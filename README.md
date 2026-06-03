@@ -152,12 +152,3 @@ Inside chat:
 
 Commands should earn their place. The tool should grow from real use, not from pretending every workflow is known in advance.
 
-## Public Readiness Check
-
-Run:
-
-```bash
-npm run privacy-check
-```
-
-This scans tracked public files for private/person-specific prompt terms that should stay local.
