@@ -1014,6 +1014,62 @@ async function runEditorBracketedPasteNewlineRegression() {
   assert.equal(submissions[0]?.displayText, "[Pasted Content 29 chars]", "the submitted echo should keep the pasted-content label");
 }
 
+async function runEditorPlainPasteReturnRegression() {
+  const submissions = [];
+  const editor = new EditorComponent({
+    suggestions: () => [],
+    theme: {},
+    onSubmit: async (text) => {
+      submissions.push(text);
+      return false;
+    },
+  });
+
+  editor.setText("Use this: ");
+  await editor.handleKeypress("first line", { name: "f" });
+  await editor.handleKeypress("\r", { name: "return" });
+  await editor.handleKeypress("second line", { name: "s" });
+  await wait(25);
+
+  assert.deepEqual(submissions, [], "return events inside a plain paste burst should not submit the prefix");
+  assert.equal(editor.buffer, "Use this: first line\rsecond line", "plain pasted newlines should stay in the editor buffer");
+
+  await wait(90);
+  await editor.handleKeypress("\r", { name: "return" });
+
+  assert.equal(submissions.length, 1, "plain pasted text should submit only once after the user presses Enter");
+  assert.equal(submissions[0]?.text, "Use this: first line\rsecond line", "submission should include typed prefix plus pasted text");
+  assert.equal(submissions[0]?.displayText, "Use this: [Pasted Content 22 chars]", "submitted echo should keep one pasted-content label");
+}
+
+async function runEditorDelayedPlainPasteReturnRegression() {
+  const submissions = [];
+  const editor = new EditorComponent({
+    suggestions: () => [],
+    theme: {},
+    onSubmit: async (text) => {
+      submissions.push(text);
+      return false;
+    },
+  });
+
+  editor.setText("Context: ");
+  await editor.handleKeypress("alpha", { name: "a" });
+  await wait(25);
+  await editor.handleKeypress("\r", { name: "return" });
+  await editor.handleKeypress("beta", { name: "b" });
+  await wait(25);
+
+  assert.deepEqual(submissions, [], "return shortly after deferred paste flush should still be treated as pasted text");
+  assert.equal(editor.buffer, "Context: alpha\rbeta", "delayed plain paste returns should preserve multiline pasted content");
+
+  await wait(90);
+  await editor.handleKeypress("\r", { name: "return" });
+
+  assert.equal(submissions.length, 1, "delayed plain paste should not replay pasted text as a second submission");
+  assert.equal(submissions[0]?.text, "Context: alpha\rbeta", "submission should preserve delayed pasted newline");
+}
+
 function runEditorUsesHardwareCursorRegression() {
   const writes = [];
   const fakeOutput = {
@@ -1508,6 +1564,10 @@ function runSessionCommandRenameRegression() {
   assert.equal(values.includes("/consolidate"), true);
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 runDeltaStreamingRegression();
 runFullSnapshotRegression();
 runRepeatedSnapshotRegression();
@@ -1551,6 +1611,8 @@ runEditorMaturePlaceholderDiversityRegression();
 runEditorSpaceKeyPreservesTrailingSpaceRegression();
 await runEditorRestartSubmitPreservesRestartSignalRegression();
 await runEditorBracketedPasteNewlineRegression();
+await runEditorPlainPasteReturnRegression();
+await runEditorDelayedPlainPasteReturnRegression();
 runEditorUsesHardwareCursorRegression();
 runFixedOnlyRenderReturnsFromHardwareCursorRegression();
 runCursorOnlyMovementRegression();

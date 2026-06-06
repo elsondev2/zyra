@@ -21,6 +21,7 @@ const placeholderPreferenceFile = path.join(".zyra", "preferences.json");
 const placeholderFirstSeenKey = "placeholderFirstSeenAt";
 const placeholderDiversityDelayMs = 14 * 24 * 60 * 60 * 1000;
 const pastedTextThreshold = 80;
+const pastedReturnGraceMs = 80;
 
 export class EditorComponent {
   constructor(options = {}) {
@@ -35,6 +36,7 @@ export class EditorComponent {
     this.bracketedPasteText = null;
     this.pendingInsertedText = "";
     this.pendingInsertTimer = undefined;
+    this.lastDeferredTextInputAt = 0;
     this.selectedIndex = 0;
     this.selectionDirty = false;
     this.completedText = "";
@@ -77,6 +79,7 @@ export class EditorComponent {
   }
 
   setText(text) {
+    this.clearPendingTextInput();
     this.buffer = String(text ?? "");
     this.cursorIndex = this.buffer.length;
     this.pastedBlocks = [];
@@ -96,16 +99,14 @@ export class EditorComponent {
   }
 
   resetSession() {
-    if (this.pendingInsertTimer) {
-      clearTimeout(this.pendingInsertTimer);
-      this.pendingInsertTimer = undefined;
-    }
+    this.clearPendingTextInput();
     this.buffer = "";
     this.cursorIndex = 0;
     this.pastedBlocks = [];
     this.pastedImages = [];
     this.bracketedPasteText = null;
     this.pendingInsertedText = "";
+    this.lastDeferredTextInputAt = 0;
     this.selectedIndex = 0;
     this.selectionDirty = false;
     this.completedText = "";
@@ -268,6 +269,10 @@ export class EditorComponent {
       return;
     }
     if (key?.name === "return") {
+      if (this.shouldTreatReturnAsPastedText(str)) {
+        this.queueTextInput(str || "\n");
+        return;
+      }
       const delivery = (key?.meta || key?.alt) ? "queue" : undefined;
       if (suggestions.length > 0 && !delivery) {
         const completed = this.completeSelection({ submitOnEnter: true });
@@ -492,9 +497,16 @@ export class EditorComponent {
       this.insertTextInput(str);
       return;
     }
+    this.lastDeferredTextInputAt = Date.now();
     this.pendingInsertedText += str;
     if (this.pendingInsertTimer) clearTimeout(this.pendingInsertTimer);
     this.pendingInsertTimer = setTimeout(() => this.flushPendingTextInput(), 18);
+  }
+
+  shouldTreatReturnAsPastedText(str) {
+    if (str !== "\r" && str !== "\n") return false;
+    if (this.pendingInsertedText) return true;
+    return Date.now() - this.lastDeferredTextInputAt <= pastedReturnGraceMs;
   }
 
   flushPendingTextInput() {
@@ -505,7 +517,17 @@ export class EditorComponent {
     if (!this.pendingInsertedText) return;
     const str = this.pendingInsertedText;
     this.pendingInsertedText = "";
+    this.lastDeferredTextInputAt = Date.now();
     this.insertTextInput(str);
+  }
+
+  clearPendingTextInput() {
+    if (this.pendingInsertTimer) {
+      clearTimeout(this.pendingInsertTimer);
+      this.pendingInsertTimer = undefined;
+    }
+    this.pendingInsertedText = "";
+    this.lastDeferredTextInputAt = 0;
   }
 
   insertTextInput(str) {
