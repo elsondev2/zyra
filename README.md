@@ -116,6 +116,8 @@ zyra --no-websearch
 zyra --no-webfetch
 zyra --interrupt steer
 zyra --interrupt queue
+zyra --mode fast
+zyra --mode normal
 zyra sessions
 zyra continue
 zyra resume
@@ -135,6 +137,7 @@ Inside chat:
 - `/web` opens web tool selection: all, none, search only, or fetch only.
 - `/websearch` toggles search results. `/webfetch` toggles URL page fetching.
 - `/interrupt` opens a picker for what Enter does while Zyra is already working; `/interrupt steer|queue` sets it directly. `/interupt` works too.
+- `/mode normal|fast|cheap|auto` sets the Codex service tier for this session. `fast` uses priority service and can cost more.
 - During an active run, Enter follows `/interrupt`: `steer` sends after the next tool-call boundary, `queue` sends after the active turn finishes. Alt+Enter always queues a follow-up, Alt+Up restores queued messages, and Escape stops the run while restoring queued messages.
 - `/consolidate` cleans up Zyra's local memory after meaningful sessions.
 - `/themes`, `/thinking`, and `/models` adjust runtime behavior.

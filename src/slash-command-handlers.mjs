@@ -15,6 +15,7 @@ import {
   setProfile,
   setStatusLine,
   setThinking,
+  setCodexMode,
   setWebFetch,
   setWebSearch,
   setWebTools,
@@ -82,6 +83,8 @@ export async function handleSlash(runtime, ui, input, controls = {}) {
       return true;
     case "thinking":
       return runThinking(runtime, ui, arg);
+    case "mode":
+      return runMode(runtime, ui, arg);
     case "themes":
       return runThemes(runtime, ui, arg);
     case "models":
@@ -285,6 +288,16 @@ async function runMemoryConsolidate(runtime, ui, controls) {
 function runThinking(runtime, ui, arg) {
   const level = setThinking(runtime, arg);
   ui.info(`Thinking: ${level}`);
+  return true;
+}
+
+function runMode(runtime, ui, arg) {
+  if (!arg) {
+    ui.info(`Mode: ${describeRuntime(runtime).codexServiceTier}. Use /mode normal|fast|cheap|auto.`);
+    return true;
+  }
+  const mode = setCodexMode(runtime, arg);
+  ui.info(`Mode: ${mode}. Fast uses Codex priority service tier and can cost more.`);
   return true;
 }
 

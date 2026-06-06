@@ -37,6 +37,7 @@ function parse(argv) {
   let printMode = false;
   let model = "";
   let thinking = "";
+  let serviceTier = "";
   let profile = "";
   let terminalTheme = "";
   let statusLine = "";
@@ -49,7 +50,7 @@ function parse(argv) {
   let skipOnboarding = false;
 
   if (args[0] === "--help" || args[0] === "-h") {
-    return { command: args[0], project, prompt, sessionMode, session, noSession, pickSession, printMode, model, thinking, profile, terminalTheme, statusLine, notifications, interruptMode, webSearch, webFetch, webMenu, forceOnboarding, skipOnboarding };
+    return { command: args[0], project, prompt, sessionMode, session, noSession, pickSession, printMode, model, thinking, serviceTier, profile, terminalTheme, statusLine, notifications, interruptMode, webSearch, webFetch, webMenu, forceOnboarding, skipOnboarding };
   }
 
   if (args[0] && !args[0].startsWith("-")) {
@@ -67,6 +68,15 @@ function parse(argv) {
     } else if (arg === "--model" && args[i + 1]) {
       model = args[i + 1];
       i += 1;
+    } else if ((arg === "--mode" || arg === "--service-tier" || arg === "--tier" || arg === "--codex-tier") && args[i + 1]) {
+      serviceTier = args[i + 1];
+      i += 1;
+    } else if (arg === "--fast") {
+      serviceTier = "fast";
+    } else if (arg === "--cheap") {
+      serviceTier = "cheap";
+    } else if (arg === "--normal-mode") {
+      serviceTier = "normal";
     } else if (arg === "--profile" && args[i + 1]) {
       profile = args[i + 1];
       i += 1;
@@ -166,7 +176,7 @@ function parse(argv) {
     throw new Error('Usage: zyra -p "your question"');
   }
 
-  return { command, project, prompt, sessionMode, session, noSession, pickSession, printMode, model, thinking, profile, terminalTheme, statusLine, notifications, interruptMode, webSearch, webFetch, webMenu, forceOnboarding, skipOnboarding };
+  return { command, project, prompt, sessionMode, session, noSession, pickSession, printMode, model, thinking, serviceTier, profile, terminalTheme, statusLine, notifications, interruptMode, webSearch, webFetch, webMenu, forceOnboarding, skipOnboarding };
 }
 
 function runUpdate() {
@@ -335,6 +345,7 @@ async function main() {
     noSession: parsed.noSession || (parsed.printMode && parsed.sessionMode === "new" && !parsed.session),
     model: parsed.model || undefined,
     thinking: parsed.thinking || undefined,
+    codexServiceTier: parsed.serviceTier || undefined,
     profile: parsed.profile || undefined,
     terminalTheme: parsed.terminalTheme || undefined,
     statusLine: parsed.statusLine || undefined,
@@ -552,6 +563,8 @@ async function restartZyraProcess(runtime, options = {}) {
   if (runtime.statusLine) args.push("--statusline", runtime.statusLine);
   if (runtime.notifications) args.push("--notifications", runtime.notifications);
   if (runtime.interruptMode) args.push("--interrupt", runtime.interruptMode);
+  const codexServiceTier = runtime.codexServiceTierState?.value ?? runtime.codexServiceTier;
+  if (codexServiceTier && codexServiceTier !== "default") args.push("--service-tier", codexServiceTier);
   if (runtime.session.model) args.push("--model", `${runtime.session.model.provider}/${runtime.session.model.id}`);
   args.push(runtime.webSearch ? "--websearch" : "--no-websearch");
   args.push(runtime.webFetch ? "--webfetch" : "--no-webfetch");

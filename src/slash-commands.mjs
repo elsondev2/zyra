@@ -1,6 +1,7 @@
 export const STATUS_LINE_MODES = ["default", "minimal", "full", "off"];
 export const NOTIFICATION_MODES = ["unfocused", "always", "off"];
 export const INTERRUPT_MODES = ["steer", "queue"];
+export const CODEX_MODES = ["normal", "fast", "cheap", "auto"];
 
 const slashCommands = [
   {
@@ -77,6 +78,13 @@ const slashCommands = [
     aliases: ["effort"],
     description: "cycle or set thinking effort",
     panelLabel: "/thinking [level]",
+  },
+  {
+    name: "mode",
+    aliases: ["tier", "service-tier", "codex-mode"],
+    description: "set Codex mode",
+    panelLabel: "/mode [normal|fast|cheap|auto]",
+    inlineArgs: CODEX_MODES,
   },
   {
     name: "themes",

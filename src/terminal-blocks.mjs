@@ -41,6 +41,7 @@ export function renderStatusBox(status = {}, theme = fallbackTheme, terminalColu
     alignedField("Directory", formatHomePath(status.project), theme, valueWidth),
     alignedField("Profile", status.profile ?? "auto", theme, valueWidth),
     alignedField("Thinking", status.thinking ?? "off", theme, valueWidth),
+    alignedField("Mode", status.codexServiceTier ?? "normal", theme, valueWidth),
     alignedField("Web", formatWebStatus(status), theme, valueWidth),
     alignedField("Interrupt", formatInterruptMode(status.interruptMode), theme, valueWidth),
     alignedField("Theme", status.terminalTheme ?? "default", theme, valueWidth),

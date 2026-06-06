@@ -1,6 +1,6 @@
 import { listCustomCommands, listZyraProfiles, listZyraThemes } from "./zyra-sdk.mjs";
 import { applyFileMentionSuggestion, getFileMentionSuggestions } from "./file-mentions.mjs";
-import { INTERRUPT_MODES, listSlashCommandSuggestions, NOTIFICATION_MODES, STATUS_LINE_MODES } from "./slash-commands.mjs";
+import { CODEX_MODES, INTERRUPT_MODES, listSlashCommandSuggestions, NOTIFICATION_MODES, STATUS_LINE_MODES } from "./slash-commands.mjs";
 
 export function getSlashSuggestions(runtime, text) {
   const fileMentions = getFileMentionSuggestions(runtime, text);
@@ -72,6 +72,17 @@ export function getSlashSuggestions(runtime, text) {
   if (query.startsWith("/statusline ") || query.startsWith("/status-line ")) {
     const command = query.startsWith("/status-line ") ? "/status-line " : "/statusline ";
     return buildSimpleArgumentSuggestions(STATUS_LINE_MODES, query.slice(command.length), "status line mode");
+  }
+
+  if (query.startsWith("/mode ") || query.startsWith("/tier ") || query.startsWith("/service-tier ") || query.startsWith("/codex-mode ")) {
+    const command = query.startsWith("/tier ")
+      ? "/tier "
+      : query.startsWith("/service-tier ")
+        ? "/service-tier "
+        : query.startsWith("/codex-mode ")
+          ? "/codex-mode "
+          : "/mode ";
+    return buildSimpleArgumentSuggestions(CODEX_MODES, query.slice(command.length), "Codex mode");
   }
 
   if (query.startsWith("/notifications ") || query.startsWith("/notify ")) {

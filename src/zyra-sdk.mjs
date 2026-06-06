@@ -54,6 +54,7 @@ export const defaults = {
 };
 
 const KNOWN_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
+export const CODEX_MODES = ["normal", "fast", "cheap", "auto"];
 
 export function getProjectSessionsDir(project = defaults.project) {
   const root = resolveProjectDataDir(project);
@@ -99,6 +100,10 @@ export function resolveZyraStartupPreferences(project = defaults.project, option
       ?? normalizeInterruptModePreference(process.env.ZYRA_INTERRUPT)
       ?? readProjectInterruptModePreference(project, preferences)
       ?? "steer",
+    codexServiceTier: normalizeCodexServiceTierPreference(options.codexServiceTier ?? options.serviceTier ?? options.mode)
+      ?? normalizeCodexServiceTierPreference(process.env.ZYRA_CODEX_SERVICE_TIER)
+      ?? normalizeCodexServiceTierPreference(process.env.ZYRA_SERVICE_TIER)
+      ?? "default",
   };
 }
 
@@ -161,8 +166,55 @@ function createEmptyExtensionRuntime() {
   };
 }
 
-function createFastResourceLoader(project) {
-  const extensionsResult = { extensions: [], errors: [], runtime: createEmptyExtensionRuntime() };
+function createZyraBuiltinExtensions(options = {}) {
+  const extensions = [];
+  if (options.codexServiceTierState) {
+    extensions.push(createCodexServiceTierExtension(options.codexServiceTierState));
+  }
+  return extensions;
+}
+
+function createCodexServiceTierExtension(state) {
+  return {
+    path: "<zyra:codex-service-tier>",
+    resolvedPath: "<zyra:codex-service-tier>",
+    sourceInfo: { source: "builtin", scope: "temporary", label: "Zyra Codex service tier" },
+    handlers: new Map([
+      ["before_provider_request", [
+        (event) => {
+          const tier = codexServiceTierForPayload(state?.value);
+          if (!tier || !isCodexResponsesPayload(event.payload)) return undefined;
+          return { ...event.payload, service_tier: tier };
+        },
+      ]],
+    ]),
+    tools: new Map(),
+    messageRenderers: new Map(),
+    commands: new Map(),
+    flags: new Map(),
+    shortcuts: new Map(),
+  };
+}
+
+function isCodexResponsesPayload(payload) {
+  return Boolean(
+    payload &&
+    typeof payload === "object" &&
+    !Array.isArray(payload) &&
+    typeof payload.model === "string" &&
+    Array.isArray(payload.include) &&
+    payload.include.includes("reasoning.encrypted_content") &&
+    Object.prototype.hasOwnProperty.call(payload, "prompt_cache_key")
+  );
+}
+
+function createFastResourceLoader(project, options = {}) {
+  const runtime = options.extensionRuntime ?? createEmptyExtensionRuntime();
+  const extensionsResult = {
+    extensions: createZyraBuiltinExtensions(options),
+    errors: [],
+    runtime,
+  };
   return {
     getExtensions: () => extensionsResult,
     getSkills: () => ({ skills: [], diagnostics: [] }),
@@ -180,10 +232,16 @@ function createFastResourceLoader(project) {
 async function createZyraResourceLoader(project, options = {}) {
   if (options.enablePiExtensions) return {};
 
-  const { SettingsManager, getAgentDir } = await loadPiStartupResources();
+  const [{ SettingsManager, getAgentDir }, { createExtensionRuntime }] = await Promise.all([
+    loadPiStartupResources(),
+    loadPiPackage(),
+  ]);
   const agentDir = getAgentDir();
   const settingsManager = SettingsManager.create(project, agentDir);
-  const resourceLoader = createFastResourceLoader(project);
+  const resourceLoader = createFastResourceLoader(project, {
+    codexServiceTierState: options.codexServiceTierState,
+    extensionRuntime: createExtensionRuntime(),
+  });
   return { agentDir, settingsManager, resourceLoader };
 }
 
@@ -363,8 +421,10 @@ export async function createZyraSession(options = {}) {
     requested: options.terminalTheme ?? process.env.ZYRA_TERMINAL_THEME,
   });
   const profile = ensureSessionProfile(sessionManager, { project, preferences, persist: !options.noSession, requested: options.profile });
+  const codexServiceTierState = { value: startupPreferences.codexServiceTier };
   const startupResources = await createZyraResourceLoader(project, {
     enablePiExtensions: options.enablePiExtensions || process.env.ZYRA_ENABLE_PI_EXTENSIONS === "1",
+    codexServiceTierState,
   });
 
   const result = await createAgentSession({
@@ -431,6 +491,8 @@ export async function createZyraSession(options = {}) {
     statusLine: startupPreferences.statusLine,
     notifications: startupPreferences.notifications,
     interruptMode: startupPreferences.interruptMode,
+    codexServiceTier: startupPreferences.codexServiceTier,
+    codexServiceTierState,
     modelFallbackMessage: result.modelFallbackMessage,
   };
 }
@@ -1008,6 +1070,34 @@ function normalizeThinkingPreference(value) {
   return KNOWN_THINKING_LEVELS.has(level) ? level : undefined;
 }
 
+function normalizeCodexServiceTierPreference(value) {
+  const mode = String(value ?? "").trim().toLowerCase();
+  if (!mode) return undefined;
+  if (["normal", "default", "standard", "off", "none"].includes(mode)) return "default";
+  if (["fast", "priority"].includes(mode)) return "priority";
+  if (["cheap", "flex", "slow", "economy"].includes(mode)) return "flex";
+  if (mode === "auto") return "auto";
+  return undefined;
+}
+
+function codexServiceTierForPayload(value) {
+  const tier = normalizeCodexServiceTierPreference(value);
+  if (!tier || tier === "default") return undefined;
+  return tier;
+}
+
+function describeCodexServiceTier(value) {
+  const tier = normalizeCodexServiceTierPreference(value) ?? "default";
+  if (tier === "priority") return "fast (priority)";
+  if (tier === "flex") return "cheap (flex)";
+  if (tier === "auto") return "auto";
+  return "normal";
+}
+
+function getCodexServiceTier(runtime) {
+  return runtime?.codexServiceTierState?.value ?? runtime?.codexServiceTier ?? "default";
+}
+
 function normalizeModelSelector(value) {
   return String(value ?? "").trim() || undefined;
 }
@@ -1254,6 +1344,7 @@ export function describeRuntime(runtime) {
     statusLine: runtime.statusLine ?? "default",
     notifications: runtime.notifications ?? "unfocused",
     interruptMode: runtime.interruptMode ?? "steer",
+    codexServiceTier: describeCodexServiceTier(getCodexServiceTier(runtime)),
     model: model ? `${model.provider}/${model.id}` : "none",
   };
 }
@@ -1800,6 +1891,17 @@ export function setThinking(runtime, level) {
   runtime.session.setThinkingLevel(requested);
   writeProjectThinkingPreference(runtime.project, runtime.session.thinkingLevel);
   return runtime.session.thinkingLevel;
+}
+
+export function setCodexMode(runtime, value) {
+  const next = normalizeCodexServiceTierPreference(value);
+  if (!next) {
+    throw new Error(`Mode must be one of: ${CODEX_MODES.join(", ")}`);
+  }
+  if (!runtime.codexServiceTierState) runtime.codexServiceTierState = { value: next };
+  runtime.codexServiceTierState.value = next;
+  runtime.codexServiceTier = next;
+  return describeCodexServiceTier(next);
 }
 
 export async function setModel(runtime, selector) {

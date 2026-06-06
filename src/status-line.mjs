@@ -26,6 +26,7 @@ export function renderStatusLine(runtime, width = Math.max(24, (process.stdout.c
   const model = session.model;
   const modelLabel = model?.id ?? "no-model";
   const thinking = session.thinkingLevel ?? "off";
+  const codexMode = formatCodexMode(runtime);
   const profile = runtime.profile ?? "auto";
   const activity = String(state.activity ?? "").trim();
   const contextUsage = getRuntimeContextUsage(runtime);
@@ -40,7 +41,7 @@ export function renderStatusLine(runtime, width = Math.max(24, (process.stdout.c
     return renderMinimalStatusLine({ theme, contextUsage, modelLabel, profile, context, cost, maxWidth });
   }
 
-  const modelStatus = `${modelLabel} ${thinking}${sep}${profile}`;
+  const modelStatus = `${modelLabel} ${thinking}${codexMode ? `/${codexMode}` : ""}${sep}${profile}`;
   const leftPlain = activity ? ` ${modelStatus}${sep}${activity}` : ` ${modelStatus}`;
   const rightBudget = Math.max(8, maxWidth - visibleWidth(leftPlain) - 1);
   const rightPlain = buildRightStatus(context, cwd, cost, rightBudget);
@@ -55,7 +56,7 @@ export function renderStatusLine(runtime, width = Math.max(24, (process.stdout.c
   const right = buildRightStatusParts(context, cwd, cost, rightBudget);
   const left = [
     color(theme.primary, ` ${modelLabel}`),
-    color(theme.warning, ` ${thinking}`),
+    color(theme.warning, ` ${thinking}${codexMode ? `/${codexMode}` : ""}`),
     low(theme.muted, sep),
     color(profileColor(theme, profile), profile),
     activity ? low(theme.muted, sep) : "",
@@ -73,6 +74,14 @@ export function renderStatusLine(runtime, width = Math.max(24, (process.stdout.c
     : [color(contextColor(theme, contextUsage), right.context), low(theme.muted, sep), color(costColor(theme, right.cost), right.cost)].join("");
 
   return [left, " ".repeat(gap), rightColored, reset].join("");
+}
+
+function formatCodexMode(runtime) {
+  const tier = String(runtime.codexServiceTierState?.value ?? runtime.codexServiceTier ?? "").toLowerCase();
+  if (tier === "priority" || tier === "fast") return "fast";
+  if (tier === "flex" || tier === "cheap") return "cheap";
+  if (tier === "auto") return "auto";
+  return "";
 }
 
 function renderMinimalStatusLine({ theme, contextUsage, modelLabel, profile, context, cost, maxWidth }) {
