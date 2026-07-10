@@ -94,8 +94,8 @@ const slashCommands = [
   },
   {
     name: "models",
-    description: "open model picker",
-    panelLabel: "/models <provider/model>",
+    description: "pick or refresh models",
+    panelLabel: "/models [provider/model|refresh]",
   },
   {
     name: "memory",
@@ -180,13 +180,13 @@ export function listSlashCommands(options = {}) {
 export function listSlashCommandSuggestions() {
   return listSlashCommands()
     .filter((command) => command.suggest !== false)
-    .map((command) => ({
-      value: `/${command.name}`,
-      label: `/${command.name}`,
+    .flatMap((command) => [command.name, ...(command.aliases ?? [])].map((name) => ({
+      value: `/${name}`,
+      label: `/${name}`,
       description: command.description,
       kind: "command",
       submitOnEnter: command.submitOnEnter === true,
-    }));
+    })));
 }
 
 export function getSlashCommand(command) {

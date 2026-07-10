@@ -1,4 +1,4 @@
-import { listCustomCommands, listZyraProfiles, listZyraThemes } from "./zyra-sdk.mjs";
+import { getZyraAvailableModels, getZyraAvailableThinkingLevels, getZyraThinkingLevel, listCustomCommands, listZyraProfiles, listZyraThemes } from "./zyra-sdk.mjs";
 import { applyFileMentionSuggestion, getFileMentionSuggestions } from "./file-mentions.mjs";
 import { CODEX_MODES, INTERRUPT_MODES, listSlashCommandSuggestions, NOTIFICATION_MODES, STATUS_LINE_MODES } from "./slash-commands.mjs";
 
@@ -11,14 +11,15 @@ export function getSlashSuggestions(runtime, text) {
   const query = text.toLowerCase();
   if (query.startsWith("/thinking ")) {
     const prefix = query.slice("/thinking ".length);
-    return runtime.session
-      .getAvailableThinkingLevels()
+    const active = getZyraThinkingLevel(runtime);
+    return getZyraAvailableThinkingLevels(runtime)
       .filter((level) => level.startsWith(prefix))
       .map((level) => ({
         value: level,
         label: level,
-        description: "thinking effort",
+        description: level === active ? "active" : "thinking effort",
         kind: "argument",
+        selected: level === active,
         submitOnEnter: true,
       }));
   }
@@ -128,16 +129,8 @@ export function getSlashSuggestions(runtime, text) {
       description: "type provider/model",
       kind: "custom-model",
     };
-    const models = runtime.session.modelRegistry
-      .getAvailable()
+    const models = getZyraAvailableModels(runtime.session.modelRegistry)
       .filter((model) => `${model.provider}/${model.id} ${model.name ?? ""}`.toLowerCase().includes(prefix))
-      .sort((a, b) => {
-        const aActive = a.provider === runtime.session.model?.provider && a.id === runtime.session.model?.id;
-        const bActive = b.provider === runtime.session.model?.provider && b.id === runtime.session.model?.id;
-        if (aActive && !bActive) return -1;
-        if (!aActive && bActive) return 1;
-        return `${a.provider}/${a.id}`.localeCompare(`${b.provider}/${b.id}`);
-      })
       .map((model) => ({
         value: `${model.provider}/${model.id}`,
         label: `${model.provider}/${model.id}`,

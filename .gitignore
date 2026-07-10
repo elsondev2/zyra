@@ -5,6 +5,8 @@ shims/
 .zyra/
 .coord/
 tmp/
+output/
+document.readyState
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

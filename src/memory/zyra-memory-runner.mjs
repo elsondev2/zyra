@@ -19,7 +19,7 @@ import {
   writeZyraPhase2WorkerOutput,
 } from "../zyra-memory.mjs";
 
-const DEFAULT_MODEL = "openai-codex/gpt-5.5";
+const DEFAULT_MODEL = "openai-codex/gpt-5.6-sol";
 
 export function createZyraMemoryRunner(services = {}) {
   const root = path.resolve(services.root ?? process.cwd());

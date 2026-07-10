@@ -17,7 +17,22 @@ import {
   runZyraMemoryStartup,
 } from "./zyra-memory.mjs";
 import { expandFileMentions } from "./file-mentions.mjs";
+import { DEFAULT_AUTO_POLL_MS, createManagedBashState, createManagedBashTool, waitForManagedBashAutoUpdate } from "./managed-bash-tool.mjs";
 import { DEFAULT_TERMINAL_THEME, listTerminalThemes, resolveTerminalTheme } from "./terminal-theme.mjs";
+import {
+  checkModelAvailability,
+  formatModelAvailabilitySummary,
+  getFilteredAvailableModels,
+  refreshModelAvailability,
+} from "./model-availability.mjs";
+import { sortModelsLatestFirst } from "./model-order.mjs";
+import {
+  applyGpt56ThinkingEffort,
+  coerceThinkingLevelForModel,
+  getModelThinkingLevels,
+  normalizeZyraThinkingLevel,
+  toPiThinkingLevel,
+} from "./thinking-levels.mjs";
 import {
   createZyraWebFetchTool,
   createZyraWebSearchTool,
@@ -50,10 +65,17 @@ export const defaults = {
   profileDir: path.join(ROOT, "prompts/profiles"),
   inspectPrompt: path.join(ROOT, "prompts/inspect-project.md"),
   thinking: "medium",
-  model: "openai-codex/gpt-5.5",
+  model: "openai-codex/gpt-5.6-sol",
 };
 
-const KNOWN_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
+const ZYRA_RUNTIME_MODEL_OVERRIDES = [
+  { provider: "openai-codex", id: "gpt-5.6-luna", templateId: "gpt-5.5", name: "GPT-5.6 Luna", cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 } },
+  { provider: "openai-codex", id: "gpt-5.6-terra", templateId: "gpt-5.5", name: "GPT-5.6 Terra", cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 } },
+  { provider: "openai-codex", id: "gpt-5.6-sol", templateId: "gpt-5.5", name: "GPT-5.6 Sol", cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 } },
+  { provider: "openai", id: "gpt-5.6-luna", templateId: "gpt-5.5", name: "GPT-5.6 Luna", cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 } },
+  { provider: "openai", id: "gpt-5.6-terra", templateId: "gpt-5.5", name: "GPT-5.6 Terra", cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 } },
+  { provider: "openai", id: "gpt-5.6-sol", templateId: "gpt-5.5", name: "GPT-5.6 Sol", cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 } },
+];
 export const CODEX_MODES = ["normal", "fast", "cheap", "auto"];
 
 export function getProjectSessionsDir(project = defaults.project) {
@@ -133,9 +155,37 @@ async function loadPiModelRegistry() {
   return { AuthStorage, ModelRegistry };
 }
 
+export function registerZyraRuntimeModels(modelRegistry) {
+  if (!modelRegistry || typeof modelRegistry.getAll !== "function") {
+    return [];
+  }
+
+  return ZYRA_RUNTIME_MODEL_OVERRIDES.map((override) => registerZyraRuntimeModel(modelRegistry, override));
+}
+
+function registerZyraRuntimeModel(modelRegistry, override) {
+  const existing = modelRegistry.find?.(override.provider, override.id);
+  if (existing) return { ...override, status: "exists" };
+
+  const models = modelRegistry.getAll();
+  if (!Array.isArray(models)) return { ...override, status: "unsupported-registry" };
+
+  const providerModels = models.filter((model) => model.provider === override.provider);
+  const template = providerModels.find((model) => model.id === override.templateId) ?? providerModels[0];
+  if (!template) return { ...override, status: "missing-template" };
+
+  models.push({
+    ...template,
+    id: override.id,
+    name: override.name ?? override.id,
+    cost: override.cost ? { ...override.cost } : template.cost,
+  });
+  return { ...override, status: "registered" };
+}
+
 async function loadPiStartupResources() {
-  const { SettingsManager, getAgentDir } = await loadPiPackage();
-  return { SettingsManager, getAgentDir };
+  const { DefaultResourceLoader, SettingsManager, getAgentDir } = await loadPiPackage();
+  return { DefaultResourceLoader, SettingsManager, getAgentDir };
 }
 
 function createEmptyExtensionRuntime() {
@@ -171,6 +221,9 @@ function createZyraBuiltinExtensions(options = {}) {
   if (options.codexServiceTierState) {
     extensions.push(createCodexServiceTierExtension(options.codexServiceTierState));
   }
+  if (options.thinkingState) {
+    extensions.push(createGpt56ThinkingExtension(options.thinkingState));
+  }
   return extensions;
 }
 
@@ -186,6 +239,24 @@ function createCodexServiceTierExtension(state) {
           if (!tier || !isCodexResponsesPayload(event.payload)) return undefined;
           return { ...event.payload, service_tier: tier };
         },
+      ]],
+    ]),
+    tools: new Map(),
+    messageRenderers: new Map(),
+    commands: new Map(),
+    flags: new Map(),
+    shortcuts: new Map(),
+  };
+}
+
+function createGpt56ThinkingExtension(state) {
+  return {
+    path: "<zyra:gpt-5.6-thinking>",
+    resolvedPath: "<zyra:gpt-5.6-thinking>",
+    sourceInfo: { source: "builtin", scope: "temporary", label: "Zyra GPT-5.6 thinking" },
+    handlers: new Map([
+      ["before_provider_request", [
+        (event) => applyGpt56ThinkingEffort(event.payload, state?.value),
       ]],
     ]),
     tools: new Map(),
@@ -230,19 +301,46 @@ function createFastResourceLoader(project, options = {}) {
 }
 
 async function createZyraResourceLoader(project, options = {}) {
-  if (options.enablePiExtensions) return {};
-
-  const [{ SettingsManager, getAgentDir }, { createExtensionRuntime }] = await Promise.all([
+  const [{ DefaultResourceLoader, SettingsManager, getAgentDir }, { createExtensionRuntime }] = await Promise.all([
     loadPiStartupResources(),
     loadPiPackage(),
   ]);
   const agentDir = getAgentDir();
   const settingsManager = SettingsManager.create(project, agentDir);
+  if (options.enablePiExtensions) {
+    const loader = new DefaultResourceLoader({ cwd: project, agentDir, settingsManager });
+    await loader.reload();
+    return {
+      agentDir,
+      settingsManager,
+      resourceLoader: withZyraBuiltinExtensions(loader, options),
+    };
+  }
   const resourceLoader = createFastResourceLoader(project, {
     codexServiceTierState: options.codexServiceTierState,
+    thinkingState: options.thinkingState,
     extensionRuntime: createExtensionRuntime(),
   });
   return { agentDir, settingsManager, resourceLoader };
+}
+
+function withZyraBuiltinExtensions(resourceLoader, options = {}) {
+  const getExtensions = resourceLoader.getExtensions.bind(resourceLoader);
+  return new Proxy(resourceLoader, {
+    get(target, property, receiver) {
+      if (property === "getExtensions") {
+        return () => {
+          const loaded = getExtensions();
+          return {
+            ...loaded,
+            extensions: [...createZyraBuiltinExtensions(options), ...(loaded.extensions ?? [])],
+          };
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 function readPrompt(file) {
@@ -391,6 +489,7 @@ export async function createZyraSession(options = {}) {
   const preferences = readProjectPreferences(project);
   const startupPreferences = resolveZyraStartupPreferences(project, options, preferences);
   const thinking = startupPreferences.thinking;
+  const thinkingState = { value: thinking };
 
   if (!existsSync(project)) {
     throw new Error(`Project path does not exist: ${project}`);
@@ -425,18 +524,38 @@ export async function createZyraSession(options = {}) {
   const startupResources = await createZyraResourceLoader(project, {
     enablePiExtensions: options.enablePiExtensions || process.env.ZYRA_ENABLE_PI_EXTENSIONS === "1",
     codexServiceTierState,
+    thinkingState,
   });
+  const cwd = sessionManager.getCwd?.() ?? project;
+  const managedBash = createManagedBashState();
+  const settingsManager = startupResources.settingsManager;
 
   const result = await createAgentSession({
-    cwd: sessionManager.getCwd?.() ?? project,
+    cwd,
     sessionManager,
-    thinkingLevel: thinking,
+    thinkingLevel: toPiThinkingLevel(thinking),
     sessionStartEvent: { type: "session_start", reason: options.sessionMode === "continue" || options.session ? "resume" : "new" },
-    customTools: [createZyraWebSearchTool(), createZyraWebFetchTool()],
+    customTools: [
+      createManagedBashTool({
+        cwd,
+        state: managedBash,
+        shellPath: settingsManager?.getShellPath?.(),
+        commandPrefix: settingsManager?.getShellCommandPrefix?.(),
+      }),
+      createZyraWebSearchTool(),
+      createZyraWebFetchTool(),
+    ],
     ...startupResources,
   });
 
+  installManagedBashAutoPoll(result.session, managedBash, {
+    intervalMs: options.managedBashAutoPollMs ?? DEFAULT_AUTO_POLL_MS,
+  });
+  registerZyraRuntimeModels(result.session.modelRegistry);
   applyWebToolState(result.session, startupPreferences);
+  const modelAvailability = await refreshZyraModelAvailability(result.session.modelRegistry, {
+    forceRefresh: options.forceModelPing ?? options.forceRefreshModels,
+  });
 
   if (!options.skipGuide) {
     injectZyraGuide(result.session, readPrompt(defaults.prompt));
@@ -462,8 +581,9 @@ export async function createZyraSession(options = {}) {
   if (!selectedModel && startupPreferences.model !== defaults.model) {
     selectedModel = await preferDefaultModel(result.session, defaults.model);
   }
+  const effectiveThinking = syncZyraThinkingLevel({ session: result.session, thinkingState }, thinking);
   persistExplicitStartupPreferences(project, options, {
-    thinking,
+    thinking: effectiveThinking,
     terminalTheme,
     profile,
     model: selectedModel,
@@ -485,7 +605,8 @@ export async function createZyraSession(options = {}) {
     surface: options.surface,
     projectMemory,
     memoryStartup,
-    thinking,
+    thinking: effectiveThinking,
+    thinkingState,
     webSearch: startupPreferences.webSearch,
     webFetch: startupPreferences.webFetch,
     statusLine: startupPreferences.statusLine,
@@ -493,7 +614,43 @@ export async function createZyraSession(options = {}) {
     interruptMode: startupPreferences.interruptMode,
     codexServiceTier: startupPreferences.codexServiceTier,
     codexServiceTierState,
+    managedBash,
+    modelAvailability,
     modelFallbackMessage: result.modelFallbackMessage,
+  };
+}
+
+function installManagedBashAutoPoll(session, managedBash, options = {}) {
+  const agent = session?.agent;
+  if (!agent || !managedBash) return;
+  const previousPrepareNextTurn = agent.prepareNextTurn;
+  agent.prepareNextTurn = async (turn) => {
+    const snapshot = await previousPrepareNextTurn?.(turn);
+    if (!managedBash.hasAutoPollJobs?.()) return snapshot;
+    const text = await waitForManagedBashAutoUpdate(managedBash, {
+      waitMs: options.intervalMs ?? DEFAULT_AUTO_POLL_MS,
+      signal: agent.signal,
+    });
+    if (!text || agent.signal?.aborted) return snapshot;
+    agent.steer({
+      role: "custom",
+      customType: "zyra.managed-bash.update.v1",
+      content: [
+        {
+          type: "text",
+          text: [
+            "[Zyra managed command update]",
+            text,
+            "",
+            "Use this command output to decide whether to keep waiting, check status again, stop the job, or continue with the task.",
+          ].join("\n"),
+        },
+      ],
+      display: false,
+      details: { source: "managed-bash-auto-poll" },
+      timestamp: Date.now(),
+    });
+    return snapshot;
   };
 }
 
@@ -926,14 +1083,43 @@ export async function listAvailableModels(options = {}) {
   const { AuthStorage, ModelRegistry } = await loadPiModelRegistry();
   const authStorage = AuthStorage.create();
   const modelRegistry = ModelRegistry.create(authStorage);
+  registerZyraRuntimeModels(modelRegistry);
   if (options.forceRefresh && typeof modelRegistry.refresh === "function") {
     modelRegistry.refresh();
+    registerZyraRuntimeModels(modelRegistry);
   }
-  return modelRegistry.getAvailable().map((model) => ({
+  await refreshZyraModelAvailability(modelRegistry, {
+    forceRefresh: options.forceRefresh ?? options.forceModelPing,
+    timeoutMs: options.timeoutMs,
+  });
+  return getZyraAvailableModels(modelRegistry).map((model) => ({
     id: `${model.provider}/${model.id}`,
     label: model.id,
     description: model.name && model.name !== model.id ? model.name : model.provider,
   }));
+}
+
+export function getZyraAvailableModels(modelRegistry, options = {}) {
+  return sortModelsLatestFirst(getFilteredAvailableModels(modelRegistry, options));
+}
+
+export async function refreshZyraModelAvailability(modelRegistry, options = {}) {
+  try {
+    return await refreshModelAvailability(modelRegistry, options);
+  } catch (error) {
+    return {
+      checked: [],
+      filtered: modelRegistry?.getAvailable?.() ?? [],
+      removed: [],
+      unknown: [],
+      available: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export function formatZyraModelAvailabilitySummary(report) {
+  return formatModelAvailabilitySummary(report);
 }
 
 export async function warmupZyraRuntime(options = {}) {
@@ -1065,9 +1251,7 @@ function normalizeProfile(value) {
 }
 
 function normalizeThinkingPreference(value) {
-  const level = String(value ?? "").trim().toLowerCase();
-  if (!level) return undefined;
-  return KNOWN_THINKING_LEVELS.has(level) ? level : undefined;
+  return normalizeZyraThinkingLevel(value);
 }
 
 function normalizeCodexServiceTierPreference(value) {
@@ -1146,6 +1330,8 @@ async function preferDefaultModel(session, selector) {
 
   const model = session.modelRegistry.find(provider, modelId);
   if (!model || !session.modelRegistry.hasConfiguredAuth(model)) return undefined;
+  const availability = await checkModelAvailability(session.modelRegistry, model);
+  if (availability.availability === "unavailable") return undefined;
   await session.setModel(model);
   return model;
 }
@@ -1338,7 +1524,7 @@ export function describeRuntime(runtime) {
     customCommands: listCustomCommands(runtime),
     terminalTheme: runtime.terminalTheme?.name ?? DEFAULT_TERMINAL_THEME,
     themes: listZyraThemes(runtime),
-    thinking: runtime.session.thinkingLevel,
+    thinking: getZyraThinkingLevel(runtime),
     webSearch: runtime.webSearch ?? isToolActive(runtime.session, ZYRA_WEB_SEARCH_TOOL_NAME),
     webFetch: runtime.webFetch ?? isToolActive(runtime.session, ZYRA_WEB_FETCH_TOOL_NAME),
     statusLine: runtime.statusLine ?? "default",
@@ -1876,21 +2062,48 @@ function extractReasoningTokens(usage) {
   );
 }
 
+export function getZyraAvailableThinkingLevels(runtime) {
+  const session = runtime?.session;
+  const piLevels = session?.getAvailableThinkingLevels?.();
+  return getModelThinkingLevels(session?.model, piLevels);
+}
+
+export function getZyraThinkingLevel(runtime) {
+  const session = runtime?.session;
+  const piLevels = session?.getAvailableThinkingLevels?.();
+  const stored = runtime?.thinkingState?.value ?? runtime?.thinking ?? session?.thinkingLevel ?? "off";
+  return coerceThinkingLevelForModel(stored, session?.model, piLevels);
+}
+
+export function syncZyraThinkingLevel(runtime, value = getZyraThinkingLevel(runtime)) {
+  const session = runtime?.session;
+  const piLevels = session?.getAvailableThinkingLevels?.();
+  const effective = coerceThinkingLevelForModel(value, session?.model, piLevels);
+  session?.setThinkingLevel?.(toPiThinkingLevel(effective));
+  if (!runtime.thinkingState) runtime.thinkingState = { value: effective };
+  else runtime.thinkingState.value = effective;
+  runtime.thinking = effective;
+  return effective;
+}
+
 export function setThinking(runtime, level) {
+  const levels = getZyraAvailableThinkingLevels(runtime);
   const requested = String(level ?? "").trim().toLowerCase();
+  let next;
+
   if (!requested || requested === "next") {
-    const cycled = runtime.session.cycleThinkingLevel() ?? runtime.session.thinkingLevel;
-    writeProjectThinkingPreference(runtime.project, cycled);
-    return cycled;
+    const currentIndex = levels.indexOf(getZyraThinkingLevel(runtime));
+    next = levels[(currentIndex + 1 + levels.length) % levels.length];
+  } else {
+    const normalized = normalizeZyraThinkingLevel(requested);
+    if (!normalized) throw new Error(`Thinking must be one of: ${levels.join(", ")}`);
+    next = coerceThinkingLevelForModel(normalized, runtime.session?.model, levels);
+    if (!levels.includes(next)) throw new Error(`Thinking must be one of: ${levels.join(", ")}`);
   }
 
-  const levels = runtime.session.getAvailableThinkingLevels();
-  if (!levels.includes(requested)) {
-    throw new Error(`Thinking must be one of: ${levels.join(", ")}`);
-  }
-  runtime.session.setThinkingLevel(requested);
-  writeProjectThinkingPreference(runtime.project, runtime.session.thinkingLevel);
-  return runtime.session.thinkingLevel;
+  const effective = syncZyraThinkingLevel(runtime, next);
+  writeProjectThinkingPreference(runtime.project, effective);
+  return effective;
 }
 
 export function setCodexMode(runtime, value) {
@@ -1910,7 +2123,7 @@ export async function setModel(runtime, selector) {
     throw new Error("Choose a model from /models.");
   }
 
-  const available = runtime.session.modelRegistry.getAvailable();
+  const available = getZyraAvailableModels(runtime.session.modelRegistry);
   const exact = available.find((model) => {
     const fullSlash = `${model.provider}/${model.id}`.toLowerCase();
     const fullColon = `${model.provider}:${model.id}`.toLowerCase();
@@ -1924,9 +2137,16 @@ export async function setModel(runtime, selector) {
   if (!fuzzy) {
     throw new Error("Model not found or not authenticated. Use /models, or check your Zyra model/auth settings.");
   }
+  const availability = await checkModelAvailability(runtime.session.modelRegistry, fuzzy, { forceRefresh: true });
+  if (availability.availability === "unavailable") {
+    throw new Error(`Model unavailable upstream: ${availability.key}. Run /models refresh to update the picker.`);
+  }
 
+  const previousThinking = getZyraThinkingLevel(runtime);
   await runtime.session.setModel(fuzzy);
+  const thinking = syncZyraThinkingLevel(runtime, previousThinking);
   writeProjectModelPreference(runtime.project, fuzzy);
+  writeProjectThinkingPreference(runtime.project, thinking);
   return fuzzy;
 }
 

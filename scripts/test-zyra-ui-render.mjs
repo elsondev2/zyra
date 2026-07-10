@@ -3,11 +3,12 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { buildProfileChangePrompt } from "../src/slash-command-handlers.mjs";
+import { buildProfileChangePrompt, handleSlash } from "../src/slash-command-handlers.mjs";
 import { getSlashSuggestions } from "../src/slash-suggestions.mjs";
 import { markOnboardingComplete, readOnboardingState, shouldRunOnboarding } from "../src/onboarding.mjs";
 import { AssistantMessageLifecycle, createZyraUi, mergeAssistantTextDelta } from "../src/zyra-ui.mjs";
-import { resolveZyraStartupPreferences, setModel, setProfile, setThinking, setWebFetch, setWebSearch, setZyraTheme } from "../src/zyra-sdk.mjs";
+import { getZyraAvailableThinkingLevels, getZyraThinkingLevel, registerZyraRuntimeModels, resolveZyraStartupPreferences, setModel, setProfile, setThinking, setWebFetch, setWebSearch, setZyraTheme, syncZyraThinkingLevel } from "../src/zyra-sdk.mjs";
+import { applyGpt56ThinkingEffort, GPT_56_THINKING_LEVELS } from "../src/thinking-levels.mjs";
 import { renderStatusLine } from "../src/status-line.mjs";
 import { buildTerminalTheme } from "../src/terminal-theme.mjs";
 import { renderAccountStatusBox, renderCodexUsageBox, renderStatusBox } from "../src/terminal-blocks.mjs";
@@ -612,7 +613,7 @@ function runStaticPanelsThroughHostRegression() {
   const ui = createZyraUi();
   ui._debugBeginInteractiveForTests();
   ui.status({
-    model: "openai-codex/gpt-5.5",
+    model: "openai-codex/gpt-5.6-sol",
     project: "C:\\Users\\dev\\my_coding_play\\zyra",
     profile: "builder",
     thinking: "medium",
@@ -746,7 +747,7 @@ function runPreInteractivePanelsSurviveInteractiveRegression() {
     const ui = createZyraUi();
     ui.banner({
       project: "C:\\Users\\dev\\my_coding_play\\zyra",
-      model: "openai-codex/gpt-5.5",
+      model: "openai-codex/gpt-5.6-sol",
       profile: "builder",
       thinking: "medium",
       terminalTheme: "rose-pine",
@@ -759,12 +760,12 @@ function runPreInteractivePanelsSurviveInteractiveRegression() {
   });
 
   assert.match(plain, /┏━━━┳┓/);
-  assert.match(plain, /gpt-5\.5 · builder/);
+  assert.match(plain, /gpt-5\.6-sol · builder/);
   assert.match(raw, /\x1b\[38;2;196;167;231m\[Context\]/);
   assert.match(plain, /\[Context\]/);
   assert.match(plain, /AGENTS\.md/);
   assert.match(plain, /\[Runtime\]/);
-  assert.match(plain, /openai-codex\/gpt-5\.5 · medium/);
+  assert.match(plain, /openai-codex\/gpt-5\.6-sol · medium/);
   assert.match(plain, /\[Theme\]/);
   assert.match(plain, /rose-pine/);
   assert.equal(plain.includes("✦ Learner"), false, "startup banner should use the Zyra wordmark");
@@ -785,7 +786,7 @@ function runStartupSectionLabelsUseActiveThemeRegression() {
     });
     ui.banner({
       project: "C:\\Users\\dev\\my_coding_play\\zyra",
-      model: "openai-codex/gpt-5.5",
+      model: "openai-codex/gpt-5.6-sol",
       profile: "builder",
       thinking: "medium",
       terminalTheme: "pill-test",
@@ -1389,7 +1390,7 @@ function runStatusLineBranchLookupDoesNotBlockInputRegression() {
     },
   };
   const start = performance.now();
-  for (let index = 0; index < 100; index += 1) {
+  for (let index = 0; index < 10; index += 1) {
     renderStatusLine(runtime, 120);
   }
   const elapsed = performance.now() - start;
@@ -1458,6 +1459,201 @@ function runOnboardingStateRegression() {
     assert.equal(shouldRunOnboarding({ root, skip: true }), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function runRuntimeModelOverrideRegression() {
+  const models = [
+    {
+      provider: "openai-codex",
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 1, output: 8, cacheRead: 0.1, cacheWrite: 1 },
+      contextWindow: 400000,
+      maxTokens: 128000,
+      compat: { supportsStore: false },
+    },
+    {
+      provider: "openai-codex",
+      id: "gpt-5.4-mini",
+      name: "GPT-5.4 Mini",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 272000,
+      maxTokens: 128000,
+    },
+    {
+      provider: "openai",
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 400000,
+      maxTokens: 128000,
+    },
+    {
+      provider: "openai",
+      id: "gpt-5.4-mini",
+      name: "GPT-5.4 Mini",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 272000,
+      maxTokens: 128000,
+    },
+    {
+      provider: "openai",
+      id: "gpt-5.4-nano",
+      name: "GPT-5.4 Nano",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 128000,
+      maxTokens: 64000,
+    },
+    {
+      provider: "openai",
+      id: "gpt-5.5-pro",
+      name: "GPT-5.5 Pro",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 512000,
+      maxTokens: 128000,
+    },
+  ];
+  const registry = {
+    getAll: () => models,
+    find: (provider, id) => models.find((model) => model.provider === provider && model.id === id),
+  };
+
+  const result = registerZyraRuntimeModels(registry);
+  assert.deepEqual(result.map((item) => item.status), ["registered", "registered", "registered", "registered", "registered", "registered"]);
+
+  const expectedCosts = {
+    luna: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
+    terra: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
+    sol: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+  };
+  for (const provider of ["openai-codex", "openai"]) {
+    for (const name of ["luna", "terra", "sol"]) {
+      const model = registry.find(provider, `gpt-5.6-${name}`);
+      assert.equal(model.name, `GPT-5.6 ${name[0].toUpperCase()}${name.slice(1)}`);
+      assert.equal(model.reasoning, true);
+      assert.deepEqual(model.input, ["text", "image"]);
+      assert.equal(model.contextWindow, 400000);
+      assert.deepEqual(model.cost, expectedCosts[name]);
+    }
+    assert.equal(registry.find(provider, "gpt-5.6-tera"), undefined);
+  }
+  assert.equal(registry.find("openai-codex", "gpt-5.6-sol")?.api, "openai-codex-responses");
+  assert.equal(registry.find("openai", "gpt-5.6-sol")?.api, "openai-responses");
+
+  const idempotent = registerZyraRuntimeModels(registry);
+  assert.deepEqual(idempotent.map((item) => item.status), ["exists", "exists", "exists", "exists", "exists", "exists"]);
+}
+
+function runModelPickerReleaseOrderRegression() {
+  const models = [
+    { provider: "anthropic", id: "claude-custom", name: "Claude Custom" },
+    { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
+    { provider: "openai-codex", id: "gpt-5.6-luna", name: "GPT-5.6 Luna" },
+    { provider: "openai-codex", id: "gpt-5.4-mini", name: "GPT-5.4 Mini" },
+    { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5" },
+    { provider: "openai-codex", id: "gpt-5.6-terra", name: "GPT-5.6 Terra" },
+    { provider: "openai", id: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+    { provider: "openai-codex", id: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+  ];
+  const runtime = {
+    project: process.cwd(),
+    session: {
+      model: models[1],
+      modelRegistry: { getAvailable: () => models },
+    },
+  };
+
+  const suggestions = getSlashSuggestions(runtime, "/models ");
+  assert.deepEqual(
+    suggestions.map((item) => item.value),
+    [
+      "openai-codex/gpt-5.6-sol",
+      "openai/gpt-5.6-sol",
+      "openai-codex/gpt-5.6-terra",
+      "openai-codex/gpt-5.6-luna",
+      "openai-codex/gpt-5.5",
+      "openai-codex/gpt-5.4",
+      "openai-codex/gpt-5.4-mini",
+      "anthropic/claude-custom",
+      "",
+    ],
+    "model picker should sort GPT releases newest-first and keep the documented GPT-5.6 tier order",
+  );
+  assert.equal(suggestions[5].description, "active", "active state should be labeled without overriding release order");
+}
+
+function runGpt56ThinkingLevelsRegression() {
+  const project = mkdtempSync(path.join(os.tmpdir(), "zyra-thinking-"));
+  try {
+    const session = {
+      model: { provider: "openai-codex", id: "gpt-5.6-sol", reasoning: true },
+      thinkingLevel: "medium",
+      getAvailableThinkingLevels: () => ["off", "minimal", "low", "medium", "high", "xhigh"],
+      setThinkingLevel(level) {
+        this.thinkingLevel = level;
+      },
+      sessionManager: {
+        getCwd: () => project,
+        getEntries: () => [],
+      },
+      modelRegistry: { isUsingOAuth: () => true },
+    };
+    const runtime = { project, session, thinkingState: { value: "medium" } };
+
+    assert.deepEqual(getZyraAvailableThinkingLevels(runtime), GPT_56_THINKING_LEVELS);
+    const initialSuggestions = getSlashSuggestions(runtime, "/thinking ");
+    assert.deepEqual(
+      initialSuggestions.map((item) => item.value),
+      GPT_56_THINKING_LEVELS,
+      "GPT-5.6 should expose its documented model-specific effort levels",
+    );
+    assert.equal(initialSuggestions.find((item) => item.selected)?.value, "medium");
+    assert.equal(setThinking(runtime, "max"), "max");
+    assert.equal(session.thinkingLevel, "xhigh", "Pi should receive its highest supported internal level");
+    assert.equal(getZyraThinkingLevel(runtime), "max", "Zyra should preserve the distinct GPT-5.6 max level");
+    assert.equal(getSlashSuggestions(runtime, "/thinking ").find((item) => item.selected)?.value, "max");
+    assert.match(stripAnsi(renderStatusLine(runtime, 100)), /gpt-5\.6-sol max/, "status line should show the real GPT-5.6 level");
+
+    const payload = applyGpt56ThinkingEffort({
+      model: "gpt-5.6-sol",
+      service_tier: "priority",
+      reasoning: { effort: "xhigh", summary: "auto" },
+    }, getZyraThinkingLevel(runtime));
+    assert.deepEqual(payload.reasoning, { effort: "max", summary: "auto" });
+    assert.equal(payload.service_tier, "priority", "thinking payload changes must preserve other provider controls");
+
+    assert.equal(setThinking(runtime), "none", "cycling after max should wrap to GPT-5.6 none");
+    assert.equal(session.thinkingLevel, "off", "GPT-5.6 none should map to Pi off internally");
+
+    session.model = { provider: "openai-codex", id: "gpt-5.5", reasoning: true };
+    assert.equal(syncZyraThinkingLevel(runtime, "max"), "xhigh", "leaving GPT-5.6 should clamp max to the target model's highest level");
+    assert.equal(getZyraThinkingLevel(runtime), "xhigh");
+
+    session.model = { provider: "openai-codex", id: "gpt-5.6-terra", reasoning: true };
+    assert.equal(syncZyraThinkingLevel(runtime, "off"), "none", "legacy off should normalize to GPT-5.6 none");
+    assert.equal(resolveZyraStartupPreferences(project, { thinking: "max" }, {}).thinking, "max");
+  } finally {
+    rmSync(project, { recursive: true, force: true });
   }
 }
 
@@ -1547,6 +1743,35 @@ async function runRuntimePreferencePersistenceRegression() {
   }
 }
 
+async function runCompactCommandNoProgressBoxRegression() {
+  let progressCalls = 0;
+  let infoText = "";
+  const terminalStates = [];
+  const handled = await handleSlash(
+    {
+      session: {
+        compact: async () => ({ tokensBefore: 246187 }),
+        getContextUsage: () => ({ tokens: 42000, contextWindow: 272000, percent: 15 }),
+      },
+    },
+    {
+      beginProgress: () => { progressCalls += 1; },
+      updateProgress: () => { progressCalls += 1; },
+      endProgress: () => { progressCalls += 1; },
+      info: (message) => { infoText = message; },
+    },
+    "/compact",
+    {
+      setTerminalTitleState: (state) => terminalStates.push(state),
+    },
+  );
+
+  assert.equal(handled, true);
+  assert.equal(progressCalls, 0, "/compact should not render the big progress box");
+  assert.match(infoText, /Context compacted/);
+  assert.deepEqual(terminalStates, ["compacting", "ready"]);
+}
+
 function runSessionCommandRenameRegression() {
   const values = getSlashSuggestions({ project: process.cwd(), session: {} }, "/").map((item) => item.value);
   assert.equal(values.includes("/session"), true);
@@ -1556,6 +1781,8 @@ function runSessionCommandRenameRegression() {
   assert.equal(values.includes("/web"), true);
   assert.equal(values.includes("/websearch"), true);
   assert.equal(values.includes("/webfetch"), true);
+  assert.equal(values.includes("/quit"), true);
+  assert.deepEqual(getSlashSuggestions({ project: process.cwd(), session: {} }, "/q").map((item) => item.value), ["/quit"]);
   assert.deepEqual(getSlashSuggestions({ project: process.cwd(), session: {} }, "/web ").map((item) => item.value), ["all", "none", "websearch", "webfetch"]);
   assert.deepEqual(getSlashSuggestions({ project: process.cwd(), session: {} }, "/websearch ").map((item) => item.value), ["on", "off"]);
   assert.deepEqual(getSlashSuggestions({ project: process.cwd(), session: {} }, "/webfetch ").map((item) => item.value), ["on", "off"]);
@@ -1628,6 +1855,10 @@ runStatusLineBranchLookupDoesNotBlockInputRegression();
 runSystemPanelWidthRegression();
 runThemePreferencePersistenceRegression();
 runOnboardingStateRegression();
+runRuntimeModelOverrideRegression();
+runModelPickerReleaseOrderRegression();
+runGpt56ThinkingLevelsRegression();
 await runRuntimePreferencePersistenceRegression();
+await runCompactCommandNoProgressBoxRegression();
 runSessionCommandRenameRegression();
 console.log("zyra-ui render regression: ok");

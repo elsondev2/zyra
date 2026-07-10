@@ -414,6 +414,12 @@ async function main() {
   let suppressNextAbortError = false;
   let previewingThemeSuggestion = false;
 
+  const abortActiveRuntime = async () => {
+    runtime.managedBash?.abortAll?.();
+    runtime.session.abortBash?.();
+    await runtime.session.abort?.();
+  };
+
   const startFreshChat = async () => {
     ui.info("Starting a fresh Zyra chat...");
     setTerminalTitleState("starting", runtime);
@@ -466,7 +472,7 @@ async function main() {
           suppressNextAbortError = true;
           setTerminalTitleState("stopped", runtime);
           ui.info("Stopping this run.");
-          await runtime.session.abort?.();
+          await abortActiveRuntime();
           return false;
         }
         if (text.startsWith("/")) {
@@ -510,6 +516,7 @@ async function main() {
       }
     },
     statusLine: (width, state) => renderStatusLine(runtime, width, state),
+    isRunActive: () => activeRun,
     shouldEchoUserMessage: () => !activeRun,
     getQueuedMessages: () => getQueuedMessages(runtime),
     onRestoreQueued: (currentText) => {
@@ -523,7 +530,7 @@ async function main() {
       setTerminalTitleState("stopped", runtime);
       const restored = restoreQueuedMessagesToEditorText(runtime, currentText);
       ui.info(restored.count > 0 ? `Stopping this run. Restored ${restored.count} queued message${restored.count === 1 ? "" : "s"}.` : "Stopping this run.");
-      await runtime.session.abort?.();
+      await abortActiveRuntime();
       ui.refreshInput?.();
       return restored.text;
     },
@@ -558,7 +565,8 @@ async function restartZyraProcess(runtime, options = {}) {
   }
   args.push("--project", runtime.project);
   if (runtime.profile) args.push("--profile", runtime.profile);
-  if (runtime.session.thinkingLevel) args.push("--thinking", runtime.session.thinkingLevel);
+  const thinking = describeRuntime(runtime).thinking;
+  if (thinking) args.push("--thinking", thinking);
   if (runtime.terminalTheme?.name) args.push("--theme", runtime.terminalTheme.name);
   if (runtime.statusLine) args.push("--statusline", runtime.statusLine);
   if (runtime.notifications) args.push("--notifications", runtime.notifications);

@@ -71,7 +71,7 @@ export async function runOnboarding(options = {}) {
 
   const state = {
     theme: buildTerminalTheme(options.theme ?? options.currentTheme),
-    model: options.model ?? "openai-codex/gpt-5.5",
+    model: options.model ?? "openai-codex/gpt-5.6-sol",
     profile: options.profile ?? "default",
     effort: options.effort ?? "medium",
   };

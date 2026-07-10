@@ -13,7 +13,7 @@ const runtime = await createZyraSession({
 
 try {
   const codexPayload = {
-    model: "gpt-5.5",
+    model: "gpt-5.6-sol",
     stream: true,
     include: ["reasoning.encrypted_content"],
     prompt_cache_key: "test-session",
@@ -35,7 +35,7 @@ try {
   assert.equal((await runtime.session._extensionRunner.emitBeforeProviderRequest(codexPayload)).service_tier, undefined);
 
   setCodexMode(runtime, "fast");
-  const nonCodexPayload = { model: "gpt-5.5", include: [] };
+  const nonCodexPayload = { model: "gpt-5.6-sol", include: [] };
   assert.equal((await runtime.session._extensionRunner.emitBeforeProviderRequest(nonCodexPayload)).service_tier, undefined);
 
   assert.throws(() => setCodexMode(runtime, "warp"), /Mode must be one of/);

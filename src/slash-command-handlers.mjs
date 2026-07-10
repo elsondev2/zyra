@@ -22,6 +22,8 @@ import {
   setZyraTheme,
   getRuntimeContextUsage,
   getAutoProfile,
+  formatZyraModelAvailabilitySummary,
+  refreshZyraModelAvailability,
 } from "./zyra-sdk.mjs";
 import { buildProjectStartPrompt } from "./project-start.mjs";
 import { getSlashCommand, parseSlashInput } from "./slash-commands.mjs";
@@ -251,21 +253,12 @@ async function runReload(runtime, ui, arg, controls) {
 }
 
 async function runContextCompact(runtime, ui, arg, controls) {
-  const beforeUsage = getRuntimeContextUsage(runtime);
-  ui.beginProgress?.("Compacting active context", {
-    label: "summarizing",
-    detail: formatCompactionProgressDetail(beforeUsage),
-    percent: 18,
-  });
   controls.setTerminalTitleState?.("compacting");
   try {
     const result = await runtime.session.compact(String(arg ?? "").trim() || undefined);
-    ui.updateProgress?.({ label: "rebuilding", detail: "refreshing the context window", percent: 86 });
     const afterUsage = getRuntimeContextUsage(runtime);
-    ui.updateProgress?.({ label: "done", detail: formatContextCompactionResult(result, afterUsage), percent: 100, done: true });
     ui.info(formatContextCompactionResult(result, afterUsage));
   } finally {
-    ui.endProgress?.();
     controls.setTerminalTitleState?.("ready");
   }
   return true;
@@ -314,11 +307,17 @@ function runThemes(runtime, ui, arg) {
 
 async function runModels(runtime, ui, arg) {
   if (!arg) {
-    ui.info("Choose a model from the picker: type /models and press Enter.");
+    ui.info("Choose a model from the picker: type /models and press Enter. Use /models refresh to ping OpenAI models.");
+    return true;
+  }
+  if (["refresh", "--refresh", "ping", "check"].includes(arg.trim().toLowerCase())) {
+    ui.info("Pinging OpenAI models...");
+    const report = await refreshZyraModelAvailability(runtime.session.modelRegistry, { forceRefresh: true });
+    ui.info(formatZyraModelAvailabilitySummary(report));
     return true;
   }
   const model = await setModel(runtime, arg);
-  ui.info(`Model: ${model.provider}/${model.id}`);
+  ui.info(`Model: ${model.provider}/${model.id} · Thinking: ${describeRuntime(runtime).thinking}`);
   return true;
 }
 
@@ -377,14 +376,6 @@ function formatWebToolsStatus(status = {}) {
   if (!status.webSearch && !status.webFetch) return "Web tools: off.";
   if (status.webSearch) return "Web tools: search only.";
   return "Web tools: fetch only.";
-}
-
-function formatCompactionProgressDetail(usage) {
-  const tokens = Number(usage?.tokens);
-  const window = Number(usage?.contextWindow);
-  if (!Number.isFinite(tokens) || tokens <= 0) return "summarizing older messages";
-  if (!Number.isFinite(window) || window <= 0) return `starting from about ${tokens.toLocaleString()} tokens`;
-  return `starting from about ${tokens.toLocaleString()} of ${window.toLocaleString()} tokens`;
 }
 
 function formatContextCompactionResult(result = {}, afterUsage) {

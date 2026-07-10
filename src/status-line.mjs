@@ -3,7 +3,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { buildTerminalTheme } from "./terminal-theme.mjs";
-import { getRuntimeContextUsage } from "./zyra-sdk.mjs";
+import { getRuntimeContextUsage, getZyraThinkingLevel } from "./zyra-sdk.mjs";
 
 const sep = " \u00b7 ";
 const reset = "\x1b[0m";
@@ -17,6 +17,7 @@ const green4 = "\x1b[38;5;46m";
 const branchCache = new Map();
 const branchCacheMs = 4000;
 const costCache = new WeakMap();
+const themeCache = new WeakMap();
 
 export function renderStatusLine(runtime, width = Math.max(24, (process.stdout.columns ?? 100) - 1), state = {}) {
   const mode = String(runtime.statusLine ?? "default").toLowerCase();
@@ -25,7 +26,7 @@ export function renderStatusLine(runtime, width = Math.max(24, (process.stdout.c
   const session = runtime.session;
   const model = session.model;
   const modelLabel = model?.id ?? "no-model";
-  const thinking = session.thinkingLevel ?? "off";
+  const thinking = getZyraThinkingLevel(runtime);
   const codexMode = formatCodexMode(runtime);
   const profile = runtime.profile ?? "auto";
   const activity = String(state.activity ?? "").trim();
@@ -36,7 +37,7 @@ export function renderStatusLine(runtime, width = Math.max(24, (process.stdout.c
   const cost = formatCost(session);
 
   const maxWidth = Math.max(24, width);
-  const theme = buildTerminalTheme(runtime.terminalTheme);
+  const theme = getStatusLineTheme(runtime);
   if (mode === "minimal") {
     return renderMinimalStatusLine({ theme, contextUsage, modelLabel, profile, context, cost, maxWidth });
   }
@@ -74,6 +75,15 @@ export function renderStatusLine(runtime, width = Math.max(24, (process.stdout.c
     : [color(contextColor(theme, contextUsage), right.context), low(theme.muted, sep), color(costColor(theme, right.cost), right.cost)].join("");
 
   return [left, " ".repeat(gap), rightColored, reset].join("");
+}
+
+function getStatusLineTheme(runtime) {
+  const input = runtime.terminalTheme;
+  const cached = themeCache.get(runtime);
+  if (cached && cached.input === input) return cached.theme;
+  const theme = buildTerminalTheme(input);
+  themeCache.set(runtime, { input, theme });
+  return theme;
 }
 
 function formatCodexMode(runtime) {
@@ -182,7 +192,7 @@ function getGitBranch(cwd) {
   if (!cached?.inFlight) {
     const branch = cached?.branch ?? "";
     branchCache.set(key, { branch, checkedAt: cached?.checkedAt ?? 0, inFlight: true });
-    refreshGitBranch(cwd, key, branch);
+    queueMicrotask(() => refreshGitBranch(cwd, key, branch));
   }
   return cached?.branch ?? "";
 }
