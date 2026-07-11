@@ -1,0 +1,68 @@
+import { resolve } from 'path'
+import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import react from '@vitejs/plugin-react'
+
+const projectRoot = resolve(__dirname)
+const rendererRoot = resolve(__dirname, 'src/renderer')
+
+export default defineConfig({
+    main: {
+        plugins: [
+            externalizeDepsPlugin({
+                include: ['node-pty']
+            })
+        ],
+        build: {
+            rollupOptions: {
+                input: {
+                    index: resolve(__dirname, 'src/main/index.ts')
+                }
+            }
+        }
+    },
+    preload: {
+        plugins: [externalizeDepsPlugin()],
+        build: {
+            rollupOptions: {
+                input: {
+                    index: resolve(__dirname, 'src/preload/index.ts')
+                }
+            }
+        }
+    },
+    renderer: {
+        root: rendererRoot,
+        optimizeDeps: {
+            include: ['@pierre/diffs', '@pierre/diffs/react', '@pierre/diffs/worker/worker.js']
+        },
+        worker: {
+            format: 'es'
+        },
+        build: {
+            rollupOptions: {
+                input: {
+                    index: resolve(rendererRoot, 'index.html')
+                }
+            }
+        },
+        plugins: [react()],
+        resolve: {
+            alias: {
+                '@': resolve(__dirname, 'src/renderer/src'),
+                '@shared': resolve(__dirname, 'src/shared'),
+                react: resolve(__dirname, 'node_modules/react'),
+                'react-dom': resolve(__dirname, 'node_modules/react-dom'),
+                'react/jsx-runtime': resolve(__dirname, 'node_modules/react/jsx-runtime.js'),
+                'react/jsx-dev-runtime': resolve(__dirname, 'node_modules/react/jsx-dev-runtime.js')
+            }
+        },
+        server: {
+            port: 5174,
+            fs: {
+                allow: [
+                    projectRoot
+                ]
+            }
+        }
+    }
+})

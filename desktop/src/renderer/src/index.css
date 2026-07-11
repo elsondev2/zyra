@@ -1,0 +1,829 @@
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;500;600;700&family=Hanken+Grotesk:wght@300;400;500;600;700&display=swap');
+@import './styles/theme-tokens.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================================
+   Base Styles
+   ============================================================================ */
+@layer base {
+  html {
+    font-family: "Hanken Grotesk Variable", "Hanken Grotesk", -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
+  }
+
+  body {
+    @apply bg-sparkle-bg text-sparkle-text;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  /* Selection */
+  ::selection {
+    @apply text-sparkle-text;
+    background-color: color-mix(in srgb, var(--color-primary), transparent 70%);
+  }
+}
+
+/* ============================================================================
+   Custom Scrollbar
+   ============================================================================ */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-text), transparent 86%);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--color-text), transparent 76%);
+}
+
+/* ============================================================================
+   Smooth Physics-Based Scrolling
+   ============================================================================ */
+.smooth-scroll {
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
+}
+
+/* Momentum scrolling for touch/trackpad - physics-like deceleration */
+.momentum-scroll {
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+  overscroll-behavior-y: contain;
+}
+
+/* ============================================================================
+   Utilities
+   ============================================================================ */
+@layer utilities {
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+
+
+  .project-surface-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--color-text), transparent 86%) transparent;
+  }
+
+  .project-surface-scrollbar::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+
+  .project-surface-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .project-surface-scrollbar::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--color-text), transparent 86%);
+    border-radius: 999px;
+  }
+
+  .project-surface-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--color-text), transparent 78%);
+  }
+
+  .drag-region {
+    -webkit-app-region: drag;
+  }
+
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+}
+
+/* ============================================================================
+   Framework badges
+   ============================================================================ */
+body.light .framework-badge {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+body:not(.light) .framework-badge {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.zyra-effort-slider {
+  appearance: none;
+  background: transparent;
+}
+
+.zyra-effort-slider::-webkit-slider-runnable-track {
+  height: 14px;
+  border-radius: 999px;
+  background:
+    var(--zyra-effort-ticks),
+    linear-gradient(
+      90deg,
+      var(--zyra-effort-color) 0%,
+      var(--zyra-effort-color) var(--zyra-effort-progress),
+      rgba(255, 255, 255, 0.09) var(--zyra-effort-progress),
+      rgba(255, 255, 255, 0.09) 100%
+    );
+}
+
+.zyra-effort-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 17px;
+  height: 15px;
+  margin-top: -0.5px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.28);
+}
+
+.zyra-effort-slider::-moz-range-track {
+  height: 14px;
+  border-radius: 999px;
+  background:
+    var(--zyra-effort-ticks),
+    rgba(255, 255, 255, 0.09);
+}
+
+.zyra-effort-slider::-moz-range-progress {
+  height: 14px;
+  border-radius: 999px;
+  background: var(--zyra-effort-color);
+}
+
+.zyra-effort-slider::-moz-range-thumb {
+  width: 17px;
+  height: 15px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.28);
+}
+
+/* ============================================================================
+   Animations
+   ============================================================================ */
+@keyframes shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+@keyframes assistantNarrationShimmer {
+  0%, 18% {
+    background-position: 135% 50%;
+  }
+  82%, 100% {
+    background-position: -35% 50%;
+  }
+}
+
+@keyframes assistantNarrationIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 0.68;
+    transform: translateY(0);
+  }
+}
+
+@keyframes assistantNarrationOut {
+  from {
+    opacity: 0.68;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes zyraLogoShimmer {
+  0% {
+    background-position: 145% 50%;
+  }
+  100% {
+    background-position: -145% 50%;
+  }
+}
+
+@keyframes zyraAsciiShine {
+  0% {
+    opacity: 0;
+    background-position: 150% 50%;
+  }
+  10% {
+    opacity: 0;
+  }
+  22% {
+    opacity: 1;
+  }
+  78% {
+    opacity: 1;
+  }
+  92% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 0;
+    background-position: -150% 50%;
+  }
+}
+
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0,
+    rgba(255, 255, 255, 0.05) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 1000px 100%;
+  animation: shimmer 2s infinite linear;
+}
+
+.assistant-live-narration-muted {
+  color: transparent;
+  font-size: 11px;
+  line-height: 1.25rem;
+  opacity: 0.68;
+  background-image: linear-gradient(
+    100deg,
+    rgba(202, 197, 219, 0.34) 0%,
+    rgba(202, 197, 219, 0.34) 38%,
+    rgba(242, 239, 250, 0.72) 50%,
+    rgba(202, 197, 219, 0.34) 62%,
+    rgba(202, 197, 219, 0.34) 100%
+  );
+  background-size: 260% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: assistantNarrationShimmer 6.5s ease-in-out infinite;
+}
+
+.assistant-live-narration-in {
+  animation:
+    assistantNarrationShimmer 6.5s ease-in-out infinite,
+    assistantNarrationIn 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.assistant-live-narration-out {
+  animation:
+    assistantNarrationShimmer 6.5s ease-in-out infinite,
+    assistantNarrationOut 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-live-narration-muted,
+  .assistant-live-narration-in,
+  .assistant-live-narration-out {
+    animation: none;
+    background: none;
+    color: rgba(202, 197, 219, 0.44);
+    opacity: 1;
+    transform: none;
+  }
+
+  .assistant-live-narration-out {
+    display: none;
+  }
+}
+
+.zyra-loading-text-shine {
+  color: transparent;
+  background-image: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(230, 226, 242, 0.08) 34%,
+    rgba(250, 249, 255, 0.98) 45%,
+    rgba(255, 255, 255, 1) 50%,
+    rgba(250, 249, 255, 0.98) 55%,
+    rgba(230, 226, 242, 0.08) 66%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 280% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: zyraAsciiShine 4s linear infinite;
+  filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.12));
+}
+
+@keyframes terminalOutputText {
+  0% {
+    opacity: 0.62;
+    transform: translateY(3px);
+    text-shadow: 0 0 10px rgba(110, 231, 183, 0.22);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    text-shadow: none;
+  }
+}
+
+.animate-terminal-output-text {
+  animation: terminalOutputText 180ms ease-out both;
+}
+
+@keyframes terminalOutputPulse {
+  0% {
+    opacity: 0.8;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(0);
+  }
+}
+
+.animate-terminal-output-pulse {
+  animation: terminalOutputPulse 520ms ease-out both;
+}
+
+@keyframes terminalCaret {
+  0%,
+  48% {
+    opacity: 1;
+  }
+  49%,
+  100% {
+    opacity: 0.2;
+  }
+}
+
+.animate-terminal-caret {
+  animation: terminalCaret 950ms steps(1, end) infinite;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-glow {
+
+  0%,
+  100% {
+    box-shadow: 0 0 5px var(--color-primary);
+  }
+
+  50% {
+    box-shadow: 0 0 20px var(--color-primary);
+  }
+}
+
+@keyframes subtle-recording-ripple {
+  0% {
+    opacity: 0;
+    transform: scale(1);
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.14);
+  }
+}
+
+.animate-subtle-recording-ripple {
+  animation: subtle-recording-ripple 1.35s ease-out infinite;
+}
+
+.animate-subtle-recording-ripple-delayed {
+  animation: subtle-recording-ripple 1.35s ease-out infinite;
+  animation-delay: 0.4s;
+}
+
+@keyframes modalBackdropIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modalBackdropOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes modalSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes modalSlideOut {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.96);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.animate-modal-backdrop {
+  animation: modalBackdropIn 0.2s ease-out;
+}
+
+.animate-modal-backdrop-out {
+  animation: modalBackdropOut 0.2s ease-in forwards;
+}
+
+.animate-modal-in {
+  animation: modalSlideIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.animate-modal-out {
+  animation: modalSlideOut 0.2s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+@keyframes commandPaletteBackdropIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes commandPaletteBackdropOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes commandPaletteIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes commandPaletteOut {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.99);
+  }
+}
+
+.animate-command-palette-backdrop-in {
+  animation: commandPaletteBackdropIn 90ms ease-out;
+}
+
+.animate-command-palette-backdrop-out {
+  animation: commandPaletteBackdropOut 90ms ease-in forwards;
+}
+
+.animate-command-palette-in {
+  animation: commandPaletteIn 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.animate-command-palette-out {
+  animation: commandPaletteOut 90ms ease-in forwards;
+}
+
+
+/* ============================================================================
+   Compact Mode
+   ============================================================================ */
+.compact-mode {
+  --spacing-scale: 0.85;
+}
+
+.compact-mode .p-4 {
+  padding: 0.75rem;
+}
+
+.compact-mode .p-5 {
+  padding: 1rem;
+}
+
+.compact-mode .p-6 {
+  padding: 1.25rem;
+}
+
+.compact-mode .gap-4 {
+  gap: 0.75rem;
+}
+
+.compact-mode .gap-6 {
+  gap: 1rem;
+}
+
+.compact-mode .mb-4 {
+  margin-bottom: 0.75rem;
+}
+
+.compact-mode .mb-6 {
+  margin-bottom: 1rem;
+}
+
+.compact-mode .text-2xl {
+  font-size: 1.25rem;
+}
+
+.compact-mode .rounded-xl {
+  border-radius: 0.625rem;
+}
+
+/* ============================================================================
+   Theme Adaptation Layer (Non-settings Tabs)
+   Maps legacy white/black utility tones to theme tokens.
+   ============================================================================ */
+.theme-adaptive .text-white {
+  color: var(--color-text) !important;
+}
+
+.theme-adaptive .text-white\/90 {
+  color: color-mix(in srgb, var(--color-text), transparent 10%) !important;
+}
+
+.theme-adaptive .text-white\/80 {
+  color: color-mix(in srgb, var(--color-text), transparent 20%) !important;
+}
+
+.theme-adaptive .text-white\/70 {
+  color: color-mix(in srgb, var(--color-text), transparent 30%) !important;
+}
+
+.theme-adaptive .text-white\/60 {
+  color: var(--color-text-dark) !important;
+}
+
+.theme-adaptive .text-white\/50 {
+  color: color-mix(in srgb, var(--color-text-dark), transparent 20%) !important;
+}
+
+.theme-adaptive .text-white\/40 {
+  color: var(--color-text-secondary) !important;
+}
+
+.theme-adaptive .text-white\/30 {
+  color: color-mix(in srgb, var(--color-text-secondary), transparent 25%) !important;
+}
+
+.theme-adaptive .text-white\/20 {
+  color: color-mix(in srgb, var(--color-text-secondary), transparent 45%) !important;
+}
+
+.theme-adaptive .text-white\/10,
+.theme-adaptive .text-white\/5 {
+  color: color-mix(in srgb, var(--color-text-secondary), transparent 65%) !important;
+}
+
+.theme-adaptive .bg-white\/10 {
+  background-color: color-mix(in srgb, var(--color-text), transparent 90%) !important;
+}
+
+.theme-adaptive .bg-white\/5 {
+  background-color: color-mix(in srgb, var(--color-text), transparent 95%) !important;
+}
+
+.theme-adaptive .bg-white\/\[0\.02\] {
+  background-color: color-mix(in srgb, var(--color-text), transparent 98%) !important;
+}
+
+.theme-adaptive .bg-black\/40 {
+  background-color: color-mix(in srgb, var(--color-bg), transparent 60%) !important;
+}
+
+.theme-adaptive .bg-black\/30 {
+  background-color: color-mix(in srgb, var(--color-bg), transparent 70%) !important;
+}
+
+.theme-adaptive .bg-black\/20,
+.theme-adaptive .bg-black\/10 {
+  background-color: color-mix(in srgb, var(--color-bg), transparent 80%) !important;
+}
+
+.theme-adaptive .border-white\/30 {
+  border-color: color-mix(in srgb, var(--color-text), transparent 70%) !important;
+}
+
+.theme-adaptive .border-white\/20 {
+  border-color: color-mix(in srgb, var(--color-border-secondary), transparent 45%) !important;
+}
+
+.theme-adaptive .border-white\/10 {
+  border-color: color-mix(in srgb, var(--color-border-secondary), transparent 25%) !important;
+}
+
+.theme-adaptive .border-white\/5 {
+  border-color: color-mix(in srgb, var(--color-border), transparent 10%) !important;
+}
+
+.theme-adaptive .shadow-black\/20,
+.theme-adaptive .shadow-black\/30 {
+  --tw-shadow-color: color-mix(in srgb, var(--color-bg), transparent 75%) !important;
+}
+
+.theme-adaptive .hover\:text-white:hover {
+  color: var(--color-text) !important;
+}
+
+.theme-adaptive .hover\:text-white\/60:hover {
+  color: color-mix(in srgb, var(--color-text), transparent 40%) !important;
+}
+
+.theme-adaptive .hover\:bg-white\/5:hover {
+  background-color: color-mix(in srgb, var(--color-text), transparent 95%) !important;
+}
+
+.theme-adaptive .hover\:bg-white\/10:hover {
+  background-color: color-mix(in srgb, var(--color-text), transparent 90%) !important;
+}
+
+.theme-adaptive .group:hover .group-hover\:text-white {
+  color: var(--color-text) !important;
+}
+
+.theme-adaptive .group:hover .group-hover\:text-white\/90 {
+  color: color-mix(in srgb, var(--color-text), transparent 10%) !important;
+}
+
+.theme-adaptive .group:hover .group-hover\:text-white\/80 {
+  color: color-mix(in srgb, var(--color-text), transparent 20%) !important;
+}
+
+.theme-adaptive .group:hover .group-hover\:text-white\/60 {
+  color: color-mix(in srgb, var(--color-text), transparent 40%) !important;
+}
+
+.monaco-editor .git-preview-gutter-added {
+  border-left: 3px solid #73C991;
+  margin-left: 3px;
+}
+
+.monaco-editor .git-preview-gutter-modified {
+  border-left: 3px solid #E2C08D;
+  margin-left: 3px;
+}
+
+.monaco-editor .git-preview-gutter-deleted {
+  border-left: 3px solid #FF6B6B;
+  margin-left: 3px;
+}
+
+.monaco-editor .view-overlays .current-line,
+.monaco-editor .margin-view-overlays .current-line-margin {
+  border: none !important;
+  outline: none !important;
+}
+
+.devscope-monaco-preview .monaco-editor .find-widget {
+  top: 20px !important;
+}
+
+.devscope-monaco-preview .monaco-editor .find-widget.visible {
+  top: 20px !important;
+}
+
+@keyframes slideInFromTop {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.animate-scaleIn {
+  animation: scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.animate-slideInFromTop {
+  animation: slideInFromTop 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes brokenLightFlicker {
+  0%, 7%, 12%, 18%, 27%, 36%, 48%, 61%, 74%, 100% {
+    opacity: 1;
+  }
+
+  8%, 10%, 19%, 20%, 28%, 30%, 49%, 50%, 62%, 63%, 75%, 77% {
+    opacity: 0.3;
+  }
+
+  11%, 31%, 64% {
+    opacity: 0.08;
+  }
+}
+
+.animate-broken-light {
+  animation: brokenLightFlicker 2.3s steps(1, end) infinite;
+}
+
+/* ============================================================================
+   Performance Utilities
+   ============================================================================ */
+.smooth-scroll {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  will-change: scroll-position;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+.gpu-accelerated {
+  transform: translateZ(0);
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+.optimize-scroll {
+  contain: layout style paint;
+  content-visibility: auto;
+}
+
+/* ============================================================================
+   Select Dropdown Theming
+   ============================================================================ */
+select option {
+  background-color: var(--color-card);
+  color: var(--color-text);
+  padding: 8px 12px;
+}
+
+select option:hover,
+select option:focus,
+select option:checked {
+  background-color: color-mix(in srgb, var(--color-text), transparent 90%);
+  color: var(--color-text);
+}
+
+/* Firefox specific */
+@-moz-document url-prefix() {
+  select option {
+    background-color: var(--color-card);
+    color: var(--color-text);
+  }
+
+  select option:checked {
+    background-color: color-mix(in srgb, var(--color-primary), transparent 80%);
+  }
+}

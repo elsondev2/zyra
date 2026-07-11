@@ -20,8 +20,19 @@ apps/*/node_modules/
 apps/*/dist/
 apps/*/.playwright-cli/
 
+# Desktop application local state and generated output
+desktop/node_modules/
+desktop/out/
+desktop/dist/
+desktop/release/
+desktop/.playwright-cli/
+desktop/.zyra/
+desktop/*.log
+desktop/.env
+desktop/.env.*
+!desktop/.env.example
+
 # App surfaces intentionally kept out of the CLI push for now
-apps/zyra-ui/
 src/zyra-ui-bridge.mjs
 
 # Local import/normalization helpers for private exports

@@ -225,7 +225,9 @@ function Download-ZyraSource($TargetDir) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $TargetDir) | Out-Null
     New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
   }
-  Copy-Item -Recurse -Force (Join-Path $source.FullName "*") $TargetDir
+  Get-ChildItem -Force $source.FullName |
+    Where-Object { $_.Name -ne "desktop" } |
+    ForEach-Object { Copy-Item -Recurse -Force $_.FullName $TargetDir }
   Remove-Item -Recurse -Force $temp
   return $TargetDir
 }

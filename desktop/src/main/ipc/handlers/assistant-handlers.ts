@@ -1,0 +1,225 @@
+import log from 'electron-log'
+import type {
+    AssistantApprovalResponseInput,
+    AssistantApprovePendingPlaygroundLabRequestInput,
+    AssistantAttachSessionToPlaygroundLabInput,
+    AssistantClearLogsInput,
+    AssistantConnectOptions,
+    AssistantCreatePlaygroundLabInput,
+    AssistantCreateSessionInput,
+    AssistantDeclinePendingPlaygroundLabRequestInput,
+    AssistantDeletePlaygroundLabInput,
+    AssistantDeleteMessageInput,
+    AssistantGetSessionTurnUsageInput,
+    AssistantPersistClipboardImageInput,
+    AssistantResolveClipboardAttachmentInput,
+    AssistantSendPromptOptions,
+    AssistantSelectThreadInput,
+    AssistantSetPlaygroundRootInput,
+    AssistantTranscribeAudioInput,
+    AssistantUserInputResponseInput
+} from '../../../shared/assistant/contracts'
+import { getAssistantService } from '../../assistant'
+import { persistAssistantClipboardImage, resolveAssistantClipboardAttachment } from '../../assistant/clipboard-attachments'
+import { getAssistantTranscriptionModelManager } from '../../assistant/transcription-models'
+
+async function withAssistantResult<T>(work: () => Promise<T> | T): Promise<T | { success: false; error: string }> {
+    try {
+        return await work()
+    } catch (error) {
+        const message = error instanceof Error ? error.message : 'Assistant request failed.'
+        log.error('Assistant IPC failed:', error)
+        return { success: false as const, error: message }
+    }
+}
+
+export function handleAssistantSubscribe(event: Electron.IpcMainInvokeEvent) {
+    log.info('IPC: assistant:subscribe', { senderId: event.sender.id })
+    return withAssistantResult(() => getAssistantService().subscribe(event.sender.id))
+}
+
+export function handleAssistantUnsubscribe(event: Electron.IpcMainInvokeEvent) {
+    log.info('IPC: assistant:unsubscribe', { senderId: event.sender.id })
+    return withAssistantResult(() => getAssistantService().unsubscribe(event.sender.id))
+}
+
+export async function handleAssistantBootstrap() {
+    return getAssistantService().getBootstrap()
+}
+
+export async function handleAssistantGetSnapshot() {
+    return getAssistantService().getSnapshot()
+}
+
+export async function handleAssistantGetStatus() {
+    return getAssistantService().getStatus()
+}
+
+export function handleAssistantGetAccountOverview() {
+    return withAssistantResult(() => getAssistantService().getAccountOverview())
+}
+
+export function handleAssistantGetSessionTurnUsage(_event: Electron.IpcMainInvokeEvent, input?: AssistantGetSessionTurnUsageInput) {
+    log.info('IPC: assistant:getSessionTurnUsage', { sessionId: input?.sessionId })
+    return withAssistantResult(() => getAssistantService().getSessionTurnUsage(input))
+}
+
+export function handleAssistantListModels(_event: Electron.IpcMainInvokeEvent, forceRefresh?: boolean) {
+    log.info('IPC: assistant:listModels', { forceRefresh: Boolean(forceRefresh) })
+    return withAssistantResult(() => getAssistantService().listModels(Boolean(forceRefresh)))
+}
+
+export function handleAssistantConnect(_event: Electron.IpcMainInvokeEvent, options?: AssistantConnectOptions) {
+    log.info('IPC: assistant:connect', { options })
+    return withAssistantResult(() => getAssistantService().connect(options))
+}
+
+export function handleAssistantDisconnect(_event: Electron.IpcMainInvokeEvent, sessionId?: string) {
+    log.info('IPC: assistant:disconnect', { sessionId })
+    return withAssistantResult(() => getAssistantService().disconnect(sessionId))
+}
+
+export function handleAssistantCreateSession(_event: Electron.IpcMainInvokeEvent, input?: AssistantCreateSessionInput) {
+    log.info('IPC: assistant:createSession', { input })
+    return withAssistantResult(() => getAssistantService().createSession(input))
+}
+
+export function handleAssistantSelectSession(_event: Electron.IpcMainInvokeEvent, sessionId: string) {
+    log.info('IPC: assistant:selectSession', { sessionId })
+    return withAssistantResult(() => getAssistantService().selectSession(sessionId))
+}
+
+export function handleAssistantSelectThread(_event: Electron.IpcMainInvokeEvent, input: AssistantSelectThreadInput) {
+    log.info('IPC: assistant:selectThread', { sessionId: input?.sessionId, threadId: input?.threadId })
+    return withAssistantResult(() => getAssistantService().selectThread(input.sessionId, input.threadId))
+}
+
+export function handleAssistantHydrateSession(_event: Electron.IpcMainInvokeEvent, sessionId: string) {
+    log.info('IPC: assistant:hydrateSession', { sessionId })
+    return withAssistantResult(() => getAssistantService().hydrateSession(sessionId))
+}
+
+export function handleAssistantRenameSession(_event: Electron.IpcMainInvokeEvent, sessionId: string, title: string) {
+    log.info('IPC: assistant:renameSession', { sessionId })
+    return withAssistantResult(() => getAssistantService().renameSession(sessionId, title))
+}
+
+export function handleAssistantArchiveSession(_event: Electron.IpcMainInvokeEvent, sessionId: string, archived?: boolean) {
+    log.info('IPC: assistant:archiveSession', { sessionId, archived: archived !== false })
+    return withAssistantResult(() => getAssistantService().archiveSession(sessionId, archived))
+}
+
+export function handleAssistantDeleteSession(_event: Electron.IpcMainInvokeEvent, sessionId: string) {
+    log.info('IPC: assistant:deleteSession', { sessionId })
+    return withAssistantResult(() => getAssistantService().deleteSession(sessionId))
+}
+
+export function handleAssistantDeleteMessage(_event: Electron.IpcMainInvokeEvent, input: AssistantDeleteMessageInput) {
+    log.info('IPC: assistant:deleteMessage', { sessionId: input?.sessionId, messageId: input?.messageId })
+    return withAssistantResult(() => getAssistantService().deleteMessage(input))
+}
+
+export function handleAssistantClearLogs(_event: Electron.IpcMainInvokeEvent, input?: AssistantClearLogsInput) {
+    log.info('IPC: assistant:clearLogs', { sessionId: input?.sessionId })
+    return withAssistantResult(() => getAssistantService().clearLogs(input))
+}
+
+export function handleAssistantSetSessionProjectPath(_event: Electron.IpcMainInvokeEvent, sessionId: string, projectPath: string | null) {
+    log.info('IPC: assistant:setSessionProjectPath', { sessionId, hasProjectPath: Boolean(projectPath) })
+    return withAssistantResult(() => getAssistantService().setSessionProjectPath(sessionId, projectPath))
+}
+
+export function handleAssistantSetPlaygroundRoot(_event: Electron.IpcMainInvokeEvent, input: AssistantSetPlaygroundRootInput) {
+    log.info('IPC: assistant:setPlaygroundRoot', { hasRootPath: Boolean(input?.rootPath) })
+    return withAssistantResult(() => getAssistantService().setPlaygroundRoot(input))
+}
+
+export function handleAssistantCreatePlaygroundLab(_event: Electron.IpcMainInvokeEvent, input: AssistantCreatePlaygroundLabInput) {
+    log.info('IPC: assistant:createPlaygroundLab', { source: input?.source, openSession: input?.openSession === true })
+    return withAssistantResult(() => getAssistantService().createPlaygroundLab(input))
+}
+
+export function handleAssistantDeletePlaygroundLab(_event: Electron.IpcMainInvokeEvent, input: AssistantDeletePlaygroundLabInput) {
+    log.info('IPC: assistant:deletePlaygroundLab', { labId: input?.labId })
+    return withAssistantResult(() => getAssistantService().deletePlaygroundLab(input))
+}
+
+export function handleAssistantAttachSessionToPlaygroundLab(_event: Electron.IpcMainInvokeEvent, input: AssistantAttachSessionToPlaygroundLabInput) {
+    log.info('IPC: assistant:attachSessionToPlaygroundLab', { sessionId: input?.sessionId, labId: input?.labId })
+    return withAssistantResult(() => getAssistantService().attachSessionToPlaygroundLab(input))
+}
+
+export function handleAssistantApprovePendingPlaygroundLabRequest(_event: Electron.IpcMainInvokeEvent, input: AssistantApprovePendingPlaygroundLabRequestInput) {
+    log.info('IPC: assistant:approvePendingPlaygroundLabRequest', { sessionId: input?.sessionId, source: input?.source })
+    return withAssistantResult(() => getAssistantService().approvePendingPlaygroundLabRequest(input))
+}
+
+export function handleAssistantDeclinePendingPlaygroundLabRequest(_event: Electron.IpcMainInvokeEvent, input: AssistantDeclinePendingPlaygroundLabRequestInput) {
+    log.info('IPC: assistant:declinePendingPlaygroundLabRequest', { sessionId: input?.sessionId })
+    return withAssistantResult(() => getAssistantService().declinePendingPlaygroundLabRequest(input))
+}
+
+export function handleAssistantPersistClipboardImage(_event: Electron.IpcMainInvokeEvent, input: AssistantPersistClipboardImageInput) {
+    return withAssistantResult(async () => ({
+        success: true as const,
+        path: await persistAssistantClipboardImage(input)
+    }))
+}
+
+export function handleAssistantResolveClipboardAttachment(_event: Electron.IpcMainInvokeEvent, input: AssistantResolveClipboardAttachmentInput) {
+    return withAssistantResult(async () => ({
+        success: true as const,
+        path: await resolveAssistantClipboardAttachment(input.reference)
+    }))
+}
+
+export function handleAssistantNewThread(_event: Electron.IpcMainInvokeEvent, sessionId?: string) {
+    log.info('IPC: assistant:newThread', { sessionId })
+    return withAssistantResult(() => getAssistantService().newThread(sessionId))
+}
+
+export function handleAssistantSendPrompt(_event: Electron.IpcMainInvokeEvent, prompt: string, options?: AssistantSendPromptOptions) {
+    log.info('IPC: assistant:sendPrompt', { sessionId: options?.sessionId, model: options?.model })
+    return withAssistantResult(() => getAssistantService().sendPrompt(prompt, options))
+}
+
+export function handleAssistantInterruptTurn(_event: Electron.IpcMainInvokeEvent, turnId?: string, sessionId?: string) {
+    log.info('IPC: assistant:interruptTurn', { turnId, sessionId })
+    return withAssistantResult(() => getAssistantService().interruptTurn(turnId, sessionId))
+}
+
+export function handleAssistantRespondApproval(_event: Electron.IpcMainInvokeEvent, input: AssistantApprovalResponseInput) {
+    log.info('IPC: assistant:respondApproval', { requestId: input?.requestId, decision: input?.decision })
+    return withAssistantResult(() => getAssistantService().respondApproval(input))
+}
+
+export function handleAssistantRespondUserInput(_event: Electron.IpcMainInvokeEvent, input: AssistantUserInputResponseInput) {
+    log.info('IPC: assistant:respondUserInput', { requestId: input?.requestId })
+    return withAssistantResult(() => getAssistantService().respondUserInput(input))
+}
+
+export function handleAssistantGetTranscriptionModelState() {
+    log.info('IPC: assistant:getTranscriptionModelState')
+    return withAssistantResult(async () => ({
+        success: true as const,
+        state: await getAssistantTranscriptionModelManager().getState()
+    }))
+}
+
+export function handleAssistantDownloadTranscriptionModel() {
+    log.info('IPC: assistant:downloadTranscriptionModel')
+    return withAssistantResult(async () => ({
+        success: true as const,
+        state: await getAssistantTranscriptionModelManager().downloadModel()
+    }))
+}
+
+export function handleAssistantTranscribeAudioWithLocalModel(_event: Electron.IpcMainInvokeEvent, input: AssistantTranscribeAudioInput) {
+    log.info('IPC: assistant:transcribeAudioWithLocalModel', {
+        byteLength: input?.audioBuffer ? input.audioBuffer.byteLength : 0
+    })
+    return withAssistantResult(async () => ({
+        success: true as const,
+        text: await getAssistantTranscriptionModelManager().transcribeWav(input.audioBuffer)
+    }))
+}

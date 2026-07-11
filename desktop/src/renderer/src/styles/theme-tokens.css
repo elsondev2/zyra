@@ -1,0 +1,22 @@
+/* ============================================================================
+   Sparkle Design System - Theme Tokens
+   Runtime theme selection now hydrates these variables from the theme catalog.
+   The values here are the fallback/default dark palette.
+   ============================================================================ */
+:root {
+  --color-bg: #0c121f;
+  --color-text: #f0f4f8;
+  --color-text-dark: #d3dbe4;
+  --color-text-darker: #aab4c3;
+  --color-text-secondary: #7e92a9;
+  --color-text-muted: #3b4658;
+  --color-card: #131c2c;
+  --color-border: #1f2a3d;
+  --color-border-secondary: #212f44;
+  --color-primary: #4f90e6;
+  --color-secondary: #3db58a;
+  --color-accent: #243144;
+  --accent-primary: #3b82f6;
+  --accent-secondary: #60a5fa;
+  --terminal-font-size: 14px;
+}

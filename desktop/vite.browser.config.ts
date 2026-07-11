@@ -1,0 +1,46 @@
+import { resolve } from 'path'
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+const projectRoot = resolve(__dirname)
+const rendererRoot = resolve(__dirname, 'src/renderer')
+
+export default defineConfig({
+    root: rendererRoot,
+    base: './',
+    optimizeDeps: {
+        include: ['@pierre/diffs', '@pierre/diffs/react', '@pierre/diffs/worker/worker.js']
+    },
+    worker: {
+        format: 'es'
+    },
+    build: {
+        outDir: resolve(projectRoot, 'out/browser'),
+        emptyOutDir: true,
+        minify: false,
+        reportCompressedSize: false,
+        chunkSizeWarningLimit: 5_000
+    },
+    plugins: [react()],
+    resolve: {
+        alias: {
+            '@': resolve(projectRoot, 'src/renderer/src'),
+            '@shared': resolve(projectRoot, 'src/shared'),
+            react: resolve(projectRoot, 'node_modules/react'),
+            'react-dom': resolve(projectRoot, 'node_modules/react-dom'),
+            'react/jsx-runtime': resolve(projectRoot, 'node_modules/react/jsx-runtime.js'),
+            'react/jsx-dev-runtime': resolve(projectRoot, 'node_modules/react/jsx-dev-runtime.js')
+        }
+    },
+    server: {
+        port: 5174,
+        strictPort: true,
+        fs: {
+            allow: [projectRoot]
+        }
+    },
+    preview: {
+        port: 4175,
+        strictPort: true
+    }
+})

@@ -12,6 +12,7 @@ This project is Zyra, a local CLI built on top of the Pi SDK.
 ## Repo Map
 
 - CLI entrypoints and install wrappers: `bin/`, `zyra.ps1`, `install.ps1`, `install.sh`
+- Desktop application: `desktop/`
 - Core CLI/runtime: `src/`
 - Terminal UI: `src/tui/`
 - Memory pipeline: `src/memory/`

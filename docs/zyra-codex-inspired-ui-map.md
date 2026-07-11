@@ -4,7 +4,7 @@ This is the target experience map for shaping the Zyra desktop app into a dense 
 
 ## Current Proof
 
-- The Electron UI exists at `apps/zyra-ui`.
+- The Electron UI exists at `desktop/`.
 - The dev renderer starts at `http://localhost:5174/`.
 - The active app shell is routed through `src/renderer/src/App.tsx`.
 - The primary assistant surface is `src/renderer/src/pages/assistant/AssistantPage.tsx`.
@@ -184,7 +184,7 @@ Overlays
 4. Polish Assistant shell: title bar, left rail, header, timeline, composer.
 5. Polish right inspectors: plan, details, diff.
 6. Verify empty, active, busy, queued, plan, pending input, diff, and preview states.
-7. Run `npm run typecheck` in `apps/zyra-ui`.
+7. Run `npm run ui:typecheck` from the repository root.
 8. Run root `npm run check` when the CLI/runtime contract is touched.
 
 ## Non-Negotiables

@@ -1,0 +1,474 @@
+import type {
+    AssistantDomainEvent,
+    AssistantMessage,
+    AssistantPendingApproval,
+    AssistantPendingUserInput,
+    AssistantSession,
+    AssistantSnapshot,
+    AssistantThread
+} from './contracts'
+
+type ThreadLocation = {
+    sessionIndex: number
+    threadIndex: number
+}
+
+function findSessionIndex(snapshot: AssistantSnapshot, sessionId: string): number {
+    return snapshot.sessions.findIndex((session) => session.id === sessionId)
+}
+
+function findThreadLocation(snapshot: AssistantSnapshot, threadId: string): ThreadLocation | null {
+    for (let sessionIndex = 0; sessionIndex < snapshot.sessions.length; sessionIndex += 1) {
+        const threadIndex = snapshot.sessions[sessionIndex]?.threads.findIndex((thread) => thread.id === threadId) ?? -1
+        if (threadIndex >= 0) {
+            return { sessionIndex, threadIndex }
+        }
+    }
+    return null
+}
+
+function sortThreadsNewestFirst(threadIds: string[], threads: AssistantThread[]): string[] {
+    const updatedAtById = new Map(threads.map((thread) => [thread.id, thread.updatedAt] as const))
+    return [...threadIds].sort((left, right) => {
+        const leftUpdatedAt = updatedAtById.get(left) || ''
+        const rightUpdatedAt = updatedAtById.get(right) || ''
+        return rightUpdatedAt.localeCompare(leftUpdatedAt) || right.localeCompare(left)
+    })
+}
+
+function sortSessionsNewestFirst(sessions: AssistantSession[]): AssistantSession[] {
+    return [...sessions].sort((left, right) =>
+        right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id)
+    )
+}
+
+function normalizeAssistantSessionRoute(session: AssistantSession): AssistantSession {
+    return {
+        ...session,
+        mode: 'work',
+        playgroundLabId: null,
+        pendingLabRequest: null
+    }
+}
+
+function pickNextSelectedSessionId(sessions: AssistantSession[], selectedSessionId: string | null, removedSessionId: string): string | null {
+    if (selectedSessionId !== removedSessionId) return selectedSessionId
+    const nextSession = sessions.find((session) => !session.archived) || sessions[0]
+    return nextSession?.id || null
+}
+
+function cloneThreadBase(thread: AssistantThread): AssistantThread {
+    return {
+        ...thread,
+        messages: thread.messages,
+        proposedPlans: thread.proposedPlans,
+        activities: thread.activities,
+        pendingApprovals: thread.pendingApprovals,
+        pendingUserInputs: thread.pendingUserInputs
+    }
+}
+
+function ensureSessionWritable(
+    next: AssistantSnapshot,
+    previousSessions: AssistantSession[],
+    sessionIndex: number
+): { session: AssistantSession; previousSession: AssistantSession } | null {
+    const previousSession = previousSessions[sessionIndex]
+    if (!previousSession) return null
+
+    if (next.sessions === previousSessions) {
+        next.sessions = [...previousSessions]
+    }
+
+    const currentSession = next.sessions[sessionIndex]
+    if (currentSession === previousSession) {
+        next.sessions[sessionIndex] = {
+            ...previousSession,
+            threadIds: previousSession.threadIds,
+            threads: previousSession.threads
+        }
+    }
+
+    return {
+        session: next.sessions[sessionIndex]!,
+        previousSession
+    }
+}
+
+function ensureThreadWritable(
+    next: AssistantSnapshot,
+    previousSessions: AssistantSession[],
+    location: ThreadLocation
+): { session: AssistantSession; previousSession: AssistantSession; thread: AssistantThread; previousThread: AssistantThread } | null {
+    const writableSession = ensureSessionWritable(next, previousSessions, location.sessionIndex)
+    if (!writableSession) return null
+
+    const { session, previousSession } = writableSession
+    if (session.threads === previousSession.threads) {
+        session.threads = [...previousSession.threads]
+    }
+
+    const previousThread = previousSession.threads[location.threadIndex]
+    if (!previousThread) return null
+
+    const currentThread = session.threads[location.threadIndex]
+    if (currentThread === previousThread) {
+        session.threads[location.threadIndex] = cloneThreadBase(previousThread)
+    }
+
+    return {
+        session,
+        previousSession,
+        thread: session.threads[location.threadIndex]!,
+        previousThread
+    }
+}
+
+function ensureThreadMessagesWritable(thread: AssistantThread, previousThread: AssistantThread): void {
+    if (thread.messages === previousThread.messages) {
+        thread.messages = [...previousThread.messages]
+    }
+}
+
+function ensureThreadActivitiesWritable(thread: AssistantThread, previousThread: AssistantThread): void {
+    if (thread.activities === previousThread.activities) {
+        thread.activities = [...previousThread.activities]
+    }
+}
+
+function ensureThreadProposedPlansWritable(thread: AssistantThread, previousThread: AssistantThread): void {
+    if (thread.proposedPlans === previousThread.proposedPlans) {
+        thread.proposedPlans = [...previousThread.proposedPlans]
+    }
+}
+
+function ensureThreadPendingApprovalsWritable(thread: AssistantThread, previousThread: AssistantThread): void {
+    if (thread.pendingApprovals === previousThread.pendingApprovals) {
+        thread.pendingApprovals = [...previousThread.pendingApprovals]
+    }
+}
+
+function ensureThreadPendingUserInputsWritable(thread: AssistantThread, previousThread: AssistantThread): void {
+    if (thread.pendingUserInputs === previousThread.pendingUserInputs) {
+        thread.pendingUserInputs = [...previousThread.pendingUserInputs]
+    }
+}
+
+function areMessagesEquivalent(left: AssistantMessage, right: AssistantMessage): boolean {
+    return left.id === right.id
+        && left.role === right.role
+        && left.text === right.text
+        && left.turnId === right.turnId
+        && left.streaming === right.streaming
+        && left.timelineSequence === right.timelineSequence
+        && left.createdAt === right.createdAt
+        && left.updatedAt === right.updatedAt
+}
+
+function upsertMessage(messages: AssistantMessage[], nextMessage: AssistantMessage): AssistantMessage[] {
+    const lastMessageIndex = messages.length - 1
+    const lastMessage = lastMessageIndex >= 0 ? messages[lastMessageIndex] : null
+    if (lastMessage?.id === nextMessage.id) {
+        if (areMessagesEquivalent(lastMessage, nextMessage)) return messages
+        const nextMessages = [...messages]
+        nextMessages[lastMessageIndex] = nextMessage
+        return nextMessages
+    }
+
+    const existingIndex = messages.findIndex((message) => message.id === nextMessage.id)
+    if (existingIndex < 0) {
+        return [...messages, nextMessage]
+    }
+
+    if (areMessagesEquivalent(messages[existingIndex]!, nextMessage)) return messages
+
+    const nextMessages = [...messages]
+    nextMessages[existingIndex] = nextMessage
+    return nextMessages
+}
+
+export function createDefaultAssistantSnapshot(): AssistantSnapshot {
+    return {
+        snapshotSequence: 0,
+        updatedAt: new Date(0).toISOString(),
+        selectedSessionId: null,
+        playground: {
+            rootPath: null,
+            labs: []
+        },
+        sessions: [],
+        knownModels: []
+    }
+}
+
+function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: AssistantDomainEvent): AssistantSnapshot {
+    const previousSessions = snapshot.sessions
+    let next: AssistantSnapshot = {
+        ...snapshot,
+        snapshotSequence: event.sequence,
+        updatedAt: event.occurredAt,
+        sessions: snapshot.sessions
+    }
+    let shouldSortSessions = false
+
+    switch (event.type) {
+        case 'session.created': {
+            const session = normalizeAssistantSessionRoute(event.payload['session'] as AssistantSession)
+            next.sessions = [...previousSessions, session]
+            next.selectedSessionId = session.id
+            shouldSortSessions = true
+            break
+        }
+        case 'session.selected': {
+            next.selectedSessionId = String(event.payload['sessionId'] || '') || null
+            break
+        }
+        case 'session.updated': {
+            const sessionId = String(event.payload['sessionId'] || '')
+            const sessionIndex = findSessionIndex(next, sessionId)
+            const writable = ensureSessionWritable(next, previousSessions, sessionIndex)
+            if (!writable) break
+
+            Object.assign(writable.session, event.payload['patch'])
+            writable.session.mode = 'work'
+            writable.session.playgroundLabId = null
+            writable.session.pendingLabRequest = null
+            writable.session.threadIds = sortThreadsNewestFirst(writable.session.threadIds, writable.session.threads)
+            shouldSortSessions = true
+            break
+        }
+        case 'session.deleted': {
+            const sessionId = String(event.payload['sessionId'] || '')
+            next.sessions = previousSessions.filter((session) => session.id !== sessionId)
+            next.selectedSessionId = pickNextSelectedSessionId(next.sessions, snapshot.selectedSessionId, sessionId)
+            shouldSortSessions = true
+            break
+        }
+        case 'playground.updated': {
+            next.playground = event.payload['playground'] as AssistantSnapshot['playground']
+            break
+        }
+        case 'thread.created': {
+            const sessionId = String(event.payload['sessionId'] || '')
+            const sessionIndex = findSessionIndex(next, sessionId)
+            const writable = ensureSessionWritable(next, previousSessions, sessionIndex)
+            const thread = event.payload['thread'] as AssistantThread
+            const makeActive = event.payload['makeActive'] !== false
+            if (!writable) break
+
+            if (writable.session.threads === writable.previousSession.threads) {
+                writable.session.threads = [...writable.previousSession.threads]
+            }
+            if (writable.session.threadIds === writable.previousSession.threadIds) {
+                writable.session.threadIds = [...writable.previousSession.threadIds]
+            }
+            writable.session.threads.unshift(thread)
+            writable.session.threadIds = sortThreadsNewestFirst([thread.id, ...writable.session.threadIds], writable.session.threads)
+            if (makeActive) {
+                writable.session.activeThreadId = thread.id
+            }
+            writable.session.updatedAt = event.occurredAt
+            shouldSortSessions = true
+            break
+        }
+        case 'thread.updated': {
+            const threadId = String(event.payload['threadId'] || '')
+            const location = findThreadLocation(next, threadId)
+            const writable = location ? ensureThreadWritable(next, previousSessions, location) : null
+            if (!writable) break
+
+            const patch = (event.payload['patch'] as Record<string, unknown> | undefined) || {}
+            Object.assign(writable.thread, patch)
+            if (Array.isArray(writable.thread.messages)) {
+                writable.thread.messageCount = writable.thread.messages.length
+            }
+
+            const patchUpdatedAt = typeof patch['updatedAt'] === 'string' ? patch['updatedAt'] : null
+            if (patchUpdatedAt) {
+                writable.thread.updatedAt = patchUpdatedAt
+                writable.session.updatedAt = patchUpdatedAt
+            }
+            break
+        }
+        case 'thread.message.user':
+        case 'thread.message.assistant.delta':
+        case 'thread.message.assistant.completed': {
+            const threadId = String(event.payload['threadId'] || event.threadId || '')
+            const location = findThreadLocation(next, threadId)
+            const writable = location ? ensureThreadWritable(next, previousSessions, location) : null
+            if (!writable) break
+
+            if (event.type === 'thread.message.assistant.delta') {
+                const messageId = String(event.payload['messageId'] || '')
+                const delta = String(event.payload['delta'] || '')
+                const existing = writable.thread.messages.find((message) => message.id === messageId)
+                const nextMessage: AssistantMessage = existing
+                    ? {
+                        ...existing,
+                        role: 'assistant',
+                        text: `${existing.text}${delta}`,
+                        streaming: true,
+                        updatedAt: event.occurredAt
+                    }
+                    : {
+                        id: messageId,
+                        role: 'assistant',
+                        text: delta,
+                        turnId: String(event.payload['turnId'] || '') || null,
+                        streaming: true,
+                        timelineSequence: event.sequence,
+                        createdAt: event.occurredAt,
+                        updatedAt: event.occurredAt
+                    }
+                writable.thread.messages = upsertMessage(writable.thread.messages, nextMessage)
+            } else if (event.type === 'thread.message.assistant.completed') {
+                const messageId = String(event.payload['messageId'] || '')
+                const existing = writable.thread.messages.find((message) => message.id === messageId)
+                if (existing) {
+                    const completedText = typeof event.payload['text'] === 'string'
+                        ? event.payload['text'] as string
+                        : existing.text
+                    writable.thread.messages = upsertMessage(writable.thread.messages, {
+                        ...existing,
+                        text: completedText,
+                        streaming: false,
+                        updatedAt: event.occurredAt
+                    })
+                }
+            } else {
+                const message = event.payload['message'] as AssistantMessage
+                writable.thread.messages = upsertMessage(writable.thread.messages, {
+                    ...message,
+                    timelineSequence: message.timelineSequence ?? event.sequence
+                })
+            }
+
+            writable.thread.messageCount = writable.thread.messages.length
+            if (event.type !== 'thread.message.assistant.delta') {
+                writable.thread.updatedAt = event.occurredAt
+                writable.session.updatedAt = event.occurredAt
+                writable.session.threadIds = sortThreadsNewestFirst(writable.session.threadIds, writable.session.threads)
+                shouldSortSessions = true
+            }
+            break
+        }
+        case 'thread.plan.updated': {
+            const threadId = String(event.payload['threadId'] || event.threadId || '')
+            const location = findThreadLocation(next, threadId)
+            const writable = location ? ensureThreadWritable(next, previousSessions, location) : null
+            if (!writable) break
+
+            writable.thread.activePlan = event.payload['activePlan'] as AssistantThread['activePlan']
+            break
+        }
+        case 'thread.proposed-plan.upserted': {
+            const threadId = String(event.payload['threadId'] || event.threadId || '')
+            const location = findThreadLocation(next, threadId)
+            const writable = location ? ensureThreadWritable(next, previousSessions, location) : null
+            if (!writable) break
+
+            const plan = event.payload['plan'] as AssistantThread['proposedPlans'][number]
+            const index = writable.thread.proposedPlans.findIndex((entry) => entry.id === plan.id)
+            const nextPlan = {
+                ...plan,
+                timelineSequence: writable.thread.proposedPlans[index]?.timelineSequence
+                    ?? plan.timelineSequence
+                    ?? event.sequence
+            }
+            if (index < 0) {
+                writable.thread.proposedPlans = [...writable.thread.proposedPlans, nextPlan]
+            } else if (writable.thread.proposedPlans[index] !== nextPlan) {
+                const nextPlans = [...writable.thread.proposedPlans]
+                nextPlans[index] = nextPlan
+                writable.thread.proposedPlans = nextPlans
+            }
+            break
+        }
+        case 'thread.activity.appended': {
+            const threadId = String(event.payload['threadId'] || event.threadId || '')
+            const location = findThreadLocation(next, threadId)
+            const writable = location ? ensureThreadWritable(next, previousSessions, location) : null
+            if (!writable) break
+
+            const activity = event.payload['activity'] as AssistantThread['activities'][number]
+            const index = writable.thread.activities.findIndex((entry) => entry.id === activity.id)
+            const nextActivity = {
+                ...activity,
+                timelineSequence: writable.thread.activities[index]?.timelineSequence
+                    ?? activity.timelineSequence
+                    ?? event.sequence
+            }
+            if (index < 0) {
+                writable.thread.activities = [...writable.thread.activities, nextActivity]
+            } else {
+                const nextActivities = [...writable.thread.activities]
+                nextActivities[index] = nextActivity
+                writable.thread.activities = nextActivities
+            }
+            break
+        }
+        case 'thread.approval.updated': {
+            const threadId = String(event.payload['threadId'] || event.threadId || '')
+            const location = findThreadLocation(next, threadId)
+            const writable = location ? ensureThreadWritable(next, previousSessions, location) : null
+            if (!writable) break
+
+            const approval = event.payload['approval'] as AssistantPendingApproval
+            const index = writable.thread.pendingApprovals.findIndex((entry) => entry.requestId === approval.requestId)
+            if (index < 0) {
+                writable.thread.pendingApprovals = [...writable.thread.pendingApprovals, approval].sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+            } else if (writable.thread.pendingApprovals[index] !== approval) {
+                const nextApprovals = [...writable.thread.pendingApprovals]
+                nextApprovals[index] = approval
+                writable.thread.pendingApprovals = nextApprovals
+            }
+            break
+        }
+        case 'thread.user-input.updated': {
+            const threadId = String(event.payload['threadId'] || event.threadId || '')
+            const location = findThreadLocation(next, threadId)
+            const writable = location ? ensureThreadWritable(next, previousSessions, location) : null
+            if (!writable) break
+
+            const userInput = event.payload['userInput'] as AssistantPendingUserInput
+            const index = writable.thread.pendingUserInputs.findIndex((entry) => entry.requestId === userInput.requestId)
+            if (index < 0) {
+                writable.thread.pendingUserInputs = [...writable.thread.pendingUserInputs, userInput].sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+            } else if (writable.thread.pendingUserInputs[index] !== userInput) {
+                const nextInputs = [...writable.thread.pendingUserInputs]
+                nextInputs[index] = userInput
+                writable.thread.pendingUserInputs = nextInputs
+            }
+            break
+        }
+        case 'thread.latest-turn.updated': {
+            const threadId = String(event.payload['threadId'] || event.threadId || '')
+            const location = findThreadLocation(next, threadId)
+            const writable = location ? ensureThreadWritable(next, previousSessions, location) : null
+            if (!writable) break
+
+            writable.thread.latestTurn = event.payload['latestTurn'] as AssistantThread['latestTurn']
+            break
+        }
+    }
+
+    if (shouldSortSessions) {
+        next.sessions = sortSessionsNewestFirst(next.sessions)
+    }
+
+    return next
+}
+
+export function applyAssistantDomainEvents(snapshot: AssistantSnapshot, events: AssistantDomainEvent[]): AssistantSnapshot {
+    if (events.length === 0) return snapshot
+
+    let next = snapshot
+    for (const event of events) {
+        next = applyAssistantDomainEventInternal(next, event)
+    }
+    return next
+}
+
+export function applyAssistantDomainEvent(snapshot: AssistantSnapshot, event: AssistantDomainEvent): AssistantSnapshot {
+    return applyAssistantDomainEvents(snapshot, [event])
+}

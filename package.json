@@ -13,9 +13,9 @@
     "privacy-check": "node scripts/privacy-check.mjs",
     "release:zip": "node scripts/build-release.mjs",
     "install:global": "bun link",
-    "ui:dev": "bun run --cwd apps/zyra-ui dev",
-    "ui:build": "bun run --cwd apps/zyra-ui build",
-    "ui:typecheck": "bun run --cwd apps/zyra-ui typecheck"
+    "ui:dev": "bun run --cwd desktop dev",
+    "ui:build": "bun run --cwd desktop build",
+    "ui:typecheck": "bun run --cwd desktop typecheck"
   },
   "bin": {
     "zyra": "bin/zyra.mjs"
@@ -29,7 +29,6 @@
     "install.ps1",
     "install.sh",
     "scripts",
-    "apps/zyra-ui",
     "prompts",
     "src",
     "zyra.cmd",
