@@ -3,7 +3,7 @@
  * Main Process Entry Point
  */
 
-import { app, BrowserWindow, Menu, shell, ipcMain, nativeTheme, protocol, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, Menu, shell, ipcMain, nativeTheme, protocol, globalShortcut, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { join } from 'path'
 import { existsSync, statSync } from 'fs'
 import { electronApp, is } from './utils'
@@ -13,6 +13,8 @@ import { disposeAssistantService } from './assistant'
 import { disposeUpdater, initializeUpdater, registerUpdateWindow } from './update/manager'
 import { registerFileProtocol } from './file-protocol'
 import { isSafeBrowserNavigationUrl, isZyraBrowserPartition } from './ipc/handlers/browser-preview-handlers'
+import { disposeAgentControlBroker, getAgentControlBroker } from './agent-control'
+import { trustedBrowserGuests } from './agent-control/trusted-guest-registry'
 
 const APP_NAME = "Zyra"
 const DEV_APP_NAME = `${APP_NAME}-dev`
@@ -161,6 +163,7 @@ function registerBrowserPreviewWebviewSecurity(window: BrowserWindow): void {
     })
 
     window.webContents.on('did-attach-webview', (_event, guestContents) => {
+        trustedBrowserGuests.register(window.webContents.id, guestContents)
         guestContents.setWindowOpenHandler(({ url }) => {
             if (isSafeBrowserNavigationUrl(url)) void shell.openExternal(url)
             return { action: 'deny' }
@@ -443,6 +446,9 @@ app.whenReady().then(() => {
     void initializeUpdater()
     registerFileProtocol(FILE_PROTOCOL)
     nativeTheme.on('updated', syncOpenWindowIcons)
+    globalShortcut.register('CommandOrControl+Alt+Escape', () => {
+        void getAgentControlBroker().emergencyStop('Global emergency-stop shortcut pressed.')
+    })
 
     // Keep the full app alive in background for shell file-preview launches.
     const launchHidden = initialShellLaunchTarget?.kind === 'file'
@@ -481,14 +487,17 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
     disposeAssistantService()
     disposeUpdater()
+    void disposeAgentControlBroker()
     if (process.platform !== 'darwin') {
         app.quit()
     }
 })
 
 app.on('before-quit', () => {
+    globalShortcut.unregisterAll()
     disposeAssistantService()
     disposeUpdater()
+    void disposeAgentControlBroker()
 })
 
 // Handle window control IPC

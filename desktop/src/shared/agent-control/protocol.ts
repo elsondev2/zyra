@@ -1,0 +1,67 @@
+import type {
+    ControlActionRequest,
+    ControlCapability,
+    ControlPrincipal,
+    ControlSideEffectClass
+} from './contracts'
+
+export const AGENT_CONTROL_IPC = {
+    getState: 'zyra:agent-control:get-state',
+    bindBrowserTab: 'zyra:agent-control:bind-browser-tab',
+    requestGrant: 'zyra:agent-control:request-grant',
+    approveGrant: 'zyra:agent-control:approve-grant',
+    rejectGrant: 'zyra:agent-control:reject-grant',
+    revokeGrant: 'zyra:agent-control:revoke-grant',
+    emergencyStop: 'zyra:agent-control:emergency-stop',
+    clearAudit: 'zyra:agent-control:clear-audit',
+    startChromePairing: 'zyra:agent-control:start-chrome-pairing',
+    stopChromePairing: 'zyra:agent-control:stop-chrome-pairing',
+    listWindows: 'zyra:agent-control:list-windows',
+    selectWindow: 'zyra:agent-control:select-window',
+    stateChanged: 'zyra:agent-control:state-changed'
+} as const
+
+export type RendererControlGrantInput = {
+    targetId: string
+    capabilities: ControlCapability[]
+    durationMs: number
+    maxActions: number
+    allowedOrigins?: string[]
+    allowedExecutableIdentities?: string[]
+    pendingRequestId?: string
+}
+
+export type AgentControlBridgeOperation =
+    | { operation: 'list_targets'; targetKind?: 'zyra-browser' | 'chrome-tab' }
+    | { operation: 'list_windows' }
+    | {
+        operation: 'request_grant'
+        targetId: string
+        capabilities: ControlCapability[]
+        durationMs?: number
+        maxActions?: number
+        allowedOrigins?: string[]
+        allowedExecutableIdentities?: string[]
+    }
+    | { operation: 'observe'; grantId: string; targetId: string; includeScreenshot?: boolean }
+    | ({ operation: 'act' } & ControlActionRequest)
+    | { operation: 'release'; grantId: string }
+
+export type AgentControlBridgeRequest = {
+    type: 'control.request'
+    requestId: string
+    operation: AgentControlBridgeOperation
+}
+
+export type AgentControlBridgeResponse = {
+    type: 'control.response'
+    requestId: string
+    ok: boolean
+    result?: Record<string, unknown>
+    error?: { code: string; message: string; retryable: boolean; freshRevision?: number }
+}
+
+export type AgentControlToolContext = {
+    principal: ControlPrincipal
+    sideEffect?: ControlSideEffectClass
+}

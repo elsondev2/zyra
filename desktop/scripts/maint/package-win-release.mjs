@@ -20,6 +20,13 @@ const builderArgs = mode === 'unpacked'
     : ['electron-builder', '--win', `--config.directories.output=${outputDir}`]
 
 const command = process.platform === 'win32' ? 'npx.cmd' : 'npx'
+const repositoryRoot = path.resolve(rootDir, '..')
+const extensionPackage = path.join(repositoryRoot, 'extensions', 'zyra-browser-control')
+const sidecarProject = path.join(repositoryRoot, 'native', 'zyra-computer-use', 'src', 'Zyra.ComputerUse', 'Zyra.ComputerUse.csproj')
+const sidecarOutput = path.join(repositoryRoot, 'native', 'zyra-computer-use', 'publish')
+
+await run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['--prefix', extensionPackage, 'run', 'package'], repositoryRoot)
+await run('dotnet', ['publish', sidecarProject, '-c', 'Release', '-r', 'win-x64', '--self-contained', 'false', '-o', sidecarOutput], repositoryRoot)
 
 await new Promise((resolve, reject) => {
     const child = spawn(command, builderArgs, {
@@ -39,3 +46,11 @@ await new Promise((resolve, reject) => {
 
     child.on('error', reject)
 })
+
+function run(executable, args, cwd) {
+    return new Promise((resolve, reject) => {
+        const child = spawn(executable, args, { cwd, stdio: 'inherit', shell: false })
+        child.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`${executable} exited with code ${code ?? 'unknown'}`)))
+        child.on('error', reject)
+    })
+}

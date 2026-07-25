@@ -5,6 +5,8 @@ export const AGENT_SURFACE_KINDS = Object.freeze([
   "file-change",
   "file-read",
   "search",
+  "browser-control",
+  "computer-control",
   "tool",
 ]);
 
@@ -102,6 +104,8 @@ export function isAgentSurfaceDescriptor(value) {
 }
 
 function classifyToolKind({ normalizedToolName, args, command, query, paths }) {
+  if (normalizedToolName === "browser control") return "browser-control";
+  if (normalizedToolName === "computer control") return "computer-control";
   if (command || /\b(bash|shell|powershell|terminal|exec|command|cmd)\b/.test(normalizedToolName)) {
     return "command";
   }
@@ -133,6 +137,13 @@ function isFileMutation(toolName, args) {
 }
 
 function summarizeSurfaceTool({ kind, lifecycle, toolName, pathCount }) {
+  if (kind === "browser-control" || kind === "computer-control") {
+    const label = kind === "browser-control" ? "Browser control" : "Computer control";
+    if (lifecycle === "running") return `Using ${label}`;
+    if (lifecycle === "failed") return `${label} failed`;
+    if (lifecycle === "stopped") return `${label} stopped`;
+    return `${label} completed`;
+  }
   if (kind === "command") {
     if (lifecycle === "running") return "Running command";
     if (lifecycle === "failed") return "Command failed";

@@ -4,6 +4,7 @@
 
 import type { DevScopeApi } from '../shared/contracts/devscope-api'
 import { createAssistantAdapter } from './adapters/assistant-adapter'
+import { createAgentControlAdapter } from './adapters/agent-control-adapter'
 import { createDisabledAdapters } from './adapters/disabled-adapters'
 import { createMemoryAdapter } from './adapters/memory-adapter'
 import { createProjectsAdapter } from './adapters/projects-adapter'
@@ -18,6 +19,7 @@ export function createDevScopeElectronAdapter(): DevScopeApi {
         ...createProjectsAdapter(),
         ...createDisabledAdapters(),
         ...createAssistantAdapter(),
+        agentControl: createAgentControlAdapter(),
         ...createUpdatesAdapter(),
         ...createWindowAdapter()
     } as unknown as DevScopeApi

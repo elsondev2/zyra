@@ -180,13 +180,17 @@ async function loadZyraToolModules() {
     import("./managed-bash-tool.mjs"),
     import("./web-search-tool.mjs"),
     import("./write-diff-tool.mjs"),
-  ]).then(([managedBash, web, writeDiff]) => ({
+    import("./agent-control/browser-control-tool.mjs"),
+    import("./agent-control/computer-control-tool.mjs"),
+  ]).then(([managedBash, web, writeDiff, browserControl, computerControl]) => ({
     createManagedBashState: managedBash.createManagedBashState,
     createManagedBashTool: managedBash.createManagedBashTool,
     waitForManagedBashAutoUpdate: managedBash.waitForManagedBashAutoUpdate,
     createZyraWebSearchTool: web.createZyraWebSearchTool,
     createZyraWebFetchTool: web.createZyraWebFetchTool,
     createZyraWriteTool: writeDiff.createZyraWriteTool,
+    createBrowserControlTool: browserControl.createBrowserControlTool,
+    createComputerControlTool: computerControl.createComputerControlTool,
   }));
   return zyraToolModulesPromise;
 }
@@ -564,6 +568,8 @@ export async function createZyraSession(options = {}) {
     createZyraWebSearchTool,
     createZyraWebFetchTool,
     createZyraWriteTool,
+    createBrowserControlTool,
+    createComputerControlTool,
   } = toolModules;
 
   const sessionManager = await createSessionManager(SessionManager, {
@@ -612,6 +618,9 @@ export async function createZyraSession(options = {}) {
         generateUnifiedPatch,
         withFileMutationQueue,
       }),
+      createBrowserControlTool({ client: options.controlBridgeClient }),
+      createComputerControlTool({ client: options.controlBridgeClient }),
+      ...(Array.isArray(options.customTools) ? options.customTools : []),
     ],
     ...startupResources,
   });

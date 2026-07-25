@@ -1,0 +1,65 @@
+import assert from 'node:assert/strict'
+import { AgentControlBroker } from '../src/main/agent-control/agent-control-broker'
+import { FakeControlDriver } from '../src/main/agent-control/drivers/fake-driver'
+
+const driver = new FakeControlDriver('zyra-browser')
+const broker = new AgentControlBroker({ drivers: [driver] })
+const targetId = broker.targets.createTargetId('zyra-browser')
+broker.registerTarget({
+    target: { kind: 'zyra-browser', targetId, tabId: 'browser:test', guestIdentity: 'guest:test', origin: 'http://127.0.0.1' },
+    driver,
+    trustedIdentity: {}
+})
+const principal = { type: 'root' as const, threadId: 'thread:test', turnId: 'turn:test' }
+const pending = broker.requestGrant({
+    principal, targetId,
+    capabilities: ['observe.structure', 'pointer.click', 'keyboard.type', 'navigate'],
+    durationMs: 60_000,
+    maxActions: 10,
+    allowedOrigins: ['http://127.0.0.1']
+})
+assert.throws(() => broker.approvePendingGrant({
+    pendingRequestId: pending.requestId, targetId,
+    capabilities: ['observe.structure', 'pointer.click', 'keyboard.type', 'navigate', 'keyboard.key'],
+    durationMs: 60_000, maxActions: 10
+}), /cannot widen/)
+const grant = broker.approvePendingGrant({
+    pendingRequestId: pending.requestId, targetId,
+    capabilities: pending.capabilities,
+    durationMs: 30_000, maxActions: 5,
+    allowedOrigins: pending.allowedOrigins
+})
+assert.equal(grant.state, 'active')
+const observation = await broker.observe(principal, grant.grantId, targetId)
+assert.equal(observation.elements.find((element) => element.role === 'password')?.value, '[REDACTED]')
+await assert.rejects(() => broker.act(principal, {
+    version: 1, requestId: 'request:secret-field', grantId: grant.grantId, targetId,
+    observationRevision: observation.revision,
+    action: { type: 'type', elementRef: 'fixture:password', text: 'model-supplied-value' }
+}), /cannot type into a password or sensitive field/)
+await assert.rejects(() => broker.act(principal, {
+    version: 1, requestId: 'request:outside', grantId: grant.grantId, targetId,
+    observationRevision: observation.revision,
+    action: { type: 'navigate', url: 'https://outside.example/' }
+}), /outside the grant origin scope/)
+await assert.rejects(() => broker.act(principal, {
+    version: 1, requestId: 'request:side-effect', grantId: grant.grantId, targetId,
+    observationRevision: observation.revision,
+    action: { type: 'click', elementRef: 'fixture:button', sideEffect: 'purchase' }
+}), /requires explicit per-action user approval/)
+
+const child = { type: 'agent' as const, fleetId: 'fleet:test', agentRunId: 'agent:test', parentThreadId: principal.threadId }
+assert.throws(() => broker.delegate({
+    parentGrantId: grant.grantId, parentPrincipal: principal, childPrincipal: child, targetId,
+    capabilities: grant.capabilities, expiresAt: grant.expiresAt, maxActions: grant.maxActions - grant.actionCount,
+    allowedOrigins: grant.allowedOrigins
+}), /must attenuate/)
+const lease = broker.delegate({
+    parentGrantId: grant.grantId, parentPrincipal: principal, childPrincipal: child, targetId,
+    capabilities: ['observe.structure'], expiresAt: new Date(Date.now() + 10_000).toISOString(), maxActions: 1,
+    allowedOrigins: ['http://127.0.0.1']
+})
+assert.equal(lease.parentGrantId, grant.grantId)
+broker.revokeGrant(grant.grantId)
+assert.equal(broker.grants.list().find((entry) => entry.grantId === lease.grantId)?.state, 'revoked')
+console.log('Agent control policy and attenuation passed.')

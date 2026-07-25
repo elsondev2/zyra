@@ -1,0 +1,220 @@
+using System.Diagnostics;
+using System.IO;
+using System.IO.Pipes;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Zyra.ComputerUse.Capture;
+using Zyra.ComputerUse.Input;
+using Zyra.ComputerUse.UiAutomation;
+using Zyra.ComputerUse.Windows;
+
+namespace Zyra.ComputerUse.Protocol;
+
+public sealed class NamedPipeRpcHost
+{
+    public const int MaxMessageBytes = 512 * 1024;
+    private readonly string _pipeName;
+    private readonly string _authSecret;
+    private readonly WindowRegistry _windows;
+    private readonly UiAutomationProvider _uia = new();
+    private readonly InputProvider _input = new();
+    private readonly WindowsGraphicsCaptureProvider _capture;
+    private readonly Dictionary<string, int> _revisions = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, WindowObservation> _observations = new(StringComparer.Ordinal);
+    private readonly JsonSerializerOptions _json = new(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
+
+    public NamedPipeRpcHost(string pipeName, string authSecret, string artifactDirectory)
+    {
+        _pipeName = pipeName;
+        _authSecret = authSecret;
+        _windows = new WindowRegistry(authSecret);
+        _capture = new WindowsGraphicsCaptureProvider(artifactDirectory);
+    }
+
+    public async Task RunAsync(CancellationToken cancellationToken)
+    {
+        using var pipe = new NamedPipeServerStream(
+            _pipeName,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly,
+            MaxMessageBytes,
+            MaxMessageBytes);
+        await pipe.WaitForConnectionAsync(cancellationToken);
+        ValidatePeer(pipe);
+        using var reader = new StreamReader(pipe, new UTF8Encoding(false), false, 4096, leaveOpen: true);
+        using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true) { AutoFlush = true };
+        while (!cancellationToken.IsCancellationRequested && pipe.IsConnected)
+        {
+            var line = await ReadBoundedLineAsync(reader, cancellationToken);
+            if (line is null) break;
+            RpcResponse response;
+            try
+            {
+                var request = JsonSerializer.Deserialize<RpcRequest>(line, _json) ?? throw new InvalidDataException("JSON-RPC request is missing.");
+                response = await HandleAsync(request, cancellationToken);
+            }
+            catch (Exception error)
+            {
+                response = new RpcResponse("unknown", false, Error: new RpcError(ErrorCode(error), Limit(error.Message, 512), error is IOException or TimeoutException));
+            }
+            await writer.WriteLineAsync(JsonSerializer.Serialize(response, _json));
+        }
+    }
+
+    public async Task<RpcResponse> HandleAsync(RpcRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request.Version != 1) return Error(request.Id, "PROTOCOL_VERSION", "Unsupported sidecar protocol version.");
+        if (!FixedEquals(request.Auth, _authSecret)) return Error(request.Id, "AUTHENTICATION_FAILED", "Sidecar authentication failed.");
+        if (request.Id.Length is < 1 or > 192 || request.Method.Length is < 1 or > 96) return Error(request.Id, "INVALID_REQUEST", "Request identifiers exceed protocol bounds.");
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            object result = request.Method switch
+            {
+                "health" => new { state = "ready", processId = Environment.ProcessId, protocolVersion = 1 },
+                "list_windows" => new { windows = _windows.ListVisibleWindows() },
+                "select_window" => SelectWindow(ReadString(request.Parameters, "windowToken")),
+                "observe" => Observe(request.Parameters),
+                "action" => Act(request.Parameters),
+                "emergency_stop" => Stop(),
+                _ => throw new NotSupportedException("Unknown sidecar operation.")
+            };
+            return new RpcResponse(request.Id, true, result);
+        }
+        catch (Exception error)
+        {
+            return new RpcResponse(request.Id, false, Error: new RpcError(ErrorCode(error), Limit(error.Message, 512), error is IOException or TimeoutException));
+        }
+    }
+
+    private object SelectWindow(string token)
+    {
+        var window = _windows.Select(token);
+        _input.Resume();
+        return new SelectedWindow(token, window.ProcessId, window.ExecutableIdentity, window.ApplicationName, window.Title, window.ProcessStartTime);
+    }
+
+    private object Observe(JsonElement parameters)
+    {
+        var token = ReadString(parameters, "windowToken");
+        var revision = ReadInt(parameters, "revision", 1, int.MaxValue);
+        var includeScreenshot = ReadBool(parameters, "includeScreenshot");
+        var window = _windows.Select(token);
+        var observation = _uia.Observe(window, revision);
+        if (includeScreenshot)
+        {
+            var screenshotRef = _capture.CaptureSelectedWindow(window);
+            observation = observation with { ScreenshotRef = screenshotRef };
+        }
+        _revisions[token] = revision;
+        _observations[token] = observation;
+        return observation;
+    }
+
+    private object Act(JsonElement parameters)
+    {
+        var token = ReadString(parameters, "windowToken");
+        var revision = ReadInt(parameters, "revision", 1, int.MaxValue);
+        if (!_revisions.TryGetValue(token, out var current) || current != revision) throw new InvalidOperationException($"Stale observation revision. Current revision is {current}.");
+        var window = _windows.Select(token);
+        var actionElement = parameters.GetProperty("action");
+        var action = JsonSerializer.Deserialize<SidecarAction>(actionElement.GetRawText(), _json) ?? throw new InvalidDataException("Action is invalid.");
+        var semantic = _uia.TryAct(action, revision);
+        if (!semantic)
+        {
+            switch (action.Type)
+            {
+                case "focus": _input.Focus(window); break;
+                case "click": _input.Click(window, RequireBounds(token, action.ElementRef)); break;
+                case "type": _input.TypeText(window, action.Text ?? string.Empty); break;
+                case "key": _input.Key(window, action.Key ?? string.Empty); break;
+                case "scroll": _input.Scroll(window, action.DeltaY); break;
+                case "wait": Thread.Sleep(100); break;
+                default: throw new NotSupportedException("The sidecar action is not allowed.");
+            }
+        }
+        return new { changed = action.Type != "wait", semantic };
+    }
+
+    private Bounds RequireBounds(string token, string? elementRef)
+    {
+        if (elementRef is null || !_observations.TryGetValue(token, out var observation)) throw new InvalidOperationException("Current element bounds are unavailable.");
+        return observation.Elements.FirstOrDefault(element => element.ElementRef == elementRef)?.Bounds
+            ?? throw new InvalidOperationException("Current element bounds are unavailable.");
+    }
+
+    private object Stop()
+    {
+        _input.EmergencyStop();
+        _revisions.Clear();
+        _observations.Clear();
+        _capture.Clear();
+        return new { stopped = true };
+    }
+
+    private static void ValidatePeer(NamedPipeServerStream pipe)
+    {
+        if (!GetNamedPipeClientProcessId(pipe.SafePipeHandle.DangerousGetHandle(), out var processId)) throw new UnauthorizedAccessException("Could not identify the named-pipe peer.");
+        var process = Process.GetProcessById((int)processId);
+        if (process.SessionId != Process.GetCurrentProcess().SessionId) throw new UnauthorizedAccessException("Named-pipe peer belongs to another user session.");
+    }
+
+    private static async Task<string?> ReadBoundedLineAsync(StreamReader reader, CancellationToken cancellationToken)
+    {
+        var builder = new StringBuilder();
+        var buffer = new char[4096];
+        while (builder.Length <= MaxMessageBytes)
+        {
+            var read = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken);
+            if (read == 0) return builder.Length == 0 ? null : builder.ToString();
+            for (var index = 0; index < read; index++)
+            {
+                if (buffer[index] == '\n') return builder.ToString().TrimEnd('\r');
+                builder.Append(buffer[index]);
+                if (Encoding.UTF8.GetByteCount(builder.ToString()) > MaxMessageBytes) throw new InvalidDataException("Sidecar message exceeds 512 KiB.");
+            }
+        }
+        throw new InvalidDataException("Sidecar message exceeds 512 KiB.");
+    }
+
+    private static bool FixedEquals(string left, string right)
+    {
+        var leftBytes = Encoding.UTF8.GetBytes(left ?? string.Empty);
+        var rightBytes = Encoding.UTF8.GetBytes(right ?? string.Empty);
+        return leftBytes.Length == rightBytes.Length && CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
+    }
+
+    private static string ReadString(JsonElement value, string name)
+    {
+        if (!value.TryGetProperty(name, out var property) || property.ValueKind != JsonValueKind.String) throw new InvalidDataException($"{name} is required.");
+        var text = property.GetString() ?? string.Empty;
+        if (text.Length is < 1 or > 512) throw new InvalidDataException($"{name} exceeds protocol bounds.");
+        return text;
+    }
+
+    private static int ReadInt(JsonElement value, string name, int minimum, int maximum)
+    {
+        if (!value.TryGetProperty(name, out var property) || !property.TryGetInt32(out var number) || number < minimum || number > maximum) throw new InvalidDataException($"{name} is invalid.");
+        return number;
+    }
+
+    private static bool ReadBool(JsonElement value, string name) => value.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.True;
+    private static RpcResponse Error(string id, string code, string message) => new(id, false, Error: new RpcError(code, message));
+    private static string ErrorCode(Exception error) => error switch
+    {
+        UnauthorizedAccessException => "POLICY_DENIED",
+        OperationCanceledException => "CANCELLED",
+        InvalidDataException => "INVALID_REQUEST",
+        InvalidOperationException when error.Message.Contains("Stale observation", StringComparison.OrdinalIgnoreCase) => "STALE_OBSERVATION",
+        InvalidOperationException => "STALE_TARGET",
+        NotSupportedException => "UNKNOWN_OPERATION",
+        _ => "SIDECAR_ERROR"
+    };
+    private static string Limit(string value, int maximum) => value[..Math.Min(maximum, value.Length)];
+
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetNamedPipeClientProcessId(nint pipe, out uint processId);
+}

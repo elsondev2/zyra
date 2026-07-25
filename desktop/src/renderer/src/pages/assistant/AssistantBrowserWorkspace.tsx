@@ -10,6 +10,7 @@ import {
     RefreshCw,
     Search,
     Server,
+    ShieldAlert,
     ShieldCheck,
     Square,
     Trash2,
@@ -17,6 +18,7 @@ import {
     X
 } from 'lucide-react'
 import type { DevScopeBrowserPreviewConfig, DevScopeProcessInfo } from '@shared/contracts/devscope-api'
+import type { ControlStateSnapshot } from '@shared/agent-control/contracts'
 import { cn } from '@/lib/utils'
 import { AssistantBrowserPageIcon } from './AssistantBrowserPageIcon'
 import { AssistantBrowserWebview, type AssistantBrowserWebviewHandle } from './AssistantBrowserWebview'
@@ -96,6 +98,8 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const [localServers, setLocalServers] = useState<LocalServerSuggestion[]>([])
     const [serversLoading, setServersLoading] = useState(false)
     const [serversError, setServersError] = useState<string | null>(null)
+    const [controlState, setControlState] = useState<ControlStateSnapshot | null>(null)
+    const [controlTargetsByTab, setControlTargetsByTab] = useState<Record<string, string>>({})
     const workspaceStateRef = useRef(workspaceState)
     const webviewRefs = useRef(new Map<string, AssistantBrowserWebviewHandle>())
     const webviewRefCallbacks = useRef(new Map<string, (handle: AssistantBrowserWebviewHandle | null) => void>())
@@ -109,6 +113,8 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const activeTab = workspaceState.tabs.find((tab) => tab.id === workspaceState.activeTabId)
         || workspaceState.tabs[0]
     const hasAudibleTab = workspaceState.tabs.some((tab) => tab.audible)
+    const activeControlTargetId = activeTab ? controlTargetsByTab[activeTab.id] : undefined
+    const activeControlGrant = controlState?.grants.find((grant) => grant.targetId === activeControlTargetId && grant.state === 'active') || null
 
     const commitWorkspaceState = useCallback((nextState: AssistantBrowserWorkspaceState) => {
         workspaceStateRef.current = nextState
@@ -122,6 +128,28 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         const nextState = updater(workspaceStateRef.current)
         if (nextState !== workspaceStateRef.current) commitWorkspaceState(nextState)
     }, [commitWorkspaceState])
+
+    useEffect(() => {
+        let cancelled = false
+        void window.devscope.agentControl.getState().then((result) => {
+            if (!cancelled && result.success) setControlState(result.state)
+        })
+        const unsubscribe = window.devscope.agentControl.onStateChange((state) => {
+            if (!cancelled) setControlState(state)
+        })
+        return () => { cancelled = true; unsubscribe() }
+    }, [])
+
+    const handleControlTargetChange = useCallback((tabId: string, targetId: string | null) => {
+        setControlTargetsByTab((current) => {
+            if (targetId && current[tabId] === targetId) return current
+            if (!targetId && !current[tabId]) return current
+            const next = { ...current }
+            if (targetId) next[tabId] = targetId
+            else delete next[tabId]
+            return next
+        })
+    }, [])
 
     useEffect(() => {
         onAudibleChange(hasAudibleTab)
@@ -444,6 +472,14 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                     />
                 </div>
                 <button type="button" onClick={() => void openExternal()} disabled={!activeTab?.url} className="inline-flex size-5 items-center justify-center text-sparkle-text-muted hover:bg-white/[0.05] hover:text-sparkle-text disabled:opacity-25" title="Open in default browser"><ExternalLink size={10} /></button>
+                {activeControlGrant ? (
+                    <div className="flex h-5 items-center gap-1 border border-amber-300/25 bg-amber-400/[0.08] px-1 text-[8px] text-amber-100" title={`Controlled by ${activeControlGrant.principal.type === 'root' ? 'root agent' : activeControlGrant.principal.agentRunId}`}>
+                        <ShieldAlert size={9} />
+                        <span>{Math.max(0, activeControlGrant.maxActions - activeControlGrant.actionCount)}</span>
+                        <button type="button" onClick={() => void window.devscope.agentControl.revokeGrant(activeControlGrant.grantId)} className="px-0.5 hover:bg-white/[0.08]" title="Revoke Browser control">Revoke</button>
+                        <button type="button" onClick={() => void window.devscope.agentControl.emergencyStop()} className="px-0.5 text-red-200 hover:bg-red-400/[0.12]" title="Emergency stop all control">Stop all</button>
+                    </div>
+                ) : null}
                 <div ref={profileMenuRef} className="relative">
                     <button
                         type="button"
@@ -507,6 +543,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                         config={config}
                         active={active && tab.id === activeTab?.id}
                         onStateChange={handleWebviewStateChange}
+                        onControlTargetChange={handleControlTargetChange}
                     />
                 ))}
 

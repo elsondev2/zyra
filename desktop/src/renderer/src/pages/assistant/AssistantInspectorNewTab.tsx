@@ -1,9 +1,9 @@
 import { memo, useEffect, useState } from 'react'
-import { ArrowUpRight, Bot, FolderTree, GitCompareArrows, Globe2, Library, SquareTerminal, type LucideIcon } from 'lucide-react'
+import { ArrowUpRight, Bot, FolderTree, GitCompareArrows, Globe2, Library, ShieldCheck, SquareTerminal, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 type WorkspaceChoice = {
-    id: 'review' | 'browser' | 'terminal' | 'subagents' | 'resources' | 'explorer'
+    id: 'review' | 'browser' | 'control' | 'terminal' | 'subagents' | 'resources' | 'explorer'
     label: string
     icon: LucideIcon
     available: boolean
@@ -12,6 +12,7 @@ type WorkspaceChoice = {
 const WORKSPACE_CHOICES: WorkspaceChoice[] = [
     { id: 'review', label: 'Review', icon: GitCompareArrows, available: true },
     { id: 'browser', label: 'Browser', icon: Globe2, available: true },
+    { id: 'control', label: 'Control', icon: ShieldCheck, available: true },
     { id: 'terminal', label: 'Terminal', icon: SquareTerminal, available: true },
     { id: 'subagents', label: 'Subagents', icon: Bot, available: false },
     { id: 'resources', label: 'Resources', icon: Library, available: true },
@@ -21,22 +22,26 @@ const WORKSPACE_CHOICES: WorkspaceChoice[] = [
 export const AssistantInspectorNewTab = memo(function AssistantInspectorNewTab({
     reviewOpen,
     browserOpen,
+    controlOpen,
     explorerOpen,
     terminalOpen,
     resourcesOpen,
     onSelectReview,
     onSelectBrowser,
+    onSelectControl,
     onSelectExplorer,
     onSelectTerminal,
     onSelectResources
 }: {
     reviewOpen: boolean
     browserOpen: boolean
+    controlOpen: boolean
     explorerOpen: boolean
     terminalOpen: boolean
     resourcesOpen: boolean
     onSelectReview: () => void
     onSelectBrowser: () => void
+    onSelectControl: () => void
     onSelectExplorer: () => void
     onSelectTerminal: () => void
     onSelectResources: () => void
@@ -60,6 +65,8 @@ export const AssistantInspectorNewTab = memo(function AssistantInspectorNewTab({
                         ? reviewOpen
                         : choice.id === 'browser'
                             ? browserOpen
+                            : choice.id === 'control'
+                                ? controlOpen
                             : choice.id === 'explorer'
                                 ? explorerOpen
                                 : choice.id === 'terminal'
@@ -77,6 +84,10 @@ export const AssistantInspectorNewTab = memo(function AssistantInspectorNewTab({
                                 }
                                 if (choice.id === 'browser') {
                                     onSelectBrowser()
+                                    return
+                                }
+                                if (choice.id === 'control') {
+                                    onSelectControl()
                                     return
                                 }
                                 if (choice.id === 'explorer') {

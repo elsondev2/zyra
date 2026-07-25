@@ -1,0 +1,224 @@
+export const CONTROL_PROTOCOL_VERSION = 1 as const
+
+export const CONTROL_CAPABILITIES = [
+    'observe.structure',
+    'observe.screenshot',
+    'navigate',
+    'pointer.click',
+    'pointer.move',
+    'keyboard.type',
+    'keyboard.key',
+    'scroll',
+    'form.select',
+    'window.focus'
+] as const
+
+export type ControlCapability = typeof CONTROL_CAPABILITIES[number]
+
+export type ControlPrincipal =
+    | { type: 'root'; threadId: string; turnId: string }
+    | { type: 'agent'; fleetId: string; agentRunId: string; parentThreadId: string }
+
+export type ControlTarget =
+    | {
+        kind: 'zyra-browser'
+        targetId: string
+        tabId: string
+        guestIdentity: string
+        origin: string | null
+    }
+    | {
+        kind: 'chrome-tab'
+        targetId: string
+        pairId: string
+        tabToken: string
+        origin: string | null
+    }
+    | {
+        kind: 'windows-window'
+        targetId: string
+        sidecarSessionId: string
+        processId: number
+        windowToken: string
+        executableIdentity: string
+    }
+
+export interface ControlGrant {
+    version: 1
+    grantId: string
+    principal: ControlPrincipal
+    targetId: string
+    capabilities: ControlCapability[]
+    allowedOrigins?: string[]
+    allowedExecutableIdentities?: string[]
+    issuedAt: string
+    expiresAt: string
+    maxActions: number
+    actionCount: number
+    state: 'active' | 'expired' | 'revoked' | 'consumed'
+    issuedBy: 'user' | 'delegated-parent'
+    parentGrantId?: string
+}
+
+export type ControlElement = {
+    elementRef: string
+    role: string
+    name?: string
+    text?: string
+    value?: string
+    description?: string
+    bounds?: { x: number; y: number; width: number; height: number }
+    states?: string[]
+    actions?: string[]
+    sensitive?: boolean
+}
+
+export interface ControlObservation {
+    version: 1
+    observationId: string
+    revision: number
+    targetId: string
+    capturedAt: string
+    targetState: 'ready' | 'navigating' | 'detached' | 'closed' | 'blocked'
+    url?: string
+    title?: string
+    origin?: string
+    viewport?: { width: number; height: number; scale: number }
+    elements: ControlElement[]
+    screenshotRef?: string
+    focusedElementRef?: string
+    truncation?: { totalElements: number; returnedElements: number }
+    redactions: string[]
+}
+
+export type ControlWaitCondition =
+    | { type: 'url-changed'; from?: string }
+    | { type: 'element-present'; name?: string; role?: string }
+    | { type: 'element-absent'; elementRef: string }
+    | { type: 'target-ready' }
+    | { type: 'delay'; durationMs: number }
+
+export type ControlAction =
+    | { type: 'click'; elementRef: string; sideEffect?: ControlSideEffectClass }
+    | { type: 'type'; elementRef: string; text: string; replace?: boolean; sideEffect?: ControlSideEffectClass }
+    | { type: 'key'; key: string; modifiers?: string[]; sideEffect?: ControlSideEffectClass }
+    | { type: 'scroll'; elementRef?: string; deltaX: number; deltaY: number }
+    | { type: 'select'; elementRef: string; values: string[]; sideEffect?: ControlSideEffectClass }
+    | { type: 'navigate'; url: string }
+    | { type: 'focus' }
+    | { type: 'wait'; condition: ControlWaitCondition; timeoutMs: number }
+
+export type ControlSideEffectClass =
+    | 'none'
+    | 'send-or-publish'
+    | 'purchase'
+    | 'account-change'
+    | 'security-change'
+    | 'destructive-delete'
+    | 'file-upload'
+    | 'sensitive-data-submit'
+    | 'software-install'
+    | 'legal-acceptance'
+
+export interface ControlActionRequest {
+    version: 1
+    requestId: string
+    grantId: string
+    targetId: string
+    observationRevision: number
+    action: ControlAction
+}
+
+export interface ControlActionResult {
+    version: 1
+    requestId: string
+    targetId: string
+    previousRevision: number
+    observation: ControlObservation
+    changed: boolean
+    outcome: 'completed' | 'blocked' | 'cancelled'
+}
+
+export interface DelegatedControlLeaseRequest {
+    parentGrantId: string
+    parentPrincipal: ControlPrincipal
+    childPrincipal: Extract<ControlPrincipal, { type: 'agent' }>
+    targetId: string
+    capabilities: ControlCapability[]
+    expiresAt: string
+    maxActions: number
+    allowedOrigins?: string[]
+    allowedExecutableIdentities?: string[]
+}
+
+export type ControlDriverHealth = {
+    targetKind: ControlTarget['kind']
+    state: 'ready' | 'degraded' | 'disconnected' | 'unavailable'
+    lastDisconnectReason?: string
+    updatedAt: string
+}
+
+export type ControlAuditEvent = {
+    version: 1
+    auditId: string
+    occurredAt: string
+    eventType: 'grant.requested' | 'grant.issued' | 'grant.revoked' | 'grant.expired' | 'action' | 'observation' | 'emergency-stop' | 'pairing' | 'target'
+    principal?: ControlPrincipal
+    parentPrincipal?: ControlPrincipal
+    targetId?: string
+    targetKind?: ControlTarget['kind']
+    grantId?: string
+    actionType?: ControlAction['type']
+    origin?: string
+    executableIdentity?: string
+    observationRevision?: number
+    outcome: 'allowed' | 'denied' | 'completed' | 'failed' | 'cancelled'
+    elapsedMs?: number
+    message?: string
+    redactions: string[]
+}
+
+export type ControlPendingGrant = {
+    requestId: string
+    principal: ControlPrincipal
+    targetId: string
+    capabilities: ControlCapability[]
+    requestedAt: string
+    expiresAt: string
+    maxActions: number
+    allowedOrigins?: string[]
+    allowedExecutableIdentities?: string[]
+    screenshots: boolean
+}
+
+export type ControlPairingState = {
+    state: 'stopped' | 'waiting' | 'paired' | 'error'
+    pairId?: string
+    code?: string
+    port?: number
+    expiresAt?: string
+    extensionId?: string
+    error?: string
+}
+
+export type ControlStateSnapshot = {
+    version: 1
+    targets: ControlTarget[]
+    grants: ControlGrant[]
+    pendingGrants: ControlPendingGrant[]
+    audit: ControlAuditEvent[]
+    health: ControlDriverHealth[]
+    pairing: ControlPairingState
+    active: boolean
+    sequence: number
+}
+
+export type ControlWindowCandidate = {
+    windowToken: string
+    title: string
+    applicationName: string
+    executableIdentity: string
+    processId: number
+    blocked: boolean
+    blockedReason?: string
+}

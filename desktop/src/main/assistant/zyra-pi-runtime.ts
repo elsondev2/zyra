@@ -23,6 +23,8 @@ import { analyzeAssistantReadResult } from '../../shared/assistant/read-activity
 import { resolveZyraRoot } from '../zyra/zyra-root'
 import type { PreparedAssistantPromptImage } from './prompt-images'
 import { getAssistantCanonicalThreadId } from './thread-identity'
+import { getAgentControlBroker } from '../agent-control'
+import { AgentControlError, toAgentControlError } from '../agent-control/control-errors'
 
 type ActiveCompactionLifecycle = {
     activityId: string
@@ -63,6 +65,8 @@ type ZyraSessionContext = {
 type BridgeMessage = {
     type?: string
     id?: number
+    requestId?: string
+    operation?: unknown
     ok?: boolean
     result?: Record<string, unknown>
     event?: unknown
@@ -839,6 +843,8 @@ class ZyraPiWorker {
     private nextId = 1
     private readonly pending = new Map<number, PendingBridgeRequest>()
     private readonly eventListeners = new Set<(event: unknown) => void>()
+    private readonly controlAbortControllers = new Map<string, AbortController>()
+    private controlRequestHandler: ((operation: unknown, signal: AbortSignal) => Promise<Record<string, unknown>>) | null = null
     private disposed = false
 
     constructor(
@@ -850,6 +856,10 @@ class ZyraPiWorker {
     onEvent(listener: (event: unknown) => void): () => void {
         this.eventListeners.add(listener)
         return () => this.eventListeners.delete(listener)
+    }
+
+    setControlRequestHandler(handler: (operation: unknown, signal: AbortSignal) => Promise<Record<string, unknown>>): void {
+        this.controlRequestHandler = handler
     }
 
     isAlive(): boolean {
@@ -887,6 +897,8 @@ class ZyraPiWorker {
         this.lines?.close()
         this.child?.kill()
         this.child = null
+        for (const controller of this.controlAbortControllers.values()) controller.abort()
+        this.controlAbortControllers.clear()
         this.rejectPending(new Error('Zyra bridge disposed.'))
     }
 
@@ -936,6 +948,14 @@ class ZyraPiWorker {
             for (const listener of this.eventListeners) listener(message.event)
             return
         }
+        if (message.type === 'control.cancel' && message.requestId) {
+            this.controlAbortControllers.get(message.requestId)?.abort()
+            return
+        }
+        if (message.type === 'control.request' && message.requestId) {
+            void this.handleControlRequest(message.requestId, message.operation)
+            return
+        }
         if (message.type === 'protocol_error') {
             log.error('[ZyraPiRuntime] bridge protocol error', message.error)
             return
@@ -953,7 +973,25 @@ class ZyraPiWorker {
         pending.reject(error)
     }
 
+    private async handleControlRequest(requestId: string, operation: unknown): Promise<void> {
+        if (!this.child?.stdin.writable) return
+        const controller = new AbortController()
+        this.controlAbortControllers.set(requestId, controller)
+        try {
+            if (!this.controlRequestHandler) throw new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', 'Desktop control authority is not bound to this worker.')
+            const result = await this.controlRequestHandler(operation, controller.signal)
+            this.child?.stdin.write(`${JSON.stringify({ type: 'control.response', requestId, ok: true, result })}\n`)
+        } catch (error) {
+            const controlError = toAgentControlError(error)
+            this.child?.stdin.write(`${JSON.stringify({ type: 'control.response', requestId, ok: false, error: controlError.toWire() })}\n`)
+        } finally {
+            this.controlAbortControllers.delete(requestId)
+        }
+    }
+
     private rejectPending(error: Error): void {
+        for (const controller of this.controlAbortControllers.values()) controller.abort()
+        this.controlAbortControllers.clear()
         for (const pending of this.pending.values()) {
             pending.reject(error)
         }
@@ -1101,6 +1139,15 @@ export class ZyraPiRuntime extends EventEmitter {
             lastAssistantItemId: null,
             lastUsage: null
         }
+        worker.setControlRequestHandler(async (operation, signal) => {
+            const turnId = context.activeTurnId
+            if (!turnId) throw new AgentControlError('CONTROL_PRINCIPAL_MISMATCH', 'Control tools require an active root turn.')
+            return getAgentControlBroker().handleToolOperation({
+                type: 'root',
+                threadId: context.localThreadId,
+                turnId
+            }, operation, signal)
+        })
         context.unsubscribe = worker.onEvent((event) => this.handleZyraEvent(context, event))
         this.sessions.set(thread.id, context)
         this.sessions.set(providerThreadId, context)
@@ -1200,6 +1247,9 @@ export class ZyraPiRuntime extends EventEmitter {
 
     async interruptTurn(threadId: string): Promise<void> {
         const context = this.requireSession(threadId)
+        if (context.activeTurnId) {
+            getAgentControlBroker().revokePrincipal({ type: 'root', threadId: context.localThreadId, turnId: context.activeTurnId })
+        }
         await context.worker.request('abort').catch((error) => {
             log.warn('[ZyraPiRuntime] bridge abort failed', error)
         })

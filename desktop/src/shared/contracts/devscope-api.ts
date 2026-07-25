@@ -73,6 +73,13 @@ import type {
     DevScopePythonPreviewEvent
 } from './devscope-project-contracts'
 import type { ZyraMemoryApi } from './memory-contracts'
+import type {
+    ControlGrant,
+    ControlStateSnapshot,
+    ControlTarget,
+    ControlWindowCandidate
+} from '../agent-control/contracts'
+import type { RendererControlGrantInput } from '../agent-control/protocol'
 
 export * from './devscope-git-contracts'
 export * from './devscope-project-contracts'
@@ -211,6 +218,21 @@ export interface DevScopeTerminalApi {
 
 export interface DevScopeAgentScopeApi {
     [method: string]: (...args: any[]) => any
+}
+
+export interface DevScopeAgentControlApi {
+    getState: () => Promise<DevScopeResult<{ state: ControlStateSnapshot }>>
+    bindBrowserTab: (input: { guestWebContentsId: number; tabId: string }) => Promise<DevScopeResult<{ target: ControlTarget }>>
+    approveGrant: (input: RendererControlGrantInput) => Promise<DevScopeResult<{ grant: ControlGrant }>>
+    rejectGrant: (requestId: string) => Promise<DevScopeResult<{ rejected: boolean }>>
+    revokeGrant: (grantId: string) => Promise<DevScopeResult<{ revoked: boolean }>>
+    emergencyStop: () => Promise<DevScopeResult<{ stopped: boolean }>>
+    clearAudit: () => Promise<DevScopeResult<{ cleared: boolean }>>
+    startChromePairing: () => Promise<DevScopeResult<{ pairing: ControlStateSnapshot['pairing'] }>>
+    stopChromePairing: () => Promise<DevScopeResult<{ pairing: ControlStateSnapshot['pairing'] }>>
+    listWindows: () => Promise<DevScopeResult<{ windows: ControlWindowCandidate[] }>>
+    selectWindow: (windowToken: string) => Promise<DevScopeResult<{ target: ControlTarget }>>
+    onStateChange: (callback: (state: ControlStateSnapshot) => void) => () => void
 }
 
 export interface DevScopeAssistantApi {
@@ -495,6 +517,7 @@ export interface DevScopeApi {
     memory: ZyraMemoryApi
     assistant: DevScopeAssistantApi
     agentscope: DevScopeAgentScopeApi
+    agentControl: DevScopeAgentControlApi
     updates: DevScopeUpdatesApi
     window: DevScopeWindowApi
 }
