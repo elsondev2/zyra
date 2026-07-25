@@ -17,7 +17,9 @@ import type {
     AssistantSendPromptOptions,
     AssistantSession,
     AssistantStartRealtimeVoiceInput,
-    AssistantThread
+    AssistantThread,
+    FleetOperationInput,
+    FleetSnapshot
 } from '../../shared/assistant/contracts'
 import { isAssistantToolLifecycleStartEvent } from '../../shared/assistant/tool-lifecycle'
 import { AssistantTextDeltaBuffer } from './assistant-text-delta-buffer'
@@ -28,6 +30,7 @@ import { nowIso } from './utils'
 import type { AssistantServiceActionDeps } from './service-action-deps'
 import { AssistantPersistence } from './persistence'
 import { toAssistantShellSnapshot } from './persistence-snapshot'
+import { FleetProjection } from './fleet-projection'
 import { queueGeneratedSessionTitle, shouldGenerateSessionTitleForPrompt } from './session-title-generation'
 import { applyDomainEvent, createDefaultSnapshot } from './projector'
 import { approvePendingPlaygroundLabRequestAction, attachSessionToPlaygroundLabAction, createPlaygroundLabAction, declinePendingPlaygroundLabRequestAction, deletePlaygroundLabAction, setPlaygroundRootAction } from './service-playground-actions'
@@ -82,6 +85,7 @@ export class AssistantService {
     private readonly runtime = new ZyraPiRuntime()
     private readonly realtimeVoiceRuntime = new CodexRealtimeVoiceRuntime()
     private readonly persistence = new AssistantPersistence()
+    private readonly fleetProjection = new FleetProjection()
     private readonly assistantTextDeltaBuffer = new AssistantTextDeltaBuffer({
         flushDelayMs: AssistantService.ASSISTANT_TEXT_DELTA_FLUSH_MS,
         onFlush: (entry) => {
@@ -218,6 +222,27 @@ export class AssistantService {
         return { success: true as const, models }
     }
 
+    async getFleetSnapshot(threadId: string) {
+        await this.ensureReady()
+        const localThreadId = requireThread(this.state.snapshot, threadId).id
+        const snapshot = this.fleetProjection.get(localThreadId)
+            || this.state.snapshot.fleetByThreadId[localThreadId]
+            || await this.persistence.readFleet(localThreadId)
+        return { success: true as const, snapshot: snapshot || null }
+    }
+
+    async runFleetOperation(namespace: 'agents' | 'workflows', input: FleetOperationInput) {
+        await this.ensureReady()
+        const localThreadId = requireThread(this.state.snapshot, input.threadId).id
+        const result = await this.runtime.requestFleetOperation(localThreadId, namespace, input.action, input.payload || {})
+        const snapshot = (result['snapshot'] || result['fleet']) as FleetSnapshot | undefined
+        if (snapshot) {
+            this.fleetProjection.apply(localThreadId, snapshot)
+            this.persistence.projectFleet(localThreadId, snapshot)
+        }
+        return { success: true as const, result }
+    }
+
     async getAccountOverview() {
         await this.ensureReady()
         const [accountPayload, rateLimitPayload] = await Promise.all([
@@ -310,7 +335,15 @@ export class AssistantService {
     }
 
     async deleteSession(sessionId: string) {
-        return deleteAssistantSessionAction(this.actionDeps, sessionId)
+        await this.ensureReady()
+        const threadIds = this.state.snapshot.sessions.find((session) => session.id === sessionId)?.threads.map((thread) => thread.id) || []
+        const result = await deleteAssistantSessionAction(this.actionDeps, sessionId)
+        for (const threadId of threadIds) {
+            this.fleetProjection.remove(threadId)
+            delete this.state.snapshot.fleetByThreadId[threadId]
+            this.persistence.deleteFleet(threadId)
+        }
+        return result
     }
 
     async clearLogs(input?: AssistantClearLogsInput) {
@@ -405,6 +438,15 @@ export class AssistantService {
         this.state = {
             snapshot: loaded.snapshot || createDefaultSnapshot(),
             events: loaded.events || []
+        }
+        this.state.snapshot.fleetByThreadId ||= {}
+        for (const session of this.state.snapshot.sessions) {
+            for (const thread of session.threads) {
+                const fleet = await this.persistence.readFleet(thread.id)
+                if (!fleet) continue
+                this.fleetProjection.apply(thread.id, fleet)
+                this.state.snapshot.fleetByThreadId[thread.id] = fleet
+            }
         }
         void this.runtime.prewarm(false).catch((error) => {
             log.warn('[Assistant] Zyra runtime prewarm failed', error)
@@ -503,6 +545,10 @@ export class AssistantService {
             queueAssistantActivityDelta: (entry) => this.assistantActivityDeltaBuffer.queue(entry),
             flushAssistantActivityDelta: (target) => this.assistantActivityDeltaBuffer.flush(target),
             appendEvent: (type, occurredAt, payload, sessionId, threadId) => this.appendEvent(type, occurredAt, payload, sessionId, threadId),
+            projectFleet: (threadId, snapshot) => {
+                this.fleetProjection.apply(threadId, snapshot)
+                this.persistence.projectFleet(threadId, snapshot)
+            },
             updateLatestTurnAssistantMessage: (sessionId, threadId, assistantMessageId, occurredAt) => {
                 updateLatestTurnAssistantMessage(this.state.snapshot, sessionId, threadId, assistantMessageId, occurredAt, (type, eventOccurredAt, payload, eventSessionId, eventThreadId) => {
                     this.appendEvent(type, eventOccurredAt, payload, eventSessionId, eventThreadId)

@@ -23,7 +23,8 @@ import type {
     AssistantStartRealtimeVoiceInput,
     AssistantSetPlaygroundRootInput,
     AssistantTranscribeAudioInput,
-    AssistantUserInputResponseInput
+    AssistantUserInputResponseInput,
+    FleetOperationInput
 } from '../../shared/assistant/contracts'
 import { ASSISTANT_IPC, assertAssistantIpcContract } from '../../shared/assistant/contracts'
 
@@ -36,6 +37,9 @@ export function createAssistantAdapter() {
             unsubscribe: () => ipcRenderer.invoke(ASSISTANT_IPC.unsubscribe),
             bootstrap: () => ipcRenderer.invoke(ASSISTANT_IPC.bootstrap),
             getSnapshot: () => ipcRenderer.invoke(ASSISTANT_IPC.getSnapshot),
+            getFleetSnapshot: (threadId: string) => ipcRenderer.invoke(ASSISTANT_IPC.getFleetSnapshot, threadId),
+            agentAction: (input: FleetOperationInput) => ipcRenderer.invoke(ASSISTANT_IPC.agentAction, input),
+            workflowAction: (input: FleetOperationInput) => ipcRenderer.invoke(ASSISTANT_IPC.workflowAction, input),
             getStatus: () => ipcRenderer.invoke(ASSISTANT_IPC.getStatus),
             getAccountOverview: () => ipcRenderer.invoke(ASSISTANT_IPC.getAccountOverview),
             getSessionTurnUsage: (input?: { sessionId?: string }) => ipcRenderer.invoke(ASSISTANT_IPC.getSessionTurnUsage, input),

@@ -16,6 +16,7 @@
         "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
         "test:activity-rail": "bun scripts/test-activity-rail-contract.ts",
         "test:agent-surface": "bun scripts/test-agent-surface-contract.ts",
+    "test:assistant-fleet": "bun scripts/test-assistant-fleet-contract.tsx",
         "test:assistant-diff": "bun scripts/test-assistant-diff-contract.ts",
         "test:assistant-history": "bun scripts/test-assistant-history-persistence.ts && bun scripts/test-assistant-paged-history.ts",
         "test:assistant-images": "bun scripts/test-assistant-image-pipeline.ts",

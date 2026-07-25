@@ -49,6 +49,7 @@ export function toAssistantShellSnapshot(snapshot: AssistantSnapshot): Assistant
         selectedSessionId: snapshot.selectedSessionId,
         playground: structuredClone(snapshot.playground),
         knownModels: structuredClone(snapshot.knownModels),
+        fleetByThreadId: structuredClone(snapshot.fleetByThreadId || {}),
         sessions: snapshot.sessions.map((session) => ({
             ...session,
             threadIds: [...session.threadIds],

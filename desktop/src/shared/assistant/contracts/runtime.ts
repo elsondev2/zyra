@@ -66,6 +66,10 @@ export interface AssistantRuntimeEventBase {
 
 export type AssistantRuntimeEvent =
     | (AssistantRuntimeEventBase & {
+        type: 'fleet.snapshot.updated'
+        payload: import('./fleet').FleetSnapshotEventPayload
+    })
+    | (AssistantRuntimeEventBase & {
         type: 'session.started'
         payload: {
             cwd: string

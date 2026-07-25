@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AssistantActivity, AssistantMessage, AssistantTurnDetail } from '@shared/assistant/contracts'
+import type { AssistantActivity, AssistantMessage, AssistantTurnDetail, FleetSnapshot } from '@shared/assistant/contracts'
 import { FilePreviewModal } from '@/components/ui/FilePreviewModal'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import { useFilePreview } from '@/components/ui/file-preview/useFilePreview'
@@ -40,6 +40,7 @@ type AssistantDiffSourceSelection = {
     activities: AssistantActivity[]
     projectRootPath: string | null
     activeTurnId: string | null
+    fleetSnapshot: FleetSnapshot | null
 }
 
 function areAssistantDiffSourceSelectionsEqual(left: AssistantDiffSourceSelection, right: AssistantDiffSourceSelection): boolean {
@@ -48,6 +49,7 @@ function areAssistantDiffSourceSelectionsEqual(left: AssistantDiffSourceSelectio
         && left.activities === right.activities
         && left.projectRootPath === right.projectRootPath
         && left.activeTurnId === right.activeTurnId
+        && left.fleetSnapshot === right.fleetSnapshot
 }
 
 export default function AssistantPage() {
@@ -109,7 +111,8 @@ export default function AssistantPage() {
             messages: selectionTransitioning ? EMPTY_ASSISTANT_MESSAGES : activeThread?.messages || EMPTY_ASSISTANT_MESSAGES,
             activities: selectionTransitioning ? EMPTY_ASSISTANT_ACTIVITIES : activeThread?.activities || EMPTY_ASSISTANT_ACTIVITIES,
             projectRootPath: selectedSession?.projectPath || activeThread?.cwd || null,
-            activeTurnId: activeThread?.latestTurn?.state === 'running' ? activeThread.latestTurn.id : null
+            activeTurnId: activeThread?.latestTurn?.state === 'running' ? activeThread.latestTurn.id : null,
+            fleetSnapshot: activeThread ? state.snapshot.fleetByThreadId[activeThread.id] || null : null
         }
     }, areAssistantDiffSourceSelectionsEqual)
     const inspectorOpen = rightPanelMode === 'review'
@@ -462,6 +465,7 @@ export default function AssistantPage() {
                             selectedTurnId={effectiveDiffTurnId}
                             selectedDiff={selectedDiff}
                             projectPath={diffSource.projectRootPath}
+                            fleetSnapshot={diffSource.fleetSnapshot}
                             onOpenPreview={preview.openPreview}
                             onOpenPreviewInNewTab={preview.openPreviewInNewTab}
                             onWidthChange={setRightSidebarWidth}

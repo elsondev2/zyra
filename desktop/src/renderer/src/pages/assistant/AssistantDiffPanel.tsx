@@ -1,5 +1,6 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { FolderTree, GitCompareArrows, LayoutGrid, Library, LoaderCircle, MessageSquareText, SquareTerminal, TriangleAlert, Volume2 } from 'lucide-react'
+import { Bot, FolderTree, GitCompareArrows, LayoutGrid, Library, LoaderCircle, MessageSquareText, SquareTerminal, TriangleAlert, Volume2 } from 'lucide-react'
+import type { FleetSnapshot } from '@shared/assistant/contracts'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import type { AssistantDiffTarget, AssistantDiffTurn } from './assistant-diff-types'
 import { AssistantBrowserPageIcon } from './AssistantBrowserPageIcon'
@@ -20,6 +21,9 @@ const AssistantBrowserWorkspace = lazy(async () => ({
 const AssistantResourcesWorkspace = lazy(async () => ({
     default: (await import('./AssistantResourcesWorkspace')).AssistantResourcesWorkspace
 }))
+const AssistantFleetWorkspace = lazy(async () => ({
+    default: (await import('./AssistantFleetWorkspace')).AssistantFleetWorkspace
+}))
 
 type WorkspaceTab =
     | { id: string; kind: 'new' }
@@ -28,6 +32,7 @@ type WorkspaceTab =
     | { id: 'terminal'; kind: 'terminal' }
     | { id: 'browser'; kind: 'browser' }
     | { id: 'resources'; kind: 'resources' }
+    | { id: 'agents'; kind: 'agents' }
     | { id: string; kind: 'turn'; turnId: string }
 
 const REVIEW_TAB: WorkspaceTab = { id: 'review', kind: 'review' }
@@ -35,6 +40,7 @@ const EXPLORER_TAB: WorkspaceTab = { id: 'explorer', kind: 'explorer' }
 const TERMINAL_TAB: WorkspaceTab = { id: 'terminal', kind: 'terminal' }
 const BROWSER_TAB: WorkspaceTab = { id: 'browser', kind: 'browser' }
 const RESOURCES_TAB: WorkspaceTab = { id: 'resources', kind: 'resources' }
+const AGENTS_TAB: WorkspaceTab = { id: 'agents', kind: 'agents' }
 
 type AssistantBrowserNavigationRequest = {
     id: number
@@ -62,6 +68,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     selectedTurnId: string | null
     selectedDiff: AssistantDiffTarget | null
     projectPath: string | null
+    fleetSnapshot: FleetSnapshot | null
     onOpenPreview: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
     onOpenPreviewInNewTab: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
     onWidthChange: (width: number) => void
@@ -86,6 +93,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
         selectedTurnId,
         selectedDiff,
         projectPath,
+        fleetSnapshot,
         onOpenPreview,
         onOpenPreviewInNewTab,
         onWidthChange,
@@ -108,6 +116,8 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     const [browserAudible, setBrowserAudible] = useState(false)
     const [browserFaviconUrl, setBrowserFaviconUrl] = useState<string | null>(null)
     const [browserNavigationRequest, setBrowserNavigationRequest] = useState<AssistantBrowserNavigationRequest | null>(null)
+    const [selectedAgentRunId, setSelectedAgentRunId] = useState<string | null>(null)
+    const [selectedWorkflowRunId, setSelectedWorkflowRunId] = useState<string | null>(null)
 
     const createNewTab = useCallback((): WorkspaceTab => ({
         id: `new:${newTabSequenceRef.current++}`,
@@ -247,6 +257,18 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                 preview: 'Image previews and links shared in this chat'
             }]
         }
+        if (tab.kind === 'agents') {
+            const running = Object.values(fleetSnapshot?.agents ?? {}).filter((run) => ['queued', 'starting', 'running', 'waiting', 'recovering'].includes(run.status)).length
+            return [{
+                id: tab.id,
+                label: 'Agents',
+                icon: <Bot size={12} />,
+                count: running,
+                closable: true,
+                loading: transitionLoadingTabId === tab.id,
+                preview: `${Object.keys(fleetSnapshot?.agents ?? {}).length} child agents · ${Object.keys(fleetSnapshot?.workflows ?? {}).length} workflows`
+            }]
+        }
         const turn = turns.find((entry) => entry.id === tab.turnId)
         return turn ? [{
             id: tab.id,
@@ -256,7 +278,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
             loading: transitionLoadingTabId === tab.id || contentLoadingTabId === tab.id,
             preview: turn.prompt
         }] : []
-    }), [browserAudible, browserFaviconUrl, contentLoadingTabId, projectPath, transitionLoadingTabId, turns, workspaceTabs])
+    }), [browserAudible, browserFaviconUrl, contentLoadingTabId, fleetSnapshot, projectPath, transitionLoadingTabId, turns, workspaceTabs])
 
     const activeWorkspaceTab = workspaceTabs.find((tab) => tab.id === activeTabId) || workspaceTabs[0] || null
     const activeTurnTab = activeWorkspaceTab?.kind === 'turn' ? activeWorkspaceTab : null
@@ -268,6 +290,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     const terminalOpen = workspaceTabs.some((tab) => tab.kind === 'terminal')
     const browserOpen = workspaceTabs.some((tab) => tab.kind === 'browser')
     const resourcesOpen = workspaceTabs.some((tab) => tab.kind === 'resources')
+    const agentsOpen = workspaceTabs.some((tab) => tab.kind === 'agents')
 
     const selectTurn = useCallback((turnId: string) => {
         onSelectTurn(turnId)
@@ -334,6 +357,28 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
         setActiveTabId('resources')
         beginTabTransition('resources')
     }, [activeTabId, beginTabTransition])
+
+    const handleOpenAgentsWorkspace = useCallback(() => {
+        setWorkspaceTabs((current) => {
+            const exists = current.some((tab) => tab.kind === 'agents')
+            const withoutChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
+            if (exists) return withoutChooser
+            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? AGENTS_TAB : tab)
+            return replaced.some((tab) => tab.kind === 'agents') ? replaced : [...replaced, AGENTS_TAB]
+        })
+        setActiveTabId('agents')
+        beginTabTransition('agents')
+    }, [activeTabId, beginTabTransition])
+
+    const handleAgentAction = useCallback((action: 'stop' | 'retry' | 'resume', agentRunId: string) => {
+        if (!threadId) return
+        void window.devscope.assistant.agentAction({ threadId, action, payload: { agentRunId } })
+    }, [threadId])
+
+    const handleWorkflowAction = useCallback((action: 'pause' | 'resume' | 'stop' | 'restart' | 'save', workflowRunId: string) => {
+        if (!threadId) return
+        void window.devscope.assistant.workflowAction({ threadId, action, payload: { workflowRunId, scope: 'personal' } })
+    }, [threadId])
 
     const handleOpenResourceUrl = useCallback((url: string) => {
         if (!projectPath) {
@@ -516,6 +561,23 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                     </div>
                 ) : null}
 
+                {agentsOpen ? (
+                    <div className={activeWorkspaceTab?.kind === 'agents' ? 'flex min-h-0 flex-1' : 'hidden'}>
+                        <Suspense fallback={(<div className="flex min-h-0 flex-1 items-center justify-center"><LoaderCircle size={18} className="animate-spin text-[var(--accent-primary)]/75" /></div>)}>
+                            <AssistantFleetWorkspace
+                                threadId={threadId}
+                                snapshot={fleetSnapshot}
+                                selectedAgentRunId={selectedAgentRunId}
+                                selectedWorkflowRunId={selectedWorkflowRunId}
+                                onSelectAgent={setSelectedAgentRunId}
+                                onSelectWorkflow={setSelectedWorkflowRunId}
+                                onAgentAction={handleAgentAction}
+                                onWorkflowAction={handleWorkflowAction}
+                            />
+                        </Suspense>
+                    </div>
+                ) : null}
+
                 {resourcesOpen ? (
                     <div className={activeWorkspaceTab?.kind === 'resources' ? 'flex min-h-0 flex-1' : 'hidden'}>
                         <Suspense fallback={(
@@ -536,18 +598,20 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                     </div>
                 ) : null}
 
-                {activeWorkspaceTab?.kind === 'terminal' || activeWorkspaceTab?.kind === 'browser' || activeWorkspaceTab?.kind === 'resources' ? null : activeWorkspaceTab?.kind === 'new' ? (
+                {activeWorkspaceTab?.kind === 'terminal' || activeWorkspaceTab?.kind === 'browser' || activeWorkspaceTab?.kind === 'resources' || activeWorkspaceTab?.kind === 'agents' ? null : activeWorkspaceTab?.kind === 'new' ? (
                     <AssistantInspectorNewTab
                         reviewOpen={reviewOpen}
                         browserOpen={browserOpen}
                         explorerOpen={explorerOpen}
                         terminalOpen={terminalOpen}
                         resourcesOpen={resourcesOpen}
+                        subagentsOpen={agentsOpen}
                         onSelectReview={handleOpenReviewWorkspace}
                         onSelectBrowser={handleOpenBrowserWorkspace}
                         onSelectExplorer={handleOpenExplorerWorkspace}
                         onSelectTerminal={handleOpenTerminalWorkspace}
                         onSelectResources={handleOpenResourcesWorkspace}
+                        onSelectSubagents={handleOpenAgentsWorkspace}
                     />
                 ) : activeWorkspaceTab?.kind === 'explorer' ? (
                     <Suspense fallback={(

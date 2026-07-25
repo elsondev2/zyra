@@ -248,10 +248,17 @@ async function main() {
     terminalTitle.notify(runtime?.notifications ?? "unfocused");
   };
 
-  const subscribeRuntimeEvents = (runtime, handler = (event) => ui.event(event)) => runtime.session.subscribe((event) => {
-    handler(event);
-    terminalTitle.fromEvent(event, runtime);
-  });
+  const subscribeRuntimeEvents = (runtime, handler = (event) => ui.event(event)) => {
+    const unsubscribeSession = runtime.session.subscribe((event) => {
+      handler(event);
+      terminalTitle.fromEvent(event, runtime);
+    });
+    const unsubscribeFleet = runtime.fleet?.subscribe?.(({ event, snapshot }) => ui.fleet?.(event, snapshot));
+    return () => {
+      unsubscribeSession?.();
+      unsubscribeFleet?.();
+    };
+  };
 
   if (parsed.command === "help" || parsed.command === "--help" || parsed.command === "-h") {
     ui.commands();
@@ -449,7 +456,10 @@ async function main() {
   const abortActiveRuntime = async () => {
     runtime.managedBash?.abortAll?.();
     runtime.session.abortBash?.();
-    await runtime.session.abort?.();
+    await Promise.allSettled([
+      runtime.fleet?.cancelAll?.("root turn cancelled"),
+      runtime.session.abort?.(),
+    ]);
   };
 
   const startFreshChat = async () => {

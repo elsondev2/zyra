@@ -11,6 +11,35 @@ const slashCommands = [
     submitOnEnter: true,
   },
   {
+    name: "agents",
+    description: "inspect and manage child agents",
+    panelLabel: "/agents [doctor|import claude]",
+    submitOnEnter: true,
+  },
+  {
+    name: "agent",
+    description: "run or control a named child agent",
+    panelLabel: "/agent <name> <task>",
+    submitOnEnter: true,
+  },
+  {
+    name: "subtask",
+    description: "fork this chat into a focused child task",
+    panelLabel: "/subtask <task>",
+    submitOnEnter: true,
+  },
+  {
+    name: "workflows",
+    description: "inspect and manage workflow runs",
+    submitOnEnter: true,
+  },
+  {
+    name: "workflow",
+    description: "run a saved workflow",
+    panelLabel: "/workflow <name> [json args]",
+    submitOnEnter: true,
+  },
+  {
     name: "compact",
     description: "compact active context",
     panelLabel: "/compact [notes]",

@@ -11,6 +11,7 @@ let sdkPromise;
 let runtime;
 let unsubscribe;
 let unsubscribeManagedBash;
+let unsubscribeFleet;
 
 function stringifyProtocol(value) {
   return JSON.stringify(value);
@@ -49,7 +50,12 @@ function disposeRuntime() {
     unsubscribeManagedBash();
   }
   unsubscribeManagedBash = undefined;
+  if (typeof unsubscribeFleet === "function") {
+    unsubscribeFleet();
+  }
+  unsubscribeFleet = undefined;
   runtime?.managedBash?.abortAll?.("Zyra bridge disposed");
+  void runtime?.fleet?.cancelAll?.("Zyra bridge disposed");
   runtime?.session?.dispose?.();
   runtime = undefined;
 }
@@ -91,6 +97,9 @@ async function handleConnect(payload) {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
     send({ type: "event", event: { type: "managed_bash_job_update", ...payload } });
   });
+  unsubscribeFleet = runtime.fleet?.subscribe?.(({ event, snapshot }) => {
+    send({ type: "event", event: { ...summarizeFleetEvent(event), fleet: projectFleetSnapshot(snapshot) } });
+  });
   const described = sdk.describeRuntime(runtime);
   const threadId = String(
     runtime.session.sessionManager?.getSessionId?.()
@@ -104,6 +113,7 @@ async function handleConnect(payload) {
     providerThreadId: threadId,
     model: String(described.model || payload.model || "openai-codex/gpt-5.6-sol"),
     profile: String(described.profile || payload.profile || "default"),
+    fleet: projectFleetSnapshot(runtime.fleet?.snapshot?.()),
   };
 }
 
@@ -318,6 +328,7 @@ async function handleGenerateText(payload) {
     skipProjectMemory: true,
     skipModelAvailability: true,
     persistStartupPreferences: false,
+    enableFleet: false,
   });
   try {
     const text = await sdk.runZyraBackgroundTextPrompt(titleRuntime, prompt);
@@ -349,8 +360,106 @@ async function handleWarmup(payload) {
 }
 
 async function handleAbort() {
-  await runtime?.session?.abort?.();
+  await Promise.allSettled([
+    runtime?.fleet?.cancelAll?.("root turn aborted"),
+    runtime?.session?.abort?.(),
+  ]);
   return {};
+}
+
+async function handleFleetOperation(type, payload = {}) {
+  if (!runtime?.fleet || !runtime?.workflows) throw new Error("Fleet runtime is not connected.");
+  const agents = runtime.fleet;
+  const workflows = runtime.workflows;
+  switch (type) {
+    case "agents.list": return { definitions: agents.listDefinitions(), runs: Object.values(agents.snapshot()?.agents ?? {}), snapshot: projectFleetSnapshot(agents.snapshot()) };
+    case "agents.listDefinitions": return agents.listDefinitions();
+    case "agents.listRuns": return { runs: Object.values(agents.snapshot()?.agents ?? {}) };
+    case "agents.get":
+    case "agents.status": return agents.status(payload.agentRunId);
+    case "agents.wait": return agents.wait(payload.agentRunId, payload);
+    case "agents.spawn": return agents.spawn({ ...payload, goal: payload.goal ?? payload.prompt });
+    case "agents.send": return agents.send(payload.agentRunId, payload.message ?? payload.prompt);
+    case "agents.stop": return agents.stop(payload.agentRunId, payload.reason);
+    case "agents.retry": return agents.retry(payload.agentRunId, payload.overrides ?? {});
+    case "agents.resume": return agents.resume(payload.agentRunId, payload.message);
+    case "agents.transcript":
+    case "agents.getTranscript": return agents.getTranscript(payload.agentRunId, payload);
+    case "workflows.list": return { definitions: workflows.listDefinitions(), runs: workflows.listRuns(), snapshot: projectFleetSnapshot(agents.snapshot()) };
+    case "workflows.listDefinitions": return workflows.listDefinitions();
+    case "workflows.listRuns": return { runs: workflows.listRuns() };
+    case "workflows.status": return workflows.status(payload.workflowRunId);
+    case "workflows.run": return workflows.run(payload.name, payload.args ?? {}, { approved: payload.approved === true, background: payload.background !== false });
+    case "workflows.pause": return workflows.pause(payload.workflowRunId);
+    case "workflows.resume": return workflows.resume(payload.workflowRunId);
+    case "workflows.stop": return workflows.stop(payload.workflowRunId, payload.reason);
+    case "workflows.restart": return workflows.restart(payload.workflowRunId, { args: payload.args });
+    case "workflows.save": return workflows.save(payload.workflowRunId, payload);
+    case "workflows.getScript": return { source: workflows.getScript(payload.workflowRunId) };
+    default: throw new Error(`Unknown fleet operation: ${type}.`);
+  }
+}
+
+function projectFleetSnapshot(snapshot) {
+  if (!snapshot) return null;
+  const allAgents = Object.values(snapshot.agents ?? {});
+  const allWorkflows = Object.values(snapshot.workflows ?? {});
+  const selectedAgents = allAgents.slice(-200);
+  const selectedWorkflows = allWorkflows.slice(-100);
+  const summarizeAgent = (run) => ({
+    version: run.version, rootSessionId: snapshot.rootSessionId,
+    agentRunId: run.agentRunId, agentId: run.agentId, definitionName: run.definitionName, label: run.label,
+    parentAgentRunId: run.parentAgentRunId, workflowRunId: run.workflowRunId, workflowPhaseId: run.phaseId, workflowCallId: null,
+    goal: String(run.goal ?? "").slice(0, 1000), status: run.status, depth: run.depth, contextFork: run.contextFork,
+    attempt: run.attempt, maxAttempts: 1, requestedModel: run.requestedModel, selectedModel: run.selectedModel, modelRoute: run.modelRoute,
+    effort: run.effort, requestedTools: run.tools, grantedTools: run.tools, deniedTools: [], deniedCapabilities: [],
+    permissionMode: run.permissionMode, isolation: run.isolation, readScope: run.readScope, writeScope: run.writeScope,
+    worktree: run.worktree, providerSessionId: run.providerSessionId, sessionFile: run.sessionFile,
+    createdAt: run.createdAt, queuedAt: run.createdAt, startedAt: run.startedAt, completedAt: run.completedAt, heartbeatAt: run.heartbeatAt,
+    elapsedMs: run.elapsedMs, activity: run.activity, usage: run.usage,
+    result: run.result ? { text: String(run.result.text ?? "").slice(0, 4000), warnings: run.result.warnings, truncated: run.result.truncated } : null,
+    error: run.error,
+  });
+  const summarizeWorkflow = (run) => ({
+    version: run.version, rootSessionId: snapshot.rootSessionId,
+    workflowRunId: run.workflowRunId, definitionName: run.definitionName, definitionPath: run.source, definitionHash: run.scriptHash,
+    status: run.status, attempt: run.attempt, args: run.args,
+    phases: Object.fromEntries(Object.entries(run.phases ?? {}).map(([phaseId, phase]) => [phaseId, { name: phaseId, ...phase, phaseId }])),
+    calls: Object.fromEntries(Object.entries(run.calls ?? {}).slice(-200)), agentRunIds: run.agentRunIds,
+    usage: run.usage, projected: run.projected, budget: run.budget, cacheHits: run.cacheHits, warnings: run.warnings,
+    approvedAt: run.approval?.approved ? run.createdAt : null,
+    createdAt: run.createdAt, startedAt: run.startedAt, completedAt: run.completedAt,
+    result: run.result === undefined ? null : cloneJsonValue(run.result), error: run.error,
+  });
+  const agents = Object.fromEntries(selectedAgents.map((run) => [run.agentRunId, summarizeAgent(run)]));
+  const workflows = Object.fromEntries(selectedWorkflows.map((run) => [run.workflowRunId, summarizeWorkflow(run)]));
+  const relationships = selectedAgents.map((run) => ({
+    parentAgentRunId: run.parentAgentRunId ?? null, childAgentRunId: run.agentRunId,
+    workflowRunId: run.workflowRunId ?? null, workflowPhaseId: run.phaseId ?? null,
+  })).slice(-400);
+  const artifacts = selectedAgents.flatMap((run) => (run.artifacts ?? []).map((artifact, index) => ({
+    artifactId: String(artifact.artifactId ?? `${run.agentRunId}:${index}`), agentRunId: run.agentRunId,
+    workflowRunId: run.workflowRunId ?? null, kind: String(artifact.kind ?? "artifact"), path: artifact.path ?? null,
+    createdAt: run.completedAt ?? run.startedAt ?? run.createdAt,
+  }))).slice(-400);
+  return {
+    version: snapshot.version, fleetId: snapshot.fleetId, rootSessionId: snapshot.rootSessionId,
+    rootThreadId: snapshot.rootThreadId, lastAppliedSequence: snapshot.lastAppliedSequence,
+    agents, workflows, relationships, artifacts, eventWindow: [], usage: snapshot.usage, updatedAt: snapshot.updatedAt,
+    truncated: { agents: allAgents.length > selectedAgents.length, workflows: allWorkflows.length > selectedWorkflows.length, relationships: false, artifacts: false, events: false },
+  };
+}
+
+function summarizeFleetEvent(event) {
+  return {
+    type: event?.type ?? "fleet_snapshot",
+    eventId: event?.eventId,
+    sequence: event?.sequence,
+    timestamp: event?.occurredAt,
+    agentRunId: event?.agentRunId,
+    workflowRunId: event?.workflowRunId,
+    phaseId: event?.phaseId,
+  };
 }
 
 async function handleMessage(message) {
@@ -378,6 +487,10 @@ async function handleMessage(message) {
     }
     if (message?.type === "abort") {
       sendResponse(id, true, { result: await handleAbort() });
+      return;
+    }
+    if (/^(?:agents|workflows)\./.test(message?.type ?? "")) {
+      sendResponse(id, true, { result: await handleFleetOperation(message.type, message.payload ?? {}) });
       return;
     }
     if (message?.type === "dispose") {

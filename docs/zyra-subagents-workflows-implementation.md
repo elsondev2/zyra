@@ -1,12 +1,12 @@
 # Zyra Subagents and Workflows Implementation Plan
 
-**Status:** Proposed
+**Status:** Implemented on `feature/20260725-170750z-013fd2-subagents-workflows` (2026-07-25)
 
 **Revision:** 1
 
 **Scope:** Shared subagent and workflow runtime, Zyra TUI, and Zyra desktop
 
-**Current runtime baseline:** Pi `0.80.3`, with a controlled upgrade target of `0.80.6`
+**Current runtime baseline:** Pi `0.80.6`
 
 **Model boundary:** Codex models available through `openai-codex/*`
 

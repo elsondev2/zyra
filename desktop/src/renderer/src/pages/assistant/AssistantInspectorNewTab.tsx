@@ -13,7 +13,7 @@ const WORKSPACE_CHOICES: WorkspaceChoice[] = [
     { id: 'review', label: 'Review', icon: GitCompareArrows, available: true },
     { id: 'browser', label: 'Browser', icon: Globe2, available: true },
     { id: 'terminal', label: 'Terminal', icon: SquareTerminal, available: true },
-    { id: 'subagents', label: 'Subagents', icon: Bot, available: false },
+    { id: 'subagents', label: 'Agents', icon: Bot, available: true },
     { id: 'resources', label: 'Resources', icon: Library, available: true },
     { id: 'explorer', label: 'Explorer', icon: FolderTree, available: true }
 ]
@@ -24,22 +24,26 @@ export const AssistantInspectorNewTab = memo(function AssistantInspectorNewTab({
     explorerOpen,
     terminalOpen,
     resourcesOpen,
+    subagentsOpen,
     onSelectReview,
     onSelectBrowser,
     onSelectExplorer,
     onSelectTerminal,
-    onSelectResources
+    onSelectResources,
+    onSelectSubagents
 }: {
     reviewOpen: boolean
     browserOpen: boolean
     explorerOpen: boolean
     terminalOpen: boolean
     resourcesOpen: boolean
+    subagentsOpen: boolean
     onSelectReview: () => void
     onSelectBrowser: () => void
     onSelectExplorer: () => void
     onSelectTerminal: () => void
     onSelectResources: () => void
+    onSelectSubagents: () => void
 }) {
     const [noticeChoiceId, setNoticeChoiceId] = useState<WorkspaceChoice['id'] | null>(null)
     const noticeChoice = WORKSPACE_CHOICES.find((choice) => choice.id === noticeChoiceId) || null
@@ -64,7 +68,9 @@ export const AssistantInspectorNewTab = memo(function AssistantInspectorNewTab({
                                 ? explorerOpen
                                 : choice.id === 'terminal'
                                     ? terminalOpen
-                                    : choice.id === 'resources' && resourcesOpen
+                                    : choice.id === 'subagents'
+                                        ? subagentsOpen
+                                        : choice.id === 'resources' && resourcesOpen
                     const ChoiceIcon = choice.icon
                     return (
                         <button
@@ -89,6 +95,10 @@ export const AssistantInspectorNewTab = memo(function AssistantInspectorNewTab({
                                 }
                                 if (choice.id === 'resources') {
                                     onSelectResources()
+                                    return
+                                }
+                                if (choice.id === 'subagents') {
+                                    onSelectSubagents()
                                     return
                                 }
                                 setNoticeChoiceId(choice.id)

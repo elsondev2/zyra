@@ -741,6 +741,9 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
             unsubscribe: () => ok(),
             bootstrap: () => Promise.resolve(bootstrapPayload()),
             getSnapshot: () => Promise.resolve(ensureSnapshot()),
+            getFleetSnapshot: (threadId: string) => ok({ snapshot: ensureSnapshot().fleetByThreadId[threadId] ?? null }),
+            agentAction: () => unavailable('Agent actions require the Zyra desktop bridge.'),
+            workflowAction: () => unavailable('Workflow actions require the Zyra desktop bridge.'),
             getStatus: () => Promise.resolve(createBrowserStatus(previewMode)),
             getAccountOverview: (): Promise<DevScopeResult<AssistantAccountOverviewPayload>> => ok({
                 overview: {

@@ -80,7 +80,8 @@ export function readAssistantSnapshot(db: SqlDatabase): AssistantSnapshot {
         selectedSessionId,
         playground,
         sessions,
-        knownModels: meta.knownModels
+        knownModels: meta.knownModels,
+        fleetByThreadId: {}
     }
     snapshot = recoverPersistedSnapshot(snapshot)
     if (selectedSessionId !== meta.selectedSessionId) {

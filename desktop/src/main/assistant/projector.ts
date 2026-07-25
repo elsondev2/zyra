@@ -25,6 +25,10 @@ export function recoverPersistedSnapshot(snapshot: AssistantSnapshot): Assistant
     const recovered = cloneSnapshot(snapshot)
     const recoveredAt = nowIso()
 
+    recovered.fleetByThreadId = recovered.fleetByThreadId && typeof recovered.fleetByThreadId === 'object'
+        ? recovered.fleetByThreadId
+        : {}
+
     recovered.playground = {
         rootPath: recovered.playground?.rootPath || null,
         labs: Array.isArray(recovered.playground?.labs) ? recovered.playground.labs : []
