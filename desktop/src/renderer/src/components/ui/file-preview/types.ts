@@ -1,5 +1,5 @@
 export type PreviewMediaType = 'image' | 'video' | 'audio'
-export type PreviewFileType = 'md' | 'html' | PreviewMediaType | 'text' | 'code' | 'json' | 'csv'
+export type PreviewFileType = 'directory' | 'md' | 'html' | PreviewMediaType | 'text' | 'code' | 'json' | 'csv'
 
 export interface PreviewFile {
     name: string
@@ -9,6 +9,8 @@ export interface PreviewFile {
     startInEditMode?: boolean
     focusLine?: number | null
     focusLineRequestId?: number | null
+    openNavigator?: boolean
+    navigatorRevealRequestId?: string | null
 }
 
 export interface PreviewTab {
@@ -31,6 +33,9 @@ export interface PreviewOpenOptions {
     startInEditMode?: boolean
     mediaItems?: PreviewMediaSource[]
     focusLine?: number
+    targetKind?: 'file' | 'directory'
+    openNavigator?: boolean
+    revealNavigatorTarget?: boolean
 }
 
 export interface PreviewMeta {

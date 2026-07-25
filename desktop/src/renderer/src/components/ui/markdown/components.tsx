@@ -1,10 +1,12 @@
 import type { Components } from 'react-markdown'
-import { Children, Fragment, cloneElement, isValidElement, type HTMLAttributes, type ReactNode } from 'react'
-import { AlertTriangle, Info, Lightbulb, ShieldAlert, Siren } from 'lucide-react'
+import { Children, Fragment, cloneElement, isValidElement, useEffect, useState, type HTMLAttributes, type ImgHTMLAttributes, type ReactNode } from 'react'
+import { AlertTriangle, ImageOff, Info, Lightbulb, Link2, ShieldAlert, Siren } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { CodeBlock, InlineCode } from './CodeElements'
 import { renderColorAwareChildren } from './colorTokens'
-import { looksLikeMarkdownFileReference } from './fileReferences'
+import { MarkdownExternalLinkContent, MarkdownFileTagContent } from './InlineTargets'
+import { MarkdownTable } from './MarkdownTable'
+import { looksLikeMarkdownFileReference, resolveMarkdownPackageReference } from './fileReferences'
 import { resolveImageSrc, resolveImageSrcSet } from './paths'
 import { resolveMarkdownLinkTarget } from './linkNavigation'
 
@@ -14,6 +16,18 @@ type ParagraphProps = HTMLAttributes<HTMLParagraphElement> & { align?: string }
 type HeadingProps = HTMLAttributes<HTMLHeadingElement> & { align?: string }
 
 type MarkdownAlertType = 'tip' | 'note' | 'important' | 'warning' | 'caution'
+
+const FENCE_TITLE_ATTR_REGEX = /(?:^|\s)(?:title|file(?:name)?)=(?:"([^"]+)"|'([^']+)'|(\S+))/i
+const FENCE_FILENAME_TOKEN_REGEX = /^[\w@][\w@./-]*\.[A-Za-z0-9]+$/
+
+function extractFenceTitle(meta: unknown): string | null {
+    const value = typeof meta === 'string' ? meta.trim() : ''
+    if (!value) return null
+    const attributeMatch = FENCE_TITLE_ATTR_REGEX.exec(value)
+    const attributeTitle = attributeMatch?.[1] ?? attributeMatch?.[2] ?? attributeMatch?.[3]
+    if (attributeTitle) return attributeTitle
+    return value.split(/\s+/).find((candidate) => FENCE_FILENAME_TOKEN_REGEX.test(candidate)) ?? null
+}
 
 const MARKDOWN_ALERT_META: Record<MarkdownAlertType, {
     label: string
@@ -96,36 +110,128 @@ function getAlignmentClass(align?: string): string | null {
     return null
 }
 
+function HeadingPermalink({ id }: { id?: string }) {
+    if (!id || id === 'footnote-label' || id.endsWith('-footnote-label')) return null
+    return (
+        <button
+            type="button"
+            data-markdown-heading-target={id}
+            className="ml-2 inline-flex translate-y-[1px] items-center text-sparkle-text-muted/0 transition-colors hover:text-[var(--accent-primary)] focus:text-[var(--accent-primary)] focus:outline-none group-hover/heading:text-sparkle-text-muted/55"
+            aria-label="This section is already in view"
+            title="This section is already in view"
+        >
+            <Link2 size={14} />
+        </button>
+    )
+}
+
+function MarkdownImage({
+    src,
+    rawSrc,
+    alt,
+    className,
+    onError,
+    ...props
+}: ImgHTMLAttributes<HTMLImageElement> & { rawSrc?: string }) {
+    const resolvedSource = resolveImageSrc(String(src || ''))
+    const targetSource = String(rawSrc || src || '').trim()
+    const [failedSource, setFailedSource] = useState<string | null>(null)
+    const [loadedSource, setLoadedSource] = useState<string | null>(null)
+
+    useEffect(() => {
+        setLoadedSource((current) => current === resolvedSource ? current : null)
+    }, [resolvedSource])
+
+    if (failedSource === resolvedSource) {
+        return (
+            <span
+                role="img"
+                aria-label={alt ? `Image unavailable: ${alt}` : 'Image unavailable'}
+                data-markdown-copy={`![${alt || ''}](${targetSource})`}
+                className="my-4 flex min-h-24 max-w-full items-center gap-3 rounded-lg border border-dashed border-sparkle-border-secondary bg-sparkle-bg/55 px-4 py-3 text-sparkle-text-muted"
+            >
+                <ImageOff size={18} className="shrink-0 opacity-70" />
+                <span className="min-w-0 truncate text-xs">{alt || 'Image unavailable'}</span>
+            </span>
+        )
+    }
+
+    return (
+        <span className="markdown-image-frame" data-markdown-copy={`![${alt || ''}](${targetSource})`}>
+            <span
+                role="button"
+                tabIndex={0}
+                data-markdown-image-target={targetSource}
+                className="markdown-image-open"
+                aria-label={alt ? `Open image: ${alt}` : 'Open image'}
+                title="Open image"
+            >
+                {loadedSource !== resolvedSource ? (
+                    <span className="markdown-image-loading" aria-hidden="true" />
+                ) : null}
+                <img
+                    {...props}
+                    src={resolvedSource}
+                    alt={alt || ''}
+                    loading="lazy"
+                    decoding="async"
+                    draggable={false}
+                    className={cn('h-auto max-w-full rounded-lg border border-white/10', className)}
+                    onLoad={() => setLoadedSource(resolvedSource)}
+                    onError={(event) => {
+                        onError?.(event)
+                        setFailedSource(resolvedSource)
+                    }}
+                />
+                <span className="markdown-image-open-label" aria-hidden="true">Open image</span>
+            </span>
+        </span>
+    )
+}
+
 export function createMarkdownComponents(
     filePath?: string,
     options?: {
         codeBlockMaxLines?: number
         plainCodeBlocks?: boolean
-        onInternalLinkClick?: (href: string) => Promise<void> | void
+        visualTheme?: 'light' | 'dark'
+        onInternalLinkClick?: (href: string) => Promise<boolean | void> | boolean | void
     }
 ): Components {
     return {
-        h1: ({ children, className, align, ...props }: HeadingProps) => (
-            <h1 className={cn('mt-8 mb-4 border-b border-white/10 pb-2 text-2xl font-bold text-sparkle-text first:mt-0', getAlignmentClass(align), className)} {...props}>
-                {children}
+        h1: ({ children, className, align, id, ...props }: HeadingProps) => (
+            <h1 id={id} className={cn('group/heading scroll-mt-20 mt-8 mb-4 border-b border-white/10 pb-2 text-2xl font-bold text-sparkle-text first:mt-0', getAlignmentClass(align), className)} {...props}>
+                {children}<HeadingPermalink id={id} />
             </h1>
         ),
         div: ({ className, ...props }: DivProps) => {
             const alignmentClass = getAlignmentClass(props.align)
             return <div className={cn(className, alignmentClass && 'flex flex-col', alignmentClass)} {...props} />
         },
-        h2: ({ children, className, align, ...props }: HeadingProps) => (
-            <h2 className={cn('mt-8 mb-3 border-b border-white/10 pb-2 text-xl font-semibold text-sparkle-text first:mt-0', getAlignmentClass(align), className)} {...props}>
-                {children}
+        h2: ({ children, className, align, id, ...props }: HeadingProps) => (
+            <h2 id={id} className={cn('group/heading scroll-mt-20 mt-8 mb-3 border-b border-white/10 pb-2 text-xl font-semibold text-sparkle-text first:mt-0', getAlignmentClass(align), className)} {...props}>
+                {children}<HeadingPermalink id={id} />
             </h2>
         ),
-        h3: ({ children, className, align, ...props }: HeadingProps) => (
-            <h3 className={cn('text-lg font-semibold text-sparkle-text mt-6 mb-3 first:mt-0', getAlignmentClass(align), className)} {...props}>{children}</h3>
+        h3: ({ children, className, align, id, ...props }: HeadingProps) => (
+            <h3 id={id} className={cn('group/heading scroll-mt-20 text-lg font-semibold text-sparkle-text mt-6 mb-3 first:mt-0', getAlignmentClass(align), className)} {...props}>
+                {children}<HeadingPermalink id={id} />
+            </h3>
         ),
-        h4: ({ children, className, align, ...props }: HeadingProps) => <h4 className={cn('text-base font-semibold text-sparkle-text mt-4 mb-2', getAlignmentClass(align), className)} {...props}>{children}</h4>,
-        h5: ({ children, className, align, ...props }: HeadingProps) => <h5 className={cn('text-sm font-semibold text-sparkle-text mt-4 mb-2', getAlignmentClass(align), className)} {...props}>{children}</h5>,
-        h6: ({ children, className, align, ...props }: HeadingProps) => (
-            <h6 className={cn('text-sm font-semibold text-sparkle-text-dark mt-4 mb-2', getAlignmentClass(align), className)} {...props}>{children}</h6>
+        h4: ({ children, className, align, id, ...props }: HeadingProps) => (
+            <h4 id={id} className={cn('group/heading scroll-mt-20 text-base font-semibold text-sparkle-text mt-4 mb-2', getAlignmentClass(align), className)} {...props}>
+                {children}<HeadingPermalink id={id} />
+            </h4>
+        ),
+        h5: ({ children, className, align, id, ...props }: HeadingProps) => (
+            <h5 id={id} className={cn('group/heading scroll-mt-20 text-sm font-semibold text-sparkle-text mt-4 mb-2', getAlignmentClass(align), className)} {...props}>
+                {children}<HeadingPermalink id={id} />
+            </h5>
+        ),
+        h6: ({ children, className, align, id, ...props }: HeadingProps) => (
+            <h6 id={id} className={cn('group/heading scroll-mt-20 text-sm font-semibold text-sparkle-text-dark mt-4 mb-2', getAlignmentClass(align), className)} {...props}>
+                {children}<HeadingPermalink id={id} />
+            </h6>
         ),
         p: ({ children, className, align, ...props }: ParagraphProps) => (
             <p className={cn('text-sparkle-text-dark leading-relaxed mb-4 last:mb-0 break-words [overflow-wrap:break-word]', getAlignmentClass(align), className)} {...props}>
@@ -135,8 +241,9 @@ export function createMarkdownComponents(
         a: ({ href, children }) => {
             const rawHref = String(href || '').trim()
             const isAnchorLink = rawHref.startsWith('#')
-            const internalTarget = rawHref && resolveMarkdownLinkTarget(rawHref, filePath)
-            const isInternalLink = Boolean(internalTarget)
+            const internalTarget = rawHref ? resolveMarkdownLinkTarget(rawHref, filePath) : null
+            const childText = flattenNodeText(children).trim()
+            const renderedChildren = renderColorAwareChildren(children, 'a')
 
             if (isAnchorLink) {
                 return (
@@ -145,20 +252,49 @@ export function createMarkdownComponents(
                         draggable={false}
                         className="text-[var(--accent-primary)] hover:text-white hover:underline"
                     >
-                        {renderColorAwareChildren(children, 'a')}
+                        {renderedChildren}
                     </a>
                 )
             }
 
-            if (isInternalLink) return (
+            if (internalTarget) return (
                 <a
                     href={href}
                     draggable={false}
-                    className="cursor-pointer text-[var(--accent-primary)] hover:text-white hover:underline"
+                    data-markdown-file-link=""
+                    data-markdown-copy={`[${flattenNodeText(children) || rawHref}](${rawHref})`}
+                    className="markdown-inline-file-tag"
                 >
-                    {renderColorAwareChildren(children, 'a')}
+                    <MarkdownFileTagContent
+                        pathValue={internalTarget.path}
+                        theme={options?.visualTheme || 'dark'}
+                        focusLine={internalTarget.focusLine}
+                        displayPath={looksLikeMarkdownFileReference(childText) ? childText.replace(/:\d+(?::\d+)?$/, '') : undefined}
+                    >
+                        {renderedChildren}
+                    </MarkdownFileTagContent>
                 </a>
             )
+
+            const linkedPackage = resolveMarkdownPackageReference(flattenNodeText(children).trim())
+            if (linkedPackage) {
+                return (
+                    <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        draggable={false}
+                        data-markdown-package-link={linkedPackage.packageName}
+                        data-markdown-copy={`[\`${linkedPackage.specifier}\`](${rawHref})`}
+                        className="markdown-inline-package-tag"
+                        title={rawHref || undefined}
+                    >
+                        <MarkdownExternalLinkContent href={rawHref}>
+                            <code>{linkedPackage.specifier}</code>
+                        </MarkdownExternalLinkContent>
+                    </a>
+                )
+            }
 
             return (
                 <a
@@ -166,9 +302,10 @@ export function createMarkdownComponents(
                     target="_blank"
                     rel="noopener noreferrer"
                     draggable={false}
+                    title={rawHref || undefined}
                     className="text-blue-400 hover:text-blue-300 hover:underline"
                 >
-                    {renderColorAwareChildren(children, 'a')}
+                    <MarkdownExternalLinkContent href={rawHref}>{renderedChildren}</MarkdownExternalLinkContent>
                 </a>
             )
         },
@@ -180,20 +317,55 @@ export function createMarkdownComponents(
         em: ({ children }) => (
             <em className="italic text-sparkle-text-dark">{renderColorAwareChildren(children, 'em')}</em>
         ),
-        code: ({ className, children }) => {
-            const match = /language-(\w+)/.exec(className || '')
+        code: ({ className, children, ...codeProps }) => {
+            const match = /(?:^|\s)language-([^\s]+)/.exec(className || '')
             const isInline = !match && !className
 
             if (isInline) {
                 const text = flattenNodeText(children).trim()
-                if (filePath && looksLikeMarkdownFileReference(text) && resolveMarkdownLinkTarget(text, filePath)) {
+                const packageTarget = resolveMarkdownPackageReference(text)
+                if (packageTarget) {
+                    return (
+                        <a
+                            href={packageTarget.href}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            draggable={false}
+                            data-markdown-package-link={packageTarget.packageName}
+                            data-markdown-copy={`\`${text}\``}
+                            className="markdown-inline-package-tag"
+                            title={`Open ${packageTarget.packageName} on npm`}
+                        >
+                            <MarkdownExternalLinkContent href={packageTarget.href}>
+                                <code>{children}</code>
+                            </MarkdownExternalLinkContent>
+                        </a>
+                    )
+                }
+                const internalTarget = filePath && looksLikeMarkdownFileReference(text)
+                    ? resolveMarkdownLinkTarget(text, filePath)
+                    : null
+                if (internalTarget) {
+                    const isAutoDetectedPath = Boolean(
+                        (codeProps as Record<string, unknown>).dataAutoPath
+                        ?? (codeProps as Record<string, unknown>)['data-auto-path']
+                    )
                     return (
                         <code
                             data-devscope-file-reference={text}
+                            data-markdown-copy={isAutoDetectedPath ? text : `\`${text}\``}
                             draggable={false}
-                            className="mx-0.5 cursor-pointer rounded border border-white/10 bg-sparkle-accent px-1.5 py-0.5 font-mono text-sm text-pink-300"
+                            className="markdown-inline-file-tag markdown-inline-code-file-tag"
                         >
-                            {children}
+                            <MarkdownFileTagContent
+                                pathValue={internalTarget.path}
+                                theme={options?.visualTheme || 'dark'}
+                                focusLine={internalTarget.focusLine}
+                                compact
+                                displayPath={text.replace(/:\d+(?::\d+)?$/, '')}
+                            >
+                                {children}
+                            </MarkdownFileTagContent>
                         </code>
                     )
                 }
@@ -210,9 +382,13 @@ export function createMarkdownComponents(
                 )
             }
 
+            const metadata = (codeProps as Record<string, unknown>).dataCodeMeta
+                ?? (codeProps as Record<string, unknown>)['data-code-meta']
             return (
                 <CodeBlock
                     language={match?.[1]}
+                    title={extractFenceTitle(metadata)}
+                    theme={options?.visualTheme || 'dark'}
                     maxLines={options?.codeBlockMaxLines}
                 >
                     {String(children).replace(/\n$/, '')}
@@ -231,13 +407,29 @@ export function createMarkdownComponents(
                 </pre>
             )
         },
-        ul: ({ children }) => (
-            <ul className="list-disc list-outside ml-6 mb-4 space-y-1 text-sparkle-text-dark">{children}</ul>
+        ul: ({ children, className, ...props }) => {
+            const isTaskList = String(className || '').includes('contains-task-list')
+            return (
+                <ul
+                    className={cn(
+                        'mb-4 text-sparkle-text-dark',
+                        isTaskList ? 'ml-0 list-none space-y-2' : 'ml-6 list-outside list-disc space-y-1',
+                        className
+                    )}
+                    {...props}
+                >
+                    {children}
+                </ul>
+            )
+        },
+        ol: ({ children, className, ...props }) => (
+            <ol className={cn('ml-6 mb-4 list-decimal list-outside space-y-1 text-sparkle-text-dark', className)} {...props}>{children}</ol>
         ),
-        ol: ({ children }) => (
-            <ol className="list-decimal list-outside ml-6 mb-4 space-y-1 text-sparkle-text-dark">{children}</ol>
+        li: ({ children, className, ...props }) => (
+            <li className={cn('leading-relaxed pl-1 break-words [overflow-wrap:break-word]', className)} {...props}>
+                {renderColorAwareChildren(children, 'li')}
+            </li>
         ),
-        li: ({ children }) => <li className="leading-relaxed pl-1 break-words [overflow-wrap:break-word]">{renderColorAwareChildren(children, 'li')}</li>,
         blockquote: ({ children }) => {
             const alert = detectMarkdownAlert(children)
             if (alert) {
@@ -264,11 +456,12 @@ export function createMarkdownComponents(
             )
         },
         hr: () => <hr className="my-6 border-white/10" />,
-        img: ({ src, alt }) => (
-            <img
+        img: ({ src, alt, ...props }) => (
+            <MarkdownImage
+                {...props}
                 src={resolveImageSrc(src || '', filePath)}
+                rawSrc={src || ''}
                 alt={alt || ''}
-                className="my-4 h-auto max-w-full rounded-lg border border-white/10"
             />
         ),
         picture: ({ children }) => (
@@ -283,37 +476,47 @@ export function createMarkdownComponents(
                 srcSet={srcSet ? resolveImageSrcSet(srcSet, filePath) : undefined}
             />
         ),
-        table: ({ children }) => (
-            <div className="my-4 overflow-x-auto rounded-lg border border-white/10">
-                <table className="w-full border-collapse text-sm">{children}</table>
-            </div>
+        table: ({ children, className, ...props }) => (
+            <MarkdownTable className={cn('w-full min-w-max border-collapse text-sm', className)} {...props}>
+                {children}
+            </MarkdownTable>
         ),
-        thead: ({ children }) => <thead className="bg-sparkle-accent">{children}</thead>,
-        tbody: ({ children }) => <tbody>{children}</tbody>,
-        tr: ({ children }) => (
-            <tr className="border-b border-white/10 transition-colors last:border-0 hover:bg-sparkle-accent">
+        thead: ({ children, className, ...props }) => <thead className={cn('bg-sparkle-accent', className)} {...props}>{children}</thead>,
+        tbody: ({ children, className, ...props }) => <tbody className={cn('markdown-table-body', className)} {...props}>{children}</tbody>,
+        tr: ({ children, className, ...props }) => (
+            <tr className={cn('border-b border-white/10 transition-colors last:border-0 hover:bg-sparkle-accent/70', className)} {...props}>
                 {children}
             </tr>
         ),
-        th: ({ children }) => (
-            <th className="border-r border-white/10 px-4 py-3 text-left font-semibold text-sparkle-text last:border-r-0">
+        th: ({ children, className, ...props }) => (
+            <th className={cn('whitespace-nowrap border-r border-white/10 px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-sparkle-text last:border-r-0', className)} {...props}>
                 {renderColorAwareChildren(children, 'th')}
             </th>
         ),
-        td: ({ children }) => (
-            <td className="border-r border-white/10 px-4 py-3 text-sparkle-text-dark last:border-r-0 break-words [overflow-wrap:break-word]">
+        td: ({ children, className, ...props }) => (
+            <td className={cn('border-r border-white/10 px-4 py-2.5 text-sparkle-text-dark last:border-r-0 break-words [overflow-wrap:break-word]', className)} {...props}>
                 {renderColorAwareChildren(children, 'td')}
             </td>
         ),
-        input: ({ type, checked }) => {
+        details: ({ children, className, ...props }) => (
+            <details data-markdown-details="" className={cn('markdown-details my-4', className)} {...props}>
+                {children}
+            </details>
+        ),
+        summary: ({ children, className, ...props }) => (
+            <summary className={cn('markdown-details-summary', className)} {...props}>{children}</summary>
+        ),
+        input: ({ type, checked, disabled, className, ...props }) => {
             if (type !== 'checkbox') return null
 
             return (
                 <input
+                    {...props}
                     type="checkbox"
                     checked={checked}
+                    disabled={disabled ?? true}
                     readOnly
-                    className="mr-2 rounded border-white/10 bg-transparent checked:border-blue-500 checked:bg-blue-500"
+                    className={cn('mr-2 size-3.5 translate-y-[1px] rounded border-white/15 bg-transparent accent-[var(--accent-primary)]', className)}
                 />
             )
         },

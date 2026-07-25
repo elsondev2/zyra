@@ -71,7 +71,7 @@ export const AssistantPlanPanel = memo(function AssistantPlanPanel(props: {
     markdownFilePath?: string | null
     onClose: () => void
     onShowThreadDetails: () => void
-    onOpenInternalLink?: (href: string) => Promise<void> | void
+    onOpenInternalLink?: (href: string) => Promise<boolean | void> | boolean | void
 }) {
     const { open, compact = false, activePlan, latestTurn, latestProposedPlan, markdownFilePath, onClose, onShowThreadDetails, onOpenInternalLink } = props
     const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false)

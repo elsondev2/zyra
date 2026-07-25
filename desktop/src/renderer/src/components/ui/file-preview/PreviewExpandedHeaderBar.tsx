@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Minimize2, PanelLeft, PanelRight, Play, Square, Trash2, X } from 'lucide-react'
+import { Check, ChevronDown, Minimize2, PanelLeftClose, PanelLeftOpen, PanelRight, Play, Square, Trash2, X } from 'lucide-react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { useSettings } from '@/lib/settings'
@@ -7,6 +7,7 @@ import type { ViewportPreset } from './viewport'
 import { PreviewHeaderEditMenu } from './PreviewHeaderEditMenu'
 import { PreviewHeaderHtmlControls } from './PreviewHeaderHtmlControls'
 import { PreviewHeaderStatusActions } from './PreviewHeaderStatusActions'
+import { PreviewHistoryNavigation } from './PreviewHistoryNavigation'
 import { PreviewTabStrip } from './PreviewTabStrip'
 
 type PreviewExpandedHeaderBarProps = {
@@ -14,6 +15,10 @@ type PreviewExpandedHeaderBarProps = {
     showCloseButton?: boolean
     previewModeEnabled: boolean
     mode: 'preview' | 'edit'
+    canNavigateBack: boolean
+    canNavigateForward: boolean
+    onNavigateBack: () => void
+    onNavigateForward: () => void
     isEditable: boolean
     isDirty: boolean
     isSaving: boolean
@@ -102,6 +107,10 @@ export function PreviewExpandedHeaderBar({
     showCloseButton = true,
     previewModeEnabled,
     mode,
+    canNavigateBack,
+    canNavigateForward,
+    onNavigateBack,
+    onNavigateForward,
     isEditable,
     isDirty,
     isSaving,
@@ -191,6 +200,25 @@ export function PreviewExpandedHeaderBar({
             className="group/header relative z-30 flex h-9 min-h-9 items-stretch justify-between gap-2 overflow-visible border-b border-white/[0.06] bg-[#0a0f16]/98 px-0"
         >
             <div className="flex min-w-0 flex-1 items-stretch gap-2 overflow-hidden">
+                <button
+                    type="button"
+                    onClick={onToggleLeftPanel}
+                    className="ml-1 inline-flex h-full w-7 shrink-0 items-center justify-center rounded-md text-[#918aa0] transition-colors hover:bg-white/[0.035] hover:text-[#d7d0e3] focus:outline-none focus-visible:ring-1 focus-visible:ring-white/10"
+                    title={leftPanelOpen ? 'Hide file navigator' : 'Show file navigator'}
+                    aria-label={leftPanelOpen ? 'Hide file navigator' : 'Show file navigator'}
+                    aria-pressed={leftPanelOpen}
+                >
+                    {leftPanelOpen
+                        ? <PanelLeftClose size={15} strokeWidth={1.7} />
+                        : <PanelLeftOpen size={15} strokeWidth={1.7} />}
+                </button>
+                <PreviewHistoryNavigation
+                    canGoBack={canNavigateBack}
+                    canGoForward={canNavigateForward}
+                    onBack={onNavigateBack}
+                    onForward={onNavigateForward}
+                    expanded
+                />
                 <div className="flex min-w-0 flex-1 items-stretch overflow-hidden">
                     <PreviewTabStrip
                         tabs={previewTabs}
@@ -297,14 +325,6 @@ export function PreviewExpandedHeaderBar({
                     </>
                 ) : null}
 
-                <HeaderIconButton
-                    active={leftPanelOpen}
-                    title={leftPanelOpen ? 'Hide left panel' : 'Show left panel'}
-                    onClick={onToggleLeftPanel}
-                    activeClassName="border-white/70 bg-white text-[#0a0f16] opacity-100"
-                >
-                    <PanelLeft size={15} />
-                </HeaderIconButton>
                 <HeaderIconButton
                     active={rightPanelOpen}
                     title={rightPanelOpen ? 'Hide right panel' : 'Show right panel'}

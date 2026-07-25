@@ -2,28 +2,42 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { AssistantActivity, AssistantMessage } from '../src/shared/assistant/contracts'
+import type { AssistantActivity, AssistantMessage, AssistantSessionTurnUsageEntry } from '../src/shared/assistant/contracts'
+import { AssistantInlineDiffPreview } from '../src/renderer/src/pages/assistant/AssistantInlineDiffPreview'
 import { TimelineToolCallCard } from '../src/renderer/src/pages/assistant/AssistantTimelineToolCallCard'
+import {
+    AssistantFileChangeStatusPill,
+    resolveAssistantFileChangeStatus
+} from '../src/renderer/src/pages/assistant/AssistantFileChangeStatusPill'
 import {
     buildBaseCheckpoints,
     resolveTimelineMinimapHeight,
     resolveTimelineMinimapIndexFromPointer,
-    resolveTimelineMinimapMarkerWidth
+    resolveTimelineMinimapMarkerWidth,
+    resolveTimelineMinimapWindow,
+    TIMELINE_MINIMAP_MAX_MARKERS
 } from '../src/renderer/src/pages/assistant/AssistantTimelineCheckpointRail'
 import { TimelineTurnWorkSummary } from '../src/renderer/src/pages/assistant/AssistantTimelineWorkSummary'
-import { sanitizeThoughtContent, TimelineCommandCheckpointGroup, TimelineMessage, TimelineThought, TimelineThoughtGroup, TimelineWorkTraceGroup } from '../src/renderer/src/pages/assistant/AssistantTimelineRows'
+import { IssueLogRow } from '../src/renderer/src/pages/assistant/AssistantPageHelpers'
+import { sanitizeThoughtContent, TimelineCommandCheckpointGroup, TimelineContextCompactionMarker, TimelineMessage, TimelineThought, TimelineThoughtGroup, TimelineWorkTraceGroup } from '../src/renderer/src/pages/assistant/AssistantTimelineRows'
 import { COLLAPSED_TOOL_CALL_COUNT, TimelineToolCallList } from '../src/renderer/src/pages/assistant/AssistantTimelineToolCalls'
 import { stripProposedPlanBlocks } from '../src/renderer/src/pages/assistant/assistant-proposed-plan'
 import { getTerminalOutputHeightClass } from '../src/renderer/src/pages/assistant/assistant-timeline-layout'
 import { groupTimelineRowsIntoWorkSummaries } from '../src/renderer/src/pages/assistant/assistant-turn-work'
-import { resolveAssistantTimelineDisclosureAnchorMode } from '../src/renderer/src/pages/assistant/assistant-timeline-scroll-events'
+import {
+    didAssistantTimelineWorkComplete,
+    resolveAssistantTimelineDisclosureAnchorMode
+} from '../src/renderer/src/pages/assistant/assistant-timeline-scroll-events'
 import {
     buildTimelineRows,
     countRunningCommandActivities,
     findRelatedCommandActivityId,
+    getActivityAgentSurface,
     getActivityElapsed,
+    getActivityStatus,
     getCommandCheckpointAction,
     getCommandJobId,
+    getContextCompactionStatus,
     getTimelineEntries,
     isCommandCheckpointActivity,
     isInternalAssistantActivity,
@@ -75,6 +89,51 @@ function activity(input: {
     }
 }
 
+const runningCompactionActivity: AssistantActivity = {
+    id: 'context-compaction-lifecycle',
+    kind: 'context.compaction',
+    tone: 'tool',
+    summary: 'AUTO-COMPACTING',
+    detail: 'Conversation context is being compacted.',
+    turnId: 'turn-compaction',
+    createdAt: iso(0),
+    payload: { category: 'context-compaction', status: 'running', startedAt: iso(0) }
+}
+const completedCompactionActivity: AssistantActivity = {
+    ...runningCompactionActivity,
+    summary: 'AUTO-COMPACTED',
+    payload: { ...runningCompactionActivity.payload, status: 'completed', completedAt: iso(1200) }
+}
+const cancelledCompactionActivity: AssistantActivity = {
+    ...completedCompactionActivity,
+    tone: 'warning',
+    summary: 'AUTO-COMPACTION CANCELLED',
+    payload: { ...completedCompactionActivity.payload, status: 'cancelled' }
+}
+assert.equal(getContextCompactionStatus(runningCompactionActivity), 'running')
+assert.equal(getContextCompactionStatus(completedCompactionActivity), 'completed')
+assert.equal(getContextCompactionStatus(cancelledCompactionActivity), 'cancelled')
+assert.equal(renderToStaticMarkup(createElement(TimelineContextCompactionMarker, { activity: runningCompactionActivity })).includes('AUTO-COMPACTING'), true)
+assert.equal(renderToStaticMarkup(createElement(TimelineContextCompactionMarker, { activity: completedCompactionActivity })).includes('AUTO-COMPACTED'), true)
+assert.equal(renderToStaticMarkup(createElement(TimelineContextCompactionMarker, { activity: cancelledCompactionActivity })).includes('AUTO-COMPACTION CANCELLED'), true)
+
+const compactWarningMarkup = renderToStaticMarkup(createElement(IssueLogRow, {
+    activity: cancelledCompactionActivity,
+    activities: [
+        cancelledCompactionActivity,
+        { ...cancelledCompactionActivity, id: 'context-compaction-lifecycle-2' },
+        { ...cancelledCompactionActivity, id: 'context-compaction-lifecycle-3' }
+    ],
+    count: 3,
+    compact: true,
+    onDismiss: () => {},
+    onShowMore: () => {}
+}))
+assert.equal(compactWarningMarkup.includes('min-h-8'), true, 'chat warning rows use the slim compact layout')
+assert.equal(compactWarningMarkup.includes('line-clamp-2'), false, 'chat warning rows remain on one line')
+assert.equal(compactWarningMarkup.includes('>Details<'), false, 'the compact warning row itself opens details without a redundant action')
+assert.equal(compactWarningMarkup.indexOf('x3') < compactWarningMarkup.indexOf('Dismiss warning options'), true, 'the repeat count appears before the warning actions menu')
+
 const turnId = 'turn-devscope-sequence'
 const messages = [
     message({ id: 'user', role: 'user', turnId, millisecond: 0, text: 'Run the harness checks.' }),
@@ -91,7 +150,6 @@ const activities = [
 ]
 
 const entries = getTimelineEntries(messages, activities)
-
 assert.deepEqual(
     entries.map((entry) => {
         if (entry.type === 'message') return entry.message.id
@@ -169,6 +227,30 @@ assert.equal(
     'expanded work keeps narration in arrival order instead of forcing the latest narration to the bottom'
 )
 
+const endCompactionActivity: AssistantActivity = {
+    ...runningCompactionActivity,
+    id: 'context-compaction-after-final',
+    turnId,
+    createdAt: iso(800),
+    payload: { ...runningCompactionActivity.payload, startedAt: iso(800) }
+}
+const compactingAfterFinalRows = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries(messages, [...activities, endCompactionActivity]), true, iso(0)),
+    messages,
+    latestAssistantMessageId: 'final',
+    latestTurnStartedAt: iso(0),
+    isWorking: true
+})
+const visibleFinalIndex = compactingAfterFinalRows.findIndex((row) => row.kind === 'message' && row.message.id === 'final')
+const liveCompactionIndex = compactingAfterFinalRows.findIndex((row) => row.kind === 'activity' && row.activity.id === endCompactionActivity.id)
+assert.equal(visibleFinalIndex > 0, true, 'a completed final response becomes a full timeline row before end-of-turn auto-compaction finishes')
+assert.equal(liveCompactionIndex > visibleFinalIndex, true, 'running auto-compaction remains a separate marker after the already-visible final response')
+assert.equal(
+    compactingAfterFinalRows.some((row) => row.kind === 'turn-work-summary' && row.running),
+    true,
+    'the runtime may remain busy compacting without absorbing the settled final response back into Working'
+)
+
 const collapsedTurnRows = groupTimelineRowsIntoWorkSummaries({
     rows: completedRows,
     messages,
@@ -183,6 +265,31 @@ assert.deepEqual(
 )
 const workSummary = collapsedTurnRows[1]
 assert.equal(workSummary?.kind === 'turn-work-summary' ? workSummary.rows.length : 0, 5)
+
+const pendingNextUser: AssistantMessage = {
+    ...message({ id: 'pending-next-user', role: 'user', turnId: 'pending-next-turn', millisecond: 800, text: 'Start the next task.' }),
+    turnId: null
+}
+const rowsAfterSendingNextMessage = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries([...messages, pendingNextUser], activities), true, pendingNextUser.createdAt),
+    messages: [...messages, pendingNextUser],
+    latestAssistantMessageId: null,
+    latestTurnStartedAt: pendingNextUser.createdAt,
+    isWorking: true
+})
+const summariesAfterSendingNextMessage = rowsAfterSendingNextMessage.filter((row) => row.kind === 'turn-work-summary')
+assert.equal(summariesAfterSendingNextMessage.length, 2, 'sending a new message keeps the previous Worked for disclosure mounted beside the new working disclosure')
+assert.equal(new Set(summariesAfterSendingNextMessage.map((row) => row.id)).size, 2, 'the pending turn cannot reuse the previous completed work summary identity')
+assert.equal(
+    summariesAfterSendingNextMessage[0]?.kind === 'turn-work-summary' ? summariesAfterSendingNextMessage[0].turnId : null,
+    turnId,
+    'the preserved historical disclosure remains attached to its completed turn'
+)
+assert.equal(
+    summariesAfterSendingNextMessage[1]?.kind === 'turn-work-summary' ? summariesAfterSendingNextMessage[1].turnId : 'unexpected',
+    null,
+    'an optimistic user message waits for its own turn ID instead of borrowing the previous turn ID'
+)
 const workSummaryMarkup = renderToStaticMarkup(createElement(TimelineTurnWorkSummary, {
     startedAt: iso(0),
     completedAt: iso(60_000),
@@ -195,6 +302,9 @@ assert.equal(workSummaryMarkup.includes('Collapse work'), false, 'work uses one 
 const workSummarySource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimelineWorkSummary.tsx', import.meta.url), 'utf8')
 assert.equal(workSummarySource.includes("expanded && 'sticky top-0 z-10 bg-sparkle-bg/95 backdrop-blur-md'"), true, 'the expanded work header remains reachable while scrolling through long work')
 assert.equal(workSummarySource.includes('if (!wasRunning || running) return'), true, 'work auto-collapses exactly when a running turn completes')
+assert.equal(workSummarySource.includes('statusTextRef.current.textContent = formatWorkSummaryStatus'), true, 'the live work timer updates its own text without reconciling the expanded work subtree')
+assert.equal(workSummarySource.includes('duration={WORK_SUMMARY_MOTION_MS} crispContent'), true, 'large work disclosures animate height without fading and compositing the complete work subtree')
+assert.equal(workSummarySource.includes('setNowIso'), false, 'the shared work disclosure does not schedule a React render every second')
 const runningWorkSummaryMarkup = renderToStaticMarkup(createElement(TimelineTurnWorkSummary, {
     startedAt: new Date().toISOString(),
     completedAt: null,
@@ -203,7 +313,82 @@ const runningWorkSummaryMarkup = renderToStaticMarkup(createElement(TimelineTurn
 }))
 assert.equal(runningWorkSummaryMarkup.includes('Working for'), true, 'the shared disclosure presents its live elapsed state')
 assert.equal(runningWorkSummaryMarkup.includes('data-state="open"'), true, 'live work starts expanded and remains user-collapsible')
+
+const interruptedTurnId = 'turn-interrupted-without-final'
+const interruptedPrompt: AssistantMessage = {
+    ...message({ id: 'interrupted-user', role: 'user', turnId: interruptedTurnId, millisecond: 800, text: 'Start work, then stop.' }),
+    turnId: null
+}
+const interruptedNarration = message({ id: 'interrupted-progress', role: 'assistant', turnId: interruptedTurnId, millisecond: 850, text: 'I am working on it.' })
+const interruptedTool = activity({ id: 'interrupted-tool', turnId: interruptedTurnId, millisecond: 900 })
+const raceTaggedTool = activity({ id: 'interrupted-tool-with-next-turn-id', turnId: 'next-turn-id', millisecond: 910 })
+const interruptedUsage: AssistantSessionTurnUsageEntry = {
+    id: interruptedTurnId,
+    sessionId: 'session-interrupted',
+    threadId: 'thread-interrupted',
+    model: 'test-model',
+    state: 'interrupted',
+    requestedAt: interruptedPrompt.createdAt,
+    startedAt: interruptedPrompt.createdAt,
+    completedAt: iso(1800),
+    assistantMessageId: interruptedNarration.id,
+    usage: null,
+    updatedAt: iso(1800)
+}
+const interruptedRows = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries([interruptedPrompt, interruptedNarration], [raceTaggedTool, interruptedTool]), false, null),
+    messages: [interruptedPrompt, interruptedNarration],
+    turnUsageById: new Map([[interruptedTurnId, interruptedUsage]]),
+    latestAssistantMessageId: null,
+    latestTurnStartedAt: null,
+    isWorking: false
+})
+assert.deepEqual(interruptedRows.map((row) => row.kind), ['message', 'turn-work-summary'], 'legacy interrupted turns collapse even when the user prompt has no turn ID and only progress narration exists')
+const interruptedSummary = interruptedRows[1]
+assert.equal(interruptedSummary?.kind === 'turn-work-summary' ? interruptedSummary.outcome : null, 'interrupted')
+assert.equal(interruptedSummary?.kind === 'turn-work-summary'
+    ? interruptedSummary.rows.some((row) => (
+        (row.kind === 'activity' && row.activity.id === raceTaggedTool.id)
+        || (row.kind === 'activity-group' && row.activities.some((entry) => entry.id === raceTaggedTool.id))
+    ))
+    : false, true, 'legacy prompt boundaries retain work rows that were race-tagged with the following turn ID')
+const interruptedMarkup = renderToStaticMarkup(createElement(TimelineTurnWorkSummary, {
+    startedAt: interruptedPrompt.createdAt,
+    completedAt: iso(1800),
+    outcome: 'interrupted',
+    children: createElement('div', null, 'Interrupted work')
+}))
+assert.equal(interruptedMarkup.includes('Worked for'), true)
+assert.equal(interruptedMarkup.includes('Interrupted'), true)
+assert.equal(interruptedMarkup.includes('data-state="closed"'), true)
+
+const orphanTurnId = 'turn-no-final-response'
+const orphanPrompt = message({ id: 'orphan-user', role: 'user', turnId: orphanTurnId, millisecond: 2000, text: 'Do work without a final response.' })
+const orphanTool = activity({ id: 'orphan-tool', turnId: orphanTurnId, millisecond: 2200 })
+const orphanRows = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries([orphanPrompt], [orphanTool]), false, null),
+    messages: [orphanPrompt],
+    latestAssistantMessageId: null,
+    latestTurnStartedAt: null,
+    isWorking: false
+})
+assert.equal(orphanRows[1]?.kind === 'turn-work-summary' ? orphanRows[1].outcome : null, 'no-response', 'historical orphan turns receive a truthful no-response work summary')
+
 const timelineSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimeline.tsx', import.meta.url), 'utf8')
+const virtualTimelineSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantVirtualTimeline.tsx', import.meta.url), 'utf8')
+const historyStoreSource = readFileSync(new URL('../src/renderer/src/lib/assistant/assistant-store-core.ts', import.meta.url), 'utf8')
+const historyStateSource = readFileSync(new URL('../src/renderer/src/lib/assistant/assistant-history-state.ts', import.meta.url), 'utf8')
+assert.equal(timelineSource.includes('<AssistantVirtualTimeline'), true, 'the timeline delegates mounting and measurement to the virtual list owner')
+assert.equal(virtualTimelineSource.includes('<LegendList'), true, 'long histories render through LegendList rather than renderer-only slicing')
+assert.equal(virtualTimelineSource.includes('maintainVisibleContentPosition={{ data: true }}'), true, 'database-page prepends preserve the measured visible anchor')
+assert.equal(virtualTimelineSource.includes('itemLayout: !disclosureLayoutActive'), true, 'user disclosures suspend item-layout end-follow while their row height animates')
+assert.equal(virtualTimelineSource.includes('layout: !disclosureLayoutActive'), true, 'viewport layout follow cannot compete with an active disclosure anchor')
+assert.equal(virtualTimelineSource.includes("addEventListener('pointerdown', handleTimelinePointerDown"), true, 'timeline controls suspend layout follow before their React click changes row height')
+assert.equal(virtualTimelineSource.includes('ASSISTANT_TIMELINE_DISCLOSURE_TOGGLE_EVENT'), true, 'automatic work collapse uses the same bounded disclosure window')
+assert.equal(virtualTimelineSource.includes('completionFollowActiveRef'), true, 'turn completion owns a bounded end-follow window through work collapse and Markdown handoff')
+assert.equal(virtualTimelineSource.includes('if (!scrollElement || !followingEndRef.current'), true, 'completion follow only activates when the viewer was already following the response end')
+assert.equal(historyStoreSource.includes('getHistoryPage({'), true, 'earlier history comes from the main-process SQLite page contract')
+assert.equal(historyStateSource.includes('5 * 60_000'), true, 'recent thread detail is retained for a bounded five-minute idle window')
 assert.equal(timelineSource.includes('compactLiveNarration: true'), true, 'the staged preview remains mounted so it can retain the last settled narration')
 assert.equal(timelineSource.includes("expanded && 'hidden'"), true, 'expanded work hides the compact preview and uses only chronological work rows')
 const compactNarrationMarkup = renderToStaticMarkup(createElement(TimelineMessage, {
@@ -211,12 +396,42 @@ const compactNarrationMarkup = renderToStaticMarkup(createElement(TimelineMessag
     compactLiveNarration: true
 }))
 assert.equal(compactNarrationMarkup.includes('line-clamp-3'), true, 'collapsed narration is capped at three lines')
-assert.equal(compactNarrationMarkup.includes('Show full narration'), true, 'the compact preview can reveal its complete narration without opening work')
+assert.equal(compactNarrationMarkup.includes('Show full narration'), false, 'compact narration is a preview rather than a second disclosure')
+assert.equal(compactNarrationMarkup.includes('aria-expanded'), false, 'compact narration cannot create a duplicate expandable control')
+const streamingCompactNarrationMarkup = renderToStaticMarkup(createElement(TimelineMessage, {
+    message: { ...messages[1], text: 'Narrating live work', streaming: true },
+    compactLiveNarration: true
+}))
+assert.equal(streamingCompactNarrationMarkup.includes('Narrating live work'), true, 'compact work narration paints its paced live text before settlement')
+const activeWorkMarkup = renderToStaticMarkup(createElement(TimelineTurnWorkSummary, {
+    startedAt: messages[0].createdAt,
+    completedAt: null,
+    running: true,
+    children: createElement('div', null, 'Active work'),
+    renderLiveNarration: () => createElement(TimelineMessage, {
+        message: messages[1],
+        compactLiveNarration: true
+    })
+}))
+assert.equal((activeWorkMarkup.match(/aria-expanded=/g) || []).length, 1, 'an active turn exposes exactly one work disclosure')
 const timelineRowsSourceForNarration = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimelineRows.tsx', import.meta.url), 'utf8')
-assert.equal(timelineRowsSourceForNarration.includes("message.role !== 'assistant' || message.streaming"), true, 'a replacement narration waits until streaming completes before entering the compact preview')
+assert.equal(timelineRowsSourceForNarration.includes("message.role !== 'assistant' || message.streaming"), true, 'the settled narration snapshot waits for completion while paced live text remains visible')
 const timelineCssSource = readFileSync(new URL('../src/renderer/src/index.css', import.meta.url), 'utf8')
 assert.equal(timelineCssSource.includes('assistantNarrationShimmer 6.5s ease-in-out infinite'), true, 'collapsed narration uses a deliberately slow shimmer')
 assert.equal(timelineCssSource.includes('assistantNarrationIn 420ms'), true, 'settled narration changes use a measured seamless handoff')
+
+assert.equal(didAssistantTimelineWorkComplete(
+    [{ id: 'active-summary', kind: 'turn-work-summary', running: true, turnId: 'turn-live' }],
+    [{ id: 'active-summary', kind: 'turn-work-summary', running: false, turnId: 'turn-live' }]
+), true, 'the same work summary detects its running-to-completed transition')
+assert.equal(didAssistantTimelineWorkComplete(
+    [{ id: 'active-fallback', kind: 'turn-work-summary', running: true, turnId: 'turn-live' }],
+    [{ id: 'persisted-turn-live', kind: 'turn-work-summary', running: false, turnId: 'turn-live' }]
+), true, 'turn identity preserves completion detection when projection changes the summary row id')
+assert.equal(didAssistantTimelineWorkComplete(
+    [{ id: 'older-summary', kind: 'turn-work-summary', running: false, turnId: 'turn-old' }],
+    [{ id: 'new-summary', kind: 'turn-work-summary', running: false, turnId: 'turn-new' }]
+), false, 'ordinary historical row changes never force end-follow')
 
 assert.equal(resolveAssistantTimelineDisclosureAnchorMode({
     expanding: true,
@@ -248,6 +463,12 @@ assert.equal(resolveAssistantTimelineDisclosureAnchorMode({
 }), 'preserve-trigger', 'collapse falls back to the disclosure header when no message dominates the viewport')
 
 assert.equal(resolveTimelineMinimapHeight(8, 800), 56, 'the minimap uses compact eight-pixel checkpoint spacing')
+assert.deepEqual(
+    resolveTimelineMinimapWindow(100, 50),
+    { startIndex: 36, endIndex: 64, hiddenBefore: 36, hiddenAfter: 36 },
+    'long chats expose a centered rolling minimap window'
+)
+assert.equal(TIMELINE_MINIMAP_MAX_MARKERS, 28, 'the minimap never accumulates an unbounded dash field')
 assert.equal(resolveTimelineMinimapIndexFromPointer({ itemCount: 8, railTop: 100, railHeight: 56, pointerY: 124 }), 3)
 assert.deepEqual(
     [0, 1, 2, 3].map((distance) => resolveTimelineMinimapMarkerWidth(distance)),
@@ -291,8 +512,8 @@ const sameTimeEntries = getTimelineEntries(
 const sameTimeGroup = sameTimeEntries.find((entry) => entry.type === 'activity-group')
 assert.deepEqual(
     sameTimeGroup?.type === 'activity-group' ? sameTimeGroup.activities.map((item) => item.id) : [],
-    ['z-first', 'm-second', 'a-third'],
-    'equal timestamps must restore the newest-first activity feed to append order without sorting by arbitrary IDs'
+    ['a-third', 'm-second', 'z-first'],
+    'legacy equal-timestamp activities use the canonical ID tiebreaker when no timeline sequence exists'
 )
 
 const failedToolEntries = getTimelineEntries([], [
@@ -416,6 +637,24 @@ assert.equal(getTerminalOutputHeightClass('running', 1), 'h-[6.875rem]', 'one ru
 assert.equal(getTerminalOutputHeightClass('running', 2), 'h-[1.875rem]', 'concurrent running commands collapse to one output line each')
 assert.equal(getTerminalOutputHeightClass('success', 2), 'h-32 sm:h-36', 'completed output keeps its normal review height')
 
+const sharedSurfaceActivity = activity({ id: 'shared-surface', turnId: 'surface-contract', millisecond: 1695 })
+sharedSurfaceActivity.kind = 'search'
+sharedSurfaceActivity.payload = {
+    surface: {
+        version: 1,
+        kind: 'search',
+        lifecycle: 'running',
+        toolName: 'web_search',
+        toolKey: 'web search',
+        primaryText: 'Pi SDK',
+        query: 'Pi SDK',
+        paths: [],
+        summary: 'Searching'
+    }
+}
+assert.equal(getActivityAgentSurface(sharedSurfaceActivity)?.kind, 'search')
+assert.equal(getActivityStatus(sharedSurfaceActivity), 'running', 'renderer status falls back to the shared surface descriptor')
+
 const runningTimedCommand = activity({ id: 'running-timed-command', turnId: 'terminal-timing', millisecond: 1700 })
 runningTimedCommand.payload = {
     command: 'npm test',
@@ -438,6 +677,93 @@ const completedTimedCommand = {
 }
 assert.equal(getActivityElapsed(completedTimedCommand, iso(9000)), '3.5s', 'completed command elapsed time freezes at the runtime duration')
 const toolCardSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimelineToolCallCard.tsx', import.meta.url), 'utf8')
+const inlineDiffPreviewSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantInlineDiffPreview.tsx', import.meta.url), 'utf8')
+const inlineDiffSyntaxSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantInlineDiffSyntax.tsx', import.meta.url), 'utf8')
+const animatedHeightSource = readFileSync(new URL('../src/renderer/src/components/ui/AnimatedHeight.tsx', import.meta.url), 'utf8')
+assert.equal(resolveAssistantFileChangeStatus({ kind: 'update' }), 'modified')
+assert.equal(resolveAssistantFileChangeStatus({ kind: 'add' }), 'untracked')
+assert.equal(resolveAssistantFileChangeStatus({ kind: 'delete' }), 'deleted')
+assert.equal(resolveAssistantFileChangeStatus({ kind: 'move' }), 'renamed')
+assert.match(renderToStaticMarkup(createElement(AssistantFileChangeStatusPill, { status: 'modified' })), />M<\/span>/)
+assert.match(renderToStaticMarkup(createElement(AssistantFileChangeStatusPill, { status: 'untracked' })), />U<\/span>/)
+assert.match(renderToStaticMarkup(createElement(AssistantFileChangeStatusPill, { status: 'deleted' })), />D<\/span>/)
+const newFileActivity = activity({ id: 'new-file-status', turnId: 'file-status', millisecond: 1690 })
+newFileActivity.kind = 'file-change'
+newFileActivity.summary = 'Edited file'
+newFileActivity.detail = 'src/new-file.ts'
+newFileActivity.payload = {
+    category: 'file-change',
+    status: 'completed',
+    paths: ['src/new-file.ts'],
+    createdPaths: ['src/new-file.ts'],
+    changes: [{ path: 'src/new-file.ts', kind: 'add', isNew: true }],
+    additions: 4,
+    deletions: 2,
+    startedAt: iso(200),
+    completedAt: iso(1500),
+    durationMs: 1300,
+    authoritative: true
+}
+const newFileMarkup = renderToStaticMarkup(createElement(TimelineToolCallCard, { activity: newFileActivity }))
+assert.equal(newFileMarkup.includes('Edited file'), false, 'file rows use path and Git-style status instead of a repeated action label')
+assert.equal(newFileMarkup.includes('aria-label="New / untracked"'), true, 'new files use a U status pill')
+assert.equal(newFileMarkup.indexOf('aria-label="New / untracked"') < newFileMarkup.indexOf('+4'), true, 'the status pill stays attached to the path before right-side metrics')
+assert.equal(newFileMarkup.indexOf('+4') < newFileMarkup.indexOf('1.3s'), true, 'diff counts sit beside and before the far-right elapsed time')
+const partialReadActivity = activity({ id: 'partial-read', turnId: 'read-presentation', millisecond: 1692 })
+partialReadActivity.kind = 'file-read'
+partialReadActivity.summary = 'Read file'
+partialReadActivity.detail = 'src/large-file.ts'
+partialReadActivity.payload = {
+    status: 'completed',
+    toolName: 'read',
+    paths: ['src/large-file.ts'],
+    output: `${Array.from({ length: 50 }, (_, index) => `line ${index + 51}`).join('\n')}\n\n[Showing lines 51-100 of 240. Use offset=101 to continue.]`,
+    readStartLine: 51,
+    readEndLine: 100,
+    readLineCount: 50,
+    readTotalLines: 240,
+    readComplete: false,
+    readTruncated: true,
+    readIsImage: false,
+    durationMs: 4
+}
+const partialReadMarkup = renderToStaticMarkup(createElement(TimelineToolCallCard, { activity: partialReadActivity }))
+assert.equal(partialReadMarkup.includes('src/large-file.ts'), true, 'collapsed Read rows lead with the file path')
+assert.equal(partialReadMarkup.includes('(line 51 to 100)'), true, 'partial Read rows put a plain parenthetical line range beside the path')
+assert.equal(partialReadMarkup.includes('bg-sky-400/[0.04]'), false, 'Read line ranges are plain text rather than pills')
+assert.match(partialReadMarkup, />Read<\/span>/, 'collapsed Read rows identify the operation instead of showing elapsed time')
+assert.equal(partialReadMarkup.includes('4ms'), false, 'Read rows do not spend their quiet right edge on millisecond timing')
+assert.equal(toolCardSource.includes('buildAssistantReadPreview(authoritativeRawOutput)'), true, 'expanded Read output uses the bounded specialized preview')
+assert.equal(toolCardSource.includes('Showing first ${readPreview.displayedLines} of ${readPreview.totalReadLines} lines returned by Read.'), true, 'expanded long reads explain the 50-line presentation cap')
+assert.equal(toolCardSource.includes('bg-sky-400 shadow-'), false, 'new-file blue dots are removed')
+assert.equal(toolCardSource.includes('TimelineEditedFileRow'), false, 'expanded file changes do not add a duplicate file row')
+assert.equal(toolCardSource.includes('Diff preview'), false, 'expanded file changes do not add a wrapper heading above the native diff header')
+assert.equal(toolCardSource.includes("'relative mt-1 h-60 min-h-0 overflow-hidden'"), true, 'expanded file changes use a tight bounded diff viewport')
+assert.equal(toolCardSource.includes('<AssistantInlineDiffPreview'), true, 'timeline cards use the lightweight inline diff instead of the rich sidebar renderer')
+assert.equal(toolCardSource.includes('LazyPatchDiffViewer'), false, 'timeline cards do not load the worker-backed rich diff renderer')
+assert.equal(toolCardSource.includes("duration={activity.kind === 'file-change' ? 220 : 240}"), true, 'inline diffs retain a short expand and collapse animation')
+assert.equal(toolCardSource.includes("crispContent={activity.kind === 'file-change'}"), true, 'file diffs request the crisp disclosure path')
+assert.equal(animatedHeightSource.includes("'grid transition-[grid-template-rows] ease-[cubic-bezier(0.2,0.8,0.2,1)]"), true, 'crisp disclosures animate grid height without opacity or transforms')
+assert.equal(toolCardSource.includes('className="shrink-0 font-mono text-[9px]'), true, 'file elapsed time no longer reserves an oversized fixed-width gap')
+assert.equal(inlineDiffPreviewSource.includes('MAX_INLINE_DIFF_ROWS = 100'), true, 'inline diff DOM work is capped at 100 lines')
+assert.equal(inlineDiffPreviewSource.includes("[text-rendering:auto] [-webkit-font-smoothing:auto]"), true, 'inline diff text uses native crisp rendering')
+assert.equal(inlineDiffPreviewSource.includes('@pierre/diffs'), false, 'inline diff has no rich-renderer dependency')
+assert.equal(inlineDiffPreviewSource.includes("lazy(() => import('./AssistantInlineDiffSyntax')"), true, 'syntax grammars load only when an inline preview opens')
+assert.equal(inlineDiffPreviewSource.includes('More lines — open full diff'), true, 'the truncation row opens the full sidebar diff')
+assert.equal(inlineDiffSyntaxSource.includes('PrismLight as SyntaxHighlighter'), true, 'capped inline rows retain syntax highlighting')
+assert.equal(inlineDiffSyntaxSource.includes("textShadow: 'none'"), true, 'syntax tokens explicitly remove theme text shadows')
+const inlineDiffMarkup = renderToStaticMarkup(createElement(AssistantInlineDiffPreview, {
+    patch: 'diff --git a/src/new-file.ts b/src/new-file.ts\n--- a/src/new-file.ts\n+++ b/src/new-file.ts\n@@ -1 +1 @@\n-old\n+new',
+    displayPath: 'src/new-file.ts',
+    additions: 1,
+    deletions: 1,
+    onOpenFullDiff: () => undefined
+}))
+assert.equal(inlineDiffMarkup.includes('src/new-file.ts'), true, 'inline diff keeps its compact file header')
+assert.equal(inlineDiffMarkup.includes('Open full diff for src/new-file.ts in side panel'), true, 'inline diff keeps the sidebar action beside its counts')
+assert.equal(inlineDiffMarkup.includes('&gt;+1&lt;'), false, 'inline diff count text is rendered as ordinary text rather than serialized markup')
+assert.match(inlineDiffMarkup, />\+1<\/span>/)
+assert.match(inlineDiffMarkup, />-1<\/span>/)
 assert.equal(toolCardSource.includes('commandTimestamp'), false, 'collapsed command rows do not expose calendar date or time')
 assert.equal(toolCardSource.includes('formatAssistantDateTime(activityStartedAt)'), true, 'expanded command details show the real command start timestamp')
 assert.equal(toolCardSource.includes("window.setInterval(() => setNowIso(new Date().toISOString()), 1000)"), true, 'running command cards refresh elapsed time once per second')
@@ -446,9 +772,9 @@ assert.equal(toolCardSource.includes("'text-white/16 group-hover:text-white/24'"
 assert.equal(toolCardSource.includes("{elapsed || ''}"), true, 'commands without timing data still reserve the duration column')
 assert.equal(toolCardSource.includes('inline-flex w-4 shrink-0 items-center justify-center'), true, 'every tool row reserves the same trailing chevron endpoint')
 assert.equal(
-    toolCardSource.indexOf('{completedWithoutOutput ? (') < toolCardSource.indexOf('{isTerminalLikeTool ? ('),
+    toolCardSource.indexOf('{completedWithoutOutput ? (') < toolCardSource.indexOf('{isRead ? ('),
     true,
-    'variable status badges stay before the final duration column instead of shifting its endpoint'
+    'variable status badges stay before the final operation/status column instead of shifting its endpoint'
 )
 
 const waitingCommand = activity({ id: 'waiting-command', turnId: 'terminal-details', millisecond: 1730 })
@@ -499,9 +825,16 @@ const timelineRowsSource = readFileSync(new URL('../src/renderer/src/pages/assis
 assert.equal(timelineRowsSource.includes('Loading chat...'), true)
 assert.equal(timelineRowsSource.includes('h-full min-h-0'), true, 'chat loading state fills the conversation viewport before centering')
 assert.equal(timelineRowsSource.includes('mt-2 flex items-center justify-between gap-3 px-1 opacity-100'), true, 'user message metadata and actions remain visible without hover')
+assert.equal(timelineRowsSource.includes('statusTextRef.current.textContent = formatWorkingIndicatorStatus'), true, 'the standalone working timer updates without a once-per-second React commit')
 
 const conversationTimelinePaneSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantConversationTimelinePane.tsx', import.meta.url), 'utf8')
-assert.equal(conversationTimelinePaneSource.includes('[scrollbar-gutter:stable]'), true, 'the chat rail permanently reserves its scrollbar gutter to prevent horizontal nudging')
+const mountedVirtualTimelineSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantVirtualTimeline.tsx', import.meta.url), 'utf8')
+const conversationPaneSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantConversationPane.tsx', import.meta.url), 'utf8')
+assert.equal(mountedVirtualTimelineSource.includes('[scrollbar-gutter:stable]'), true, 'the virtual chat viewport permanently reserves its scrollbar gutter')
+assert.equal(mountedVirtualTimelineSource.includes('AssistantVirtualTimelineMinimap'), false, 'the minimap stays out of the mounted chat path while scrolling is being tuned')
+assert.equal(conversationTimelinePaneSource.includes('timelineRailHostRef'), false, 'the hidden minimap does not leave a portal host or resize observer mounted')
+assert.equal(conversationPaneSource.includes('suppressMinimap='), false, 'the conversation no longer carries dead minimap visibility state')
+assert.equal(mountedVirtualTimelineSource.includes('[overflow-anchor:none]'), true, 'older-message prepends use LegendList anchoring instead of browser scroll anchoring')
 
 const chatSessionsRailSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantChatSessionsRail.tsx', import.meta.url), 'utf8')
 assert.equal(chatSessionsRailSource.includes('resolveAssistantThreadStatusPill('), true, 'the mounted chat sidebar derives tags from real thread phase state')
@@ -522,9 +855,11 @@ assert.equal(
     'new messages and background activity cannot reshuffle the chat list'
 )
 
-const checkpointRailSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimelineCheckpointRail.tsx', import.meta.url), 'utf8')
-assert.equal(checkpointRailSource.includes('hidden w-[72px] md:block'), false, 'the chat minimap must not disappear at a desktop window-width breakpoint')
-assert.equal(checkpointRailSource.includes('new MutationObserver(scheduleMeasure)'), true, 'the minimap remeasures when timeline rows mount or change')
+const markdownRendererSource = readFileSync(new URL('../src/renderer/src/components/ui/MarkdownRenderer.tsx', import.meta.url), 'utf8')
+assert.equal(markdownRendererSource.includes('const compiledMarkdown = new Map'), true, 'completed Markdown survives virtual-row remounts in a bounded compiled cache')
+assert.equal(markdownRendererSource.includes('window.requestIdleCallback(drainMarkdownPreparation)'), true, 'newly loaded history prewarms immutable Markdown outside the scrolling hot path')
+assert.equal(markdownRendererSource.includes('MAX_COMPILED_ENTRIES = 320'), true, 'the compiled Markdown cache has an explicit retention bound')
+assert.equal(mountedVirtualTimelineSource.includes('markAssistantTimelineMotion'), false, 'scrolling does not downgrade or delay formatted Markdown')
 
 const assistantPageHelpersSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantPageHelpers.tsx', import.meta.url), 'utf8')
 assert.equal(assistantPageHelpersSource.includes('return createPortal('), true, 'error details render outside the chat rail')

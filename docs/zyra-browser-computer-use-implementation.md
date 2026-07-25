@@ -1,0 +1,1315 @@
+# Zyra Browser and Computer Use Implementation Plan
+
+**Status:** Proposed
+
+**Revision:** 1
+
+**Scope:** In-app Browser control, explicitly paired Chrome tabs, Windows computer use, shared permission broker, agent tools, audit, recovery, UI, packaging, and testing
+
+**Execution mode:** One autonomous builder agent completes this plan end to end in an isolated branch and worktree
+
+---
+
+## 1. Goal
+
+Give Zyra secure, observable, revocable control over three target classes:
+
+1. The retained in-app Zyra Browser.
+2. Explicitly paired tabs in the user's Chrome browser.
+3. Explicitly selected Windows application windows.
+
+The implementation must let a root Codex agent observe a target, act on the latest observation, verify the result, and stop safely. The same broker must later accept attenuated leases from Zyra subagents without giving them control by default.
+
+A complete result includes:
+
+- Typed contracts.
+- Main-process broker and policy.
+- In-app Browser driver.
+- Chrome MV3 extension and pairing transport.
+- Windows sidecar using UI Automation and Windows capture APIs.
+- Root-agent tools and bridge RPC.
+- Desktop controls, grants, audit, emergency stop, and status.
+- Persistence and recovery behavior.
+- Deterministic, integration, security, performance, and manual tests.
+- Packaging hooks and operator documentation.
+
+---
+
+## 2. Non-goals and prohibitions
+
+The implementation must not:
+
+- Expose raw Chrome DevTools Protocol access to a model, renderer, workflow, or subagent.
+- Expose cookies, authentication headers, local storage, IndexedDB, browser profile files, or password values.
+- Attach to arbitrary Electron `webContents` selected by renderer input.
+- Give an extension permanent broad control of every Chrome tab.
+- Use `<all_urls>` as the default Chrome permission.
+- Control `chrome://`, extension, browser-settings, payment, password-manager, or browser-internal pages.
+- Automatically elevate a Windows process.
+- Interact with UAC or the Windows secure desktop.
+- Inject input into a higher-integrity process.
+- Read the clipboard globally.
+- Type a secret supplied through a model prompt.
+- Approve purchases, messages, publishing, deletion, account changes, or other external side effects silently.
+- Persist active grants across an app restart by default.
+- Give Browser, Chrome, or Windows control to a subagent without an explicit attenuated lease.
+- Weaken the existing global Browser profile, webview sandbox, permission denial, download denial, or HTTP(S)-only navigation policy.
+
+---
+
+## 3. Existing foundation
+
+The implementation builds on the current Browser rather than creating a second embedded browser.
+
+Existing authority:
+
+- `desktop/src/main/index.ts`
+  - gates `will-attach-webview`;
+  - forces sandbox, context isolation, Node isolation, and web security;
+  - handles guest navigation and popup policy.
+- `desktop/src/main/ipc/handlers/browser-preview-handlers.ts`
+  - owns the one exact persistent Browser partition;
+  - owns the global local Browser session;
+  - denies permissions and downloads;
+  - owns safe external navigation and data clearing.
+- `desktop/src/renderer/src/pages/assistant/AssistantBrowserWebview.tsx`
+  - owns one retained guest webview and navigation events.
+- `desktop/src/renderer/src/pages/assistant/AssistantBrowserWorkspace.tsx`
+  - owns Browser tabs, toolbar, retained mounting, and global profile UI.
+- `desktop/src/renderer/src/pages/assistant/assistant-browser-workspace-state.ts`
+  - owns bounded per-chat tab metadata.
+- `desktop/src/shared/contracts/devscope-api.ts`
+  - owns typed renderer/preload/main contracts.
+- `src/zyra-ui-bridge.mjs` and `desktop/src/main/assistant/zyra-pi-runtime.ts`
+  - form the process boundary between the Pi agent and Electron main.
+
+Preserve the current global Browser profile:
+
+```text
+zyra-global-browser-profile:v1
+  -> SHA-256 digest
+  -> exact persistent Chromium partition
+  -> retained sandboxed webviews
+```
+
+Browser credentials remain local under Electron `userData` and never enter prompts, Resources, link previews, logs, or control observations.
+
+---
+
+## 4. Platform basis
+
+### Electron
+
+Electron exposes Chrome DevTools Protocol through `webContents.debugger` in the main process. The API supports attach, detach, event messages, and bounded `sendCommand` calls. Invoking DevTools can detach the debugger, so detach and recovery are normal lifecycle states.
+
+Official reference: <https://www.electronjs.org/docs/latest/api/debugger>
+
+### Chrome extensions
+
+Chrome MV3 provides:
+
+- `activeTab` for temporary access after an explicit user gesture.
+- `chrome.scripting` for bounded DOM observation and actions.
+- `chrome.debugger` for optional CDP access with an explicit extension permission and visible browser warning.
+- Native messaging when a packaged native host is required.
+
+Initial Zyra pairing uses a loopback transport with rotating credentials and exact-tab grants. Native messaging remains an optional packaged transport, not a reason to request broad page permissions.
+
+Official references:
+
+- <https://developer.chrome.com/docs/extensions/develop/concepts/activeTab>
+- <https://developer.chrome.com/docs/extensions/reference/api/scripting>
+- <https://developer.chrome.com/docs/extensions/reference/api/debugger>
+- <https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging>
+
+### Windows
+
+Windows UI Automation exposes an accessibility tree, common properties, control patterns, events, and actions across supported desktop frameworks. It is the primary Windows observation and action path.
+
+Windows Graphics Capture provides user-consented capture of a selected application window or display and visibly marks active capture.
+
+`SendInput` can synthesize keyboard and mouse input, but Windows User Interface Privilege Isolation limits injection to equal or lower integrity processes. Zyra must treat this as a security boundary rather than trying to bypass it.
+
+Official references:
+
+- <https://learn.microsoft.com/en-us/dotnet/framework/ui-automation/ui-automation-overview>
+- <https://learn.microsoft.com/en-us/windows/apps/develop/media-authoring-processing/screen-capture>
+- <https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput>
+
+---
+
+## 5. Architecture
+
+```text
+Codex root or leased subagent
+          |
+          | bounded tool request
+          v
+Bridge duplex RPC
+          |
+          v
+AgentControlBroker (Electron main)
+  |             |                 |
+  v             v                 v
+ZyraBrowser   ChromeExtension   WindowsDesktop
+Driver        Driver            Driver
+  |             |                 |
+  v             v                 v
+retained      paired exact      selected HWND
+webContents   Chrome tab        + UIA sidecar
+```
+
+### 5.1 Authority
+
+`AgentControlBroker` is authoritative for:
+
+- Principals.
+- Targets.
+- Grants and leases.
+- Observation revisions.
+- Allowed actions.
+- Domain and application scope.
+- Action count and expiry.
+- Auditing.
+- Cancellation.
+- Emergency stop.
+
+Drivers translate normalized broker operations into platform-specific calls. They do not make independent permission decisions.
+
+### 5.2 No renderer authority
+
+The renderer may request a grant, select a visible target, display state, and trigger emergency stop. It cannot:
+
+- Mint a grant.
+- Select an arbitrary process or `webContents` by numeric ID.
+- Widen capabilities.
+- Extend expiry.
+- Forge observation revisions.
+- Mark an action approved.
+
+Every renderer request is rebound to its sender window and validated in main.
+
+---
+
+## 6. Shared contracts
+
+Create:
+
+```text
+desktop/src/shared/agent-control/
+  contracts.ts
+  protocol.ts
+  policy.ts
+  validation.ts
+
+src/agent-control/
+  contracts.mjs
+  tool-contracts.mjs
+  bridge-client.mjs
+```
+
+JavaScript and TypeScript contract fixtures must prove equivalent wire behavior.
+
+### 6.1 Principal
+
+```typescript
+type ControlPrincipal =
+  | { type: "root"; threadId: string; turnId: string }
+  | { type: "agent"; fleetId: string; agentRunId: string; parentThreadId: string };
+```
+
+### 6.2 Target
+
+```typescript
+type ControlTarget =
+  | {
+      kind: "zyra-browser";
+      targetId: string;
+      tabId: string;
+      guestIdentity: string;
+      origin: string | null;
+    }
+  | {
+      kind: "chrome-tab";
+      targetId: string;
+      pairId: string;
+      tabToken: string;
+      origin: string | null;
+    }
+  | {
+      kind: "windows-window";
+      targetId: string;
+      sidecarSessionId: string;
+      processId: number;
+      windowToken: string;
+      executableIdentity: string;
+    };
+```
+
+Numeric `webContents`, Chrome tab, process, and HWND values remain inside drivers. Public contracts use opaque identities.
+
+### 6.3 Capabilities
+
+```typescript
+type ControlCapability =
+  | "observe.structure"
+  | "observe.screenshot"
+  | "navigate"
+  | "pointer.click"
+  | "pointer.move"
+  | "keyboard.type"
+  | "keyboard.key"
+  | "scroll"
+  | "form.select"
+  | "window.focus";
+```
+
+No generic `evaluate`, `executeScript`, `cdp`, `shell`, `clipboard.read`, `cookie.read`, or `credential.read` capability exists.
+
+### 6.4 Grant and lease
+
+```typescript
+interface ControlGrant {
+  version: 1;
+  grantId: string;
+  principal: ControlPrincipal;
+  targetId: string;
+  capabilities: ControlCapability[];
+  allowedOrigins?: string[];
+  allowedExecutableIdentities?: string[];
+  issuedAt: string;
+  expiresAt: string;
+  maxActions: number;
+  actionCount: number;
+  state: "active" | "expired" | "revoked" | "consumed";
+  issuedBy: "user" | "delegated-parent";
+  parentGrantId?: string;
+}
+```
+
+An agent lease must be a strict subset of its parent grant:
+
+- Same target or narrower target.
+- Subset of capabilities.
+- Same or earlier expiry.
+- Same or fewer remaining actions.
+- Same or narrower origins/application identity.
+
+### 6.5 Observation
+
+```typescript
+interface ControlObservation {
+  version: 1;
+  observationId: string;
+  revision: number;
+  targetId: string;
+  capturedAt: string;
+  targetState: "ready" | "navigating" | "detached" | "closed" | "blocked";
+  url?: string;
+  title?: string;
+  origin?: string;
+  viewport?: { width: number; height: number; scale: number };
+  elements: ControlElement[];
+  screenshotRef?: string;
+  focusedElementRef?: string;
+  truncation?: { totalElements: number; returnedElements: number };
+  redactions: string[];
+}
+```
+
+Element references are valid only for one target revision.
+
+### 6.6 Action
+
+```typescript
+interface ControlActionRequest {
+  version: 1;
+  requestId: string;
+  grantId: string;
+  targetId: string;
+  observationRevision: number;
+  action:
+    | { type: "click"; elementRef: string }
+    | { type: "type"; elementRef: string; text: string; replace?: boolean }
+    | { type: "key"; key: string; modifiers?: string[] }
+    | { type: "scroll"; elementRef?: string; deltaX: number; deltaY: number }
+    | { type: "select"; elementRef: string; values: string[] }
+    | { type: "navigate"; url: string }
+    | { type: "focus" }
+    | { type: "wait"; condition: ControlWaitCondition; timeoutMs: number };
+}
+```
+
+Every action requires the latest observation revision. Stale actions return a typed stale-observation error and a fresh observation hint.
+
+---
+
+## 7. Permission policy
+
+### 7.1 User-visible grant flow
+
+Before control begins, show:
+
+- Requesting root or subagent identity.
+- Exact target.
+- Allowed origin or executable.
+- Requested capabilities.
+- Expiry.
+- Maximum actions.
+- Whether screenshots are included.
+- Side-effect policy.
+
+Default presets:
+
+```text
+Observe only                    5 minutes, 30 observations
+Interact with this tab          10 minutes, 100 actions
+Interact with this app window   10 minutes, 100 actions
+One action                      expires after one successful action
+```
+
+### 7.2 Side effects
+
+The following remain per-action approval boundaries in the first release:
+
+- Sending or publishing content.
+- Purchases and financial transactions.
+- Account, security, permission, or password changes.
+- Destructive deletion.
+- Uploading local files.
+- Submitting sensitive personal or regulated data.
+- Installing software or extensions.
+- Accepting legal terms.
+
+The broker cannot perfectly infer semantics from UI structure. The agent must mark intended side-effect class, and the broker adds DOM/UI heuristics. Either signal may require approval.
+
+### 7.3 Secrets
+
+- Password fields are represented as redacted and non-readable.
+- Existing field values are never returned for password or sensitive fields.
+- A model cannot receive or type a secret from Browser profile storage.
+- The user may manually focus and type a secret while a lease is paused.
+- Control resumes only after a new observation.
+- Clipboard read is absent.
+
+### 7.4 Emergency stop
+
+One global emergency stop must:
+
+- Revoke every active grant.
+- Abort every queued and running action.
+- Detach Electron and Chrome debugger sessions.
+- Stop Windows input injection and capture.
+- Close pairing transports.
+- Invalidate every observation revision.
+- Record a redacted audit event.
+
+Expose it in:
+
+- Browser toolbar while controlled.
+- Control Center Inspector workspace.
+- Desktop title/status area while any target is controlled.
+- A global keyboard shortcut that does not conflict with normal editing.
+
+---
+
+## 8. AgentControlBroker
+
+Create:
+
+```text
+desktop/src/main/agent-control/
+  agent-control-broker.ts
+  capability-policy.ts
+  grant-store.ts
+  target-registry.ts
+  observation-store.ts
+  action-queue.ts
+  audit-store.ts
+  redaction.ts
+  emergency-stop.ts
+  control-errors.ts
+  drivers/
+    driver.ts
+    zyra-browser-driver.ts
+    chrome-extension-driver.ts
+    windows-desktop-driver.ts
+```
+
+Responsibilities:
+
+- Bind targets to trusted main-process identities.
+- Validate every grant and action.
+- Serialize actions per target.
+- Permit bounded parallel observation across different targets.
+- Maintain monotonic target revisions.
+- Enforce expiry and action counts before dispatch.
+- Reject stale actions.
+- Redact observations and audit records.
+- Cancel on target destruction, navigation, principal cancellation, app shutdown, lease expiry, or emergency stop.
+- Expose bounded query state to the renderer.
+
+### 8.1 Persistence
+
+Persist:
+
+- Redacted audit summaries.
+- Pairing metadata without reusable secrets.
+- Trusted extension identity.
+- Driver health and last disconnect reason.
+- User policy preferences.
+
+Do not persist active grants, raw screenshots, page trees, field contents, or pairing bearer credentials across restarts by default.
+
+---
+
+## 9. In-app Zyra Browser driver
+
+### 9.1 Trusted guest registry
+
+Extend `did-attach-webview` handling in main.
+
+Main must:
+
+- Verify the exact global Browser partition.
+- Verify the owner BrowserWindow.
+- Verify the existing sandbox and navigation policy.
+- Mint an opaque guest control identity.
+- Track lifecycle by trusted `webContents` reference.
+- Remove the target immediately when destroyed.
+
+The renderer may associate its local tab ID with a main-minted target token. Main verifies sender ownership and guest identity. A raw renderer-provided `webContents` ID is insufficient authority.
+
+### 9.2 CDP ownership
+
+Only `ZyraBrowserDriver` uses `guestContents.debugger`.
+
+Attach on demand and handle:
+
+- Already attached state.
+- DevTools-caused detach.
+- Guest destruction.
+- Main-frame navigation.
+- Renderer reload.
+- Driver timeout.
+- Emergency stop.
+
+Use a strict command allowlist. Initial allowed CDP domains/commands may include bounded subsets of:
+
+- Accessibility tree retrieval.
+- DOM snapshot capture.
+- Page screenshot capture.
+- Input dispatch.
+- Page lifecycle and navigation.
+
+Do not enable Network inspection, Storage, Cookies, raw Runtime evaluation, arbitrary script injection, Target discovery beyond the bound guest, or download control.
+
+### 9.3 Observation strategy
+
+Prefer:
+
+1. Accessibility tree.
+2. Bounded DOM snapshot for missing semantics.
+3. Screenshot only when requested or needed for visual verification.
+
+Normalize into `ControlElement` values containing only useful fields:
+
+- Opaque element reference.
+- Role.
+- Accessible name.
+- Bounded text.
+- State.
+- Bounds.
+- Action affordances.
+
+Bound observations by node count, depth, text length, image dimensions, and total bytes.
+
+### 9.4 Actions
+
+- Resolve an element reference against the current revision.
+- Prefer semantic DOM/accessibility actions.
+- Use input dispatch when semantic action is unavailable.
+- Wait for a meaningful lifecycle, DOM, focus, or URL change.
+- Capture the next revision.
+- Return action result plus a bounded observation diff.
+
+Navigation must pass the existing HTTP(S)-only URL policy and grant origin policy.
+
+---
+
+## 10. Root-agent tool and duplex bridge RPC
+
+The Pi agent runs in `src/zyra-ui-bridge.mjs`, while control authority lives in Electron main. Add correlated duplex RPC.
+
+### 10.1 Bridge flow
+
+```text
+Pi tool handler
+  -> bridge emits control.request(requestId, operation)
+  -> ZyraPiRuntime receives trusted bridge request
+  -> AgentControlBroker validates and runs operation
+  -> main sends control.response(requestId, result) to bridge
+  -> tool resolves with bounded result
+```
+
+Requirements:
+
+- Correlated request IDs.
+- Timeout and abort propagation.
+- Principal bound from the current thread and turn, not model input.
+- Bounded request and response sizes.
+- Unknown-operation rejection.
+- Worker exit rejects pending control calls.
+- Main disposal aborts all pending calls.
+
+### 10.2 Model-facing tools
+
+Expose narrow tools:
+
+#### `browser_control`
+
+```text
+list_targets
+request_grant
+observe
+navigate
+click
+type
+key
+scroll
+select
+wait
+release
+```
+
+#### `computer_control`
+
+```text
+list_windows
+request_grant
+observe
+focus
+click
+type
+key
+scroll
+wait
+release
+```
+
+Tool output contains normalized observations and references, never raw CDP, raw UIA objects, cookies, handles, or reusable pairing tokens.
+
+TUI-only sessions return a specific capability-unavailable result until a standalone broker transport is implemented. They must not silently emulate desktop control with shell tools.
+
+---
+
+## 11. Chrome MV3 extension
+
+Create a standalone package:
+
+```text
+extensions/zyra-browser-control/
+  manifest.json
+  package.json
+  tsconfig.json
+  src/
+    service-worker.ts
+    popup.ts
+    popup.html
+    content-observer.ts
+    protocol.ts
+    pairing.ts
+    tab-grants.ts
+    action-runner.ts
+    redaction.ts
+  scripts/
+    build.mjs
+    package.mjs
+  tests/
+```
+
+### 11.1 Permissions
+
+Default manifest permissions:
+
+- `activeTab`.
+- `scripting`.
+- `storage` for bounded local pairing metadata.
+- `tabs` only if exact required behavior cannot be implemented without it.
+
+`debugger` is optional and requested only for features that cannot be delivered safely through `activeTab` plus `scripting`.
+
+Do not request broad persistent host access by default.
+
+### 11.2 Pairing
+
+User flow:
+
+1. Open Zyra Control Center.
+2. Choose **Pair Chrome**.
+3. Zyra starts a loopback-only server on a random port.
+4. Zyra shows a short-lived pairing code.
+5. User opens the extension popup and enters/confirms the code.
+6. Challenge-response establishes a session with a rotating high-entropy credential.
+7. User activates an exact tab through the extension popup.
+8. Extension grants only that tab to Zyra.
+
+Transport rules:
+
+- Bind only to `127.0.0.1` and `::1` when supported safely.
+- Reject non-loopback peers.
+- Validate extension origin and protocol version.
+- Use a challenge nonce and rotating session key.
+- Never place bearer credentials in query strings, logs, prompts, or command lines.
+- Cap message size, rate, and pending requests.
+- Expire pairing and tab tokens.
+- Revoke on extension disable, tab close, browser restart, app restart, or emergency stop.
+
+### 11.3 Observation and action
+
+Prefer injected, predefined content functions through `chrome.scripting`:
+
+- Build a bounded accessible DOM representation.
+- Redact secret fields.
+- Mint revision-scoped element references.
+- Perform predefined click, focus, type, select, and scroll actions.
+- Observe resulting DOM, focus, URL, and title changes.
+
+Optional `chrome.debugger` use must:
+
+- Be separately consented.
+- Be exact-tab scoped.
+- Use a command allowlist.
+- Handle Chrome's visible debugging indicator.
+- Detach on lease release or emergency stop.
+
+No arbitrary script text comes from the model or broker.
+
+---
+
+## 12. Windows computer-use sidecar
+
+Create a separate Windows project:
+
+```text
+native/zyra-computer-use/
+  Zyra.ComputerUse.sln
+  src/Zyra.ComputerUse/
+    Program.cs
+    Protocol/
+    Security/
+    UiAutomation/
+    Capture/
+    Input/
+    Windows/
+    Redaction/
+    Audit/
+  tests/Zyra.ComputerUse.Tests/
+```
+
+A separate sidecar is preferred over an Electron ABI-bound native addon.
+
+### 12.1 Process and transport
+
+- Electron main launches the sidecar on demand.
+- Use an ACL-restricted named pipe for the current Windows user.
+- Pass the initial authentication secret through an inherited handle or protected stdin, not command-line arguments.
+- Validate protocol version and peer process.
+- Use bounded JSON-RPC messages.
+- Enforce per-call deadlines and cancellation.
+- Kill the child process tree on broker disposal or emergency stop.
+- Sidecar never listens on a network socket.
+
+### 12.2 Window selection
+
+The user selects an exact visible top-level application window.
+
+Store opaque target identity bound to:
+
+- Process identity.
+- Executable path/signature hash where available.
+- Process start time.
+- Window identity.
+- Current user session.
+
+Reject stale PID reuse and changed process identity.
+
+### 12.3 UI Automation first
+
+Observation:
+
+- Control/content tree.
+- Name, automation ID, class, control type, enabled/focused state.
+- Supported control patterns.
+- Bounds.
+- Bounded text where safe.
+
+Actions prefer UIA patterns:
+
+- Invoke.
+- Selection.
+- Value.
+- Toggle.
+- Expand/collapse.
+- Scroll.
+- Focus.
+
+`SendInput` is fallback-only for equal-or-lower integrity targets and requires a current revision plus target focus verification.
+
+### 12.4 Capture
+
+Use Windows Graphics Capture for selected-window screenshots.
+
+- Require user consent through system selection where required.
+- Preserve the system's visible capture indicator.
+- Capture only the granted window.
+- Bound size and frequency.
+- Redact configured regions and sensitive controls when coordinates are reliable.
+- Store screenshots as short-lived local artifacts.
+- Return only opaque references through tools.
+
+### 12.5 Blocked targets
+
+Deny or require hardened policy for:
+
+- UAC and secure desktop.
+- Higher-integrity/admin processes.
+- Password managers.
+- Credential, authentication, security, and system-policy applications.
+- Lock screen and logon UI.
+- Antivirus/security configuration.
+- Payment and wallet applications.
+- Hidden/background windows not selected by the user.
+
+No automatic elevation path exists.
+
+---
+
+## 13. Control Center and Browser UI
+
+Create:
+
+```text
+desktop/src/renderer/src/pages/assistant/
+  AssistantControlWorkspace.tsx
+  AssistantControlTargets.tsx
+  AssistantControlGrantDialog.tsx
+  AssistantControlAudit.tsx
+  AssistantChromePairing.tsx
+  AssistantWindowsTargetPicker.tsx
+  AssistantControlEmergencyStop.tsx
+```
+
+### 13.1 Inspector Control workspace
+
+Modes:
+
+```text
+Targets | Grants | Audit | Pairing
+```
+
+Show:
+
+- In-app Browser tabs available for control.
+- Paired Chrome tabs.
+- Selected Windows windows.
+- Principal using each target.
+- Capabilities, origin/app scope, expiry, and remaining actions.
+- Current driver health.
+- Last redacted action.
+- Revoke and emergency-stop controls.
+
+### 13.2 Browser toolbar
+
+When the active Browser tab is controlled:
+
+- Show a visible control indicator.
+- Show principal and remaining lease time.
+- Offer pause, revoke, and emergency stop.
+- Keep normal Browser navigation and profile controls unchanged.
+
+### 13.3 Approval cards
+
+Use typed approval cards for grant and side-effect requests. Do not encode permission requests as ordinary chat prose.
+
+### 13.4 Responsive and motion behavior
+
+- Reuse existing Inspector tab and retained-workspace patterns.
+- Preserve Inspector resizing and entrance motion.
+- Avoid remounting Browser webviews when Control is selected.
+- Respect reduced motion.
+- Use status text and iconography, not color alone.
+
+---
+
+## 14. Subagent integration contract
+
+This builder implements the broker side of delegation without assuming the fleet implementation's internal files.
+
+```typescript
+interface DelegatedControlLeaseRequest {
+  parentGrantId: string;
+  parentPrincipal: ControlPrincipal;
+  childPrincipal: Extract<ControlPrincipal, { type: "agent" }>;
+  targetId: string;
+  capabilities: ControlCapability[];
+  expiresAt: string;
+  maxActions: number;
+}
+```
+
+Rules:
+
+- A subagent has no control grant by default.
+- Only the parent/root may request delegation.
+- Broker proves strict attenuation.
+- Child actions are audited under child and parent identities.
+- Parent cancellation revokes descendants.
+- Workflow completion revokes unused leases.
+- A child cannot delegate again at initial depth policy.
+
+The integration agent later connects this contract to `AgentFleetController` cancellation and capability policy.
+
+---
+
+## 15. Audit, redaction, and retention
+
+Audit events include:
+
+- Principal.
+- Target kind and opaque ID.
+- Grant lifecycle.
+- Action type.
+- Origin or executable identity.
+- Observation revision.
+- Outcome and bounded error.
+- Timestamp and elapsed time.
+- Redaction flags.
+
+Audit events exclude:
+
+- Typed text values by default.
+- Password values.
+- Cookies and tokens.
+- Raw page trees.
+- Raw screenshots.
+- Full URLs containing sensitive query or fragment values.
+- Pairing secrets.
+
+Use bounded retention under Electron `userData`. Add an explicit clear-audit action separate from clearing Browser profile data.
+
+---
+
+## 16. Recovery and lifecycle
+
+On app restart:
+
+- Active grants become revoked.
+- Observation revisions are invalid.
+- CDP sessions are detached.
+- Loopback pairing bearer credentials are gone.
+- Chrome and Windows targets appear disconnected until explicitly repaired/reselected.
+- Redacted audit history remains according to retention policy.
+
+On renderer reload:
+
+- Main-owned grants remain active only if the trusted target and principal remain alive.
+- UI rehydrates summaries through typed IPC.
+- Renderer cannot recreate missing grants.
+
+On target navigation:
+
+- Increment revision.
+- Re-evaluate origin scope.
+- Pause or revoke if the new origin is outside grant policy.
+
+On root/subagent cancellation:
+
+- Abort pending action.
+- Revoke descendant leases.
+- Release driver resources.
+
+---
+
+## 17. Packaging
+
+### Chrome extension
+
+- Produce deterministic unpacked and ZIP artifacts.
+- Exclude private pairing state.
+- Document developer loading.
+- Keep Chrome Web Store publication manual and explicitly approved.
+- Do not auto-install the extension.
+
+### Windows sidecar
+
+- Build a self-contained or framework-dependent package according to measured installer size.
+- Include the sidecar in Electron `extraResources` or the existing package pipeline.
+- Resolve the binary from packaged and dev paths.
+- Verify hashes before launch where practical.
+- Add code-signing as a release gate; do not require a signing credential for local deterministic tests.
+- Uninstaller removes bundled binaries and registered native-host entries if native messaging is later enabled.
+
+No agent may publish, sign with a user identity, or alter system-wide registry state during ordinary tests.
+
+---
+
+## 18. Implementation phases
+
+### Phase 0 — Threat model and contracts
+
+- [ ] Add data-flow and threat-model documentation.
+- [ ] Define principals, targets, grants, observations, actions, results, and audit events.
+- [ ] Add runtime validation and cross-language fixtures.
+- [ ] Define error taxonomy and stale-revision behavior.
+
+**Gate:** Untrusted renderer/model input cannot mint target authority or raw platform handles.
+
+### Phase 1 — Broker core
+
+- [ ] Implement target registry, grants, action queue, revisions, audit, and emergency stop.
+- [ ] Add expiry and action-count enforcement.
+- [ ] Add strict lease attenuation.
+- [ ] Add deterministic fake driver.
+
+**Gate:** Broker policy tests cover grant widening, stale revisions, cancellation, expiry, and emergency stop.
+
+### Phase 2 — In-app Browser observation
+
+- [ ] Register trusted retained guests in main.
+- [ ] Add on-demand debugger lifecycle.
+- [ ] Implement bounded accessibility/DOM observation.
+- [ ] Implement screenshot artifact references.
+- [ ] Add redaction and navigation revision changes.
+
+**Gate:** A local fixture page can be observed without exposing raw CDP, cookies, storage, or password values.
+
+### Phase 3 — In-app Browser actions
+
+- [ ] Add click, type, key, select, scroll, navigate, wait, and focus.
+- [ ] Require latest revision.
+- [ ] Verify resulting state.
+- [ ] Add origin-scope transitions.
+- [ ] Add grant and emergency-stop UI.
+
+**Gate:** An agent completes a local form fixture, while stale and out-of-origin actions fail safely.
+
+### Phase 4 — Agent bridge and tools
+
+- [ ] Add duplex correlated bridge RPC.
+- [ ] Bind principal from runtime context.
+- [ ] Add narrow Browser and computer tools.
+- [ ] Add abort and timeout propagation.
+- [ ] Add specialized activity presentation.
+
+**Gate:** A root Codex turn can request a grant, observe, act, and verify through bounded tool contracts.
+
+### Phase 5 — Chrome extension and pairing
+
+- [ ] Build standalone MV3 package.
+- [ ] Add loopback pairing and rotating credentials.
+- [ ] Add exact-tab activation.
+- [ ] Add bounded observation/actions through scripting.
+- [ ] Add optional debugger mode only if required.
+- [ ] Add disconnect, revoke, and browser-restart behavior.
+
+**Gate:** One explicitly paired Chrome tab is controllable; another unpaired tab remains inaccessible.
+
+### Phase 6 — Windows sidecar protocol
+
+- [ ] Build named-pipe JSON-RPC host.
+- [ ] Add same-user and peer validation.
+- [ ] Add process/window identity and stale-PID protection.
+- [ ] Add cancellation and process-tree disposal.
+- [ ] Add fake UIA/capture providers for tests.
+
+**Gate:** Malformed, oversized, unauthenticated, and stale-target requests are rejected deterministically.
+
+### Phase 7 — Windows observation and actions
+
+- [ ] Add UIA tree and control patterns.
+- [ ] Add selected-window capture.
+- [ ] Add semantic actions and bounded `SendInput` fallback.
+- [ ] Add integrity/UAC/secure-desktop denial.
+- [ ] Add Control Center target selection.
+
+**Gate:** Zyra controls a selected ordinary test window and cannot control an elevated or secure-desktop target.
+
+### Phase 8 — Persistence, audit, and recovery
+
+- [ ] Persist redacted audit and non-secret pairing metadata.
+- [ ] Revoke active grants at restart.
+- [ ] Handle renderer reload and target destruction.
+- [ ] Add retention and clear-audit controls.
+
+**Gate:** Restart leaves no active control path or reusable credential while preserving bounded audit evidence.
+
+### Phase 9 — Subagent lease seam
+
+- [ ] Implement delegated lease acceptance and strict attenuation.
+- [ ] Add parent/child audit identity.
+- [ ] Add cancellation hooks independent of fleet internals.
+- [ ] Add integration fixtures for the merge agent.
+
+**Gate:** Root grants do not automatically reach children; a valid subset lease works and revokes with its parent.
+
+### Phase 10 — Packaging and end-to-end hardening
+
+- [ ] Package extension artifacts.
+- [ ] Package sidecar in dev and production layouts.
+- [ ] Run security, performance, failure, and build checks.
+- [ ] Run isolated live Electron, Chrome, and Windows smoke tests where locally available.
+- [ ] Update architecture and user documentation.
+
+**Gate:** All acceptance criteria pass, with exact external/manual limitations documented.
+
+---
+
+## 19. File map
+
+```text
+src/agent-control/
+  contracts.mjs
+  tool-contracts.mjs
+  bridge-client.mjs
+  browser-control-tool.mjs
+  computer-control-tool.mjs
+
+desktop/src/shared/agent-control/
+  contracts.ts
+  protocol.ts
+  policy.ts
+  validation.ts
+
+desktop/src/main/agent-control/
+  agent-control-broker.ts
+  capability-policy.ts
+  grant-store.ts
+  target-registry.ts
+  observation-store.ts
+  action-queue.ts
+  audit-store.ts
+  redaction.ts
+  emergency-stop.ts
+  control-errors.ts
+  bridge-control-rpc.ts
+  drivers/driver.ts
+  drivers/zyra-browser-driver.ts
+  drivers/chrome-extension-driver.ts
+  drivers/windows-desktop-driver.ts
+
+desktop/src/main/ipc/handlers/
+  agent-control-handlers.ts
+
+desktop/src/preload/adapters/
+  agent-control-adapter.ts
+
+desktop/src/renderer/src/pages/assistant/
+  AssistantControlWorkspace.tsx
+  AssistantControlTargets.tsx
+  AssistantControlGrantDialog.tsx
+  AssistantControlAudit.tsx
+  AssistantChromePairing.tsx
+  AssistantWindowsTargetPicker.tsx
+  AssistantControlEmergencyStop.tsx
+
+extensions/zyra-browser-control/
+  manifest.json
+  package.json
+  src/
+  scripts/
+  tests/
+
+native/zyra-computer-use/
+  Zyra.ComputerUse.sln
+  src/
+  tests/
+```
+
+Keep Browser profile ownership in the existing Browser preview handler. The driver may call it through a narrow internal interface; it must not duplicate partition derivation or storage clearing.
+
+---
+
+## 20. Testing
+
+### 20.1 Contract and broker tests
+
+Add:
+
+```text
+desktop/scripts/test-agent-control-contract.ts
+desktop/scripts/test-agent-control-policy.ts
+desktop/scripts/test-agent-control-revisions.ts
+desktop/scripts/test-agent-control-bridge.ts
+desktop/scripts/test-agent-control-audit.ts
+```
+
+Cover:
+
+- Schema bounds.
+- Unknown capability.
+- Renderer-forged target.
+- Grant widening.
+- Expired grant.
+- Consumed grant.
+- Stale observation.
+- Origin transition.
+- Parent cancellation.
+- Emergency stop.
+- Duplicate and late driver results.
+- Secret and URL redaction.
+
+### 20.2 In-app Browser tests
+
+Use a local deterministic HTTP fixture with:
+
+- Buttons.
+- Inputs.
+- Password field.
+- Select.
+- Scroll container.
+- Same-origin navigation.
+- Cross-origin navigation.
+- Delayed DOM updates.
+- iframe.
+- Popup attempt.
+- Download attempt.
+
+Prove:
+
+- Browser profile behavior remains unchanged.
+- Main owns guest identity.
+- Accessibility tree is bounded.
+- Password value is absent.
+- Stale actions fail.
+- New navigation increments revision.
+- Existing download, permission, protocol, popup, and partition gates remain effective.
+
+### 20.3 Extension tests
+
+Cover:
+
+- Manifest permissions.
+- Pairing expiry and replay.
+- Origin validation.
+- Exact-tab scope.
+- Message size/rate bounds.
+- Secret-field redaction.
+- Tab close and browser restart.
+- Optional debugger detach.
+- Unpaired-tab denial.
+
+### 20.4 Windows sidecar tests
+
+Cover:
+
+- Named-pipe authentication.
+- Protocol bounds.
+- Stale PID/window identity.
+- UIA normalization.
+- Semantic action preference.
+- Equal-integrity `SendInput` fallback.
+- Higher-integrity denial.
+- Capture consent and selected-window scope.
+- Sidecar crash and restart.
+- Emergency stop during input.
+
+Use an owned deterministic test application for automated integration. Use Notepad only as a manual smoke target when available.
+
+### 20.5 Performance bounds
+
+Initial targets:
+
+```text
+Observation nodes returned: <= 1,500
+Observation payload: <= 512 KiB without screenshot
+Screenshot artifact: <= configured 2 MiB after scaling/compression
+Pending actions per target: <= 32
+Concurrent actions per target: 1
+Audit in-memory page: <= 500 entries
+Pairing pending requests: <= 32
+Default action timeout: <= 15 seconds
+```
+
+### 20.6 Required checks
+
+- Focused Node syntax and contract tests.
+- Desktop TypeScript.
+- Existing Browser architecture and Inspector contracts.
+- Extension build and tests.
+- Sidecar unit and integration tests.
+- Scoped `git diff --check`.
+- Privacy check.
+- Desktop production build after full integration.
+- No installer publication.
+
+If an external Chrome or Windows UI test cannot run in the isolated environment, deterministic protocol and fake-driver coverage must still pass, and the exact manual check remains listed in the handoff. The builder continues all other work.
+
+---
+
+## 21. Acceptance criteria
+
+- [ ] The in-app Browser remains sandboxed, context-isolated, Node-isolated, permission-denied, download-denied, and HTTP(S)-only.
+- [ ] The existing global Browser profile remains the only integrated Browser credential profile.
+- [ ] Root tools can list, observe, and act only through `AgentControlBroker`.
+- [ ] Raw CDP, raw UIA, cookies, storage, and platform handles never reach model or renderer contracts.
+- [ ] Every action requires an active grant and current observation revision.
+- [ ] Stale actions fail without best-effort clicking.
+- [ ] Origin and executable transitions pause or revoke out-of-scope control.
+- [ ] Password and sensitive field values are redacted.
+- [ ] Emergency stop revokes every target and aborts active work.
+- [ ] Chrome pairing requires an explicit user gesture and exact-tab selection.
+- [ ] Unpaired Chrome tabs are inaccessible.
+- [ ] Windows control requires an explicitly selected ordinary application window.
+- [ ] Zyra never elevates or controls UAC/secure desktop.
+- [ ] `SendInput` is fallback-only and respects Windows integrity boundaries.
+- [ ] Active grants and bearer credentials do not survive restart.
+- [ ] Subagents have no control by default.
+- [ ] Delegated subagent leases are strict subsets and revoke with the parent.
+- [ ] Audit is bounded and redacted.
+- [ ] TUI-only sessions report control unavailable rather than bypassing the broker.
+- [ ] Extension, sidecar, desktop, bridge, security, and build checks pass.
+
+---
+
+## 22. Autonomous builder mandate
+
+The assigned builder owns this complete plan. It must not stop after contracts, a protocol skeleton, the in-app Browser driver, or a renderer prototype.
+
+The builder must:
+
+- Read this plan, `AGENTS.md`, `docs/assistant-browser-architecture.md`, and the parallel execution runbook completely.
+- Inspect real files before editing.
+- Implement every phase end to end.
+- Preserve the existing Browser profile and security constraints.
+- Use a separate dev/test Electron process and isolated test profile.
+- Leave any user-owned Electron process untouched.
+- Make routine architecture, naming, dependency, and test decisions independently.
+- Diagnose failures and continue.
+- Commit coherent checkpoints.
+- Finish with a clean feature worktree.
+- Write `docs/handoffs/browser-computer-use.md` containing commits, exact tests/results, package or installer changes, manual checks, collision notes, and limitations.
+
+The builder asks only when continuing requires:
+
+- Destructive user-data or Git-history changes.
+- Stopping a user-owned process with no isolated substitute.
+- A missing production secret, signing identity, paid account, or store identity.
+- Deployment, publication, purchase, force push, or protected-branch merge.
+- An irreversible security/compatibility choice that cannot be resolved from repository and platform evidence.
+
+Routine decisions do not justify a question. A blocked optional live check does not stop deterministic implementation and tests.
+
+The handoff must end with:
+
+```text
+READY_FOR_MERGE
+```
+
+or one exact reason:
+
+```text
+BLOCKED_FOR_MERGE: <reason>
+```
+
+`READY_FOR_MERGE` means the full implementation is committed. TODO-only Chrome, sidecar, packaging, bridge, or UI placeholders are not completion.

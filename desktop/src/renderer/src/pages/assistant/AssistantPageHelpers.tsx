@@ -74,7 +74,7 @@ export function AssistantTransientToast({ toast }: { toast: AssistantToastState 
     return (
         <div
             className={cn(
-                'fixed bottom-4 right-4 z-[110] max-w-sm rounded-xl px-4 py-3 text-sm shadow-lg backdrop-blur-md transition-all duration-300',
+                'fixed bottom-4 right-4 z-[110] w-[min(24rem,calc(100vw-2rem))] rounded-xl px-4 py-3 text-sm shadow-lg backdrop-blur-md transition-all duration-300',
                 toast.tone === 'error'
                     ? 'border border-red-500/30 bg-red-500/10 text-red-200'
                     : toast.tone === 'success'
@@ -83,9 +83,9 @@ export function AssistantTransientToast({ toast }: { toast: AssistantToastState 
                 toast.visible ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-4 opacity-0'
             )}
         >
-            <div className="flex items-start gap-2">
+            <div className="flex min-w-0 items-start gap-2">
                 <AlertCircle size={16} className="mt-0.5 shrink-0" />
-                <span>{toast.message}</span>
+                <span className="min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{toast.message}</span>
             </div>
         </div>
     )
@@ -354,13 +354,15 @@ export function IssueLogRow({
     activities,
     count,
     onDismiss,
-    onShowMore
+    onShowMore,
+    compact = false
 }: {
     activity: AssistantActivity
     activities?: AssistantActivity[]
     count?: number
     onDismiss?: (activity: AssistantActivity, scope: IssueDismissScope) => void
     onShowMore: (activity: AssistantActivity, activities?: AssistantActivity[]) => void
+    compact?: boolean
 }) {
     const [expanded, setExpanded] = useState(false)
     const brief = getIssueActivityBrief(activity)
@@ -399,47 +401,71 @@ export function IssueLogRow({
                         openDetails()
                     }
                 }}
-                className={cn('group flex items-start justify-between gap-3 px-2.5 py-2.5 transition-colors hover:bg-white/[0.025] focus:outline-none focus-visible:ring-1', toneSurface.focus)}
+                className={cn(
+                    'group flex justify-between transition-colors hover:bg-white/[0.025] focus:outline-none focus-visible:ring-1',
+                    compact ? 'min-h-8 items-center gap-2 px-2 py-1' : 'items-start gap-3 px-2.5 py-2.5',
+                    toneSurface.focus
+                )}
             >
-                <AlertCircle size={14} className={cn('mt-0.5 shrink-0', activity.tone === 'error' ? 'text-red-300/60' : 'text-amber-200/55')} />
-                <div className="min-w-0 flex-1">
-                    <p className="truncate text-[12px] font-medium text-sparkle-text/90">{displayTitle}</p>
-                    {brief ? <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-sparkle-text-secondary/62">{brief}</p> : null}
-                </div>
-                <div className="flex shrink-0 items-center gap-1 text-sparkle-text-muted/45 opacity-55 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-                    {dismissItems.length > 0 ? (
-                        <FileActionsMenu
-                            items={dismissItems}
-                            presentation="portal"
-                            preferredDirection="up"
-                            title={`Dismiss ${toneLabel.toLowerCase()} options`}
-                            buttonClassName={cn('h-7 w-7 rounded-md border-transparent bg-transparent hover:border-transparent', toneSurface.menuButton)}
-                            openButtonClassName={cn('border-transparent', toneSurface.menuOpenButton)}
-                            menuClassName="min-w-[188px]"
-                        />
-                    ) : null}
+                <AlertCircle
+                    size={compact ? 12 : 14}
+                    className={cn('shrink-0', !compact && 'mt-0.5', activity.tone === 'error' ? 'text-red-300/60' : 'text-amber-200/55')}
+                />
+                {compact ? (
+                    <div className="flex min-w-0 flex-1 items-center gap-1.5 text-[11px] leading-5">
+                        <span className="max-w-[42%] shrink-0 truncate font-medium text-sparkle-text/88">{displayTitle}</span>
+                        {brief ? (
+                            <>
+                                <span className="shrink-0 text-white/18" aria-hidden="true">·</span>
+                                <span className="min-w-0 flex-1 truncate text-sparkle-text-secondary/58">{brief}</span>
+                            </>
+                        ) : null}
+                    </div>
+                ) : (
+                    <div className="min-w-0 flex-1">
+                        <p className="truncate text-[12px] font-medium text-sparkle-text/90">{displayTitle}</p>
+                        {brief ? <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-sparkle-text-secondary/62">{brief}</p> : null}
+                    </div>
+                )}
+                <div className={cn(
+                    'flex shrink-0 items-center text-sparkle-text-muted/45 transition-opacity group-hover:opacity-100 focus-within:opacity-100',
+                    compact ? 'gap-0.5 opacity-70' : 'gap-1 opacity-55'
+                )}>
                     {hasMultiple ? (
                         <button
                             type="button"
                             onClick={(event) => { event.stopPropagation(); setExpanded(!expanded) }}
-                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] transition-colors hover:bg-white/[0.04] hover:text-sparkle-text-secondary"
+                            className={cn('inline-flex items-center gap-1 rounded-md text-[10px] transition-colors hover:bg-white/[0.04] hover:text-sparkle-text-secondary', compact ? 'h-6 px-1' : 'px-1.5 py-1')}
                             title={expanded ? 'Collapse repeated logs' : `Show ${count} repeated logs`}
                         >
                             <ChevronDown size={12} className={cn('transition-transform duration-150', expanded && 'rotate-180')} />
                             <span>x{count}</span>
                         </button>
                     ) : null}
-                    <button
-                        type="button"
-                        onClick={(event) => { event.stopPropagation(); openDetails() }}
-                        className="rounded-md px-1.5 py-1 text-[10px] transition-colors hover:bg-white/[0.04] hover:text-sparkle-text-secondary"
-                    >
-                        Details
-                    </button>
+                    {dismissItems.length > 0 ? (
+                        <FileActionsMenu
+                            items={dismissItems}
+                            presentation="portal"
+                            preferredDirection="up"
+                            title={`Dismiss ${toneLabel.toLowerCase()} options`}
+                            buttonClassName={cn(compact ? 'h-6 w-6' : 'h-7 w-7', 'rounded-md border-transparent bg-transparent hover:border-transparent', toneSurface.menuButton)}
+                            openButtonClassName={cn('border-transparent', toneSurface.menuOpenButton)}
+                            menuClassName="min-w-[188px]"
+                        />
+                    ) : null}
+                    {!compact ? (
+                        <button
+                            type="button"
+                            onClick={(event) => { event.stopPropagation(); openDetails() }}
+                            className="rounded-md px-1.5 py-1 text-[10px] transition-colors hover:bg-white/[0.04] hover:text-sparkle-text-secondary"
+                        >
+                            Details
+                        </button>
+                    ) : null}
                 </div>
             </div>
-            <AnimatedHeight isOpen={Boolean(hasMultiple && expanded)}>
-                <div className="px-3 pb-2 pt-1">
+            <AnimatedHeight isOpen={Boolean(hasMultiple && expanded)} duration={180} crispContent>
+                <div className={cn(compact ? 'px-2 pb-1.5 pt-0.5' : 'px-3 pb-2 pt-1')}>
                     <div className="space-y-1">
                         {(activities || []).map((act, index) => (
                             <div key={act.id} role="button" tabIndex={0} onClick={() => onShowMore(act)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onShowMore(act) } }} className={cn('flex items-center gap-2 rounded px-2 py-1 text-[10px] text-sparkle-text-muted focus:outline-none focus-visible:ring-1', toneSurface.subtleFocus, toneSurface.subtleRow)}>

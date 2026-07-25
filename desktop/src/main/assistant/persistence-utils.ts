@@ -250,6 +250,14 @@ export function initializeAssistantPersistenceSchema(db: SqlDatabase): void {
     ensureTableColumn(db, 'assistant_messages', 'timeline_sequence', 'INTEGER')
     ensureTableColumn(db, 'assistant_activities', 'timeline_sequence', 'INTEGER')
     ensureTableColumn(db, 'assistant_proposed_plans', 'timeline_sequence', 'INTEGER')
+    db.run(`
+        CREATE INDEX IF NOT EXISTS idx_assistant_messages_history ON assistant_messages(thread_id, created_at DESC, timeline_sequence DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_assistant_activities_history ON assistant_activities(thread_id, created_at DESC, timeline_sequence DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_assistant_plans_history ON assistant_proposed_plans(thread_id, created_at DESC, timeline_sequence DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_assistant_messages_turn ON assistant_messages(thread_id, turn_id, created_at ASC, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_assistant_activities_turn ON assistant_activities(thread_id, turn_id, created_at ASC, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_assistant_plans_turn ON assistant_proposed_plans(thread_id, turn_id, created_at ASC, id ASC);
+    `)
 }
 
 function ensureTableColumn(db: SqlDatabase, tableName: string, columnName: string, definition: string): void {

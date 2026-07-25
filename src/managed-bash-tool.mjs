@@ -1,9 +1,10 @@
 import { createLocalBashOperations } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { DEFAULT_MANAGED_BASH_AUTO_POLL_MS } from "./tool-contracts.mjs";
 
 const DEFAULT_INITIAL_WAIT_MS = 8000;
 const DEFAULT_STATUS_WAIT_MS = 5000;
-export const DEFAULT_AUTO_POLL_MS = 30000;
+export const DEFAULT_AUTO_POLL_MS = DEFAULT_MANAGED_BASH_AUTO_POLL_MS;
 const DEFAULT_MAX_AUTO_POLLS = 20;
 const MAX_BUFFER_CHARS = 120000;
 const STATUS_OUTPUT_LINES = 80;
@@ -27,6 +28,7 @@ const bashSchema = Type.Object({
 export function createManagedBashState() {
   const state = {
     jobs: new Map(),
+    listeners: new Set(),
     nextId: 1,
     abortAll(reason = "Command aborted") {
       for (const job of state.jobs.values()) {
@@ -35,6 +37,11 @@ export function createManagedBashState() {
     },
     hasAutoPollJobs() {
       return hasManagedBashAutoPollJobs(state);
+    },
+    subscribe(listener) {
+      if (typeof listener !== "function") return () => {};
+      state.listeners.add(listener);
+      return () => state.listeners.delete(listener);
     },
   };
   return state;
@@ -52,11 +59,11 @@ export function createManagedBashTool(options = {}) {
     description: "Execute a bash command. Long-running commands may return before completion with a job id; call action=status with that job id to inspect output, or action=stop to stop it.",
     promptSnippet: "Execute bash commands. If a command returns `still running` with a job id, call bash action=status to inspect output before deciding what to do next.",
     parameters: bashSchema,
-    async execute(_toolCallId, input = {}, signal, onUpdate) {
+    async execute(toolCallId, input = {}, signal, onUpdate) {
       const action = normalizeAction(input);
       if (action === "status") return statusAction(state, input, signal);
       if (action === "stop") return stopAction(state, input);
-      return runAction({ state, operations, commandPrefix, cwd, input, signal, onUpdate });
+      return runAction({ state, operations, commandPrefix, cwd, toolCallId, input, signal, onUpdate });
     },
   };
 }
@@ -67,11 +74,11 @@ function normalizeAction(input = {}) {
   return input.jobId && !input.command ? "status" : "run";
 }
 
-async function runAction({ state, operations, commandPrefix, cwd, input, signal, onUpdate }) {
+async function runAction({ state, operations, commandPrefix, cwd, toolCallId, input, signal, onUpdate }) {
   const command = String(input.command ?? "").trim();
   if (!command) throw new Error("bash command is required");
 
-  const job = startJob({ state, operations, commandPrefix, cwd, command, timeout: input.timeout, onUpdate });
+  const job = startJob({ state, operations, commandPrefix, cwd, command, toolCallId, timeout: input.timeout, onUpdate });
   const waitMs = secondsToMs(input.wait, DEFAULT_INITIAL_WAIT_MS);
   const abortResult = linkAbort(signal, job);
 
@@ -79,6 +86,7 @@ async function runAction({ state, operations, commandPrefix, cwd, input, signal,
     const completed = await waitForJob(job, waitMs, signal);
     if (completed) return finalJobResult(state, job);
     flushLiveUpdate(job);
+    job.onUpdate = undefined;
     return runningJobResult(job, { initial: true });
   } finally {
     abortResult.unlink();
@@ -101,13 +109,14 @@ async function stopAction(state, input = {}) {
   return toolResult(formatStoppedJob(job), { jobId: job.id, status: "stopped", outputLineCount: countOutputLines(job.output) });
 }
 
-function startJob({ state, operations, commandPrefix, cwd, command, timeout, onUpdate }) {
+function startJob({ state, operations, commandPrefix, cwd, command, toolCallId, timeout, onUpdate }) {
   const id = `cmd-${state.nextId++}`;
   const abortController = new AbortController();
   const startedAt = Date.now();
   const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
   const job = {
     id,
+    toolCallId,
     command,
     startedAt,
     lastOutputAt: undefined,
@@ -123,6 +132,7 @@ function startJob({ state, operations, commandPrefix, cwd, command, timeout, onU
     lastLiveUpdateAt: 0,
     liveUpdateTimer: undefined,
     done: undefined,
+    state,
   };
   state.jobs.set(id, job);
 
@@ -138,12 +148,14 @@ function startJob({ state, operations, commandPrefix, cwd, command, timeout, onU
     clearLiveUpdateTimer(job);
     job.exitCode = result.exitCode;
     job.completedAt = Date.now();
+    emitManagedBashJobUpdate(job);
     return job;
   }).catch((error) => {
     flushLiveUpdate(job);
     clearLiveUpdateTimer(job);
     job.error = error instanceof Error ? error : new Error(String(error));
     job.completedAt = Date.now();
+    emitManagedBashJobUpdate(job);
     return job;
   });
 
@@ -161,7 +173,7 @@ function appendOutput(job, data) {
 }
 
 function scheduleLiveUpdate(job) {
-  if (!job.onUpdate || job.completedAt) return;
+  if ((!job.onUpdate && job.state.listeners.size === 0) || job.completedAt) return;
   const elapsed = Date.now() - (job.lastLiveUpdateAt || 0);
   if (elapsed >= LIVE_UPDATE_INTERVAL_MS) {
     flushLiveUpdate(job);
@@ -175,19 +187,58 @@ function scheduleLiveUpdate(job) {
 }
 
 function flushLiveUpdate(job) {
-  if (!job.onUpdate || job.completedAt || !job.output) return;
+  if (job.completedAt || !job.output) return;
+  if (!job.onUpdate && job.state.listeners.size === 0) return;
   job.lastLiveUpdateAt = Date.now();
-  try {
-    job.onUpdate(toolResult(outputSnapshot(job.output, STATUS_OUTPUT_CHARS), {
+  const update = toolResult(outputSnapshot(job.output, STATUS_OUTPUT_CHARS), {
       jobId: job.id,
       status: "running",
       live: true,
       outputLineCount: countOutputLines(job.output),
       startedAt: new Date(job.startedAt).toISOString(),
       lastOutputAt: job.lastOutputAt ? new Date(job.lastOutputAt).toISOString() : undefined,
-    }));
-  } catch {
-    // Live UI updates are best-effort; the command result still carries output.
+    });
+  if (job.onUpdate) {
+    try {
+      job.onUpdate(update);
+    } catch {
+      // Pi live updates are best-effort; the managed job observer remains authoritative.
+    }
+  }
+  notifyManagedBashListeners(job.state, createManagedBashJobSnapshot(job, "running", update.content[0].text));
+}
+
+function emitManagedBashJobUpdate(job) {
+  const status = job.stoppedReason
+    ? "stopped"
+    : job.error || (job.exitCode !== 0 && job.exitCode !== null && job.exitCode !== undefined)
+      ? "failed"
+      : "completed";
+  notifyManagedBashListeners(job.state, createManagedBashJobSnapshot(job, status, outputSnapshot(job.output, FINAL_OUTPUT_CHARS)));
+}
+
+function createManagedBashJobSnapshot(job, status, output) {
+  return {
+    jobId: job.id,
+    toolCallId: job.toolCallId,
+    command: job.command,
+    status,
+    output,
+    startedAt: new Date(job.startedAt).toISOString(),
+    lastOutputAt: job.lastOutputAt ? new Date(job.lastOutputAt).toISOString() : undefined,
+    completedAt: job.completedAt ? new Date(job.completedAt).toISOString() : undefined,
+    exitCode: job.exitCode,
+    errorMessage: job.stoppedReason ? undefined : job.error?.message,
+  };
+}
+
+function notifyManagedBashListeners(state, update) {
+  for (const listener of state.listeners) {
+    try {
+      listener(update);
+    } catch {
+      // Lifecycle observers must not affect command execution.
+    }
   }
 }
 

@@ -618,6 +618,7 @@ export default function FolderBrowsePage({ mode = 'projects' }: FolderBrowseProp
                 submitCloneRepo={actions.submitCloneRepo}
                 submitCreateTarget={actions.submitCreateTarget}
                 submitRenameTarget={actions.submitRenameTarget}
+                onShowToast={(message, tone) => actions.showToast(message, tone === 'error' ? 'error' : 'success')}
                 toast={actions.toast}
             />
         </div>

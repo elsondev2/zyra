@@ -1,10 +1,12 @@
-import { memo, useMemo } from 'react'
+import { memo, useMemo, type ReactNode } from 'react'
 import { normalizePatchText } from '@/lib/diffRendering'
 import { cn } from '@/lib/utils'
 
 type RawPatchFallbackProps = {
     patch: string
     notice?: string | null
+    flush?: boolean
+    header?: ReactNode
 }
 
 type RawPatchLineTone =
@@ -46,18 +48,21 @@ const lineToneClassName: Record<RawPatchLineTone, string> = {
 
 export const RawPatchFallback = memo(function RawPatchFallback({
     patch,
-    notice = null
+    notice = null,
+    flush = false,
+    header = null
 }: RawPatchFallbackProps) {
     const lines = useMemo(() => normalizePatchText(patch).split('\n'), [patch])
 
     return (
-        <div className="h-full overflow-auto overscroll-contain custom-scrollbar px-5 py-4 [scrollbar-gutter:stable]">
+        <div className={cn('h-full overflow-auto overscroll-contain custom-scrollbar [scrollbar-gutter:stable]', flush ? 'p-0' : 'px-5 py-4')}>
+            {header}
             {notice ? (
-                <div className="mb-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-amber-200/85">
+                <div className={cn('border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-amber-200/85', flush ? 'border-x-0 border-t-0' : 'mb-3 rounded-xl')}>
                     {notice}
                 </div>
             ) : null}
-            <div className="overflow-hidden rounded-2xl border border-white/10 bg-black/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+            <div className={cn('overflow-hidden border border-white/10 bg-black/25 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]', flush ? 'rounded-none border-x-0 border-b-0' : 'rounded-2xl')}>
                 <div className="overflow-x-auto overscroll-contain custom-scrollbar">
                     <div className="min-w-full">
                         {lines.map((line, index) => {

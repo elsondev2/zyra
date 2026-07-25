@@ -9,6 +9,11 @@ type UserTurnEntry = {
 type AssistantDeleteMessagePlan = {
     rollbackTurnCount: number | null
     removedTurnIds: string[]
+    removedMessageIds: string[]
+    removedActivityIds: string[]
+    removedProposedPlanIds: string[]
+    removedPendingApprovalIds: string[]
+    removedPendingUserInputIds: string[]
     deletedWindow: {
         startCreatedAt: string
         endCreatedAt: string | null
@@ -151,6 +156,7 @@ export function buildDeleteMessagePlan(thread: AssistantThread, messageId: strin
     const deletedWindowStartAt = targetEntry.message.createdAt
     const deletedWindowEndAt = nextUserIndex < messages.length ? messages[nextUserIndex]?.createdAt || null : null
     const includesThreadTail = nextUserIndex >= messages.length
+    const removedMessages = messages.slice(targetIndex, nextUserIndex)
     const keptMessages = messages.filter((_message, index) => index < targetIndex || index >= nextUserIndex)
     const latestTurn = getRemainingLatestTurn(thread, keptMessages, orderedTurnIds, removedTurnIds, occurredAt)
     const lastSeenCompletedTurnId = getRemainingLastSeenCompletedTurnId(thread, orderedTurnIds, removedTurnIds)
@@ -161,9 +167,23 @@ export function buildDeleteMessagePlan(thread: AssistantThread, messageId: strin
         return true
     }
 
+    const keptActivities = thread.activities.filter((activity) => shouldKeepRecord(activity.turnId, activity.createdAt))
+    const keptProposedPlans = thread.proposedPlans.filter((plan) => shouldKeepRecord(plan.turnId, plan.createdAt))
+    const keptPendingApprovals = thread.pendingApprovals.filter((approval) => shouldKeepRecord(approval.turnId, approval.createdAt))
+    const keptPendingUserInputs = thread.pendingUserInputs.filter((entry) => shouldKeepRecord(entry.turnId, entry.createdAt))
+    const keptActivityIds = new Set(keptActivities.map((entry) => entry.id))
+    const keptProposedPlanIds = new Set(keptProposedPlans.map((entry) => entry.id))
+    const keptPendingApprovalIds = new Set(keptPendingApprovals.map((entry) => entry.id))
+    const keptPendingUserInputIds = new Set(keptPendingUserInputs.map((entry) => entry.id))
+
     return {
         rollbackTurnCount: includesThreadTail && targetTurnIndex >= 0 ? 1 : null,
         removedTurnIds: [...removedTurnIds],
+        removedMessageIds: removedMessages.map((entry) => entry.id),
+        removedActivityIds: thread.activities.filter((entry) => !keptActivityIds.has(entry.id)).map((entry) => entry.id),
+        removedProposedPlanIds: thread.proposedPlans.filter((entry) => !keptProposedPlanIds.has(entry.id)).map((entry) => entry.id),
+        removedPendingApprovalIds: thread.pendingApprovals.filter((entry) => !keptPendingApprovalIds.has(entry.id)).map((entry) => entry.id),
+        removedPendingUserInputIds: thread.pendingUserInputs.filter((entry) => !keptPendingUserInputIds.has(entry.id)).map((entry) => entry.id),
         deletedWindow: {
             startCreatedAt: deletedWindowStartAt,
             endCreatedAt: deletedWindowEndAt,
@@ -171,10 +191,10 @@ export function buildDeleteMessagePlan(thread: AssistantThread, messageId: strin
         },
         patch: {
             messages: keptMessages,
-            activities: thread.activities.filter((activity) => shouldKeepRecord(activity.turnId, activity.createdAt)),
-            proposedPlans: thread.proposedPlans.filter((plan) => shouldKeepRecord(plan.turnId, plan.createdAt)),
-            pendingApprovals: thread.pendingApprovals.filter((approval) => shouldKeepRecord(approval.turnId, approval.createdAt)),
-            pendingUserInputs: thread.pendingUserInputs.filter((entry) => shouldKeepRecord(entry.turnId, entry.createdAt)),
+            activities: keptActivities,
+            proposedPlans: keptProposedPlans,
+            pendingApprovals: keptPendingApprovals,
+            pendingUserInputs: keptPendingUserInputs,
             activePlan: thread.activePlan && thread.activePlan.turnId && removedTurnIds.has(thread.activePlan.turnId) ? null : thread.activePlan,
             lastSeenCompletedTurnId,
             latestTurn,

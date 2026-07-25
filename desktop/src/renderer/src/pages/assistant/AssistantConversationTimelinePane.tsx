@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 import { AssistantTimeline } from './AssistantTimeline'
 import type { AssistantDiffTarget } from './assistant-diff-types'
 import type { AssistantElementBounds } from './assistant-composer-types'
+import { resolveAssistantScrollButtonBottom } from './assistant-pane-layout'
 
 export const AssistantConversationTimelinePane = memo(function AssistantConversationTimelinePane(props: {
     loading: boolean
@@ -33,6 +34,11 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
     assistantTextStreamingMode: AssistantTextStreamingMode
     assistantToolOutputDefaultMode: AssistantToolOutputDefaultMode
     bottomComposerOverlayActive?: boolean
+    contentInsetEndAdjustment?: number
+    hasOlder?: boolean
+    loadingOlder?: boolean
+    loadOlderError?: string | null
+    onLoadOlder?: () => void
     showScrollToBottom: boolean
     elevateScrollToBottom?: boolean
     onScrollButtonBoundsChange?: (bounds: AssistantElementBounds | null) => void
@@ -46,13 +52,13 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
         ext: string,
         options?: PreviewOpenOptions
     ) => Promise<void> | void
-    onOpenAssistantLink?: (href: string) => Promise<void> | void
+    onOpenAssistantLink?: (href: string) => Promise<boolean | void> | boolean | void
+    onLinkNotice?: (message: string, tone: 'info' | 'error') => void
     onOpenEditedFile?: (filePath: string) => Promise<void> | void
     onViewDiff?: (target: AssistantDiffTarget) => void
 }) {
     const projectRootPath = props.projectTitle
     const floatingPlanOverlayRef = useRef<HTMLDivElement | null>(null)
-    const timelineRailHostRef = useRef<HTMLDivElement | null>(null)
     const scrollButtonRef = useRef<HTMLButtonElement | null>(null)
 
     useLayoutEffect(() => {
@@ -87,7 +93,7 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
     }, [props.elevateScrollToBottom, props.onScrollButtonBoundsChange, props.showScrollToBottom])
 
     return (
-        <div className="relative flex-1 min-h-0 bg-sparkle-bg" data-assistant-conversation-timeline-pane="true">
+        <div className="relative min-h-0 min-w-0 flex-1 overflow-x-hidden bg-sparkle-bg" data-assistant-conversation-timeline-pane="true">
             {props.loading ? (
                 <LoadingSpinner
                     message="Loading assistant snapshot..."
@@ -96,63 +102,54 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
                 />
             ) : (
                 <>
-                    <div
-                        ref={props.timelineScrollRef}
-                        onScroll={(event) => props.onScrollTimeline(event.currentTarget)}
-                        className="custom-scrollbar relative h-full overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable]"
-                    >
-                        <div
-                            ref={props.timelineContentRef}
-                            className={cn(
-                                'mx-auto w-full max-w-3xl px-4 pt-0 transition-[padding] duration-300 md:translate-x-[2px]',
-                                props.loadingChats && 'h-full max-w-none px-0 md:translate-x-0',
-                                props.loadingChats
-                                    ? 'pb-0'
-                                    : props.bottomComposerOverlayActive
-                                        ? 'pb-[178px]'
-                                        : 'pb-4'
-                            )}
-                        >
-                            <AssistantTimeline
-                                messages={props.messages}
-                                activities={props.activities}
-                                proposedPlans={props.proposedPlans || []}
-                                sessionMode={props.sessionMode}
-                                projectLabel={projectRootPath ? props.latestProjectLabel : null}
-                                projectTitle={projectRootPath}
-                                projectRootPath={projectRootPath}
-                                assistantMessageFilePath={props.assistantMessageFilePath}
-                                windowKey={props.windowKey}
-                                scrollContainerRef={props.timelineScrollRef}
-                                overlayContainerRef={floatingPlanOverlayRef}
-                                railHostRef={timelineRailHostRef}
-                                isWorking={props.isWorking}
-                                workingLabel={props.activeStatusLabel}
-                                activeWorkStartedAt={props.activeWorkStartedAt}
-                                latestAssistantMessageId={props.latestAssistantMessageId}
-                                latestTurnStartedAt={props.latestTurnStartedAt}
-                                turnUsageById={props.turnUsageById}
-                                deletingMessageId={props.deletingMessageId}
-                                loadingChats={props.loadingChats}
-                                assistantTextStreamingMode={props.assistantTextStreamingMode}
-                                assistantToolOutputDefaultMode={props.assistantToolOutputDefaultMode}
-                                isConnecting={props.isConnecting}
-                                onRequestDeleteUserMessage={props.onRequestDeleteUserMessage}
-                                onImplementProposedPlan={props.onImplementProposedPlan}
-                                onShowPlanPanel={props.onShowPlanPanel}
-                                onOpenAttachmentPreview={props.onOpenAttachmentPreview}
-                                onOpenInternalLink={props.onOpenAssistantLink}
-                                onOpenFilePath={props.onOpenEditedFile}
-                                onViewDiff={props.onViewDiff}
-                            />
-                        </div>
-                    </div>
-                    <div ref={timelineRailHostRef} className="pointer-events-none absolute inset-0 z-20" />
+                    <AssistantTimeline
+                        messages={props.messages}
+                        activities={props.activities}
+                        proposedPlans={props.proposedPlans || []}
+                        sessionMode={props.sessionMode}
+                        projectLabel={projectRootPath ? props.latestProjectLabel : null}
+                        projectTitle={projectRootPath}
+                        projectRootPath={projectRootPath}
+                        assistantMessageFilePath={props.assistantMessageFilePath}
+                        windowKey={props.windowKey}
+                        scrollContainerRef={props.timelineScrollRef}
+                        overlayContainerRef={floatingPlanOverlayRef}
+                        isWorking={props.isWorking}
+                        workingLabel={props.activeStatusLabel}
+                        activeWorkStartedAt={props.activeWorkStartedAt}
+                        latestAssistantMessageId={props.latestAssistantMessageId}
+                        latestTurnStartedAt={props.latestTurnStartedAt}
+                        turnUsageById={props.turnUsageById}
+                        deletingMessageId={props.deletingMessageId}
+                        loadingChats={props.loadingChats}
+                        assistantTextStreamingMode={props.assistantTextStreamingMode}
+                        assistantToolOutputDefaultMode={props.assistantToolOutputDefaultMode}
+                        isConnecting={props.isConnecting}
+                        contentInsetEndAdjustment={props.contentInsetEndAdjustment || 0}
+                        hasOlder={props.hasOlder}
+                        loadingOlder={props.loadingOlder}
+                        loadOlderError={props.loadOlderError}
+                        onLoadOlder={props.onLoadOlder}
+                        onScrollContainer={props.onScrollTimeline}
+                        onRequestDeleteUserMessage={props.onRequestDeleteUserMessage}
+                        onImplementProposedPlan={props.onImplementProposedPlan}
+                        onShowPlanPanel={props.onShowPlanPanel}
+                        onOpenAttachmentPreview={props.onOpenAttachmentPreview}
+                        onOpenInternalLink={props.onOpenAssistantLink}
+                        onLinkNotice={props.onLinkNotice}
+                        onOpenFilePath={props.onOpenEditedFile}
+                        onViewDiff={props.onViewDiff}
+                    />
                     <div ref={floatingPlanOverlayRef} className="pointer-events-none absolute inset-0 z-20" />
-                    <div className={cn(
-                        'pointer-events-none absolute inset-x-0 z-30 flex justify-center px-4 transition-[bottom,opacity,transform] duration-200',
-                        props.elevateScrollToBottom ? 'bottom-[158px]' : 'bottom-4'
-                    )}>
+                    <div
+                        className="pointer-events-none absolute inset-x-0 z-30 flex justify-center px-4 transition-[bottom,opacity,transform] duration-200"
+                        style={{
+                            bottom: `${resolveAssistantScrollButtonBottom(
+                                props.contentInsetEndAdjustment || 0,
+                                props.elevateScrollToBottom === true
+                            )}px`
+                        }}
+                    >
                         <button
                             ref={scrollButtonRef}
                             type="button"

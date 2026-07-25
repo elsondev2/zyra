@@ -1,3 +1,4 @@
+import { isAgentSurfaceDescriptor, normalizeAgentSurfaceTool } from "../../agent-surface.mjs";
 import { renderMarkdown } from "../../pi-markdown.mjs";
 import { buildTerminalTheme } from "../../terminal-theme.mjs";
 import {
@@ -84,6 +85,33 @@ export class ToolMessageComponent {
   }
 }
 
+export class CheckedCommandsComponent {
+  constructor(key, commands = [], theme = fallbackTheme) {
+    this.key = key;
+    this.commands = [...commands];
+    this.theme = theme;
+    this.spacingKind = "tool";
+  }
+
+  setHost(host) {
+    this.host = host;
+  }
+
+  update(commands = []) {
+    this.commands = [...commands];
+    this.host?.invalidate();
+  }
+
+  render(width) {
+    if (this.commands.length === 0) return [];
+    const label = this.commands.length === 1
+      ? `Checked command — ${String(this.commands[0]).replace(/\s+/g, " ").trim()}`
+      : `Checked ${this.commands.length} commands`;
+    const text = truncatePlain(label, Math.max(12, Number(width || 100) - 6));
+    return ["", `  ${this.theme.success}✓${reset} ${this.theme.muted}${text}${reset}`];
+  }
+}
+
 export class ActivityComponent {
   constructor(key, getState, theme = fallbackTheme) {
     this.key = key;
@@ -107,11 +135,18 @@ export class ActivityComponent {
 
 export function renderToolBlock(toolState, theme = fallbackTheme, width = 100) {
   const resolvedTheme = buildTerminalTheme(theme);
-  const isError = toolState.isError || toolState.state === "error";
-  const isDone = toolState.state === "done";
-  const stateLabel = isError ? "failed" : isDone ? "succeeded" : "running";
-  const state = isError ? "error" : isDone ? "done" : "running";
-  const title = toolState.toolName ?? "tool";
+  if (toolState.fileChange?.category === "file-change") {
+    return renderFileChangeToolBlock(toolState, resolvedTheme, width);
+  }
+  const agentSurface = isAgentSurfaceDescriptor(toolState.surface)
+    ? toolState.surface
+    : normalizeAgentSurfaceTool(toolState);
+  const isError = agentSurface.lifecycle === "failed";
+  const isStopped = agentSurface.lifecycle === "stopped";
+  const isDone = agentSurface.lifecycle === "completed";
+  const stateLabel = isError ? "failed" : isStopped ? "stopped" : isDone ? "succeeded" : "running";
+  const state = isError ? "error" : isStopped ? "stopped" : isDone ? "done" : "running";
+  const title = agentSurface.toolName ?? toolState.toolName ?? "tool";
   const rawArgs = toolState.args ?? toolState.arguments;
   const command = rawArgs && typeof rawArgs === "object" ? firstStringValue(rawArgs, ["command", "cmd"]) : undefined;
   const rows = command
@@ -139,6 +174,48 @@ export function renderToolBlock(toolState, theme = fallbackTheme, width = 100) {
     innerBlank,
     ...rows.flatMap((row) => renderToolRow(row, resolvedTheme, terminalWidth, surface)),
     innerBlank,
+    "",
+  ];
+}
+
+function renderFileChangeToolBlock(toolState, theme, width) {
+  const change = toolState.fileChange ?? {};
+  const state = change.status === "failed" ? "error" : change.status === "completed" ? "done" : "running";
+  const stateLabel = state === "error" ? "failed" : state === "done" ? "applied" : "running";
+  const paths = Array.isArray(change.paths) ? change.paths.filter(Boolean) : [];
+  const title = String(change.toolName ?? toolState.toolName ?? "edit");
+  const rows = [{ kind: "title", title, state, stateLabel }];
+  for (const path of paths.slice(0, 4)) rows.push({ kind: "args", text: `path ${path}` });
+  if (paths.length > 4) rows.push({ kind: "hint", text: `… ${paths.length - 4} more files` });
+  const sourceLabel = change.authoritative
+    ? change.snapshotBacked ? "applied · snapshot-backed" : "applied · provider result"
+    : state === "error"
+      ? "failed · preview not applied"
+      : change.source === "provider-live"
+        ? "live provider preview"
+        : "live preview";
+  rows.push({ kind: state === "error" ? "footerError" : "diffMeta", text: sourceLabel });
+  rows.push({ kind: "diffMeta", text: `+${Number(change.additions) || 0}/-${Number(change.deletions) || 0}${change.truncated ? " · truncated" : ""}` });
+
+  const displayDiff = String(change.displayDiff ?? change.patch ?? change.previewPatch ?? "");
+  const diffRows = renderPatchDiff(displayDiff, 12);
+  if (diffRows.length > 0) {
+    rows.push({ kind: "spacer" });
+    rows.push(...diffRows);
+    const totalLines = displayDiff.split(/\r?\n/).filter((line) => line.trim()).length;
+    if (totalLines > diffRows.length) rows.push({ kind: "hint", text: `… ${totalLines - diffRows.length} more diff lines` });
+  } else if (state === "running") {
+    rows.push({ kind: "hint", text: "waiting for complete file-change arguments" });
+  }
+
+  const terminalWidth = Math.max(24, Number(width) || 100);
+  const surface = toolSurfaceForState(state, theme);
+  const blank = renderToolBlankRow(terminalWidth, surface);
+  return [
+    "",
+    blank,
+    ...rows.flatMap((row) => renderToolRow(row, theme, terminalWidth, surface)),
+    blank,
     "",
   ];
 }

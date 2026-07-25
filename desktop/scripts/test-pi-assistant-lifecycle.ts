@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import type {
     AssistantDomainEvent,
     AssistantRuntimeEvent,
@@ -9,7 +10,8 @@ import type {
 import { applyAssistantDomainEvent } from '../src/shared/assistant/projector'
 import { handleAssistantRuntimeEvent, normalizeRuntimeActivityPayload } from '../src/main/assistant/service-runtime-events'
 import { getAssistantModelNoticePresentation } from '../src/main/assistant/assistant-failure-presentation'
-import { shouldGenerateSessionTitleForPrompt } from '../src/main/assistant/session-title-generation'
+import { getTitleGenerationModelCandidates, queueGeneratedSessionTitle, shouldGenerateSessionTitleForPrompt } from '../src/main/assistant/session-title-generation'
+import { getAssistantCanonicalThreadId, matchesAssistantThreadId } from '../src/main/assistant/thread-identity'
 import { ZyraPiRuntime } from '../src/main/assistant/zyra-pi-runtime'
 import { buildEffortSliderTicks, EFFORT_LABELS } from '../src/renderer/src/pages/assistant/assistant-composer-controller-constants'
 import { piEditFixture, piWriteExistingFixture, piWriteFailureFixture } from './fixtures/file-change-lifecycle-fixtures'
@@ -149,6 +151,42 @@ const internalCompletion = runtimeEvents.findLast((event) => (
 assert.equal(internalCompletion?.type === 'content.completed' ? internalCompletion.payload.text : null, thoughtMarkdown)
 assert.equal(context.activeAssistantItemId, null, 'message_end must clear the active assistant lifecycle')
 
+handleEvent({ type: 'compaction_start', reason: 'threshold' })
+const runningCompactionEvent = runtimeEvents.findLast((event) => event.type === 'activity' && event.payload.kind === 'context.compaction')
+assert.equal(runningCompactionEvent?.type === 'activity' ? runningCompactionEvent.payload.summary : null, 'AUTO-COMPACTING')
+assert.equal(runningCompactionEvent?.type === 'activity' ? runningCompactionEvent.payload.data?.['status'] : null, 'running')
+assert.equal(typeof (runningCompactionEvent?.type === 'activity' ? runningCompactionEvent.payload.activityId : null), 'string')
+
+handleEvent({
+    type: 'compaction_end',
+    reason: 'threshold',
+    result: {
+        firstKeptEntryId: 'kept-entry',
+        tokensBefore: 150_000,
+        estimatedTokensAfter: 32_000
+    },
+    aborted: false,
+    willRetry: false
+})
+const completedCompactionEvent = runtimeEvents.findLast((event) => event.type === 'activity' && event.payload.kind === 'context.compaction')
+assert.equal(completedCompactionEvent?.type === 'activity' ? completedCompactionEvent.payload.summary : null, 'AUTO-COMPACTED')
+assert.equal(completedCompactionEvent?.type === 'activity' ? completedCompactionEvent.payload.data?.['status'] : null, 'completed')
+assert.equal(completedCompactionEvent?.type === 'activity' ? completedCompactionEvent.payload.data?.['tokensBefore'] : null, 150_000)
+assert.equal(
+    completedCompactionEvent?.type === 'activity' ? completedCompactionEvent.payload.activityId : null,
+    runningCompactionEvent?.type === 'activity' ? runningCompactionEvent.payload.activityId : null,
+    'compaction_end must update the same activity emitted by compaction_start'
+)
+
+const bridgeSource = readFileSync(new URL('../../src/zyra-ui-bridge.mjs', import.meta.url), 'utf8')
+assert.match(bridgeSource, /type === ["']compaction_end["']/, 'the Pi bridge must forward compaction_end instead of reducing it to a bare event type')
+assert.match(bridgeSource, /estimatedTokensAfter/, 'the Pi bridge must retain bounded compaction result metrics')
+assert.match(bridgeSource, /requestedThreadId = payload\.threadId \|\| payload\.providerThreadId/, 'desktop must prefer the canonical threadId while accepting the legacy providerThreadId alias')
+assert.match(bridgeSource, /type === ["']generate_text["']/, 'title generation must use the Pi bridge instead of launching a detached Codex app-server')
+assert.match(bridgeSource, /normalizeAgentSurfaceTool/, 'Pi tool events must cross the desktop bridge through the shared agent-surface normalizer')
+const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-pi-runtime.ts', import.meta.url), 'utf8')
+assert.match(runtimeSource, /threadId: requestedThreadId[\s\S]*noSession: false/, 'desktop chats must create persistent Pi threads that the TUI can resolve')
+
 const separationRuntime = new ZyraPiRuntime()
 const separationEvents: AssistantRuntimeEvent[] = []
 separationRuntime.on('runtime', (event: AssistantRuntimeEvent) => separationEvents.push(event))
@@ -220,6 +258,32 @@ assert.equal(completedToolData?.['command'], 'rg -n harness .', 'tool completion
 assert.equal(typeof completedToolData?.['startedAt'], 'string')
 assert.equal(typeof completedToolData?.['completedAt'], 'string')
 assert.equal(typeof completedToolData?.['durationMs'], 'number')
+
+handleEvent({
+    type: 'tool_execution_end',
+    toolCallId: 'tool-surface-contract',
+    toolName: 'provider_lookup',
+    args: { query: 'agent surface contract' },
+    surface: {
+        version: 1,
+        kind: 'search',
+        lifecycle: 'completed',
+        toolName: 'provider_lookup',
+        toolKey: 'provider lookup',
+        primaryText: 'agent surface contract',
+        query: 'agent surface contract',
+        paths: [],
+        summary: 'Searched'
+    }
+})
+const canonicalSurfaceEvent = runtimeEvents.findLast((event) => event.type === 'activity' && event.itemId === 'tool-surface-contract')
+assert.equal(canonicalSurfaceEvent?.type === 'activity' ? canonicalSurfaceEvent.payload.kind : null, 'search')
+assert.equal(canonicalSurfaceEvent?.type === 'activity' ? canonicalSurfaceEvent.payload.summary : null, 'Searched')
+const canonicalSurfaceData = canonicalSurfaceEvent?.type === 'activity'
+    ? canonicalSurfaceEvent.payload.data?.['surface'] as Record<string, unknown> | undefined
+    : undefined
+assert.equal(canonicalSurfaceData?.['version'], 1)
+assert.equal(canonicalSurfaceData?.['kind'], 'search')
 
 handleEvent({
     type: 'tool_execution_start',
@@ -501,6 +565,15 @@ const projectedSession: AssistantSession = {
     threadIds: [projectedThread.id],
     threads: [projectedThread]
 }
+assert.deepEqual(
+    getTitleGenerationModelCandidates('openai-codex/gpt-5.6-sol'),
+    ['openai-codex/gpt-5.6-sol', 'openai-codex/gpt-5.4-mini'],
+    'title generation should use the active Pi model before the stable mini fallback'
+)
+assert.equal(getAssistantCanonicalThreadId(projectedThread), 'provider-lifecycle')
+assert.equal(getAssistantCanonicalThreadId({ ...projectedThread, providerThreadId: null }), projectedThread.id)
+assert.equal(matchesAssistantThreadId(projectedThread, projectedThread.id), true, 'legacy desktop thread keys must remain resolvable')
+assert.equal(matchesAssistantThreadId(projectedThread, projectedThread.providerThreadId), true, 'canonical Pi thread IDs must resolve the same chat')
 assert.equal(
     shouldGenerateSessionTitleForPrompt({ ...projectedSession, title: 'New Session' }),
     true,
@@ -512,9 +585,60 @@ assert.equal(
         title: 'New Session',
         threads: [{ ...projectedThread, messageCount: 1 }]
     }),
-    false,
-    'existing chat history must not trigger another generated title'
+    true,
+    'an existing chat that still has the default title must retry generation'
 )
+const failedTitleThread: AssistantThread = {
+    ...projectedThread,
+    messageCount: 1,
+    messages: [{
+        id: 'message-title-seed',
+        role: 'user',
+        text: 'hello',
+        turnId: null,
+        streaming: false,
+        createdAt: projectedThread.createdAt,
+        updatedAt: projectedThread.createdAt
+    }]
+}
+const failedTitleSession: AssistantSession = {
+    ...projectedSession,
+    title: 'hello',
+    threads: [failedTitleThread]
+}
+assert.equal(
+    shouldGenerateSessionTitleForPrompt(failedTitleSession),
+    true,
+    'an existing chat whose title is still the first-message heuristic must retry generation'
+)
+assert.equal(
+    shouldGenerateSessionTitleForPrompt({
+        ...failedTitleSession,
+        threads: [{ ...failedTitleThread, messages: [] }]
+    }, 'hello'),
+    true,
+    'paged shell snapshots must recover titles from the lightweight persisted first-message lookup'
+)
+assert.equal(
+    shouldGenerateSessionTitleForPrompt({ ...failedTitleSession, title: 'Manually named chat' }),
+    false,
+    'manual titles must never be replaced by recovery'
+)
+const generatedTitleEvents: Array<{ type: AssistantDomainEvent['type']; payload: Record<string, unknown> }> = []
+await queueGeneratedSessionTitle({
+    sessionId: failedTitleSession.id,
+    threadId: failedTitleThread.id,
+    messageText: 'Standardize desktop and TUI thread IDs without breaking existing chats.',
+    seedTitle: failedTitleSession.title,
+    cwd: 'C:\\workspace',
+    preferredModel: failedTitleThread.model,
+    generateText: async () => ({ success: true, text: 'Standardize Zyra Thread IDs' }),
+    getSnapshot: () => ({ sessions: [failedTitleSession] }),
+    appendEvent: (type, _occurredAt, payload) => generatedTitleEvents.push({ type, payload })
+})
+assert.equal(generatedTitleEvents.length, 1)
+assert.equal(generatedTitleEvents[0]?.type, 'session.updated')
+assert.equal((generatedTitleEvents[0]?.payload.patch as { title?: string })?.title, 'Standardize Zyra Thread IDs')
 let projectedSnapshot: AssistantSnapshot = {
     snapshotSequence: 0,
     updatedAt: projectedThread.createdAt,
@@ -544,6 +668,8 @@ const projectedDeps = {
     findThreadRecord: findProjectedRecord,
     queueAssistantTextDelta: () => {},
     flushAssistantTextDelta: () => {},
+    queueAssistantActivityDelta: () => {},
+    flushAssistantActivityDelta: () => {},
     appendEvent: (
         type: AssistantDomainEvent['type'],
         occurredAt: string,
@@ -564,16 +690,27 @@ const projectedDeps = {
     },
     updateLatestTurnAssistantMessage: () => {}
 }
+if (runningCompactionEvent?.type === 'activity' && completedCompactionEvent?.type === 'activity') {
+    handleAssistantRuntimeEvent(runningCompactionEvent, projectedDeps)
+    handleAssistantRuntimeEvent(completedCompactionEvent, projectedDeps)
+}
+const projectedCompactionActivities = findProjectedRecord(context.localThreadId)?.thread.activities.filter((activity) => activity.kind === 'context.compaction') || []
+assert.equal(projectedCompactionActivities.length, 1, 'start and end must persist as one compaction activity')
+assert.equal(projectedCompactionActivities[0]?.payload?.['status'], 'completed')
+assert.equal(projectedCompactionActivities[0]?.payload?.['startedAt'], runningCompactionEvent?.type === 'activity' ? runningCompactionEvent.payload.data?.['startedAt'] : null)
+assert.equal(typeof projectedCompactionActivities[0]?.payload?.['completedAt'], 'string')
+
 handleAssistantRuntimeEvent(observedRunningCommand, projectedDeps)
-const runningProjectedActivity = findProjectedRecord(context.localThreadId)?.thread.activities[0]
+const runningProjectedActivity = findProjectedRecord(context.localThreadId)?.thread.activities.find((activity) => activity.id === 'zyra-tool-tool-observed-command')
 assert.match(String(runningProjectedActivity?.payload?.['output'] || ''), /Command still running/)
 const runningTimelineSequence = runningProjectedActivity?.timelineSequence
 handleAssistantRuntimeEvent(observedManagedCommand, projectedDeps)
 const completedProjectedActivities = findProjectedRecord(context.localThreadId)?.thread.activities || []
-assert.equal(completedProjectedActivities.length, 1, 'same-ID observer updates must replace the original persisted activity')
-assert.equal(completedProjectedActivities[0]?.payload?.['status'], 'completed')
-assert.equal(completedProjectedActivities[0]?.payload?.['output'], 'observer done', 'terminal observer output must replace the stale still-running wrapper')
-assert.equal(completedProjectedActivities[0]?.timelineSequence, runningTimelineSequence, 'same-ID updates must preserve timeline position')
+const completedProjectedCommands = completedProjectedActivities.filter((activity) => activity.id === 'zyra-tool-tool-observed-command')
+assert.equal(completedProjectedCommands.length, 1, 'same-ID observer updates must replace the original persisted activity')
+assert.equal(completedProjectedCommands[0]?.payload?.['status'], 'completed')
+assert.equal(completedProjectedCommands[0]?.payload?.['output'], 'observer done', 'terminal observer output must replace the stale still-running wrapper')
+assert.equal(completedProjectedCommands[0]?.timelineSequence, runningTimelineSequence, 'same-ID updates must preserve timeline position')
 
 handleAssistantRuntimeEvent({
     eventId: 'usage-limit-turn',
@@ -637,25 +774,69 @@ const piEditStart = fileChangeEvents.findLast((event) => event.type === 'activit
 assert.equal(piEditStart?.type === 'activity' ? piEditStart.payload.activityId : null, `zyra-tool-${piEditFixture.toolCallId}`)
 assert.equal(piEditStart?.type === 'activity' ? piEditStart.payload.kind : null, 'file-change')
 assert.equal(piEditStart?.type === 'activity' ? piEditStart.payload.data?.['status'] : null, 'running')
+assert.equal(piEditStart?.type === 'activity' ? piEditStart.payload.data?.['toolLifecyclePhase'] : null, 'start')
 assert.equal(piEditStart?.type === 'activity' ? piEditStart.payload.data?.['source'] : null, 'args-preview')
 assert.equal(piEditStart?.type === 'activity' ? piEditStart.payload.data?.['patch'] : null, undefined)
 assert.match(String(piEditStart?.type === 'activity' ? piEditStart.payload.data?.['previewPatch'] : ''), /const answer = 42/)
 assert.deepEqual(piEditStart?.type === 'activity' ? piEditStart.payload.data?.['paths'] : null, [piEditFixture.path])
+if (piEditStart?.type === 'activity') handleAssistantRuntimeEvent(piEditStart, projectedDeps)
+const projectedRunningEdit = findProjectedRecord(context.localThreadId)?.thread.activities.find((activity) => activity.id === `zyra-tool-${piEditFixture.toolCallId}`)
+assert.equal(projectedRunningEdit?.payload?.['status'], 'running', 'Pi edit start must become a visible running activity before completion')
+assert.equal(projectedRunningEdit?.payload?.['toolLifecyclePhase'], 'start', 'service normalization must preserve the urgent start boundary')
 
 handleFileChangeEvent(piEditFixture.update)
 handleFileChangeEvent(piEditFixture.end)
 const piEditEnd = fileChangeEvents.findLast((event) => event.type === 'activity')
 assert.equal(piEditEnd?.type === 'activity' ? piEditEnd.payload.activityId : null, `zyra-tool-${piEditFixture.toolCallId}`)
 assert.equal(piEditEnd?.type === 'activity' ? piEditEnd.payload.data?.['status'] : null, 'completed')
+assert.equal(piEditEnd?.type === 'activity' ? piEditEnd.payload.data?.['toolLifecyclePhase'] : null, 'end')
 assert.equal(piEditEnd?.type === 'activity' ? piEditEnd.payload.data?.['source'] : null, 'provider-result')
 assert.equal(piEditEnd?.type === 'activity' ? piEditEnd.payload.data?.['authoritative'] : null, true)
 assert.equal(piEditEnd?.type === 'activity' ? piEditEnd.payload.data?.['patch'] : null, piEditFixture.end.result.details.patch)
 assert.equal(piEditEnd?.type === 'activity' ? piEditEnd.payload.data?.['displayDiff'] : null, piEditFixture.end.result.details.diff)
+const piEditRawResult = piEditEnd?.type === 'activity'
+    ? piEditEnd.payload.data?.['result'] as Record<string, unknown> | undefined
+    : undefined
+const piEditRawDetails = piEditRawResult?.['details'] as Record<string, unknown> | undefined
+assert.equal(piEditRawDetails?.['patch'], undefined, 'raw file-change results must not duplicate canonical patches')
+assert.equal(piEditRawDetails?.['diff'], undefined, 'raw file-change results must not duplicate canonical display diffs')
+assert.deepEqual(piEditRawResult?.['content'], piEditFixture.end.result.content, 'raw result text remains available after patch stripping')
 assert.equal(
     fileChangeEvents.filter((event) => event.type === 'activity' && event.payload.activityId === `zyra-tool-${piEditFixture.toolCallId}`).length,
     3,
     'Pi start/update/end emit revisions for one stable activity instead of separate IDs'
 )
+if (piEditEnd?.type === 'activity') handleAssistantRuntimeEvent(piEditEnd, projectedDeps)
+const projectedCompletedEdits = findProjectedRecord(context.localThreadId)?.thread.activities.filter((activity) => activity.id === `zyra-tool-${piEditFixture.toolCallId}`) || []
+assert.equal(projectedCompletedEdits.length, 1, 'edit completion updates the already-visible running row')
+assert.equal(projectedCompletedEdits[0]?.payload?.['status'], 'completed')
+
+handleFileChangeEvent({
+    type: 'tool_execution_start',
+    toolCallId: 'pi-read-lines',
+    toolName: 'read',
+    args: { path: 'src/large.ts', offset: 51, limit: 50 }
+})
+const piReadStart = fileChangeEvents.findLast((event) => event.type === 'activity' && event.itemId === 'pi-read-lines')
+assert.equal(piReadStart?.type === 'activity' ? piReadStart.payload.kind : null, 'file-read')
+assert.equal(piReadStart?.type === 'activity' ? piReadStart.payload.data?.['status'] : null, 'running')
+assert.equal(piReadStart?.type === 'activity' ? piReadStart.payload.data?.['toolLifecyclePhase'] : null, 'start')
+const readBody = Array.from({ length: 50 }, (_, index) => `line ${index + 51}`).join('\n')
+handleFileChangeEvent({
+    type: 'tool_execution_end',
+    toolCallId: 'pi-read-lines',
+    toolName: 'read',
+    result: {
+        content: [{ type: 'text', text: `${readBody}\n\n[Showing lines 51-100 of 240. Use offset=101 to continue.]` }]
+    },
+    isError: false
+})
+const piReadEnd = fileChangeEvents.findLast((event) => event.type === 'activity' && event.itemId === 'pi-read-lines')
+assert.equal(piReadEnd?.type === 'activity' ? piReadEnd.payload.data?.['readStartLine'] : null, 51)
+assert.equal(piReadEnd?.type === 'activity' ? piReadEnd.payload.data?.['readEndLine'] : null, 100)
+assert.equal(piReadEnd?.type === 'activity' ? piReadEnd.payload.data?.['readLineCount'] : null, 50)
+assert.equal(piReadEnd?.type === 'activity' ? piReadEnd.payload.data?.['readTotalLines'] : null, 240)
+assert.equal(piReadEnd?.type === 'activity' ? piReadEnd.payload.data?.['readComplete'] : null, false)
 
 handleFileChangeEvent({
     type: 'tool_execution_start',

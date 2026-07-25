@@ -31,7 +31,29 @@ import {
     toNullableString,
     toNumber
 } from './persistence-utils'
+import { assistantActivityPayloadColumns, parseAssistantActivityPayload } from './persistence-activity-payload'
 import { persistAssistantSnapshotMeta } from './persistence-write'
+
+function readAssistantUserMessageText(db: SqlDatabase, sessionId: string, direction: 'ASC' | 'DESC'): string | null {
+    const row = db.exec(`
+        SELECT assistant_messages.text
+        FROM assistant_messages
+        INNER JOIN assistant_threads ON assistant_threads.id = assistant_messages.thread_id
+        WHERE assistant_threads.session_id = ? AND assistant_messages.role = 'user'
+        ORDER BY assistant_messages.created_at ${direction}, assistant_messages.id ${direction}
+        LIMIT 1
+    `, [sessionId])[0]?.values?.[0]
+    const messageText = String(row?.[0] || '').trim()
+    return messageText || null
+}
+
+export function readAssistantFirstUserMessageText(db: SqlDatabase, sessionId: string): string | null {
+    return readAssistantUserMessageText(db, sessionId, 'ASC')
+}
+
+export function readAssistantLatestUserMessageText(db: SqlDatabase, sessionId: string): string | null {
+    return readAssistantUserMessageText(db, sessionId, 'DESC')
+}
 
 export function readAssistantPersistenceRecord(db: SqlDatabase): { version: number; snapshot: AssistantSnapshot; events: AssistantDomainEvent[] } {
     return {
@@ -61,7 +83,6 @@ export function readAssistantSnapshot(db: SqlDatabase): AssistantSnapshot {
         knownModels: meta.knownModels
     }
     snapshot = recoverPersistedSnapshot(snapshot)
-    snapshot = hydrateSnapshotThreads(snapshot, selectedSessionId, readHydratedThreadDetails(db, snapshot, selectedSessionId))
     if (selectedSessionId !== meta.selectedSessionId) {
         persistAssistantSnapshotMeta(db, snapshot)
     }
@@ -134,7 +155,7 @@ function readThreadDetails(db: SqlDatabase, threadId: string): AssistantHydrated
             updatedAt: String(row[5] || new Date(0).toISOString())
         })),
         activities: readThreadRows<AssistantActivity>(db, 'assistant_activities', threadId, [
-            'id', 'kind', 'tone', 'summary', 'detail', 'turn_id', 'timeline_sequence', 'created_at', 'payload_json'
+            'id', 'kind', 'tone', 'summary', 'detail', 'turn_id', 'timeline_sequence', 'created_at', assistantActivityPayloadColumns()
         ], (row) => ({
             id: String(row[0] || ''),
             kind: String(row[1] || ''),
@@ -144,7 +165,7 @@ function readThreadDetails(db: SqlDatabase, threadId: string): AssistantHydrated
             turnId: toNullableString(row[5]),
             timelineSequence: typeof row[6] === 'number' ? row[6] : undefined,
             createdAt: String(row[7] || new Date(0).toISOString()),
-            payload: parseJson<Record<string, unknown> | undefined>(row[8], undefined)
+            payload: parseAssistantActivityPayload(row[8], row[9])
         })),
         pendingApprovals: readThreadRows<AssistantPendingApproval>(db, 'assistant_pending_approvals', threadId, [
             'id', 'request_id', 'request_type', 'title', 'detail', 'command', 'paths_json', 'status', 'decision', 'turn_id', 'created_at', 'resolved_at'
@@ -285,17 +306,20 @@ function readAssistantSessionSummaries(db: SqlDatabase, playground: AssistantSna
         firstUserMessageTextBySessionId.set(sessionId, messageText)
     }
 
-    const messageCountByThreadId = new Map<string, number>()
-    const messageCountRows = db.exec(`
-        SELECT thread_id, COUNT(*)
-        FROM assistant_messages
-        GROUP BY thread_id
-    `)[0]?.values || []
-    for (const row of messageCountRows) {
-        const threadId = String(row[0] || '')
-        const messageCount = toNumber(row[1])
-        if (threadId) messageCountByThreadId.set(threadId, messageCount)
+    const readCountMap = (table: string, where = '') => {
+        const counts = new Map<string, number>()
+        const rows = db.exec(`SELECT thread_id, COUNT(*) FROM ${table}${where} GROUP BY thread_id`)[0]?.values || []
+        for (const row of rows) {
+            const threadId = String(row[0] || '')
+            if (threadId) counts.set(threadId, toNumber(row[1]))
+        }
+        return counts
     }
+    const messageCountByThreadId = readCountMap('assistant_messages')
+    const activityCountByThreadId = readCountMap('assistant_activities')
+    const proposedPlanCountByThreadId = readCountMap('assistant_proposed_plans')
+    const pendingApprovalCountByThreadId = readCountMap('assistant_pending_approvals', ` WHERE status = 'pending'`)
+    const pendingUserInputCountByThreadId = readCountMap('assistant_pending_user_inputs', ` WHERE status = 'pending'`)
 
     const threadRows = db.exec(`
         SELECT
@@ -318,7 +342,8 @@ function readAssistantSessionSummaries(db: SqlDatabase, playground: AssistantSna
             last_error,
             created_at,
             updated_at,
-            latest_turn_json
+            latest_turn_json,
+            active_plan_json
         FROM assistant_threads
         ORDER BY session_id ASC, updated_at DESC, id DESC
     `)[0]?.values || []
@@ -342,6 +367,8 @@ function readAssistantSessionSummaries(db: SqlDatabase, playground: AssistantSna
             model: String(row[9] || ''),
             cwd: toNullableString(row[10]),
             messageCount,
+            activityCount: activityCountByThreadId.get(threadId) ?? 0,
+            proposedPlanCount: proposedPlanCountByThreadId.get(threadId) ?? 0,
             lastSeenCompletedTurnId: toNullableString(row[12]),
             runtimeMode: String(row[13] || 'approval-required') as AssistantThread['runtimeMode'],
             interactionMode: String(row[14] || 'default') as AssistantThread['interactionMode'],
@@ -350,6 +377,9 @@ function readAssistantSessionSummaries(db: SqlDatabase, playground: AssistantSna
             createdAt: String(row[17] || new Date(0).toISOString()),
             updatedAt: String(row[18] || new Date(0).toISOString()),
             latestTurn: parseJson(row[19], null),
+            hasPendingApprovals: (pendingApprovalCountByThreadId.get(threadId) ?? 0) > 0,
+            hasPendingUserInputs: (pendingUserInputCountByThreadId.get(threadId) ?? 0) > 0,
+            hasActivePlan: Boolean(parseJson(row[20], null)),
             activePlan: null,
             messages: [],
             proposedPlans: [],

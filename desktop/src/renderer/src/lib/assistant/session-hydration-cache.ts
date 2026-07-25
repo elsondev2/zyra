@@ -81,35 +81,29 @@ export function applyCachedSessionSelection(
     threadId: string | null,
     cache: Map<string, CachedHydratedThreadState>
 ): AssistantSnapshot {
-    const session = snapshot.sessions.find((entry) => entry.id === sessionId) || null
+    const sessionIndex = snapshot.sessions.findIndex((entry) => entry.id === sessionId)
+    const session = sessionIndex >= 0 ? snapshot.sessions[sessionIndex] : null
     const targetThreadId = threadId || session?.activeThreadId || null
     const cached = targetThreadId ? cache.get(targetThreadId) : null
-    const nextSessions = snapshot.sessions.map((session) => {
-        if (session.id !== sessionId) return session
-        if (!cached || cached.sessionId !== sessionId || session.activeThreadId !== cached.threadId) {
-            if (!targetThreadId || session.activeThreadId === targetThreadId) return session
-            return {
-                ...session,
-                activeThreadId: targetThreadId
-            }
-        }
+    let nextSession = session
 
-        let threadChanged = false
-        const nextThreads = session.threads.map((thread) => {
-            if (thread.id !== cached.threadId) return thread
-            if (
-                thread.activePlan === cached.activePlan
-                && thread.messages === cached.messages
-                && thread.proposedPlans === cached.proposedPlans
-                && thread.activities === cached.activities
-                && thread.pendingApprovals === cached.pendingApprovals
-                && thread.pendingUserInputs === cached.pendingUserInputs
-            ) {
-                return thread
-            }
+    if (session && targetThreadId && session.activeThreadId !== targetThreadId) {
+        nextSession = { ...session, activeThreadId: targetThreadId }
+    }
 
-            threadChanged = true
-            return {
+    if (nextSession && cached && cached.sessionId === sessionId && targetThreadId === cached.threadId) {
+        const threadIndex = nextSession.threads.findIndex((thread) => thread.id === cached.threadId)
+        const thread = threadIndex >= 0 ? nextSession.threads[threadIndex] : null
+        if (thread && (
+            thread.activePlan !== cached.activePlan
+            || thread.messages !== cached.messages
+            || thread.proposedPlans !== cached.proposedPlans
+            || thread.activities !== cached.activities
+            || thread.pendingApprovals !== cached.pendingApprovals
+            || thread.pendingUserInputs !== cached.pendingUserInputs
+        )) {
+            const threads = nextSession.threads.slice()
+            threads[threadIndex] = {
                 ...thread,
                 activePlan: cached.activePlan,
                 messages: cached.messages,
@@ -118,24 +112,20 @@ export function applyCachedSessionSelection(
                 pendingApprovals: cached.pendingApprovals,
                 pendingUserInputs: cached.pendingUserInputs
             }
-        })
-
-        if (!threadChanged && session.activeThreadId === targetThreadId) return session
-        return {
-            ...session,
-            activeThreadId: targetThreadId,
-            threads: nextThreads
+            nextSession = { ...nextSession, threads }
         }
-    })
-
-    if (snapshot.selectedSessionId === sessionId && nextSessions === snapshot.sessions) {
-        return snapshot
     }
 
+    const sessionChanged = Boolean(session && nextSession && nextSession !== session)
+    if (snapshot.selectedSessionId === sessionId && !sessionChanged) return snapshot
+    if (!sessionChanged) return { ...snapshot, selectedSessionId: sessionId }
+
+    const sessions = snapshot.sessions.slice()
+    sessions[sessionIndex] = nextSession!
     return {
         ...snapshot,
         selectedSessionId: sessionId,
-        sessions: nextSessions
+        sessions
     }
 }
 

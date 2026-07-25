@@ -1,12 +1,12 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { ZYRA_WEB_FETCH_TOOL_NAME, ZYRA_WEB_SEARCH_TOOL_NAME } from "./tool-contracts.mjs";
 
 const DUCKDUCKGO_HTML_URL = "https://html.duckduckgo.com/html/";
 const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 8;
 
-export const ZYRA_WEB_SEARCH_TOOL_NAME = "web_search";
-export const ZYRA_WEB_FETCH_TOOL_NAME = "web_fetch";
+export { ZYRA_WEB_FETCH_TOOL_NAME, ZYRA_WEB_SEARCH_TOOL_NAME };
 
 export function createZyraWebSearchTool() {
   return defineTool({

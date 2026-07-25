@@ -28,6 +28,7 @@ export function FolderBrowseOverlays(input: {
     handleProjectRename: (project: Project) => Promise<void>
     loadingPreview: boolean
     onPreviewSaved: () => Promise<void>
+    onShowToast: (message: string, tone?: 'success' | 'info' | 'error') => void
     openPreview: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
     previewBytes?: number | null
     previewContent: string
@@ -90,6 +91,7 @@ export function FolderBrowseOverlays(input: {
         handleProjectRename,
         loadingPreview,
         onPreviewSaved,
+        onShowToast,
         openPreview,
         previewBytes,
         previewContent,
@@ -135,6 +137,7 @@ export function FolderBrowseOverlays(input: {
                     onOpenLinkedPreview={openPreview}
                     mediaItems={previewMediaItems}
                     onSaved={onPreviewSaved}
+                    onShowToast={onShowToast}
                     onClose={closePreview}
                 />
             )}
@@ -245,7 +248,7 @@ export function FolderBrowseOverlays(input: {
             {toast && (
                 <div
                     className={cn(
-                        'fixed bottom-4 right-4 z-[120] max-w-sm rounded-xl px-4 py-3 text-sm shadow-lg backdrop-blur-md transition-all duration-300',
+                        'fixed bottom-4 right-4 z-[120] w-[min(24rem,calc(100vw-2rem))] rounded-xl px-4 py-3 text-sm shadow-lg backdrop-blur-md transition-all duration-300',
                         toast.tone === 'error'
                             ? 'border border-red-500/30 bg-red-500/10 text-red-200'
                             : toast.tone === 'info'
@@ -254,9 +257,9 @@ export function FolderBrowseOverlays(input: {
                         toast.visible ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-4 opacity-0'
                     )}
                 >
-                    <div className="font-medium">{toast.message}</div>
+                    <div className="whitespace-pre-wrap break-words font-medium [overflow-wrap:anywhere]">{toast.message}</div>
                     {toast.detail && (
-                        <div className="mt-1 line-clamp-2 break-words text-xs opacity-75">{toast.detail}</div>
+                        <div className="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-xs opacity-75 [overflow-wrap:anywhere]">{toast.detail}</div>
                     )}
                     {typeof toast.progress === 'number' && (
                         <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/10">

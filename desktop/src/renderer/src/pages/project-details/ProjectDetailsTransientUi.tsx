@@ -44,6 +44,7 @@ export function ProjectDetailsTransientUi(props: ProjectDetailsTransientUiProps)
         reorderPreviewTabs,
         closePreview,
         onPreviewSaved,
+        onShowToast,
         toast,
         navigate,
         setToast
@@ -101,6 +102,7 @@ export function ProjectDetailsTransientUi(props: ProjectDetailsTransientUiProps)
                     onReorderPreviewTabs={reorderPreviewTabs}
                     mediaItems={previewMediaItems}
                     onSaved={onPreviewSaved}
+                    onShowToast={onShowToast}
                     onClose={closePreview}
                 />
             )}
@@ -108,7 +110,7 @@ export function ProjectDetailsTransientUi(props: ProjectDetailsTransientUiProps)
             {toast && (
                 <div
                     className={cn(
-                        'fixed bottom-4 right-4 z-[80] max-w-sm rounded-xl px-4 py-3 text-sm shadow-lg backdrop-blur-md transition-all duration-300',
+                        'fixed bottom-4 right-4 z-[80] w-[min(24rem,calc(100vw-2rem))] rounded-xl px-4 py-3 text-sm shadow-lg backdrop-blur-md transition-all duration-300',
                         toast.tone === 'error'
                             ? 'border border-red-500/30 bg-red-500/10 text-red-200'
                             : toast.tone === 'success'
@@ -117,10 +119,10 @@ export function ProjectDetailsTransientUi(props: ProjectDetailsTransientUiProps)
                         toast.visible ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0 pointer-events-none'
                     )}
                 >
-                    <div className="flex items-start gap-2">
+                    <div className="flex min-w-0 items-start gap-2">
                         <AlertCircle size={16} className="mt-0.5 shrink-0" />
-                        <div className="flex flex-col gap-1">
-                            <span>{toast.message}</span>
+                        <div className="flex min-w-0 flex-col gap-1">
+                            <span className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{toast.message}</span>
                             {toast.actionTo && toast.actionLabel && (
                                 <button
                                     onClick={() => {

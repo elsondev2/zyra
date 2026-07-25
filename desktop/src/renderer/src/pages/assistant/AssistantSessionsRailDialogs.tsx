@@ -208,11 +208,12 @@ export function PlaygroundLabModal(props: {
 export function RenameSessionModal(props: {
     renameTarget: AssistantSession | null
     renameDraft: string
+    saving?: boolean
     onChangeDraft: (value: string) => void
     onClose: () => void
     onSubmit: () => void
 }) {
-    const { renameTarget, renameDraft, onChangeDraft, onClose, onSubmit } = props
+    const { renameTarget, renameDraft, saving = false, onChangeDraft, onClose, onSubmit } = props
     if (!renameTarget || typeof document === 'undefined') return null
 
     return createPortal(
@@ -225,6 +226,7 @@ export function RenameSessionModal(props: {
                         <input
                             autoFocus
                             value={renameDraft}
+                            disabled={saving}
                             onChange={(event) => onChangeDraft(event.target.value)}
                             onKeyDown={(event) => {
                                 if (event.key === 'Enter') {
@@ -241,19 +243,19 @@ export function RenameSessionModal(props: {
                         />
                     </div>
                     <div className="mt-4 flex items-center justify-end gap-2">
-                        <button type="button" onClick={onClose} className="rounded-lg px-3 py-2 text-sm text-sparkle-text-secondary transition-colors hover:bg-white/[0.04] hover:text-sparkle-text">Cancel</button>
+                        <button type="button" onClick={onClose} disabled={saving} className="rounded-lg px-3 py-2 text-sm text-sparkle-text-secondary transition-colors hover:bg-white/[0.04] hover:text-sparkle-text disabled:cursor-not-allowed disabled:opacity-50">Cancel</button>
                         <button
                             type="button"
                             onClick={onSubmit}
-                            disabled={!renameDraft.trim()}
+                            disabled={saving || !renameDraft.trim()}
                             className={cn(
                                 'rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-                                renameDraft.trim()
+                                !saving && renameDraft.trim()
                                     ? 'bg-[var(--accent-primary)] text-white hover:bg-[var(--accent-primary)]/90'
                                     : 'cursor-not-allowed bg-white/[0.04] text-sparkle-text-muted/45'
                             )}
                         >
-                            Save
+                            {saving ? 'Saving...' : 'Save'}
                         </button>
                     </div>
                 </div>

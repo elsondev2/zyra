@@ -11,17 +11,24 @@ import type {
     AssistantDeleteMessageInput,
     AssistantDeletePlaygroundLabInput,
     AssistantDomainEvent,
+    AssistantGetHistoryPageInput,
     AssistantGetSessionTurnUsageInput,
     AssistantRuntimeStatus,
     AssistantSendPromptOptions,
     AssistantSession,
+    AssistantStartRealtimeVoiceInput,
     AssistantThread
 } from '../../shared/assistant/contracts'
+import { isAssistantToolLifecycleStartEvent } from '../../shared/assistant/tool-lifecycle'
 import { AssistantTextDeltaBuffer } from './assistant-text-delta-buffer'
+import { AssistantActivityDeltaBuffer } from './assistant-activity-delta-buffer'
+import { CodexRealtimeVoiceRuntime } from './codex-realtime-voice'
 import { ZyraPiRuntime } from './zyra-pi-runtime'
 import { nowIso } from './utils'
 import type { AssistantServiceActionDeps } from './service-action-deps'
 import { AssistantPersistence } from './persistence'
+import { toAssistantShellSnapshot } from './persistence-snapshot'
+import { queueGeneratedSessionTitle, shouldGenerateSessionTitleForPrompt } from './session-title-generation'
 import { applyDomainEvent, createDefaultSnapshot } from './projector'
 import { approvePendingPlaygroundLabRequestAction, attachSessionToPlaygroundLabAction, createPlaygroundLabAction, declinePendingPlaygroundLabRequestAction, deletePlaygroundLabAction, setPlaygroundRootAction } from './service-playground-actions'
 import {
@@ -46,11 +53,16 @@ import {
 } from './service-session-actions'
 import {
     broadcastAssistantPayload,
+    broadcastAssistantRealtimeVoiceEvent,
     createAssistantDomainEvent,
     trimAssistantEvents,
     updateLatestTurnAssistantMessage
 } from './service-helpers'
-import { handleAssistantRuntimeEvent } from './service-runtime-events'
+import {
+    buildInternalTextActivity,
+    buildStreamingToolActivity,
+    handleAssistantRuntimeEvent
+} from './service-runtime-events'
 import {
     type AssistantStateRecord,
     findSessionByThreadId,
@@ -64,9 +76,11 @@ import {
 export class AssistantService {
     private static readonly MAX_IN_MEMORY_EVENTS = 256
     private static readonly ASSISTANT_TEXT_DELTA_FLUSH_MS = 40
+    private static readonly ASSISTANT_ACTIVITY_DELTA_FLUSH_MS = 48
     private static readonly ASSISTANT_EVENT_BROADCAST_BATCH_MS = 16
 
     private readonly runtime = new ZyraPiRuntime()
+    private readonly realtimeVoiceRuntime = new CodexRealtimeVoiceRuntime()
     private readonly persistence = new AssistantPersistence()
     private readonly assistantTextDeltaBuffer = new AssistantTextDeltaBuffer({
         flushDelayMs: AssistantService.ASSISTANT_TEXT_DELTA_FLUSH_MS,
@@ -79,7 +93,40 @@ export class AssistantService {
             }, entry.sessionId, entry.threadId)
         }
     })
+    private readonly assistantActivityDeltaBuffer = new AssistantActivityDeltaBuffer({
+        flushDelayMs: AssistantService.ASSISTANT_ACTIVITY_DELTA_FLUSH_MS,
+        onFlush: (entry) => {
+            const threadRecord = findThreadRecord(this.state.snapshot, entry.threadId)
+            if (!threadRecord) return
+            const existing = threadRecord.thread.activities.find((activity) => activity.id === entry.activityId) || null
+            const activity = entry.streamKind === 'reasoning_text' || entry.streamKind === 'reasoning_summary_text'
+                ? buildInternalTextActivity({
+                    existing,
+                    activityId: entry.activityId,
+                    text: entry.delta,
+                    turnId: entry.turnId,
+                    itemId: entry.itemId,
+                    occurredAt: entry.occurredAt,
+                    status: 'streaming',
+                    streamKind: entry.streamKind
+                })
+                : buildStreamingToolActivity({
+                    existing,
+                    activityId: entry.activityId,
+                    kind: entry.streamKind === 'command_output' ? 'command' : 'file-change',
+                    delta: entry.delta,
+                    turnId: entry.turnId,
+                    itemId: entry.itemId,
+                    occurredAt: entry.occurredAt
+                })
+            this.appendEvent('thread.activity.appended', entry.occurredAt, {
+                threadId: entry.threadId,
+                activity
+            }, entry.sessionId, entry.threadId)
+        }
+    })
     private readonly subscribers = new Set<number>()
+    private readonly realtimeVoiceSubscribers = new Set<number>()
     private readonly planBuffers = new Map<string, string>()
     private readonly assistantTextBuffers = new Map<string, string>()
     private readonly suppressedAssistantTextTurns = new Set<string>()
@@ -102,6 +149,7 @@ export class AssistantService {
             hydrateSelectedSession: async (sessionId: string) => {
                 this.state.snapshot = await this.persistence.hydrateSelectedSession(this.state.snapshot, sessionId)
             },
+            getFirstUserMessageText: (sessionId: string) => this.persistence.readFirstUserMessageText(sessionId),
             appendEvent: (type, occurredAt, payload, sessionId, threadId) => {
                 this.appendEvent(type, occurredAt, payload, sessionId, threadId)
             },
@@ -116,6 +164,12 @@ export class AssistantService {
         this.runtime.on('runtime', (event) => {
             this.handleRuntimeEvent(event)
         })
+        this.realtimeVoiceRuntime.on('event', (event) => {
+            broadcastAssistantRealtimeVoiceEvent(this.realtimeVoiceSubscribers, event)
+        })
+        void this.readyPromise
+            .then(() => this.recoverSelectedSessionTitle())
+            .catch((error) => log.warn('[Assistant] Failed to recover the selected chat title', error))
     }
 
     subscribe(senderId: number) {
@@ -128,16 +182,26 @@ export class AssistantService {
         return { success: true as const }
     }
 
+    subscribeRealtimeVoice(senderId: number) {
+        this.realtimeVoiceSubscribers.add(senderId)
+        return { success: true as const }
+    }
+
+    unsubscribeRealtimeVoice(senderId: number) {
+        this.realtimeVoiceSubscribers.delete(senderId)
+        return { success: true as const }
+    }
+
     async getSnapshot() {
         await this.ensureReady()
-        return structuredClone(this.state.snapshot)
+        return toAssistantShellSnapshot(this.state.snapshot)
     }
 
     async getBootstrap() {
         await this.ensureReady()
         const status = await this.getStatus()
         return {
-            snapshot: structuredClone(this.state.snapshot),
+            snapshot: toAssistantShellSnapshot(this.state.snapshot),
             status
         }
     }
@@ -201,15 +265,40 @@ export class AssistantService {
         return selectAssistantThreadAction(this.actionDeps, sessionId, threadId)
     }
 
-    async hydrateSession(sessionId: string) {
+    async getThreadDetailBootstrap(threadId: string) {
         await this.ensureReady()
-        requireSession(this.state.snapshot, sessionId)
-        this.state.snapshot = await this.persistence.hydrateSelectedSession(this.state.snapshot, sessionId)
+        const localThreadId = requireThread(this.state.snapshot, threadId).id
         return {
             success: true as const,
-            sessionId,
-            snapshot: structuredClone(this.state.snapshot)
+            detail: await this.persistence.readThreadDetail(localThreadId)
         }
+    }
+
+    async getHistoryPage(input: AssistantGetHistoryPageInput) {
+        await this.ensureReady()
+        const localThreadId = requireThread(this.state.snapshot, input.threadId).id
+        return {
+            success: true as const,
+            page: await this.persistence.readHistoryPage({ ...input, threadId: localThreadId })
+        }
+    }
+
+    async getReviewIndex(threadId: string) {
+        await this.ensureReady()
+        const localThreadId = requireThread(this.state.snapshot, threadId).id
+        return { success: true as const, index: await this.persistence.readReviewIndex(localThreadId) }
+    }
+
+    async searchTurns(threadId: string, query: string, limit?: number) {
+        await this.ensureReady()
+        const localThreadId = requireThread(this.state.snapshot, threadId).id
+        return { success: true as const, result: await this.persistence.searchTurns(localThreadId, query, limit) }
+    }
+
+    async getTurnDetail(threadId: string, turnId: string) {
+        await this.ensureReady()
+        const localThreadId = requireThread(this.state.snapshot, threadId).id
+        return { success: true as const, detail: await this.persistence.readTurnDetail(localThreadId, turnId) }
     }
 
     async renameSession(sessionId: string, title: string) {
@@ -229,6 +318,11 @@ export class AssistantService {
     }
 
     async deleteMessage(input: AssistantDeleteMessageInput) {
+        await this.ensureReady()
+        const sessionId = input.sessionId || this.state.snapshot.selectedSessionId
+        if (!sessionId) throw new Error('Assistant session not found.')
+        // Deletion planning must see persisted history even when the renderer has only a page loaded.
+        this.state.snapshot = await this.persistence.hydrateSelectedSession(this.state.snapshot, sessionId)
         return deleteAssistantMessageAction(this.actionDeps, input)
     }
 
@@ -272,6 +366,24 @@ export class AssistantService {
         return respondAssistantUserInputAction(this.actionDeps, input)
     }
 
+    async startRealtimeVoice(input: AssistantStartRealtimeVoiceInput) {
+        await this.ensureReady()
+        const session = getSelectedSession(this.state.snapshot)
+        const thread = getActiveThread(session)
+        const cwd = session && thread ? this.getSessionRuntimeCwd(session, thread) : process.cwd()
+        const result = await this.realtimeVoiceRuntime.start({
+            cwd,
+            sdp: input.sdp,
+            instructions: input.instructions
+        })
+        return { success: true as const, ...result }
+    }
+
+    async stopRealtimeVoice() {
+        await this.realtimeVoiceRuntime.stop()
+        return { success: true as const }
+    }
+
     async approvePendingPlaygroundLabRequest(input: AssistantApprovePendingPlaygroundLabRequestInput) {
         return approvePendingPlaygroundLabRequestAction(this.actionDeps, input)
     }
@@ -282,6 +394,8 @@ export class AssistantService {
 
     dispose() {
         this.assistantTextDeltaBuffer.dispose()
+        this.assistantActivityDeltaBuffer.dispose()
+        this.realtimeVoiceRuntime.dispose()
         this.runtime.dispose()
         void this.persistence.flush()
     }
@@ -294,6 +408,31 @@ export class AssistantService {
         }
         void this.runtime.prewarm(false).catch((error) => {
             log.warn('[Assistant] Zyra runtime prewarm failed', error)
+        })
+    }
+
+    private async recoverSelectedSessionTitle(): Promise<void> {
+        const session = getSelectedSession(this.state.snapshot)
+        const thread = getActiveThread(session)
+        if (!session || !thread) return
+
+        const firstUserMessage = await this.persistence.readFirstUserMessageText(session.id)
+        if (!shouldGenerateSessionTitleForPrompt(session, firstUserMessage)) return
+        const latestUserMessage = await this.persistence.readLatestUserMessageText(session.id)
+        if (!latestUserMessage) return
+
+        await queueGeneratedSessionTitle({
+            sessionId: session.id,
+            threadId: thread.id,
+            messageText: latestUserMessage,
+            seedTitle: session.title,
+            cwd: this.getSessionRuntimeCwd(session, thread),
+            preferredModel: thread.model || null,
+            generateText: (titlePrompt, titleOptions) => this.runtime.generateText(titlePrompt, titleOptions),
+            getSnapshot: () => this.state.snapshot,
+            appendEvent: (type, occurredAt, payload, sessionId, threadId) => {
+                this.appendEvent(type, occurredAt, payload, sessionId, threadId)
+            }
         })
     }
 
@@ -325,6 +464,14 @@ export class AssistantService {
 
     private queueBroadcastEvent(event: AssistantDomainEvent): void {
         this.pendingBroadcastEvents.push(event)
+        if (isAssistantToolLifecycleStartEvent(event)) {
+            if (this.pendingBroadcastTimer) {
+                clearTimeout(this.pendingBroadcastTimer)
+                this.pendingBroadcastTimer = null
+            }
+            this.flushBroadcastEvents()
+            return
+        }
         if (this.pendingBroadcastTimer) return
 
         this.pendingBroadcastTimer = setTimeout(() => {
@@ -341,6 +488,9 @@ export class AssistantService {
     }
 
     private handleRuntimeEvent(event: Parameters<typeof handleAssistantRuntimeEvent>[0]) {
+        if (event.type === 'turn.started') {
+            this.persistence.setStreamingActive(event.threadId, true)
+        }
         handleAssistantRuntimeEvent(event, {
             planBuffers: this.planBuffers,
             assistantTextBuffers: this.assistantTextBuffers,
@@ -350,6 +500,8 @@ export class AssistantService {
             findThreadRecord: (threadId) => findThreadRecord(this.state.snapshot, threadId),
             queueAssistantTextDelta: (entry) => this.assistantTextDeltaBuffer.queue(entry),
             flushAssistantTextDelta: (target) => this.assistantTextDeltaBuffer.flush(target),
+            queueAssistantActivityDelta: (entry) => this.assistantActivityDeltaBuffer.queue(entry),
+            flushAssistantActivityDelta: (target) => this.assistantActivityDeltaBuffer.flush(target),
             appendEvent: (type, occurredAt, payload, sessionId, threadId) => this.appendEvent(type, occurredAt, payload, sessionId, threadId),
             updateLatestTurnAssistantMessage: (sessionId, threadId, assistantMessageId, occurredAt) => {
                 updateLatestTurnAssistantMessage(this.state.snapshot, sessionId, threadId, assistantMessageId, occurredAt, (type, eventOccurredAt, payload, eventSessionId, eventThreadId) => {
@@ -357,6 +509,13 @@ export class AssistantService {
                 })
             }
         })
+
+        if (
+            event.type === 'turn.completed'
+            || (event.type === 'session.state.changed' && !['starting', 'running', 'waiting'].includes(event.payload.state))
+        ) {
+            this.persistence.setStreamingActive(event.threadId, false)
+        }
 
         if (event.type !== 'turn.completed') return
 

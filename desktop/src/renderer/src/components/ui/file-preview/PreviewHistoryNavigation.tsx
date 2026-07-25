@@ -1,0 +1,48 @@
+import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { cn } from '@/lib/utils'
+
+export function PreviewHistoryNavigation({
+    canGoBack,
+    canGoForward,
+    onBack,
+    onForward,
+    expanded = false
+}: {
+    canGoBack: boolean
+    canGoForward: boolean
+    onBack: () => void
+    onForward: () => void
+    expanded?: boolean
+}) {
+    const buttonClass = 'inline-flex h-6 w-6 items-center justify-center rounded-md text-white/55 transition-colors hover:bg-white/[0.07] hover:text-white disabled:cursor-default disabled:text-white/18 disabled:hover:bg-transparent'
+
+    return (
+        <div className={cn(
+            'flex shrink-0 items-center gap-0.5',
+            expanded
+                ? 'h-full border-r border-white/[0.08] bg-sparkle-bg px-1'
+                : 'px-0.5'
+        )} aria-label="File preview history">
+            <button
+                type="button"
+                onClick={onBack}
+                disabled={!canGoBack}
+                className={buttonClass}
+                title={canGoBack ? 'Back to previous file' : 'No previous file'}
+                aria-label="Back to previous file"
+            >
+                <ChevronLeft size={15} />
+            </button>
+            <button
+                type="button"
+                onClick={onForward}
+                disabled={!canGoForward}
+                className={buttonClass}
+                title={canGoForward ? 'Forward to next file' : 'No next file'}
+                aria-label="Forward to next file"
+            >
+                <ChevronRight size={15} />
+            </button>
+        </div>
+    )
+}

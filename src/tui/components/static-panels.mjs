@@ -98,10 +98,10 @@ export function sessionInfoPanel(info = {}, theme = fallbackTheme) {
   const cost = info.cost ?? {};
   return new LinesPanelComponent(`session-${Date.now()}`, [
     "",
-    `${bold}${theme.primary}Session Info${reset}`,
+    `${bold}${theme.primary}Thread Info${reset}`,
     "",
     ` ${theme.warning}File:${reset} ${theme.muted}${info.file ?? "in-memory"}${reset}`,
-    ` ${theme.warning}ID:${reset} ${theme.muted}${info.id ?? "none"}${reset}`,
+    ` ${theme.warning}ID:${reset} ${theme.muted}${info.threadId ?? info.id ?? "none"}${reset}`,
     "",
     `${bold} Messages${reset}`,
     ` User: ${formatCount(messages.user)}`,

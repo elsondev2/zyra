@@ -6,14 +6,14 @@ import {
     parseSerializedAssistantMessage,
     type SerializedAssistantAttachment
 } from '../../shared/assistant/message-attachments'
-import { generateCodexText } from '../ai/codex'
-import { isDefaultSessionTitle, nowIso } from './utils'
+import { deriveSessionTitleFromPrompt, isDefaultSessionTitle, nowIso } from './utils'
 
 const SESSION_TITLE_MAX_LENGTH = 60
-const DEFAULT_TITLE_GENERATION_MODEL = 'gpt-5.4-mini'
+const TITLE_GENERATION_FALLBACK_MODEL = 'openai-codex/gpt-5.4-mini'
 const ATTACHMENT_EXCERPT_LIMIT = 240
 const BODY_EXCERPT_LIMIT = 720
 const ATTACHMENT_LIMIT = 4
+const pendingTitleGenerationSessionIds = new Set<string>()
 
 type AppendEvent = (
     type: AssistantDomainEvent['type'],
@@ -104,7 +104,7 @@ function buildSessionTitlePrompt(messageText: string, seedTitle: string): string
         '',
         `Current heuristic title: ${seedTitle}`,
         '',
-        'First user message:',
+        'User request to title:',
         body || '(no message body)',
         '',
         'Attachment context:',
@@ -120,29 +120,48 @@ function shouldApplyGeneratedTitle(session: AssistantSession | null, seedTitle: 
     return currentTitle === seedTitle.trim()
 }
 
-function hasExistingSessionHistory(session: AssistantSession): boolean {
-    return session.threads.some((thread) => (
-        Number(thread.messageCount || 0) > 0
-        || thread.messages.some((message) => message.role === 'user' && String(message.text || '').trim().length > 0)
-    ))
+export type AssistantTitleTextGenerator = (
+    prompt: string,
+    options: { cwd: string; model?: string; effort?: 'low' }
+) => Promise<{ success: boolean; text?: string; model?: string; error?: string }>
+
+function normalizeTitleModel(model?: string | null): string | null {
+    const normalized = String(model || '').trim()
+    if (!normalized) return null
+    if (normalized.includes('/')) return normalized
+    if (normalized.startsWith('gpt-') || normalized.startsWith('o')) return `openai-codex/${normalized}`
+    return normalized
 }
 
-function getTitleGenerationModelCandidates(_preferredModel?: string | null): string[] {
-    return [DEFAULT_TITLE_GENERATION_MODEL]
+export function getTitleGenerationModelCandidates(preferredModel?: string | null): string[] {
+    return [...new Set([
+        normalizeTitleModel(preferredModel),
+        TITLE_GENERATION_FALLBACK_MODEL
+    ].filter((model): model is string => Boolean(model)))]
+}
+
+function firstUserMessageText(session: AssistantSession): string | null {
+    const messages = session.threads
+        .flatMap((thread) => thread.messages)
+        .filter((message) => message.role === 'user' && String(message.text || '').trim().length > 0)
+        .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
+    return messages[0]?.text || null
 }
 
 async function generateSessionTitleText(args: {
     prompt: string
     cwd: string
     preferredModel?: string | null
+    generateText: AssistantTitleTextGenerator
 }): Promise<string | null> {
     const modelCandidates = getTitleGenerationModelCandidates(args.preferredModel)
     let lastError: string | null = null
 
     for (const model of modelCandidates) {
-        const result = await generateCodexText(args.prompt, {
+        const result = await args.generateText(args.prompt, {
             cwd: args.cwd,
-            model
+            model,
+            effort: 'low'
         })
         if (result.success && result.text) {
             return result.text
@@ -156,9 +175,12 @@ async function generateSessionTitleText(args: {
     return null
 }
 
-export function shouldGenerateSessionTitleForPrompt(session: AssistantSession): boolean {
-    if (!isDefaultSessionTitle(session.title)) return false
-    return !hasExistingSessionHistory(session)
+export function shouldGenerateSessionTitleForPrompt(session: AssistantSession, persistedFirstUserMessage?: string | null): boolean {
+    if (isDefaultSessionTitle(session.title)) return true
+
+    const firstMessage = persistedFirstUserMessage || firstUserMessageText(session)
+    if (!firstMessage) return false
+    return session.title.trim() === deriveSessionTitleFromPrompt(firstMessage).trim()
 }
 
 export function queueGeneratedSessionTitle(args: {
@@ -168,15 +190,20 @@ export function queueGeneratedSessionTitle(args: {
     seedTitle: string
     cwd: string
     preferredModel?: string | null
+    generateText: AssistantTitleTextGenerator
     getSnapshot: () => { sessions: AssistantSession[] }
     appendEvent: AppendEvent
-}): void {
+}): Promise<void> {
+    if (pendingTitleGenerationSessionIds.has(args.sessionId)) return Promise.resolve()
+    pendingTitleGenerationSessionIds.add(args.sessionId)
+
     const prompt = buildSessionTitlePrompt(args.messageText, args.seedTitle)
-    void (async () => {
+    const task = (async () => {
         const generatedText = await generateSessionTitleText({
             prompt,
             cwd: args.cwd,
-            preferredModel: args.preferredModel
+            preferredModel: args.preferredModel,
+            generateText: args.generateText
         })
         if (!generatedText) return
 
@@ -194,7 +221,13 @@ export function queueGeneratedSessionTitle(args: {
                 updatedAt: occurredAt
             }
         }, args.sessionId, args.threadId)
-    })().catch((error) => {
+    })()
+    task.then(
+        () => pendingTitleGenerationSessionIds.delete(args.sessionId),
+        () => pendingTitleGenerationSessionIds.delete(args.sessionId)
+    )
+    task.catch((error) => {
         log.warn('[Assistant] Session title generation task failed:', error)
     })
+    return task
 }

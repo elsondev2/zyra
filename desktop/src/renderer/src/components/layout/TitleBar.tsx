@@ -171,6 +171,7 @@ export default function TitleBar() {
             { label: 'Reload UI', shortcut: 'Ctrl R', action: () => window.location.reload() }
         ],
         Help: [
+            { label: 'Instructor Voice Lab', action: () => navigate('/assistant/instructor') },
             { label: 'Open settings', action: () => navigate('/settings') },
             { label: 'Show command palette', shortcut: 'Ctrl K', action: commandPalette.open }
         ]
@@ -185,12 +186,7 @@ export default function TitleBar() {
                 <button
                     type="button"
                     onClick={handleToggleSidebar}
-                    className={cn(
-                        'inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-white/10',
-                        sidebarCollapsed
-                            ? 'text-[#918aa0] hover:bg-white/[0.035] hover:text-[#d7d0e3]'
-                            : 'bg-white/[0.055] text-[#d7d0e3] hover:bg-white/[0.075] hover:text-[#f0edf9]'
-                    )}
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[#918aa0] transition-colors hover:bg-white/[0.035] hover:text-[#d7d0e3] focus:outline-none focus-visible:ring-1 focus-visible:ring-white/10"
                     style={{ WebkitAppRegion: 'no-drag' } as any}
                     title={sidebarActionLabel}
                     aria-label={sidebarActionLabel}

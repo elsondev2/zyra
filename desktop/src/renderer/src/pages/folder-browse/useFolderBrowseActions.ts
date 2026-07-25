@@ -518,6 +518,7 @@ export function useFolderBrowseActions(input: {
         submitCloneRepo,
         submitRenameTarget,
         confirmDeleteTarget,
+        showToast,
         toast
     }
 }

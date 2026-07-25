@@ -3,6 +3,7 @@ import mermaid from 'mermaid'
 
 mermaid.initialize({
     startOnLoad: false,
+    securityLevel: 'strict',
     theme: 'base',
     themeVariables: {
         darkMode: true,
@@ -21,8 +22,33 @@ mermaid.initialize({
     }
 })
 
+const MAX_MERMAID_CACHE_ENTRIES = 80
+const MAX_MERMAID_CACHE_LENGTH = 2_000_000
 const mermaidSvgCache = new Map<string, string>()
 const mermaidRenderPromiseCache = new Map<string, Promise<string>>()
+let mermaidSvgCacheLength = 0
+
+function readCachedSvg(chart: string): string {
+    const cached = mermaidSvgCache.get(chart) || ''
+    if (!cached) return ''
+    mermaidSvgCache.delete(chart)
+    mermaidSvgCache.set(chart, cached)
+    return cached
+}
+
+function retainCachedSvg(chart: string, svg: string): void {
+    const previous = mermaidSvgCache.get(chart)
+    if (previous) mermaidSvgCacheLength -= previous.length
+    mermaidSvgCache.delete(chart)
+    mermaidSvgCache.set(chart, svg)
+    mermaidSvgCacheLength += svg.length
+    while (mermaidSvgCache.size > MAX_MERMAID_CACHE_ENTRIES || mermaidSvgCacheLength > MAX_MERMAID_CACHE_LENGTH) {
+        const oldest = mermaidSvgCache.entries().next().value as [string, string] | undefined
+        if (!oldest) break
+        mermaidSvgCache.delete(oldest[0])
+        mermaidSvgCacheLength -= oldest[1].length
+    }
+}
 
 function hashString(input: string): string {
     let hash = 0
@@ -35,11 +61,11 @@ function hashString(input: string): string {
 
 export const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }) {
     const containerRef = useRef<HTMLDivElement | null>(null)
-    const [svg, setSvg] = useState<string>(() => mermaidSvgCache.get(chart) || '')
+    const [svg, setSvg] = useState<string>(() => readCachedSvg(chart))
     const [error, setError] = useState('')
 
     useEffect(() => {
-        const cachedSvg = mermaidSvgCache.get(chart)
+        const cachedSvg = readCachedSvg(chart)
         setSvg((previous) => (previous === (cachedSvg || '') ? previous : (cachedSvg || '')))
         setError((previous) => (previous ? '' : previous))
 
@@ -55,7 +81,7 @@ export const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: s
 
             const renderPromise = mermaid.render(`mermaid-${hashString(chart)}`, chart)
                 .then(({ svg: renderedSvg }) => {
-                    mermaidSvgCache.set(chart, renderedSvg)
+                    retainCachedSvg(chart, renderedSvg)
                     mermaidRenderPromiseCache.delete(chart)
                     return renderedSvg
                 })

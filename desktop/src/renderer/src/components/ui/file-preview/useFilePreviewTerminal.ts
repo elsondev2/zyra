@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Shell } from '@/lib/settings'
-import { Terminal as XtermTerminal } from 'xterm'
-import { FitAddon } from 'xterm-addon-fit'
-import { WebLinksAddon } from 'xterm-addon-web-links'
+import type { Terminal as XtermTerminal } from 'xterm'
+import type { FitAddon as XtermFitAddon } from 'xterm-addon-fit'
 import type { PreviewFile } from './types'
 import { createPreviewTerminalSessionId, mapTerminalStatusToState, PREVIEW_TERMINAL_MIN_HEIGHT, readCssVariable, TERMINAL_PANEL_ANIMATION_MS, type PreviewTerminalSessionItem, type PreviewTerminalState, type TerminalPanelPhase } from './modalShared'
+import { loadPreviewTerminalRuntime } from './previewTerminalRuntime'
 
 type UseFilePreviewTerminalParams = {
     canUsePreviewTerminal: boolean; file: PreviewFile; projectPath?: string; defaultShell: Shell; accentColorPrimary?: string; themeKey?: string; initialHeight: number; persistHeight: (height: number) => void
@@ -39,7 +39,7 @@ export function useFilePreviewTerminal({
     const terminalHostRef = useRef<HTMLDivElement | null>(null)
     const terminalMountedHostRef = useRef<HTMLDivElement | null>(null)
     const xtermRef = useRef<XtermTerminal | null>(null)
-    const fitAddonRef = useRef<FitAddon | null>(null)
+    const fitAddonRef = useRef<XtermFitAddon | null>(null)
     const terminalHydratedSessionIdRef = useRef('')
     const terminalSessionIdRef = useRef(terminalSessionId)
     useEffect(() => {
@@ -216,7 +216,14 @@ export function useFilePreviewTerminal({
     }, [])
 
     const clearTerminalOutput = useCallback(() => {
+        const activeSessionId = terminalSessionIdRef.current
         xtermRef.current?.clear()
+        setTerminalSessions((current) => current.map((session) => (
+            session.sessionId === activeSessionId ? { ...session, recentOutput: '' } : session
+        )))
+        if (activeSessionId) {
+            void window.devscope.clearPreviewTerminal(activeSessionId).catch(() => undefined)
+        }
     }, [])
 
     const focusTerminal = useCallback(() => {
@@ -273,79 +280,100 @@ export function useFilePreviewTerminal({
         }
         const host = terminalHostRef.current
         if (!host) return
-        let terminal = xtermRef.current
-        let fitAddon = fitAddonRef.current
-        if (terminal && terminalMountedHostRef.current && terminalMountedHostRef.current !== host) {
-            disposePreviewTerminal()
-            terminal = null
-            fitAddon = null
-        }
-        if (!terminal || !fitAddon) {
-            terminal = new XtermTerminal({
-                cursorBlink: true,
-                fontFamily: 'Consolas, "Cascadia Code", monospace',
-                fontSize: Math.max(11, Number.parseInt(readCssVariable('--terminal-font-size', '14'), 10) || 14),
-                convertEol: true,
-                scrollback: 5000,
-                allowProposedApi: true,
-                theme: terminalTheme
-            })
-            fitAddon = new FitAddon()
-            terminal.loadAddon(fitAddon)
-            terminal.loadAddon(new WebLinksAddon())
-            terminal.open(host)
-            terminal.focus()
-            terminalMountedHostRef.current = host
-            xtermRef.current = terminal
-            fitAddonRef.current = fitAddon
-            terminal.onData((data) => {
-                void window.devscope.writePreviewTerminal({ sessionId: terminalSessionIdRef.current, data }).catch(() => undefined)
-            })
-            terminal.onTitleChange((title) => {
-                const normalizedTitle = String(title || '').trim()
-                const activeSessionId = terminalSessionIdRef.current
-                if (!normalizedTitle || !activeSessionId) return
-                void window.devscope.setPreviewTerminalTitle({
-                    sessionId: activeSessionId,
-                    title: normalizedTitle
-                }).catch(() => undefined)
-            })
+
+        let disposed = false
+        let resizeObserver: ResizeObserver | null = null
+        let syncTerminalSize: (() => void) | null = null
+        let initialSyncTimer = 0
+        let retrySyncTimer = 0
+        let settleSyncTimer = 0
+
+        const mountTerminal = async () => {
+            try {
+                const runtime = await loadPreviewTerminalRuntime()
+                if (disposed || terminalHostRef.current !== host) return
+
+                let terminal = xtermRef.current
+                let fitAddon = fitAddonRef.current
+                if (terminal && terminalMountedHostRef.current && terminalMountedHostRef.current !== host) {
+                    disposePreviewTerminal()
+                    terminal = null
+                    fitAddon = null
+                }
+                if (!terminal || !fitAddon) {
+                    terminal = new runtime.Terminal({
+                        cursorBlink: true,
+                        fontFamily: 'Consolas, "Cascadia Code", monospace',
+                        fontSize: Math.max(11, Number.parseInt(readCssVariable('--terminal-font-size', '14'), 10) || 14),
+                        convertEol: true,
+                        scrollback: 5000,
+                        allowProposedApi: true,
+                        theme: terminalTheme
+                    })
+                    fitAddon = new runtime.FitAddon()
+                    terminal.loadAddon(fitAddon)
+                    terminal.loadAddon(new runtime.WebLinksAddon())
+                    terminal.open(host)
+                    terminal.focus()
+                    terminalMountedHostRef.current = host
+                    xtermRef.current = terminal
+                    fitAddonRef.current = fitAddon
+                    terminal.onData((data) => {
+                        void window.devscope.writePreviewTerminal({ sessionId: terminalSessionIdRef.current, data }).catch(() => undefined)
+                    })
+                    terminal.onTitleChange((title) => {
+                        const normalizedTitle = String(title || '').trim()
+                        const activeSessionId = terminalSessionIdRef.current
+                        if (!normalizedTitle || !activeSessionId) return
+                        void window.devscope.setPreviewTerminalTitle({
+                            sessionId: activeSessionId,
+                            title: normalizedTitle
+                        }).catch(() => undefined)
+                    })
+                }
+
+                if (terminalHydratedSessionIdRef.current !== currentTerminalSession.sessionId) {
+                    terminal.clear()
+                    if (currentTerminalSession.recentOutput) terminal.write(currentTerminalSession.recentOutput)
+                    terminalHydratedSessionIdRef.current = currentTerminalSession.sessionId
+                    window.requestAnimationFrame(() => {
+                        const activeTerminal = xtermRef.current
+                        if (!activeTerminal) return
+                        activeTerminal.refresh(0, Math.max(0, activeTerminal.rows - 1))
+                    })
+                }
+
+                syncTerminalSize = () => {
+                    const activeFitAddon = fitAddonRef.current
+                    if (!activeFitAddon) return
+                    activeFitAddon.fit()
+                    const dimensions = activeFitAddon.proposeDimensions?.()
+                    if (!dimensions) return
+                    void window.devscope.resizePreviewTerminal({
+                        sessionId: terminalSessionIdRef.current,
+                        cols: dimensions.cols,
+                        rows: dimensions.rows
+                    }).catch(() => undefined)
+                }
+
+                resizeObserver = new ResizeObserver(syncTerminalSize)
+                resizeObserver.observe(host)
+                window.addEventListener('resize', syncTerminalSize)
+                initialSyncTimer = window.setTimeout(syncTerminalSize, 0)
+                retrySyncTimer = window.setTimeout(syncTerminalSize, 96)
+                settleSyncTimer = window.setTimeout(syncTerminalSize, TERMINAL_PANEL_ANIMATION_MS + 40)
+            } catch (error) {
+                if (disposed) return
+                setTerminalState('error')
+                setTerminalError(error instanceof Error ? error.message : 'Failed to load terminal preview.')
+            }
         }
 
-        if (terminalHydratedSessionIdRef.current !== currentTerminalSession.sessionId) {
-            terminal.clear()
-            if (currentTerminalSession.recentOutput) terminal.write(currentTerminalSession.recentOutput)
-            terminalHydratedSessionIdRef.current = currentTerminalSession.sessionId
-            window.requestAnimationFrame(() => {
-                const activeTerminal = xtermRef.current
-                if (!activeTerminal) return
-                activeTerminal.refresh(0, Math.max(0, activeTerminal.rows - 1))
-            })
-        }
-
-        const syncTerminalSize = () => {
-            const activeFitAddon = fitAddonRef.current
-            if (!activeFitAddon) return
-            activeFitAddon.fit()
-            const dimensions = activeFitAddon.proposeDimensions?.()
-            if (!dimensions) return
-            void window.devscope.resizePreviewTerminal({
-                sessionId: terminalSessionIdRef.current,
-                cols: dimensions.cols,
-                rows: dimensions.rows
-            }).catch(() => undefined)
-        }
-
-        const resizeObserver = new ResizeObserver(syncTerminalSize)
-        resizeObserver.observe(host)
-        window.addEventListener('resize', syncTerminalSize)
-        const initialSyncTimer = window.setTimeout(syncTerminalSize, 0)
-        const retrySyncTimer = window.setTimeout(syncTerminalSize, 96)
-        const settleSyncTimer = window.setTimeout(syncTerminalSize, TERMINAL_PANEL_ANIMATION_MS + 40)
-
+        void mountTerminal()
         return () => {
-            resizeObserver.disconnect()
-            window.removeEventListener('resize', syncTerminalSize)
+            disposed = true
+            resizeObserver?.disconnect()
+            if (syncTerminalSize) window.removeEventListener('resize', syncTerminalSize)
             window.clearTimeout(initialSyncTimer)
             window.clearTimeout(retrySyncTimer)
             window.clearTimeout(settleSyncTimer)
@@ -375,6 +403,15 @@ export function useFilePreviewTerminal({
                     }
                 }))
                 if (eventPayload.sessionId === terminalSessionIdRef.current) xtermRef.current?.write(outputChunk)
+                return
+            }
+            if (eventPayload.type === 'clear') {
+                setTerminalSessions((current) => current.map((session) => (
+                    session.sessionId === eventPayload.sessionId
+                        ? { ...session, recentOutput: '', lastActivityAt: Date.now() }
+                        : session
+                )))
+                if (eventPayload.sessionId === terminalSessionIdRef.current) xtermRef.current?.clear()
                 return
             }
             if (eventPayload.type === 'title') {

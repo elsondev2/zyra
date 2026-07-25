@@ -17,8 +17,19 @@ import type {
     AssistantThread,
     AssistantTurnUsage
 } from '../../shared/assistant/contracts'
+import { parseAgentSurfaceDescriptor, sanitizeFileChangeRawPayload } from '../../shared/assistant/contracts'
 import { getAssistantModelReasoningEfforts, isAssistantReasoningEffort } from '../../shared/assistant/reasoning-efforts'
+import { analyzeAssistantReadResult } from '../../shared/assistant/read-activity'
 import { resolveZyraRoot } from '../zyra/zyra-root'
+import type { PreparedAssistantPromptImage } from './prompt-images'
+import { getAssistantCanonicalThreadId } from './thread-identity'
+
+type ActiveCompactionLifecycle = {
+    activityId: string
+    startedAt: string
+    reason: string
+    turnId: string | null
+}
 
 type ZyraSessionContext = {
     localThreadId: string
@@ -44,6 +55,7 @@ type ZyraSessionContext = {
     assistantCompletedItemIds: Set<string>
     internalTextByItemId: Map<string, string>
     internalCompletedItemIds: Set<string>
+    activeCompaction: ActiveCompactionLifecycle | null
     lastAssistantItemId: string | null
     lastUsage: AssistantTurnUsage | null
 }
@@ -704,7 +716,7 @@ function classifyZyraToolActivity(input: {
             summary: running ? 'Editing files' : failed ? 'File edit failed' : (paths.length > 1 ? 'Edited files' : 'Edited file'),
             detail: paths.length > 0 ? paths.join('\n') : firstToolString(args, ['path', 'filePath', 'file_path']) || output || toolName,
             data: {
-                ...baseData,
+                ...sanitizeFileChangeRawPayload(baseData),
                 category: 'file-change',
                 paths,
                 createdPaths: paths.filter((entry) => /\b(create|write)\b/i.test(toolName)),
@@ -993,6 +1005,43 @@ export class ZyraPiRuntime extends EventEmitter {
         return this.ensureWarmWorker(resolveZyraRoot(), forceRefresh)
     }
 
+    async generateText(
+        prompt: string,
+        options: { cwd: string; model?: string; effort?: 'low' }
+    ): Promise<{ success: boolean; text?: string; model?: string; error?: string }> {
+        const normalizedPrompt = String(prompt || '').trim()
+        if (!normalizedPrompt) return { success: false, error: 'Prompt is required.' }
+
+        const availability = await this.checkAvailability()
+        if (!availability.available) {
+            return { success: false, error: availability.reason || 'Zyra Pi runtime is unavailable.' }
+        }
+
+        const root = resolveZyraRoot()
+        const worker = new ZyraPiWorker(root, resolveBridgePath(root), options.cwd)
+        try {
+            const result = await worker.request('generate_text', {
+                prompt: normalizedPrompt,
+                cwd: options.cwd,
+                model: normalizeZyraModel(options.model),
+                thinking: options.effort || 'low'
+            })
+            const text = asString(result['text'])
+            if (!text) return { success: false, error: 'Zyra returned an empty title.' }
+            return {
+                success: true,
+                text,
+                model: asString(result['model']) || normalizeZyraModel(options.model)
+            }
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Zyra title generation failed.'
+            log.warn('[ZyraPiRuntime] background text generation failed', message)
+            return { success: false, error: message }
+        } finally {
+            worker.dispose()
+        }
+    }
+
     async getAccount(): Promise<{ account: AssistantAccountIdentity | null; authMode: 'apikey' | 'chatgpt' | 'chatgptAuthTokens' | null; requiresOpenaiAuth: boolean }> {
         return {
             account: null,
@@ -1023,7 +1072,7 @@ export class ZyraPiRuntime extends EventEmitter {
         const bridgePath = resolveBridgePath(root)
         const worker = await this.claimWarmWorker(root, bridgePath, cwd)
             || new ZyraPiWorker(root, bridgePath, cwd)
-        const providerThreadId = thread.providerThreadId || thread.id
+        const providerThreadId = getAssistantCanonicalThreadId(thread)
         const model = normalizeZyraModel(thread.model) || 'openai-codex/gpt-5.5'
         const context: ZyraSessionContext = {
             localThreadId: thread.id,
@@ -1048,6 +1097,7 @@ export class ZyraPiRuntime extends EventEmitter {
             assistantCompletedItemIds: new Set(),
             internalTextByItemId: new Map(),
             internalCompletedItemIds: new Set(),
+            activeCompaction: null,
             lastAssistantItemId: null,
             lastUsage: null
         }
@@ -1102,6 +1152,7 @@ export class ZyraPiRuntime extends EventEmitter {
             effort?: AssistantReasoningEffort
             serviceTier?: 'fast'
             profile?: string
+            images?: PreparedAssistantPromptImage[]
         }
     ): Promise<{ turnId: string; providerThreadId: string | null }> {
         const context = this.requireSession(threadId)
@@ -1265,7 +1316,11 @@ export class ZyraPiRuntime extends EventEmitter {
         context: ZyraSessionContext,
         turnId: string,
         prompt: string,
-        options?: { effort?: AssistantReasoningEffort; serviceTier?: 'fast' }
+        options?: {
+            effort?: AssistantReasoningEffort
+            serviceTier?: 'fast'
+            images?: PreparedAssistantPromptImage[]
+        }
     ): Promise<void> {
         try {
             await this.ensureConnected(context)
@@ -1273,7 +1328,8 @@ export class ZyraPiRuntime extends EventEmitter {
                 prompt,
                 model: context.model,
                 thinking: context.thinking,
-                profile: context.profile
+                profile: context.profile,
+                images: options?.images
             })
             if (context.activeTurnId !== turnId) return
             this.completeAssistantText(context, turnId)
@@ -1344,16 +1400,18 @@ export class ZyraPiRuntime extends EventEmitter {
 
         context.connectPromise = (async () => {
             const shouldResumeProviderSession = Boolean(context.resumeProviderThreadId)
+            const requestedThreadId = shouldResumeProviderSession ? context.resumeProviderThreadId || undefined : undefined
             const result = await context.worker.request('connect', {
                 cwd: context.cwd,
-                providerThreadId: shouldResumeProviderSession ? context.resumeProviderThreadId || undefined : undefined,
-                noSession: !shouldResumeProviderSession,
+                threadId: requestedThreadId,
+                providerThreadId: requestedThreadId,
+                noSession: false,
                 model: context.model,
                 thinking: context.thinking,
                 profile: context.profile
             })
             const previousProviderThreadId = context.providerThreadId
-            const providerThreadId = String(result['providerThreadId'] || context.resumeProviderThreadId || context.providerThreadId || randomUUID())
+            const providerThreadId = String(result['threadId'] || result['providerThreadId'] || context.resumeProviderThreadId || context.providerThreadId || randomUUID())
             const model = String(result['model'] || context.model)
             const profile = normalizeZyraProfile(result['profile'] || context.profile)
             context.providerThreadId = providerThreadId
@@ -1459,20 +1517,95 @@ export class ZyraPiRuntime extends EventEmitter {
         }
 
         if (type === 'compaction_start') {
+            const startedAt = nowIso()
+            const reason = asString(event['reason']) || 'threshold'
+            const lifecycle: ActiveCompactionLifecycle = {
+                activityId: `zyra-context-compaction-${randomUUID()}`,
+                startedAt,
+                reason,
+                turnId
+            }
+            context.activeCompaction = lifecycle
             this.emitRuntime({
                 eventId: randomUUID(),
                 type: 'activity',
-                createdAt: nowIso(),
+                createdAt: startedAt,
                 threadId: context.localThreadId,
                 providerThreadId: context.providerThreadId,
                 turnId: turnId || undefined,
                 payload: {
+                    activityId: lifecycle.activityId,
                     kind: 'context.compaction',
-                    summary: 'Compacting context',
-                    detail: asString(event['reason']) || undefined,
-                    tone: 'tool'
+                    summary: 'AUTO-COMPACTING',
+                    detail: 'Conversation context is being compacted.',
+                    tone: 'tool',
+                    data: {
+                        category: 'context-compaction',
+                        sourceMethod: 'pi-sdk',
+                        status: 'running',
+                        reason,
+                        startedAt
+                    }
                 }
             })
+            return
+        }
+
+        if (type === 'compaction_end') {
+            const completedAt = nowIso()
+            const reason = asString(event['reason']) || context.activeCompaction?.reason || 'threshold'
+            const lifecycle = context.activeCompaction || {
+                activityId: `zyra-context-compaction-${randomUUID()}`,
+                startedAt: completedAt,
+                reason,
+                turnId
+            }
+            const result = asRecord(event['result'])
+            const aborted = event['aborted'] === true
+            const errorMessage = asString(event['errorMessage'])
+            const status = aborted ? 'cancelled' : result ? 'completed' : 'failed'
+            const tone = status === 'failed' ? 'error' : status === 'cancelled' ? 'warning' : 'tool'
+            const summary = status === 'completed'
+                ? 'AUTO-COMPACTED'
+                : status === 'cancelled'
+                    ? 'AUTO-COMPACTION CANCELLED'
+                    : 'AUTO-COMPACTION FAILED'
+            this.emitRuntime({
+                eventId: randomUUID(),
+                type: 'activity',
+                createdAt: completedAt,
+                threadId: context.localThreadId,
+                providerThreadId: context.providerThreadId,
+                turnId: lifecycle.turnId || undefined,
+                payload: {
+                    activityId: lifecycle.activityId,
+                    kind: 'context.compaction',
+                    summary,
+                    detail: errorMessage
+                        || (status === 'completed'
+                            ? 'Conversation context was compacted.'
+                            : status === 'cancelled'
+                                ? 'Conversation context compaction was cancelled.'
+                                : 'Conversation context could not be compacted.'),
+                    tone,
+                    data: {
+                        category: 'context-compaction',
+                        sourceMethod: 'pi-sdk',
+                        status,
+                        reason,
+                        startedAt: lifecycle.startedAt,
+                        completedAt,
+                        aborted,
+                        willRetry: event['willRetry'] === true,
+                        firstKeptEntryId: asString(result?.['firstKeptEntryId']) || undefined,
+                        tokensBefore: typeof result?.['tokensBefore'] === 'number' ? result['tokensBefore'] : undefined,
+                        estimatedTokensAfter: typeof result?.['estimatedTokensAfter'] === 'number' ? result['estimatedTokensAfter'] : undefined,
+                        errorMessage: errorMessage || undefined
+                    }
+                }
+            })
+            context.activeCompaction = null
+            return
         }
     }
 
@@ -1614,7 +1747,8 @@ export class ZyraPiRuntime extends EventEmitter {
     }
 
     private emitToolActivity(context: ZyraSessionContext, event: Record<string, unknown>, type: string): void {
-        const toolName = asString(event['toolName']) || asString(event['name']) || 'tool'
+        const agentSurface = parseAgentSurfaceDescriptor(event['surface'])
+        const toolName = agentSurface?.toolName || asString(event['toolName']) || asString(event['name']) || 'tool'
         const toolCallId = asString(event['toolCallId']) || asString(event['id']) || `${toolName}-${context.activeTurnId || 'turn'}`
         const isError = Boolean(event['isError'])
         const occurredAt = nowIso()
@@ -1649,6 +1783,12 @@ export class ZyraPiRuntime extends EventEmitter {
             state,
             output
         })
+        const keepsSpecializedDesktopKind = classified.kind === 'command.checkpoint' || classified.kind.startsWith('subagent.')
+        if (agentSurface && !keepsSpecializedDesktopKind) {
+            classified.kind = agentSurface.kind
+            classified.summary = agentSurface.summary
+            classified.detail ||= agentSurface.primaryText
+        }
         if (classified.kind === 'file-change') {
             Object.assign(classified.data, readPiFileChangeData({
                 cwd: context.cwd,
@@ -1662,9 +1802,30 @@ export class ZyraPiRuntime extends EventEmitter {
                 toolCallId
             })
         }
+        if (classified.kind === 'file-read') {
+            Object.assign(classified.data, analyzeAssistantReadResult({
+                args: argsRecord,
+                result: resultRecord,
+                partialResult,
+                output,
+                status: state === 'error' ? 'failed' : state
+            }))
+        }
+        classified.data['toolLifecyclePhase'] = agentSurface?.phase
+            || (type === 'tool_execution_start' ? 'start' : type === 'tool_execution_update' ? 'update' : 'end')
         if (type === 'tool_execution_end' && lifecycleStatus && !isCommandCheckpointCall) {
             classified.data['status'] = lifecycleStatus
             classified.summary = managedCommandSummary(lifecycleStatus)
+        }
+        if (agentSurface) {
+            const effectiveLifecycle = lifecycleStatus
+                || (state === 'error' ? 'failed' : state)
+            classified.data['surface'] = {
+                ...agentSurface,
+                kind: keepsSpecializedDesktopKind ? agentSurface.kind : classified.kind,
+                lifecycle: effectiveLifecycle,
+                summary: classified.summary
+            }
         }
         const activityId = `zyra-tool-${toolCallId}`
         const commandJobId = asString(classified.data['jobId'])

@@ -14,7 +14,8 @@ import {
     extractFileChangePathsFromPatch,
     mergeNormalizedFileChangePayload,
     normalizeFileChangePayload,
-    normalizeFileChangePath
+    normalizeFileChangePath,
+    sanitizeFileChangeRawPayload
 } from '../../shared/assistant/contracts'
 import { getAssistantModelNoticePresentation } from './assistant-failure-presentation'
 import { createAssistantId, extractProposedPlanMarkdown } from './utils'
@@ -34,7 +35,18 @@ interface AssistantRuntimeEventHandlerDeps {
         turnId: string | null
         occurredAt: string
     }) => void
-    flushAssistantTextDelta: (target?: { threadId: string; messageId: string }) => void
+    flushAssistantTextDelta: (target?: { threadId: string; messageId?: string }) => void
+    queueAssistantActivityDelta: (entry: {
+        sessionId: string
+        threadId: string
+        activityId: string
+        turnId: string | null
+        itemId?: string
+        streamKind: 'reasoning_text' | 'reasoning_summary_text' | 'command_output' | 'file_change_output'
+        delta: string
+        occurredAt: string
+    }) => void
+    flushAssistantActivityDelta: (target?: { threadId: string; activityId?: string }) => void
     appendEvent: (
         type: AssistantDomainEvent['type'],
         occurredAt: string,
@@ -258,6 +270,12 @@ function normalizeRuntimeStatus(value: unknown, tone?: AssistantActivity['tone']
     return readRuntimeJsonEnvelopeText(value)
 }
 
+function normalizeRuntimeCompactionStatus(value: unknown, tone?: AssistantActivity['tone']): string {
+    const raw = readRuntimeJsonEnvelopeText(value).toLowerCase().replace(/[-_\s]/g, '')
+    if (raw === 'cancelled' || raw === 'canceled' || raw === 'aborted' || raw === 'stopped') return 'cancelled'
+    return normalizeRuntimeStatus(value, tone)
+}
+
 function isRuntimeShellToolName(value: string): boolean {
     return /\b(bash|shell|powershell|terminal|exec|command|cmd)\b/i.test(value)
 }
@@ -286,7 +304,9 @@ export function normalizeRuntimeActivityPayload(incoming: RuntimeActivityPayload
     const output = readRuntimeOutputText(data)
     const errorText = readRuntimeErrorText(data)
     const paths = readRuntimeToolPaths(data)
-    const status = normalizeRuntimeStatus(data['status'] || data['state'] || data['phase'], incoming.tone)
+    const status = incoming.kind === 'context.compaction'
+        ? normalizeRuntimeCompactionStatus(data['status'] || data['state'] || data['phase'], incoming.tone)
+        : normalizeRuntimeStatus(data['status'] || data['state'] || data['phase'], incoming.tone)
     const normalizedData: Record<string, unknown> = { ...data }
 
     if (toolName && !normalizedData['toolName']) normalizedData['toolName'] = toolName
@@ -469,8 +489,8 @@ function mergeRuntimeFileChangeActivity(
     if (!isFileChange) return mergeRuntimeActivity(existing, incoming, turnId, occurredAt)
 
     const provider = inferFileChangeProvider(existing, normalizedIncoming)
-    const incomingData = { ...(normalizedIncoming.data || {}) }
-    const existingData = { ...(existing?.payload || {}) }
+    const incomingData = sanitizeFileChangeRawPayload({ ...(normalizedIncoming.data || {}) })
+    const existingData = sanitizeFileChangeRawPayload({ ...(existing?.payload || {}) })
     const startedAt = readRuntimePayloadString(existingData['startedAt']) || existing?.createdAt || occurredAt
     const incomingNormalized = normalizeFileChangePayload(incomingData, {
         provider,
@@ -508,7 +528,7 @@ function mergeRuntimeFileChangeActivity(
     }
 }
 
-function buildStreamingToolActivity(input: {
+export function buildStreamingToolActivity(input: {
     existing: AssistantActivity | null
     activityId: string
     kind: 'command' | 'file-change'
@@ -537,7 +557,7 @@ function buildStreamingToolActivity(input: {
     }
 }
 
-function buildInternalTextActivity(input: {
+export function buildInternalTextActivity(input: {
     existing: AssistantActivity | null
     activityId: string
     text: string
@@ -610,9 +630,24 @@ export function findFileChangeReconciliationTarget(
 }
 
 export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: AssistantRuntimeEventHandlerDeps): void {
-    const eventThreadRecord = deps.findThreadRecord(event.threadId)
-    const eventSession = eventThreadRecord?.session || deps.findSessionByThreadId(event.threadId)
-    const eventThreadId = eventThreadRecord?.thread.id || event.threadId
+    let eventThreadRecord = deps.findThreadRecord(event.threadId)
+    let eventSession = eventThreadRecord?.session || deps.findSessionByThreadId(event.threadId)
+    let eventThreadId = eventThreadRecord?.thread.id || event.threadId
+    const terminalSessionState = event.type === 'session.state.changed'
+        && !['starting', 'running', 'waiting'].includes(event.payload.state)
+    const shouldFlushActivityOutput = event.type === 'activity'
+        || event.type === 'content.completed'
+        || event.type === 'turn.completed'
+        || terminalSessionState
+    if (event.type === 'turn.completed' || terminalSessionState) {
+        deps.flushAssistantTextDelta({ threadId: eventThreadId })
+    }
+    if (shouldFlushActivityOutput) {
+        deps.flushAssistantActivityDelta({ threadId: eventThreadId })
+        eventThreadRecord = deps.findThreadRecord(event.threadId)
+        eventSession = eventThreadRecord?.session || deps.findSessionByThreadId(event.threadId)
+        eventThreadId = eventThreadRecord?.thread.id || event.threadId
+    }
 
     if (event.type === 'session.state.changed') {
         if (!eventSession) return
@@ -666,6 +701,8 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
                 model: parentThread?.model || '',
                 cwd: event.payload.cwd || parentThread?.cwd || null,
                 messageCount: 0,
+                activityCount: 0,
+                proposedPlanCount: 0,
                 lastSeenCompletedTurnId: null,
                 runtimeMode: parentThread?.runtimeMode || 'approval-required',
                 interactionMode: parentThread?.interactionMode || 'default',
@@ -674,6 +711,9 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
                 createdAt: event.createdAt,
                 updatedAt: event.createdAt,
                 latestTurn: null,
+                hasPendingApprovals: false,
+                hasPendingUserInputs: false,
+                hasActivePlan: false,
                 activePlan: null,
                 messages: [],
                 proposedPlans: [],
@@ -891,19 +931,16 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
     if (event.type === 'content.delta' && (event.payload.streamKind === 'reasoning_text' || event.payload.streamKind === 'reasoning_summary_text')) {
         if (!eventSession) return
         const activityId = `assistant-internal-${event.itemId || event.turnId || event.eventId}`
-        const existingThread = eventThreadRecord?.thread || deps.requireThread(event.threadId)
-        const existingActivity = existingThread.activities.find((activity) => activity.id === activityId) || null
-        const activity = buildInternalTextActivity({
-            existing: existingActivity,
+        deps.queueAssistantActivityDelta({
+            sessionId: eventSession.id,
+            threadId: eventThreadId,
             activityId,
-            text: event.payload.delta,
             turnId: event.turnId || null,
             itemId: event.itemId,
-            occurredAt: event.createdAt,
-            status: 'streaming',
-            streamKind: event.payload.streamKind
+            streamKind: event.payload.streamKind,
+            delta: event.payload.delta,
+            occurredAt: event.createdAt
         })
-        deps.appendEvent('thread.activity.appended', event.createdAt, { threadId: eventThreadId, activity }, eventSession.id, eventThreadId)
         return
     }
 
@@ -925,6 +962,34 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
             streamKind: event.payload.streamKind
         })
         deps.appendEvent('thread.activity.appended', event.createdAt, { threadId: eventThreadId, activity }, eventSession.id, eventThreadId)
+        return
+    }
+
+    if (event.type === 'content.completed' && (event.payload.streamKind === 'command_output' || event.payload.streamKind === 'file_change_output')) {
+        if (!eventSession) return
+        const activityId = buildCodexItemActivityId(event.itemId)
+            || `assistant-stream-${event.payload.streamKind}-${event.turnId || eventThreadId}`
+        const existingThread = eventThreadRecord?.thread || deps.requireThread(eventThreadId)
+        const existingActivity = existingThread.activities.find((activity) => activity.id === activityId) || null
+        const completedText = String(event.payload.text || '')
+        if (!existingActivity && !completedText) return
+        const activity = buildStreamingToolActivity({
+            existing: existingActivity,
+            activityId,
+            kind: event.payload.streamKind === 'command_output' ? 'command' : 'file-change',
+            delta: completedText,
+            turnId: event.turnId || null,
+            itemId: event.itemId,
+            occurredAt: event.createdAt
+        })
+        activity.payload = {
+            ...(activity.payload || {}),
+            status: 'completed'
+        }
+        deps.appendEvent('thread.activity.appended', event.createdAt, {
+            threadId: eventThreadId,
+            activity
+        }, eventSession.id, eventThreadId)
         return
     }
 
@@ -957,19 +1022,18 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
 
     if (event.type === 'content.delta' && (event.payload.streamKind === 'command_output' || event.payload.streamKind === 'file_change_output')) {
         if (!eventSession) return
-        const activityId = buildCodexItemActivityId(event.itemId) || createAssistantId('assistant-activity')
-        const existingThread = eventThreadRecord?.thread || deps.requireThread(event.threadId)
-        const existingActivity = existingThread.activities.find((activity) => activity.id === activityId) || null
-        const activity = buildStreamingToolActivity({
-            existing: existingActivity,
+        const activityId = buildCodexItemActivityId(event.itemId)
+            || `assistant-stream-${event.payload.streamKind}-${event.turnId || eventThreadId}`
+        deps.queueAssistantActivityDelta({
+            sessionId: eventSession.id,
+            threadId: eventThreadId,
             activityId,
-            kind: event.payload.streamKind === 'command_output' ? 'command' : 'file-change',
-            delta: event.payload.delta,
             turnId: event.turnId || null,
             itemId: event.itemId,
+            streamKind: event.payload.streamKind,
+            delta: event.payload.delta,
             occurredAt: event.createdAt
         })
-        deps.appendEvent('thread.activity.appended', event.createdAt, { threadId: eventThreadId, activity }, eventSession.id, eventThreadId)
         return
     }
 

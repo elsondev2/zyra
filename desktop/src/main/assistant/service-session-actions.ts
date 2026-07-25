@@ -14,7 +14,9 @@ import {
     parseDevContextCompactionTestCommand,
     type AssistantDevContextCompactionTestCommand
 } from '../../shared/assistant/dev-context-compaction-test'
+import { isAssistantSessionProjectLocked } from '../../shared/assistant/session-project'
 import { is } from '../utils'
+import { prepareAssistantPromptImages } from './prompt-images'
 import { buildDeleteMessagePlan } from './service-history'
 import { createAssistantSessionRecord, createAssistantUserMessage, createRunningLatestTurn } from './service-records'
 import type { AssistantServiceActionDeps } from './service-action-deps'
@@ -34,6 +36,7 @@ import {
     requireSession
 } from './service-state'
 import { buildSessionHistoryMutationResult } from './session-mutation-utils'
+import { getAssistantCanonicalThreadId, matchesAssistantThreadId } from './thread-identity'
 import {
     queueGeneratedSessionTitle,
     shouldGenerateSessionTitleForPrompt
@@ -65,7 +68,7 @@ export async function disconnectAssistantSession(deps: AssistantServiceActionDep
         : getSelectedSession(deps.getSnapshot())
     if (!session) return { success: true as const }
     const thread = requireActiveThread(session)
-    deps.runtime.disconnect(thread.providerThreadId || thread.id)
+    deps.runtime.disconnect(getAssistantCanonicalThreadId(thread))
     return { success: true as const }
 }
 
@@ -108,23 +111,25 @@ export async function selectAssistantSessionAction(deps: AssistantServiceActionD
 export async function selectAssistantThreadAction(deps: AssistantServiceActionDeps, sessionId: string, threadId: string) {
     await deps.ensureReady()
     const session = requireSession(deps.getSnapshot(), sessionId)
-    if (!session.threads.some((thread) => thread.id === threadId)) {
+    const selectedThread = session.threads.find((thread) => matchesAssistantThreadId(thread, threadId)) || null
+    if (!selectedThread) {
         throw new Error(`Assistant thread ${threadId} does not belong to session ${sessionId}.`)
     }
 
+    const localThreadId = selectedThread.id
     const occurredAt = nowIso()
     deps.appendEvent('session.updated', occurredAt, {
         sessionId,
         patch: {
-            activeThreadId: threadId
+            activeThreadId: localThreadId
         }
-    }, session.id, threadId)
+    }, session.id, localThreadId)
     if (deps.getSnapshot().selectedSessionId !== sessionId) {
-        deps.appendEvent('session.selected', occurredAt, { sessionId }, session.id, threadId)
+        deps.appendEvent('session.selected', occurredAt, { sessionId }, session.id, localThreadId)
     }
     const updatedSession = requireSession(deps.getSnapshot(), sessionId)
     markThreadCompletionSeen(deps, updatedSession, occurredAt)
-    return { success: true as const, sessionId, threadId }
+    return { success: true as const, sessionId, threadId: localThreadId }
 }
 
 export async function renameAssistantSessionAction(deps: AssistantServiceActionDeps, sessionId: string, title: string) {
@@ -158,7 +163,7 @@ export async function deleteAssistantSessionAction(deps: AssistantServiceActionD
     const session = requireSession(deps.getSnapshot(), sessionId)
     const thread = getActiveThread(session)
     if (thread) {
-        deps.runtime.disconnect(thread.providerThreadId || thread.id)
+        deps.runtime.disconnect(getAssistantCanonicalThreadId(thread))
     }
     const occurredAt = nowIso()
     deps.appendEvent('session.deleted', occurredAt, { sessionId }, sessionId)
@@ -176,12 +181,15 @@ export async function clearAssistantLogsAction(deps: AssistantServiceActionDeps,
     const thread = requireActiveThread(session)
     const occurredAt = nowIso()
 
+    const keptActivities = thread.activities.filter((activity) => !isClearableIssueActivity(activity))
+    const keptActivityIds = new Set(keptActivities.map((activity) => activity.id))
     deps.appendEvent('thread.updated', occurredAt, {
         threadId: thread.id,
         patch: {
-            activities: thread.activities.filter((activity) => !isClearableIssueActivity(activity)),
+            activities: keptActivities,
             updatedAt: occurredAt
-        }
+        },
+        removedActivityIds: thread.activities.filter((activity) => !keptActivityIds.has(activity.id)).map((activity) => activity.id)
     }, session.id, thread.id)
 
     return { success: true as const }
@@ -198,7 +206,7 @@ export async function deleteAssistantMessageAction(deps: AssistantServiceActionD
 
     if (deletePlan.rollbackTurnCount) {
         try {
-            await deps.runtime.rollbackThread(thread.providerThreadId || thread.id, deletePlan.rollbackTurnCount)
+            await deps.runtime.rollbackThread(getAssistantCanonicalThreadId(thread), deletePlan.rollbackTurnCount)
         } catch (error) {
             log.warn('[Assistant] rollbackThread failed during deleteMessage; applying local message delete only', error)
         }
@@ -214,7 +222,9 @@ export async function deleteAssistantMessageAction(deps: AssistantServiceActionD
     const nextThread: AssistantThread = {
         ...thread,
         ...deletePlan.patch,
-        messageCount: deletePlan.patch.messages.length
+        messageCount: deletePlan.patch.messages.length,
+        activityCount: deletePlan.patch.activities.length,
+        proposedPlanCount: deletePlan.patch.proposedPlans.length
     }
     const sessionHistoryMutation = buildSessionHistoryMutationResult({
         session,
@@ -222,7 +232,7 @@ export async function deleteAssistantMessageAction(deps: AssistantServiceActionD
     })
 
     if (sessionHistoryMutation.deleteSession) {
-        deps.runtime.disconnect(thread.providerThreadId || thread.id)
+        deps.runtime.disconnect(getAssistantCanonicalThreadId(thread))
         deps.appendEvent('session.deleted', occurredAt, { sessionId: session.id }, session.id)
         await ensureAssistantSessionSelectionAfterDeletion(deps, session, {
             replacementInput: buildDeletedSessionReplacementInput(session)
@@ -232,8 +242,23 @@ export async function deleteAssistantMessageAction(deps: AssistantServiceActionD
 
     deps.appendEvent('thread.updated', occurredAt, {
         threadId: thread.id,
-        patch: deletePlan.patch,
-        removedTurnIds: deletePlan.removedTurnIds
+        patch: {
+            activePlan: deletePlan.patch.activePlan,
+            lastSeenCompletedTurnId: deletePlan.patch.lastSeenCompletedTurnId,
+            latestTurn: deletePlan.patch.latestTurn,
+            state: deletePlan.patch.state,
+            lastError: deletePlan.patch.lastError,
+            updatedAt: deletePlan.patch.updatedAt,
+            messageCount: nextThread.messageCount,
+            activityCount: nextThread.activityCount,
+            proposedPlanCount: nextThread.proposedPlanCount
+        },
+        removedTurnIds: deletePlan.removedTurnIds,
+        removedMessageIds: deletePlan.removedMessageIds,
+        removedActivityIds: deletePlan.removedActivityIds,
+        removedProposedPlanIds: deletePlan.removedProposedPlanIds,
+        removedPendingApprovalIds: deletePlan.removedPendingApprovalIds,
+        removedPendingUserInputIds: deletePlan.removedPendingUserInputIds
     }, session.id, thread.id)
 
     const sessionPatch: Record<string, unknown> = {
@@ -261,11 +286,18 @@ export async function setAssistantSessionProjectPathAction(
     projectPath: string | null
 ) {
     await deps.ensureReady()
-    requireSession(deps.getSnapshot(), sessionId)
+    const snapshot = deps.getSnapshot()
+    const session = requireSession(snapshot, sessionId)
     const route = resolveAssistantSessionRoute({
         projectPath,
-        playground: deps.getSnapshot().playground
+        playground: snapshot.playground
     })
+    if (route.projectPath === session.projectPath) {
+        return { success: true as const }
+    }
+    if (isAssistantSessionProjectLocked(session)) {
+        throw new Error('Project directory is locked after the chat starts.')
+    }
     deps.appendEvent('session.updated', nowIso(), {
         sessionId,
         patch: {
@@ -403,7 +435,11 @@ export async function sendAssistantPromptAction(
         return triggerDevContextCompactionTestPrompt(deps, session.id, thread, compactionTestCommand, occurredAt)
     }
 
-    const shouldGenerateTitle = shouldGenerateSessionTitleForPrompt(session)
+    const promptImages = await prepareAssistantPromptImages(options?.images)
+    const persistedFirstUserMessage = isDefaultSessionTitle(session.title)
+        ? null
+        : await deps.getFirstUserMessageText(session.id)
+    const shouldGenerateTitle = shouldGenerateSessionTitleForPrompt(session, persistedFirstUserMessage)
     const title = isDefaultSessionTitle(session.title) ? deriveSessionTitleFromPrompt(input) : session.title
     if (title !== session.title) {
         deps.appendEvent('session.updated', occurredAt, {
@@ -416,7 +452,7 @@ export async function sendAssistantPromptAction(
     }
 
     const runtimeCwd = deps.getSessionRuntimeCwd(session, thread)
-    const runtimeThreadId = thread.providerThreadId || thread.id
+    const runtimeThreadId = getAssistantCanonicalThreadId(thread)
     let hasLiveRuntimeSession = deps.runtime.hasSession(runtimeThreadId)
     const previousRuntimeCwd = sanitizeOptionalPath(thread.cwd)
     if (
@@ -453,18 +489,20 @@ export async function sendAssistantPromptAction(
             interactionMode: options?.interactionMode,
             effort: options?.effort,
             serviceTier: options?.serviceTier,
-            profile: options?.profile
+            profile: options?.profile,
+            images: promptImages.length > 0 ? promptImages : undefined
         })
         const latestTurn = createRunningLatestTurn(result.turnId, occurredAt, options)
         deps.appendEvent('thread.latest-turn.updated', occurredAt, { threadId: thread.id, latestTurn }, session.id, thread.id)
         if (shouldGenerateTitle) {
-            queueGeneratedSessionTitle({
+            void queueGeneratedSessionTitle({
                 sessionId: session.id,
                 threadId: thread.id,
                 messageText: input,
                 seedTitle: title,
                 cwd: runtimeCwd,
                 preferredModel: options?.model || thread.model || null,
+                generateText: (titlePrompt, titleOptions) => deps.runtime.generateText(titlePrompt, titleOptions),
                 getSnapshot: deps.getSnapshot,
                 appendEvent: deps.appendEvent
             })
@@ -507,7 +545,7 @@ export async function interruptAssistantTurnAction(
     const thread = requireActiveThread(session)
     const effectiveTurnId = turnId || thread.latestTurn?.id
     if (effectiveTurnId) {
-        await deps.runtime.interruptTurn(thread.providerThreadId || thread.id, effectiveTurnId)
+        await deps.runtime.interruptTurn(getAssistantCanonicalThreadId(thread), effectiveTurnId)
     }
     return { success: true as const }
 }
@@ -519,7 +557,7 @@ export async function respondAssistantApprovalAction(
     await deps.ensureReady()
     const target = findThreadForApproval(deps.getSnapshot(), input.requestId)
     if (!target) throw new Error(`Unknown approval request ${input.requestId}.`)
-    await deps.runtime.respondApproval(target.thread.providerThreadId || target.thread.id, input.requestId, input.decision)
+    await deps.runtime.respondApproval(getAssistantCanonicalThreadId(target.thread), input.requestId, input.decision)
     return { success: true as const }
 }
 
@@ -530,7 +568,7 @@ export async function respondAssistantUserInputAction(
     await deps.ensureReady()
     const target = findThreadForUserInput(deps.getSnapshot(), input.requestId)
     if (!target) throw new Error(`Unknown user-input request ${input.requestId}.`)
-    await deps.runtime.respondUserInput(target.thread.providerThreadId || target.thread.id, input.requestId, input.answers)
+    await deps.runtime.respondUserInput(getAssistantCanonicalThreadId(target.thread), input.requestId, input.answers)
     return { success: true as const }
 }
 
@@ -539,7 +577,7 @@ export async function getAssistantRuntimeStatusAction(deps: AssistantServiceActi
     const availability = await deps.runtime.checkAvailability()
     const session = getSelectedSession(deps.getSnapshot())
     const thread = getActiveThread(session)
-    const activeRuntimeThreadId = thread?.providerThreadId || thread?.id || null
+    const activeRuntimeThreadId = thread ? getAssistantCanonicalThreadId(thread) : null
     const liveConnected = activeRuntimeThreadId ? deps.runtime.hasSession(activeRuntimeThreadId) : false
     return {
         available: availability.available,

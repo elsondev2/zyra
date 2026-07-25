@@ -19,6 +19,7 @@ import type {
     AssistantSnapshot,
     AssistantThread
 } from '../../shared/assistant/contracts'
+import type { PreparedAssistantPromptImage } from './prompt-images'
 
 export interface AssistantRuntimeBridge {
     checkAvailability(): Promise<{ available: boolean; reason: string | null }>
@@ -34,6 +35,10 @@ export interface AssistantRuntimeBridge {
     }>
     connect(thread: AssistantThread, cwd: string): Promise<void>
     hasSession(threadId: string): boolean
+    generateText(
+        prompt: string,
+        options: { cwd: string; model?: string; effort?: 'low' }
+    ): Promise<{ success: boolean; text?: string; model?: string; error?: string }>
     sendPrompt(
         threadId: string,
         prompt: string,
@@ -44,6 +49,7 @@ export interface AssistantRuntimeBridge {
             effort?: AssistantReasoningEffort
             serviceTier?: 'fast'
             profile?: string
+            images?: PreparedAssistantPromptImage[]
         }
     ): Promise<{ turnId: string; providerThreadId: string | null }>
     interruptTurn(threadId: string, turnId?: string): Promise<void>
@@ -60,6 +66,7 @@ export interface AssistantServiceActionDeps {
     ensureReady(): Promise<void>
     getSnapshot(): AssistantSnapshot
     hydrateSelectedSession(sessionId: string): Promise<void>
+    getFirstUserMessageText(sessionId: string): Promise<string | null>
     appendEvent(
         type: AssistantDomainEvent['type'],
         occurredAt: string,

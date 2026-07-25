@@ -128,6 +128,7 @@ export function extractColorValues(content: string, maxItems: number): string[] 
 }
 
 export function getFileUrl(filePath: string): string {
+    if (filePath.toLowerCase().startsWith('data:image/')) return filePath
     if (filePath.startsWith('zyra://')) return filePath
     if (filePath.startsWith('devscope://')) return `zyra://${filePath.slice('devscope://'.length)}`
 

@@ -608,6 +608,8 @@ function createBrowserPreviewSnapshot(mode: BrowserPreviewMode, runningCommandCo
         model: previewModels[0]!.id,
         cwd: hasRailFixture ? 'C:\\projects\\zyra' : null,
         messageCount: railDevMessages.length,
+        activityCount: railDevActivities.length,
+        proposedPlanCount: 0,
         lastSeenCompletedTurnId: latestRailDevTurn?.id || null,
         runtimeMode: 'approval-required',
         interactionMode: 'default',
@@ -626,6 +628,9 @@ function createBrowserPreviewSnapshot(mode: BrowserPreviewMode, runningCommandCo
             serviceTier: latestRailDevTurn.serviceTier,
             usage: latestRailDevTurn.usage
         } : null,
+        hasPendingApprovals: false,
+        hasPendingUserInputs: false,
+        hasActivePlan: false,
         activePlan: null,
         messages: railDevMessages,
         proposedPlans: [],
@@ -695,6 +700,28 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
         state: browserUpdateState
     })
 
+    const getBrowserThreadDetail = (threadId: string) => {
+        const thread = ensureSnapshot().sessions.flatMap((session) => session.threads).find((entry) => entry.id === threadId)
+        if (!thread) return null
+        return {
+            threadId,
+            activePlan: thread.activePlan,
+            pendingApprovals: thread.pendingApprovals,
+            pendingUserInputs: thread.pendingUserInputs,
+            history: {
+                threadId,
+                messages: thread.messages,
+                activities: thread.activities,
+                proposedPlans: thread.proposedPlans,
+                pageInfo: { oldestCursor: null, hasOlder: false, turnCount: thread.messages.filter((message) => message.role === 'user').length },
+                initialLoading: false,
+                loadingOlder: false,
+                loadOlderError: null,
+                fullyLoaded: true
+            }
+        }
+    }
+
     const base = {
         window: {
             minimize: () => {},
@@ -744,7 +771,32 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
                 threadId: input.threadId,
                 snapshot: ensureSnapshot()
             }),
-            hydrateSession: (sessionId: string) => ok({ sessionId, snapshot: ensureSnapshot() }),
+            getThreadDetailBootstrap: (threadId: string) => {
+                const detail = getBrowserThreadDetail(threadId)
+                return detail ? ok({ detail }) : unavailable('Assistant thread not found.')
+            },
+            getHistoryPage: () => unavailable('No older browser-preview history is available.'),
+            searchTurns: (input: { threadId: string; query: string }) => {
+                const detail = getBrowserThreadDetail(input.threadId)
+                const query = input.query.trim().toLowerCase()
+                const turnIds = detail ? [...new Set([
+                    ...detail.history.messages.filter((message) => message.text.toLowerCase().includes(query)).map((message) => message.turnId),
+                    ...detail.history.activities.filter((activity) => JSON.stringify(activity).toLowerCase().includes(query)).map((activity) => activity.turnId)
+                ].filter((turnId): turnId is string => Boolean(turnId)))] : []
+                return ok({ result: { threadId: input.threadId, turnIds } })
+            },
+            getTurnDetail: (input: { threadId: string; turnId: string }) => {
+                const detail = getBrowserThreadDetail(input.threadId)
+                return detail ? ok({
+                    detail: {
+                        threadId: input.threadId,
+                        turnId: input.turnId,
+                        messages: detail.history.messages.filter((message) => message.turnId === input.turnId),
+                        activities: detail.history.activities.filter((activity) => activity.turnId === input.turnId),
+                        proposedPlans: detail.history.proposedPlans.filter((plan) => plan.turnId === input.turnId)
+                    }
+                }) : unavailable('Assistant turn not found.')
+            },
             renameSession: (_sessionId: string, title: string) => {
                 snapshot = {
                     ...snapshot,
@@ -773,6 +825,9 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
             interruptTurn: () => ok(),
             respondApproval: () => unavailable('Approvals require the Zyra desktop bridge.'),
             respondUserInput: () => unavailable('Guided responses require the Zyra desktop bridge.'),
+            startRealtimeVoice: () => unavailable('Realtime voice requires the Zyra desktop bridge.'),
+            stopRealtimeVoice: () => ok(),
+            onRealtimeVoiceEvent: () => noopUnsubscribe,
             getTranscriptionModelState: () => ok({ state: browserTranscriptionModelState }),
             downloadTranscriptionModel: () => unavailable('Local transcription requires the Zyra desktop bridge.'),
             transcribeAudioWithLocalModel: () => unavailable('Local transcription requires the Zyra desktop bridge.'),
@@ -811,6 +866,10 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
         searchIndexedPaths: () => ok({ results: [] }),
         openInExplorer: () => unavailable('Explorer actions require the Zyra desktop bridge.'),
         openInTerminal: () => unavailable('Terminal actions require the Zyra desktop bridge.'),
+        getBrowserPreviewConfig: () => unavailable('Integrated Browser requires the Zyra desktop bridge.'),
+        clearBrowserPreviewData: () => unavailable('Clearing Browser data requires the Zyra desktop bridge.'),
+        getBrowserLinkPreview: () => unavailable('Website previews require the Zyra desktop bridge.'),
+        openBrowserPreviewExternal: () => unavailable('Opening external links requires the Zyra desktop bridge.'),
         listInstalledIdes: () => ok({ ides: [] }),
         openProjectInIde: () => unavailable('IDE actions require the Zyra desktop bridge.'),
         installProjectDependencies: () => unavailable('Dependency installation requires the Zyra desktop bridge.'),

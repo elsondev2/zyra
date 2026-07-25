@@ -1,17 +1,43 @@
-import type { AssistantActivity } from '@shared/assistant/contracts'
-import { buildRenderableFileChangePatch } from '@shared/assistant/contracts/file-change'
+import type { AssistantActivity, FileChangeKind } from '@shared/assistant/contracts'
+import { getActivityPatch, type ParsedUserAttachment } from './assistant-timeline-helpers'
 
 export interface AssistantDiffTarget {
     activityId: string
+    turnId?: string | null
     filePath: string
     displayPath: string
     patch: string
     previousPath?: string
     createdAt?: string
     isNew?: boolean
+    changeKind?: FileChangeKind
     provisional?: boolean
     truncated?: boolean
     unavailableReason?: string
+}
+
+export interface AssistantDiffTurnFile {
+    target: AssistantDiffTarget
+    additions: number
+    deletions: number
+}
+
+export interface AssistantDiffTurn {
+    id: string
+    number: number
+    prompt: string
+    promptAttachments: ParsedUserAttachment[]
+    response: string
+    agentLabel?: string
+    historyUnavailable: boolean
+    detailLoaded?: boolean
+    searchText: string
+    createdAt: string
+    updatedAt: string
+    files: AssistantDiffTurnFile[]
+    changes: AssistantDiffTurnFile[]
+    additions: number
+    deletions: number
 }
 
 function readString(value: unknown): string | undefined {
@@ -41,14 +67,7 @@ export function resolveAssistantDiffTarget(
         const previousPath = normalizePath(entry.previousPath || entry.previous_path)
         return path === selectedPath || previousPath === selectedPath
     })
-    const rawPatch = readString(payload.patch)
-        || readString(payload.previewPatch)
-        || readString(change?.diff)
-    const patch = buildRenderableFileChangePatch(
-        rawPatch,
-        payload.changes,
-        Array.isArray(payload.paths) ? payload.paths.filter((entry): entry is string => typeof entry === 'string') : [selected.filePath]
-    ) || rawPatch || selected.patch
+    const patch = getActivityPatch(activity) || selected.patch
     const status = String(payload.status || '').toLowerCase().replace(/[-_\s]/g, '')
     const authoritative = payload.authoritative === true
     return {
@@ -56,6 +75,9 @@ export function resolveAssistantDiffTarget(
         patch,
         previousPath: readString(change?.previousPath || change?.previous_path) || selected.previousPath,
         isNew: change?.isNew === true || change?.kind === 'add' || selected.isNew,
+        changeKind: change?.kind === 'add' || change?.kind === 'delete' || change?.kind === 'update' || change?.kind === 'move'
+            ? change.kind
+            : selected.changeKind,
         provisional: status === 'running' || status === 'inprogress' || !authoritative,
         truncated: payload.truncated === true,
         unavailableReason: readString(payload.diffUnavailableReason)

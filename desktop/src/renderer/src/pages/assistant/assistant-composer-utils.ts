@@ -1,3 +1,4 @@
+import type { AssistantPromptImageInput } from '@shared/assistant/contracts'
 import type { ComposerContextFile } from './assistant-composer-types'
 
 export const SLASH_COMMANDS = [
@@ -94,6 +95,23 @@ export function getContextFileMeta(file: Partial<ComposerContextFile>): {
         return { name, ext: ext || 'code', category: 'code' }
     }
     return { name, ext: ext || 'file', category: 'doc' }
+}
+
+export function buildPromptImageInputs(contextFiles: ComposerContextFile[]): AssistantPromptImageInput[] {
+    const seenPaths = new Set<string>()
+    return contextFiles.flatMap((file) => {
+        if (getContextFileMeta(file).category !== 'image') return []
+        const path = String(file.path || '').trim()
+        if (!path) return []
+        const pathKey = path.toLowerCase()
+        if (seenPaths.has(pathKey)) return []
+        seenPaths.add(pathKey)
+        return [{
+            path,
+            name: String(file.name || '').trim() || undefined,
+            mimeType: String(file.mimeType || '').trim() || undefined
+        }]
+    })
 }
 
 export function buildAttachmentPath(source: 'paste' | 'manual', name: string): string {

@@ -11,10 +11,16 @@ import type {
     AssistantDeletePlaygroundLabInput,
     AssistantDeleteMessageInput,
     AssistantEventStreamPayload,
+    AssistantGetHistoryPageInput,
+    AssistantGetReviewIndexInput,
+    AssistantGetTurnDetailInput,
     AssistantPersistClipboardImageInput,
+    AssistantRealtimeVoiceEvent,
     AssistantResolveClipboardAttachmentInput,
+    AssistantSearchTurnsInput,
     AssistantSendPromptOptions,
     AssistantSelectThreadInput,
+    AssistantStartRealtimeVoiceInput,
     AssistantSetPlaygroundRootInput,
     AssistantTranscribeAudioInput,
     AssistantUserInputResponseInput
@@ -39,7 +45,11 @@ export function createAssistantAdapter() {
             createSession: (input?: AssistantCreateSessionInput) => ipcRenderer.invoke(ASSISTANT_IPC.createSession, input),
             selectSession: (sessionId: string) => ipcRenderer.invoke(ASSISTANT_IPC.selectSession, sessionId),
             selectThread: (input: AssistantSelectThreadInput) => ipcRenderer.invoke(ASSISTANT_IPC.selectThread, input),
-            hydrateSession: (sessionId: string) => ipcRenderer.invoke(ASSISTANT_IPC.hydrateSession, sessionId),
+            getThreadDetailBootstrap: (threadId: string) => ipcRenderer.invoke(ASSISTANT_IPC.getThreadDetailBootstrap, threadId),
+            getHistoryPage: (input: AssistantGetHistoryPageInput) => ipcRenderer.invoke(ASSISTANT_IPC.getHistoryPage, input),
+            getReviewIndex: (input: AssistantGetReviewIndexInput) => ipcRenderer.invoke(ASSISTANT_IPC.getReviewIndex, input),
+            getTurnDetail: (input: AssistantGetTurnDetailInput) => ipcRenderer.invoke(ASSISTANT_IPC.getTurnDetail, input),
+            searchTurns: (input: AssistantSearchTurnsInput) => ipcRenderer.invoke(ASSISTANT_IPC.searchTurns, input),
             renameSession: (sessionId: string, title: string) => ipcRenderer.invoke(ASSISTANT_IPC.renameSession, sessionId, title),
             archiveSession: (sessionId: string, archived = true) => ipcRenderer.invoke(ASSISTANT_IPC.archiveSession, sessionId, archived),
             deleteSession: (sessionId: string) => ipcRenderer.invoke(ASSISTANT_IPC.deleteSession, sessionId),
@@ -71,6 +81,18 @@ export function createAssistantAdapter() {
                 ipcRenderer.invoke(ASSISTANT_IPC.respondApproval, input),
             respondUserInput: (input: AssistantUserInputResponseInput) =>
                 ipcRenderer.invoke(ASSISTANT_IPC.respondUserInput, input),
+            startRealtimeVoice: (input: AssistantStartRealtimeVoiceInput) =>
+                ipcRenderer.invoke(ASSISTANT_IPC.startRealtimeVoice, input),
+            stopRealtimeVoice: () => ipcRenderer.invoke(ASSISTANT_IPC.stopRealtimeVoice),
+            onRealtimeVoiceEvent: (callback: (event: AssistantRealtimeVoiceEvent) => void) => {
+                const listener = (_event: Electron.IpcRendererEvent, payload: AssistantRealtimeVoiceEvent) => callback(payload)
+                ipcRenderer.on(ASSISTANT_IPC.realtimeVoiceEvent, listener)
+                void ipcRenderer.invoke(ASSISTANT_IPC.subscribeRealtimeVoice).catch(() => undefined)
+                return () => {
+                    ipcRenderer.removeListener(ASSISTANT_IPC.realtimeVoiceEvent, listener)
+                    void ipcRenderer.invoke(ASSISTANT_IPC.unsubscribeRealtimeVoice).catch(() => undefined)
+                }
+            },
             getTranscriptionModelState: () => ipcRenderer.invoke(ASSISTANT_IPC.getTranscriptionModelState),
             downloadTranscriptionModel: () => ipcRenderer.invoke(ASSISTANT_IPC.downloadTranscriptionModel),
             transcribeAudioWithLocalModel: (input: AssistantTranscribeAudioInput) => ipcRenderer.invoke(ASSISTANT_IPC.transcribeAudioWithLocalModel, input),

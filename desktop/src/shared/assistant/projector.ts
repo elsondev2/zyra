@@ -57,6 +57,18 @@ function pickNextSelectedSessionId(sessions: AssistantSession[], selectedSession
     return nextSession?.id || null
 }
 
+function mergeThreadRecordsById<T extends { id: string }>(
+    current: T[],
+    incoming: T[],
+    removedIds: unknown
+): T[] {
+    const removed = new Set(Array.isArray(removedIds) ? removedIds.map((entry) => String(entry || '')).filter(Boolean) : [])
+    const merged = new Map(current.map((entry) => [entry.id, entry]))
+    for (const entry of incoming) merged.set(entry.id, entry)
+    for (const id of removed) merged.delete(id)
+    return [...merged.values()]
+}
+
 function cloneThreadBase(thread: AssistantThread): AssistantThread {
     return {
         ...thread,
@@ -277,11 +289,26 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
             const writable = location ? ensureThreadWritable(next, previousSessions, location) : null
             if (!writable) break
 
-            const patch = (event.payload['patch'] as Record<string, unknown> | undefined) || {}
+            const patch = { ...((event.payload['patch'] as Record<string, unknown> | undefined) || {}) }
+            const messages = Array.isArray(patch.messages) ? patch.messages as AssistantThread['messages'] : null
+            const activities = Array.isArray(patch.activities) ? patch.activities as AssistantThread['activities'] : null
+            const proposedPlans = Array.isArray(patch.proposedPlans) ? patch.proposedPlans as AssistantThread['proposedPlans'] : null
+            const pendingApprovals = Array.isArray(patch.pendingApprovals) ? patch.pendingApprovals as AssistantThread['pendingApprovals'] : null
+            const pendingUserInputs = Array.isArray(patch.pendingUserInputs) ? patch.pendingUserInputs as AssistantThread['pendingUserInputs'] : null
+            delete patch.messages
+            delete patch.activities
+            delete patch.proposedPlans
+            delete patch.pendingApprovals
+            delete patch.pendingUserInputs
             Object.assign(writable.thread, patch)
-            if (Array.isArray(writable.thread.messages)) {
-                writable.thread.messageCount = writable.thread.messages.length
-            }
+            if (messages || Array.isArray(event.payload['removedMessageIds'])) writable.thread.messages = mergeThreadRecordsById(writable.thread.messages, messages || [], event.payload['removedMessageIds'])
+            if (activities || Array.isArray(event.payload['removedActivityIds'])) writable.thread.activities = mergeThreadRecordsById(writable.thread.activities, activities || [], event.payload['removedActivityIds'])
+            if (proposedPlans || Array.isArray(event.payload['removedProposedPlanIds'])) writable.thread.proposedPlans = mergeThreadRecordsById(writable.thread.proposedPlans, proposedPlans || [], event.payload['removedProposedPlanIds'])
+            if (pendingApprovals || Array.isArray(event.payload['removedPendingApprovalIds'])) writable.thread.pendingApprovals = mergeThreadRecordsById(writable.thread.pendingApprovals, pendingApprovals || [], event.payload['removedPendingApprovalIds'])
+            if (pendingUserInputs || Array.isArray(event.payload['removedPendingUserInputIds'])) writable.thread.pendingUserInputs = mergeThreadRecordsById(writable.thread.pendingUserInputs, pendingUserInputs || [], event.payload['removedPendingUserInputIds'])
+            writable.thread.hasPendingApprovals = writable.thread.pendingApprovals.some((entry) => entry.status === 'pending')
+            writable.thread.hasPendingUserInputs = writable.thread.pendingUserInputs.some((entry) => entry.status === 'pending')
+            writable.thread.hasActivePlan = Boolean(writable.thread.activePlan)
 
             const patchUpdatedAt = typeof patch['updatedAt'] === 'string' ? patch['updatedAt'] : null
             if (patchUpdatedAt) {
@@ -298,6 +325,7 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
             const writable = location ? ensureThreadWritable(next, previousSessions, location) : null
             if (!writable) break
 
+            const loadedMessageCountBefore = writable.thread.messages.length
             if (event.type === 'thread.message.assistant.delta') {
                 const messageId = String(event.payload['messageId'] || '')
                 const delta = String(event.payload['delta'] || '')
@@ -343,7 +371,8 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
                 })
             }
 
-            writable.thread.messageCount = writable.thread.messages.length
+            const addedMessageCount = Math.max(0, writable.thread.messages.length - loadedMessageCountBefore)
+            if (addedMessageCount > 0) writable.thread.messageCount += addedMessageCount
             if (event.type !== 'thread.message.assistant.delta') {
                 writable.thread.updatedAt = event.occurredAt
                 writable.session.updatedAt = event.occurredAt
@@ -359,6 +388,7 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
             if (!writable) break
 
             writable.thread.activePlan = event.payload['activePlan'] as AssistantThread['activePlan']
+            writable.thread.hasActivePlan = Boolean(writable.thread.activePlan)
             break
         }
         case 'thread.proposed-plan.upserted': {
@@ -377,6 +407,7 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
             }
             if (index < 0) {
                 writable.thread.proposedPlans = [...writable.thread.proposedPlans, nextPlan]
+                writable.thread.proposedPlanCount += 1
             } else if (writable.thread.proposedPlans[index] !== nextPlan) {
                 const nextPlans = [...writable.thread.proposedPlans]
                 nextPlans[index] = nextPlan
@@ -400,6 +431,7 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
             }
             if (index < 0) {
                 writable.thread.activities = [...writable.thread.activities, nextActivity]
+                writable.thread.activityCount += 1
             } else {
                 const nextActivities = [...writable.thread.activities]
                 nextActivities[index] = nextActivity
@@ -422,6 +454,7 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
                 nextApprovals[index] = approval
                 writable.thread.pendingApprovals = nextApprovals
             }
+            writable.thread.hasPendingApprovals = writable.thread.pendingApprovals.some((entry) => entry.status === 'pending')
             break
         }
         case 'thread.user-input.updated': {
@@ -439,6 +472,7 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
                 nextInputs[index] = userInput
                 writable.thread.pendingUserInputs = nextInputs
             }
+            writable.thread.hasPendingUserInputs = writable.thread.pendingUserInputs.some((entry) => entry.status === 'pending')
             break
         }
         case 'thread.latest-turn.updated': {

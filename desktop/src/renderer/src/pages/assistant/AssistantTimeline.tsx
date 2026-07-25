@@ -1,8 +1,10 @@
 import type { ReactNode, RefObject } from 'react'
-import { memo, useCallback, useLayoutEffect, useMemo, useRef } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import type { LegendListRef } from '@legendapp/list/react'
 import type { AssistantActivity, AssistantMessage, AssistantProposedPlan, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import type { AssistantTextStreamingMode, AssistantToolOutputDefaultMode } from '@/lib/settings'
+import { prewarmMarkdownRenders } from '@/components/ui/MarkdownRenderer'
 import { cn } from '@/lib/utils'
 import type { AssistantDiffTarget } from './assistant-diff-types'
 import {
@@ -22,7 +24,8 @@ import {
     TimelineWorkingIndicator
 } from './AssistantTimelineRows'
 import { TimelineTurnWorkSummary } from './AssistantTimelineWorkSummary'
-import { AssistantTimelineCheckpointRail } from './AssistantTimelineCheckpointRail'
+import { AssistantVirtualTimeline } from './AssistantVirtualTimeline'
+import { computeStableAssistantTimelineRows, type StableTimelineRowsState } from './assistant-virtual-timeline-rows'
 import {
     buildTimelineRows,
     countRunningCommandActivities,
@@ -37,9 +40,9 @@ import {
     type TimelineDisplayRow,
     type TimelineRenderRow
 } from './assistant-timeline-helpers'
+import { stripProposedPlanBlocks } from './assistant-proposed-plan'
 import { groupTimelineRowsIntoWorkSummaries } from './assistant-turn-work'
 import { useAssistantTimelineEntries } from './useAssistantTimelineEntries'
-import { useAssistantTimelineWindow } from './useAssistantTimelineWindow'
 
 type AssistantTimelineProps = {
     messages: AssistantMessage[]
@@ -53,7 +56,6 @@ type AssistantTimelineProps = {
     windowKey?: string
     scrollContainerRef?: RefObject<HTMLDivElement | null>
     overlayContainerRef?: RefObject<HTMLDivElement | null>
-    railHostRef?: RefObject<HTMLDivElement | null>
     isWorking?: boolean
     workingLabel?: string
     activeWorkStartedAt?: string | null
@@ -73,9 +75,16 @@ type AssistantTimelineProps = {
         ext: string,
         options?: PreviewOpenOptions
     ) => Promise<void> | void
-    onOpenInternalLink?: (href: string) => Promise<void> | void
+    onOpenInternalLink?: (href: string) => Promise<boolean | void> | boolean | void
+    onLinkNotice?: (message: string, tone: 'info' | 'error') => void
     onOpenFilePath?: (filePath: string) => Promise<void> | void
     onViewDiff?: (target: AssistantDiffTarget) => void
+    contentInsetEndAdjustment?: number
+    hasOlder?: boolean
+    loadingOlder?: boolean
+    loadOlderError?: string | null
+    onLoadOlder?: () => void
+    onScrollContainer?: (element: HTMLDivElement) => void
 }
 
 function AssistantTimelineImpl({
@@ -90,7 +99,6 @@ function AssistantTimelineImpl({
     windowKey = 'default',
     scrollContainerRef,
     overlayContainerRef,
-    railHostRef,
     isWorking = false,
     workingLabel = 'Working...',
     activeWorkStartedAt = null,
@@ -107,16 +115,32 @@ function AssistantTimelineImpl({
     onShowPlanPanel,
     onOpenAttachmentPreview,
     onOpenInternalLink,
+    onLinkNotice,
     onOpenFilePath,
-    onViewDiff
+    onViewDiff,
+    contentInsetEndAdjustment = 0,
+    hasOlder = false,
+    loadingOlder = false,
+    loadOlderError = null,
+    onLoadOlder,
+    onScrollContainer
 }: AssistantTimelineProps) {
-    const timelineEntryCount = messages.length + activities.length + proposedPlans.length
-    const timelineWindow = useAssistantTimelineWindow({
-        entryCount: timelineEntryCount,
-        resetKey: windowKey,
-        scrollContainerRef
-    })
-    const timelineRootRef = useRef<HTMLDivElement | null>(null)
+    useEffect(
+        () => prewarmMarkdownRenders(messages.flatMap((message) => {
+            if (message.role !== 'assistant' || message.streaming) return []
+            const content = stripProposedPlanBlocks(message.text || '')
+            if (!content.trim()) return []
+            return [{
+                content,
+                cacheKey: `${message.id}:${message.updatedAt}:${content.length}`,
+                filePath: assistantMessageFilePath || undefined
+            }]
+        })),
+        [assistantMessageFilePath, messages]
+    )
+
+    const entries = useAssistantTimelineEntries(messages, activities, proposedPlans)
+    const listRef = useRef<LegendListRef | null>(null)
     const pendingActivityRevealRef = useRef<string | null>(null)
     const revealActivityInDom = useCallback((activityId: string): boolean => {
         const target = document.getElementById(getTimelineActivityDomId(activityId))
@@ -137,24 +161,11 @@ function AssistantTimelineImpl({
     const revealActivity = useCallback((activityId: string) => {
         if (revealActivityInDom(activityId)) return
         pendingActivityRevealRef.current = activityId
-        timelineWindow.revealAll()
-    }, [revealActivityInDom, timelineWindow])
+    }, [revealActivityInDom])
 
-    useLayoutEffect(() => {
-        const pendingActivityId = pendingActivityRevealRef.current
-        if (!pendingActivityId || !revealActivityInDom(pendingActivityId)) return
-        pendingActivityRevealRef.current = null
-    }, [revealActivityInDom, timelineWindow.loadedEntryCount])
-    const entries = useAssistantTimelineEntries(
-        messages,
-        activities,
-        proposedPlans,
-        timelineWindow.loadedEntryCount
-    )
-    const visibleEntries = entries
     const baseRows = useMemo(
-        () => buildTimelineRows(visibleEntries, isWorking, activeWorkStartedAt),
-        [activeWorkStartedAt, isWorking, visibleEntries]
+        () => buildTimelineRows(entries, isWorking, activeWorkStartedAt),
+        [activeWorkStartedAt, entries, isWorking]
     )
     const rows = useMemo(
         () => groupTimelineRowsIntoWorkSummaries({
@@ -181,6 +192,30 @@ function AssistantTimelineImpl({
             .map((activity) => [activity.id, findRelatedCommandActivityId(activity, activities)] as const)
     ), [activities])
     const runningCommandCount = useMemo(() => countRunningCommandActivities(activities), [activities])
+    const stableRowsStateRef = useRef<StableTimelineRowsState | null>(null)
+    const stableRows = useMemo(() => {
+        const next = computeStableAssistantTimelineRows(stableRowsStateRef.current, rows)
+        stableRowsStateRef.current = next
+        return next.rows
+    }, [rows])
+
+    useLayoutEffect(() => {
+        const activityId = pendingActivityRevealRef.current
+        if (!activityId) return
+        const rowIndex = stableRows.findIndex((row) => (
+            row.kind === 'activity' ? row.activity.id === activityId
+                : 'activities' in row ? row.activities.some((activity) => activity.id === activityId)
+                    : row.kind === 'turn-work-summary' ? row.rows.some((nested) => (
+                        nested.kind === 'activity' ? nested.activity.id === activityId : 'activities' in nested && nested.activities.some((activity) => activity.id === activityId)
+                    )) : false
+        ))
+        if (rowIndex < 0) return
+        void listRef.current?.scrollToIndex({ index: rowIndex, viewPosition: 0.5, animated: true })
+        const frame = window.requestAnimationFrame(() => {
+            if (revealActivityInDom(activityId)) pendingActivityRevealRef.current = null
+        })
+        return () => window.cancelAnimationFrame(frame)
+    }, [revealActivityInDom, stableRows])
 
     if (loadingChats) {
         return <TimelineChatLoadingState />
@@ -209,6 +244,7 @@ function AssistantTimelineImpl({
                     startedAt={row.startedAt}
                     completedAt={row.completedAt}
                     running={row.running}
+                    outcome={row.outcome}
                     renderLiveNarration={row.liveNarrationRow
                         ? (expanded) => (
                             <div
@@ -337,6 +373,7 @@ function AssistantTimelineImpl({
                     overlayContainerRef={overlayContainerRef}
                     filePath={assistantMessageFilePath}
                     onInternalLinkClick={onOpenInternalLink}
+                    onLinkNotice={onLinkNotice}
                 />
             )
         }
@@ -355,6 +392,7 @@ function AssistantTimelineImpl({
                 onOpenFilePath={row.message.role === 'user' ? onOpenFilePath : undefined}
                 filePath={row.message.role === 'assistant' ? assistantMessageFilePath : null}
                 onInternalLinkClick={row.message.role === 'assistant' ? onOpenInternalLink : undefined}
+                onLinkNotice={row.message.role === 'assistant' ? onLinkNotice : undefined}
                 onOpenAttachmentPreview={row.message.role === 'user' ? onOpenAttachmentPreview : undefined}
             />
         )
@@ -377,17 +415,19 @@ function AssistantTimelineImpl({
     }
 
     return (
-        <div ref={timelineRootRef} className="relative">
-            <AssistantTimelineCheckpointRail
-                rows={baseRows}
-                rootRef={timelineRootRef}
-                railHostRef={railHostRef}
-                scrollContainerRef={scrollContainerRef}
-                turnUsageById={turnUsageById}
-                latestTurnStartedAt={latestTurnStartedAt}
-            />
-            {rows.map((row) => renderRowContainer(row, renderRow(row)))}
-        </div>
+        <AssistantVirtualTimeline
+            rows={stableRows}
+            windowKey={windowKey}
+            listRef={listRef}
+            scrollContainerRef={scrollContainerRef}
+            contentInsetEndAdjustment={contentInsetEndAdjustment}
+            hasOlder={hasOlder}
+            loadingOlder={loadingOlder}
+            loadOlderError={loadOlderError}
+            onLoadOlder={onLoadOlder}
+            onScrollContainer={onScrollContainer}
+            renderRow={renderRow}
+        />
     )
 }
 

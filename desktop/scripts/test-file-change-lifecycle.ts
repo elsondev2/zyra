@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import {
     buildPatchFromFileChanges,
+    FILE_CHANGE_MAX_PATCH_BYTES,
     mergeNormalizedFileChangePayload,
     normalizeFileChange,
     normalizeFileChangePayload,
@@ -368,6 +369,54 @@ assert.equal((projectedCodexFileChange.payload?.['changes'] as unknown[])?.lengt
 handleAssistantRuntimeEvent(codexItemEvents[1]!, serviceDeps)
 assert.equal(projectedCodexThread.activities[0]?.payload?.['status'], 'completed', 'late live event cannot regress projected completion')
 assert.equal(projectedCodexThread.activities[0]?.payload?.['source'], 'provider-result')
+
+const rawPatchSentinel = 'RAW-PATCH-SENTINEL-MUST-NOT-PERSIST'
+const oversizedRawPatch = `diff --git a/src/large.ts b/src/large.ts\n--- a/src/large.ts\n+++ b/src/large.ts\n@@ -1 +1 @@\n-${'x'.repeat(FILE_CHANGE_MAX_PATCH_BYTES + 4096)}\n+bounded\n${rawPatchSentinel}\n`
+handleAssistantRuntimeEvent({
+    eventId: 'pi-large-raw-result',
+    type: 'activity',
+    createdAt: '2026-07-10T17:05:00.000Z',
+    threadId: projectedCodexThread.id,
+    turnId: codexFileChangeFixture.turnId,
+    payload: {
+        activityId: 'zyra-tool-large-raw-result',
+        kind: 'file-change',
+        summary: 'Edited file',
+        tone: 'tool',
+        data: {
+            category: 'file-change',
+            provider: 'pi',
+            status: 'completed',
+            source: 'provider-result',
+            authoritative: true,
+            revision: 3,
+            paths: ['src/large.ts'],
+            changes: [{ path: 'src/large.ts', kind: 'update' }],
+            patch: oversizedRawPatch,
+            result: {
+                content: [{ type: 'text', text: 'Successfully edited src/large.ts' }],
+                details: {
+                    patch: oversizedRawPatch,
+                    diff: oversizedRawPatch,
+                    changes: [{ path: 'src/large.ts', kind: 'update', diff: oversizedRawPatch }],
+                    providerMetadata: 'preserved'
+                }
+            }
+        }
+    }
+}, serviceDeps)
+const boundedRawResultActivity = projectedCodexThread.activities.find((activity) => activity.id === 'zyra-tool-large-raw-result')
+const boundedCanonicalPatch = String(boundedRawResultActivity?.payload?.['patch'] || '')
+const persistedRawResult = boundedRawResultActivity?.payload?.['result'] as Record<string, unknown> | undefined
+const persistedRawDetails = persistedRawResult?.['details'] as Record<string, unknown> | undefined
+const persistedRawChanges = persistedRawDetails?.['changes'] as Array<Record<string, unknown>> | undefined
+assert.match(boundedCanonicalPatch, /diff truncated by Zyra/, 'canonical persisted patches remain bounded')
+assert.ok(Buffer.byteLength(boundedCanonicalPatch, 'utf8') < Buffer.byteLength(oversizedRawPatch, 'utf8'))
+assert.equal(persistedRawDetails?.['patch'], undefined, 'raw result patches must be stripped before persistence')
+assert.equal(persistedRawDetails?.['diff'], undefined, 'raw result diffs must be stripped before persistence')
+assert.equal(persistedRawChanges?.[0]?.['diff'], undefined, 'nested raw change diffs must be stripped before persistence')
+assert.equal(persistedRawDetails?.['providerMetadata'], 'preserved', 'non-patch result metadata must remain available')
+assert.equal(JSON.stringify(boundedRawResultActivity?.payload).includes(rawPatchSentinel), false, 'oversized raw patch tails must not persist')
 
 const reconciliationActivities: AssistantActivity[] = [
     {

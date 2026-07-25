@@ -1,11 +1,18 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
-import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import { normalizeOpeningTheme, pickOpeningTheme } from "./banner.mjs";
+import {
+  extractCodexRateLimitWindows,
+  extractCodexUsageLimitWindows,
+  formatCodexUsageWindowLabel,
+  listCodexUsageWindows,
+  normalizeCodexLimitWindow,
+} from "./codex-usage-windows.mjs";
 import { createMemoryController } from "./memory/zyra-memory-controller.mjs";
 import { createZyraMemoryRunner } from "./memory/zyra-memory-runner.mjs";
 import {
@@ -17,7 +24,6 @@ import {
   runZyraMemoryStartup,
 } from "./zyra-memory.mjs";
 import { expandFileMentions } from "./file-mentions.mjs";
-import { DEFAULT_AUTO_POLL_MS, createManagedBashState, createManagedBashTool, waitForManagedBashAutoUpdate } from "./managed-bash-tool.mjs";
 import { DEFAULT_TERMINAL_THEME, listTerminalThemes, resolveTerminalTheme } from "./terminal-theme.mjs";
 import {
   checkModelAvailability,
@@ -25,7 +31,25 @@ import {
   getFilteredAvailableModels,
   refreshModelAvailability,
 } from "./model-availability.mjs";
+import {
+  applyModelCompatibility,
+  getModelCompatibilityError,
+  getModelCompatibilityLabel,
+  PI_SUPPORT_PENDING_STATUS,
+} from "./model-compatibility.mjs";
 import { sortModelsLatestFirst } from "./model-order.mjs";
+import {
+  chooseVerifiedApiModel,
+  configureOpenAIApiKey,
+  formatZyraAuthMethodsStatus,
+  getZyraAuthMethodsStatus,
+  normalizeZyraAuthMethod,
+  providerForZyraAuthMethod,
+  removeZyraAuthMethod,
+  verifyOpenAIApiKey,
+  ZYRA_API_DEFAULT_MODEL,
+  ZYRA_SUBSCRIPTION_DEFAULT_MODEL,
+} from "./auth-methods.mjs";
 import {
   applyGpt56ThinkingEffort,
   coerceThinkingLevelForModel,
@@ -34,11 +58,10 @@ import {
   toPiThinkingLevel,
 } from "./thinking-levels.mjs";
 import {
-  createZyraWebFetchTool,
-  createZyraWebSearchTool,
+  DEFAULT_MANAGED_BASH_AUTO_POLL_MS,
   ZYRA_WEB_FETCH_TOOL_NAME,
   ZYRA_WEB_SEARCH_TOOL_NAME,
-} from "./web-search-tool.mjs";
+} from "./tool-contracts.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ZYRA_THEME_CUSTOM_TYPE = "zyra.theme.v1";
@@ -69,7 +92,14 @@ export const defaults = {
 };
 
 const ZYRA_RUNTIME_MODEL_OVERRIDES = [
-  { provider: "openai-codex", id: "gpt-5.6-luna", templateId: "gpt-5.5", name: "GPT-5.6 Luna", cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 } },
+  {
+    provider: "openai-codex",
+    id: "gpt-5.6-luna",
+    templateId: "gpt-5.5",
+    name: "GPT-5.6 Luna",
+    cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
+    compatibility: { status: PI_SUPPORT_PENDING_STATUS, capability: "codex-responses-lite" },
+  },
   { provider: "openai-codex", id: "gpt-5.6-terra", templateId: "gpt-5.5", name: "GPT-5.6 Terra", cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 } },
   { provider: "openai-codex", id: "gpt-5.6-sol", templateId: "gpt-5.5", name: "GPT-5.6 Sol", cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 } },
   { provider: "openai", id: "gpt-5.6-luna", templateId: "gpt-5.5", name: "GPT-5.6 Luna", cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 } },
@@ -134,10 +164,31 @@ function resolveProjectDataDir(project) {
 }
 
 let piPackagePromise;
+let estimateTokensImpl;
+let zyraToolModulesPromise;
 
 async function loadPiPackage() {
-  piPackagePromise ??= import("@earendil-works/pi-coding-agent");
+  piPackagePromise ??= import("@earendil-works/pi-coding-agent").then((module) => {
+    estimateTokensImpl = typeof module.estimateTokens === "function" ? module.estimateTokens : undefined;
+    return module;
+  });
   return piPackagePromise;
+}
+
+async function loadZyraToolModules() {
+  zyraToolModulesPromise ??= Promise.all([
+    import("./managed-bash-tool.mjs"),
+    import("./web-search-tool.mjs"),
+    import("./write-diff-tool.mjs"),
+  ]).then(([managedBash, web, writeDiff]) => ({
+    createManagedBashState: managedBash.createManagedBashState,
+    createManagedBashTool: managedBash.createManagedBashTool,
+    waitForManagedBashAutoUpdate: managedBash.waitForManagedBashAutoUpdate,
+    createZyraWebSearchTool: web.createZyraWebSearchTool,
+    createZyraWebFetchTool: web.createZyraWebFetchTool,
+    createZyraWriteTool: writeDiff.createZyraWriteTool,
+  }));
+  return zyraToolModulesPromise;
 }
 
 async function loadPiSessionManager() {
@@ -174,12 +225,13 @@ function registerZyraRuntimeModel(modelRegistry, override) {
   const template = providerModels.find((model) => model.id === override.templateId) ?? providerModels[0];
   if (!template) return { ...override, status: "missing-template" };
 
-  models.push({
+  const runtimeModel = applyModelCompatibility({
     ...template,
     id: override.id,
     name: override.name ?? override.id,
     cost: override.cost ? { ...override.cost } : template.cost,
-  });
+  }, override.compatibility);
+  models.push(runtimeModel);
   return { ...override, status: "registered" };
 }
 
@@ -500,10 +552,19 @@ export async function createZyraSession(options = {}) {
 
   mkdirSync(sessions, { recursive: true });
 
-  const [{ createAgentSession }, SessionManager] = await Promise.all([
+  const [{ createAgentSession, createWriteTool, generateDiffString, generateUnifiedPatch, withFileMutationQueue }, SessionManager, toolModules] = await Promise.all([
     loadPiPackage(),
     loadPiSessionManager(),
+    loadZyraToolModules(),
   ]);
+  const {
+    createManagedBashState,
+    createManagedBashTool,
+    waitForManagedBashAutoUpdate,
+    createZyraWebSearchTool,
+    createZyraWebFetchTool,
+    createZyraWriteTool,
+  } = toolModules;
 
   const sessionManager = await createSessionManager(SessionManager, {
     project,
@@ -544,19 +605,35 @@ export async function createZyraSession(options = {}) {
       }),
       createZyraWebSearchTool(),
       createZyraWebFetchTool(),
+      createZyraWriteTool({
+        cwd,
+        createWriteTool,
+        generateDiffString,
+        generateUnifiedPatch,
+        withFileMutationQueue,
+      }),
     ],
     ...startupResources,
   });
 
   installManagedBashAutoPoll(result.session, managedBash, {
-    intervalMs: options.managedBashAutoPollMs ?? DEFAULT_AUTO_POLL_MS,
+    intervalMs: options.managedBashAutoPollMs ?? DEFAULT_MANAGED_BASH_AUTO_POLL_MS,
+    waitForUpdate: waitForManagedBashAutoUpdate,
   });
   registerZyraRuntimeModels(result.session.modelRegistry);
   applyWebToolState(result.session, startupPreferences);
-  const modelAvailability = await refreshZyraModelAvailability(result.session.modelRegistry, {
-    forceRefresh: options.forceModelPing ?? options.forceRefreshModels,
-  });
-
+  const modelAvailability = options.skipModelAvailability
+    ? {
+        checked: [],
+        filtered: result.session.modelRegistry?.getAvailable?.() ?? [],
+        removed: [],
+        unknown: [],
+        available: [],
+        skipped: true,
+      }
+    : await refreshZyraModelAvailability(result.session.modelRegistry, {
+        forceRefresh: options.forceModelPing ?? options.forceRefreshModels,
+      });
   if (!options.skipGuide) {
     injectZyraGuide(result.session, readPrompt(defaults.prompt));
   }
@@ -577,22 +654,25 @@ export async function createZyraSession(options = {}) {
   }
   const projectMemory = options.skipProjectMemory ? [] : injectProjectMemory(result.session, project);
 
-  let selectedModel = await preferDefaultModel(result.session, startupPreferences.model);
+  const preferredModelOptions = { skipAvailabilityCheck: Boolean(options.skipModelAvailability) };
+  let selectedModel = await preferDefaultModel(result.session, startupPreferences.model, preferredModelOptions);
   if (!selectedModel && startupPreferences.model !== defaults.model) {
-    selectedModel = await preferDefaultModel(result.session, defaults.model);
+    selectedModel = await preferDefaultModel(result.session, defaults.model, preferredModelOptions);
   }
   const effectiveThinking = syncZyraThinkingLevel({ session: result.session, thinkingState }, thinking);
-  persistExplicitStartupPreferences(project, options, {
-    thinking: effectiveThinking,
-    terminalTheme,
-    profile,
-    model: selectedModel,
-    webSearch: startupPreferences.webSearch,
-    webFetch: startupPreferences.webFetch,
-    statusLine: startupPreferences.statusLine,
-    notifications: startupPreferences.notifications,
-    interruptMode: startupPreferences.interruptMode,
-  });
+  if (options.persistStartupPreferences !== false) {
+    persistExplicitStartupPreferences(project, options, {
+      thinking: effectiveThinking,
+      terminalTheme,
+      profile,
+      model: selectedModel,
+      webSearch: startupPreferences.webSearch,
+      webFetch: startupPreferences.webFetch,
+      statusLine: startupPreferences.statusLine,
+      notifications: startupPreferences.notifications,
+      interruptMode: startupPreferences.interruptMode,
+    });
+  }
 
   return {
     session: result.session,
@@ -627,8 +707,8 @@ function installManagedBashAutoPoll(session, managedBash, options = {}) {
   agent.prepareNextTurn = async (turn) => {
     const snapshot = await previousPrepareNextTurn?.(turn);
     if (!managedBash.hasAutoPollJobs?.()) return snapshot;
-    const text = await waitForManagedBashAutoUpdate(managedBash, {
-      waitMs: options.intervalMs ?? DEFAULT_AUTO_POLL_MS,
+    const text = await options.waitForUpdate?.(managedBash, {
+      waitMs: options.intervalMs ?? DEFAULT_MANAGED_BASH_AUTO_POLL_MS,
       signal: agent.signal,
     });
     if (!text || agent.signal?.aborted) return snapshot;
@@ -684,7 +764,7 @@ export async function listZyraSessions(options = {}) {
 
 export async function loginZyraAuth(provider = "openai-codex", options = {}) {
   const AuthStorage = await loadPiAuthStorage();
-  const authStorage = AuthStorage.create();
+  const authStorage = options.authStorage ?? AuthStorage.create();
   const tell = typeof options.onMessage === "function" ? options.onMessage : console.log;
 
   await authStorage.login(provider, {
@@ -769,13 +849,11 @@ export function formatZyraAuthAccountStatus(account = {}) {
 
   if (account.usage) {
     lines.push("", "Limits:");
-    appendUsageWindow(lines, "Session (5h)", account.usage.primary);
-    appendUsageWindow(lines, "Week (7d)", account.usage.secondary);
-    for (const item of account.usage.additional ?? []) {
-      appendUsageWindow(lines, `${item.name || "Additional"} (5h)`, item.primary, { hideEmpty: true });
-      appendUsageWindow(lines, `${item.name || "Additional"} (7d)`, item.secondary, { hideEmpty: true });
+    const windows = listCodexUsageWindows(account.usage);
+    if (windows.length === 0) lines.push(" No rate-limit windows returned by ChatGPT.");
+    for (const window of windows) {
+      appendUsageWindow(lines, formatCodexUsageWindowLabel(window), window);
     }
-    appendUsageWindow(lines, "Code review", account.usage.codeReview, { hideEmpty: true });
   } else if (account.usageError) {
     lines.push("", ` Limits: unavailable — ${account.usageError}`);
   } else {
@@ -825,31 +903,31 @@ function shortId(value) {
   return text.length <= 14 ? text : `${text.slice(0, 8)}…${text.slice(-4)}`;
 }
 
-const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/codex/usage";
+const CODEX_ACCOUNT_API_BASE = "https://chatgpt.com/backend-api";
 const CODEX_TOKEN_URL = "https://auth.openai.com/oauth/token";
 const OPENAI_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 
 export async function fetchCodexUsageStats() {
-  const auth = (await getPiCodexUsageAuth()) ?? getCodexCliUsageAuth();
-  if (!auth) {
-    throw new Error("No Codex auth found. Run /login or `zyra login`, or sign in with the Codex CLI first.");
-  }
+  const { data, auth } = await requestCodexAccountJson("/wham/usage");
+  return normalizeCodexUsageStats(data, auth.source, auth);
+}
 
-  let activeAuth = auth;
-  let response = await fetchCodexUsageWithAuth(activeAuth);
-  if ((response.status === 401 || response.status === 403) && activeAuth.refreshToken) {
-    const accessToken = await refreshCodexCliUsageAccessToken(activeAuth.refreshToken);
-    activeAuth = { ...activeAuth, accessToken };
-    response = await fetchCodexUsageWithAuth(activeAuth);
-  }
+export async function fetchCodexResetCredits() {
+  const { data } = await requestCodexAccountJson("/wham/rate-limit-reset-credits");
+  return normalizeCodexResetCredits(data);
+}
 
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new Error(formatCodexUsageHttpFailure(response.status, response.statusText, detail));
-  }
-
-  const data = await response.json();
-  return normalizeCodexUsageStats(data, activeAuth.source, activeAuth);
+export async function redeemCodexResetCredit(creditId) {
+  const normalizedId = String(creditId ?? "").trim();
+  if (!normalizedId) throw new Error("Choose a banked Codex reset before redeeming.");
+  const { data } = await requestCodexAccountJson("/wham/rate-limit-reset-credits/consume", {
+    method: "POST",
+    body: JSON.stringify({
+      credit_id: normalizedId,
+      redeem_request_id: randomUUID(),
+    }),
+  });
+  return normalizeCodexResetRedemption(data);
 }
 
 export function formatCodexUsageStats(stats) {
@@ -857,34 +935,18 @@ export function formatCodexUsageStats(stats) {
   const lines = ["", separator, "Codex usage", ""];
   lines.push(` Source: ${stats.source}`);
   lines.push(` Plan: ${stats.plan ?? "unknown"}`);
+  if (stats.availableResetCount !== undefined) {
+    lines.push(` Banked resets: ${stats.availableResetCount}`);
+  }
   lines.push("");
 
-  const windows = [
-    ["Session (5h)", stats.primary],
-    ["Week (7d)", stats.secondary],
-  ];
-  let shown = 0;
-  for (const [label, bucket] of windows) {
-    if (!bucket) continue;
-    lines.push(` ${label.padEnd(14)} ${formatUsagePercent(bucket.usedPercent)}${formatReset(bucket.resetAt)}`);
-    shown += 1;
+  const windows = listCodexUsageWindows(stats);
+  for (const window of windows) {
+    const label = formatCodexUsageWindowLabel(window);
+    lines.push(` ${label.padEnd(14)} ${formatUsagePercent(window.usedPercent)}${formatReset(window.resetAt)}`);
   }
 
-  for (const item of stats.additional ?? []) {
-    for (const [windowLabel, bucket] of [["5h", item.primary], ["7d", item.secondary]]) {
-      if (!bucket || bucket.usedPercent <= 0) continue;
-      const label = `${item.name || "Additional"} (${windowLabel})`;
-      lines.push(` ${label.padEnd(14)} ${formatUsagePercent(bucket.usedPercent)}${formatReset(bucket.resetAt)}`);
-      shown += 1;
-    }
-  }
-
-  if (stats.codeReview) {
-    lines.push(` ${"Code review".padEnd(14)} ${formatUsagePercent(stats.codeReview.usedPercent)}${formatReset(stats.codeReview.resetAt)}`);
-    shown += 1;
-  }
-
-  if (!shown) lines.push(" No rate-limit windows returned by ChatGPT.");
+  if (windows.length === 0) lines.push(" No rate-limit windows returned by ChatGPT.");
   lines.push("", ` Updated: ${formatLocalDateTime(stats.updatedAt)}`, separator);
   return lines;
 }
@@ -948,25 +1010,64 @@ async function refreshCodexCliUsageAccessToken(refreshToken) {
   return json.access_token;
 }
 
-function fetchCodexUsageWithAuth(auth) {
+async function requestCodexAccountJson(pathname, init = {}) {
+  const auth = (await getPiCodexUsageAuth()) ?? getCodexCliUsageAuth();
+  if (!auth) {
+    throw new Error("No Codex auth found. Run /login or `zyra login`, or sign in with the Codex CLI first.");
+  }
+
+  let activeAuth = auth;
+  let response = await fetchCodexAccountWithAuth(activeAuth, pathname, init);
+  if ((response.status === 401 || response.status === 403) && activeAuth.refreshToken) {
+    const accessToken = await refreshCodexCliUsageAccessToken(activeAuth.refreshToken);
+    activeAuth = { ...activeAuth, accessToken };
+    response = await fetchCodexAccountWithAuth(activeAuth, pathname, init);
+  }
+
+  const raw = await response.text().catch(() => "");
+  if (!response.ok) {
+    throw new Error(formatCodexUsageHttpFailure(response.status, response.statusText, raw));
+  }
+  if (!raw) return { data: {}, auth: activeAuth };
+  try {
+    return { data: JSON.parse(raw), auth: activeAuth };
+  } catch {
+    throw new Error(`Codex account request failed (${response.status}): expected JSON response.`);
+  }
+}
+
+function fetchCodexAccountWithAuth(auth, pathname, init = {}) {
   const headers = {
     Authorization: `Bearer ${auth.accessToken}`,
     Accept: "application/json",
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+    "User-Agent": "zyra-codex-resets/1.0",
+    Origin: "https://chatgpt.com",
   };
-  if (auth.accountId) headers["chatgpt-account-id"] = auth.accountId;
-  return fetch(CODEX_USAGE_URL, { headers });
+  if (auth.accountId) headers["ChatGPT-Account-Id"] = auth.accountId;
+  if (init.body) headers["Content-Type"] = "application/json";
+  return fetch(`${CODEX_ACCOUNT_API_BASE}${pathname}`, {
+    ...init,
+    headers: { ...headers, ...(init.headers ?? {}) },
+  });
 }
 
-function normalizeCodexUsageStats(data, source, auth = {}) {
+export function normalizeCodexUsageStats(data, source, auth = {}) {
   const rateLimit = data?.rate_limit ?? {};
   const additional = Array.isArray(data?.additional_rate_limits)
-    ? data.additional_rate_limits.map((item) => ({
-        name: String(item?.limit_name ?? item?.name ?? "Additional"),
+    ? data.additional_rate_limits.map((item, index) => ({
+        name: String(item?.limit_name ?? item?.name ?? item?.id ?? `Additional ${index + 1}`),
         primary: normalizeCodexLimitWindow(item?.rate_limit?.primary_window),
         secondary: normalizeCodexLimitWindow(item?.rate_limit?.secondary_window),
+        windows: extractCodexRateLimitWindows(item?.rate_limit ?? item, {
+          idPrefix: `legacy-additional:${index}`,
+          scope: String(item?.limit_name ?? item?.name ?? item?.id ?? `Additional ${index + 1}`),
+        }),
       }))
     : [];
+  const codeReviewWindows = extractCodexRateLimitWindows(data?.code_review_rate_limit, {
+    idPrefix: "legacy-code-review",
+    scope: "Code review",
+  });
 
   return {
     source,
@@ -977,17 +1078,58 @@ function normalizeCodexUsageStats(data, source, auth = {}) {
     secondary: normalizeCodexLimitWindow(rateLimit.secondary_window),
     additional,
     codeReview: normalizeCodexLimitWindow(data?.code_review_rate_limit?.primary_window),
+    codeReviewWindows,
+    limitWindows: extractCodexUsageLimitWindows(data),
+    availableResetCount: firstNumber(data?.rate_limit_reset_credits?.available_count),
   };
 }
 
-function normalizeCodexLimitWindow(window) {
-  if (!window) return undefined;
-  const usedPercent = firstNumber(window.used_percent, window.usedPercent, window.usage_percent, window.utilization_percent);
+export function normalizeCodexResetCredits(data) {
+  const credits = Array.isArray(data?.credits)
+    ? data.credits
+        .map(normalizeCodexResetCredit)
+        .filter(Boolean)
+        .sort(compareCodexResetCredits)
+    : [];
+  const reportedCount = firstNumber(data?.available_count);
   return {
-    usedPercent: usedPercent ?? 0,
-    resetAt: normalizeResetAt(window.reset_at ?? window.resetAt),
-    windowSeconds: firstNumber(window.limit_window_seconds, window.window_seconds, window.windowSeconds),
+    availableCount: reportedCount ?? credits.filter(isCodexResetCreditAvailable).length,
+    credits,
   };
+}
+
+export function normalizeCodexResetCredit(value) {
+  if (!value || typeof value.id !== "string" || !value.id) return undefined;
+  return {
+    id: value.id,
+    title: String(value.title ?? "Codex rate-limit reset"),
+    status: String(value.status ?? "unknown").toLowerCase(),
+    resetType: stringOrUndefined(value.reset_type),
+    grantedAt: normalizeResetAt(value.granted_at),
+    expiresAt: normalizeResetAt(value.expires_at),
+    description: stringOrUndefined(value.description),
+  };
+}
+
+export function normalizeCodexResetRedemption(data) {
+  return {
+    code: stringOrUndefined(data?.code),
+    windowsReset: firstNumber(data?.windows_reset),
+    redeemedAt: normalizeResetAt(data?.credit?.redeemed_at),
+    credit: normalizeCodexResetCredit(data?.credit),
+  };
+}
+
+export function isCodexResetCreditAvailable(credit, now = Date.now()) {
+  if (credit?.status !== "available") return false;
+  if (!credit.expiresAt) return true;
+  return new Date(credit.expiresAt).getTime() > now;
+}
+
+function compareCodexResetCredits(left, right) {
+  const availability = Number(isCodexResetCreditAvailable(right)) - Number(isCodexResetCreditAvailable(left));
+  if (availability !== 0) return availability;
+  return resetDateValue(left.expiresAt, Number.MAX_SAFE_INTEGER) - resetDateValue(right.expiresAt, Number.MAX_SAFE_INTEGER);
 }
 
 function formatCodexUsageHttpFailure(status, statusText, body) {
@@ -1005,6 +1147,16 @@ function isCloudflareChallenge(body) {
 
 function stripHtml(value) {
   return String(value ?? "").replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ");
+}
+
+function stringOrUndefined(value) {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function resetDateValue(value, fallback) {
+  if (!value) return fallback;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function firstNumber(...values) {
@@ -1095,8 +1247,83 @@ export async function listAvailableModels(options = {}) {
   return getZyraAvailableModels(modelRegistry).map((model) => ({
     id: `${model.provider}/${model.id}`,
     label: model.id,
-    description: model.name && model.name !== model.id ? model.name : model.provider,
+    description: getModelCompatibilityLabel(model)
+      ?? (model.name && model.name !== model.id ? model.name : model.provider),
+    supportedEfforts: getModelThinkingLevels(model),
   }));
+}
+
+export async function getZyraAuthOverview(runtime, options = {}) {
+  const AuthStorage = await loadPiAuthStorage();
+  const authStorage = options.authStorage ?? runtime?.session?.modelRegistry?.authStorage ?? AuthStorage.create();
+  const preferredSelector = options.project ? readProjectModelPreference(options.project) : undefined;
+  const preferredModel = parseModelSelector(preferredSelector);
+  return getZyraAuthMethodsStatus(authStorage, runtime?.session?.model ?? preferredModel);
+}
+
+export { formatZyraAuthMethodsStatus };
+
+export async function configureZyraOpenAIApiKey(apiKey, options = {}) {
+  const AuthStorage = await loadPiAuthStorage();
+  const authStorage = options.authStorage ?? AuthStorage.create();
+  return configureOpenAIApiKey(authStorage, apiKey, options);
+}
+
+export async function verifyZyraOpenAIApiAuth(options = {}) {
+  const AuthStorage = await loadPiAuthStorage();
+  const authStorage = options.authStorage ?? AuthStorage.create();
+  if (!authStorage.hasAuth?.("openai")) throw new Error("OpenAI API is not connected.");
+  const key = await authStorage.getApiKey("openai");
+  return verifyOpenAIApiKey(key, options);
+}
+
+export async function removeZyraAuth(method, options = {}) {
+  const AuthStorage = await loadPiAuthStorage();
+  const authStorage = options.authStorage ?? AuthStorage.create();
+  return removeZyraAuthMethod(authStorage, method);
+}
+
+export async function switchZyraAuthMethod(runtime, method, options = {}) {
+  const normalized = normalizeZyraAuthMethod(method);
+  if (!normalized) throw new Error("Auth method must be subscription or api.");
+
+  const authStorage = options.authStorage ?? runtime?.session?.modelRegistry?.authStorage;
+  const provider = providerForZyraAuthMethod(normalized);
+  if (!authStorage?.hasAuth?.(provider)) {
+    throw new Error(normalized === "api"
+      ? "OpenAI API is not connected. Run /auth api to add and verify a key."
+      : "ChatGPT subscription is not connected. Run /auth subscription to sign in.");
+  }
+
+  let verification = options.verification;
+  let selector = ZYRA_SUBSCRIPTION_DEFAULT_MODEL;
+  if (normalized === "api") {
+    if (!verification) {
+      const key = await authStorage.getApiKey(provider);
+      verification = await verifyOpenAIApiKey(key, options);
+    }
+    selector = chooseVerifiedApiModel(verification);
+    if (!selector) {
+      throw new Error("The API key is valid, but this account does not expose a supported GPT-5.6 API model.");
+    }
+  }
+
+  const model = await setModel(runtime, selector, {
+    skipAvailabilityCheck: normalized === "api" && Boolean(verification),
+  });
+  return { method: normalized, provider, model, verification };
+}
+
+export function setZyraAuthMethodPreference(project, method, selector) {
+  const normalized = normalizeZyraAuthMethod(method);
+  if (!normalized) throw new Error("Auth method must be subscription or api.");
+  const model = selector ?? (normalized === "api" ? ZYRA_API_DEFAULT_MODEL : ZYRA_SUBSCRIPTION_DEFAULT_MODEL);
+  writeProjectModelPreference(project, model);
+  return model;
+}
+
+export function getZyraModelThinkingLevels(model, piLevels) {
+  return getModelThinkingLevels(model, piLevels);
 }
 
 export function getZyraAvailableModels(modelRegistry, options = {}) {
@@ -1123,10 +1350,11 @@ export function formatZyraModelAvailabilitySummary(report) {
 }
 
 export async function warmupZyraRuntime(options = {}) {
-  const [, , , models] = await Promise.all([
+  const [, , , , models] = await Promise.all([
     loadPiPackage(),
     loadPiSessionManager(),
     loadPiStartupResources(),
+    loadZyraToolModules(),
     listAvailableModels(options),
   ]);
   return { models };
@@ -1137,7 +1365,7 @@ export async function resolveZyraSessionPath(options = {}) {
   const sessions = path.resolve(options.sessions ?? getProjectSessionsDir(project));
   const selector = String(options.selector ?? "").trim();
   if (!selector) {
-    throw new Error("Choose a chat id from `zyra sessions`, or pass a session file path.");
+    throw new Error("Choose a thread id from `zyra threads` (legacy: `zyra sessions`), or pass a session file path.");
   }
 
   if (looksLikePath(selector)) {
@@ -1322,7 +1550,7 @@ function normalizeInterruptModePreference(value) {
   return undefined;
 }
 
-async function preferDefaultModel(session, selector) {
+async function preferDefaultModel(session, selector, options = {}) {
   const [provider, ...modelParts] = String(selector ?? "").split("/");
   const modelId = modelParts.join("/");
   if (!provider || !modelId) return undefined;
@@ -1330,8 +1558,10 @@ async function preferDefaultModel(session, selector) {
 
   const model = session.modelRegistry.find(provider, modelId);
   if (!model || !session.modelRegistry.hasConfiguredAuth(model)) return undefined;
-  const availability = await checkModelAvailability(session.modelRegistry, model);
-  if (availability.availability === "unavailable") return undefined;
+  if (!options.skipAvailabilityCheck) {
+    const availability = await checkModelAvailability(session.modelRegistry, model);
+    if (["blocked", "unavailable"].includes(availability.availability)) return undefined;
+  }
   await session.setModel(model);
   return model;
 }
@@ -1374,6 +1604,7 @@ export async function runZyraPrompt(runtime, prompt, options = {}) {
   } finally {
     markRuntimeMemoryPollutedFromTurn(runtime, expanded, options, beforeEntryCount);
   }
+  assertFinalAssistantMessageSucceeded(runtime);
 }
 
 export async function queueZyraMidRunInput(runtime, prompt, options = {}) {
@@ -1389,6 +1620,15 @@ export async function queueZyraMidRunInput(runtime, prompt, options = {}) {
   return mode;
 }
 
+export async function runZyraBackgroundTextPrompt(runtime, prompt) {
+  const normalizedPrompt = String(prompt ?? '').trim();
+  if (!normalizedPrompt) throw new Error('Prompt is required.');
+  await runtime.session.prompt(normalizedPrompt, { source: 'print' });
+  const lastMessage = assertFinalAssistantMessageSucceeded(runtime);
+  if (lastMessage?.role !== 'assistant') return '';
+  return extractAssistantText(lastMessage.content);
+}
+
 export async function runZyraPrintPrompt(runtime, prompt, options = {}) {
   const beforeEntryCount = sessionEntries(runtime).length;
   const expanded = expandFileMentions(runtime, prompt);
@@ -1398,18 +1638,28 @@ export async function runZyraPrintPrompt(runtime, prompt, options = {}) {
   } finally {
     markRuntimeMemoryPollutedFromTurn(runtime, expanded, options, beforeEntryCount);
   }
-  const lastMessage = runtime.session.state?.messages?.at?.(-1);
+  const lastMessage = assertFinalAssistantMessageSucceeded(runtime);
   if (lastMessage?.role !== "assistant") return "";
+  return extractAssistantText(lastMessage.content);
+}
+
+function assertFinalAssistantMessageSucceeded(runtime) {
+  const lastMessage = runtime.session.state?.messages?.at?.(-1);
+  if (lastMessage?.role !== "assistant") return lastMessage;
   if (lastMessage.stopReason === "error" || lastMessage.stopReason === "aborted") {
     throw new Error(lastMessage.errorMessage || `Request ${lastMessage.stopReason}`);
   }
-  return extractAssistantText(lastMessage.content);
+  return lastMessage;
+}
+
+export function getZyraThreadId(runtime) {
+  return runtime?.session?.sessionManager?.getSessionId?.();
 }
 
 export function markRuntimeMemoryPollutedFromTurn(runtime, expanded = {}, options = {}, beforeEntryCount = 0) {
   const reasons = externalContextReasons(runtime, expanded, options, beforeEntryCount);
   if (!reasons.length) return { changed: false, reason: "no external context" };
-  const threadId = runtime?.session?.sessionManager?.getSessionId?.();
+  const threadId = getZyraThreadId(runtime);
   const sessionFile = runtime?.session?.sessionManager?.getSessionFile?.();
   if (!threadId || !sessionFile) {
     return { changed: false, reason: "no persisted thread" };
@@ -1494,9 +1744,11 @@ export function buildSessionInfo(runtime) {
   }
   tokens.total = tokens.input + tokens.output + tokens.cacheRead;
 
+  const threadId = sessionManager.getSessionId?.();
   return {
     file: sessionManager.getSessionFile?.(),
-    id: sessionManager.getSessionId?.(),
+    threadId,
+    id: threadId,
     messages,
     tokens,
     cost: { total: totalCost },
@@ -1513,6 +1765,7 @@ export function describeRuntime(runtime) {
     sessions: runtime.sessions,
     theme: runtime.theme,
     profile: runtime.profile,
+    threadId: sessionManager.getSessionId(),
     sessionId: sessionManager.getSessionId(),
     sessionFile: sessionManager.getSessionFile(),
     sessionName: sessionManager.getSessionName?.(),
@@ -2010,7 +2263,7 @@ export function estimateRuntimeContextUsage(runtime) {
 
   let tokens = 0;
   for (const message of messages) {
-    tokens += Number(estimateTokens(message)) || 0;
+    tokens += estimateMessageTokens(message);
   }
   const percent = (tokens / contextWindow) * 100;
   return { tokens, contextWindow, percent, estimated: true };
@@ -2068,6 +2321,23 @@ export function getZyraAvailableThinkingLevels(runtime) {
   return getModelThinkingLevels(session?.model, piLevels);
 }
 
+function parseModelSelector(selector) {
+  const [provider, ...idParts] = String(selector ?? "").split("/");
+  const id = idParts.join("/");
+  return provider && id ? { provider, id } : undefined;
+}
+
+function estimateMessageTokens(message) {
+  if (typeof estimateTokensImpl === "function") {
+    return Number(estimateTokensImpl(message)) || 0;
+  }
+  try {
+    return Math.ceil(JSON.stringify(message).length / 4);
+  } catch {
+    return 0;
+  }
+}
+
 export function getZyraThinkingLevel(runtime) {
   const session = runtime?.session;
   const piLevels = session?.getAvailableThinkingLevels?.();
@@ -2117,10 +2387,24 @@ export function setCodexMode(runtime, value) {
   return describeCodexServiceTier(next);
 }
 
-export async function setModel(runtime, selector) {
+export async function setModel(runtime, selector, options = {}) {
   const query = String(selector ?? "").trim().toLowerCase();
   if (!query) {
     throw new Error("Choose a model from /models.");
+  }
+
+  const currentModel = runtime.session?.model;
+  if (currentModel) {
+    const currentSelectors = new Set([
+      `${currentModel.provider}/${currentModel.id}`.toLowerCase(),
+      `${currentModel.provider}:${currentModel.id}`.toLowerCase(),
+      String(currentModel.id).toLowerCase(),
+    ]);
+    if (currentSelectors.has(query)) {
+      const compatibilityError = getModelCompatibilityError(currentModel);
+      if (compatibilityError) throw new Error(compatibilityError);
+      return currentModel;
+    }
   }
 
   const available = getZyraAvailableModels(runtime.session.modelRegistry);
@@ -2137,9 +2421,14 @@ export async function setModel(runtime, selector) {
   if (!fuzzy) {
     throw new Error("Model not found or not authenticated. Use /models, or check your Zyra model/auth settings.");
   }
-  const availability = await checkModelAvailability(runtime.session.modelRegistry, fuzzy, { forceRefresh: true });
-  if (availability.availability === "unavailable") {
-    throw new Error(`Model unavailable upstream: ${availability.key}. Run /models refresh to update the picker.`);
+  if (!options.skipAvailabilityCheck) {
+    const availability = await checkModelAvailability(runtime.session.modelRegistry, fuzzy, { forceRefresh: true });
+    if (availability.availability === "blocked") {
+      throw new Error(getModelCompatibilityError(fuzzy) ?? `Model blocked by the current provider: ${availability.key}.`);
+    }
+    if (availability.availability === "unavailable") {
+      throw new Error(`Model unavailable upstream: ${availability.key}. Run /models refresh to update the picker.`);
+    }
   }
 
   const previousThinking = getZyraThinkingLevel(runtime);

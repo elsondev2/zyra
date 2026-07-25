@@ -1,7 +1,9 @@
 import type { AssistantCreateSessionInput, AssistantRuntimeStatus, AssistantSnapshot } from '@shared/assistant/contracts'
+import type { AssistantHistoryByThreadId } from './assistant-history-state'
 
 export type AssistantStoreState = {
     snapshot: AssistantSnapshot
+    historyByThreadId: AssistantHistoryByThreadId
     status: AssistantRuntimeStatus
     hydrating: boolean
     hydrated: boolean
@@ -9,6 +11,9 @@ export type AssistantStoreState = {
     commandPending: boolean
     pendingCreateSessionInput: AssistantCreateSessionInput | null
     selectionHydrationKey: string | null
+    selectionTransitionKey: string | null
+    selectionRequestId: number
+    selectionRequestSessionId: string | null
     error: string | null
 }
 
@@ -33,11 +38,18 @@ export function deriveAssistantRuntimeStatus(
         || threadState === 'running'
         || threadState === 'waiting'
 
+    const statusMatchesSelection = Boolean(
+        selectedSession
+        && activeThread
+        && currentStatus.selectedSessionId === selectedSession.id
+        && currentStatus.activeThreadId === activeThread.id
+    )
+
     return {
         ...currentStatus,
         selectedSessionId: selectedSession?.id || null,
         activeThreadId: activeThread?.id || null,
         state: threadState,
-        connected: Boolean(currentStatus.connected && activeThread && connectedState)
+        connected: Boolean(currentStatus.connected && statusMatchesSelection && connectedState)
     }
 }

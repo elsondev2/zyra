@@ -5,6 +5,8 @@ import { createZyraSession } from "../src/zyra-sdk.mjs";
 
 const state = createManagedBashState();
 const tool = createManagedBashTool({ cwd: process.cwd(), state });
+const stateUpdates = [];
+const unsubscribeState = state.subscribe((update) => stateUpdates.push(update));
 
 const short = await tool.execute("short", { command: "printf hello" }, new AbortController().signal);
 assert.match(short.content[0].text, /hello/);
@@ -28,7 +30,34 @@ assert.match(status.content[0].text, /Command still running|Command completed|Co
 if (state.jobs.has(long.details.jobId)) {
   const stopped = await tool.execute("stop", { action: "stop", jobId: long.details.jobId }, new AbortController().signal);
   assert.match(stopped.content[0].text, /Command stopped|Command aborted/);
+  const stoppedUpdate = stateUpdates.findLast((update) => update.jobId === long.details.jobId && update.status === "stopped");
+  assert.ok(stoppedUpdate, "managed bash should publish a stopped terminal snapshot");
+  assert.equal(stoppedUpdate.errorMessage, undefined, "an intentional stop must not be reported as a command failure");
 }
+unsubscribeState();
+
+const observedState = createManagedBashState();
+const observedTool = createManagedBashTool({ cwd: process.cwd(), state: observedState });
+const observedUpdates = [];
+const unsubscribeObserved = observedState.subscribe((update) => observedUpdates.push(update));
+const observedRun = await observedTool.execute(
+  "observer-background",
+  { command: "node -e \"console.log('observer started'); setTimeout(()=>console.log('observer done'), 180)\"", wait: 0.01 },
+  new AbortController().signal,
+);
+assert.equal(observedRun.details.status, "running");
+await waitFor(() => observedUpdates.some((update) => update.status === "completed"), 3000);
+const observedTerminal = observedUpdates.findLast((update) => update.status === "completed");
+assert.equal(observedTerminal?.toolCallId, "observer-background");
+assert.equal(observedTerminal?.jobId, observedRun.details.jobId);
+assert.match(observedTerminal?.output || "", /observer done/);
+assert.equal(typeof observedTerminal?.completedAt, "string");
+await observedTool.execute(
+  "observer-cleanup",
+  { action: "status", jobId: observedRun.details.jobId, wait: 0 },
+  new AbortController().signal,
+);
+unsubscribeObserved();
 
 const runtime = await createZyraSession({
   noSession: true,

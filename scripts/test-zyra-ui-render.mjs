@@ -7,8 +7,9 @@ import { buildProfileChangePrompt, handleSlash } from "../src/slash-command-hand
 import { getSlashSuggestions } from "../src/slash-suggestions.mjs";
 import { markOnboardingComplete, readOnboardingState, shouldRunOnboarding } from "../src/onboarding.mjs";
 import { AssistantMessageLifecycle, createZyraUi, mergeAssistantTextDelta } from "../src/zyra-ui.mjs";
-import { getZyraAvailableThinkingLevels, getZyraThinkingLevel, registerZyraRuntimeModels, resolveZyraStartupPreferences, setModel, setProfile, setThinking, setWebFetch, setWebSearch, setZyraTheme, syncZyraThinkingLevel } from "../src/zyra-sdk.mjs";
+import { getZyraAvailableThinkingLevels, getZyraModelThinkingLevels, getZyraThinkingLevel, registerZyraRuntimeModels, resolveZyraStartupPreferences, setModel, setProfile, setThinking, setWebFetch, setWebSearch, setZyraTheme, syncZyraThinkingLevel } from "../src/zyra-sdk.mjs";
 import { applyGpt56ThinkingEffort, GPT_56_THINKING_LEVELS } from "../src/thinking-levels.mjs";
+import { PI_SUPPORT_PENDING_STATUS } from "../src/model-compatibility.mjs";
 import { renderStatusLine } from "../src/status-line.mjs";
 import { buildTerminalTheme } from "../src/terminal-theme.mjs";
 import { renderAccountStatusBox, renderCodexUsageBox, renderStatusBox } from "../src/terminal-blocks.mjs";
@@ -429,6 +430,31 @@ function runInteractiveNoTurnEndDuplicateRegression() {
   assert.equal((after.match(/Final answer/g) ?? []).length, 1, "turn_end/agent_end must not append a delayed duplicate");
 }
 
+function runCompactionLifecycleRegression() {
+  const ui = createZyraUi();
+  ui._debugBeginInteractiveForTests();
+  ui.event({ type: "compaction_start", reason: "threshold" });
+  const running = ui._debugRenderLinesForTests(80).map(stripAnsi).join("\n");
+  assert.match(running, /compact threshold/, "the TUI must render compaction_start immediately");
+
+  ui.event({
+    type: "compaction_end",
+    reason: "threshold",
+    result: { firstKeptEntryId: "kept", tokensBefore: 150000, estimatedTokensAfter: 32000 },
+    aborted: false,
+    willRetry: false,
+  });
+  const completed = ui._debugRenderLinesForTests(80).map(stripAnsi).join("\n");
+  assert.match(completed, /compacted threshold/, "the TUI must render the matching compaction_end outcome");
+
+  const failedUi = createZyraUi();
+  failedUi._debugBeginInteractiveForTests();
+  failedUi.event({ type: "compaction_start", reason: "overflow" });
+  failedUi.event({ type: "compaction_end", reason: "overflow", aborted: false, willRetry: false, errorMessage: "quota exceeded" });
+  const failed = failedUi._debugRenderLinesForTests(80).map(stripAnsi).join("\n");
+  assert.match(failed, /compact failed quota exceeded/, "failed compaction must not be presented as completed");
+}
+
 function runInteractiveToolComponentRegression() {
   const ui = createZyraUi();
   ui._debugBeginInteractiveForTests();
@@ -464,26 +490,111 @@ function runToolEventsWithoutIdsReuseActiveComponentRegression() {
   ui.event({
     type: "tool_execution_start",
     toolName: "bash",
-    args: { command: "node scripts/test-zyra-ui-render.mjs" },
+    args: { command: "node scripts/render-suite.mjs" },
   });
   ui.event({
     type: "tool_execution_update",
     toolName: "bash",
-    args: { command: "node scripts/test-zyra-ui-render.mjs" },
+    args: { command: "node scripts/render-suite.mjs" },
     partialResult: { content: [{ type: "text", text: "running suite" }] },
   });
   ui.event({
     type: "tool_execution_end",
     toolName: "bash",
-    args: { command: "node scripts/test-zyra-ui-render.mjs" },
+    args: { command: "node scripts/render-suite.mjs" },
     result: { content: [{ type: "text", text: "suite ok" }] },
   });
   const plain = ui._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
 
-  assert.equal((plain.match(/\$ node scripts\/test-zyra-ui-render\.mjs/g) ?? []).length, 1, "tool events without ids should update the running component instead of appending a second one");
+  assert.equal((plain.match(/\$ node scripts\/render-suite\.mjs/g) ?? []).length, 1, "tool events without ids should update the running component instead of appending a second one");
   assert.match(plain, /suite ok/);
   assert.doesNotMatch(plain, /running suite/);
   assert.doesNotMatch(plain, /bash running/);
+}
+
+function runSuccessfulCheckCommandSummaryRegression() {
+  const ui = createZyraUi();
+  ui._debugBeginInteractiveForTests();
+  ui.event({ type: "turn_start" });
+  ui.event({
+    type: "tool_execution_start",
+    toolName: "bash",
+    toolCallId: "check-1",
+    args: { command: "npm run check" },
+  });
+  const running = ui._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
+  assert.equal(ui._debugActivityLabelForTests(), "checking command", "a verification command should use one generic active label");
+  assert.doesNotMatch(running, /\$ npm run check/, "a running verification should not mount the full tool block");
+
+  ui.event({
+    type: "tool_execution_end",
+    toolName: "bash",
+    toolCallId: "check-1",
+    args: { command: "npm run check" },
+    result: { content: [{ type: "text", text: "verbose check output" }] },
+  });
+  const singular = ui._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
+  assert.match(singular, /✓ Checked command — npm run check/);
+  assert.doesNotMatch(singular, /verbose check output/);
+  assert.doesNotMatch(singular, /\$ npm run check/);
+
+  ui.event({
+    type: "tool_execution_start",
+    toolName: "bash",
+    toolCallId: "check-2",
+    args: { command: "npm run lint" },
+  });
+  ui.event({
+    type: "tool_execution_end",
+    toolName: "bash",
+    toolCallId: "check-2",
+    args: { command: "npm run lint" },
+    result: { content: [{ type: "text", text: "verbose lint output" }] },
+  });
+  const plural = ui._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
+  assert.equal((plural.match(/✓ Checked 2 commands/g) ?? []).length, 1);
+  assert.doesNotMatch(plural, /Checked command —/);
+  assert.doesNotMatch(plural, /verbose lint output/);
+
+  const failedUi = createZyraUi();
+  failedUi._debugBeginInteractiveForTests();
+  failedUi.event({
+    type: "tool_execution_start",
+    toolName: "bash",
+    toolCallId: "check-failed",
+    args: { command: "npm test" },
+  });
+  failedUi.event({
+    type: "tool_execution_end",
+    toolName: "bash",
+    toolCallId: "check-failed",
+    args: { command: "npm test" },
+    result: { content: [{ type: "text", text: "tests failed" }] },
+    isError: true,
+  });
+  const failed = failedUi._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
+  assert.match(failed, /\$ npm test/);
+  assert.match(failed, /tests failed/);
+  assert.doesNotMatch(failed, /✓ Checked/);
+
+  const progressUi = createZyraUi();
+  progressUi._debugBeginInteractiveForTests();
+  progressUi.event({ type: "turn_start" });
+  progressUi.beginProgress("Inspecting", { label: "orienting", detail: "mapping the project", percent: 10 });
+  for (const [toolCallId, command] of [["progress-check-1", "npm run check"], ["progress-check-2", "npm run lint"]]) {
+    progressUi.event({ type: "tool_execution_start", toolName: "bash", toolCallId, args: { command } });
+    progressUi.event({
+      type: "tool_execution_end",
+      toolName: "bash",
+      toolCallId,
+      args: { command },
+      result: { content: [{ type: "text", text: `${command} output` }] },
+    });
+  }
+  const progress = progressUi._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
+  assert.match(progress, /✓ Checked 2 commands/, "progress-mode checks should use the same compact aggregate");
+  assert.match(progress, /orienting/, "check commands should not replace the higher-level progress mission");
+  assert.doesNotMatch(progress, /checked bash|npm run check output|npm run lint output/);
 }
 
 function runRunningToolStartsImmediatelyRegression() {
@@ -503,12 +614,168 @@ function runRunningToolStartsImmediatelyRegression() {
   const plain = ui._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
   assert.match(plain, /edit running/, "tool start should render immediately as running");
   assert.match(plain, /path src\/example\.mjs/);
-  assert.match(plain, /edit replace/);
-  assert.match(plain, /--- before/);
+  assert.match(plain, /live preview/);
+  assert.match(plain, /\+2\/-1/);
+  assert.match(plain, /--- a\/src\/example\.mjs/);
   assert.match(plain, /- const value = 1;/);
-  assert.match(plain, /\+\+\+ after/);
+  assert.match(plain, /\+\+\+ b\/src\/example\.mjs/);
   assert.match(plain, /\+ const value = 2;/);
-  assert.match(plain, /status started/);
+}
+
+function runFileChangeAuthoritativeReconciliationRegression() {
+  const ui = createZyraUi();
+  ui._debugBeginInteractiveForTests();
+  const args = {
+    path: "src/live-edit.mjs",
+    oldString: "const value = 1;",
+    newString: "const value = 2;",
+  };
+  ui.event({
+    type: "tool_execution_start",
+    toolName: "edit",
+    toolCallId: "edit-authoritative",
+    args,
+  });
+  const preview = ui._debugRenderLinesForTests(54).map(stripAnsi).join("\n");
+  assert.match(preview, /> edit running/);
+  assert.match(preview, /live preview/);
+  assert.match(preview, /\+ const value = 2;/);
+  assert.equal(preview.split("\n").every((line) => line.length <= 54), true, "running edit preview must respect terminal width");
+
+  ui.event({
+    type: "tool_execution_end",
+    toolName: "edit",
+    toolCallId: "edit-authoritative",
+    result: {
+      content: [{ type: "text", text: "Successfully replaced 1 block." }],
+      details: {
+        diff: "  context line\n- const value = 1;\n+ const value = 3;",
+        patch: "--- a/src/live-edit.mjs\n+++ b/src/live-edit.mjs\n@@ -1 +1 @@\n-const value = 1;\n+const value = 3;\n",
+      },
+    },
+    isError: false,
+  });
+  const completed = ui._debugRenderLinesForTests(54).map(stripAnsi).join("\n");
+  assert.equal((completed.match(/> edit applied/g) ?? []).length, 1, "result details must replace preview inside one mutable card");
+  assert.match(completed, /applied · provider result/);
+  assert.match(completed, /\+\s+const value = 3;/);
+  assert.doesNotMatch(completed, /\+\s+const value = 2;/, "authoritative result diff must replace provisional content");
+  assert.equal(completed.split("\n").every((line) => line.length <= 54), true, "completed edit result must respect terminal width");
+}
+
+function runLateFileChangeEventsStayTerminalRegression() {
+  const ui = createZyraUi();
+  ui._debugBeginInteractiveForTests();
+  const args = {
+    path: "src/late-edit.mjs",
+    oldString: "const value = 1;",
+    newString: "const value = 2;",
+  };
+  ui.event({
+    type: "tool_execution_start",
+    toolName: "edit",
+    toolCallId: "edit-late-event",
+    args,
+  });
+  ui.event({
+    type: "tool_execution_end",
+    toolName: "edit",
+    toolCallId: "edit-late-event",
+    args,
+    result: {
+      content: [{ type: "text", text: "Successfully replaced 1 block." }],
+      details: {
+        patch: "--- a/src/late-edit.mjs\n+++ b/src/late-edit.mjs\n@@ -1 +1 @@\n-const value = 1;\n+const value = 2;\n",
+      },
+    },
+  });
+  ui.event({
+    type: "tool_execution_update",
+    toolName: "edit",
+    toolCallId: "edit-late-event",
+    args,
+    partialResult: { content: [{ type: "text", text: "late running update" }] },
+  });
+  ui.event({
+    type: "tool_execution_end",
+    toolName: "edit",
+    toolCallId: "edit-late-event",
+    args,
+    result: { content: [{ type: "text", text: "duplicate completion" }] },
+    isError: true,
+  });
+
+  const plain = ui._debugRenderLinesForTests(70).map(stripAnsi).join("\n");
+  assert.equal((plain.match(/> edit applied/g) ?? []).length, 1, "late events must keep one completed card");
+  assert.equal((plain.match(/> edit running/g) ?? []).length, 0, "late updates must not regress a completed operation");
+  assert.equal((plain.match(/! edit failed/g) ?? []).length, 0, "duplicate completions must not replace terminal state");
+  assert.doesNotMatch(plain, /late running update|duplicate completion/);
+}
+
+function runFailedFileChangePreviewRegression() {
+  const ui = createZyraUi();
+  ui._debugBeginInteractiveForTests();
+  const args = { path: "src/blocked.mjs", content: "uncommitted\n" };
+  ui.event({ type: "tool_execution_start", toolName: "write", toolCallId: "write-failed", args });
+  ui.event({
+    type: "tool_execution_end",
+    toolName: "write",
+    toolCallId: "write-failed",
+    result: { content: [{ type: "text", text: "Permission denied" }] },
+    isError: true,
+  });
+  const failed = ui._debugRenderLinesForTests(60).map(stripAnsi).join("\n");
+  assert.equal((failed.match(/! write failed/g) ?? []).length, 1);
+  assert.match(failed, /failed · preview not applied/);
+  assert.match(failed, /\+ uncommitted/);
+  assert.doesNotMatch(failed, /applied ·/);
+}
+
+function runSnapshotBackedWriteRenderingRegression() {
+  const ui = createZyraUi();
+  ui._debugBeginInteractiveForTests();
+  const args = { path: "src/existing.mjs", content: "after\n" };
+  ui.event({ type: "tool_execution_start", toolName: "write", toolCallId: "write-snapshot", args });
+  ui.event({
+    type: "tool_execution_end",
+    toolName: "write",
+    toolCallId: "write-snapshot",
+    result: {
+      content: [{ type: "text", text: "Successfully wrote file" }],
+      details: {
+        source: "synthetic-snapshot",
+        snapshotBacked: true,
+        path: args.path,
+        paths: [args.path],
+        patch: "--- a/src/existing.mjs\n+++ b/src/existing.mjs\n@@ -1 +1 @@\n-before\n+after\n",
+        diff: "- before\n+ after",
+      },
+    },
+  });
+  const plain = ui._debugRenderLinesForTests(64).map(stripAnsi).join("\n");
+  assert.equal((plain.match(/> write applied/g) ?? []).length, 1);
+  assert.match(plain, /applied · snapshot-backed/);
+  assert.match(plain, /\+\s+after/);
+  assert.doesNotMatch(plain, /live preview/);
+}
+
+function runFileChangeEventsWithoutIdsRegression() {
+  const ui = createZyraUi();
+  ui._debugBeginInteractiveForTests();
+  const args = { path: "src/no-id.mjs", oldText: "old", newText: "new" };
+  ui.event({ type: "tool_execution_start", toolName: "edit", args });
+  ui.event({
+    type: "tool_execution_end",
+    toolName: "edit",
+    result: {
+      content: [{ type: "text", text: "ok" }],
+      details: { diff: "- old\n+ final", patch: "--- a/src/no-id.mjs\n+++ b/src/no-id.mjs\n@@ -1 +1 @@\n-old\n+final\n" },
+    },
+  });
+  const plain = ui._debugRenderLinesForTests(70).map(stripAnsi).join("\n");
+  assert.equal((plain.match(/> edit applied/g) ?? []).length, 1, "no-ID file changes must reuse their one active component");
+  assert.match(plain, /\+\s+final/);
+  assert.doesNotMatch(plain, /\+\s+new/);
 }
 
 function runWriteToolRicherRepresentationRegression() {
@@ -552,7 +819,7 @@ function runConsecutiveToolSpacingRegression() {
   const lines = ui._debugRenderLinesForTests(80).map(stripAnsi);
   const firstEnd = lines.findIndex((line) => line.includes("a-output"));
   const firstFooter = lines.findIndex((line, index) => index > firstEnd && line.includes("succeeded"));
-  const secondStart = lines.findIndex((line) => line.includes("write succeeded"));
+  const secondStart = lines.findIndex((line) => line.includes("write applied"));
   assert.ok(firstEnd >= 0, "first tool output should render");
   assert.ok(firstFooter > firstEnd, "first tool footer should render after output");
   assert.ok(secondStart > firstEnd, "second tool should render after first tool");
@@ -624,7 +891,7 @@ function runStaticPanelsThroughHostRegression() {
   });
   ui.commands();
   const plain = ui._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
-  assert.match(plain, /Zyra session/);
+  assert.match(plain, /Zyra thread/);
   assert.match(plain, /Slash commands/);
   assert.match(plain, /\/memory\s+toggle memory logging for this chat/);
   assert.match(plain, /Web\s+:\s+all on/);
@@ -1400,6 +1667,9 @@ function runStatusLineBranchLookupDoesNotBlockInputRegression() {
 
 function runSystemPanelWidthRegression() {
   const widthOf = (lines) => stripAnsi(lines.find((line) => stripAnsi(line).trim()) ?? "").length;
+  const canonicalThreadStatus = stripAnsi(renderStatusBox({ threadId: "thread-canonical", sessionId: "legacy-session" }, undefined, 100).join("\n"));
+  assert.match(canonicalThreadStatus, /Zyra thread/);
+  assert.match(canonicalThreadStatus, /Thread\s+: thread-canonical/);
   const account = {
     provider: "openai-codex",
     status: { configured: true, source: "test" },
@@ -1411,8 +1681,10 @@ function runSystemPanelWidthRegression() {
     source: "test",
     plan: "plus",
     account: "dev@example.com",
+    availableResetCount: 2,
     updatedAt: "2026-05-24T00:00:00.000Z",
   };
+  assert.match(stripAnsi(renderCodexUsageBox(usage, undefined, 100).join("\n")), /banked\s+2 resets/);
 
   for (const terminalColumns of [80, 120]) {
     const statusWidth = widthOf(renderStatusBox({}, undefined, terminalColumns));
@@ -1559,16 +1831,33 @@ function runRuntimeModelOverrideRegression() {
   }
   assert.equal(registry.find("openai-codex", "gpt-5.6-sol")?.api, "openai-codex-responses");
   assert.equal(registry.find("openai", "gpt-5.6-sol")?.api, "openai-responses");
+  assert.equal(registry.find("openai-codex", "gpt-5.6-luna")?.zyraCompatibility?.status, PI_SUPPORT_PENDING_STATUS);
+  assert.equal(registry.find("openai", "gpt-5.6-luna")?.zyraCompatibility, undefined);
 
   const idempotent = registerZyraRuntimeModels(registry);
   assert.deepEqual(idempotent.map((item) => item.status), ["exists", "exists", "exists", "exists", "exists", "exists"]);
+
+  const officialLuna = {
+    provider: "openai-codex",
+    id: "gpt-5.6-luna",
+    name: "GPT-5.6 Luna",
+    api: "openai-codex-responses",
+  };
+  const officialModels = [officialLuna];
+  const officialRegistry = {
+    getAll: () => officialModels,
+    find: (provider, id) => officialModels.find((model) => model.provider === provider && model.id === id),
+  };
+  const officialResult = registerZyraRuntimeModels(officialRegistry);
+  assert.equal(officialResult[0].status, "exists");
+  assert.equal(officialLuna.zyraCompatibility, undefined, "future Pi-owned Luna entries must not inherit Zyra's temporary compatibility block");
 }
 
 function runModelPickerReleaseOrderRegression() {
   const models = [
     { provider: "anthropic", id: "claude-custom", name: "Claude Custom" },
     { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
-    { provider: "openai-codex", id: "gpt-5.6-luna", name: "GPT-5.6 Luna" },
+    { provider: "openai-codex", id: "gpt-5.6-luna", name: "GPT-5.6 Luna", zyraCompatibility: { status: PI_SUPPORT_PENDING_STATUS } },
     { provider: "openai-codex", id: "gpt-5.4-mini", name: "GPT-5.4 Mini" },
     { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5" },
     { provider: "openai-codex", id: "gpt-5.6-terra", name: "GPT-5.6 Terra" },
@@ -1600,6 +1889,37 @@ function runModelPickerReleaseOrderRegression() {
     "model picker should sort GPT releases newest-first and keep the documented GPT-5.6 tier order",
   );
   assert.equal(suggestions[5].description, "active", "active state should be labeled without overriding release order");
+  assert.equal(suggestions[3].description, "Pi support pending", "the picker should keep Luna visible without implying the current Pi transport can run it");
+}
+
+async function runPendingLunaSelectionRegression() {
+  const model = {
+    provider: "openai-codex",
+    id: "gpt-5.6-luna",
+    name: "GPT-5.6 Luna",
+    zyraCompatibility: { status: PI_SUPPORT_PENDING_STATUS, capability: "codex-responses-lite" },
+  };
+  let setModelCalls = 0;
+  const runtime = {
+    project: process.cwd(),
+    session: {
+      model: null,
+      modelRegistry: { getAvailable: () => [model] },
+      async setModel() { setModelCalls += 1; },
+    },
+  };
+  await assert.rejects(
+    () => setModel(runtime, "openai-codex/gpt-5.6-luna"),
+    /wired into Zyra.*Pi runtime does not officially support/i,
+  );
+  assert.equal(setModelCalls, 0);
+
+  runtime.session.model = model;
+  await assert.rejects(
+    () => setModel(runtime, "gpt-5.6-luna"),
+    /wired into Zyra.*Pi runtime does not officially support/i,
+    "an already-active compatibility entry must not bypass the provider guard",
+  );
 }
 
 function runGpt56ThinkingLevelsRegression() {
@@ -1621,6 +1941,7 @@ function runGpt56ThinkingLevelsRegression() {
     const runtime = { project, session, thinkingState: { value: "medium" } };
 
     assert.deepEqual(getZyraAvailableThinkingLevels(runtime), GPT_56_THINKING_LEVELS);
+    assert.deepEqual(getZyraModelThinkingLevels("openai-codex/gpt-5.6-sol"), GPT_56_THINKING_LEVELS, "desktop bridge metadata must use the same full-id GPT-5.6 capability contract");
     const initialSuggestions = getSlashSuggestions(runtime, "/thinking ");
     assert.deepEqual(
       initialSuggestions.map((item) => item.value),
@@ -1642,15 +1963,16 @@ function runGpt56ThinkingLevelsRegression() {
     assert.deepEqual(payload.reasoning, { effort: "max", summary: "auto" });
     assert.equal(payload.service_tier, "priority", "thinking payload changes must preserve other provider controls");
 
-    assert.equal(setThinking(runtime), "none", "cycling after max should wrap to GPT-5.6 none");
-    assert.equal(session.thinkingLevel, "off", "GPT-5.6 none should map to Pi off internally");
+    assert.equal(setThinking(runtime), "low", "cycling after max should wrap to GPT-5.6 low");
+    assert.equal(session.thinkingLevel, "low", "GPT-5.6 has no selectable no-reasoning level");
 
     session.model = { provider: "openai-codex", id: "gpt-5.5", reasoning: true };
+    assert.deepEqual(getZyraAvailableThinkingLevels(runtime), ["low", "medium", "high", "xhigh"], "ChatGPT models should begin at low in the TUI");
     assert.equal(syncZyraThinkingLevel(runtime, "max"), "xhigh", "leaving GPT-5.6 should clamp max to the target model's highest level");
     assert.equal(getZyraThinkingLevel(runtime), "xhigh");
 
     session.model = { provider: "openai-codex", id: "gpt-5.6-terra", reasoning: true };
-    assert.equal(syncZyraThinkingLevel(runtime, "off"), "none", "legacy off should normalize to GPT-5.6 none");
+    assert.equal(syncZyraThinkingLevel(runtime, "off"), "low", "legacy off should normalize to GPT-5.6 low");
     assert.equal(resolveZyraStartupPreferences(project, { thinking: "max" }, {}).thinking, "max");
   } finally {
     rmSync(project, { recursive: true, force: true });
@@ -1685,7 +2007,9 @@ async function runRuntimePreferencePersistenceRegression() {
           return this.thinkingLevel;
         },
         model: null,
+        setModelCalls: 0,
         async setModel(nextModel) {
+          this.setModelCalls += 1;
           this.model = nextModel;
         },
         modelRegistry: {
@@ -1703,6 +2027,7 @@ async function runRuntimePreferencePersistenceRegression() {
     setProfile(runtime, "learner");
     setThinking(runtime, "high");
     await setModel(runtime, "gpt-test");
+    await setModel(runtime, "openai-codex/gpt-test");
     setWebSearch(runtime, false);
     setWebFetch(runtime, false);
 
@@ -1713,6 +2038,7 @@ async function runRuntimePreferencePersistenceRegression() {
     assert.equal(preferences.model, "openai-codex/gpt-test");
     assert.equal(preferences.webSearch, false);
     assert.equal(preferences.webFetch, false);
+    assert.equal(runtime.session.setModelCalls, 1, "selecting the active model should be a no-op");
     assert.equal(runtime.webSearch, false);
     assert.equal(runtime.webFetch, false);
     assert.equal(runtime.session.activeTools.includes("web_search"), false);
@@ -1813,9 +2139,16 @@ runEditToolPiLikeRegression();
 runToolCallThemeStylingRegression();
 runInteractiveAssistantComponentRegression();
 runInteractiveNoTurnEndDuplicateRegression();
+runCompactionLifecycleRegression();
 runInteractiveToolComponentRegression();
 runToolEventsWithoutIdsReuseActiveComponentRegression();
+runSuccessfulCheckCommandSummaryRegression();
 runRunningToolStartsImmediatelyRegression();
+runFileChangeAuthoritativeReconciliationRegression();
+runLateFileChangeEventsStayTerminalRegression();
+runFailedFileChangePreviewRegression();
+runSnapshotBackedWriteRenderingRegression();
+runFileChangeEventsWithoutIdsRegression();
 runWriteToolRicherRepresentationRegression();
 runConsecutiveToolSpacingRegression();
 runAssistantAndToolInterleaveRegression();
@@ -1857,6 +2190,7 @@ runThemePreferencePersistenceRegression();
 runOnboardingStateRegression();
 runRuntimeModelOverrideRegression();
 runModelPickerReleaseOrderRegression();
+await runPendingLunaSelectionRegression();
 runGpt56ThinkingLevelsRegression();
 await runRuntimePreferencePersistenceRegression();
 await runCompactCommandNoProgressBoxRegression();

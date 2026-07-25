@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction, type WheelEvent as ReactWheelEvent } from 'react'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
 import { cn } from '@/lib/utils'
@@ -57,7 +57,7 @@ function isLatestModel(model: { id: string; label?: string }, latestModelId: str
     return Boolean(latestModelId && model.id === latestModelId)
 }
 
-export const ComposerAttachmentsShelf = memo(({
+export const ComposerAttachmentsShelf = memo(function ComposerAttachmentsShelf({
     contextFiles,
     compact,
     removingAttachmentIds,
@@ -75,9 +75,84 @@ export const ComposerAttachmentsShelf = memo(({
     ) => Promise<void> | void
     onPreview: (file: ComposerContextFile) => void
     onRemove: (id: string) => void
-}) => (
+}) {
+    const shelfRef = useRef<HTMLDivElement | null>(null)
+    const previousRectsRef = useRef(new Map<string, DOMRect>())
+    const runningAnimationsRef = useRef(new Map<string, Animation>())
+    const attachmentLayoutKey = contextFiles.map((file) => file.id).join('\u0000')
+    const handleAttachmentShelfWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+        const element = event.currentTarget
+        const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight)
+        if (maxScrollTop <= 0 || event.deltaY === 0) return
+        const canScrollShelf = event.deltaY < 0
+            ? element.scrollTop > 1
+            : maxScrollTop - element.scrollTop > 1
+        if (canScrollShelf) event.stopPropagation()
+    }
+
+    useLayoutEffect(() => {
+        const shelf = shelfRef.current
+        if (!shelf) {
+            previousRectsRef.current.clear()
+            return
+        }
+
+        const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+        const nextRects = new Map<string, DOMRect>()
+        const elements = shelf.querySelectorAll<HTMLElement>('[data-composer-attachment-layout-id]')
+
+        for (const element of elements) {
+            const id = element.dataset.composerAttachmentLayoutId
+            if (!id) continue
+
+            const previousRect = previousRectsRef.current.get(id)
+            const runningAnimation = runningAnimationsRef.current.get(id)
+            const transformedRect = runningAnimation ? element.getBoundingClientRect() : null
+            runningAnimation?.cancel()
+            runningAnimationsRef.current.delete(id)
+
+            const nextRect = element.getBoundingClientRect()
+            nextRects.set(id, nextRect)
+            if (!previousRect || reduceMotion) continue
+
+            const carriedX = transformedRect ? transformedRect.left - nextRect.left : 0
+            const carriedY = transformedRect ? transformedRect.top - nextRect.top : 0
+            const deltaX = previousRect.left + carriedX - nextRect.left
+            const deltaY = previousRect.top + carriedY - nextRect.top
+            if (Math.abs(deltaX) < 0.5 && Math.abs(deltaY) < 0.5) continue
+
+            const animation = element.animate([
+                { transform: `translate3d(${deltaX}px, ${deltaY}px, 0)` },
+                { transform: 'translate3d(0, 0, 0)' }
+            ], {
+                duration: 240,
+                easing: 'cubic-bezier(0.22, 1, 0.36, 1)'
+            })
+            runningAnimationsRef.current.set(id, animation)
+            animation.addEventListener('finish', () => {
+                if (runningAnimationsRef.current.get(id) === animation) runningAnimationsRef.current.delete(id)
+            }, { once: true })
+        }
+
+        previousRectsRef.current = nextRects
+    }, [attachmentLayoutKey])
+
+    useEffect(() => () => {
+        for (const animation of runningAnimationsRef.current.values()) animation.cancel()
+        runningAnimationsRef.current.clear()
+        previousRectsRef.current.clear()
+    }, [])
+
+    return (
     <AnimatedHeight isOpen={contextFiles.length > 0} duration={220}>
-        <div className={cn('pointer-events-auto flex flex-wrap items-start', compact ? 'gap-1.5 pb-1' : 'gap-2 pb-1.5')}>
+        <div
+            ref={shelfRef}
+            onWheel={handleAttachmentShelfWheel}
+            className={cn(
+                'custom-scrollbar pointer-events-auto flex max-h-[206px] flex-wrap items-start overflow-y-auto overscroll-contain pr-1',
+                compact ? 'gap-1.5 pb-1' : 'gap-2 pb-1.5'
+            )}
+        >
             {contextFiles.map((file) => {
                 const meta = getContextFileMeta(file)
                 const contentType = getContentTypeTag(file)
@@ -98,9 +173,13 @@ export const ComposerAttachmentsShelf = memo(({
                 }
 
                 return (
-                    isImageAttachment ? (
+                    <div
+                        key={file.id}
+                        data-composer-attachment-layout-id={file.id}
+                        className="shrink-0 will-change-transform"
+                    >
+                        {isImageAttachment ? (
                             <AssistantAttachmentImageCard
-                                key={file.id}
                                 name={meta.name}
                                 src={file.previewDataUrl || ''}
                                 widthClassName={cardWidthClass}
@@ -110,35 +189,35 @@ export const ComposerAttachmentsShelf = memo(({
                                 removable
                                 removing={isRemoving || isEntering}
                             />
-                    ) : isPastedText ? (
-                        <AssistantPastedTextCard
-                            key={file.id}
-                            widthClassName={cardWidthClass}
-                            onClick={handleOpenPastedTextPreview}
-                            onRemove={() => onRemove(file.id)}
-                            removable
-                            removing={isRemoving || isEntering}
-                            previewText={file.content || file.previewText}
-                        />
-                    ) : (
-                        <AssistantFileAttachmentCard
-                            key={file.id}
-                            widthClassName={cardWidthClass}
-                            name={meta.name}
-                            contentType={contentType}
-                            category={meta.category}
-                            pathLabel={file.path}
-                            onClick={() => onPreview(file)}
-                            onRemove={() => onRemove(file.id)}
-                            removable
-                            removing={isRemoving || isEntering}
-                        />
-                    )
+                        ) : isPastedText ? (
+                            <AssistantPastedTextCard
+                                widthClassName={cardWidthClass}
+                                onClick={handleOpenPastedTextPreview}
+                                onRemove={() => onRemove(file.id)}
+                                removable
+                                removing={isRemoving || isEntering}
+                                previewText={file.content || file.previewText}
+                            />
+                        ) : (
+                            <AssistantFileAttachmentCard
+                                widthClassName={cardWidthClass}
+                                name={meta.name}
+                                contentType={contentType}
+                                category={meta.category}
+                                pathLabel={file.path}
+                                onClick={() => onPreview(file)}
+                                onRemove={() => onRemove(file.id)}
+                                removable
+                                removing={isRemoving || isEntering}
+                            />
+                        )}
+                    </div>
                 )
             })}
         </div>
     </AnimatedHeight>
-))
+    )
+})
 
 export const ComposerMentionMenu = memo(({
     isOpen,

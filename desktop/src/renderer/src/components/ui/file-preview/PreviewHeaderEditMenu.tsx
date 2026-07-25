@@ -248,7 +248,7 @@ export function PreviewHeaderEditMenu({
                                 )}
                             >
                                 <Undo2 size={12} />
-                                <span className="min-w-0 flex-1 truncate">Revert</span>
+                                <span className="min-w-0 flex-1 truncate">Discard unsaved edits</span>
                             </button>
                         </div>
                     </AnimatedHeight>

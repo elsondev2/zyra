@@ -7,31 +7,33 @@ function normalizePathKey(pathValue: string): string {
     return String(pathValue || '').replace(/\\/g, '/').toLowerCase()
 }
 
-function getDirectoryPath(pathValue: string): string {
+export function getPreviewNavigatorFolderPath(pathValue: string, directoryTarget = false): string {
+    if (directoryTarget) return String(pathValue || '').replace(/[\\/]+$/, '')
     const normalized = String(pathValue || '').replace(/\\/g, '/')
     const lastSlashIndex = normalized.lastIndexOf('/')
     if (lastSlashIndex <= 0) return normalized
     return normalized.slice(0, lastSlashIndex)
 }
 
-function getParentFolderPath(pathValue: string): string | null {
-    const normalized = String(pathValue || '').replace(/\\/g, '/').replace(/\/+$/, '')
-    if (!normalized) return null
+function collectAncestorDirectoryPaths(rootPath: string, folderPath: string): string[] {
+    const normalizedRoot = String(rootPath || '').replace(/\\/g, '/').replace(/\/+$/, '')
+    const normalizedFolder = String(folderPath || '').replace(/\\/g, '/').replace(/\/+$/, '')
+    const rootKey = normalizePathKey(normalizedRoot)
+    const folderKey = normalizePathKey(normalizedFolder)
+    if (!rootKey || !folderKey.startsWith(`${rootKey}/`)) return []
 
-    if (/^[A-Za-z]:$/.test(normalized)) {
-        return null
+    const paths: string[] = []
+    const relativeSegments = normalizedFolder.slice(normalizedRoot.length + 1).split('/').filter(Boolean)
+    let currentPath = normalizedRoot
+    for (const segment of relativeSegments) {
+        currentPath = `${currentPath}/${segment}`
+        paths.push(currentPath)
     }
+    return paths
+}
 
-    const lastSlashIndex = normalized.lastIndexOf('/')
-    if (lastSlashIndex < 0) return null
-    if (lastSlashIndex === 0) return '/'
-
-    const parentPath = normalized.slice(0, lastSlashIndex)
-    if (/^[A-Za-z]:$/.test(parentPath)) {
-        return `${parentPath}/`
-    }
-
-    return parentPath || null
+function collectAncestorDirectoryKeys(rootPath: string, folderPath: string): Set<string> {
+    return new Set(collectAncestorDirectoryPaths(rootPath, folderPath).map(normalizePathKey))
 }
 
 function resolveTreeRootPath(projectPath: string | undefined, folderPath: string): string {
@@ -75,6 +77,7 @@ function applyTreeUpdate(
 type UsePreviewFolderTreeOptions = {
     filePath: string
     projectPath?: string
+    directoryTarget?: boolean
     enabled?: boolean
     refreshToken?: number
 }
@@ -82,19 +85,27 @@ type UsePreviewFolderTreeOptions = {
 export function usePreviewFolderTree({
     filePath,
     projectPath,
+    directoryTarget = false,
     enabled = true,
     refreshToken = 0
 }: UsePreviewFolderTreeOptions) {
-    const currentFileFolderPath = useMemo(() => getDirectoryPath(filePath), [filePath])
+    const currentFileFolderPath = useMemo(
+        () => getPreviewNavigatorFolderPath(filePath, directoryTarget),
+        [directoryTarget, filePath]
+    )
     const [activeFolderPath, setActiveFolderPath] = useState(currentFileFolderPath)
     const treeRootPath = useMemo(() => resolveTreeRootPath(projectPath, activeFolderPath), [activeFolderPath, projectPath])
-    const rootBoundaryPath = useMemo(() => resolveTreeRootPath(projectPath, currentFileFolderPath), [currentFileFolderPath, projectPath])
+    const targetAncestorPaths = useMemo(
+        () => collectAncestorDirectoryPaths(treeRootPath, activeFolderPath),
+        [activeFolderPath, treeRootPath]
+    )
 
     const [tree, setTree] = useState<DevScopeFileTreeNode[]>([])
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set())
-    const requestIdRef = useRef(0)
+    const requestSequenceRef = useRef(0)
+    const latestRequestByPathRef = useRef(new Map<string, number>())
     const internalNavigationTargetRef = useRef<string | null>(null)
     const cacheKeyRootPath = treeRootPath || activeFolderPath
 
@@ -104,11 +115,12 @@ export function usePreviewFolderTree({
 
         if (internalNavigationTargetRef.current === nextFileKey) {
             internalNavigationTargetRef.current = null
+            if (directoryTarget) setActiveFolderPath(currentFileFolderPath)
             return
         }
 
         setActiveFolderPath(currentFileFolderPath)
-    }, [currentFileFolderPath, filePath])
+    }, [currentFileFolderPath, directoryTarget, filePath])
 
     const readCachedDirectory = useCallback((folderPath: string) => {
         if (!cacheKeyRootPath || !folderPath) return null
@@ -123,30 +135,33 @@ export function usePreviewFolderTree({
 
     const loadTree = useCallback(async (
         targetPath?: string,
-        options?: { preferCache?: boolean; background?: boolean }
+        options?: { preferCache?: boolean }
     ) => {
         if (!enabled || !treeRootPath || !activeFolderPath) return
 
-        const resolvedTargetPath = targetPath || activeFolderPath
+        const resolvedTargetPath = targetPath || treeRootPath
         const cachedTree = options?.preferCache === false ? null : readCachedDirectory(resolvedTargetPath)
         if (cachedTree) {
-            setError(null)
             if (targetPath) {
                 applyTreeUpdate(setTree, (currentTree) => mergeDirectoryChildren(currentTree, resolvedTargetPath, cachedTree))
             } else {
+                setError(null)
+                setLoading(false)
                 applyTreeUpdate(setTree, cachedTree)
             }
-            if (!options?.background) {
-                setLoading(false)
-                return
-            }
+            return
         }
 
-        const requestId = ++requestIdRef.current
-        const isStaleRequest = () => requestId !== requestIdRef.current
+        const requestKey = normalizePathKey(resolvedTargetPath)
+        const requestId = ++requestSequenceRef.current
+        latestRequestByPathRef.current.set(requestKey, requestId)
+        const isStaleRequest = () => latestRequestByPathRef.current.get(requestKey) !== requestId
+        const ownsNavigatorStatus = !targetPath
 
-        setLoading(!cachedTree || !options?.background)
-        setError(null)
+        if (ownsNavigatorStatus) {
+            setLoading(true)
+            setError(null)
+        }
 
         try {
             const result = await window.devscope.getFileTree(treeRootPath, {
@@ -160,7 +175,7 @@ export function usePreviewFolderTree({
             if (isStaleRequest()) return
 
             if (!result?.success) {
-                setError(result?.error || 'Failed to load folder tree.')
+                if (ownsNavigatorStatus) setError(result?.error || 'Failed to load folder tree.')
                 return
             }
 
@@ -174,10 +189,11 @@ export function usePreviewFolderTree({
             applyTreeUpdate(setTree, nextTree)
         } catch (loadError: any) {
             if (isStaleRequest()) return
-            setError(loadError?.message || 'Failed to load folder tree.')
+            if (ownsNavigatorStatus) setError(loadError?.message || 'Failed to load folder tree.')
         } finally {
             if (!isStaleRequest()) {
-                setLoading(false)
+                latestRequestByPathRef.current.delete(requestKey)
+                if (ownsNavigatorStatus) setLoading(false)
             }
         }
     }, [activeFolderPath, enabled, readCachedDirectory, treeRootPath, writeCachedDirectory])
@@ -191,49 +207,32 @@ export function usePreviewFolderTree({
             return
         }
 
-        setExpandedPaths(new Set())
-        const cachedTree = readCachedDirectory(activeFolderPath)
-        if (cachedTree) {
-            setError(null)
-            setLoading(false)
-            applyTreeUpdate(setTree, cachedTree)
-            void loadTree(undefined, { background: true })
-            return
+        setExpandedPaths(collectAncestorDirectoryKeys(treeRootPath, activeFolderPath))
+
+        let cancelled = false
+        void (async () => {
+            await loadTree()
+            for (const ancestorPath of targetAncestorPaths) {
+                if (cancelled) return
+                await loadTree(ancestorPath)
+            }
+        })()
+        return () => {
+            cancelled = true
         }
-        void loadTree(undefined, { preferCache: false })
-    }, [activeFolderPath, enabled, loadTree, readCachedDirectory, treeRootPath])
+    }, [activeFolderPath, enabled, loadTree, targetAncestorPaths, treeRootPath])
 
     useEffect(() => {
         if (!enabled || !activeFolderPath || !treeRootPath || refreshToken <= 0) return
         void loadTree(undefined, { preferCache: false })
     }, [activeFolderPath, enabled, loadTree, refreshToken, treeRootPath])
 
-    const toggleDirectory = useCallback(async (node: DevScopeFileTreeNode) => {
-        if (node.type !== 'directory') return
-
-        const nodeKey = normalizePathKey(node.path)
-        const isExpanded = expandedPaths.has(nodeKey)
-        const shouldLoadChildren = !isExpanded && node.childrenLoaded !== true
-
-        setExpandedPaths((currentExpandedPaths) => {
-            const nextExpandedPaths = new Set(currentExpandedPaths)
-            if (nextExpandedPaths.has(nodeKey)) {
-                nextExpandedPaths.delete(nodeKey)
-            } else {
-                nextExpandedPaths.add(nodeKey)
-            }
-            return nextExpandedPaths
-        })
-
-        if (shouldLoadChildren) {
-            const cachedTree = readCachedDirectory(node.path)
-            if (cachedTree) {
-                applyTreeUpdate(setTree, (currentTree) => mergeDirectoryChildren(currentTree, node.path, cachedTree))
-                return
-            }
-            await loadTree(node.path, { preferCache: false })
-        }
-    }, [expandedPaths, loadTree, readCachedDirectory])
+    const ensureDirectoryLoaded = useCallback(async (node: DevScopeFileTreeNode) => {
+        if (node.type !== 'directory' || node.childrenLoaded === true) return
+        // The virtual tree owns live expansion state. Updating expandedPaths here
+        // would flatten the visible rows once before loading and again after merge.
+        await loadTree(node.path)
+    }, [loadTree])
 
     const reload = useCallback(async () => {
         await loadTree(undefined, { preferCache: false })
@@ -243,27 +242,6 @@ export function usePreviewFolderTree({
         internalNavigationTargetRef.current = normalizePathKey(targetFilePath)
     }, [])
 
-    const canNavigateUpFolder = useMemo(() => {
-        const parentFolderPath = getParentFolderPath(activeFolderPath)
-        if (!parentFolderPath) return false
-
-        const activeFolderKey = normalizePathKey(activeFolderPath)
-        const rootBoundaryKey = normalizePathKey(rootBoundaryPath)
-        return activeFolderKey !== rootBoundaryKey
-    }, [activeFolderPath, rootBoundaryPath])
-
-    const navigateUpFolder = useCallback(() => {
-        const parentFolderPath = getParentFolderPath(activeFolderPath)
-        if (!parentFolderPath) return
-
-        const rootBoundaryKey = normalizePathKey(rootBoundaryPath)
-        const parentFolderKey = normalizePathKey(parentFolderPath)
-        const nextFolderPath = parentFolderKey === rootBoundaryKey ? rootBoundaryPath : parentFolderPath
-
-        if (normalizePathKey(activeFolderPath) === normalizePathKey(nextFolderPath)) return
-        setActiveFolderPath(nextFolderPath)
-    }, [activeFolderPath, rootBoundaryPath])
-
     const navigateToFolder = useCallback((folderPath: string) => {
         const nextFolderPath = String(folderPath || '').trim()
         if (!nextFolderPath) return
@@ -272,16 +250,14 @@ export function usePreviewFolderTree({
     }, [activeFolderPath])
 
     return {
-        activeFolderPath,
+        treeRootPath,
         tree,
         loading,
         error,
         expandedPaths,
-        toggleDirectory,
+        ensureDirectoryLoaded,
         reload,
         preserveContextForFile,
-        canNavigateUpFolder,
-        navigateUpFolder,
         navigateToFolder
     }
 }

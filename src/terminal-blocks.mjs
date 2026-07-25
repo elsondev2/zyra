@@ -1,4 +1,5 @@
 import os from "node:os";
+import { formatCodexUsageWindowLabel, listCodexUsageWindows } from "./codex-usage-windows.mjs";
 import { buildTerminalTheme } from "./terminal-theme.mjs";
 
 const bold = "\x1b[1m";
@@ -35,7 +36,7 @@ export function renderStatusBox(status = {}, theme = fallbackTheme, terminalColu
   const contentWidth = Math.max(24, width - 4);
   const valueWidth = Math.max(16, contentWidth - 32);
   const rows = [
-    `${bold}${theme.primary}>_ Zyra session${reset} ${theme.muted}${status.sessionName ? status.sessionName : "live session"}${reset}`,
+    `${bold}${theme.primary}>_ Zyra thread${reset} ${theme.muted}${status.sessionName ? status.sessionName : "live thread"}${reset}`,
     "",
     alignedField("Model", status.model, theme, valueWidth),
     alignedField("Directory", formatHomePath(status.project), theme, valueWidth),
@@ -45,9 +46,9 @@ export function renderStatusBox(status = {}, theme = fallbackTheme, terminalColu
     alignedField("Web", formatWebStatus(status), theme, valueWidth),
     alignedField("Interrupt", formatInterruptMode(status.interruptMode), theme, valueWidth),
     alignedField("Theme", status.terminalTheme ?? "default", theme, valueWidth),
-    alignedField("Session", status.sessionId, theme, valueWidth),
-    alignedField("Session file", formatHomePath(status.sessionFile), theme, valueWidth),
-    alignedField("Sessions dir", formatHomePath(status.sessions), theme, valueWidth),
+    alignedField("Thread", status.threadId ?? status.sessionId, theme, valueWidth),
+    alignedField("Thread file", formatHomePath(status.sessionFile), theme, valueWidth),
+    alignedField("Threads dir", formatHomePath(status.sessions), theme, valueWidth),
     "",
     alignedField("Context", renderContextSummary(status, theme), theme, valueWidth),
     alignedField("Tokens", renderTokenSummary(status.usage), theme, valueWidth),
@@ -135,6 +136,9 @@ export function renderCodexUsageBox(stats = {}, theme = fallbackTheme, terminalC
   rows.push(
     statusField("source", stats.source ?? "unknown", theme, valueWidth),
     statusField("plan", stats.plan ?? "unknown", theme, valueWidth, theme.accent),
+    ...(stats.availableResetCount === undefined
+      ? []
+      : [statusField("banked", `${stats.availableResetCount} reset${stats.availableResetCount === 1 ? "" : "s"}`, theme, valueWidth, theme.info)]),
     "",
     ...renderLimitRows(stats, theme),
     "",
@@ -349,16 +353,14 @@ function renderBox(rows, theme, width, contentWidth) {
 }
 
 function renderLimitRows(usage = {}, theme = fallbackTheme) {
-  const rows = [
-    `${theme.accent}${"limits".padEnd(8)}${reset} ${formatAccountLimit("Session (5h)", usage.primary, theme)}`,
-    `${theme.accent}${"".padEnd(8)}${reset} ${formatAccountLimit("Week (7d)", usage.secondary, theme)}`,
-  ];
-  for (const item of usage.additional ?? []) {
-    if (item.primary?.usedPercent > 0) rows.push(`${theme.accent}${"".padEnd(8)}${reset} ${formatAccountLimit(`${item.name || "Additional"} (5h)`, item.primary, theme)}`);
-    if (item.secondary?.usedPercent > 0) rows.push(`${theme.accent}${"".padEnd(8)}${reset} ${formatAccountLimit(`${item.name || "Additional"} (7d)`, item.secondary, theme)}`);
+  const windows = listCodexUsageWindows(usage);
+  if (windows.length === 0) {
+    return [`${theme.accent}${"limits".padEnd(8)}${reset} ${theme.muted}No rate-limit windows returned by ChatGPT.${reset}`];
   }
-  if (usage.codeReview) rows.push(`${theme.accent}${"".padEnd(8)}${reset} ${formatAccountLimit("Code review", usage.codeReview, theme)}`);
-  return rows;
+  return windows.map((window, index) => {
+    const prefix = index === 0 ? "limits" : "";
+    return `${theme.accent}${prefix.padEnd(8)}${reset} ${formatAccountLimit(formatCodexUsageWindowLabel(window), window, theme)}`;
+  });
 }
 
 function formatAccountLimit(label, bucket, theme = fallbackTheme) {

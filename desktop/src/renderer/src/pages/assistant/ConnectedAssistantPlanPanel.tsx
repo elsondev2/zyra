@@ -62,7 +62,7 @@ export function ConnectedAssistantPlanPanel(props: {
     compact?: boolean
     onClose: () => void
     onShowThreadDetails: () => void
-    onOpenInternalLink?: (href: string) => Promise<void> | void
+    onOpenInternalLink?: (href: string) => Promise<boolean | void> | boolean | void
 }) {
     const selection = useAssistantStoreSelector<PlanPanelSelection>((state) => {
         if (!props.open) return CLOSED_PLAN_PANEL_SELECTION

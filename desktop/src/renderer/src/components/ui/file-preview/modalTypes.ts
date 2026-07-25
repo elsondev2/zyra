@@ -16,5 +16,6 @@ export interface FilePreviewModalProps extends PreviewMeta {
     onReorderPreviewTabs?: (activeTabId: string, overTabId: string | null) => void
     mediaItems?: PreviewMediaItem[]
     onSaved?: (filePath: string) => Promise<void> | void
+    onShowToast?: (message: string, tone?: 'success' | 'error' | 'info') => void
     onClose: () => void
 }

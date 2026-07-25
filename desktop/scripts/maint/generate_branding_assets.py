@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import shutil
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -11,8 +11,24 @@ BRANDING_DIR = ROOT / 'resources' / 'branding'
 RENDERER_BRANDING_DIR = ROOT / 'src' / 'renderer' / 'src' / 'assets' / 'branding'
 LANDING_PUBLIC_DIR = ROOT / 'apps' / 'landing' / 'zyra-web' / 'public'
 BLUEPRINT_SOURCE_PATH = BRANDING_DIR / 'zyra-blueprint-source.png'
+APP_ICON_DIR = BRANDING_DIR / 'icons'
+DEV_ICON_SOURCE_PATH = APP_ICON_DIR / 'zyra-dev-source.png'
+PROD_ICON_SOURCE_PATH = APP_ICON_DIR / 'zyra-prod-source.png'
 
 MASTER_SIZE = 1024
+ICON_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+APP_ICON_MARK_SIZE = (570, 760)
+APP_ICON_TILE_BOUNDS = (48, 48, 976, 976)
+APP_ICON_TILE_RADIUS = 196
+APP_ICON_TILE_BORDER_WIDTH = 28
+APP_ICON_PALETTES = {
+    'zyra-dev.png': ('#062735', '#15b8dc', '#54e4ff', '#00151e'),
+    'zyra-dev-light.png': ('#041d2b', '#009dc5', '#4de3ff', '#001018'),
+    'zyra-dev-dark.png': ('#0a3a4d', '#74e9ff', '#c1f7ff', '#00161e'),
+    'zyra-prod.png': ('#202020', '#f4f4f4', '#ffffff', '#060606'),
+    'zyra-prod-light.png': ('#111111', '#c8c8c8', '#ffffff', '#020202'),
+    'zyra-prod-dark.png': ('#ececec', '#ffffff', '#181818', '#aaaaaa')
+}
 
 
 def load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -223,10 +239,67 @@ def load_blueprint_master(size: int) -> Image.Image:
     return draw_blueprint_mark(size)
 
 
+def extract_app_icon_mark_mask() -> Image.Image:
+    if not DEV_ICON_SOURCE_PATH.exists():
+        raise FileNotFoundError(f'Missing app icon source: {DEV_ICON_SOURCE_PATH}')
+    if not PROD_ICON_SOURCE_PATH.exists():
+        raise FileNotFoundError(f'Missing app icon source: {PROD_ICON_SOURCE_PATH}')
+
+    # The production source has the same mark geometry as the development source,
+    # but its neutral foreground gives us a clean mask without retaining either
+    # source image's bloom, gradients, or low-contrast background.
+    source = Image.open(PROD_ICON_SOURCE_PATH).convert('L')
+    mask = source.point(lambda value: 255 if value >= 248 else 0)
+    mark_bounds = mask.getbbox()
+    if not mark_bounds:
+        raise ValueError('Could not extract the Zyra mark from the production icon source.')
+
+    mask = mask.crop(mark_bounds)
+    mask = mask.filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.MinFilter(5))
+    mask = mask.resize(APP_ICON_MARK_SIZE, Image.Resampling.LANCZOS)
+    mask = mask.point(lambda value: 255 if value >= 128 else 0)
+    mask = mask.filter(ImageFilter.MaxFilter(17))
+
+    positioned = Image.new('L', (MASTER_SIZE, MASTER_SIZE), 0)
+    positioned.paste(mask, (
+        (MASTER_SIZE - APP_ICON_MARK_SIZE[0]) // 2,
+        (MASTER_SIZE - APP_ICON_MARK_SIZE[1]) // 2
+    ))
+    return positioned
+
+
+def build_crisp_app_icon(
+    mark_mask: Image.Image,
+    outline_mask: Image.Image,
+    *,
+    tile_color: str,
+    tile_border_color: str,
+    mark_color: str,
+    mark_outline_color: str
+) -> Image.Image:
+    image = Image.new('RGBA', (MASTER_SIZE, MASTER_SIZE), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle(
+        APP_ICON_TILE_BOUNDS,
+        radius=APP_ICON_TILE_RADIUS,
+        fill=tile_color,
+        outline=tile_border_color,
+        width=APP_ICON_TILE_BORDER_WIDTH
+    )
+    image.paste(mark_outline_color, (0, 0, MASTER_SIZE, MASTER_SIZE), outline_mask)
+    image.paste(mark_color, (0, 0, MASTER_SIZE, MASTER_SIZE), mark_mask)
+    return image
+
+
 def save_png(image: Image.Image, path: Path, size: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     output = image.resize((size, size), Image.Resampling.LANCZOS)
     output.save(path, format='PNG', optimize=True)
+
+
+def save_ico(image: Image.Image, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(path, format='ICO', sizes=ICON_SIZES)
 
 
 def main() -> None:
@@ -235,22 +308,39 @@ def main() -> None:
 
     BRANDING_DIR.mkdir(parents=True, exist_ok=True)
     RENDERER_BRANDING_DIR.mkdir(parents=True, exist_ok=True)
-    LANDING_PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
 
     clean_brand_path = BRANDING_DIR / 'zyra-mark.png'
     blueprint_path = BRANDING_DIR / 'zyra-blueprint.png'
     save_png(clean_master, clean_brand_path, 1024)
     save_png(blueprint_master, blueprint_path, 1024)
 
-    icon_png = ROOT / 'resources' / 'icon.png'
-    clean_master.resize((512, 512), Image.Resampling.LANCZOS).save(icon_png, format='PNG', optimize=True)
-    clean_master.save(
-        ROOT / 'resources' / 'icon.ico',
-        format='ICO',
-        sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
-    )
+    app_icon_mark_mask = extract_app_icon_mark_mask()
+    app_icon_outline_mask = app_icon_mark_mask.filter(ImageFilter.MaxFilter(31))
+    app_icon_variants = {
+        file_name: build_crisp_app_icon(
+            app_icon_mark_mask,
+            app_icon_outline_mask,
+            tile_color=palette[0],
+            tile_border_color=palette[1],
+            mark_color=palette[2],
+            mark_outline_color=palette[3]
+        )
+        for file_name, palette in APP_ICON_PALETTES.items()
+    }
+    dev_icon_master = app_icon_variants['zyra-dev.png']
+    prod_icon_master = app_icon_variants['zyra-prod.png']
+    for file_name, image in app_icon_variants.items():
+        save_png(image, APP_ICON_DIR / file_name, 512)
 
-    shutil.copyfile(clean_brand_path, LANDING_PUBLIC_DIR / 'logo.png')
+    icon_png = ROOT / 'resources' / 'icon.png'
+    dev_icon_png = ROOT / 'resources' / 'icon-dev.png'
+    save_png(prod_icon_master, icon_png, 512)
+    save_png(dev_icon_master, dev_icon_png, 512)
+    save_ico(prod_icon_master, ROOT / 'resources' / 'icon.ico')
+    save_ico(dev_icon_master, ROOT / 'resources' / 'icon-dev.ico')
+
+    if LANDING_PUBLIC_DIR.exists():
+        shutil.copyfile(clean_brand_path, LANDING_PUBLIC_DIR / 'logo.png')
     shutil.copyfile(clean_brand_path, RENDERER_BRANDING_DIR / 'zyra-mark.png')
     shutil.copyfile(blueprint_path, RENDERER_BRANDING_DIR / 'zyra-blueprint.png')
 
@@ -259,9 +349,16 @@ def main() -> None:
         print(f'  {BLUEPRINT_SOURCE_PATH.relative_to(ROOT)}')
     print(f'  {clean_brand_path.relative_to(ROOT)}')
     print(f'  {blueprint_path.relative_to(ROOT)}')
+    for source_path in (DEV_ICON_SOURCE_PATH, PROD_ICON_SOURCE_PATH):
+        print(f'  {source_path.relative_to(ROOT)}')
+    for file_name in app_icon_variants:
+        print(f'  {(APP_ICON_DIR / file_name).relative_to(ROOT)}')
     print(f'  {icon_png.relative_to(ROOT)}')
+    print(f'  {dev_icon_png.relative_to(ROOT)}')
     print(f"  {(ROOT / 'resources' / 'icon.ico').relative_to(ROOT)}")
-    print(f"  {(LANDING_PUBLIC_DIR / 'logo.png').relative_to(ROOT)}")
+    print(f"  {(ROOT / 'resources' / 'icon-dev.ico').relative_to(ROOT)}")
+    if LANDING_PUBLIC_DIR.exists():
+        print(f"  {(LANDING_PUBLIC_DIR / 'logo.png').relative_to(ROOT)}")
     print(f"  {(RENDERER_BRANDING_DIR / 'zyra-mark.png').relative_to(ROOT)}")
     print(f"  {(RENDERER_BRANDING_DIR / 'zyra-blueprint.png').relative_to(ROOT)}")
 

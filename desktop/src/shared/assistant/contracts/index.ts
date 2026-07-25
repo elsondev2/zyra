@@ -1,4 +1,6 @@
+export * from './agent-surface'
 export * from './file-change'
 export * from './ipc'
 export * from './read-model'
+export * from './realtime-voice'
 export * from './runtime'

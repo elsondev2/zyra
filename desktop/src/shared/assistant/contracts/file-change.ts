@@ -63,6 +63,36 @@ function asRecord(value: unknown): Record<string, unknown> | null {
         : null
 }
 
+const RAW_FILE_CHANGE_PATCH_KEYS = new Set([
+    'patch',
+    'diff',
+    'unifieddiff',
+    'previewpatch',
+    'displaydiff'
+])
+
+function stripRawFileChangePatchFields(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(stripRawFileChangePatchFields)
+    const record = asRecord(value)
+    if (!record) return value
+    const sanitized: Record<string, unknown> = {}
+    for (const [key, entry] of Object.entries(record)) {
+        const normalizedKey = key.toLowerCase().replace(/[-_]/g, '')
+        if (RAW_FILE_CHANGE_PATCH_KEYS.has(normalizedKey)) continue
+        sanitized[key] = stripRawFileChangePatchFields(entry)
+    }
+    return sanitized
+}
+
+export function sanitizeFileChangeRawPayload(payload: Record<string, unknown>): Record<string, unknown> {
+    const sanitized = { ...payload }
+    for (const key of ['result', 'partialResult', 'partial_result', 'response']) {
+        if (!Object.prototype.hasOwnProperty.call(sanitized, key)) continue
+        sanitized[key] = stripRawFileChangePatchFields(sanitized[key])
+    }
+    return sanitized
+}
+
 function readString(value: unknown): string | undefined {
     return typeof value === 'string' && value.trim() ? value : undefined
 }

@@ -1,56 +1,187 @@
-import { memo, useRef, useState, type ReactNode } from 'react'
-import { Check, ChevronUp, Copy } from 'lucide-react'
+import { Component, lazy, memo, Suspense, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react'
+import { Check, ChevronUp, Copy, WrapText } from 'lucide-react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
 import { hasColorToken, renderColorAwareText } from './colorTokens'
-import { MermaidDiagram } from './MermaidDiagram'
 
-const flatCodeTheme = Object.fromEntries(
-    Object.entries(oneDark).map(([selector, style]) => [
-        selector,
-        {
-            ...(style as Record<string, unknown>),
-            background: 'transparent',
-            backgroundColor: 'transparent',
-            textShadow: 'none'
-        }
-    ])
-)
+const MermaidDiagram = lazy(async () => ({
+    default: (await import('./MermaidDiagram')).MermaidDiagram
+}))
+
+const MAX_HIGHLIGHT_CACHE_ENTRIES = 240
+const MAX_HIGHLIGHT_CACHE_CHARACTERS = 3_000_000
+const highlightedCodeCache = new Map<string, { source: string; node: ReactNode }>()
+let highlightedCodeCharacters = 0
+let codeHighlightCompilationCount = 0
+
+function createFlatCodeTheme(theme: 'light' | 'dark') {
+    return Object.fromEntries(
+        Object.entries(theme === 'light' ? oneLight : oneDark).map(([selector, style]) => [
+            selector,
+            {
+                ...(style as Record<string, unknown>),
+                background: 'transparent',
+                backgroundColor: 'transparent',
+                textShadow: 'none'
+            }
+        ])
+    )
+}
+
+const FLAT_CODE_THEMES = {
+    light: createFlatCodeTheme('light'),
+    dark: createFlatCodeTheme('dark')
+} as const
+
+class CodeHighlightErrorBoundary extends Component<{
+    fallback: ReactNode
+    children: ReactNode
+}, { failed: boolean }> {
+    state = { failed: false }
+
+    static getDerivedStateFromError() {
+        return { failed: true }
+    }
+
+    componentDidCatch(error: Error, info: ErrorInfo) {
+        console.warn('Markdown code highlighting failed; using plain text.', error, info.componentStack)
+    }
+
+    render() {
+        return this.state.failed ? this.props.fallback : this.props.children
+    }
+}
 
 const TREE_HINTS = ['\u251c\u2500\u2500', '\u2514\u2500\u2500', '\u2502']
 const TREE_GLYPH_REGEX = /[\u251c\u2514\u2502\u2500\u252c\u2534\u253c]/
 const TREE_LINE_REGEX = /^([\s\u251c\u2514\u2502\u2500\u252c\u2534\u253c]*(?:\u251c\u2500\u2500|\u2514\u2500\u2500|\u2502\s+)?)(.*?)$/
 const CODE_HIGHLIGHT_CHAR_LIMIT = 12_000
 const CODE_HIGHLIGHT_LINE_LIMIT = 350
+const SYNTAX_CUSTOM_STYLE = {
+    margin: 0,
+    padding: '1rem',
+    background: 'var(--color-card)',
+    fontSize: '0.875rem',
+    lineHeight: '1.6'
+}
+const SYNTAX_LINE_NUMBER_STYLE = { color: 'var(--color-text-muted)', paddingRight: '1rem' }
+const SYNTAX_LINE_PROPS = { style: { background: 'transparent', display: 'block', width: '100%' } }
+
+function codeFingerprint(source: string): string {
+    let hash = 2166136261
+    for (let index = 0; index < source.length; index += 1) {
+        hash ^= source.charCodeAt(index)
+        hash = Math.imul(hash, 16777619)
+    }
+    return `${source.length}:${(hash >>> 0).toString(36)}`
+}
+
+function retainHighlightedCode(key: string, source: string, node: ReactNode): ReactNode {
+    const previous = highlightedCodeCache.get(key)
+    if (previous) highlightedCodeCharacters -= previous.source.length
+    highlightedCodeCache.set(key, { source, node })
+    highlightedCodeCharacters += source.length
+    while (highlightedCodeCache.size > MAX_HIGHLIGHT_CACHE_ENTRIES || highlightedCodeCharacters > MAX_HIGHLIGHT_CACHE_CHARACTERS) {
+        const oldest = highlightedCodeCache.entries().next().value as [string, { source: string; node: ReactNode }] | undefined
+        if (!oldest) break
+        highlightedCodeCache.delete(oldest[0])
+        highlightedCodeCharacters -= oldest[1].source.length
+    }
+    return node
+}
+
+export function getCodeHighlightCacheStats(): { entries: number; compilations: number } {
+    return { entries: highlightedCodeCache.size, compilations: codeHighlightCompilationCount }
+}
+
+export function prepareCodeHighlight(
+    language: string | undefined,
+    source: string,
+    showLineNumbers: boolean,
+    theme: 'light' | 'dark' = 'dark'
+): ReactNode {
+    const key = `${theme}:${language || 'text'}:${showLineNumbers ? 'lines' : 'plain'}:${codeFingerprint(source)}`
+    const cached = highlightedCodeCache.get(key)
+    if (cached?.source === source) {
+        highlightedCodeCache.delete(key)
+        highlightedCodeCache.set(key, cached)
+        return cached.node
+    }
+
+    codeHighlightCompilationCount += 1
+    const renderHighlighter = SyntaxHighlighter as unknown as (props: Record<string, unknown>) => ReactNode
+    return retainHighlightedCode(key, source, renderHighlighter({
+        language: language || 'text',
+        style: FLAT_CODE_THEMES[theme],
+        customStyle: SYNTAX_CUSTOM_STYLE,
+        showLineNumbers,
+        lineNumberStyle: SYNTAX_LINE_NUMBER_STYLE,
+        wrapLines: true,
+        lineProps: SYNTAX_LINE_PROPS,
+        children: source
+    }))
+}
 
 function looksLikeFolderStructure(text: string): boolean {
     if (TREE_HINTS.some((hint) => text.includes(hint))) return true
     return TREE_GLYPH_REGEX.test(text)
 }
 
+export function prewarmCodeBlockHighlight(language: string | undefined, source: string, maxLines?: number): void {
+    if (language === 'mermaid' || looksLikeFolderStructure(source) || hasColorToken(source)) return
+    const lines = source.split('\n')
+    const lineLimit = Number.isFinite(maxLines) && Number(maxLines) > 0 ? Math.floor(Number(maxLines)) : 0
+    const visibleLines = lineLimit > 0 && lines.length > lineLimit ? lines.slice(0, lineLimit) : lines
+    const visibleText = visibleLines.join('\n')
+    if (visibleText.length > CODE_HIGHLIGHT_CHAR_LIMIT || visibleLines.length > CODE_HIGHLIGHT_LINE_LIMIT) return
+    prepareCodeHighlight(language, visibleText, lines.length > 3 && visibleLines.length <= 200)
+}
+
 export const CodeBlock = memo(function CodeBlock({
     language,
+    title,
+    theme = 'dark',
     children,
     maxLines
 }: {
     language?: string
+    title?: string | null
+    theme?: 'light' | 'dark'
     children: string
     maxLines?: number
 }) {
     const [copied, setCopied] = useState(false)
     const [expanded, setExpanded] = useState(false)
+    const [wrapped, setWrapped] = useState(false)
     const codeBlockRef = useRef<HTMLDivElement | null>(null)
+    const copiedTimerRef = useRef<number | null>(null)
+
+    useEffect(() => () => {
+        if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current)
+    }, [])
 
     const handleCopy = async () => {
-        await navigator.clipboard.writeText(children)
-        setCopied(true)
-        setTimeout(() => setCopied(false), 2000)
+        try {
+            await navigator.clipboard.writeText(children)
+            setCopied(true)
+            if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current)
+            copiedTimerRef.current = window.setTimeout(() => setCopied(false), 2000)
+        } catch {
+            setCopied(false)
+        }
     }
 
     if (language === 'mermaid') {
         return (
             <div className="my-4">
-                <MermaidDiagram chart={children} />
+                <Suspense fallback={(
+                    <div className="flex min-h-40 items-center justify-center rounded-lg border border-white/10 bg-sparkle-card text-xs text-sparkle-text-muted">
+                        <span className="animate-pulse">Preparing diagram…</span>
+                    </div>
+                )}>
+                    <MermaidDiagram chart={children} />
+                </Suspense>
             </div>
         )
     }
@@ -64,6 +195,9 @@ export const CodeBlock = memo(function CodeBlock({
     const visibleLines = shouldCollapse && !expanded ? normalizedLines.slice(0, lineLimit) : normalizedLines
     const visibleText = visibleLines.join('\n')
     const shouldUsePlainCodeView = visibleText.length > CODE_HIGHLIGHT_CHAR_LIMIT || visibleLines.length > CODE_HIGHLIGHT_LINE_LIMIT
+    const highlightedCode = !isFolderStructure && !hasColorPreviewTokens && !shouldUsePlainCodeView
+        ? prepareCodeHighlight(language, visibleText, normalizedLines.length > 3 && visibleLines.length <= 200, theme)
+        : null
     const hiddenLineCount = Math.max(0, normalizedLines.length - lineLimit)
     const estimatedLineHeight = 26
     const collapsedMaxHeight = lineLimit > 0 ? (lineLimit * estimatedLineHeight) + 36 : undefined
@@ -81,27 +215,38 @@ export const CodeBlock = memo(function CodeBlock({
     }
 
     return (
-        <div ref={codeBlockRef} className="relative my-4 overflow-hidden rounded-lg border border-white/10 bg-sparkle-card">
-            <div className="flex items-center justify-between border-b border-white/10 bg-white/[0.03] px-4 py-2">
-                <span className="text-xs font-mono uppercase tracking-wide text-sparkle-text-secondary">
-                    {displayLanguage}
+        <div
+            ref={codeBlockRef}
+            className="markdown-code-block relative my-4 overflow-hidden rounded-lg border border-white/10 bg-sparkle-card"
+            data-language={language || 'code'}
+            data-wrap={wrapped ? 'true' : 'false'}
+        >
+            <div className="flex min-h-9 items-center justify-between gap-3 border-b border-white/10 bg-white/[0.03] px-3 py-1.5" data-markdown-chrome="">
+                <span className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-sparkle-text-secondary">
+                    {title ? <VscodeEntryIcon pathValue={title} kind="file" theme={theme} loading="lazy" className="size-3.5" /> : null}
+                    <span className="truncate">{title || displayLanguage}</span>
                 </span>
-                <button
-                    onClick={handleCopy}
-                    className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-sparkle-text-secondary transition-colors hover:bg-white/[0.05] hover:text-sparkle-text"
-                >
-                    {copied ? (
-                        <>
-                            <Check size={12} className="text-green-400" />
-                            <span className="text-green-400">Copied!</span>
-                        </>
-                    ) : (
-                        <>
-                            <Copy size={12} />
-                            <span>Copy</span>
-                        </>
-                    )}
-                </button>
+                <span className="flex shrink-0 items-center gap-0.5">
+                    <button
+                        type="button"
+                        onClick={() => setWrapped((value) => !value)}
+                        className="markdown-chrome-action"
+                        aria-pressed={wrapped}
+                        aria-label={wrapped ? 'Disable line wrap' : 'Wrap lines'}
+                        title={wrapped ? 'Disable line wrap' : 'Wrap lines'}
+                    >
+                        <WrapText size={13} />
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleCopy}
+                        className="markdown-chrome-action"
+                        aria-label={copied ? 'Copied' : 'Copy code'}
+                        title={copied ? 'Copied' : 'Copy code'}
+                    >
+                        {copied ? <Check size={13} className="text-green-400" /> : <Copy size={13} />}
+                    </button>
+                </span>
             </div>
 
             <div
@@ -172,23 +317,16 @@ export const CodeBlock = memo(function CodeBlock({
                         </code>
                     </pre>
                 ) : (
-                    <SyntaxHighlighter
-                        language={language || 'text'}
-                        style={flatCodeTheme as any}
-                        customStyle={{
-                            margin: 0,
-                            padding: '1rem',
-                            background: 'var(--color-card)',
-                            fontSize: '0.875rem',
-                            lineHeight: '1.6'
-                        }}
-                        showLineNumbers={normalizedLines.length > 3 && visibleLines.length <= 200}
-                        lineNumberStyle={{ color: 'var(--color-text-muted)', paddingRight: '1rem' }}
-                        wrapLines
-                        lineProps={{ style: { background: 'transparent', display: 'block', width: '100%' } }}
+                    <CodeHighlightErrorBoundary
+                        key={`${theme}:${language || 'text'}:${codeFingerprint(visibleText)}`}
+                        fallback={(
+                            <pre className="m-0 overflow-x-auto bg-sparkle-card p-4">
+                                <code className="whitespace-pre text-sm font-mono leading-6 text-sparkle-text-dark">{visibleText}</code>
+                            </pre>
+                        )}
                     >
-                        {visibleText}
-                    </SyntaxHighlighter>
+                        {highlightedCode}
+                    </CodeHighlightErrorBoundary>
                 )}
             </div>
 
@@ -207,6 +345,8 @@ export const CodeBlock = memo(function CodeBlock({
     )
 }, (previous, next) => (
     previous.language === next.language
+    && previous.title === next.title
+    && previous.theme === next.theme
     && previous.children === next.children
     && previous.maxLines === next.maxLines
 ))

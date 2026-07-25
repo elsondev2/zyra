@@ -1,5 +1,7 @@
 import { buildRenderableFileChangePatch } from '@shared/assistant/contracts/file-change'
+import { parseAgentSurfaceDescriptor } from '@shared/assistant/contracts'
 import type { AssistantActivity, AssistantMessage, AssistantProposedPlan } from '@shared/assistant/contracts'
+import { ASSISTANT_TIMELINE_KIND_RANK, compareAssistantTimelineOrderKeys } from '@shared/assistant/timeline-order'
 import {
     getSerializedAttachmentDisplayName,
     isSerializedClipboardAttachment,
@@ -39,6 +41,7 @@ export type TimelineTurnWorkSummaryRow = {
     startedAt: string
     completedAt: string | null
     running: boolean
+    outcome: 'completed' | 'interrupted' | 'failed' | 'no-response' | null
     rows: TimelineRenderRow[]
     liveNarrationRow: TimelineRenderRow | null
 }
@@ -152,6 +155,10 @@ function readActivityString(value: unknown): string {
 
 function readActivityRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+export function getActivityAgentSurface(activity: AssistantActivity) {
+    return parseAgentSurfaceDescriptor(activity.payload?.surface)
 }
 
 export type CommandCheckpointAction = 'status' | 'stop'
@@ -463,10 +470,12 @@ export function areMessagesEqual(left: AssistantMessage, right: AssistantMessage
 
 export function getActivityCommand(activity: AssistantActivity): string {
     const payload = activity.payload || {}
+    const surface = getActivityAgentSurface(activity)
     const toolName = readActivityToolName(payload)
     const paths = readActivityPathsFromPayload(payload, activity.detail)
     const isReadTool = /\b(read|open|cat|view)\b/i.test(toolName) && !/\b(thread|message)\b/i.test(toolName)
     return readActivityCommandFromPayload(payload, activity.detail)
+        || surface?.command
         || readActivityString(payload.query)
         || (isReadTool ? paths[0] : '')
         || toolName
@@ -689,11 +698,19 @@ export function getTimelineEntries(
                 canImplement: !hasLaterMessage
             }
         })
-    ].sort((left, right) => compareTimelinePosition(
-        left.createdAt,
-        right.createdAt,
-        left.timelineSequence,
-        right.timelineSequence
+    ].sort((left, right) => compareAssistantTimelineOrderKeys(
+        {
+            createdAt: left.createdAt,
+            timelineSequence: left.timelineSequence ?? null,
+            kindRank: left.type === 'message' ? ASSISTANT_TIMELINE_KIND_RANK.message : left.type === 'plan' ? ASSISTANT_TIMELINE_KIND_RANK.plan : ASSISTANT_TIMELINE_KIND_RANK.activity,
+            id: left.type === 'plan' ? left.plan.id : left.type === 'message' ? left.message.id : left.activity.id
+        },
+        {
+            createdAt: right.createdAt,
+            timelineSequence: right.timelineSequence ?? null,
+            kindRank: right.type === 'message' ? ASSISTANT_TIMELINE_KIND_RANK.message : right.type === 'plan' ? ASSISTANT_TIMELINE_KIND_RANK.plan : ASSISTANT_TIMELINE_KIND_RANK.activity,
+            id: right.type === 'plan' ? right.plan.id : right.type === 'message' ? right.message.id : right.activity.id
+        }
     ))
 
     return groupAdjacentTimelineActivities(sortedEntries)
@@ -842,7 +859,9 @@ export function getActivityDetails(activity: AssistantActivity): string[] {
 
 export function getActivityPaths(activity: AssistantActivity): string[] {
     const payload = activity.payload || {}
-    return readActivityPathsFromPayload(payload, activity.detail)
+    const paths = readActivityPathsFromPayload(payload, activity.detail)
+    if (paths.length > 0) return paths
+    return getActivityAgentSurface(activity)?.paths || []
 }
 
 export function getCreatedFilePaths(activity: AssistantActivity): string[] {
@@ -916,7 +935,12 @@ export function getActivityTitle(activity: AssistantActivity): string {
 
 export function getActivityStatus(activity: AssistantActivity): 'success' | 'running' | 'failed' {
     const payload = activity.payload || {}
-    const rawStatus = readActivityString(payload.status) || readActivityString(payload.state) || readActivityString(payload.phase)
+    const surface = getActivityAgentSurface(activity)
+    const rawStatus = readActivityString(payload.status)
+        || readActivityString(payload.state)
+        || readActivityString(payload.phase)
+        || surface?.lifecycle
+        || ''
     const normalizedStatus = rawStatus.toLowerCase().replace(/[-_\s]/g, '')
     if (activity.tone === 'error') return 'failed'
     if (normalizedStatus === 'running' || normalizedStatus === 'inprogress' || normalizedStatus === 'pending' || normalizedStatus === 'started') return 'running'
@@ -924,7 +948,7 @@ export function getActivityStatus(activity: AssistantActivity): 'success' | 'run
     return 'success'
 }
 
-export function getContextCompactionStatus(activity: AssistantActivity): 'running' | 'completed' {
+export function getContextCompactionStatus(activity: AssistantActivity): 'running' | 'completed' | 'cancelled' | 'failed' {
     const payload = activity.payload || {}
     const rawStatus = readActivityString(payload.status)
         || readActivityString(payload.state)
@@ -940,6 +964,12 @@ export function getContextCompactionStatus(activity: AssistantActivity): 'runnin
         || normalized === 'compacting'
     ) {
         return 'running'
+    }
+    if (normalized === 'cancelled' || normalized === 'canceled' || normalized === 'aborted' || normalized === 'autocompactioncancelled') {
+        return 'cancelled'
+    }
+    if (activity.tone === 'error' || normalized === 'failed' || normalized === 'error' || normalized === 'autocompactionfailed') {
+        return 'failed'
     }
     return 'completed'
 }

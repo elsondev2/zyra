@@ -55,15 +55,19 @@ function AttachmentCardBase({
             {removable ? (
                 <button
                     type="button"
+                    onPointerDown={(event) => event.stopPropagation()}
                     onClick={(event) => {
                         event.stopPropagation()
                         onRemove?.()
                     }}
-                    className="absolute right-1 top-1 shrink-0 rounded-md border border-white/10 bg-black/35 p-1 text-sparkle-text-muted opacity-90 backdrop-blur-sm transition-colors hover:bg-rose-500/10 hover:text-rose-300"
+                    className="absolute right-0 top-0 z-20 inline-flex size-8 shrink-0 items-center justify-center rounded-bl-xl text-sparkle-text-muted transition-colors hover:text-rose-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-300/45 disabled:pointer-events-none"
                     disabled={removing}
                     title="Remove attachment"
+                    aria-label="Remove attachment"
                 >
-                    <X size={11} />
+                    <span className="inline-flex size-5 items-center justify-center rounded-md border border-white/10 bg-black/55 shadow-sm backdrop-blur-sm transition-colors group-hover:border-white/15 group-hover:bg-black/65">
+                        <X size={12} strokeWidth={2.2} />
+                    </span>
                 </button>
             ) : null}
         </article>

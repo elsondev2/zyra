@@ -76,6 +76,7 @@ export const TimelineIssueList = memo(({
                                 count={group.count}
                                 onDismiss={handleDismissIssue}
                                 onShowMore={handleShowLogDetails}
+                                compact
                             />
                             )
                         ))}

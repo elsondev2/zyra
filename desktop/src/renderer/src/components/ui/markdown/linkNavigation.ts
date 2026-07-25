@@ -215,6 +215,15 @@ export async function navigateMarkdownLink({
     }
 
     if (pathInfo.type === 'directory') {
+        if (openPreview) {
+            const { name } = splitFileNameAndExtension(pathInfo.path)
+            await openPreview({ name, path: pathInfo.path }, '', {
+                targetKind: 'directory',
+                openNavigator: true,
+                revealNavigatorTarget: true
+            })
+            return true
+        }
         if (navigate) {
             navigate(`/folder-browse/${encodeURIComponent(pathInfo.path)}`)
             return true
@@ -226,6 +235,9 @@ export async function navigateMarkdownLink({
     const { extension, name } = splitFileNameAndExtension(pathInfo.path)
     if (openPreview) {
         await openPreview({ name, path: pathInfo.path }, extension, {
+            targetKind: 'file',
+            openNavigator: true,
+            revealNavigatorTarget: true,
             focusLine: target.focusLine
         })
         return true

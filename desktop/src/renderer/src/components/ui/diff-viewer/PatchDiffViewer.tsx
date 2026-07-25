@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { FileDiff, PatchDiff } from '@pierre/diffs/react'
 import type { FileDiffMetadata } from '@pierre/diffs/react'
@@ -10,11 +10,27 @@ type DiffRenderMode = 'stacked' | 'split'
 
 interface PatchDiffViewerProps {
     fileDiff?: FileDiffMetadata | null
+    fileDiffs?: FileDiffMetadata[]
     patch?: string
     mode: DiffRenderMode
+    flush?: boolean
+    hideChangeIcon?: boolean
+    hideHeaderStats?: boolean
+    headerPrefix?: ReactNode
+    headerMetadata?: ReactNode
+    renderFileHeaderPrefix?: (fileDiff: FileDiffMetadata, index: number) => ReactNode
+    renderFileHeaderMetadata?: (fileDiff: FileDiffMetadata, index: number) => ReactNode
+    activeFileDiffIndex?: number | null
+    activeFileDiffScrollKey?: string | number | null
+    onRenderingChange?: (rendering: boolean) => void
 }
 
-function buildDiffViewerUnsafeCss(themeType: 'light' | 'dark'): string {
+function buildDiffViewerUnsafeCss(
+    themeType: 'light' | 'dark',
+    flush: boolean,
+    hideChangeIcon: boolean,
+    hideHeaderStats: boolean
+): string {
     const isDark = themeType === 'dark'
     const surface = isDark
         ? 'color-mix(in lab, var(--color-card, #131c2c) 84%, var(--color-bg, #0c121f))'
@@ -22,6 +38,7 @@ function buildDiffViewerUnsafeCss(themeType: 'light' | 'dark'): string {
     const surfaceRaised = isDark
         ? 'color-mix(in lab, var(--color-card, #131c2c) 92%, var(--color-bg, #0c121f))'
         : 'color-mix(in lab, var(--color-card, #ffffff) 97%, var(--color-bg, #eef2f7))'
+    const headerSurface = '#07090d'
     const surfaceMuted = isDark
         ? 'color-mix(in lab, var(--color-card, #131c2c) 74%, var(--color-bg, #0c121f))'
         : 'color-mix(in lab, var(--color-card, #ffffff) 88%, var(--color-bg, #eef2f7))'
@@ -44,9 +61,11 @@ function buildDiffViewerUnsafeCss(themeType: 'light' | 'dark'): string {
 
     return `
 :host {
+  -webkit-font-smoothing: auto;
+  text-rendering: optimizeLegibility;
   --diffs-font-family: 'JetBrains Mono', Consolas, Monaco, 'Courier New', monospace;
   --diffs-header-font-family: 'Hanken Grotesk Variable', 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', 'Segoe UI', system-ui, sans-serif;
-  --diffs-font-size: 12.5px;
+  --diffs-font-size: 12px;
   --diffs-line-height: 20px;
   --diffs-gap-inline: 12px;
   --diffs-gap-block: 10px;
@@ -85,16 +104,47 @@ function buildDiffViewerUnsafeCss(themeType: 'light' | 'dark'): string {
 }
 
 [data-diffs-header] {
-  background: ${surfaceRaised};
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  gap: 8px;
+  overflow: hidden;
+  background: ${headerSurface};
   box-shadow: inset 0 -1px 0 ${borderSubtle};
+}
+
+[data-diffs-header] [data-header-content] {
+  flex: 1 1 0;
+  min-width: 0;
+  gap: 6px;
+  overflow: hidden;
+}
+
+[data-diffs-header] [data-metadata] {
+  flex: 0 0 auto;
+  min-width: max-content;
+  gap: 6px;
 }
 
 [data-diff],
 [data-file] {
-  border-radius: 16px;
+  border-radius: ${flush ? '0' : '16px'};
   overflow: hidden;
   box-shadow: inset 0 0 0 1px ${borderSubtle};
 }
+
+${hideChangeIcon ? `
+[data-diffs-header] [data-change-icon] {
+  display: none;
+}
+` : ''}
+
+${hideHeaderStats ? `
+[data-diffs-header] [data-additions-count],
+[data-diffs-header] [data-deletions-count] {
+  display: none;
+}
+` : ''}
 
 [data-line],
 [data-gutter-buffer],
@@ -136,26 +186,45 @@ function buildDiffViewerUnsafeCss(themeType: 'light' | 'dark'): string {
 function hasRenderedDiffContent(container: HTMLDivElement | null): boolean {
     if (!container) return false
 
-    const diffElement = container.querySelector('diffs-container')
-    if (!(diffElement instanceof HTMLElement)) return false
+    const diffElements = [...container.querySelectorAll('diffs-container')]
+        .filter((element): element is HTMLElement => element instanceof HTMLElement)
+    if (diffElements.length === 0) return false
 
-    const shadowRoot = diffElement.shadowRoot
-    if (!shadowRoot) return false
-
-    return Boolean(
-        shadowRoot.querySelector('[data-code], [data-error-wrapper], [data-file-info]')
-    )
+    return diffElements.every((diffElement) => Boolean(
+        diffElement.shadowRoot?.querySelector('[data-code], [data-error-wrapper], [data-file-info]')
+    ))
 }
 
-export default function PatchDiffViewer({ fileDiff, patch, mode }: PatchDiffViewerProps) {
+export default function PatchDiffViewer({
+    fileDiff,
+    fileDiffs = [],
+    patch,
+    mode,
+    flush = false,
+    hideChangeIcon = flush,
+    hideHeaderStats = false,
+    headerPrefix,
+    headerMetadata,
+    renderFileHeaderPrefix,
+    renderFileHeaderMetadata,
+    activeFileDiffIndex = null,
+    activeFileDiffScrollKey = null,
+    onRenderingChange
+}: PatchDiffViewerProps) {
     const { settings } = useSettings()
     const containerRef = useRef<HTMLDivElement | null>(null)
-    const [isRendering, setIsRendering] = useState(Boolean(fileDiff || patch))
+    const hasDiffInput = Boolean(fileDiff || fileDiffs.length > 0 || patch)
     const diffThemeName = resolveDiffThemeName(settings.theme)
     const diffThemeType = resolveDiffThemeType(settings.theme)
     const diffStyle: 'split' | 'unified' = mode === 'split' ? 'split' : 'unified'
-    const renderToken = `${fileDiff?.cacheKey || fileDiff?.name || patch || 'empty'}:${mode}:${settings.theme}:${settings.accentColor.primary}`
-    const unsafeCSS = useMemo(() => buildDiffViewerUnsafeCss(diffThemeType), [diffThemeType])
+    const fileDiffsToken = fileDiffs.map((entry, index) => `${entry.cacheKey || entry.name}:${index}`).join('|')
+    const renderToken = `${fileDiff?.cacheKey || fileDiff?.name || fileDiffsToken || patch || 'empty'}:${mode}:${settings.theme}:${settings.accentColor.primary}`
+    const [settledRenderToken, setSettledRenderToken] = useState<string | null>(null)
+    const isRendering = hasDiffInput && settledRenderToken !== renderToken
+    const unsafeCSS = useMemo(
+        () => buildDiffViewerUnsafeCss(diffThemeType, flush, hideChangeIcon, hideHeaderStats),
+        [diffThemeType, flush, hideChangeIcon, hideHeaderStats]
+    )
     const options = useMemo(() => ({
         diffStyle,
         lineDiffType: 'none' as const,
@@ -166,19 +235,40 @@ export default function PatchDiffViewer({ fileDiff, patch, mode }: PatchDiffView
     }), [diffStyle, diffThemeName, diffThemeType, unsafeCSS])
 
     useEffect(() => {
-        if (!fileDiff && !patch) {
-            setIsRendering(false)
+        onRenderingChange?.(isRendering)
+    }, [isRendering, onRenderingChange])
+
+    useEffect(() => {
+        if (activeFileDiffIndex === null || activeFileDiffIndex < 0 || fileDiffs.length === 0) return
+        if (settledRenderToken !== renderToken) return
+        let firstFrame = 0
+        let secondFrame = 0
+        firstFrame = window.requestAnimationFrame(() => {
+            secondFrame = window.requestAnimationFrame(() => {
+                const container = containerRef.current
+                const entry = container?.querySelector<HTMLElement>(`[data-file-diff-entry="${activeFileDiffIndex}"]`)
+                if (!container || !entry) return
+                container.scrollTo({ top: entry.offsetTop, behavior: 'smooth' })
+            })
+        })
+        return () => {
+            window.cancelAnimationFrame(firstFrame)
+            window.cancelAnimationFrame(secondFrame)
+        }
+    }, [activeFileDiffIndex, activeFileDiffScrollKey, fileDiffs.length, renderToken, settledRenderToken])
+
+    useEffect(() => {
+        if (!hasDiffInput) {
+            setSettledRenderToken(renderToken)
             return
         }
-
-        setIsRendering(true)
 
         let animationFrame = 0
         let timeoutId = 0
 
         const settleIfReady = () => {
             if (hasRenderedDiffContent(containerRef.current)) {
-                setIsRendering(false)
+                setSettledRenderToken(renderToken)
                 return true
             }
 
@@ -191,13 +281,13 @@ export default function PatchDiffViewer({ fileDiff, patch, mode }: PatchDiffView
         }
 
         animationFrame = window.requestAnimationFrame(tick)
-        timeoutId = window.setTimeout(() => setIsRendering(false), 4000)
+        timeoutId = window.setTimeout(() => setSettledRenderToken(renderToken), 4000)
 
         return () => {
             window.cancelAnimationFrame(animationFrame)
             window.clearTimeout(timeoutId)
         }
-    }, [fileDiff, patch, renderToken])
+    }, [hasDiffInput, renderToken])
 
     return (
         <div
@@ -206,9 +296,40 @@ export default function PatchDiffViewer({ fileDiff, patch, mode }: PatchDiffView
         >
             <DiffWorkerPoolProvider>
                 {fileDiff ? (
-                    <FileDiff fileDiff={fileDiff} options={options} />
+                    <FileDiff
+                        key={renderToken}
+                        fileDiff={fileDiff}
+                        options={options}
+                        renderHeaderPrefix={headerPrefix ? () => headerPrefix : undefined}
+                        renderHeaderMetadata={headerMetadata ? () => headerMetadata : undefined}
+                    />
+                ) : fileDiffs.length > 0 ? (
+                    <div key={renderToken} className={flush ? 'space-y-0' : 'space-y-3'}>
+                        {fileDiffs.map((entry, index) => (
+                            <div
+                                key={`${entry.cacheKey || entry.name}:${index}`}
+                                data-file-diff-entry={index}
+                                className={activeFileDiffIndex === index
+                                    ? 'relative z-[1] ring-1 ring-inset ring-[var(--accent-primary)]/55'
+                                    : 'relative'}
+                            >
+                                <FileDiff
+                                    fileDiff={entry}
+                                    options={options}
+                                    renderHeaderPrefix={renderFileHeaderPrefix ? () => renderFileHeaderPrefix(entry, index) : undefined}
+                                    renderHeaderMetadata={renderFileHeaderMetadata ? () => renderFileHeaderMetadata(entry, index) : undefined}
+                                />
+                            </div>
+                        ))}
+                    </div>
                 ) : patch ? (
-                    <PatchDiff patch={patch} options={options} />
+                    <PatchDiff
+                        key={renderToken}
+                        patch={patch}
+                        options={options}
+                        renderHeaderPrefix={headerPrefix ? () => headerPrefix : undefined}
+                        renderHeaderMetadata={headerMetadata ? () => headerMetadata : undefined}
+                    />
                 ) : (
                     <div className="flex min-h-full items-center justify-center px-6 py-10 text-sm text-white/40">
                         No diff content available.
@@ -216,11 +337,11 @@ export default function PatchDiffViewer({ fileDiff, patch, mode }: PatchDiffView
                 )}
             </DiffWorkerPoolProvider>
 
-            {isRendering && (fileDiff || patch) && (
+            {isRendering && hasDiffInput && (
                 <div
                     className="pointer-events-none absolute inset-0 flex items-center justify-center px-4 py-4"
                     style={{
-                        background: 'linear-gradient(180deg, color-mix(in lab, var(--color-bg) 72%, transparent) 0%, color-mix(in lab, var(--color-bg) 36%, transparent) 34%, transparent 100%)'
+                        background: 'color-mix(in srgb, var(--color-bg) 95%, black)'
                     }}
                 >
                     <div

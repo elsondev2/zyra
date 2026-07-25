@@ -1,4 +1,3 @@
-import type { NavigateFunction } from 'react-router-dom'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import type { UseFilePreviewReturn } from '@/components/ui/file-preview/useFilePreview'
 import { isWindowsPathHref, resolveMarkdownLinkTarget } from '@/components/ui/markdown/linkNavigation'
@@ -50,7 +49,6 @@ export function getAssistantRelativeFilePath(targetPath: string, projectPath?: s
 export async function openAssistantFileTarget(options: {
     target: string
     projectPath?: string | null
-    navigate: NavigateFunction
     openPreview: UseFilePreviewReturn['openPreview']
     previewOptions?: PreviewOpenOptions
 }): Promise<boolean> {
@@ -66,13 +64,22 @@ export async function openAssistantFileTarget(options: {
     if (!pathInfo.success || !pathInfo.exists) return false
 
     if (pathInfo.type === 'directory') {
-        options.navigate(`/folder-browse/${encodeURIComponent(pathInfo.path)}`)
+        const directoryName = splitFileNameAndExtension(pathInfo.path).name
+        await options.openPreview({ name: directoryName, path: pathInfo.path }, '', {
+            ...options.previewOptions,
+            targetKind: 'directory',
+            openNavigator: true,
+            revealNavigatorTarget: true
+        })
         return true
     }
 
     const { extension, name } = splitFileNameAndExtension(pathInfo.path)
     await options.openPreview({ name, path: pathInfo.path }, extension, {
         ...options.previewOptions,
+        targetKind: 'file',
+        openNavigator: true,
+        revealNavigatorTarget: true,
         focusLine: options.previewOptions?.focusLine ?? resolvedTarget?.focusLine
     })
     return true

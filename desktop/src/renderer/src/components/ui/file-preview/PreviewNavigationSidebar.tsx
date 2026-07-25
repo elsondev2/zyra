@@ -2,46 +2,44 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
     AlertCircle,
     AppWindow,
-    Check,
     ChevronDown,
-    ChevronLeft,
     ChevronRight,
-    ChevronUp,
+    ChevronsDownUp,
     Copy,
     ExternalLink,
-    FilePlus,
-    FolderPlus,
+    File,
+    Folder,
     FolderOpen,
-    ListTree,
+    MoveHorizontal,
     Pencil,
+    Plus,
     RefreshCw,
     Trash2,
-    PanelLeft
+    WrapText
 } from 'lucide-react'
 import type { DevScopeFileTreeNode } from '@shared/contracts/devscope-project-contracts'
 import { ConfirmModal } from '@/components/ui/ConfirmModal'
-import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
+import type { FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
 import { PromptModal } from '@/components/ui/PromptModal'
-import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
 import { getParentFolderPath, validateCreateName } from '@/lib/filesystem/fileSystemPaths'
 import { useSettings } from '@/lib/settings'
 import { cn, getFileExtension } from '@/lib/utils'
-import type { OutlineItem, OutlineItemKind } from './modalShared'
 import type { PreviewFile, PreviewOpenOptions } from './types'
 import { resolvePreviewType } from './utils'
+import { PreviewVirtualFileTree } from './PreviewVirtualFileTree'
 import { usePreviewFolderTree } from './usePreviewFolderTree'
-import {
-    collectDefaultExpandedOutlineIds,
-    DraggablePreviewFileRow,
-    flattenFolderNodes,
-    flattenOutlineItems,
-    getPathName,
-    normalizePathKey,
-    type VisibleFolderNode,
-    type VisibleOutlineItem
-} from './previewNavigationSidebar.tree'
+import { getPathName, normalizePathKey } from './previewNavigationSidebar.tree'
 
-type SidebarTab = 'outline' | 'folder'
+function ExplorerCreateIcon({ kind }: { kind: 'file' | 'directory' }) {
+    const EntryIcon = kind === 'directory' ? Folder : File
+    return (
+        <span className="relative inline-flex size-4 items-center justify-center" aria-hidden="true">
+            <EntryIcon className="size-3.5" strokeWidth={1.8} />
+            <Plus className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-sm bg-sparkle-card" strokeWidth={3} />
+        </span>
+    )
+}
+
 type TreePromptState =
     | {
         type: 'create-file' | 'create-folder'
@@ -60,100 +58,49 @@ type TreePromptState =
 type PreviewNavigationSidebarProps = {
     file: PreviewFile
     projectPath?: string
-    outlineItems: OutlineItem[]
-    onOutlineSelect: (item: OutlineItem) => void
-    onMinimizePanel?: () => void
     onOpenLinkedPreview?: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
     onOpenLinkedPreviewInNewTab?: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
     refreshToken?: number
     preserveContextRequest?: { path: string; nonce: number } | null
-}
-
-const KIND_STYLES: Record<OutlineItemKind, { dot: string; glow: string }> = {
-    heading: { dot: 'bg-violet-400', glow: 'shadow-[0_0_0_1px_rgba(167,139,250,0.2)]' },
-    class: { dot: 'bg-sky-400', glow: 'shadow-[0_0_0_1px_rgba(56,189,248,0.2)]' },
-    function: { dot: 'bg-emerald-400', glow: 'shadow-[0_0_0_1px_rgba(52,211,153,0.2)]' }
+    revealTargetRequestId?: string | null
+    onRevealTargetHandled?: (requestId: string) => void
 }
 
 export function PreviewNavigationSidebar({
     file,
     projectPath,
-    outlineItems,
-    onOutlineSelect,
-    onMinimizePanel,
     onOpenLinkedPreview,
     onOpenLinkedPreviewInNewTab,
     refreshToken = 0,
-    preserveContextRequest = null
+    preserveContextRequest = null,
+    revealTargetRequestId = null,
+    onRevealTargetHandled
 }: PreviewNavigationSidebarProps) {
-    const { settings } = useSettings()
+    const { settings, updateSettings } = useSettings()
     const iconTheme = settings.theme === 'light' ? 'light' : 'dark'
-    const [activeTab, setActiveTab] = useState<SidebarTab>('folder')
-    const [expandedOutlineIds, setExpandedOutlineIds] = useState<Set<string>>(() => new Set())
-    const [copiedPath, setCopiedPath] = useState(false)
+    const nameLayout = settings.filePreviewExplorerNameLayout
+    const [explorerOpen, setExplorerOpen] = useState(true)
+    const [collapseAllRequest, setCollapseAllRequest] = useState(0)
     const [toastMessage, setToastMessage] = useState<string | null>(null)
     const [treePrompt, setTreePrompt] = useState<TreePromptState>(null)
     const [deleteTarget, setDeleteTarget] = useState<DevScopeFileTreeNode | null>(null)
-    const [fileHistory, setFileHistory] = useState<string[]>(() => file.path ? [file.path] : [])
-    const [fileHistoryIndex, setFileHistoryIndex] = useState(file.path ? 0 : -1)
     const toastTimerRef = useRef<number | null>(null)
-    const pendingHistoryTargetRef = useRef<{ pathKey: string; index: number } | null>(null)
     const {
-        activeFolderPath,
+        treeRootPath,
         tree,
         loading: folderLoading,
         error: folderError,
         expandedPaths,
-        toggleDirectory,
+        ensureDirectoryLoaded,
         reload,
         preserveContextForFile,
-        canNavigateUpFolder,
-        navigateUpFolder,
         navigateToFolder
     } = usePreviewFolderTree({
         filePath: file.path,
         projectPath,
+        directoryTarget: file.type === 'directory',
         refreshToken
     })
-
-    useEffect(() => {
-        setExpandedOutlineIds(new Set(collectDefaultExpandedOutlineIds(outlineItems)))
-    }, [file.path, outlineItems])
-
-    useEffect(() => {
-        const nextPath = String(file.path || '').trim()
-        const nextPathKey = normalizePathKey(nextPath)
-        if (!nextPathKey) return
-
-        const pendingTarget = pendingHistoryTargetRef.current
-        if (pendingTarget?.pathKey === nextPathKey) {
-            pendingHistoryTargetRef.current = null
-            setFileHistoryIndex(pendingTarget.index)
-            return
-        }
-
-        setFileHistory((currentHistory) => {
-            if (currentHistory.length === 0) {
-                setFileHistoryIndex(0)
-                return [nextPath]
-            }
-
-            const currentEntry = currentHistory[fileHistoryIndex]
-            if (normalizePathKey(currentEntry || '') === nextPathKey) {
-                return currentHistory
-            }
-
-            const trimmedHistory = currentHistory.slice(0, Math.max(0, fileHistoryIndex) + 1)
-            if (normalizePathKey(trimmedHistory[trimmedHistory.length - 1] || '') === nextPathKey) {
-                setFileHistoryIndex(trimmedHistory.length - 1)
-                return trimmedHistory
-            }
-
-            const nextHistory = [...trimmedHistory, nextPath]
-            setFileHistoryIndex(nextHistory.length - 1)
-            return nextHistory
-        })
-    }, [file.path, fileHistoryIndex])
 
     useEffect(() => {
         const nextPath = String(preserveContextRequest?.path || '').trim()
@@ -169,74 +116,17 @@ export function PreviewNavigationSidebar({
         }
     }, [])
 
-    const visibleOutlineItems = useMemo(
-        () => flattenOutlineItems(outlineItems, expandedOutlineIds),
-        [expandedOutlineIds, outlineItems]
-    )
-    const visibleFolderNodes = useMemo(
-        () => flattenFolderNodes(tree, expandedPaths),
-        [expandedPaths, tree]
-    )
     const activeFileKey = useMemo(() => normalizePathKey(file.path), [file.path])
-    const activeFolderName = useMemo(() => (
-        activeFolderPath ? getPathName(activeFolderPath) || activeFolderPath : 'No folder context'
-    ), [activeFolderPath])
-
-    const handleOutlineToggle = useCallback((item: OutlineItem) => {
-        if (item.children.length === 0) return
-        setExpandedOutlineIds((currentExpandedIds) => {
-            const nextExpandedIds = new Set(currentExpandedIds)
-            if (nextExpandedIds.has(item.id)) nextExpandedIds.delete(item.id)
-            else nextExpandedIds.add(item.id)
-            return nextExpandedIds
-        })
-    }, [])
+    const explorerRootName = useMemo(
+        () => getPathName(treeRootPath) || getPathName(projectPath || '') || 'Workspace',
+        [projectPath, treeRootPath]
+    )
 
     const handleFolderFileOpen = useCallback(async (node: DevScopeFileTreeNode) => {
         if (node.type !== 'file' || !onOpenLinkedPreview) return
         preserveContextForFile(node.path)
         await onOpenLinkedPreview({ name: node.name, path: node.path }, getFileExtension(node.name))
     }, [onOpenLinkedPreview, preserveContextForFile])
-
-    const openHistoryFile = useCallback(async (targetIndex: number) => {
-        if (!onOpenLinkedPreview) return
-
-        const targetPath = fileHistory[targetIndex]
-        if (!targetPath) return
-
-        pendingHistoryTargetRef.current = {
-            pathKey: normalizePathKey(targetPath),
-            index: targetIndex
-        }
-        preserveContextForFile(targetPath)
-        const targetName = getPathName(targetPath)
-        try {
-            await onOpenLinkedPreview({ name: targetName, path: targetPath }, getFileExtension(targetName))
-        } catch (error) {
-            pendingHistoryTargetRef.current = null
-            throw error
-        }
-    }, [fileHistory, onOpenLinkedPreview, preserveContextForFile])
-
-    const canGoToPreviousFile = fileHistoryIndex > 0
-    const canGoToNextFile = fileHistoryIndex >= 0 && fileHistoryIndex < fileHistory.length - 1
-
-    const handleCopyFolderPath = useCallback(async () => {
-        if (!activeFolderPath) return
-        if (window.devscope.copyToClipboard) {
-            const result = await window.devscope.copyToClipboard(activeFolderPath)
-            if (!result.success) {
-                setToastMessage(result.error || 'Failed to copy path')
-                return
-            }
-        } else {
-            await navigator.clipboard.writeText(activeFolderPath)
-        }
-        setCopiedPath(true)
-        setToastMessage('Copied full path')
-        window.setTimeout(() => setCopiedPath(false), 1200)
-        window.setTimeout(() => setToastMessage(null), 2200)
-    }, [activeFolderPath])
 
     const showToast = useCallback((message: string) => {
         setToastMessage(message)
@@ -447,13 +337,13 @@ export function PreviewNavigationSidebar({
             destinationDirectory ? {
                 id: 'new-file',
                 label: isDirectory ? 'New file here' : 'New sibling file',
-                icon: <FilePlus className="size-3.5" />,
+                icon: <ExplorerCreateIcon kind="file" />,
                 onSelect: () => startCreate('file', destinationDirectory)
             } : null,
             destinationDirectory ? {
                 id: 'new-folder',
                 label: isDirectory ? 'New folder here' : 'New sibling folder',
-                icon: <FolderPlus className="size-3.5" />,
+                icon: <ExplorerCreateIcon kind="directory" />,
                 onSelect: () => startCreate('directory', destinationDirectory)
             } : null,
             {
@@ -502,274 +392,117 @@ export function PreviewNavigationSidebar({
     return (
         <>
         <div className="flex min-h-0 flex-1 flex-col bg-sparkle-card">
-            <div className="border-b border-white/[0.06] bg-white/[0.02]">
-                <div className="relative grid h-9 min-h-9 grid-cols-2">
-                    <div
-                        className={cn(
-                            'pointer-events-none absolute inset-y-0 w-1/2 bg-white/[0.045] transition-transform duration-200 ease-out',
-                            activeTab === 'folder' ? 'translate-x-0' : 'translate-x-full'
-                        )}
-                    />
-                    <div className="pointer-events-none absolute inset-y-1.5 left-1/2 w-px -translate-x-1/2 bg-white/[0.08]" />
-                    <div
-                        className={cn(
-                            'relative z-[1] flex min-w-0 items-stretch border-b transition-colors duration-200',
-                            activeTab === 'folder' ? 'border-white/55 text-sparkle-text' : 'border-transparent text-sparkle-text-muted hover:text-sparkle-text-secondary'
-                        )}
-                    >
-                        <button
-                            type="button"
-                            onClick={onMinimizePanel}
-                            className="inline-flex h-full shrink-0 items-center justify-center pl-1.5 pr-2 text-inherit opacity-70 transition-[opacity,color,background-color] duration-200 hover:bg-white/[0.04] hover:opacity-100 hover:text-sparkle-text"
-                            title="Minimize left panel"
-                        >
-                            <PanelLeft className="size-3.5" />
-                        </button>
-                        <div className="my-2 w-px shrink-0 bg-white/[0.08]" />
-                        <button
-                            type="button"
-                            onClick={() => setActiveTab('folder')}
-                            className={cn(
-                                'inline-flex min-w-0 flex-1 items-center justify-center gap-1.5 px-2 text-[11px] font-medium transition-[opacity,color,background-color] duration-200',
-                                activeTab === 'folder' ? 'text-sparkle-text opacity-100' : 'text-sparkle-text-muted opacity-70 hover:bg-white/[0.04] hover:text-sparkle-text-secondary hover:opacity-100'
-                            )}
-                        >
-                            <FolderOpen className="size-3.5" />
-                            <span>Folder</span>
-                        </button>
-                    </div>
+            <div className="group/explorer flex h-8 min-h-8 items-center border-b border-white/[0.05] px-1.5">
+                <button
+                    type="button"
+                    onClick={() => setExplorerOpen((open) => !open)}
+                    className="flex min-w-0 flex-1 items-center gap-1 px-0.5 text-left text-[11px] font-semibold uppercase tracking-[0.04em] text-sparkle-text"
+                    title={treeRootPath}
+                    aria-expanded={explorerOpen}
+                >
+                    {explorerOpen ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
+                    <span className="truncate">{explorerRootName}</span>
+                </button>
+                <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover/explorer:opacity-100 group-focus-within/explorer:opacity-100">
                     <button
                         type="button"
-                        onClick={() => setActiveTab('outline')}
-                        className={cn(
-                            'relative z-[1] inline-flex min-w-0 items-center justify-center gap-1.5 border-b px-2 text-[11px] font-medium transition-[opacity,color,background-color,border-color] duration-200',
-                            activeTab === 'outline'
-                                ? 'border-white/55 text-sparkle-text opacity-100'
-                                : 'border-transparent text-sparkle-text-muted opacity-70 hover:bg-white/[0.04] hover:text-sparkle-text-secondary hover:opacity-100'
-                        )}
+                        disabled={!treeRootPath}
+                        onClick={(event) => {
+                            event.stopPropagation()
+                            startCreate('file', treeRootPath)
+                        }}
+                        className="inline-flex size-6 items-center justify-center rounded text-sparkle-text-muted hover:bg-white/[0.06] hover:text-sparkle-text disabled:opacity-30"
+                        title="New File"
+                        aria-label="New File"
                     >
-                        <ListTree className="size-3.5" />
-                        <span>File map</span>
+                        <ExplorerCreateIcon kind="file" />
+                    </button>
+                    <button
+                        type="button"
+                        disabled={!treeRootPath}
+                        onClick={(event) => {
+                            event.stopPropagation()
+                            startCreate('directory', treeRootPath)
+                        }}
+                        className="inline-flex size-6 items-center justify-center rounded text-sparkle-text-muted hover:bg-white/[0.06] hover:text-sparkle-text disabled:opacity-30"
+                        title="New Folder"
+                        aria-label="New Folder"
+                    >
+                        <ExplorerCreateIcon kind="directory" />
+                    </button>
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation()
+                            void reload()
+                        }}
+                        className="inline-flex size-6 items-center justify-center rounded text-sparkle-text-muted hover:bg-white/[0.06] hover:text-sparkle-text"
+                        title="Refresh Explorer"
+                        aria-label="Refresh Explorer"
+                    >
+                        <RefreshCw className="size-3.5" />
+                    </button>
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation()
+                            setCollapseAllRequest((request) => request + 1)
+                        }}
+                        className="inline-flex size-6 items-center justify-center rounded text-sparkle-text-muted hover:bg-white/[0.06] hover:text-sparkle-text"
+                        title="Collapse Folders in Explorer"
+                        aria-label="Collapse Folders in Explorer"
+                    >
+                        <ChevronsDownUp className="size-3.5" />
+                    </button>
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation()
+                            updateSettings({
+                                filePreviewExplorerNameLayout: nameLayout === 'wrap' ? 'horizontal' : 'wrap'
+                            })
+                        }}
+                        className="inline-flex size-6 items-center justify-center rounded text-sparkle-text-muted hover:bg-white/[0.06] hover:text-sparkle-text"
+                        title={nameLayout === 'wrap' ? 'Use horizontal scrolling for long names' : 'Wrap long names'}
+                        aria-label={nameLayout === 'wrap' ? 'Use horizontal scrolling for long names' : 'Wrap long names'}
+                        aria-pressed={nameLayout === 'wrap'}
+                    >
+                        {nameLayout === 'wrap' ? <WrapText className="size-3.5" /> : <MoveHorizontal className="size-3.5" />}
                     </button>
                 </div>
             </div>
 
-            <div className="relative min-h-0 flex-1 overflow-hidden">
-                <div
-                    className={cn(
-                        'absolute inset-0 flex min-h-0 flex-col transition-[opacity,transform] duration-180 ease-out',
-                        activeTab === 'outline'
-                            ? 'translate-x-0 opacity-100'
-                            : '-translate-x-2 pointer-events-none opacity-0'
-                    )}
-                >
-                    <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-2 py-2">
-                        {visibleOutlineItems.length > 0 ? (
-                            <div className="space-y-0.5">
-                                {visibleOutlineItems.map(({ item, depth }) => {
-                                    const isExpanded = expandedOutlineIds.has(item.id)
-                                    const canExpand = item.children.length > 0
-                                    const kindStyle = KIND_STYLES[item.kind]
-
-                                    return (
-                                        <button
-                                            key={item.id}
-                                            type="button"
-                                            onClick={() => onOutlineSelect(item)}
-                                            className="flex w-full items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-left text-[11px] transition-colors hover:border-white/[0.08] hover:bg-white/[0.05]"
-                                            style={{ paddingLeft: `${8 + depth * 16}px` }}
-                                            title={`${item.label} (line ${item.line})`}
-                                        >
-                                            <span
-                                                onClick={(event) => {
-                                                    event.stopPropagation()
-                                                    handleOutlineToggle(item)
-                                                }}
-                                                className={cn(
-                                                    'inline-flex size-4 shrink-0 items-center justify-center rounded text-sparkle-text-muted',
-                                                    canExpand ? 'hover:bg-white/[0.06] hover:text-sparkle-text-secondary' : 'pointer-events-none opacity-0'
-                                                )}
-                                            >
-                                                {canExpand ? (
-                                                    isExpanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />
-                                                ) : (
-                                                    <ChevronRight className="size-3.5" />
-                                                )}
-                                            </span>
-                                            <span className={cn('size-2.5 shrink-0 rounded-full', kindStyle.dot, kindStyle.glow)} />
-                                            <span className="min-w-0 flex-1 truncate text-sparkle-text">{item.label}</span>
-                                            <span className="shrink-0 text-[10px] text-sparkle-text-muted">:{item.line}</span>
-                                        </button>
-                                    )
-                                })}
-                            </div>
-                        ) : (
-                            <div className="rounded-xl border border-dashed border-white/[0.08] bg-white/[0.03] px-3 py-4 text-[11px] text-sparkle-text-secondary">
-                                No structure.
-                            </div>
-                        )}
-                    </div>
-                </div>
-
-                <div
-                    className={cn(
-                        'absolute inset-0 flex min-h-0 flex-col transition-[opacity,transform] duration-180 ease-out',
-                        activeTab === 'folder'
-                            ? 'translate-x-0 opacity-100'
-                            : 'translate-x-2 pointer-events-none opacity-0'
-                    )}
-                >
-                    <div className="border-b border-white/[0.05] px-2 py-1.5">
-                        <div
-                            className="group flex min-w-0 items-center gap-1.5"
-                            onDoubleClick={() => { void reload() }}
-                            title={activeFolderPath ? `${activeFolderPath}\nDouble-click to refresh` : 'No folder context'}
-                        >
-                            <div
-                                className="min-w-0 flex-1 truncate rounded-md bg-white/[0.025] px-1.5 py-1 text-[11px] font-medium text-sparkle-text-secondary"
-                            >
-                                {activeFolderName}
-                            </div>
-                            <button
-                                type="button"
-                                onClick={(event) => {
-                                    event.stopPropagation()
-                                    void reload()
-                                }}
-                                className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted transition-colors hover:bg-white/[0.06] hover:text-sparkle-text"
-                                title="Refresh folder"
-                            >
-                                <RefreshCw className="size-3.5" />
-                            </button>
-                            <button
-                                type="button"
-                                disabled={!activeFolderPath}
-                                onClick={(event) => {
-                                    event.stopPropagation()
-                                    startCreate('file', activeFolderPath)
-                                }}
-                                className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted transition-colors hover:bg-white/[0.06] hover:text-sparkle-text disabled:cursor-not-allowed disabled:opacity-35"
-                                title="New file here"
-                            >
-                                <FilePlus className="size-3.5" />
-                            </button>
-                            <button
-                                type="button"
-                                disabled={!activeFolderPath}
-                                onClick={(event) => {
-                                    event.stopPropagation()
-                                    startCreate('directory', activeFolderPath)
-                                }}
-                                className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted transition-colors hover:bg-white/[0.06] hover:text-sparkle-text disabled:cursor-not-allowed disabled:opacity-35"
-                                title="New folder here"
-                            >
-                                <FolderPlus className="size-3.5" />
-                            </button>
-                            <button
-                                type="button"
-                                onClick={(event) => {
-                                    event.stopPropagation()
-                                    void handleCopyFolderPath()
-                                }}
-                                className={cn(
-                                    'inline-flex size-6 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted transition-colors hover:bg-white/[0.06] hover:text-sparkle-text',
-                                    copiedPath && 'opacity-100 text-emerald-300'
-                                )}
-                                title={copiedPath ? 'Copied' : 'Copy path'}
-                            >
-                                {copiedPath ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-                            </button>
-                        </div>
-                    </div>
-
-                    <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
+            <div className={cn('flex min-h-0 flex-1 overflow-hidden px-1 pb-1', !explorerOpen && 'hidden')}>
                         {folderError ? (
-                            <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-3 text-[11px] text-red-200">
+                            <div className="m-1 h-fit flex-1 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-3 text-[11px] text-red-200">
                                 <div className="flex items-center gap-2">
                                     <AlertCircle className="size-3.5 shrink-0" />
                                     <span className="truncate">{folderError}</span>
                                 </div>
                             </div>
-                        ) : folderLoading && visibleFolderNodes.length === 0 ? (
-                            <div className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-4 text-[11px] text-sparkle-text-secondary">
-                                Loading current folder...
+                        ) : folderLoading && tree.length === 0 ? (
+                            <div className="m-1 h-fit flex-1 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-4 text-[11px] text-sparkle-text-secondary">
+                                Loading project tree...
                             </div>
-                        ) : visibleFolderNodes.length > 0 ? (
-                            <div className="space-y-px">
-                                {visibleFolderNodes.map(({ node, depth, expanded }) => {
-                                    const isDirectory = node.type === 'directory'
-                                    const nodeKey = normalizePathKey(node.path)
-                                    const isActiveFile = !isDirectory && nodeKey === activeFileKey
-                                    const extension = getFileExtension(node.name)
-                                    const previewTarget = !isDirectory ? resolvePreviewType(node.name, extension) : null
-                                    const isPreviewable = Boolean(previewTarget)
-
-                                    if (!isDirectory) {
-                                        return (
-                                            <DraggablePreviewFileRow
-                                                key={node.path}
-                                                node={node}
-                                                depth={depth}
-                                                isActiveFile={isActiveFile}
-                                                isPreviewable={isPreviewable}
-                                                iconTheme={iconTheme}
-                                                onOpen={() => { void handleFolderFileOpen(node) }}
-                                                actionMenu={(
-                                                    <FileActionsMenu
-                                                        items={buildNodeActions(node)}
-                                                        buttonClassName="size-5.5 rounded-[4px] border-0 text-sparkle-text-muted hover:border-0 hover:bg-white/[0.06] hover:text-sparkle-text"
-                                                        openButtonClassName="border-0 bg-white/[0.08] text-sparkle-text opacity-100"
-                                                        title={`Actions for ${node.name}`}
-                                                    />
-                                                )}
-                                            />
-                                        )
-                                    }
-
-                                    return (
-                                        <div
-                                            key={node.path}
-                                            className={cn(
-                                                'group/row flex w-full items-center rounded-[4px] border text-left text-[11px] transition-colors',
-                                                isActiveFile
-                                                    ? 'border-transparent bg-sky-500/10 text-sky-100'
-                                                    : 'border-transparent text-sparkle-text-secondary hover:bg-white/[0.05] hover:text-sparkle-text',
-                                                !isDirectory && !isPreviewable && 'text-sparkle-text-muted'
-                                            )}
-                                        >
-                                            <button
-                                                type="button"
-                                                onClick={() => { void toggleDirectory(node) }}
-                                                onDoubleClick={() => navigateToFolder(node.path)}
-                                                className="flex min-w-0 flex-1 items-center gap-1.5 rounded-l-[4px] px-1.5 py-1 text-left"
-                                                style={{ paddingLeft: `${6 + depth * 14}px` }}
-                                            >
-                                                <span className="inline-flex size-4 shrink-0 items-center justify-center rounded-[3px] text-sparkle-text-muted hover:bg-white/[0.06] hover:text-sparkle-text-secondary">
-                                                    {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-                                                </span>
-                                                <VscodeEntryIcon
-                                                    pathValue={node.path}
-                                                    kind={node.type}
-                                                    theme={iconTheme}
-                                                    className="size-3.5 shrink-0"
-                                                />
-                                                <span className="min-w-0 flex-1 truncate">{node.name}</span>
-                                            </button>
-                                            <div className="shrink-0 pr-0.5">
-                                                <FileActionsMenu
-                                                    items={buildNodeActions(node)}
-                                                    buttonClassName="size-5.5 rounded-[4px] border-0 text-sparkle-text-muted hover:border-0 hover:bg-white/[0.06] hover:text-sparkle-text"
-                                                    openButtonClassName="border-0 bg-white/[0.08] text-sparkle-text opacity-100"
-                                                    title={`Actions for ${node.name}`}
-                                                />
-                                            </div>
-                                        </div>
-                                    )
-                                })}
-                            </div>
+                        ) : tree.length > 0 ? (
+                            <PreviewVirtualFileTree
+                                nodes={tree}
+                                rootPath={treeRootPath}
+                                selectedPath={file.path}
+                                selectedPathKind={file.type === 'directory' ? 'directory' : 'file'}
+                                expandedPathKeys={expandedPaths}
+                                collapseAllRequest={collapseAllRequest}
+                                nameLayout={nameLayout}
+                                theme={iconTheme}
+                                revealTargetRequestId={revealTargetRequestId}
+                                onRevealTargetHandled={onRevealTargetHandled}
+                                onOpenFile={(node) => { void handleFolderFileOpen(node) }}
+                                onExpandDirectory={ensureDirectoryLoaded}
+                                getNodeActions={buildNodeActions}
+                            />
                         ) : (
-                            <div className="rounded-xl border border-dashed border-white/[0.08] bg-white/[0.03] px-3 py-4 text-[11px] text-sparkle-text-secondary">
-                                No sibling files found in this folder.
+                            <div className="m-1 h-fit flex-1 rounded-xl border border-dashed border-white/[0.08] bg-white/[0.03] px-3 py-4 text-[11px] text-sparkle-text-secondary">
+                                No project files found.
                             </div>
                         )}
                     </div>
@@ -778,57 +511,6 @@ export function PreviewNavigationSidebar({
                             {toastMessage}
                         </div>
                     ) : null}
-                    <div className="border-t border-white/[0.06] bg-white/[0.02]">
-                        <div className="grid grid-cols-3">
-                            <button
-                                type="button"
-                                onClick={navigateUpFolder}
-                                disabled={!canNavigateUpFolder}
-                                className={cn(
-                                    'inline-flex items-center justify-center gap-1.5 border-r border-white/[0.08] px-2 py-2.5 text-[11px] font-medium transition-colors',
-                                    canNavigateUpFolder
-                                        ? 'text-sparkle-text-secondary hover:bg-white/[0.05] hover:text-sparkle-text'
-                                        : 'cursor-not-allowed text-sparkle-text-muted'
-                                )}
-                                title="Go up one folder"
-                            >
-                                <ChevronUp className="size-3.5" />
-                                <span>Up</span>
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => { void openHistoryFile(fileHistoryIndex - 1) }}
-                                disabled={!canGoToPreviousFile}
-                                className={cn(
-                                    'inline-flex items-center justify-center gap-1.5 border-r border-white/[0.08] px-2 py-2.5 text-[11px] font-medium transition-colors',
-                                    canGoToPreviousFile
-                                        ? 'text-sparkle-text-secondary hover:bg-white/[0.05] hover:text-sparkle-text'
-                                        : 'cursor-not-allowed text-sparkle-text-muted'
-                                )}
-                                title="Previous file in preview history"
-                            >
-                                <ChevronLeft className="size-3.5" />
-                                <span>Prev</span>
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => { void openHistoryFile(fileHistoryIndex + 1) }}
-                                disabled={!canGoToNextFile}
-                                className={cn(
-                                    'inline-flex items-center justify-center gap-1.5 px-2 py-2.5 text-[11px] font-medium transition-colors',
-                                    canGoToNextFile
-                                        ? 'text-sparkle-text-secondary hover:bg-white/[0.05] hover:text-sparkle-text'
-                                        : 'cursor-not-allowed text-sparkle-text-muted'
-                                )}
-                                title="Next file in preview history"
-                            >
-                                <span>Next</span>
-                                <ChevronRight className="size-3.5" />
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
         </div>
         <PromptModal
             isOpen={Boolean(treePrompt)}

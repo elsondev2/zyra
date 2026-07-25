@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useState } from 'react'
+import MarkdownRenderer, { prepareMarkdownRender } from '@/components/ui/MarkdownRenderer'
 import { useObservedElementWidth } from '@/lib/text-layout/useObservedElementWidth'
 import {
     getUserMessageBodyWidth,
@@ -10,6 +11,26 @@ import {
 type StreamingAssistantTextProps = {
     content: string
     className?: string
+}
+
+type AssistantMarkdownInteractionProps = {
+    onInternalLinkClick?: (href: string) => Promise<boolean | void> | boolean | void
+    onLinkNotice?: (message: string, tone: 'info' | 'error') => void
+}
+
+type StreamingAssistantMarkdownProps = AssistantMarkdownInteractionProps & {
+    content: string
+    filePath?: string
+    className?: string
+    cacheKey: string
+}
+
+type CompletedAssistantMarkdownProps = AssistantMarkdownInteractionProps & {
+    content: string
+    filePath?: string
+    className?: string
+    cacheKey: string
+    deferInitialRender?: boolean
 }
 
 type CollapsibleUserMessageBodyProps = {
@@ -24,6 +45,171 @@ export const StreamingAssistantText = memo(function StreamingAssistantText({
         <div className={className || 'whitespace-pre-wrap break-words text-[13px] leading-6 text-sparkle-text [overflow-wrap:anywhere]'}>
             {content || ' '}
         </div>
+    )
+})
+
+export function splitStreamingMarkdownBlocks(content: string): { settled: string[]; tail: string } {
+    const settled: string[] = []
+    let blockStart = 0
+    let lineStart = 0
+    let fenceCharacter = ''
+    let fenceLength = 0
+
+    while (lineStart < content.length) {
+        const newlineIndex = content.indexOf('\n', lineStart)
+        const lineEnd = newlineIndex >= 0 ? newlineIndex + 1 : content.length
+        const line = content.slice(lineStart, newlineIndex >= 0 ? newlineIndex : content.length).replace(/\r$/, '')
+        const fenceMatch = line.match(/^ {0,3}(`{3,}|~{3,})/)
+        if (fenceMatch) {
+            const marker = fenceMatch[1] || ''
+            if (!fenceCharacter) {
+                fenceCharacter = marker[0] || ''
+                fenceLength = marker.length
+            } else if (
+                marker[0] === fenceCharacter
+                && marker.length >= fenceLength
+                && line.slice((fenceMatch.index || 0) + fenceMatch[0].length).trim() === ''
+            ) {
+                fenceCharacter = ''
+                fenceLength = 0
+            }
+        }
+
+        if (!fenceCharacter && !line.trim()) {
+            const block = content.slice(blockStart, lineStart).trimEnd()
+            if (block.trim()) settled.push(block)
+            blockStart = lineEnd
+        }
+        lineStart = lineEnd
+    }
+
+    return {
+        settled,
+        tail: content.slice(blockStart)
+    }
+}
+
+const StreamingMarkdownBlock = memo(function StreamingMarkdownBlock(props: {
+    content: string
+    filePath?: string
+    className?: string
+    cacheKey: string
+    transient?: boolean
+    onInternalLinkClick?: AssistantMarkdownInteractionProps['onInternalLinkClick']
+    onLinkNotice?: AssistantMarkdownInteractionProps['onLinkNotice']
+}) {
+    return (
+        <MarkdownRenderer
+            content={props.content}
+            filePath={props.filePath}
+            className={props.className}
+            cacheKey={props.cacheKey}
+            lightweight={props.transient}
+            transient={props.transient}
+            onInternalLinkClick={props.onInternalLinkClick}
+            onLinkNotice={props.onLinkNotice}
+        />
+    )
+})
+
+export const StreamingAssistantMarkdown = memo(function StreamingAssistantMarkdown({
+    content,
+    filePath,
+    className,
+    cacheKey,
+    onInternalLinkClick,
+    onLinkNotice
+}: StreamingAssistantMarkdownProps) {
+    const blocks = useMemo(() => splitStreamingMarkdownBlocks(content), [content])
+    if (!content.trim()) return <StreamingAssistantText content=" " className={className} />
+
+    return (
+        <div data-assistant-streaming-markdown="true">
+            {blocks.settled.map((block, index) => (
+                <StreamingMarkdownBlock
+                    key={`${index}:${block.length}`}
+                    content={block}
+                    filePath={filePath}
+                    className={className}
+                    cacheKey={`${cacheKey}:settled:${index}:${block.length}`}
+                    onInternalLinkClick={onInternalLinkClick}
+                    onLinkNotice={onLinkNotice}
+                />
+            ))}
+            {blocks.tail ? (
+                <StreamingMarkdownBlock
+                    content={blocks.tail}
+                    filePath={filePath}
+                    className={className}
+                    cacheKey={`${cacheKey}:tail`}
+                    transient
+                    onInternalLinkClick={onInternalLinkClick}
+                    onLinkNotice={onLinkNotice}
+                />
+            ) : null}
+        </div>
+    )
+})
+
+export const CompletedAssistantMarkdown = memo(function CompletedAssistantMarkdown({
+    content,
+    filePath,
+    className,
+    cacheKey,
+    deferInitialRender = false,
+    onInternalLinkClick,
+    onLinkNotice
+}: CompletedAssistantMarkdownProps) {
+    const [renderReady, setRenderReady] = useState(!deferInitialRender)
+
+    useEffect(() => {
+        if (!deferInitialRender) {
+            setRenderReady(true)
+            return
+        }
+
+        let cancelled = false
+        setRenderReady(false)
+        const prepare = () => {
+            prepareMarkdownRender({ content, filePath, cacheKey })
+            if (!cancelled) setRenderReady(true)
+        }
+        if (typeof window.requestIdleCallback === 'function') {
+            const idleId = window.requestIdleCallback(prepare, { timeout: 180 })
+            return () => {
+                cancelled = true
+                window.cancelIdleCallback(idleId)
+            }
+        }
+        const timeoutId = window.setTimeout(prepare, 0)
+        return () => {
+            cancelled = true
+            window.clearTimeout(timeoutId)
+        }
+    }, [cacheKey, content, deferInitialRender, filePath])
+
+    if (!renderReady) {
+        return (
+            <StreamingAssistantMarkdown
+                content={content}
+                filePath={filePath}
+                className={className}
+                cacheKey={`${cacheKey}:handoff`}
+                onInternalLinkClick={onInternalLinkClick}
+                onLinkNotice={onLinkNotice}
+            />
+        )
+    }
+
+    return (
+        <MarkdownRenderer
+            content={content}
+            filePath={filePath}
+            cacheKey={cacheKey}
+            onInternalLinkClick={onInternalLinkClick}
+            onLinkNotice={onLinkNotice}
+            className={className}
+        />
     )
 })
 

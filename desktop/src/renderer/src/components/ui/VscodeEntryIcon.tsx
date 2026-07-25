@@ -7,12 +7,14 @@ export const VscodeEntryIcon = memo(function VscodeEntryIcon({
     pathValue,
     kind,
     theme,
-    className
+    className,
+    loading = 'eager'
 }: {
     pathValue: string
     kind: 'file' | 'directory'
     theme: 'light' | 'dark'
     className?: string
+    loading?: 'eager' | 'lazy'
 }) {
     const [failedIconUrl, setFailedIconUrl] = useState<string | null>(null)
     const iconUrl = useMemo(
@@ -33,7 +35,7 @@ export const VscodeEntryIcon = memo(function VscodeEntryIcon({
             alt=""
             aria-hidden="true"
             className={cn('size-4 shrink-0', className)}
-            loading="eager"
+            loading={loading}
             decoding="async"
             onError={() => setFailedIconUrl(iconUrl)}
         />

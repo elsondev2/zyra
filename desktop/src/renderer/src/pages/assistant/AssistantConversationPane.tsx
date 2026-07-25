@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { AssistantProposedPlan, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
+import type { AssistantProposedPlan, AssistantSession, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
+import { isAssistantSessionProjectLocked } from '@shared/assistant/session-project'
 import { useSettings } from '@/lib/settings'
 import { useAssistantConversationStore, useAssistantStoreActions, useAssistantStoreSelector } from '@/lib/assistant/store'
+import { hasAssistantPersistedThreadContent, shouldShowAssistantThreadHistoryLoader } from '@/lib/assistant/assistant-history-state'
 import { isAssistantThreadActivelyWorking } from '@/lib/assistant/selectors'
 import { cn } from '@/lib/utils'
-import { buildPromptWithContextFiles } from './assistant-composer-utils'
+import { buildPromptImageInputs, buildPromptWithContextFiles } from './assistant-composer-utils'
 import { clearAssistantComposerSessionState } from './assistant-composer-session-state'
 import { AssistantChatOnboardingOverlay } from './AssistantChatOnboardingOverlay'
 import { AssistantConnectionRecoveryBanner } from './AssistantConnectionRecoveryBanner'
@@ -12,8 +14,14 @@ import { AssistantConversationHeader } from './AssistantConversationHeader'
 import { AssistantConversationComposerPane } from './AssistantConversationComposerPane'
 import { AssistantConversationTimelinePane } from './AssistantConversationTimelinePane'
 import type { AssistantConversationPaneProps } from './AssistantConversationPane.types'
-import type { AssistantComposerSendOptions, ComposerContextFile } from './assistant-composer-types'
+import { RenameSessionModal, SessionDeleteModal } from './AssistantSessionsRailDialogs'
+import type { AssistantComposerSendOptions, AssistantElementBounds, ComposerContextFile } from './assistant-composer-types'
 import { getAssistantLinkBaseFilePath } from './assistant-file-navigation'
+import {
+    ASSISTANT_COMPOSER_OVERLAY_TOP_PADDING_PX,
+    resolveAssistantComposerInsetEnd,
+    resolveAssistantStableComposerInsetEnd
+} from './assistant-pane-layout'
 import { getAssistantActivePlanProgress, hasAssistantPlanPanelContent } from './assistant-plan-utils'
 import { getAssistantThreadDisplayTitle, getSessionDisplayTitle, isAssistantDraftSession, resolveSessionProjectPath } from './assistant-sessions-rail-utils'
 import { useAssistantConnectionRecovery } from './useAssistantConnectionRecovery'
@@ -71,13 +79,22 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const controller = useAssistantConversationStore()
     const actions = useAssistantStoreActions()
     const { settings } = useSettings()
-    const headerMenuRef = useRef<HTMLDivElement | null>(null)
-    const [activeHeaderMenu, setActiveHeaderMenu] = useState<'none' | 'open-with' | 'more'>('none')
+    const composerPaneRef = useRef<HTMLDivElement | null>(null)
     const [activeZyraProfile, setActiveZyraProfile] = useState<ZyraActiveProfile>(() => readStoredZyraProfile())
     const [showScrollToBottom, setShowScrollToBottom] = useState(false)
     const [interactionModeOverride, setInteractionModeOverride] = useState<'default' | null>(null)
     const [implementationToastVisible, setImplementationToastVisible] = useState(false)
     const [newChatHandoffRevision, setNewChatHandoffRevision] = useState(0)
+    const [composerInsetEnd, setComposerInsetEnd] = useState(0)
+    const [attachmentShelfTop, setAttachmentShelfTop] = useState<number | null>(null)
+    const [renameTarget, setRenameTarget] = useState<AssistantSession | null>(null)
+    const [renameDraft, setRenameDraft] = useState('')
+    const [sessionToDelete, setSessionToDelete] = useState<AssistantSession | null>(null)
+    const [headerActionPending, setHeaderActionPending] = useState<'rename' | 'project' | 'archive' | 'delete' | null>(null)
+    const composerInsetEndRef = useRef(0)
+    const composerInsetTargetRef = useRef(0)
+    const composerInsetFrameRef = useRef<number | null>(null)
+    const composerInsetLastFrameAtRef = useRef(0)
     const showScrollToBottomRef = useRef(false)
     const scrollButtonRafRef = useRef<number | null>(null)
     const newChatHandoffUntilRef = useRef(0)
@@ -154,14 +171,8 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         && !controller.timelineMessages.some((message) => message.role === 'assistant' && message.streaming)
     const lastTimelineMessage = controller.timelineMessages[controller.timelineMessages.length - 1] || null
     const latestTimelineActivity = controller.activityFeed[0] || null
-    const selectedThreadHasHistoricalContent = Boolean(
-        ((controller.activeThread?.messageCount || 0) > 0)
-        || Boolean(controller.activeThread?.latestTurn)
-        || Boolean(controller.activeThread?.activePlan)
-        || (controller.activeThread?.proposedPlans.length || 0) > 0
-        || (controller.activeThread?.pendingApprovals.length || 0) > 0
-        || (controller.activeThread?.pendingUserInputs.length || 0) > 0
-    )
+    const selectedThreadHasHistoricalContent = hasAssistantPersistedThreadContent(controller.activeThread)
+    const projectDirectoryLocked = isAssistantSessionProjectLocked(controller.selectedSession)
     const connectionRecovery = useAssistantConnectionRecovery({
         selectedSessionId: activeComposerSessionId,
         activeThreadId: newChatHandoffActive ? null : controller.activeThread?.id || null,
@@ -201,13 +212,13 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         && controller.selectedSession
         && controller.timelineMessages.length === 0
         && controller.activityFeed.length === 0
-        && (
-            controller.selectionHydrating
-            || (
-                !controller.loading
-                && selectedThreadHasHistoricalContent
-            )
-        )
+        && shouldShowAssistantThreadHistoryLoader({
+            selectionHydrating: controller.selectionHydrating,
+            snapshotLoading: controller.loading,
+            historyLoaded: Boolean(controller.history),
+            historyLoadFailed: Boolean(controller.commandError),
+            hasPersistedContent: selectedThreadHasHistoricalContent
+        })
     )
     const showPlaygroundRootOnboarding = false
     const showWorkProjectOnboarding = false
@@ -233,6 +244,10 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     )
     const composerIsCentered = newChatHandoffActive || centerComposer
     const bottomComposerOverlayActive = !composerIsCentered
+    const effectiveComposerInsetEnd = resolveAssistantStableComposerInsetEnd(
+        composerInsetEnd,
+        bottomComposerOverlayActive
+    )
     const visibleComposerSessionId = newChatHandoffActive
         ? NEW_CHAT_HANDOFF_SESSION_ID
         : selectedSessionId
@@ -291,6 +306,74 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         })
     }, [onScrollTimeline, syncScrollButtonVisibility])
 
+    const updateComposerInsetEnd = useCallback((nextInsetEnd: number, immediate = false) => {
+        const target = Math.max(0, nextInsetEnd)
+        const current = composerInsetEndRef.current
+        const startsFromEmpty = current === 0 && composerInsetTargetRef.current === 0
+        composerInsetTargetRef.current = target
+
+        const commit = (value: number) => {
+            composerInsetEndRef.current = value
+            setComposerInsetEnd(value)
+        }
+        const shouldReduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+        if (immediate || startsFromEmpty || shouldReduceMotion || Math.abs(target - current) < 0.35) {
+            if (composerInsetFrameRef.current !== null) window.cancelAnimationFrame(composerInsetFrameRef.current)
+            composerInsetFrameRef.current = null
+            commit(target)
+            return
+        }
+        if (composerInsetFrameRef.current !== null) return
+
+        composerInsetLastFrameAtRef.current = window.performance.now()
+        const animate = (now: number) => {
+            composerInsetFrameRef.current = null
+            const elapsed = Math.max(1, Math.min(40, now - composerInsetLastFrameAtRef.current))
+            composerInsetLastFrameAtRef.current = now
+            const frameTarget = composerInsetTargetRef.current
+            const frameCurrent = composerInsetEndRef.current
+            const blend = 1 - Math.exp(-elapsed / 68)
+            const next = frameCurrent + (frameTarget - frameCurrent) * blend
+
+            if (Math.abs(frameTarget - next) < 0.35) {
+                commit(frameTarget)
+                return
+            }
+
+            commit(Math.round(next * 10) / 10)
+            composerInsetFrameRef.current = window.requestAnimationFrame(animate)
+        }
+        composerInsetFrameRef.current = window.requestAnimationFrame(animate)
+    }, [])
+
+    const handleAttachmentShelfBoundsChange = useCallback((bounds: AssistantElementBounds | null) => {
+        const nextTop = bounds ? Math.floor(bounds.top) : null
+        setAttachmentShelfTop((current) => current === nextTop ? current : nextTop)
+    }, [])
+
+    useLayoutEffect(() => {
+        const element = composerPaneRef.current
+        if (!bottomComposerOverlayActive) {
+            updateComposerInsetEnd(0, true)
+            return
+        }
+        if (!element) return
+        const measure = () => {
+            const paneRect = element.getBoundingClientRect()
+            const insetEnd = resolveAssistantComposerInsetEnd({
+                paneTop: paneRect.top,
+                paneBottom: paneRect.bottom,
+                attachmentShelfTop,
+                contentTopInset: ASSISTANT_COMPOSER_OVERLAY_TOP_PADDING_PX
+            })
+            updateComposerInsetEnd(insetEnd)
+        }
+        measure()
+        const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null
+        observer?.observe(element)
+        return () => observer?.disconnect()
+    }, [attachmentShelfTop, bottomComposerOverlayActive, effectivePendingUserInputs.length, updateComposerInsetEnd])
+
     useEffect(() => {
         if (!selectedSessionId || !selectedProjectPath) return
         lastResolvedProjectPathBySessionRef.current[selectedSessionId] = selectedProjectPath
@@ -312,22 +395,6 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         }, Math.max(0, remainingMs))
         return () => window.clearTimeout(timeoutId)
     }, [isCreatingFreshChat, newChatHandoffRevision, selectedSessionId])
-
-    useEffect(() => {
-        if (activeHeaderMenu === 'none') return
-        const handlePointerDown = (event: MouseEvent) => {
-            if (!headerMenuRef.current?.contains(event.target as Node)) setActiveHeaderMenu('none')
-        }
-        const handleEscape = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') setActiveHeaderMenu('none')
-        }
-        document.addEventListener('mousedown', handlePointerDown)
-        window.addEventListener('keydown', handleEscape)
-        return () => {
-            document.removeEventListener('mousedown', handlePointerDown)
-            window.removeEventListener('keydown', handleEscape)
-        }
-    }, [activeHeaderMenu])
 
     useEffect(() => {
         try {
@@ -362,6 +429,9 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
             if (scrollButtonRafRef.current !== null) {
                 window.cancelAnimationFrame(scrollButtonRafRef.current)
             }
+            if (composerInsetFrameRef.current !== null) {
+                window.cancelAnimationFrame(composerInsetFrameRef.current)
+            }
         }
     }, [])
 
@@ -372,9 +442,11 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     }, [controller.activeThread?.interactionMode, controller.activeThread?.id])
 
     useEffect(() => {
-        setActiveHeaderMenu('none')
         setInteractionModeOverride(null)
         setImplementationToastVisible(false)
+        setRenameTarget(null)
+        setRenameDraft('')
+        setSessionToDelete(null)
     }, [controller.activeThread?.id, selectedSessionId])
 
     useEffect(() => {
@@ -440,6 +512,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         options: AssistantComposerSendOptions
     ) => {
         if (!sessionId) return false
+        const images = buildPromptImageInputs(contextFiles)
         const result = await actions.sendPromptResult(buildPromptWithContextFiles(prompt, contextFiles), {
             sessionId,
             model: options.model,
@@ -447,10 +520,14 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
             interactionMode: options.interactionMode,
             effort: options.effort,
             serviceTier: options.serviceTier,
-            profile: activeZyraProfile
+            profile: activeZyraProfile,
+            images: images.length > 0 ? images : undefined
         })
+        if (!result.success && images.length > 0) {
+            props.onShowToast?.(`Could not send image: ${result.error}`, 'error')
+        }
         return result.success
-    }, [actions, activeZyraProfile])
+    }, [actions, activeZyraProfile, props.onShowToast])
     const isAssistantBusy = !newChatHandoffActive && (controller.commandPending || isThreadWorking)
     const {
         sendingComposerPrompt,
@@ -501,8 +578,104 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
 
     const handleCreateThread = useCallback(() => {
         void actions.newThread(controller.selectedSession?.id || undefined)
-        setActiveHeaderMenu('none')
     }, [actions, controller.selectedSession?.id])
+
+    const handleOpenRenameChat = useCallback(() => {
+        const session = controller.selectedSession
+        if (!session || headerActionPending) return
+        setRenameTarget(session)
+        setRenameDraft(getSessionDisplayTitle(session))
+    }, [controller.selectedSession, headerActionPending])
+
+    const handleCloseRenameChat = useCallback(() => {
+        if (headerActionPending === 'rename') return
+        setRenameTarget(null)
+        setRenameDraft('')
+    }, [headerActionPending])
+
+    const handleSubmitRenameChat = useCallback(async () => {
+        if (!renameTarget || headerActionPending) return
+        const title = renameDraft.replace(/\s+/g, ' ').trim().slice(0, 60)
+        if (!title) return
+        if (title === getSessionDisplayTitle(renameTarget)) {
+            handleCloseRenameChat()
+            return
+        }
+
+        setHeaderActionPending('rename')
+        try {
+            const result = await actions.renameSessionResult(renameTarget.id, title)
+            if (!result.success) {
+                props.onShowToast?.(`Could not rename chat: ${result.error}`, 'error')
+                return
+            }
+            setRenameTarget(null)
+            setRenameDraft('')
+            props.onShowToast?.('Chat renamed', 'success')
+        } finally {
+            setHeaderActionPending(null)
+        }
+    }, [actions, handleCloseRenameChat, headerActionPending, props.onShowToast, renameDraft, renameTarget])
+
+    const handleChooseHeaderProject = useCallback(async () => {
+        const session = controller.selectedSession
+        if (!session || projectDirectoryLocked || headerActionPending) return
+        setHeaderActionPending('project')
+        try {
+            const result = await actions.chooseProjectPathResult(session.id)
+            if (!result.success) {
+                props.onShowToast?.(`Could not update project: ${result.error}`, 'error')
+                return
+            }
+            if ('cancelled' in result && result.cancelled) return
+            props.onShowToast?.(session.projectPath ? 'Project changed' : 'Project attached', 'success')
+        } finally {
+            setHeaderActionPending(null)
+        }
+    }, [actions, controller.selectedSession, headerActionPending, projectDirectoryLocked, props.onShowToast])
+
+    const handleArchiveChat = useCallback(async () => {
+        const session = controller.selectedSession
+        if (!session || headerActionPending) return
+        setHeaderActionPending('archive')
+        try {
+            const result = await actions.archiveSessionResult(session.id, true)
+            if (!result.success) {
+                props.onShowToast?.(`Could not archive chat: ${result.error}`, 'error')
+                return
+            }
+            props.onShowToast?.('Chat archived', 'success')
+        } finally {
+            setHeaderActionPending(null)
+        }
+    }, [actions, controller.selectedSession, headerActionPending, props.onShowToast])
+
+    const handleOpenDeleteChat = useCallback(() => {
+        const session = controller.selectedSession
+        if (!session || headerActionPending) return
+        setSessionToDelete(session)
+    }, [controller.selectedSession, headerActionPending])
+
+    const handleCancelDeleteChat = useCallback(() => {
+        if (headerActionPending === 'delete') return
+        setSessionToDelete(null)
+    }, [headerActionPending])
+
+    const handleConfirmDeleteChat = useCallback(async () => {
+        if (!sessionToDelete || headerActionPending) return
+        setHeaderActionPending('delete')
+        try {
+            const result = await actions.deleteSessionResult(sessionToDelete.id)
+            if (!result.success) {
+                props.onShowToast?.(`Could not delete chat: ${result.error}`, 'error')
+                return
+            }
+            setSessionToDelete(null)
+            props.onShowToast?.('Chat deleted', 'success')
+        } finally {
+            setHeaderActionPending(null)
+        }
+    }, [actions, headerActionPending, props.onShowToast, sessionToDelete])
 
     const handleChooseProjectForWorkChat = useCallback(async () => {
         if (controller.commandPending) return
@@ -515,13 +688,12 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
 
     const handleToggleDetailsPanel = useCallback(() => {
         props.onToggleRightSidebar()
-        setActiveHeaderMenu('none')
     }, [props.onToggleRightSidebar])
 
     const effectiveInteractionMode = interactionModeOverride || controller.activeThread?.interactionMode || 'default'
 
     return (
-        <section className="relative flex min-w-0 flex-1 flex-col">
+        <section className="assistant-conversation-pane relative flex min-w-0 flex-1 flex-col overflow-x-hidden">
             <div className={cn(
                 'flex min-h-0 flex-1 flex-col transition-[filter,opacity] duration-200',
                 showChatOnboardingOverlay && 'pointer-events-none select-none blur-[2px] opacity-55'
@@ -530,13 +702,12 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                     <AssistantConversationHeader
                         rightPanelOpen={props.rightPanelOpen}
                         rightPanelMode={props.rightPanelMode}
+                        showRightSidebarToggle={props.showRightSidebarToggle}
                         planPanelAvailable={planPanelAvailable}
                         planProgressLabel={planProgressLabel}
                         planIsComplete={planIsComplete}
-                        activeHeaderMenu={activeHeaderMenu}
-                        setActiveHeaderMenu={setActiveHeaderMenu}
-                        headerMenuRef={headerMenuRef}
                         leftSidebarCollapsed={props.leftSidebarCollapsed}
+                        pinnedBubbleHeaderInset={props.pinnedBubbleHeaderInset}
                         latestProjectLabel={latestProjectLabel}
                         selectedSessionTitle={selectedSessionTitle}
                         selectedSessionMode={selectedSessionMode}
@@ -545,14 +716,20 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         activeThreadLabel={activeThreadLabel}
                         selectedProjectTooltip={selectedProjectTooltip}
                         selectedProjectPath={displayProjectPath || null}
+                        projectDirectoryLocked={projectDirectoryLocked}
                         preferredShell={settings.defaultShell}
                         gitRefreshToken={gitRefreshToken}
                         showPlaygroundTerminalAccessControl={false}
                         playgroundTerminalAccess={props.playgroundTerminalAccess}
+                        actionsDisabled={Boolean(headerActionPending) || controller.commandPending}
                         onToggleLeftSidebar={props.onToggleLeftSidebar}
                         onPlaygroundTerminalAccessChange={props.onPlaygroundTerminalAccessChange}
                         onTogglePlanPanel={props.onTogglePlanPanel}
                         onCreateThread={handleCreateThread}
+                        onRenameChat={handleOpenRenameChat}
+                        onChooseProject={handleChooseHeaderProject}
+                        onArchiveChat={handleArchiveChat}
+                        onDeleteChat={handleOpenDeleteChat}
                         onToggleRightSidebar={handleToggleDetailsPanel}
                     />
                 ) : null}
@@ -595,6 +772,11 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                             assistantTextStreamingMode={settings.assistantTextStreamingMode}
                             assistantToolOutputDefaultMode={settings.assistantToolOutputDefaultMode}
                             bottomComposerOverlayActive={bottomComposerOverlayActive}
+                            contentInsetEndAdjustment={effectiveComposerInsetEnd}
+                            hasOlder={controller.history?.pageInfo.hasOlder || false}
+                            loadingOlder={controller.history?.loadingOlder || false}
+                            loadOlderError={controller.history?.loadOlderError || null}
+                            onLoadOlder={() => actions.loadOlderHistory(controller.activeThread?.id)}
                             showScrollToBottom={showScrollToBottom}
                             elevateScrollToBottom={bottomComposerOverlayActive}
                             onScrollTimeline={handleTimelineScrollEvent}
@@ -604,11 +786,13 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                             onShowPlanPanel={undefined}
                             onOpenAttachmentPreview={props.onOpenAttachmentPreview}
                             onOpenAssistantLink={props.onOpenAssistantLink}
+                            onLinkNotice={props.onShowToast}
                             onOpenEditedFile={props.onOpenEditedFile}
                             onViewDiff={props.onViewDiff}
                         />
                     ) : null}
                     <AssistantConversationComposerPane
+                        paneRef={composerPaneRef}
                         placement={composerIsCentered ? 'center' : 'bottom'}
                         newChatPrompt={composerIsCentered ? emptyComposerPrompt : null}
                         pendingPlaygroundLabRequest={null}
@@ -645,6 +829,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         onReconnect={handleReconnectAssistant}
                         onBlockedSend={(message) => props.onShowToast?.(message, 'info')}
                         onOpenAttachmentPreview={props.onOpenAttachmentPreview}
+                        onAttachmentShelfBoundsChange={handleAttachmentShelfBoundsChange}
                         sendPrompt={newChatHandoffActive ? async () => false : handleSendPrompt}
                         refreshModels={handleRefreshModels}
                         respondUserInput={handleRespondUserInput}
@@ -680,6 +865,20 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                     onStartDetachedPlaygroundChat={props.onStartDetachedPlaygroundChat}
                 />
             ) : null}
+            <RenameSessionModal
+                renameTarget={renameTarget}
+                renameDraft={renameDraft}
+                saving={headerActionPending === 'rename'}
+                onChangeDraft={setRenameDraft}
+                onClose={handleCloseRenameChat}
+                onSubmit={() => void handleSubmitRenameChat()}
+            />
+            <SessionDeleteModal
+                sessionToDelete={sessionToDelete}
+                deleting={headerActionPending === 'delete'}
+                onConfirm={() => void handleConfirmDeleteChat()}
+                onCancel={handleCancelDeleteChat}
+            />
             <div className="pointer-events-none absolute inset-x-0 bottom-24 z-30 flex justify-center px-4">
                 <div
                     className={cn(

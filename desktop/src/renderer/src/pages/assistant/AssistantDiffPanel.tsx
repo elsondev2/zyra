@@ -1,241 +1,610 @@
-import { memo, useEffect, useMemo, useState } from 'react'
-import { Check, ChevronRight, Columns3, Copy, FileCode2, Rows3 } from 'lucide-react'
-import { RawPatchFallback } from '@/components/ui/diff-viewer/RawPatchFallback'
-import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
-import PatchDiffViewer from '@/components/ui/diff-viewer/PatchDiffViewer'
-import {
-    buildSyntheticSingleFilePatch,
-    extractFilePatch,
-    parsePatchForRendering,
-    resolveFileDiffPath,
-    scanPatchFileSummaries,
-    summarizeFileDiff
-} from '@/lib/diffRendering'
-import { useSettings } from '@/lib/settings'
-import { cn } from '@/lib/utils'
-import { DiffStats } from '@/pages/project-details/DiffStats'
-import type { AssistantDiffTarget } from './assistant-diff-types'
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { FolderTree, GitCompareArrows, LayoutGrid, Library, LoaderCircle, MessageSquareText, SquareTerminal, TriangleAlert, Volume2 } from 'lucide-react'
+import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
+import type { AssistantDiffTarget, AssistantDiffTurn } from './assistant-diff-types'
+import { AssistantBrowserPageIcon } from './AssistantBrowserPageIcon'
+import { AssistantInspectorNewTab } from './AssistantInspectorNewTab'
+import { AssistantInspectorSidebar, type AssistantInspectorTab } from './AssistantInspectorSidebar'
+import { AssistantReviewLanding } from './AssistantReviewLanding'
+import { AssistantTurnReview } from './AssistantTurnReview'
+
+const AssistantExplorerWorkspace = lazy(async () => ({
+    default: (await import('./AssistantExplorerWorkspace')).AssistantExplorerWorkspace
+}))
+const AssistantTerminalWorkspace = lazy(async () => ({
+    default: (await import('./AssistantTerminalWorkspace')).AssistantTerminalWorkspace
+}))
+const AssistantBrowserWorkspace = lazy(async () => ({
+    default: (await import('./AssistantBrowserWorkspace')).AssistantBrowserWorkspace
+}))
+const AssistantResourcesWorkspace = lazy(async () => ({
+    default: (await import('./AssistantResourcesWorkspace')).AssistantResourcesWorkspace
+}))
+
+type WorkspaceTab =
+    | { id: string; kind: 'new' }
+    | { id: 'review'; kind: 'review' }
+    | { id: 'explorer'; kind: 'explorer' }
+    | { id: 'terminal'; kind: 'terminal' }
+    | { id: 'browser'; kind: 'browser' }
+    | { id: 'resources'; kind: 'resources' }
+    | { id: string; kind: 'turn'; turnId: string }
+
+const REVIEW_TAB: WorkspaceTab = { id: 'review', kind: 'review' }
+const EXPLORER_TAB: WorkspaceTab = { id: 'explorer', kind: 'explorer' }
+const TERMINAL_TAB: WorkspaceTab = { id: 'terminal', kind: 'terminal' }
+const BROWSER_TAB: WorkspaceTab = { id: 'browser', kind: 'browser' }
+const RESOURCES_TAB: WorkspaceTab = { id: 'resources', kind: 'resources' }
+
+type AssistantBrowserNavigationRequest = {
+    id: number
+    url: string
+}
+
+export type AssistantDiffRevealRequest = {
+    id: number
+    turnId: string
+}
 
 export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     open: boolean
-    compact?: boolean
+    sessionId: string | null
+    threadId: string | null
+    width: number
+    maxWidth: number
+    turns: AssistantDiffTurn[]
+    reviewIndexReady: boolean
+    reviewIndexLoading: boolean
+    reviewIndexError: string | null
+    turnDetailError: string | null
+    activeTurnId: string | null
+    revealRequest: AssistantDiffRevealRequest | null
+    selectedTurnId: string | null
     selectedDiff: AssistantDiffTarget | null
+    projectPath: string | null
+    onOpenPreview: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
+    onOpenPreviewInNewTab: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
+    onWidthChange: (width: number) => void
+    onSelectTurn: (turnId: string) => void
+    onSelectDiff: (target: AssistantDiffTarget) => void
+    onRevealRequestHandled: (requestId: number) => void
     onClose: () => void
 }) {
-    const { open, compact = false, selectedDiff, onClose } = props
-    const { settings } = useSettings()
-    const iconTheme = settings.theme === 'light' ? 'light' : 'dark'
-    const [copied, setCopied] = useState(false)
-    const [renderMode, setRenderMode] = useState<'stacked' | 'split'>('stacked')
-    const summaries = useMemo(
-        () => selectedDiff ? scanPatchFileSummaries(selectedDiff.patch) : [],
-        [selectedDiff]
-    )
-    const parsedDiff = useMemo(
-        () => parsePatchForRendering(
-            selectedDiff?.patch || '',
-            `assistant-diff:${selectedDiff?.activityId || 'empty'}:${selectedDiff?.filePath || 'none'}`
-        ),
-        [selectedDiff]
-    )
-    const matchedSummary = useMemo(() => {
-        if (!selectedDiff) return null
-        const normalizedFilePath = selectedDiff.filePath.replace(/\\/g, '/')
-        const normalizedPreviousPath = selectedDiff.previousPath?.replace(/\\/g, '/')
-        return summaries.find((summary) => {
-            if (summary.path === normalizedFilePath) return true
-            if (normalizedPreviousPath && summary.previousPath === normalizedPreviousPath) return true
-            return summary.previousPath === normalizedFilePath
-        }) || null
-    }, [selectedDiff, summaries])
-    const resolvedFileDiff = useMemo(() => {
-        if (!selectedDiff) return null
-        const normalizedFilePath = selectedDiff.filePath.replace(/\\/g, '/')
-        const normalizedPreviousPath = selectedDiff.previousPath?.replace(/\\/g, '/')
-        return parsedDiff.files.find((entry) => {
-            const currentPath = resolveFileDiffPath(entry)
-            const previousPath = entry.prevName?.replace(/\\/g, '/')
-            return currentPath === normalizedFilePath
-                || (normalizedPreviousPath ? previousPath === normalizedPreviousPath : false)
-                || previousPath === normalizedFilePath
-        }) || null
-    }, [parsedDiff.files, selectedDiff])
-    const filePatch = useMemo(() => {
-        if (!selectedDiff) return ''
-        const extractedPatch = extractFilePatch(selectedDiff.patch, selectedDiff.filePath, selectedDiff.previousPath)
-        if (extractedPatch) return extractedPatch
-        const syntheticPatch = buildSyntheticSingleFilePatch(
-            selectedDiff.patch,
-            selectedDiff.displayPath || selectedDiff.filePath,
-            selectedDiff.previousPath,
-            { isNew: selectedDiff.isNew }
-        )
-        if (syntheticPatch) return syntheticPatch
-        if (!resolvedFileDiff && parsedDiff.files.length === 1) return parsedDiff.patch
-        return ''
-    }, [parsedDiff.files.length, parsedDiff.patch, resolvedFileDiff, selectedDiff])
-    const displayStats = useMemo(() => {
-        if (resolvedFileDiff) {
-            const summary = summarizeFileDiff(resolvedFileDiff)
-            return {
-                additions: summary.additions,
-                deletions: summary.deletions
-            }
-        }
+    const {
+        open,
+        sessionId,
+        threadId,
+        width,
+        maxWidth,
+        turns,
+        reviewIndexReady,
+        reviewIndexLoading,
+        reviewIndexError,
+        turnDetailError,
+        activeTurnId,
+        revealRequest,
+        selectedTurnId,
+        selectedDiff,
+        projectPath,
+        onOpenPreview,
+        onOpenPreviewInNewTab,
+        onWidthChange,
+        onSelectTurn,
+        onSelectDiff,
+        onRevealRequestHandled,
+        onClose
+    } = props
+    const newTabSequenceRef = useRef(1)
+    const reviewFileRevealSequenceRef = useRef(-1)
+    const browserNavigationSequenceRef = useRef(1)
+    const wasOpenRef = useRef(open)
+    const loadingTimerRef = useRef(0)
+    const [activeTabId, setActiveTabId] = useState('new:0')
+    const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>([{ id: 'new:0', kind: 'new' }])
+    const [reviewTurnId, setReviewTurnId] = useState<string | null>(null)
+    const [focusedDiffRequestId, setFocusedDiffRequestId] = useState<number | null>(null)
+    const [transitionLoadingTabId, setTransitionLoadingTabId] = useState<string | null>(null)
+    const [contentLoadingTabId, setContentLoadingTabId] = useState<string | null>(null)
+    const [browserAudible, setBrowserAudible] = useState(false)
+    const [browserFaviconUrl, setBrowserFaviconUrl] = useState<string | null>(null)
+    const [browserNavigationRequest, setBrowserNavigationRequest] = useState<AssistantBrowserNavigationRequest | null>(null)
 
-        if (filePatch) {
-            const summary = scanPatchFileSummaries(filePatch)[0] || null
-            if (summary) {
-                return {
-                    additions: summary.additions,
-                    deletions: summary.deletions
-                }
-            }
-        }
+    const createNewTab = useCallback((): WorkspaceTab => ({
+        id: `new:${newTabSequenceRef.current++}`,
+        kind: 'new'
+    }), [])
 
-        return {
-            additions: matchedSummary?.additions ?? 0,
-            deletions: matchedSummary?.deletions ?? 0
-        }
-    }, [filePatch, matchedSummary, resolvedFileDiff])
+    const beginTabTransition = useCallback((tabId: string) => {
+        window.clearTimeout(loadingTimerRef.current)
+        setTransitionLoadingTabId(tabId)
+        loadingTimerRef.current = window.setTimeout(() => {
+            setTransitionLoadingTabId((current) => current === tabId ? null : current)
+        }, 480)
+    }, [])
+
+    const handleTurnLoadingChange = useCallback((loading: boolean) => {
+        setContentLoadingTabId((current) => loading ? activeTabId : current === activeTabId ? null : current)
+    }, [activeTabId])
+
+    useEffect(() => () => window.clearTimeout(loadingTimerRef.current), [])
 
     useEffect(() => {
-        setCopied(false)
-    }, [selectedDiff?.activityId, selectedDiff?.filePath])
+        const newTab = createNewTab()
+        setActiveTabId(newTab.id)
+        setWorkspaceTabs([newTab])
+        setReviewTurnId(null)
+        setFocusedDiffRequestId(null)
+        setTransitionLoadingTabId(null)
+        setContentLoadingTabId(null)
+        setBrowserAudible(false)
+        setBrowserFaviconUrl(null)
+        setBrowserNavigationRequest(null)
+    }, [createNewTab, sessionId])
 
-    const handleCopyPath = async () => {
-        if (!selectedDiff?.filePath) return
-        await navigator.clipboard.writeText(selectedDiff.filePath)
-        setCopied(true)
-        window.setTimeout(() => setCopied(false), 1200)
-    }
+    useEffect(() => {
+        const opening = open && !wasOpenRef.current
+        wasOpenRef.current = open
+        if (!opening || revealRequest) return
+        const newTab = createNewTab()
+        setWorkspaceTabs([newTab])
+        setActiveTabId(newTab.id)
+        setReviewTurnId(null)
+        setFocusedDiffRequestId(null)
+        setTransitionLoadingTabId(null)
+        setContentLoadingTabId(null)
+        setBrowserNavigationRequest(null)
+    }, [createNewTab, open, revealRequest])
+
+    useEffect(() => {
+        if (!open || !revealRequest) return
+        setWorkspaceTabs((current) => {
+            const reviewExists = current.some((tab) => tab.kind === 'review')
+            const withoutActiveChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
+            if (reviewExists) return withoutActiveChooser
+            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? REVIEW_TAB : tab)
+            return replaced.some((tab) => tab.kind === 'review') ? replaced : [...replaced, REVIEW_TAB]
+        })
+        setActiveTabId('review')
+        setReviewTurnId(revealRequest.turnId)
+        setFocusedDiffRequestId(revealRequest.id)
+        onRevealRequestHandled(revealRequest.id)
+    }, [onRevealRequestHandled, open, revealRequest])
+
+    useEffect(() => {
+        const invalidIds = new Set(workspaceTabs.flatMap((tab) => (
+            tab.kind === 'turn' && !turns.some((turn) => turn.id === tab.turnId) ? [tab.id] : []
+        )))
+        if (invalidIds.size === 0) return
+        const next = workspaceTabs.filter((tab) => !invalidIds.has(tab.id))
+        setWorkspaceTabs(next)
+        if (invalidIds.has(activeTabId)) setActiveTabId(next[0]?.id || 'review')
+    }, [activeTabId, turns, workspaceTabs])
+
+    useEffect(() => {
+        setReviewTurnId((current) => current && turns.some((turn) => turn.id === current) ? current : null)
+    }, [turns])
+
+    const tabs = useMemo<AssistantInspectorTab[]>(() => workspaceTabs.flatMap((tab) => {
+        if (tab.kind === 'new') {
+            return [{
+                id: tab.id,
+                label: 'New tab',
+                icon: <LayoutGrid size={11} />,
+                closable: true,
+                loading: transitionLoadingTabId === tab.id,
+                preview: 'Choose an Inspector workspace'
+            }]
+        }
+        if (tab.kind === 'review') {
+            return [{
+                id: tab.id,
+                label: 'Review',
+                icon: <GitCompareArrows size={12} />,
+                count: turns.length,
+                closable: true,
+                loading: transitionLoadingTabId === tab.id || contentLoadingTabId === tab.id,
+                preview: `${turns.length} turns · Search prompts, responses, files, and turn numbers`
+            }]
+        }
+        if (tab.kind === 'explorer') {
+            return [{
+                id: tab.id,
+                label: 'Explorer',
+                icon: <FolderTree size={12} />,
+                closable: true,
+                loading: transitionLoadingTabId === tab.id,
+                preview: projectPath ? `Browse ${projectPath}` : 'No project attached'
+            }]
+        }
+        if (tab.kind === 'terminal') {
+            return [{
+                id: tab.id,
+                label: 'Terminal',
+                icon: <SquareTerminal size={12} />,
+                closable: true,
+                loading: transitionLoadingTabId === tab.id,
+                preview: projectPath ? `Terminal · ${projectPath}` : 'No project attached'
+            }]
+        }
+        if (tab.kind === 'browser') {
+            return [{
+                id: tab.id,
+                label: 'Browser',
+                icon: <AssistantBrowserPageIcon faviconUrl={browserFaviconUrl} size={12} />,
+                statusIcon: browserAudible ? <Volume2 size={10} aria-label="A browser tab is playing audio" /> : undefined,
+                closable: true,
+                loading: transitionLoadingTabId === tab.id,
+                preview: projectPath ? `Browser · ${projectPath}` : 'No project attached'
+            }]
+        }
+        if (tab.kind === 'resources') {
+            return [{
+                id: tab.id,
+                label: 'Resources',
+                icon: <Library size={12} />,
+                closable: true,
+                loading: transitionLoadingTabId === tab.id,
+                preview: 'Image previews and links shared in this chat'
+            }]
+        }
+        const turn = turns.find((entry) => entry.id === tab.turnId)
+        return turn ? [{
+            id: tab.id,
+            label: `Turn ${turn.number}`,
+            icon: <MessageSquareText size={11} />,
+            closable: true,
+            loading: transitionLoadingTabId === tab.id || contentLoadingTabId === tab.id,
+            preview: turn.prompt
+        }] : []
+    }), [browserAudible, browserFaviconUrl, contentLoadingTabId, projectPath, transitionLoadingTabId, turns, workspaceTabs])
+
+    const activeWorkspaceTab = workspaceTabs.find((tab) => tab.id === activeTabId) || workspaceTabs[0] || null
+    const activeTurnTab = activeWorkspaceTab?.kind === 'turn' ? activeWorkspaceTab : null
+    const visibleTurnId = activeTurnTab?.turnId || (activeWorkspaceTab?.kind === 'review' ? reviewTurnId : null)
+    const visibleTurn = turns.find((turn) => turn.id === visibleTurnId) || null
+    const visibleSelectedDiff = visibleTurn && selectedTurnId === visibleTurn.id ? selectedDiff : visibleTurn?.files[0]?.target || null
+    const reviewOpen = workspaceTabs.some((tab) => tab.kind === 'review')
+    const explorerOpen = workspaceTabs.some((tab) => tab.kind === 'explorer')
+    const terminalOpen = workspaceTabs.some((tab) => tab.kind === 'terminal')
+    const browserOpen = workspaceTabs.some((tab) => tab.kind === 'browser')
+    const resourcesOpen = workspaceTabs.some((tab) => tab.kind === 'resources')
+
+    const selectTurn = useCallback((turnId: string) => {
+        onSelectTurn(turnId)
+    }, [onSelectTurn])
+
+    const handleOpenReviewWorkspace = useCallback(() => {
+        setFocusedDiffRequestId(null)
+        setWorkspaceTabs((current) => {
+            const reviewExists = current.some((tab) => tab.kind === 'review')
+            const withoutChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
+            if (reviewExists) return withoutChooser
+            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? REVIEW_TAB : tab)
+            return replaced.some((tab) => tab.kind === 'review') ? replaced : [...replaced, REVIEW_TAB]
+        })
+        setActiveTabId('review')
+        setReviewTurnId(null)
+        beginTabTransition('review')
+    }, [activeTabId, beginTabTransition])
+
+    const handleOpenExplorerWorkspace = useCallback(() => {
+        setWorkspaceTabs((current) => {
+            const explorerExists = current.some((tab) => tab.kind === 'explorer')
+            const withoutChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
+            if (explorerExists) return withoutChooser
+            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? EXPLORER_TAB : tab)
+            return replaced.some((tab) => tab.kind === 'explorer') ? replaced : [...replaced, EXPLORER_TAB]
+        })
+        setActiveTabId('explorer')
+        beginTabTransition('explorer')
+    }, [activeTabId, beginTabTransition])
+
+    const handleOpenTerminalWorkspace = useCallback(() => {
+        setWorkspaceTabs((current) => {
+            const terminalExists = current.some((tab) => tab.kind === 'terminal')
+            const withoutChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
+            if (terminalExists) return withoutChooser
+            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? TERMINAL_TAB : tab)
+            return replaced.some((tab) => tab.kind === 'terminal') ? replaced : [...replaced, TERMINAL_TAB]
+        })
+        setActiveTabId('terminal')
+        beginTabTransition('terminal')
+    }, [activeTabId, beginTabTransition])
+
+    const handleOpenBrowserWorkspace = useCallback(() => {
+        setWorkspaceTabs((current) => {
+            const browserExists = current.some((tab) => tab.kind === 'browser')
+            const withoutChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
+            if (browserExists) return withoutChooser
+            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? BROWSER_TAB : tab)
+            return replaced.some((tab) => tab.kind === 'browser') ? replaced : [...replaced, BROWSER_TAB]
+        })
+        setActiveTabId('browser')
+        beginTabTransition('browser')
+    }, [activeTabId, beginTabTransition])
+
+    const handleOpenResourcesWorkspace = useCallback(() => {
+        setWorkspaceTabs((current) => {
+            const resourcesExists = current.some((tab) => tab.kind === 'resources')
+            const withoutChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
+            if (resourcesExists) return withoutChooser
+            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? RESOURCES_TAB : tab)
+            return replaced.some((tab) => tab.kind === 'resources') ? replaced : [...replaced, RESOURCES_TAB]
+        })
+        setActiveTabId('resources')
+        beginTabTransition('resources')
+    }, [activeTabId, beginTabTransition])
+
+    const handleOpenResourceUrl = useCallback((url: string) => {
+        if (!projectPath) {
+            void window.devscope.openBrowserPreviewExternal(url)
+            return
+        }
+        setWorkspaceTabs((current) => current.some((tab) => tab.kind === 'browser')
+            ? current
+            : [...current, BROWSER_TAB])
+        setBrowserNavigationRequest({ id: browserNavigationSequenceRef.current++, url })
+        setActiveTabId('browser')
+        beginTabTransition('browser')
+    }, [beginTabTransition, projectPath])
+
+    const handleBrowserNavigationRequestHandled = useCallback((requestId: number) => {
+        setBrowserNavigationRequest((current) => current?.id === requestId ? null : current)
+    }, [])
+
+    const handleOpenResourceTurn = useCallback((turnId: string) => {
+        setWorkspaceTabs((current) => current.some((tab) => tab.kind === 'review')
+            ? current
+            : [...current, REVIEW_TAB])
+        setFocusedDiffRequestId(null)
+        setActiveTabId('review')
+        setReviewTurnId(turnId)
+        beginTabTransition('review')
+        selectTurn(turnId)
+    }, [beginTabTransition, selectTurn])
+
+    const handleOpenResourceDiff = useCallback((target: AssistantDiffTarget) => {
+        const turnId = target.turnId || turns.find((turn) => turn.changes.some((change) => (
+            change.target.activityId === target.activityId && change.target.filePath === target.filePath
+        )))?.id
+        if (!turnId) return
+        setWorkspaceTabs((current) => current.some((tab) => tab.kind === 'review')
+            ? current
+            : [...current, REVIEW_TAB])
+        setFocusedDiffRequestId(reviewFileRevealSequenceRef.current--)
+        setActiveTabId('review')
+        setReviewTurnId(turnId)
+        selectTurn(turnId)
+        onSelectDiff(target)
+    }, [onSelectDiff, selectTurn, turns])
+
+    const handleOpenReviewTurn = useCallback((turnId: string) => {
+        setFocusedDiffRequestId(null)
+        setActiveTabId('review')
+        setReviewTurnId(turnId)
+        beginTabTransition('review')
+        selectTurn(turnId)
+    }, [beginTabTransition, selectTurn])
+
+    const handleOpenReviewFile = useCallback((turnId: string, target: AssistantDiffTarget) => {
+        setFocusedDiffRequestId(reviewFileRevealSequenceRef.current--)
+        setActiveTabId('review')
+        setReviewTurnId(turnId)
+        selectTurn(turnId)
+        onSelectDiff(target)
+    }, [onSelectDiff, selectTurn])
+
+    const handleOpenTurnInTab = useCallback((turnId: string) => {
+        const tabId = `turn:${turnId}`
+        setReviewTurnId(null)
+        setFocusedDiffRequestId(null)
+        setWorkspaceTabs((current) => current.some((tab) => tab.id === tabId)
+            ? current
+            : [...current, { id: tabId, kind: 'turn', turnId }])
+        setActiveTabId(tabId)
+        beginTabTransition(tabId)
+        selectTurn(turnId)
+    }, [beginTabTransition, selectTurn])
+
+    const handleSelectTab = useCallback((tabId: string) => {
+        setActiveTabId(tabId)
+        beginTabTransition(tabId)
+        const tab = workspaceTabs.find((entry) => entry.id === tabId)
+        if (tab?.kind === 'review' && reviewTurnId) {
+            selectTurn(reviewTurnId)
+            return
+        }
+        if (tab?.kind === 'turn') selectTurn(tab.turnId)
+    }, [beginTabTransition, reviewTurnId, selectTurn, workspaceTabs])
+
+    const handleAddTab = useCallback(() => {
+        const newTab = createNewTab()
+        setWorkspaceTabs((current) => [...current, newTab])
+        setActiveTabId(newTab.id)
+        beginTabTransition(newTab.id)
+    }, [beginTabTransition, createNewTab])
+
+    const handleReorderTab = useCallback((fromTabId: string, toTabId: string) => {
+        if (fromTabId === toTabId) return
+        setWorkspaceTabs((current) => {
+            const fromIndex = current.findIndex((tab) => tab.id === fromTabId)
+            const toIndex = current.findIndex((tab) => tab.id === toTabId)
+            if (fromIndex < 0 || toIndex < 0) return current
+            const next = current.slice()
+            const [moved] = next.splice(fromIndex, 1)
+            next.splice(toIndex, 0, moved)
+            return next
+        })
+    }, [])
+
+    const handleCloseTab = useCallback((tabId: string) => {
+        if (workspaceTabs.length <= 1) {
+            onClose()
+            return
+        }
+        const closingIndex = workspaceTabs.findIndex((tab) => tab.id === tabId)
+        const closingTab = workspaceTabs[closingIndex]
+        const next = workspaceTabs.filter((tab) => tab.id !== tabId)
+        setWorkspaceTabs(next)
+        setTransitionLoadingTabId((current) => current === tabId ? null : current)
+        setContentLoadingTabId((current) => current === tabId ? null : current)
+        if (closingTab?.kind === 'review') {
+            setReviewTurnId(null)
+            setFocusedDiffRequestId(null)
+        }
+        if (closingTab?.kind === 'browser') {
+            setBrowserAudible(false)
+            setBrowserFaviconUrl(null)
+            setBrowserNavigationRequest(null)
+        }
+        if (activeTabId === tabId) {
+            const fallback = next[Math.min(Math.max(closingIndex, 0), next.length - 1)] || next[next.length - 1]
+            setActiveTabId(fallback.id)
+            if (fallback.kind === 'turn') selectTurn(fallback.turnId)
+            if (fallback.kind === 'review' && reviewTurnId) selectTurn(reviewTurnId)
+        }
+    }, [activeTabId, onClose, reviewTurnId, selectTurn, workspaceTabs])
 
     return (
-        <div
-            className={cn('relative overflow-hidden transition-all duration-300', open ? 'opacity-100' : 'pointer-events-none opacity-0')}
-            style={{ width: open ? (compact ? '360px' : '460px') : '0px' }}
+        <AssistantInspectorSidebar
+            open={open}
+            width={width}
+            maxWidth={maxWidth}
+            tabs={tabs}
+            activeTabId={activeTabId}
+            onWidthChange={onWidthChange}
+            onSelectTab={handleSelectTab}
+            onCloseTab={handleCloseTab}
+            onReorderTab={handleReorderTab}
+            onAddTab={handleAddTab}
+            onClose={onClose}
         >
-            <aside className="flex h-full min-h-0 flex-col border-l border-white/10 bg-sparkle-bg">
-                <div className="flex shrink-0 items-start justify-between gap-3 border-b border-white/10 px-4 py-3">
-                    <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                            <span className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--accent-primary)]">
-                                <FileCode2 size={11} />
-                                Diff
-                            </span>
-                            {selectedDiff?.isNew ? (
-                                <span className="rounded-md border border-sky-400/25 bg-sky-500/[0.10] px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-sky-200">
-                                    New file
-                                </span>
-                            ) : null}
-                            {selectedDiff?.provisional ? (
-                                <span className="rounded-md border border-amber-400/25 bg-amber-500/[0.10] px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-amber-200">
-                                    Live preview
-                                </span>
-                            ) : null}
-                            {selectedDiff?.truncated ? (
-                                <span className="rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-white/45">
-                                    Truncated
-                                </span>
-                            ) : null}
-                        </div>
-                        <p className="mt-2 text-sm font-semibold text-sparkle-text">AI runtime diff</p>
-                        {selectedDiff ? (
-                            <div className="group/path mt-2 flex min-w-0 items-center gap-2">
-                                <VscodeEntryIcon
-                                    pathValue={selectedDiff.filePath}
-                                    kind="file"
-                                    theme={iconTheme}
-                                    className="size-4 shrink-0"
-                                />
-                                <p className="truncate font-mono text-[11px] leading-5 text-sparkle-text-secondary" title={selectedDiff.filePath}>
-                                    {selectedDiff.displayPath}
-                                </p>
-                                <button
-                                    type="button"
-                                    onClick={() => void handleCopyPath()}
-                                    className={cn(
-                                        'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-white/10 bg-white/[0.03] transition-all hover:border-white/20 hover:bg-white/[0.05]',
-                                        copied
-                                            ? 'opacity-100 text-emerald-300'
-                                            : 'pointer-events-none opacity-0 text-sparkle-text-secondary group-hover/path:pointer-events-auto group-hover/path:opacity-100 hover:text-sparkle-text focus-visible:pointer-events-auto focus-visible:opacity-100'
-                                    )}
-                                    title={copied ? 'Copied' : 'Copy path'}
-                                >
-                                    {copied ? <Check size={11} /> : <Copy size={11} />}
-                                </button>
+            <>
+                {terminalOpen ? (
+                    <div className={activeWorkspaceTab?.kind === 'terminal' ? 'flex min-h-0 flex-1' : 'hidden'}>
+                        <Suspense fallback={(
+                            <div className="flex min-h-0 flex-1 items-center justify-center">
+                                <LoaderCircle size={18} className="animate-spin text-[var(--accent-primary)]/75" />
                             </div>
-                        ) : null}
+                        )}>
+                            <AssistantTerminalWorkspace
+                                workspaceKey={sessionId || projectPath || 'detached'}
+                                projectPath={projectPath}
+                                active={open && activeWorkspaceTab?.kind === 'terminal'}
+                            />
+                        </Suspense>
                     </div>
-                    <button
-                        type="button"
-                        onClick={onClose}
-                        className="rounded-md border border-white/10 bg-white/[0.03] p-1.5 text-sparkle-text-secondary transition-colors hover:border-white/20 hover:bg-white/[0.05] hover:text-sparkle-text"
-                        title="Close diff panel"
-                    >
-                        <ChevronRight size={14} />
-                    </button>
-                </div>
+                ) : null}
 
-                {selectedDiff ? (
-                    <>
-                        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-white/10 px-4 py-3">
-                            <DiffStats additions={displayStats.additions} deletions={displayStats.deletions} className="gap-1.5" />
-                            <div className="flex items-center gap-1">
-                                <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.03] p-1">
-                                    <button
-                                        type="button"
-                                        onClick={() => setRenderMode('stacked')}
-                                        className={cn(
-                                            'inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors',
-                                            renderMode === 'stacked'
-                                                ? 'border-white/10 bg-white/10 text-white'
-                                                : 'border-transparent text-white/55 hover:border-white/10 hover:bg-white/[0.03] hover:text-white'
-                                        )}
-                                        title="Unified view"
-                                    >
-                                        <Rows3 size={12} />
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => setRenderMode('split')}
-                                        className={cn(
-                                            'inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors',
-                                            renderMode === 'split'
-                                                ? 'border-white/10 bg-white/10 text-white'
-                                                : 'border-transparent text-white/55 hover:border-white/10 hover:bg-white/[0.03] hover:text-white'
-                                        )}
-                                        title="Split view"
-                                    >
-                                        <Columns3 size={12} />
-                                    </button>
-                                </div>
+                {browserOpen ? (
+                    <div className={activeWorkspaceTab?.kind === 'browser' ? 'flex min-h-0 flex-1' : 'hidden'}>
+                        <Suspense fallback={(
+                            <div className="flex min-h-0 flex-1 items-center justify-center">
+                                <LoaderCircle size={18} className="animate-spin text-[var(--accent-primary)]/75" />
                             </div>
-                        </div>
-                        <div className="min-h-0 flex-1 bg-black/20">
-                            {resolvedFileDiff ? (
-                                <PatchDiffViewer fileDiff={resolvedFileDiff} mode={renderMode} />
-                            ) : filePatch ? (
-                                <PatchDiffViewer patch={filePatch} mode={renderMode} />
-                            ) : (
-                                <RawPatchFallback
-                                    patch={selectedDiff.patch}
-                                    notice={parsedDiff.error
-                                        ? 'Falling back to raw diff view because patch parsing failed.'
-                                        : 'Unable to isolate a single-file diff for this entry. Showing raw patch instead.'}
-                                />
-                            )}
-                        </div>
-                    </>
-                ) : (
-                    <div className="flex min-h-[220px] flex-1 items-center justify-center px-6 text-center">
-                        <div>
-                            <p className="text-sm text-sparkle-text-secondary">No diff selected.</p>
-                            <p className="mt-1 text-[12px] text-sparkle-text-muted">Choose "View diff" on an edited file to inspect the runtime patch.</p>
-                        </div>
+                        )}>
+                            <AssistantBrowserWorkspace
+                                workspaceKey={sessionId || projectPath || 'detached'}
+                                projectPath={projectPath}
+                                active={open && activeWorkspaceTab?.kind === 'browser'}
+                                navigationRequest={browserNavigationRequest}
+                                onNavigationRequestHandled={handleBrowserNavigationRequestHandled}
+                                onAudibleChange={setBrowserAudible}
+                                onActiveFaviconChange={setBrowserFaviconUrl}
+                            />
+                        </Suspense>
                     </div>
+                ) : null}
+
+                {resourcesOpen ? (
+                    <div className={activeWorkspaceTab?.kind === 'resources' ? 'flex min-h-0 flex-1' : 'hidden'}>
+                        <Suspense fallback={(
+                            <div className="flex min-h-0 flex-1 items-center justify-center">
+                                <LoaderCircle size={18} className="animate-spin text-[var(--accent-primary)]/75" />
+                            </div>
+                        )}>
+                            <AssistantResourcesWorkspace
+                                turns={turns}
+                                projectPath={projectPath}
+                                onOpenPreview={onOpenPreview}
+                                onOpenPreviewInNewTab={onOpenPreviewInNewTab}
+                                onOpenUrl={handleOpenResourceUrl}
+                                onOpenDiff={handleOpenResourceDiff}
+                                onOpenTurn={handleOpenResourceTurn}
+                            />
+                        </Suspense>
+                    </div>
+                ) : null}
+
+                {activeWorkspaceTab?.kind === 'terminal' || activeWorkspaceTab?.kind === 'browser' || activeWorkspaceTab?.kind === 'resources' ? null : activeWorkspaceTab?.kind === 'new' ? (
+                    <AssistantInspectorNewTab
+                        reviewOpen={reviewOpen}
+                        browserOpen={browserOpen}
+                        explorerOpen={explorerOpen}
+                        terminalOpen={terminalOpen}
+                        resourcesOpen={resourcesOpen}
+                        onSelectReview={handleOpenReviewWorkspace}
+                        onSelectBrowser={handleOpenBrowserWorkspace}
+                        onSelectExplorer={handleOpenExplorerWorkspace}
+                        onSelectTerminal={handleOpenTerminalWorkspace}
+                        onSelectResources={handleOpenResourcesWorkspace}
+                    />
+                ) : activeWorkspaceTab?.kind === 'explorer' ? (
+                    <Suspense fallback={(
+                        <div className="flex min-h-0 flex-1 items-center justify-center">
+                            <LoaderCircle size={18} className="animate-spin text-[var(--accent-primary)]/75" />
+                        </div>
+                    )}>
+                        <AssistantExplorerWorkspace
+                            projectPath={projectPath}
+                            onOpenPreview={onOpenPreview}
+                            onOpenPreviewInNewTab={onOpenPreviewInNewTab}
+                        />
+                    </Suspense>
+                ) : visibleTurn?.detailLoaded === false ? (
+                    <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center">
+                        {turnDetailError ? (
+                            <div>
+                                <TriangleAlert size={18} className="mx-auto text-amber-300/75" />
+                                <p className="mt-3 text-[12px] font-medium text-sparkle-text-secondary">Could not load this turn</p>
+                                <p className="mt-1 text-[10px] leading-4 text-sparkle-text-muted/70">{turnDetailError}</p>
+                            </div>
+                        ) : (
+                            <div>
+                                <LoaderCircle size={18} className="mx-auto animate-spin text-[var(--accent-primary)]/75" />
+                                <p className="mt-3 text-[11px] text-sparkle-text-muted/70">Loading this turn’s messages and diffs…</p>
+                            </div>
+                        )}
+                    </div>
+                ) : visibleTurn ? (
+                    <AssistantTurnReview
+                        turn={visibleTurn}
+                        selectedDiff={visibleSelectedDiff}
+                        focusSelectedDiffRequestId={activeWorkspaceTab?.kind === 'review' ? focusedDiffRequestId : null}
+                        showBack={activeWorkspaceTab?.kind === 'review'}
+                        showOpenInTab={activeWorkspaceTab?.kind === 'review'}
+                        onBack={() => {
+                            setReviewTurnId(null)
+                            setFocusedDiffRequestId(null)
+                        }}
+                        onOpenInTab={() => handleOpenTurnInTab(visibleTurn.id)}
+                        onSelectDiff={onSelectDiff}
+                        onLoadingChange={handleTurnLoadingChange}
+                    />
+                ) : (
+                    <AssistantReviewLanding
+                        threadId={threadId}
+                        turns={turns}
+                        activeTurnId={activeTurnId}
+                        ready={reviewIndexReady}
+                        loading={reviewIndexLoading}
+                        error={reviewIndexError}
+                        onOpenTurn={handleOpenReviewTurn}
+                        onOpenFile={handleOpenReviewFile}
+                        onOpenTurnInTab={handleOpenTurnInTab}
+                    />
                 )}
-            </aside>
-        </div>
+            </>
+        </AssistantInspectorSidebar>
     )
 })

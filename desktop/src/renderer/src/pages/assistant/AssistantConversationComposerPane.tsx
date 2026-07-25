@@ -1,4 +1,4 @@
-import { memo, useCallback, type WheelEvent as ReactWheelEvent } from 'react'
+import { memo, useCallback, type RefObject, type WheelEvent as ReactWheelEvent } from 'react'
 import type { AssistantPendingUserInput, AssistantPlaygroundPendingLabRequest, AssistantTurnUsage } from '@shared/assistant/contracts'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import { cn } from '@/lib/utils'
@@ -7,10 +7,12 @@ import { AssistantPendingPlaygroundLabPanel } from './AssistantPendingPlayground
 import { AssistantPendingTerminalAccessModal, getPendingTerminalAccessRequest } from './AssistantPendingTerminalAccessModal'
 import { AssistantPendingUserInputPanel } from './AssistantPendingUserInputPanel'
 import { deriveAssistantComposerDisabledReason } from './assistant-composer-capabilities'
+import { ASSISTANT_COMPOSER_OVERLAY_TOP_PADDING_PX } from './assistant-pane-layout'
 import type { AssistantComposerSendOptions, AssistantElementBounds, AssistantQueuedComposerMessage, ComposerContextFile } from './assistant-composer-types'
 
 export const AssistantConversationComposerPane = memo(function AssistantConversationComposerPane(props: {
     placement?: 'bottom' | 'center'
+    paneRef?: RefObject<HTMLDivElement | null>
     newChatPrompt?: string | null
     pendingPlaygroundLabRequest: AssistantPlaygroundPendingLabRequest | null
     pendingUserInputs: AssistantPendingUserInput[]
@@ -90,12 +92,14 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
 
     return (
         <div
+            ref={props.paneRef}
             className={cn(
                 'w-full px-4 transition-[padding,transform,opacity] duration-300 ease-out',
                 placement === 'center'
                     ? '-translate-y-[7vh] pb-0 pt-0'
-                    : 'pointer-events-none absolute inset-x-0 bottom-0 z-40 translate-y-0 pb-4 pt-10'
+                    : 'pointer-events-none absolute inset-x-0 bottom-0 z-40 translate-y-0 pb-4'
             )}
+            style={placement === 'bottom' ? { paddingTop: ASSISTANT_COMPOSER_OVERLAY_TOP_PADDING_PX } : undefined}
             onWheel={handlePaneWheel}
         >
             {isWaitingForUserInput ? (
