@@ -2,7 +2,8 @@ param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path,
     [string]$ConfigPath = '',
     [int]$ShutdownDelaySeconds = 20,
-    [switch]$NoShutdown
+    [switch]$NoShutdown,
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,7 +45,7 @@ foreach (`$targetPid in `$targets) {
 }
 
 $repo = (Resolve-Path $RepoRoot).Path
-$existingZyra = Get-ExistingZyraMainProcesses -Root $repo
+$existingZyra = @(Get-ExistingZyraMainProcesses -Root $repo)
 
 if (-not $ConfigPath) {
     Write-Host 'Preparing autonomous snapshot branches and worktrees...'
@@ -81,6 +82,15 @@ $wtArgs = @(
     ';',
     'new-tab', '--title', 'Coordinator + Merge Agent', '-d', [string]$config.worktrees.integration, 'cmd.exe', '/k', ('"{0}"' -f $coordinatorCmd)
 )
+
+if ($DryRun) {
+    Write-Host "Dry run: Windows Terminal would launch three tabs for run $($config.runId)."
+    Write-Host "Builder A command: $fleetCmd"
+    Write-Host "Builder B command: $controlCmd"
+    Write-Host "Coordinator command: $coordinatorCmd"
+    Write-Host "Pre-existing Zyra main processes detected: $($existingZyra.Count)"
+    return
+}
 
 Write-Host "Launching one Windows Terminal window with three tabs for run $($config.runId)..."
 & $wt @wtArgs
