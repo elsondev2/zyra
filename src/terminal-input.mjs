@@ -108,7 +108,7 @@ export async function runTerminalInputLoop(onInput, options = {}, controls = {})
 }
 
 export async function dispatchTerminalKeypress(host, fallbackInput, str, key) {
-  const activeInput = host?.inputComponent ?? fallbackInput;
+  const activeInput = host?.activeInputComponent?.() ?? host?.inputComponent ?? fallbackInput;
   if (typeof activeInput?.handleKeypress === "function") {
     return activeInput.handleKeypress(str, key);
   }

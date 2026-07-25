@@ -15,7 +15,8 @@ import type {
     AssistantRuntimeEvent,
     AssistantRuntimeMode,
     AssistantThread,
-    AssistantTurnUsage
+    AssistantTurnUsage,
+    FleetSnapshot
 } from '../../shared/assistant/contracts'
 import { parseAgentSurfaceDescriptor, sanitizeFileChangeRawPayload } from '../../shared/assistant/contracts'
 import { getAssistantModelReasoningEfforts, isAssistantReasoningEffort } from '../../shared/assistant/reasoning-efforts'
@@ -1198,6 +1199,12 @@ export class ZyraPiRuntime extends EventEmitter {
         return { turnId, providerThreadId: context.providerThreadId }
     }
 
+    async requestFleetOperation(threadId: string, namespace: 'agents' | 'workflows', action: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+        const context = this.requireSession(threadId)
+        await this.ensureConnected(context)
+        return context.worker.request(`${namespace}.${action}`, payload)
+    }
+
     async interruptTurn(threadId: string): Promise<void> {
         const context = this.requireSession(threadId)
         await context.worker.request('abort').catch((error) => {
@@ -1419,6 +1426,17 @@ export class ZyraPiRuntime extends EventEmitter {
             context.model = model
             context.profile = profile
             context.connected = true
+            const connectedFleet = asRecord(result['fleet']) as unknown as FleetSnapshot | null
+            if (connectedFleet) {
+                this.emitRuntime({
+                    eventId: randomUUID(),
+                    type: 'fleet.snapshot.updated',
+                    createdAt: nowIso(),
+                    threadId: context.localThreadId,
+                    providerThreadId,
+                    payload: { eventType: 'fleet_snapshot', event: { type: 'fleet_snapshot' }, snapshot: connectedFleet }
+                })
+            }
             this.sessions.set(context.localThreadId, context)
             this.sessions.set(providerThreadId, context)
             this.aliases.set(providerThreadId, context.localThreadId)
@@ -1455,6 +1473,24 @@ export class ZyraPiRuntime extends EventEmitter {
         const type = asString(event['type'])
         if (!type) return
         const turnId = context.activeTurnId
+
+        if (type === 'fleet_snapshot' || type.startsWith('agent.') || type.startsWith('workflow.')) {
+            const fleet = asRecord(event['fleet'] || event['fleetSnapshot']) as unknown as FleetSnapshot | null
+            if (!fleet) return
+            this.emitRuntime({
+                eventId: randomUUID(),
+                type: 'fleet.snapshot.updated',
+                createdAt: asString(event['timestamp']) || nowIso(),
+                threadId: context.localThreadId,
+                providerThreadId: context.providerThreadId,
+                payload: {
+                    eventType: type,
+                    event,
+                    snapshot: fleet
+                }
+            })
+            return
+        }
 
         if (type === 'managed_bash_job_update') {
             this.emitManagedBashJobUpdate(context, event)

@@ -12,6 +12,8 @@ import type {
     AssistantDeletePlaygroundLabInput,
     AssistantDeleteMessageInput,
     AssistantEventStreamPayload,
+    AssistantFleetOperationResultPayload,
+    AssistantFleetSnapshotPayload,
     AssistantGetHistoryPageInput,
     AssistantGetReviewIndexInput,
     AssistantGetSessionTurnUsageInput,
@@ -36,7 +38,8 @@ import type {
     AssistantTurnDetailResultPayload,
     AssistantTranscribeAudioInput,
     AssistantTranscriptionModelState,
-    AssistantUserInputResponseInput
+    AssistantUserInputResponseInput,
+    FleetOperationInput
 } from '../assistant/contracts'
 import type {
     DevScopeGitBranchSummary,
@@ -218,6 +221,9 @@ export interface DevScopeAssistantApi {
     unsubscribe: () => Promise<DevScopeResult>
     bootstrap: () => Promise<AssistantBootstrapPayload>
     getSnapshot: () => Promise<AssistantShellSnapshot>
+    getFleetSnapshot: (threadId: string) => Promise<DevScopeResult<AssistantFleetSnapshotPayload>>
+    agentAction: (input: FleetOperationInput) => Promise<DevScopeResult<AssistantFleetOperationResultPayload>>
+    workflowAction: (input: FleetOperationInput) => Promise<DevScopeResult<AssistantFleetOperationResultPayload>>
     getStatus: () => Promise<AssistantRuntimeStatus>
     getAccountOverview: () => Promise<DevScopeResult<AssistantAccountOverviewPayload>>
     getSessionTurnUsage: (input?: AssistantGetSessionTurnUsageInput) => Promise<DevScopeResult<AssistantSessionTurnUsageResultPayload>>

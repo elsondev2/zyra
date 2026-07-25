@@ -241,6 +241,7 @@ export class EditorComponent {
       this.invalidateInput();
       return;
     }
+    if (key?.name === "down" && !this.buffer.trim() && suggestions.length === 0 && this.host?.focusNextAuxiliary?.()) return;
     if (key?.name === "up" && this.recallInputHistory(-1)) return this.invalidateInput();
     if (key?.name === "down" && this.recallInputHistory(1)) return this.invalidateInput();
     if ((key?.name === "tab" || key?.name === "right") && suggestions.length > 0) {

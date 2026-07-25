@@ -23,6 +23,7 @@ import {
     handleAssistantApprovePendingPlaygroundLabRequest,
     handleAssistantArchiveSession,
     handleAssistantAttachSessionToPlaygroundLab,
+    handleAssistantAgentAction,
     handleAssistantBootstrap,
     handleAssistantClearLogs,
     handleAssistantConnect,
@@ -35,6 +36,7 @@ import {
     handleAssistantDownloadTranscriptionModel,
     handleAssistantDisconnect,
     handleAssistantGetAccountOverview,
+    handleAssistantGetFleetSnapshot,
     handleAssistantGetHistoryPage,
     handleAssistantGetReviewIndex,
     handleAssistantGetSessionTurnUsage,
@@ -56,6 +58,7 @@ import {
     handleAssistantSubscribeRealtimeVoice,
     handleAssistantTranscribeAudioWithLocalModel,
     handleAssistantUnsubscribeRealtimeVoice,
+    handleAssistantWorkflowAction,
     handleAssistantSearchTurns,
     handleAssistantSelectSession,
     handleAssistantSelectThread,
@@ -210,6 +213,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     ipcMain.handle(ASSISTANT_IPC.unsubscribe, handleAssistantUnsubscribe)
     ipcMain.handle(ASSISTANT_IPC.bootstrap, handleAssistantBootstrap)
     ipcMain.handle(ASSISTANT_IPC.getSnapshot, handleAssistantGetSnapshot)
+    ipcMain.handle(ASSISTANT_IPC.getFleetSnapshot, handleAssistantGetFleetSnapshot)
+    ipcMain.handle(ASSISTANT_IPC.agentAction, handleAssistantAgentAction)
+    ipcMain.handle(ASSISTANT_IPC.workflowAction, handleAssistantWorkflowAction)
     ipcMain.handle(ASSISTANT_IPC.getStatus, handleAssistantGetStatus)
     ipcMain.handle(ASSISTANT_IPC.getAccountOverview, handleAssistantGetAccountOverview)
     ipcMain.handle(ASSISTANT_IPC.getSessionTurnUsage, handleAssistantGetSessionTurnUsage)

@@ -13,12 +13,14 @@ import type {
     AssistantSessionTurnUsageEntry,
     AssistantTurnDetail,
     AssistantSnapshot,
-    AssistantThreadDetail
+    AssistantThreadDetail,
+    FleetSnapshot
 } from '../../shared/assistant/contracts'
 import { is } from '../utils'
 import { createDefaultSnapshot, recoverPersistedSnapshot } from './projector'
 import { readAssistantHistoryPage, readAssistantReviewIndex, readAssistantThreadDetail, readAssistantTurnDetail, searchAssistantTurns } from './persistence-history'
 import { hydrateSnapshotThreads } from './persistence-snapshot'
+import { deleteFleetProjection, projectFleetSnapshot, readFleetSnapshot } from './fleet-persistence'
 import {
     readHydratedThreadDetails,
     readAssistantFirstUserMessageText,
@@ -202,6 +204,27 @@ export class AssistantPersistence {
     async readSessionTurnUsage(sessionId: string): Promise<AssistantSessionTurnUsageEntry[]> {
         await this.ensureInitialized()
         return this.enqueue(() => readAssistantSessionTurnUsage(this.requireDb(), sessionId))
+    }
+
+    projectFleet(threadId: string, snapshot: FleetSnapshot): void {
+        void this.enqueue(() => {
+            projectFleetSnapshot(this.requireDb(), threadId, snapshot)
+            this.scheduleFlush()
+        }).catch((error) => {
+            log.error('[AssistantPersistence] Failed to project fleet snapshot.', error)
+        })
+    }
+
+    async readFleet(threadId: string): Promise<FleetSnapshot | null> {
+        await this.ensureInitialized()
+        return this.enqueue(() => readFleetSnapshot(this.requireDb(), threadId))
+    }
+
+    deleteFleet(threadId: string): void {
+        void this.enqueue(() => {
+            deleteFleetProjection(this.requireDb(), threadId)
+            this.scheduleFlush()
+        }).catch((error) => log.error('[AssistantPersistence] Failed to delete fleet projection.', error))
     }
 
     async flush(): Promise<void> {

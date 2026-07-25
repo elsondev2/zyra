@@ -4,12 +4,44 @@ import { getModelCompatibilityLabel } from "./model-compatibility.mjs";
 import { CODEX_MODES, INTERRUPT_MODES, listSlashCommandSuggestions, NOTIFICATION_MODES, STATUS_LINE_MODES } from "./slash-commands.mjs";
 
 export function getSlashSuggestions(runtime, text) {
+  const agentMentions = getAgentMentionSuggestions(runtime, text);
+  if (agentMentions.length > 0) return agentMentions;
   const fileMentions = getFileMentionSuggestions(runtime, text);
   if (fileMentions.length > 0) return fileMentions;
 
   if (!text.startsWith("/")) return [];
 
   const query = text.toLowerCase();
+  if (query.startsWith("/agent ")) {
+    const prefix = query.slice("/agent ".length);
+    if (!prefix.includes(" ")) {
+      return (runtime.fleet?.listDefinitions?.().active ?? [])
+        .filter((entry) => entry.name.startsWith(prefix))
+        .map((entry) => ({
+          value: entry.name,
+          label: entry.name,
+          description: entry.definition?.description ?? "agent definition",
+          kind: "agent-definition",
+          submitOnEnter: false,
+        }));
+    }
+  }
+
+  if (query.startsWith("/workflow ")) {
+    const prefix = query.slice("/workflow ".length);
+    if (!prefix.includes(" ")) {
+      return (runtime.workflows?.listDefinitions?.().active ?? [])
+        .filter((entry) => entry.definition.name.startsWith(prefix))
+        .map((entry) => ({
+          value: entry.definition.name,
+          label: entry.definition.name,
+          description: entry.definition.description,
+          kind: "workflow-definition",
+          submitOnEnter: false,
+        }));
+    }
+  }
+
   if (query.startsWith("/auth ") || query.startsWith("/account ") || query.startsWith("/login ") || query.startsWith("/logout ")) {
     const command = query.slice(0, query.indexOf(" ") + 1);
     return buildSimpleArgumentSuggestions(["subscription", "api"], query.slice(command.length), "authentication method");
@@ -171,6 +203,14 @@ export function applySlashSuggestion(text, item) {
     return applyFileMentionSuggestion(text, item);
   }
 
+  if (item.kind === "agent-mention") {
+    const token = findAgentMentionToken(text);
+    return token ? `${text.slice(0, token.start)}${item.value}${text.slice(token.end)}` : `${text}${item.value}`;
+  }
+
+  if (item.kind === "agent-definition") return `/agent ${item.value} `;
+  if (item.kind === "workflow-definition") return `/workflow ${item.value} `;
+
   if (item.kind === "command") {
     return item.submitOnEnter ? item.value : `${item.value} `;
   }
@@ -191,6 +231,29 @@ export function applySlashSuggestion(text, item) {
 
   const command = text.slice(0, spaceIndex + 1);
   return `${command}${item.value}`;
+}
+
+function getAgentMentionSuggestions(runtime, text) {
+  const token = findAgentMentionToken(text);
+  if (!token) return [];
+  const query = token.value.slice("@agent-".length).toLowerCase();
+  return (runtime.fleet?.listDefinitions?.().active ?? [])
+    .filter((entry) => entry.name.includes(query))
+    .map((entry) => ({
+      value: `@agent-${entry.name}`,
+      label: `@agent-${entry.name}`,
+      description: entry.definition?.description ?? "agent",
+      kind: "agent-mention",
+      agentName: entry.name,
+    }));
+}
+
+function findAgentMentionToken(text) {
+  const value = String(text ?? "");
+  const matches = [...value.matchAll(/@agent-[a-z0-9-]*/gi)];
+  const match = matches.at(-1);
+  if (!match || match.index === undefined || match.index + match[0].length !== value.length) return null;
+  return { value: match[0], start: match.index, end: match.index + match[0].length };
 }
 
 function buildThemePreview(theme) {

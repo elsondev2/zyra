@@ -1,3 +1,4 @@
+import type { FleetOperationInput, FleetSnapshot } from './fleet'
 import type {
     AssistantApprovalDecision,
     AssistantInteractionMode,
@@ -27,6 +28,9 @@ export const ASSISTANT_IPC = {
     unsubscribe: 'devscope:assistant:unsubscribe',
     bootstrap: 'devscope:assistant:bootstrap',
     getSnapshot: 'devscope:assistant:getSnapshot',
+    getFleetSnapshot: 'devscope:assistant:getFleetSnapshot',
+    agentAction: 'devscope:assistant:agentAction',
+    workflowAction: 'devscope:assistant:workflowAction',
     getStatus: 'devscope:assistant:getStatus',
     getAccountOverview: 'devscope:assistant:getAccountOverview',
     getSessionTurnUsage: 'devscope:assistant:getSessionTurnUsage',
@@ -85,6 +89,16 @@ export interface AssistantBootstrapPayload {
 export interface AssistantAccountOverviewPayload {
     overview: AssistantAccountOverview
 }
+
+export interface AssistantFleetSnapshotPayload {
+    snapshot: FleetSnapshot | null
+}
+
+export interface AssistantFleetOperationResultPayload {
+    result: Record<string, unknown>
+}
+
+export type { FleetOperationInput }
 
 export type { AssistantGetHistoryPageInput, AssistantGetReviewIndexInput, AssistantGetTurnDetailInput, AssistantSearchTurnsInput }
 

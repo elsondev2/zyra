@@ -209,7 +209,8 @@ export function createDefaultAssistantSnapshot(): AssistantSnapshot {
             labs: []
         },
         sessions: [],
-        knownModels: []
+        knownModels: [],
+        fleetByThreadId: {}
     }
 }
 
@@ -224,6 +225,13 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
     let shouldSortSessions = false
 
     switch (event.type) {
+        case 'fleet.snapshot.updated': {
+            const threadId = String(event.payload['threadId'] || event.threadId || '')
+            if (threadId && event.payload['snapshot']) {
+                next.fleetByThreadId = { ...snapshot.fleetByThreadId, [threadId]: event.payload['snapshot'] as AssistantSnapshot['fleetByThreadId'][string] }
+            }
+            break
+        }
         case 'session.created': {
             const session = normalizeAssistantSessionRoute(event.payload['session'] as AssistantSession)
             next.sessions = [...previousSessions, session]

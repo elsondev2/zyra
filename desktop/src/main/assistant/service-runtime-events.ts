@@ -55,6 +55,7 @@ interface AssistantRuntimeEventHandlerDeps {
         threadId?: string
     ) => void
     updateLatestTurnAssistantMessage: (sessionId: string, threadId: string, assistantMessageId: string, occurredAt: string) => void
+    projectFleet: (threadId: string, snapshot: Extract<AssistantRuntimeEvent, { type: 'fleet.snapshot.updated' }>['payload']['snapshot']) => void
 }
 
 type RuntimeActivityPayload = Extract<AssistantRuntimeEvent, { type: 'activity' }>['payload']
@@ -630,6 +631,20 @@ export function findFileChangeReconciliationTarget(
 }
 
 export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: AssistantRuntimeEventHandlerDeps): void {
+    if (event.type === 'fleet.snapshot.updated') {
+        const eventThreadRecord = deps.findThreadRecord(event.threadId)
+        const eventSession = eventThreadRecord?.session || deps.findSessionByThreadId(event.threadId)
+        const eventThreadId = eventThreadRecord?.thread.id || event.threadId
+        deps.projectFleet(eventThreadId, event.payload.snapshot)
+        deps.appendEvent('fleet.snapshot.updated', event.createdAt, {
+            threadId: eventThreadId,
+            eventType: event.payload.eventType,
+            event: event.payload.event,
+            snapshot: event.payload.snapshot
+        }, eventSession?.id, eventThreadId)
+        return
+    }
+
     let eventThreadRecord = deps.findThreadRecord(event.threadId)
     let eventSession = eventThreadRecord?.session || deps.findSessionByThreadId(event.threadId)
     let eventThreadId = eventThreadRecord?.thread.id || event.threadId

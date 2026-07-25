@@ -22,7 +22,8 @@ import type {
     AssistantStartRealtimeVoiceInput,
     AssistantSetPlaygroundRootInput,
     AssistantTranscribeAudioInput,
-    AssistantUserInputResponseInput
+    AssistantUserInputResponseInput,
+    FleetOperationInput
 } from '../../../shared/assistant/contracts'
 import { getAssistantService } from '../../assistant'
 import { persistAssistantClipboardImage, resolveAssistantClipboardAttachment } from '../../assistant/clipboard-attachments'
@@ -66,6 +67,18 @@ export async function handleAssistantGetSnapshot() {
 
 export async function handleAssistantGetStatus() {
     return getAssistantService().getStatus()
+}
+
+export function handleAssistantGetFleetSnapshot(_event: Electron.IpcMainInvokeEvent, threadId: string) {
+    return withAssistantResult(() => getAssistantService().getFleetSnapshot(threadId))
+}
+
+export function handleAssistantAgentAction(_event: Electron.IpcMainInvokeEvent, input: FleetOperationInput) {
+    return withAssistantResult(() => getAssistantService().runFleetOperation('agents', input))
+}
+
+export function handleAssistantWorkflowAction(_event: Electron.IpcMainInvokeEvent, input: FleetOperationInput) {
+    return withAssistantResult(() => getAssistantService().runFleetOperation('workflows', input))
 }
 
 export function handleAssistantGetAccountOverview() {

@@ -1,4 +1,5 @@
 import type { FileChangeKind } from './file-change'
+import type { FleetSnapshot } from './fleet'
 import type {
     AssistantApprovalDecision,
     AssistantApprovalRequestType,
@@ -374,6 +375,7 @@ export interface AssistantSnapshot {
     playground: AssistantPlaygroundState
     sessions: AssistantSession[]
     knownModels: AssistantModelInfo[]
+    fleetByThreadId: Record<string, FleetSnapshot>
 }
 
 export type AssistantShellSnapshot = Omit<AssistantSnapshot, 'sessions'> & {
@@ -401,6 +403,7 @@ export type AssistantDomainEventType =
     | 'thread.approval.updated'
     | 'thread.user-input.updated'
     | 'thread.latest-turn.updated'
+    | 'fleet.snapshot.updated'
 
 export interface AssistantDomainEvent {
     sequence: number
