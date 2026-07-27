@@ -24,6 +24,7 @@ type BrowserWebviewElement = HTMLElement & {
     stop: () => void
     focus: () => void
     isCurrentlyAudible: () => boolean
+    getWebContentsId: () => number
 }
 
 type BrowserWebviewEvent = Event & {
@@ -44,7 +45,8 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
     config: DevScopeBrowserPreviewConfig
     active: boolean
     onStateChange: (tabId: string, patch: BrowserStatePatch) => void
-}>(function AssistantBrowserWebview({ tab, config, active, onStateChange }, forwardedRef) {
+    onControlTargetChange: (tabId: string, targetId: string | null) => void
+}>(function AssistantBrowserWebview({ tab, config, active, onStateChange, onControlTargetChange }, forwardedRef) {
     const [webview, setWebview] = useState<BrowserWebviewElement | null>(null)
     const onStateChangeRef = useRef(onStateChange)
     const tabTitleRef = useRef(tab.title)
@@ -171,7 +173,17 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
             })
             syncAudible()
         }
-        const handleDomReady = () => syncAudible()
+        const handleDomReady = () => {
+            syncAudible()
+            try {
+                const guestWebContentsId = webview.getWebContentsId()
+                void window.devscope.agentControl.bindBrowserTab({ guestWebContentsId, tabId: tab.id }).then((result) => {
+                    onControlTargetChange(tab.id, result.success ? result.target.targetId : null)
+                }).catch(() => onControlTargetChange(tab.id, null))
+            } catch {
+                onControlTargetChange(tab.id, null)
+            }
+        }
 
         webview.addEventListener('did-start-navigation', handleStartNavigation)
         webview.addEventListener('did-stop-loading', handleStop)
@@ -197,8 +209,9 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
             webview.removeEventListener('dom-ready', handleDomReady)
             webview.removeEventListener('media-started-playing', syncAudible)
             webview.removeEventListener('media-paused', syncAudible)
+            onControlTargetChange(tab.id, null)
         }
-    }, [tab.id, webview])
+    }, [onControlTargetChange, tab.id, webview])
 
     useEffect(() => {
         if (active) webview?.focus()

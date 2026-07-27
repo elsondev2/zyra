@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>Zyra.ComputerUse</AssemblyName>
+    <RootNamespace>Zyra.ComputerUse</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="UIAutomationClient">
+      <HintPath>$(WINDIR)\Microsoft.NET\Framework64\v4.0.30319\WPF\UIAutomationClient.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="UIAutomationTypes">
+      <HintPath>$(WINDIR)\Microsoft.NET\Framework64\v4.0.30319\WPF\UIAutomationTypes.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

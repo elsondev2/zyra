@@ -1,5 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, FolderTree, GitCompareArrows, LayoutGrid, Library, LoaderCircle, MessageSquareText, SquareTerminal, TriangleAlert, Volume2 } from 'lucide-react'
+import { Bot, FolderTree, GitCompareArrows, LayoutGrid, Library, LoaderCircle, MessageSquareText, ShieldCheck, SquareTerminal, TriangleAlert, Volume2 } from 'lucide-react'
 import type { FleetSnapshot } from '@shared/assistant/contracts'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import type { AssistantDiffTarget, AssistantDiffTurn } from './assistant-diff-types'
@@ -24,6 +24,9 @@ const AssistantResourcesWorkspace = lazy(async () => ({
 const AssistantFleetWorkspace = lazy(async () => ({
     default: (await import('./AssistantFleetWorkspace')).AssistantFleetWorkspace
 }))
+const AssistantControlWorkspace = lazy(async () => ({
+    default: (await import('./AssistantControlWorkspace')).AssistantControlWorkspace
+}))
 
 type WorkspaceTab =
     | { id: string; kind: 'new' }
@@ -31,6 +34,7 @@ type WorkspaceTab =
     | { id: 'explorer'; kind: 'explorer' }
     | { id: 'terminal'; kind: 'terminal' }
     | { id: 'browser'; kind: 'browser' }
+    | { id: 'control'; kind: 'control' }
     | { id: 'resources'; kind: 'resources' }
     | { id: 'agents'; kind: 'agents' }
     | { id: string; kind: 'turn'; turnId: string }
@@ -39,6 +43,7 @@ const REVIEW_TAB: WorkspaceTab = { id: 'review', kind: 'review' }
 const EXPLORER_TAB: WorkspaceTab = { id: 'explorer', kind: 'explorer' }
 const TERMINAL_TAB: WorkspaceTab = { id: 'terminal', kind: 'terminal' }
 const BROWSER_TAB: WorkspaceTab = { id: 'browser', kind: 'browser' }
+const CONTROL_TAB: WorkspaceTab = { id: 'control', kind: 'control' }
 const RESOURCES_TAB: WorkspaceTab = { id: 'resources', kind: 'resources' }
 const AGENTS_TAB: WorkspaceTab = { id: 'agents', kind: 'agents' }
 
@@ -247,6 +252,16 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                 preview: projectPath ? `Browser · ${projectPath}` : 'No project attached'
             }]
         }
+        if (tab.kind === 'control') {
+            return [{
+                id: tab.id,
+                label: 'Control',
+                icon: <ShieldCheck size={12} />,
+                closable: true,
+                loading: transitionLoadingTabId === tab.id,
+                preview: 'Targets, grants, audit, pairing, and emergency stop'
+            }]
+        }
         if (tab.kind === 'resources') {
             return [{
                 id: tab.id,
@@ -289,6 +304,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     const explorerOpen = workspaceTabs.some((tab) => tab.kind === 'explorer')
     const terminalOpen = workspaceTabs.some((tab) => tab.kind === 'terminal')
     const browserOpen = workspaceTabs.some((tab) => tab.kind === 'browser')
+    const controlOpen = workspaceTabs.some((tab) => tab.kind === 'control')
     const resourcesOpen = workspaceTabs.some((tab) => tab.kind === 'resources')
     const agentsOpen = workspaceTabs.some((tab) => tab.kind === 'agents')
 
@@ -344,6 +360,18 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
         })
         setActiveTabId('browser')
         beginTabTransition('browser')
+    }, [activeTabId, beginTabTransition])
+
+    const handleOpenControlWorkspace = useCallback(() => {
+        setWorkspaceTabs((current) => {
+            const controlExists = current.some((tab) => tab.kind === 'control')
+            const withoutChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
+            if (controlExists) return withoutChooser
+            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? CONTROL_TAB : tab)
+            return replaced.some((tab) => tab.kind === 'control') ? replaced : [...replaced, CONTROL_TAB]
+        })
+        setActiveTabId('control')
+        beginTabTransition('control')
     }, [activeTabId, beginTabTransition])
 
     const handleOpenResourcesWorkspace = useCallback(() => {
@@ -578,6 +606,18 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                     </div>
                 ) : null}
 
+                {controlOpen ? (
+                    <div className={activeWorkspaceTab?.kind === 'control' ? 'flex min-h-0 flex-1' : 'hidden'}>
+                        <Suspense fallback={(
+                            <div className="flex min-h-0 flex-1 items-center justify-center">
+                                <LoaderCircle size={18} className="animate-spin text-[var(--accent-primary)]/75" />
+                            </div>
+                        )}>
+                            <AssistantControlWorkspace active={open && activeWorkspaceTab?.kind === 'control'} />
+                        </Suspense>
+                    </div>
+                ) : null}
+
                 {resourcesOpen ? (
                     <div className={activeWorkspaceTab?.kind === 'resources' ? 'flex min-h-0 flex-1' : 'hidden'}>
                         <Suspense fallback={(
@@ -598,16 +638,18 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                     </div>
                 ) : null}
 
-                {activeWorkspaceTab?.kind === 'terminal' || activeWorkspaceTab?.kind === 'browser' || activeWorkspaceTab?.kind === 'resources' || activeWorkspaceTab?.kind === 'agents' ? null : activeWorkspaceTab?.kind === 'new' ? (
+                {activeWorkspaceTab?.kind === 'terminal' || activeWorkspaceTab?.kind === 'browser' || activeWorkspaceTab?.kind === 'control' || activeWorkspaceTab?.kind === 'resources' || activeWorkspaceTab?.kind === 'agents' ? null : activeWorkspaceTab?.kind === 'new' ? (
                     <AssistantInspectorNewTab
                         reviewOpen={reviewOpen}
                         browserOpen={browserOpen}
+                        controlOpen={controlOpen}
                         explorerOpen={explorerOpen}
                         terminalOpen={terminalOpen}
                         resourcesOpen={resourcesOpen}
                         subagentsOpen={agentsOpen}
                         onSelectReview={handleOpenReviewWorkspace}
                         onSelectBrowser={handleOpenBrowserWorkspace}
+                        onSelectControl={handleOpenControlWorkspace}
                         onSelectExplorer={handleOpenExplorerWorkspace}
                         onSelectTerminal={handleOpenTerminalWorkspace}
                         onSelectResources={handleOpenResourcesWorkspace}

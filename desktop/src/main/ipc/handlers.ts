@@ -183,6 +183,8 @@ import {
     handleStageFiles,
     handleUnstageFiles
 } from './handlers/git-write-handlers'
+import { createAgentControlHandlers } from './handlers/agent-control-handlers'
+import { AGENT_CONTROL_IPC } from '../../shared/agent-control/protocol'
 import {
     UPDATE_CHECK_CHANNEL,
     UPDATE_DOWNLOAD_CHANNEL,
@@ -192,6 +194,19 @@ import {
 
 export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     log.info('Registering IPC handlers...')
+
+    const controlHandlers = createAgentControlHandlers(mainWindow)
+    ipcMain.handle(AGENT_CONTROL_IPC.getState, controlHandlers.getState)
+    ipcMain.handle(AGENT_CONTROL_IPC.bindBrowserTab, controlHandlers.bindBrowserTab)
+    ipcMain.handle(AGENT_CONTROL_IPC.approveGrant, controlHandlers.approveGrant)
+    ipcMain.handle(AGENT_CONTROL_IPC.rejectGrant, controlHandlers.rejectGrant)
+    ipcMain.handle(AGENT_CONTROL_IPC.revokeGrant, controlHandlers.revokeGrant)
+    ipcMain.handle(AGENT_CONTROL_IPC.emergencyStop, controlHandlers.emergencyStop)
+    ipcMain.handle(AGENT_CONTROL_IPC.clearAudit, controlHandlers.clearAudit)
+    ipcMain.handle(AGENT_CONTROL_IPC.startChromePairing, controlHandlers.startChromePairing)
+    ipcMain.handle(AGENT_CONTROL_IPC.stopChromePairing, controlHandlers.stopChromePairing)
+    ipcMain.handle(AGENT_CONTROL_IPC.listWindows, controlHandlers.listWindows)
+    ipcMain.handle(AGENT_CONTROL_IPC.selectWindow, controlHandlers.selectWindow)
 
     ipcMain.handle('devscope:getFileSystemRoots', handleGetFileSystemRoots)
     ipcMain.handle(UPDATE_GET_STATE_CHANNEL, handleGetUpdateState)

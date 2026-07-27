@@ -16,7 +16,8 @@
         "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
         "test:activity-rail": "bun scripts/test-activity-rail-contract.ts",
         "test:agent-surface": "bun scripts/test-agent-surface-contract.ts",
-    "test:assistant-fleet": "bun scripts/test-assistant-fleet-contract.tsx",
+        "test:assistant-fleet": "bun scripts/test-assistant-fleet-contract.tsx",
+        "test:agent-control": "bun scripts/test-agent-control-contract.ts && bun scripts/test-agent-control-policy.ts && bun scripts/test-agent-control-revisions.ts && bun scripts/test-agent-control-bridge.ts && bun scripts/test-agent-control-audit.ts && bun scripts/test-agent-control-pairing.ts",
         "test:assistant-diff": "bun scripts/test-assistant-diff-contract.ts",
         "test:assistant-history": "bun scripts/test-assistant-history-persistence.ts && bun scripts/test-assistant-paged-history.ts",
         "test:assistant-images": "bun scripts/test-assistant-image-pipeline.ts",
@@ -113,6 +114,18 @@
         "directories": {
             "output": "dist"
         },
+        "extraResources": [
+            {
+                "from": "../native/zyra-computer-use/publish",
+                "to": "zyra-computer-use",
+                "filter": ["**/*"]
+            },
+            {
+                "from": "../extensions/zyra-browser-control/dist/unpacked",
+                "to": "zyra-browser-control-extension",
+                "filter": ["**/*"]
+            }
+        ],
         "publish": [
             {
                 "provider": "github",

@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "principal": { "type": "root", "threadId": "thread:test", "turnId": "turn:test" },
+  "target": {
+    "kind": "zyra-browser",
+    "targetId": "control-target:test",
+    "tabId": "browser:test",
+    "guestIdentity": "browser-guest:test",
+    "origin": "https://example.test"
+  },
+  "capabilities": ["observe.structure", "pointer.click", "keyboard.type"],
+  "action": {
+    "version": 1,
+    "requestId": "control-request:test",
+    "grantId": "control-grant:test",
+    "targetId": "control-target:test",
+    "observationRevision": 1,
+    "action": { "type": "click", "elementRef": "element:1:1" }
+  }
+}

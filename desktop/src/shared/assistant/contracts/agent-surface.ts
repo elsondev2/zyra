@@ -1,4 +1,4 @@
-export type AgentSurfaceKind = 'command' | 'file-change' | 'file-read' | 'search' | 'tool'
+export type AgentSurfaceKind = 'command' | 'file-change' | 'file-read' | 'search' | 'browser-control' | 'computer-control' | 'tool'
 export type AgentSurfaceLifecycle = 'running' | 'completed' | 'failed' | 'stopped'
 export type AgentSurfacePhase = 'start' | 'update' | 'end'
 
@@ -16,7 +16,7 @@ export interface AgentSurfaceDescriptor {
     summary: string
 }
 
-const AGENT_SURFACE_KINDS = new Set<AgentSurfaceKind>(['command', 'file-change', 'file-read', 'search', 'tool'])
+const AGENT_SURFACE_KINDS = new Set<AgentSurfaceKind>(['command', 'file-change', 'file-read', 'search', 'browser-control', 'computer-control', 'tool'])
 const AGENT_SURFACE_LIFECYCLES = new Set<AgentSurfaceLifecycle>(['running', 'completed', 'failed', 'stopped'])
 
 /** Validate the versioned descriptor crossing the root Zyra runtime -> desktop boundary. */

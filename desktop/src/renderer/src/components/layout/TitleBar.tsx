@@ -4,7 +4,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, Copy, Minus, PanelLeftClose, PanelLeftOpen, Square, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Copy, Minus, PanelLeftClose, PanelLeftOpen, ShieldAlert, Square, X } from 'lucide-react'
 import { useAssistantStoreActions, useAssistantStoreSelector } from '@/lib/assistant/store'
 import { useCommandPalette } from '@/lib/commandPalette'
 import { cn } from '@/lib/utils'
@@ -29,7 +29,15 @@ export default function TitleBar() {
     const [isMaximized, setIsMaximized] = useState(false)
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
     const [openMenu, setOpenMenu] = useState<MenuLabel | null>(null)
+    const [controlActive, setControlActive] = useState(false)
     const [appHistory, setAppHistory] = useState<{ entries: AppNavEntry[]; index: number }>({ entries: [], index: -1 })
+
+    useEffect(() => {
+        void window.devscope.agentControl.getState().then((result) => {
+            if (result.success) setControlActive(result.state.active || result.state.pairing.state !== 'stopped')
+        }).catch(() => undefined)
+        return window.devscope.agentControl.onStateChange((state) => setControlActive(state.active || state.pairing.state !== 'stopped'))
+    }, [])
 
     useEffect(() => {
         void window.devscope.window.isMaximized().then(setIsMaximized).catch(() => undefined)
@@ -264,6 +272,11 @@ export default function TitleBar() {
             <div className="min-w-0 flex-1 self-stretch" />
 
             <div className="flex h-full items-center" style={{ WebkitAppRegion: 'no-drag' } as any}>
+                {controlActive ? (
+                    <button type="button" onClick={() => void window.devscope.agentControl.emergencyStop()} className="mr-1 inline-flex h-6 items-center gap-1 rounded border border-red-300/20 bg-red-400/[0.08] px-2 text-[9px] text-red-100 hover:bg-red-400/[0.14]" title="Emergency stop all Browser and computer control">
+                        <ShieldAlert size={10} /> Stop control
+                    </button>
+                ) : null}
                 <button
                     onClick={handleMinimize}
                     className={cn(windowControlClass, 'hover:bg-white/[0.055]')}

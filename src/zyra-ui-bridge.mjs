@@ -3,6 +3,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 import { normalizeAgentSurfaceTool } from "./agent-surface.mjs";
+import { AgentControlBridgeClient } from "./agent-control/bridge-client.mjs";
 
 const root = path.resolve(process.env.ZYRA_ROOT ?? path.resolve(import.meta.dirname, ".."));
 const sdkPath = path.join(root, "src", "zyra-sdk.mjs");
@@ -12,6 +13,7 @@ let runtime;
 let unsubscribe;
 let unsubscribeManagedBash;
 let unsubscribeFleet;
+const controlBridgeClient = new AgentControlBridgeClient({ send: (message) => send(message) });
 
 function stringifyProtocol(value) {
   return JSON.stringify(value);
@@ -78,6 +80,7 @@ async function handleConnect(payload) {
     surface: "desktop-ui",
     skipMemoryStartup: true,
     skipModelAvailability: true,
+    controlBridgeClient,
     ...overrides,
   });
   try {
@@ -463,6 +466,10 @@ function summarizeFleetEvent(event) {
 }
 
 async function handleMessage(message) {
+  if (message?.type === "control.response") {
+    controlBridgeClient.handleResponse(message);
+    return;
+  }
   const id = message?.id;
   try {
     if (message?.type === "connect") {
@@ -494,6 +501,7 @@ async function handleMessage(message) {
       return;
     }
     if (message?.type === "dispose") {
+      controlBridgeClient.dispose();
       disposeRuntime();
       sendResponse(id, true, { result: {} });
       process.exit(0);
@@ -520,11 +528,13 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 });
 
 process.on("SIGTERM", () => {
+  controlBridgeClient.dispose();
   disposeRuntime();
   process.exit(0);
 });
 
 process.on("SIGINT", () => {
+  controlBridgeClient.dispose();
   disposeRuntime();
   process.exit(0);
 });

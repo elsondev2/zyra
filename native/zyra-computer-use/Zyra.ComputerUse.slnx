@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Zyra.ComputerUse/Zyra.ComputerUse.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Zyra.ComputerUse.Tests/Zyra.ComputerUse.Tests.csproj" />
+  </Folder>
+</Solution>
