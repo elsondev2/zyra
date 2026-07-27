@@ -26,6 +26,10 @@ try {
 
 assert.throws(() => normalizeTemporaryBrowserOperation({ operation: 'list_windows' }), /not allowed/)
 assert.throws(() => normalizeTemporaryBrowserOperation({ operation: 'observe', targetId: 'chrome-tab:1' }), /in-app Browser/)
+assert.equal(
+    (normalizeTemporaryBrowserOperation({ operation: 'observe', targetId: 'control-target:zyra-browser:1' }) as any).targetId,
+    'control-target:zyra-browser:1'
+)
 const relayFlag = process.env.ZYRA_ENABLE_TEMP_BROWSER_RELAY
 process.env.ZYRA_ENABLE_TEMP_BROWSER_RELAY = '1'
 let relayedOperation: any

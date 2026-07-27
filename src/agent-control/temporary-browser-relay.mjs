@@ -17,7 +17,7 @@ export function normalizeTemporaryBrowserOperation(value) {
   }
   if (operation !== "release") {
     const targetId = String(value.targetId || "");
-    if (!targetId.startsWith("zyra-browser:")) throw new Error("The temporary relay is restricted to in-app Browser targets.");
+    if (!/^(?:control-target:)?zyra-browser:/.test(targetId)) throw new Error("The temporary relay is restricted to in-app Browser targets.");
   }
   return JSON.parse(JSON.stringify(value));
 }
