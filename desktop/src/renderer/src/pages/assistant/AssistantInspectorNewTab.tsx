@@ -62,8 +62,8 @@ export const AssistantInspectorNewTab = memo(function AssistantInspectorNewTab({
 
     return (
         <section className="relative flex min-h-0 flex-1 items-center justify-center bg-[color-mix(in_srgb,var(--color-bg)_94%,black)] px-3 py-4" aria-label="Choose an Inspector workspace">
-            <div className="grid w-full max-w-[306px] grid-cols-3 items-stretch gap-2">
-                {WORKSPACE_CHOICES.map((choice) => {
+            <div className="grid w-full max-w-[306px] grid-cols-6 items-stretch gap-2">
+                {WORKSPACE_CHOICES.map((choice, index) => {
                     const available = choice.available
                     const choiceOpen = choice.id === 'review'
                         ? reviewOpen
@@ -115,7 +115,10 @@ export const AssistantInspectorNewTab = memo(function AssistantInspectorNewTab({
                                 setNoticeChoiceId(choice.id)
                             }}
                             className={cn(
-                                'group relative flex min-h-[72px] min-w-0 flex-col items-center justify-center gap-2 rounded-lg border p-2 text-center outline-none transition-[background-color,border-color,color,transform] duration-150 focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]/50 active:translate-y-0',
+                                'group relative col-span-2 flex min-h-[72px] min-w-0 flex-col items-center justify-center gap-2 rounded-lg border p-2 text-center outline-none transition-[background-color,border-color,color,transform] duration-150 focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]/50 active:translate-y-0',
+                                WORKSPACE_CHOICES.length % 3 === 1 && index === WORKSPACE_CHOICES.length - 1 && 'col-start-3',
+                                WORKSPACE_CHOICES.length % 3 === 2 && index === WORKSPACE_CHOICES.length - 2 && 'col-start-2',
+                                WORKSPACE_CHOICES.length % 3 === 2 && index === WORKSPACE_CHOICES.length - 1 && 'col-start-4',
                                 available
                                     ? 'border-[color-mix(in_srgb,var(--accent-primary)_24%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_7%,var(--color-card))] text-sparkle-text hover:-translate-y-0.5 hover:border-[color-mix(in_srgb,var(--accent-primary)_38%,transparent)] hover:bg-[color-mix(in_srgb,var(--accent-primary)_11%,var(--color-card))] active:bg-[color-mix(in_srgb,var(--accent-primary)_15%,var(--color-card))]'
                                     : 'border-[color-mix(in_srgb,var(--color-text)_6%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_38%,transparent)] text-sparkle-text-muted/45 hover:-translate-y-0.5 hover:border-[color-mix(in_srgb,var(--color-text)_11%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-card)_58%,transparent)] hover:text-sparkle-text-muted/75 active:bg-[color-mix(in_srgb,var(--color-card)_68%,transparent)]'
