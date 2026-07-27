@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createBrowserControlTool } from '../../src/agent-control/browser-control-tool.mjs'
@@ -7,8 +9,19 @@ import { AgentControlBroker } from '../src/main/agent-control/agent-control-brok
 import { BrowserSurfaceHost } from '../src/main/agent-control/browser-surface-host'
 import { FakeControlDriver } from '../src/main/agent-control/drivers/fake-driver'
 import { ObservationStore } from '../src/main/agent-control/observation-store'
+import { resolveZyraRoot } from '../src/main/zyra/zyra-root'
 import { AssistantBrowserAgentCursor } from '../src/renderer/src/pages/assistant/AssistantBrowserAgentCursor'
 import type { ControlTarget } from '../src/shared/agent-control/contracts'
+
+const expectedRuntimeRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+const inheritedZyraRoot = process.env.ZYRA_ROOT
+try {
+    process.env.ZYRA_ROOT = path.resolve(expectedRuntimeRoot, '..', '..', '..')
+    assert.equal(resolveZyraRoot(), expectedRuntimeRoot, 'the loaded desktop worktree wins over a stale inherited ZYRA_ROOT')
+} finally {
+    if (inheritedZyraRoot === undefined) delete process.env.ZYRA_ROOT
+    else process.env.ZYRA_ROOT = inheritedZyraRoot
+}
 
 const driver = new FakeControlDriver()
 const broker = new AgentControlBroker({ drivers: [driver] })
