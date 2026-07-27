@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { AgentControlBroker } from '../src/main/agent-control/agent-control-broker'
+import { assertActionAllowed } from '../src/main/agent-control/capability-policy'
 import { FakeControlDriver } from '../src/main/agent-control/drivers/fake-driver'
 
 const driver = new FakeControlDriver('zyra-browser')
@@ -30,6 +31,11 @@ const grant = broker.approvePendingGrant({
     allowedOrigins: pending.allowedOrigins
 })
 assert.equal(grant.state, 'active')
+assert.throws(() => assertActionAllowed(
+    { ...grant, capabilities: ['keyboard.type'] },
+    broker.targets.get(targetId).target,
+    { type: 'type', x: 320, y: 220, text: 'Canvas text' }
+), /also requires pointer\.click/)
 const observation = await broker.observe(principal, grant.grantId, targetId)
 assert.equal(observation.elements.find((element) => element.role === 'password')?.value, '[REDACTED]')
 await assert.rejects(() => broker.act(principal, {
@@ -47,6 +53,17 @@ await assert.rejects(() => broker.act(principal, {
     observationRevision: observation.revision,
     action: { type: 'click', elementRef: 'fixture:button', sideEffect: 'purchase' }
 }), /requires explicit per-action user approval/)
+await assert.rejects(() => broker.act(principal, {
+    version: 1, requestId: 'request:outside-type', grantId: grant.grantId, targetId,
+    observationRevision: observation.revision,
+    action: { type: 'type', x: 100_000, y: 220, text: 'outside viewport' }
+}), /outside the latest observed viewport/)
+const focusedTypeResult = await broker.act(principal, {
+    version: 1, requestId: 'request:focused-type', grantId: grant.grantId, targetId,
+    observationRevision: observation.revision,
+    action: { type: 'type', text: 'Canvas text' }
+})
+assert.equal(focusedTypeResult.changed, true)
 
 const child = { type: 'agent' as const, fleetId: 'fleet:test', agentRunId: 'agent:test', parentThreadId: principal.threadId }
 assert.throws(() => broker.delegate({

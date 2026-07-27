@@ -14,6 +14,7 @@
     "test:agent-surface": "node scripts/test-agent-surface-contract.mjs && bun run --cwd desktop test:agent-surface",
     "test:subagents-workflows": "node scripts/test-zyra-subagents.mjs && node scripts/test-zyra-workflows.mjs && node scripts/test-zyra-fleet-ui.mjs && bun run --cwd desktop test:assistant-fleet",
     "test:agent-control": "bun run --cwd desktop test:agent-control && npm --prefix extensions/zyra-browser-control test && dotnet build native/zyra-computer-use/Zyra.ComputerUse.slnx && dotnet run --project native/zyra-computer-use/tests/Zyra.ComputerUse.Tests/Zyra.ComputerUse.Tests.csproj --no-build",
+    "test:browser-tool-projection": "node scripts/test-zyra-browser-tool-projection.mjs",
     "test:agent-platform-integration": "bun desktop/scripts/test-agent-platform-integration.ts",
     "browser:live": "node scripts/automation/live-browser-control.mjs",
     "test:codex-resets": "node scripts/test-zyra-codex-resets.mjs",

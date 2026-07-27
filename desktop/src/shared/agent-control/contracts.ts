@@ -107,7 +107,7 @@ export type ControlAction =
     | { type: 'move'; x: number; y: number; durationMs?: number }
     | { type: 'click'; elementRef?: string; x?: number; y?: number; button?: ControlPointerButton; clickCount?: number; sideEffect?: ControlSideEffectClass }
     | { type: 'drag'; fromX: number; fromY: number; toX: number; toY: number; durationMs?: number; button?: ControlPointerButton }
-    | { type: 'type'; elementRef: string; text: string; replace?: boolean; sideEffect?: ControlSideEffectClass }
+    | { type: 'type'; elementRef?: string; x?: number; y?: number; text: string; replace?: boolean; sideEffect?: ControlSideEffectClass }
     | { type: 'key'; key: string; modifiers?: string[]; sideEffect?: ControlSideEffectClass }
     | { type: 'scroll'; elementRef?: string; x?: number; y?: number; deltaX: number; deltaY: number }
     | { type: 'select'; elementRef: string; values: string[]; sideEffect?: ControlSideEffectClass }

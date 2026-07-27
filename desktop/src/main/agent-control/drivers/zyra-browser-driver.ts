@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto'
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { nativeImage, type WebContents } from 'electron'
+import { nativeImage, type NativeImage, type WebContents } from 'electron'
 import type { ControlAction, ControlElement, ControlObservation } from '../../../shared/agent-control/contracts'
 import { CONTROL_BOUNDS, normalizedOrigin } from '../../../shared/agent-control/policy'
 import { AgentControlError } from '../control-errors'
@@ -95,17 +95,11 @@ export class ZyraBrowserDriver implements AgentControlDriver {
         let screenshotRef: string | undefined
         const redactions: string[] = []
         if (options.includeScreenshot) {
-            const screenshot = await this.command(guest, 'Page.captureScreenshot', {
-                format: 'jpeg', quality: 70, fromSurface: true, captureBeyondViewport: false
-            }) as { data?: string }
-            const sourceBytes = Buffer.from(String(screenshot.data || ''), 'base64')
-            const sourceImage = nativeImage.createFromBuffer(sourceBytes)
-            const visualImage = sourceImage.isEmpty()
-                ? sourceImage
-                : sourceImage.resize({ width: viewport.width, height: viewport.height, quality: 'good' })
+            const sourceImage = await this.captureRenderedPage(guest)
+            const visualImage = sourceImage.resize({ width: viewport.width, height: viewport.height, quality: 'good' })
             let bytes: Buffer<ArrayBufferLike> = Buffer.alloc(0)
             for (const quality of [65, 50, 35]) {
-                bytes = visualImage.isEmpty() ? sourceBytes : visualImage.toJPEG(quality)
+                bytes = visualImage.toJPEG(quality)
                 if (bytes.length <= CONTROL_BOUNDS.maxVisualScreenshotBytes) break
             }
             if (bytes.length > CONTROL_BOUNDS.maxVisualScreenshotBytes) {
@@ -204,10 +198,21 @@ export class ZyraBrowserDriver implements AgentControlDriver {
                 return { changed: true }
             }
             case 'type': {
-                const point = await this.elementPoint(guest, target.target.targetId, context.revision, action.elementRef)
-                await this.movePointer(guest, point, 160, context)
-                const reference = this.element(target.target.targetId, context.revision, action.elementRef)
-                await this.command(guest, 'DOM.focus', { backendNodeId: reference.backendNodeId })
+                let point: { x: number; y: number } | undefined
+                if (action.elementRef) {
+                    point = await this.elementPoint(guest, target.target.targetId, context.revision, action.elementRef)
+                    await this.movePointer(guest, point, 160, context)
+                    const reference = this.element(target.target.targetId, context.revision, action.elementRef)
+                    await this.command(guest, 'DOM.focus', { backendNodeId: reference.backendNodeId })
+                } else if (action.x !== undefined && action.y !== undefined) {
+                    point = { x: action.x, y: action.y }
+                    await this.movePointer(guest, point, 160, context)
+                    context.updateCursor?.({ ...point, phase: 'pressing', visible: true, durationMs: 70 })
+                    await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 })
+                    await delay(70, context.signal)
+                    await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 })
+                }
+                if (!action.elementRef) await this.assertFocusedTypingSafe(guest)
                 context.updateCursor?.({ ...point, phase: 'typing', visible: true, durationMs: 90 })
                 if (action.replace) {
                     await this.command(guest, 'Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 2 })
@@ -316,12 +321,66 @@ export class ZyraBrowserDriver implements AgentControlDriver {
         }
     }
 
-    private command(guest: WebContents, method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    private command(
+        guest: WebContents,
+        method: string,
+        params: Record<string, unknown> = {},
+        timeoutMs: number = CONTROL_BOUNDS.defaultActionTimeoutMs
+    ): Promise<unknown> {
         if (!ZYRA_BROWSER_CDP_ALLOWLIST.has(method)) throw new AgentControlError('CONTROL_CAPABILITY_DENIED', `CDP command ${method} is not allowed.`)
-        return Promise.race([
+        return withTimeout(
             guest.debugger.sendCommand(method, params),
-            new Promise((_, reject) => setTimeout(() => reject(new AgentControlError('CONTROL_TIMEOUT', `Browser command ${method} timed out.`, { retryable: true })), CONTROL_BOUNDS.defaultActionTimeoutMs))
-        ])
+            timeoutMs,
+            `Browser command ${method} timed out.`
+        )
+    }
+
+    private async captureRenderedPage(guest: WebContents): Promise<NativeImage> {
+        const errors: string[] = []
+        for (const fromSurface of [true, false]) {
+            try {
+                const screenshot = await this.command(guest, 'Page.captureScreenshot', {
+                    format: 'jpeg', quality: 70, fromSurface, captureBeyondViewport: false
+                }, 4_000) as { data?: string }
+                const bytes = Buffer.from(String(screenshot.data || ''), 'base64')
+                const image = nativeImage.createFromBuffer(bytes)
+                if (!image.isEmpty()) return image
+                errors.push(`CDP fromSurface=${fromSurface} returned an empty frame`)
+            } catch (error) {
+                errors.push(error instanceof Error ? error.message : String(error))
+            }
+        }
+
+        try {
+            guest.invalidate()
+            await delay(50)
+            const image = await withTimeout(guest.capturePage(), 4_000, 'Browser capturePage timed out.')
+            if (!image.isEmpty()) return image
+            errors.push('Electron capturePage returned an empty frame')
+        } catch (error) {
+            errors.push(error instanceof Error ? error.message : String(error))
+        }
+
+        throw new AgentControlError(
+            'CONTROL_TIMEOUT',
+            `Browser screenshot capture failed across bounded rendered-frame paths: ${errors.slice(0, 3).join('; ')}`,
+            { retryable: true }
+        )
+    }
+
+    private async assertFocusedTypingSafe(guest: WebContents): Promise<void> {
+        const response = await this.command(guest, 'Accessibility.getFullAXTree', { depth: 8 }) as { nodes?: AxNode[] }
+        const focused = (response.nodes || []).find((node) => node.properties?.some((property) => (
+            property.name === 'focused' && property.value?.value === true
+        )))
+        if (!focused) return
+        const semantics = `${stringAx(focused.role?.value)} ${stringAx(focused.name?.value)} ${stringAx(focused.description?.value)}`
+        const protectedValue = focused.properties?.some((property) => (
+            /protected|password/i.test(String(property.name || '')) && property.value?.value === true
+        ))
+        if (protectedValue || /password|passcode|secret|token|credential/i.test(semantics)) {
+            throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Model control cannot type into the focused password or sensitive field. Pause control and enter it manually.')
+        }
     }
 
     private element(targetId: string, revision: number, elementRef: string) {
@@ -396,6 +455,22 @@ function actionsForRole(role: string): string[] {
     if (/textbox|searchbox|combobox/i.test(role)) actions.push('type')
     if (/combobox|listbox/i.test(role)) actions.push('select')
     return actions
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new AgentControlError('CONTROL_TIMEOUT', message, { retryable: true })), timeoutMs)
+        promise.then(
+            (value) => {
+                clearTimeout(timer)
+                resolve(value)
+            },
+            (error) => {
+                clearTimeout(timer)
+                reject(error)
+            }
+        )
+    })
 }
 
 async function delay(ms: number, signal?: AbortSignal): Promise<void> {

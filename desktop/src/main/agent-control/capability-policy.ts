@@ -20,6 +20,9 @@ export function assertActionAllowed(grant: ControlGrant, target: ControlTarget, 
     if (capability && !grant.capabilities.includes(capability)) {
         throw new AgentControlError('CONTROL_CAPABILITY_DENIED', `The grant does not allow ${capability}.`)
     }
+    if (action.type === 'type' && action.x !== undefined && !grant.capabilities.includes('pointer.click')) {
+        throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Coordinate typing also requires pointer.click.')
+    }
     if ('sideEffect' in action && action.sideEffect && CONTROL_SIDE_EFFECTS_REQUIRING_APPROVAL.has(action.sideEffect)) {
         throw new AgentControlError(
             'CONTROL_SIDE_EFFECT_APPROVAL_REQUIRED',

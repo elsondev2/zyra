@@ -156,6 +156,7 @@ function registerBrowserPreviewWebviewSecurity(window: BrowserWindow): void {
         webPreferences.nodeIntegration = false
         webPreferences.nodeIntegrationInSubFrames = false
         webPreferences.nodeIntegrationInWorker = false
+        webPreferences.backgroundThrottling = false
         webPreferences.webSecurity = true
         webPreferences.allowRunningInsecureContent = false
         webPreferences.navigateOnDragDrop = false

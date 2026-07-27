@@ -126,14 +126,19 @@ export function assertControlAction(value: unknown): ControlAction {
                 durationMs: action.durationMs === undefined ? undefined : finiteNumber(action.durationMs, 'durationMs', 0, 5_000),
                 button: pointerButton(action.button)
             }
-        case 'type':
+        case 'type': {
+            const hasCoordinates = action.x !== undefined || action.y !== undefined
+            if (hasCoordinates && (action.x === undefined || action.y === undefined)) fail('Type coordinates require both x and y.')
             return {
                 type: 'type',
-                elementRef: assertControlIdentifier(action.elementRef, 'elementRef'),
+                elementRef: action.elementRef === undefined ? undefined : assertControlIdentifier(action.elementRef, 'elementRef'),
+                x: hasCoordinates ? pointerCoordinate(action.x, 'x') : undefined,
+                y: hasCoordinates ? pointerCoordinate(action.y, 'y') : undefined,
                 text: boundedString(action.text, 'text', CONTROL_BOUNDS.maxTypedTextLength),
                 replace: action.replace === true,
                 ...(sideEffect(action.sideEffect) ? { sideEffect: sideEffect(action.sideEffect) } : {})
             }
+        }
         case 'key':
             return {
                 type: 'key',

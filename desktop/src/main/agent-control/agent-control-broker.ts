@@ -590,7 +590,7 @@ function assertVisualActionInsideObservation(observation: ControlObservation, ac
         ? [{ x: action.x, y: action.y }]
         : action.type === 'drag'
             ? [{ x: action.fromX, y: action.fromY }, { x: action.toX, y: action.toY }]
-            : action.type === 'click' && action.x !== undefined && action.y !== undefined
+            : (action.type === 'click' || action.type === 'type') && action.x !== undefined && action.y !== undefined
                 ? [{ x: action.x, y: action.y }]
                 : action.type === 'scroll' && action.x !== undefined && action.y !== undefined
                     ? [{ x: action.x, y: action.y }]

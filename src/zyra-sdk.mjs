@@ -560,6 +560,22 @@ function isToolActive(session, name) {
   return Boolean(session?.getActiveToolNames?.().includes(name));
 }
 
+export function ensureBrowserControlToolState(session, enabled) {
+  if (!enabled) return false;
+  if (typeof session?.getToolDefinition !== "function" || !session.getToolDefinition("browser_control")) {
+    throw new Error("The desktop Browser control tool was not registered with Pi.");
+  }
+  if (isToolActive(session, "browser_control")) return false;
+  if (typeof session.setActiveToolsByName !== "function") {
+    throw new Error("The desktop Pi session cannot project Browser control into model turns.");
+  }
+  session.setActiveToolsByName([...new Set([...session.getActiveToolNames(), "browser_control"])]);
+  if (!isToolActive(session, "browser_control")) {
+    throw new Error("The desktop Pi session omitted Browser control from the callable tool manifest.");
+  }
+  return true;
+}
+
 export async function createZyraSession(options = {}) {
   const project = path.resolve(options.project ?? defaults.project);
   const sessions = path.resolve(options.sessions ?? getProjectSessionsDir(project));
@@ -656,6 +672,7 @@ export async function createZyraSession(options = {}) {
   });
   registerZyraRuntimeModels(result.session.modelRegistry);
   applyWebToolState(result.session, startupPreferences);
+  ensureBrowserControlToolState(result.session, Boolean(options.controlBridgeClient));
   const modelAvailability = options.skipModelAvailability
     ? {
         checked: [],

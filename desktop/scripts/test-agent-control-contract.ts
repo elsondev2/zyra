@@ -25,4 +25,13 @@ assert.throws(() => assertControlCapabilities(['cookie.read']), /Unknown control
 assert.throws(() => assertControlActionRequest({ ...fixture.action, observationRevision: 0 }), /observationRevision/)
 assert.throws(() => assertControlActionRequest({ ...fixture.action, action: { type: 'navigate', url: 'file:///secret' } }), /HTTP and HTTPS/)
 assert.throws(() => assertControlActionRequest({ ...fixture.action, action: { type: 'click', elementRef: 'element:1:1', sideEffect: 'harmless-trust-me' } }), /Side-effect class/)
+const focusedType = assertControlActionRequest({ ...fixture.action, action: { type: 'type', text: 'Canvas text' } })
+assert.equal(focusedType.action.type, 'type')
+assert.equal(focusedType.action.type === 'type' ? focusedType.action.elementRef : null, undefined, 'typing may use the page current focus without a DOM reference')
+const coordinateType = assertControlActionRequest({ ...fixture.action, action: { type: 'type', x: 320, y: 220, text: 'Canvas text' } })
+assert.deepEqual(coordinateType.action.type === 'type' ? [coordinateType.action.x, coordinateType.action.y] : null, [320, 220])
+assert.throws(
+    () => assertControlActionRequest({ ...fixture.action, action: { type: 'type', x: 320, text: 'partial coordinates' } }),
+    /both x and y/
+)
 console.log('Agent control contract equivalence passed.')

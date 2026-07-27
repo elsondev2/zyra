@@ -1168,6 +1168,12 @@ export class ZyraPiRuntime extends EventEmitter {
     disconnect(threadId: string): void {
         const context = this.getSessionContext(threadId)
         if (!context) return
+        if (context.activeTurnId) {
+            getAgentControlBroker().revokePrincipal(
+                { type: 'root', threadId: context.localThreadId, turnId: context.activeTurnId },
+                'Root Browser control ended when its session disconnected.'
+            )
+        }
         this.sessions.delete(context.localThreadId)
         this.sessions.delete(context.providerThreadId)
         this.aliases.delete(context.localThreadId)
@@ -1326,6 +1332,10 @@ export class ZyraPiRuntime extends EventEmitter {
             })
         } finally {
             if (context.activeTurnId === turnId) {
+                getAgentControlBroker().revokePrincipal(
+                    { type: 'root', threadId: context.localThreadId, turnId },
+                    'Root Browser control ended with its turn.'
+                )
                 context.activeTurnId = null
             }
         }

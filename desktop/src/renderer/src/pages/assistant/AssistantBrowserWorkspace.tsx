@@ -6,6 +6,7 @@ import {
     FolderX,
     Globe2,
     LoaderCircle,
+    MousePointer2,
     Plus,
     RefreshCw,
     Search,
@@ -532,20 +533,47 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                 {workspaceState.tabs.map((tab) => {
                     const tabActive = tab.id === activeTab?.id
                     const tabTargetId = controlTargetsByTab[tab.id]
+                    const tabGrant = tabTargetId
+                        ? controlState?.grants.find((grant) => grant.targetId === tabTargetId && grant.state === 'active')
+                        : undefined
+                    const tabCursor = tabTargetId
+                        ? controlState?.cursors.find((cursor) => cursor.targetId === tabTargetId && cursor.visible)
+                        : undefined
+                    const tabControlled = Boolean(tabGrant)
+                    const tabControlActive = Boolean(tabCursor && tabCursor.phase !== 'idle')
+                    const tabControllerLabel = (tabCursor?.principal || tabGrant?.principal)?.type === 'agent' ? 'Agent' : 'Zyra'
                     const tabNeedsAttention = Boolean(tabTargetId && controlState?.pendingGrants.some((grant) => grant.targetId === tabTargetId))
                     return (
-                        <div key={tab.id} className={cn(
-                            'group/tab flex h-6 min-w-[92px] max-w-[150px] items-center gap-1 border-x border-t px-1.5',
-                            tabActive ? 'border-white/[0.09] bg-[color-mix(in_srgb,var(--color-bg)_96%,black)] text-sparkle-text' : 'border-transparent bg-white/[0.018] text-sparkle-text-muted hover:bg-white/[0.04] hover:text-sparkle-text-secondary',
-                            tabNeedsAttention && 'border-amber-300/35 bg-amber-400/[0.08] text-amber-100'
-                        )}>
-                            <button type="button" onClick={() => activateTab(tab.id)} className="flex min-w-0 flex-1 items-center gap-1 text-left" title={tab.title || tab.url || 'New tab'}>
+                        <div
+                            key={tab.id}
+                            data-browser-control-owned={tabControlled ? '' : undefined}
+                            className={cn(
+                                'group/tab relative flex h-6 min-w-[92px] max-w-[150px] items-center gap-1 border-x border-t px-1.5 transition-[border-color,background-color,box-shadow,color] motion-reduce:transition-none',
+                                tabActive ? 'border-white/[0.09] bg-[color-mix(in_srgb,var(--color-bg)_96%,black)] text-sparkle-text' : 'border-transparent bg-white/[0.018] text-sparkle-text-muted hover:bg-white/[0.04] hover:text-sparkle-text-secondary',
+                                tabControlled && 'border-cyan-300/45 bg-cyan-400/[0.07] text-cyan-50 shadow-[inset_0_0_0_1px_rgba(103,232,249,0.12),0_0_12px_rgba(34,211,238,0.22)]',
+                                tabNeedsAttention && 'border-amber-300/35 bg-amber-400/[0.08] text-amber-100'
+                            )}
+                        >
+                            {tabControlled ? <span className="pointer-events-none absolute inset-0 border border-cyan-200/15 motion-safe:animate-pulse" aria-hidden="true" /> : null}
+                            <button type="button" onClick={() => activateTab(tab.id)} className="relative flex min-w-0 flex-1 items-center gap-1 text-left" title={tab.title || tab.url || 'New tab'}>
                                 {tab.status === 'loading' ? <LoaderCircle size={9} className="shrink-0 animate-spin text-[var(--accent-primary)]" /> : <AssistantBrowserPageIcon faviconUrl={tab.faviconUrl} size={9} />}
                                 <span className="min-w-0 flex-1 truncate text-[9px]">{tab.title || 'New tab'}</span>
                             </button>
-                            {tab.audible ? <Volume2 size={10} className="shrink-0 text-[var(--accent-primary)]" aria-label="This tab is playing audio" /> : null}
-                            {tabNeedsAttention ? <ShieldAlert size={10} className="shrink-0 text-amber-300 motion-safe:animate-pulse" aria-label="This tab needs control approval" /> : null}
-                            <button type="button" onClick={() => closeTab(tab.id)} className="inline-flex size-4 shrink-0 items-center justify-center opacity-0 hover:bg-white/[0.06] hover:text-sparkle-text group-hover/tab:opacity-100" title={`Close ${tab.title || 'tab'}`}><X size={9} /></button>
+                            {tab.audible ? <Volume2 size={10} className="relative shrink-0 text-[var(--accent-primary)]" aria-label="This tab is playing audio" /> : null}
+                            {tabControlled ? (
+                                <span
+                                    className={cn(
+                                        'relative inline-flex size-3.5 shrink-0 items-center justify-center rounded-full border border-cyan-200/25 bg-cyan-300/15 text-cyan-100 shadow-sm shadow-cyan-950/50',
+                                        tabControlActive && 'scale-110 bg-cyan-300/25 motion-safe:animate-pulse'
+                                    )}
+                                    title={`${tabControllerLabel} controls this tab${tabCursor ? ` · ${tabCursor.phase}` : ''}`}
+                                    aria-label={`${tabControllerLabel} controls this Browser tab`}
+                                >
+                                    <MousePointer2 size={9} strokeWidth={2.3} className="fill-cyan-200 text-slate-950" />
+                                </span>
+                            ) : null}
+                            {tabNeedsAttention ? <ShieldAlert size={10} className="relative shrink-0 text-amber-300 motion-safe:animate-pulse" aria-label="This tab needs control approval" /> : null}
+                            <button type="button" onClick={() => closeTab(tab.id)} className="relative inline-flex size-4 shrink-0 items-center justify-center opacity-0 hover:bg-white/[0.06] hover:text-sparkle-text group-hover/tab:opacity-100" title={`Close ${tab.title || 'tab'}`}><X size={9} /></button>
                         </div>
                     )
                 })}
@@ -686,6 +714,12 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                         onControlTargetChange={handleControlTargetChange}
                     />
                 ))}
+                {activeControlGrant ? (
+                    <div
+                        className="pointer-events-none absolute inset-0 z-[25] border border-cyan-300/35 shadow-[inset_0_0_20px_rgba(34,211,238,0.08)]"
+                        aria-label="Zyra-controlled Browser surface"
+                    />
+                ) : null}
                 <AssistantBrowserAgentCursor cursor={activeAgentCursor} />
 
                 {activePendingGrant ? (
