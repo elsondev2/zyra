@@ -1,6 +1,7 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, FolderTree, GitCompareArrows, LayoutGrid, Library, LoaderCircle, MessageSquareText, ShieldCheck, SquareTerminal, TriangleAlert, Volume2 } from 'lucide-react'
 import type { FleetSnapshot } from '@shared/assistant/contracts'
+import type { BrowserSurfaceOpenRequest } from '@shared/agent-control/protocol'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import type { AssistantDiffTarget, AssistantDiffTurn } from './assistant-diff-types'
 import { AssistantBrowserPageIcon } from './AssistantBrowserPageIcon'
@@ -74,6 +75,8 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     selectedDiff: AssistantDiffTarget | null
     projectPath: string | null
     fleetSnapshot: FleetSnapshot | null
+    browserSurfaceRequest: BrowserSurfaceOpenRequest | null
+    onBrowserSurfaceRequestHandled: (requestId: string) => void
     onOpenPreview: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
     onOpenPreviewInNewTab: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
     onWidthChange: (width: number) => void
@@ -99,6 +102,8 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
         selectedDiff,
         projectPath,
         fleetSnapshot,
+        browserSurfaceRequest,
+        onBrowserSurfaceRequestHandled,
         onOpenPreview,
         onOpenPreviewInNewTab,
         onWidthChange,
@@ -110,6 +115,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     const newTabSequenceRef = useRef(1)
     const reviewFileRevealSequenceRef = useRef(-1)
     const browserNavigationSequenceRef = useRef(1)
+    const processedBrowserSurfaceRequestRef = useRef<string | null>(null)
     const wasOpenRef = useRef(open)
     const loadingTimerRef = useRef(0)
     const [activeTabId, setActiveTabId] = useState('new:0')
@@ -154,12 +160,13 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
         setBrowserAudible(false)
         setBrowserFaviconUrl(null)
         setBrowserNavigationRequest(null)
+        processedBrowserSurfaceRequestRef.current = null
     }, [createNewTab, sessionId])
 
     useEffect(() => {
         const opening = open && !wasOpenRef.current
         wasOpenRef.current = open
-        if (!opening || revealRequest) return
+        if (!opening || revealRequest || workspaceTabs.some((tab) => tab.kind !== 'new')) return
         const newTab = createNewTab()
         setWorkspaceTabs([newTab])
         setActiveTabId(newTab.id)
@@ -168,7 +175,22 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
         setTransitionLoadingTabId(null)
         setContentLoadingTabId(null)
         setBrowserNavigationRequest(null)
-    }, [createNewTab, open, revealRequest])
+    }, [createNewTab, open, revealRequest, workspaceTabs])
+
+    useEffect(() => {
+        if (!browserSurfaceRequest || processedBrowserSurfaceRequestRef.current === browserSurfaceRequest.requestId) return
+        processedBrowserSurfaceRequestRef.current = browserSurfaceRequest.requestId
+        setWorkspaceTabs((current) => {
+            const withoutChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
+            if (current.some((tab) => tab.kind === 'browser')) return withoutChooser
+            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? BROWSER_TAB : tab)
+            return replaced.some((tab) => tab.kind === 'browser') ? replaced : [...replaced, BROWSER_TAB]
+        })
+        if (browserSurfaceRequest.reveal) {
+            setActiveTabId('browser')
+            beginTabTransition('browser')
+        }
+    }, [activeTabId, beginTabTransition, browserSurfaceRequest])
 
     useEffect(() => {
         if (!open || !revealRequest) return
@@ -570,7 +592,12 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                 ) : null}
 
                 {browserOpen ? (
-                    <div className={activeWorkspaceTab?.kind === 'browser' ? 'flex min-h-0 flex-1' : 'hidden'}>
+                    <div
+                        aria-hidden={activeWorkspaceTab?.kind !== 'browser'}
+                        className={activeWorkspaceTab?.kind === 'browser'
+                            ? 'flex min-h-0 flex-1'
+                            : 'pointer-events-none invisible absolute inset-x-0 bottom-0 top-[76px] flex'}
+                    >
                         <Suspense fallback={(
                             <div className="flex min-h-0 flex-1 items-center justify-center">
                                 <LoaderCircle size={18} className="animate-spin text-[var(--accent-primary)]/75" />
@@ -581,7 +608,9 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                                 projectPath={projectPath}
                                 active={open && activeWorkspaceTab?.kind === 'browser'}
                                 navigationRequest={browserNavigationRequest}
+                                surfaceRequest={browserSurfaceRequest}
                                 onNavigationRequestHandled={handleBrowserNavigationRequestHandled}
+                                onSurfaceRequestHandled={onBrowserSurfaceRequestHandled}
                                 onAudibleChange={setBrowserAudible}
                                 onActiveFaviconChange={setBrowserFaviconUrl}
                             />

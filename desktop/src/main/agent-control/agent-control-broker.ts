@@ -32,6 +32,11 @@ import { redactObservation } from './redaction'
 import { TargetRegistry } from './target-registry'
 import type { AgentControlDriver } from './drivers/driver'
 
+export type BrowserSurfaceController = {
+    openTab(principal: ControlPrincipal, reveal: boolean, signal?: AbortSignal): Promise<Extract<ControlTarget, { kind: 'zyra-browser' }>>
+    cancelPending(reason?: string): void
+}
+
 export type PairingController = {
     start(): Promise<ControlPairingState>
     stop(reason?: string): Promise<void> | void
@@ -46,6 +51,7 @@ export class AgentControlBroker extends EventEmitter {
     readonly audit: AuditStore
     private sequence = 0
     private disposed = false
+    private browserSurface: BrowserSurfaceController | null = null
     private readonly cursors = new Map<string, ControlCursorState>()
 
     constructor(
@@ -57,6 +63,10 @@ export class AgentControlBroker extends EventEmitter {
     ) {
         super()
         this.audit = new AuditStore(options.userDataPath)
+    }
+
+    setBrowserSurfaceController(controller: BrowserSurfaceController | null): void {
+        this.browserSurface = controller
     }
 
     registerTarget(input: {
@@ -344,6 +354,7 @@ export class AgentControlBroker extends EventEmitter {
 
     async emergencyStop(reason = 'Emergency stop requested by user.'): Promise<void> {
         this.actions.cancelAll(reason)
+        this.browserSurface?.cancelPending(reason)
         this.grants.revokeAll()
         this.observations.invalidateAll()
         this.cursors.clear()
@@ -410,6 +421,18 @@ export class AgentControlBroker extends EventEmitter {
         }
         const operation = operationValue as AgentControlBridgeOperation
         switch (operation.operation) {
+            case 'open_tab': {
+                if (operation.reveal !== undefined && typeof operation.reveal !== 'boolean') {
+                    throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Browser reveal must be a boolean.')
+                }
+                if (!this.browserSurface) throw new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', 'The in-app Browser workspace is unavailable.')
+                if (principal.type === 'agent' && operation.reveal) {
+                    throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents may create background Browser tabs but cannot reveal or take over the user interface.')
+                }
+                const revealed = principal.type === 'root' && operation.reveal === true
+                const target = await this.browserSurface.openTab(principal, revealed, signal)
+                return { target, revealed }
+            }
             case 'list_targets': {
                 const kind = operation.targetKind
                 const activeGrants = this.grants.listForPrincipal(principal).filter((grant) => grant.state === 'active')

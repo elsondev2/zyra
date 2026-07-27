@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import type { DevScopeBrowserPreviewConfig, DevScopeProcessInfo } from '@shared/contracts/devscope-api'
 import type { ControlStateSnapshot } from '@shared/agent-control/contracts'
+import type { BrowserSurfaceOpenRequest } from '@shared/agent-control/protocol'
 import { cn } from '@/lib/utils'
 import { AssistantBrowserAgentCursor } from './AssistantBrowserAgentCursor'
 import { AssistantBrowserPageIcon } from './AssistantBrowserPageIcon'
@@ -71,7 +72,9 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     projectPath,
     active,
     navigationRequest,
+    surfaceRequest,
     onNavigationRequestHandled,
+    onSurfaceRequestHandled,
     onAudibleChange,
     onActiveFaviconChange
 }: {
@@ -79,7 +82,9 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     projectPath: string | null
     active: boolean
     navigationRequest: { id: number; url: string } | null
+    surfaceRequest: BrowserSurfaceOpenRequest | null
     onNavigationRequestHandled: (requestId: number) => void
+    onSurfaceRequestHandled: (requestId: string) => void
     onAudibleChange: (audible: boolean) => void
     onActiveFaviconChange: (faviconUrl: string | null) => void
 }) {
@@ -106,16 +111,21 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const webviewRefCallbacks = useRef(new Map<string, (handle: AssistantBrowserWebviewHandle | null) => void>())
     const pendingNavigationRef = useRef(new Map<string, string>())
     const consumedNavigationRequestsRef = useRef(new Set<number>())
+    const consumedSurfaceRequestsRef = useRef(new Set<string>())
+    const pendingSurfaceRequestsRef = useRef(new Map<string, BrowserSurfaceOpenRequest>())
+    const onSurfaceRequestHandledRef = useRef(onSurfaceRequestHandled)
     const tabSequenceRef = useRef(tabSequenceSeed(workspaceState))
     const addressFocusedRef = useRef(false)
     const profileMenuRef = useRef<HTMLDivElement | null>(null)
 
     workspaceStateRef.current = workspaceState
+    onSurfaceRequestHandledRef.current = onSurfaceRequestHandled
     const activeTab = workspaceState.tabs.find((tab) => tab.id === workspaceState.activeTabId)
         || workspaceState.tabs[0]
     const hasAudibleTab = workspaceState.tabs.some((tab) => tab.audible)
     const activeControlTargetId = activeTab ? controlTargetsByTab[activeTab.id] : undefined
     const activeControlGrant = controlState?.grants.find((grant) => grant.targetId === activeControlTargetId && grant.state === 'active') || null
+    const activePendingGrant = controlState?.pendingGrants.find((grant) => grant.targetId === activeControlTargetId) || null
     const activeAgentCursor = controlState?.cursors.find((cursor) => cursor.targetId === activeControlTargetId) || null
 
     const commitWorkspaceState = useCallback((nextState: AssistantBrowserWorkspaceState) => {
@@ -131,6 +141,60 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         if (nextState !== workspaceStateRef.current) commitWorkspaceState(nextState)
     }, [commitWorkspaceState])
 
+    const completeSurfaceRequest = useCallback((
+        request: BrowserSurfaceOpenRequest,
+        outcome: { targetId: string } | { error: string }
+    ) => {
+        pendingSurfaceRequestsRef.current.delete(request.requestId)
+        const completion = 'targetId' in outcome
+            ? {
+                requestId: request.requestId,
+                threadId: request.threadId,
+                tabId: request.tabId,
+                success: true as const,
+                targetId: outcome.targetId
+            }
+            : {
+                requestId: request.requestId,
+                threadId: request.threadId,
+                tabId: request.tabId,
+                success: false as const,
+                error: outcome.error
+            }
+        void window.devscope.agentControl.completeBrowserSurfaceRequest(completion)
+            .finally(() => onSurfaceRequestHandledRef.current(request.requestId))
+    }, [])
+
+    useEffect(() => {
+        if (!surfaceRequest || consumedSurfaceRequestsRef.current.has(surfaceRequest.requestId)) return
+        consumedSurfaceRequestsRef.current.add(surfaceRequest.requestId)
+        if (consumedSurfaceRequestsRef.current.size > 100) {
+            const oldest = consumedSurfaceRequestsRef.current.values().next().value
+            if (oldest) consumedSurfaceRequestsRef.current.delete(oldest)
+        }
+        if (!normalizedProjectPath) {
+            completeSurfaceRequest(surfaceRequest, { error: 'Attach a project to this chat before opening the in-app Browser.' })
+            return
+        }
+        if (workspaceStateRef.current.tabs.length >= ASSISTANT_BROWSER_TAB_LIMIT) {
+            completeSurfaceRequest(surfaceRequest, { error: `Close a Browser tab first; the ${ASSISTANT_BROWSER_TAB_LIMIT}-tab limit is full.` })
+            return
+        }
+        if (configError) {
+            completeSurfaceRequest(surfaceRequest, { error: configError })
+            return
+        }
+        pendingSurfaceRequestsRef.current.set(surfaceRequest.requestId, surfaceRequest)
+        mutateWorkspaceState((current) => addAssistantBrowserTab(current, surfaceRequest.tabId))
+    }, [completeSurfaceRequest, configError, mutateWorkspaceState, normalizedProjectPath, surfaceRequest])
+
+    useEffect(() => {
+        if (!configError) return
+        for (const request of [...pendingSurfaceRequestsRef.current.values()]) {
+            completeSurfaceRequest(request, { error: configError })
+        }
+    }, [completeSurfaceRequest, configError])
+
     useEffect(() => {
         let cancelled = false
         void window.devscope.agentControl.getState().then((result) => {
@@ -143,6 +207,10 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     }, [])
 
     const handleControlTargetChange = useCallback((tabId: string, targetId: string | null) => {
+        if (targetId) {
+            const request = [...pendingSurfaceRequestsRef.current.values()].find((entry) => entry.tabId === tabId)
+            if (request) completeSurfaceRequest(request, { targetId })
+        }
         setControlTargetsByTab((current) => {
             if (targetId && current[tabId] === targetId) return current
             if (!targetId && !current[tabId]) return current
@@ -151,7 +219,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             else delete next[tabId]
             return next
         })
-    }, [])
+    }, [completeSurfaceRequest])
 
     useEffect(() => {
         onAudibleChange(hasAudibleTab)
@@ -347,6 +415,20 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         if (!result.success) setAddressError(result.error || 'Could not open the page externally.')
     }, [activeTab?.url])
 
+    const approveActivePendingGrant = useCallback(async () => {
+        if (!activePendingGrant) return
+        const remainingMs = Math.max(1_000, Date.parse(activePendingGrant.expiresAt) - Date.now())
+        await window.devscope.agentControl.approveGrant({
+            pendingRequestId: activePendingGrant.requestId,
+            targetId: activePendingGrant.targetId,
+            capabilities: activePendingGrant.capabilities,
+            durationMs: Math.min(10 * 60 * 1000, remainingMs),
+            maxActions: activePendingGrant.maxActions,
+            allowedOrigins: activePendingGrant.allowedOrigins,
+            allowedExecutableIdentities: activePendingGrant.allowedExecutableIdentities
+        })
+    }, [activePendingGrant])
+
     const clearLocalBrowserProfile = useCallback(async () => {
         if (!clearProfileArmed) {
             setClearProfileArmed(true)
@@ -474,7 +556,14 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                     />
                 </div>
                 <button type="button" onClick={() => void openExternal()} disabled={!activeTab?.url} className="inline-flex size-5 items-center justify-center text-sparkle-text-muted hover:bg-white/[0.05] hover:text-sparkle-text disabled:opacity-25" title="Open in default browser"><ExternalLink size={10} /></button>
-                {activeControlGrant ? (
+                {activePendingGrant ? (
+                    <div className="flex h-5 items-center gap-1 border border-sky-300/25 bg-sky-400/[0.08] px-1 text-[8px] text-sky-100" title="An agent is waiting for your approval to control this exact tab.">
+                        <ShieldAlert size={9} />
+                        <span>Allow agent?</span>
+                        <button type="button" onClick={() => void approveActivePendingGrant()} className="px-0.5 font-semibold hover:bg-white/[0.08]" title="Approve bounded Browser control">Allow</button>
+                        <button type="button" onClick={() => void window.devscope.agentControl.rejectGrant(activePendingGrant.requestId)} className="px-0.5 hover:bg-white/[0.08]" title="Deny Browser control">Deny</button>
+                    </div>
+                ) : activeControlGrant ? (
                     <div className="flex h-5 items-center gap-1 border border-amber-300/25 bg-amber-400/[0.08] px-1 text-[8px] text-amber-100" title={`Controlled by ${activeControlGrant.principal.type === 'root' ? 'root agent' : activeControlGrant.principal.agentRunId}`}>
                         <ShieldAlert size={9} />
                         <span>{Math.max(0, activeControlGrant.maxActions - activeControlGrant.actionCount)}</span>

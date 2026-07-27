@@ -83,7 +83,7 @@ export function normalizeControlToolInput(value = {}) {
   if (!value || typeof value !== "object" || Array.isArray(value)) fail("Control tool input is invalid.");
   const operation = String(value.operation || "");
   const allowed = new Set([
-    "list_targets", "list_windows", "request_grant", "observe", "navigate", "move", "click", "drag",
+    "list_targets", "open_tab", "list_windows", "request_grant", "observe", "navigate", "move", "click", "drag",
     "type", "key", "scroll", "select", "wait", "focus", "release",
   ]);
   if (!allowed.has(operation)) fail(`Unknown control operation: ${operation || "missing"}`);

@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createBrowserControlTool } from '../../src/agent-control/browser-control-tool.mjs'
 import { AgentControlBroker } from '../src/main/agent-control/agent-control-broker'
+import { BrowserSurfaceHost } from '../src/main/agent-control/browser-surface-host'
 import { FakeControlDriver } from '../src/main/agent-control/drivers/fake-driver'
 import { ObservationStore } from '../src/main/agent-control/observation-store'
 import { AssistantBrowserAgentCursor } from '../src/renderer/src/pages/assistant/AssistantBrowserAgentCursor'
+import type { ControlTarget } from '../src/shared/agent-control/contracts'
 
 const driver = new FakeControlDriver()
 const broker = new AgentControlBroker({ drivers: [driver] })
@@ -31,6 +34,63 @@ const grant = broker.approvePendingGrant({
 })
 const client = { request: (operation: unknown, options: { signal?: AbortSignal } = {}) => broker.handleToolOperation(principal, operation, options.signal) }
 const tool = createBrowserControlTool({ client })
+
+const surfaceRequests: any[] = []
+const openedTargets = new Map<string, any>()
+const surfaceHost = new BrowserSurfaceHost({
+    send: (request) => surfaceRequests.push(request),
+    resolveTarget: (openedTargetId) => {
+        const opened = openedTargets.get(openedTargetId)
+        if (!opened) throw new Error('missing target')
+        return opened
+    },
+    makeId: () => 'visual-open',
+    timeoutMs: 2_000
+})
+const openedPromise = surfaceHost.openTab(principal, true)
+assert.deepEqual(surfaceRequests[0] && {
+    requestId: surfaceRequests[0].requestId,
+    threadId: surfaceRequests[0].threadId,
+    tabId: surfaceRequests[0].tabId,
+    reveal: surfaceRequests[0].reveal
+}, {
+    requestId: 'browser-open:visual-open',
+    threadId: principal.threadId,
+    tabId: 'browser:agent:visual-open',
+    reveal: true
+})
+const openedTarget = {
+    kind: 'zyra-browser' as const,
+    targetId: 'zyra-browser:opened',
+    tabId: surfaceRequests[0].tabId,
+    guestIdentity: 'guest:opened',
+    origin: null
+}
+openedTargets.set(openedTarget.targetId, openedTarget)
+surfaceHost.complete({
+    requestId: surfaceRequests[0].requestId,
+    threadId: surfaceRequests[0].threadId,
+    tabId: surfaceRequests[0].tabId,
+    success: true,
+    targetId: openedTarget.targetId
+})
+assert.equal((await openedPromise).targetId, openedTarget.targetId)
+surfaceHost.dispose()
+
+broker.setBrowserSurfaceController({
+    openTab: async (_requestPrincipal, reveal) => {
+        assert.equal(reveal, true)
+        return broker.targets.get(targetId).target as Extract<ControlTarget, { kind: 'zyra-browser' }>
+    },
+    cancelPending: () => undefined
+})
+const openedByTool = await tool.execute('visual-open-tab', { operation: 'open_tab', reveal: true })
+assert.equal((openedByTool.details as any).target.targetId, targetId)
+assert.match(String(openedByTool.content[0]?.text), /no navigation or input authority yet/i)
+await assert.rejects(
+    broker.handleToolOperation(principal, { operation: 'open_tab', reveal: 'yes' }),
+    (error: any) => error.code === 'CONTROL_VALIDATION_ERROR'
+)
 
 const observed = await tool.execute('visual-observe', {
     operation: 'observe', grantId: grant.grantId, targetId, includeScreenshot: true
@@ -75,6 +135,10 @@ assert.equal(races.currentRevision(base.targetId), newer)
 assert.throws(() => races.requireRevision(base.targetId, older), (error: any) => error.code === 'CONTROL_STALE_OBSERVATION')
 
 const childPrincipal = { type: 'agent' as const, fleetId: 'fleet:visual', agentRunId: 'agent:visual', parentThreadId: 'thread:visual' }
+await assert.rejects(
+    broker.handleToolOperation(childPrincipal, { operation: 'open_tab', reveal: true }),
+    (error: any) => error.code === 'CONTROL_CAPABILITY_DENIED'
+)
 const discovered = await broker.handleToolOperation(childPrincipal, { operation: 'list_targets', targetKind: 'zyra-browser' })
 assert.equal((discovered.targets as unknown[]).length, 1)
 assert.equal((discovered.grants as unknown[]).length, 0)
@@ -101,4 +165,27 @@ assert.equal(broker.grants.listPending().some((entry) => entry.principal.type ==
 
 await broker.emergencyStop()
 assert.equal(broker.state().cursors.length, 0)
+
+const pageSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantPage.tsx', import.meta.url), 'utf8')
+const panelSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantDiffPanel.tsx', import.meta.url), 'utf8')
+const workspaceSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantBrowserWorkspace.tsx', import.meta.url), 'utf8')
+const handlerSource = readFileSync(new URL('../src/main/ipc/handlers/agent-control-handlers.ts', import.meta.url), 'utf8')
+const preloadSource = readFileSync(new URL('../src/preload/adapters/agent-control-adapter.ts', import.meta.url), 'utf8')
+const protocolSource = readFileSync(new URL('../src/shared/agent-control/protocol.ts', import.meta.url), 'utf8')
+const hostSource = readFileSync(new URL('../src/main/agent-control/browser-surface-host.ts', import.meta.url), 'utf8')
+assert(pageSource.includes('onBrowserSurfaceRequest'))
+assert(pageSource.includes('request.threadId !== diffSource.threadId'))
+assert(pageSource.includes("if (request.reveal) setRightPanelMode('review')"))
+assert(panelSource.includes('processedBrowserSurfaceRequestRef'))
+assert(panelSource.includes('surfaceRequest={browserSurfaceRequest}'))
+assert(panelSource.includes("'pointer-events-none invisible absolute inset-x-0 bottom-0 top-[76px] flex'"))
+assert(workspaceSource.includes('addAssistantBrowserTab(current, surfaceRequest.tabId)'))
+assert(workspaceSource.includes('completeBrowserSurfaceRequest(completion)'))
+assert(workspaceSource.includes('Allow agent?'))
+assert(workspaceSource.includes('rejectGrant(activePendingGrant.requestId)'))
+assert(protocolSource.includes("operation: 'open_tab'"))
+assert(preloadSource.includes('browserSurfaceRequested'))
+assert(handlerSource.includes('assertTrustedRenderer(event, mainWindow)'))
+assert(hostSource.includes("tabId: `browser:agent:${id}`"))
+assert(hostSource.includes('target.tabId !== pending.request.tabId'))
 console.log('Zyra visual Browser control contract passed.')

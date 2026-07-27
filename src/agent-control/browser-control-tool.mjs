@@ -6,7 +6,7 @@ export function createBrowserControlTool(options = {}) {
   return defineTool({
     name: "browser_control",
     label: "Browser control",
-    description: "Observe and control only an explicitly granted Zyra Browser or paired Chrome tab through the desktop permission broker.",
+    description: "Create a blank in-app Browser tab, discover tabs, request user-approved access, then visually observe and control only the granted tab. Use open_tab with reveal=true when the user wants to watch.",
     parameters: browserControlSchema,
     execute: async (_toolCallId, input = {}, signal) => {
       const normalized = normalizeControlToolInput(input);
@@ -34,7 +34,7 @@ export function createBrowserControlTool(options = {}) {
 }
 
 function toBridgeOperation(input) {
-  if (["list_targets", "request_grant", "observe", "release"].includes(input.operation)) return input;
+  if (["list_targets", "open_tab", "request_grant", "observe", "release"].includes(input.operation)) return input;
   return {
     operation: "act",
     version: 1,
@@ -87,6 +87,10 @@ function formatControlResult(operation, result) {
       remainingActions: Math.max(0, Number(grant.maxActions) - Number(grant.actionCount)),
     }));
     return `Available Browser targets and your active grants:\n${JSON.stringify({ targets, grants }, null, 2)}`;
+  }
+  if (operation === "open_tab") {
+    const target = result.target || {};
+    return `A blank in-app Browser tab is registered. It has no navigation or input authority yet. Request a scoped grant before using it.\n${JSON.stringify({ targetId: target.targetId, tabId: target.tabId, title: target.title, url: target.url, revealed: Boolean(result.revealed) }, null, 2)}`;
   }
   if (operation === "request_grant") {
     return result.pending

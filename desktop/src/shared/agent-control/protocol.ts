@@ -19,8 +19,28 @@ export const AGENT_CONTROL_IPC = {
     stopChromePairing: 'zyra:agent-control:stop-chrome-pairing',
     listWindows: 'zyra:agent-control:list-windows',
     selectWindow: 'zyra:agent-control:select-window',
+    completeBrowserSurfaceRequest: 'zyra:agent-control:complete-browser-surface-request',
+    browserSurfaceRequested: 'zyra:agent-control:browser-surface-requested',
     stateChanged: 'zyra:agent-control:state-changed'
 } as const
+
+export type BrowserSurfaceOpenRequest = {
+    version: 1
+    requestId: string
+    threadId: string
+    tabId: string
+    reveal: boolean
+    requestedBy: ControlPrincipal
+}
+
+export type BrowserSurfaceOpenCompletion = {
+    requestId: string
+    threadId: string
+    tabId: string
+} & (
+    | { success: true; targetId: string }
+    | { success: false; error: string }
+)
 
 export type RendererControlGrantInput = {
     targetId: string
@@ -34,6 +54,7 @@ export type RendererControlGrantInput = {
 
 export type AgentControlBridgeOperation =
     | { operation: 'list_targets'; targetKind?: 'zyra-browser' | 'chrome-tab' }
+    | { operation: 'open_tab'; reveal?: boolean }
     | { operation: 'list_windows' }
     | {
         operation: 'request_grant'

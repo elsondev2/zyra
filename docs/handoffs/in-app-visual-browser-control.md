@@ -14,7 +14,10 @@ Delivered:
 - monotonic observation protection against concurrent stale-frame rewind;
 - bounded trusted tab title, URL, origin, and opaque identity for natural tab selection;
 - root and child on-demand Browser discovery;
-- first-use child grant requests through Control Center;
+- trusted `open_tab` creation of an exact blank sandboxed tab;
+- root-only Inspector reveal and child-only background creation;
+- selected-thread matching and nonce-bound renderer acknowledgement;
+- first-use grant requests through Control Center or the exact Browser tab toolbar;
 - automatic cleanup of child active grants and pending requests;
 - corrected local-thread identity propagation for delegated desktop control;
 - deterministic visual contracts and an isolated Electron Word Grid smoke harness.

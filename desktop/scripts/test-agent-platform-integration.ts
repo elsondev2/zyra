@@ -5,7 +5,7 @@ import path from 'node:path'
 import { AgentFleetController } from '../../src/agents/runtime/fleet-controller.mjs'
 import { AgentControlBroker } from '../src/main/agent-control/agent-control-broker'
 import { FakeControlDriver } from '../src/main/agent-control/drivers/fake-driver'
-import type { ControlPrincipal } from '../src/shared/agent-control/contracts'
+import type { ControlPrincipal, ControlTarget } from '../src/shared/agent-control/contracts'
 
 const project = await mkdtemp(path.join(os.tmpdir(), 'zyra-agent-platform-integration-'))
 const rootPrincipal = { type: 'root' as const, threadId: 'thread:integration', turnId: 'turn:integration' }
@@ -16,6 +16,14 @@ broker.registerTarget({
     target: { kind: 'zyra-browser', targetId, tabId: 'browser:integration', guestIdentity: 'guest:integration', origin: 'http://127.0.0.1' },
     driver,
     trustedIdentity: {}
+})
+broker.setBrowserSurfaceController({
+    openTab: async (principal, reveal) => {
+        assert.equal(principal.type, 'agent')
+        assert.equal(reveal, false)
+        return broker.targets.get(targetId).target as Extract<ControlTarget, { kind: 'zyra-browser' }>
+    },
+    cancelPending: () => undefined
 })
 
 function issueRootGrant(maxActions = 6) {
@@ -64,6 +72,8 @@ const runner = {
         let grantId = options.controlLease?.grantId
         if (run.goal === 'request browser on demand') {
             assert.equal(options.controlLease, undefined)
+            const opened = await childClient.request({ operation: 'open_tab' })
+            assert.equal(opened.target.targetId, targetId)
             const requested = await childClient.request({
                 operation: 'request_grant', targetId, capabilities: ['observe.structure'], maxActions: 3
             })

@@ -81,7 +81,9 @@ These values are forced during `will-attach-webview`; the renderer-provided attr
 
 ## Visual Agent Control
 
-Each trusted Browser guest registers as an on-demand `zyra-browser` control target. The Browser remains usable without an agent; authority is created only after a root or child principal requests a bounded grant and the user approves it in Control Center.
+Each trusted Browser guest registers as an on-demand `zyra-browser` control target. The Browser remains usable without an agent; authority is created only after a root or child principal requests a bounded grant and the user approves it in Control Center or from the exact tab’s Browser toolbar.
+
+`browser_control.open_tab` lets an agent create a blank sandboxed tab without navigation or input authority. Main sends a nonce-bound request only to the selected thread’s renderer and waits until that exact tab registers as a trusted guest. A root agent may set `reveal: true` to open the Inspector Browser for the user. Child agents may create background tabs but cannot reveal or take over Zyra’s interface. The agent must then request a separately scoped grant before it can navigate, observe, or interact.
 
 The visual loop is:
 

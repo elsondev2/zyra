@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AssistantActivity, AssistantMessage, AssistantTurnDetail, FleetSnapshot } from '@shared/assistant/contracts'
+import type { BrowserSurfaceOpenRequest } from '@shared/agent-control/protocol'
 import { FilePreviewModal } from '@/components/ui/FilePreviewModal'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import { useFilePreview } from '@/components/ui/file-preview/useFilePreview'
@@ -95,6 +96,7 @@ export default function AssistantPage() {
     const [diffRevealRequest, setDiffRevealRequest] = useState<AssistantDiffRevealRequest | null>(null)
     const [reviewTurnDetails, setReviewTurnDetails] = useState<Record<string, AssistantTurnDetail>>({})
     const [reviewTurnDetailErrors, setReviewTurnDetailErrors] = useState<Record<string, string>>({})
+    const [browserSurfaceRequest, setBrowserSurfaceRequest] = useState<BrowserSurfaceOpenRequest | null>(null)
     const pendingReviewTurnIdsRef = useRef(new Set<string>())
     const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
     const autoCollapsedLeftSidebarRef = useRef(false)
@@ -193,6 +195,21 @@ export default function AssistantPage() {
         window.addEventListener('resize', handleResize)
         return () => window.removeEventListener('resize', handleResize)
     }, [])
+
+    useEffect(() => window.devscope.agentControl.onBrowserSurfaceRequest((request) => {
+        if (!diffSource.threadId || request.threadId !== diffSource.threadId) {
+            void window.devscope.agentControl.completeBrowserSurfaceRequest({
+                requestId: request.requestId,
+                threadId: request.threadId,
+                tabId: request.tabId,
+                success: false,
+                error: 'Select the requesting chat before opening its Browser tab.'
+            })
+            return
+        }
+        setBrowserSurfaceRequest(request)
+        if (request.reveal) setRightPanelMode('review')
+    }), [diffSource.threadId, setRightPanelMode])
 
     const paneLayout = resolveAssistantPaneLayout({
         viewportWidth,
@@ -383,6 +400,9 @@ export default function AssistantPage() {
     const handleDiffRevealRequestHandled = useCallback((requestId: number) => {
         setDiffRevealRequest((current) => current?.id === requestId ? null : current)
     }, [])
+    const handleBrowserSurfaceRequestHandled = useCallback((requestId: string) => {
+        setBrowserSurfaceRequest((current) => current?.requestId === requestId ? null : current)
+    }, [])
     const handleToggleInspector = useCallback(() => {
         if (rightPanelMode === 'review') {
             setRightPanelMode('none')
@@ -466,6 +486,8 @@ export default function AssistantPage() {
                             selectedDiff={selectedDiff}
                             projectPath={diffSource.projectRootPath}
                             fleetSnapshot={diffSource.fleetSnapshot}
+                            browserSurfaceRequest={browserSurfaceRequest}
+                            onBrowserSurfaceRequestHandled={handleBrowserSurfaceRequestHandled}
                             onOpenPreview={preview.openPreview}
                             onOpenPreviewInNewTab={preview.openPreviewInNewTab}
                             onWidthChange={setRightSidebarWidth}

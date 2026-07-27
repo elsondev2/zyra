@@ -1,7 +1,8 @@
 import { BrowserWindow, type IpcMainInvokeEvent } from 'electron'
-import type { RendererControlGrantInput } from '../../../shared/agent-control/protocol'
+import { AGENT_CONTROL_IPC, type BrowserSurfaceOpenCompletion, type RendererControlGrantInput } from '../../../shared/agent-control/protocol'
 import { AgentControlError } from '../../agent-control/control-errors'
 import { bindTrustedBrowserTarget, getAgentControlBroker } from '../../agent-control'
+import { BrowserSurfaceHost } from '../../agent-control/browser-surface-host'
 
 function assertTrustedRenderer(event: IpcMainInvokeEvent, mainWindow: BrowserWindow): void {
     const senderWindow = BrowserWindow.fromWebContents(event.sender)
@@ -24,11 +25,23 @@ async function result<T>(operation: () => T | Promise<T>) {
 
 export function createAgentControlHandlers(mainWindow: BrowserWindow) {
     const broker = getAgentControlBroker()
+    const browserSurface = new BrowserSurfaceHost({
+        send: (request) => {
+            if (mainWindow.isDestroyed()) throw new Error('The Zyra window is closed.')
+            mainWindow.webContents.send(AGENT_CONTROL_IPC.browserSurfaceRequested, request)
+        },
+        resolveTarget: (targetId) => broker.targets.get(targetId).target
+    })
+    broker.setBrowserSurfaceController(browserSurface)
     const broadcast = () => {
         if (!mainWindow.isDestroyed()) mainWindow.webContents.send('zyra:agent-control:state-changed', broker.state())
     }
     broker.on('changed', broadcast)
-    mainWindow.once('closed', () => broker.removeListener('changed', broadcast))
+    mainWindow.once('closed', () => {
+        broker.removeListener('changed', broadcast)
+        browserSurface.dispose()
+        broker.setBrowserSurfaceController(null)
+    })
 
     return {
         getState: (event: IpcMainInvokeEvent) => result(() => {
@@ -41,6 +54,11 @@ export function createAgentControlHandlers(mainWindow: BrowserWindow) {
             if (!Number.isInteger(guestWebContentsId) || guestWebContentsId < 1) throw new Error('Browser guest identity is invalid.')
             const target = bindTrustedBrowserTarget(event.sender.id, guestWebContentsId, String(input?.tabId || ''))
             return { target }
+        }),
+        completeBrowserSurfaceRequest: (event: IpcMainInvokeEvent, input: BrowserSurfaceOpenCompletion) => result(() => {
+            assertTrustedRenderer(event, mainWindow)
+            browserSurface.complete(input)
+            return { completed: true }
         }),
         approveGrant: (event: IpcMainInvokeEvent, input: RendererControlGrantInput) => result(() => {
             assertTrustedRenderer(event, mainWindow)

@@ -18,6 +18,7 @@ const common = {
   button: Type.Optional(Type.Union([Type.Literal("left"), Type.Literal("middle"), Type.Literal("right")])),
   clickCount: Type.Optional(Type.Number()),
   includeScreenshot: Type.Optional(Type.Boolean()),
+  reveal: Type.Optional(Type.Boolean({ description: "Reveal the in-app Browser workspace. Root agent only." })),
   capabilities: Type.Optional(Type.Array(capability, { maxItems: CONTROL_CAPABILITIES.length })),
   durationMs: Type.Optional(Type.Number()),
   maxActions: Type.Optional(Type.Number()),
@@ -40,7 +41,7 @@ export const browserControlSchema = Type.Object(common, { additionalProperties: 
 export const computerControlSchema = Type.Object(common, { additionalProperties: false });
 
 export const BROWSER_CONTROL_OPERATIONS = Object.freeze([
-  "list_targets", "request_grant", "observe", "navigate", "move", "click", "drag", "type", "key", "scroll", "select", "wait", "release",
+  "list_targets", "open_tab", "request_grant", "observe", "navigate", "move", "click", "drag", "type", "key", "scroll", "select", "wait", "release",
 ]);
 export const COMPUTER_CONTROL_OPERATIONS = Object.freeze([
   "list_windows", "request_grant", "observe", "focus", "click", "type", "key", "scroll", "wait", "release",
