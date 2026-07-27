@@ -51,6 +51,23 @@ Passed:
 - diff check
 - isolated Electron visual smoke
 
+## Temporary live-thread test relay
+
+For the current development demonstration, `src/agent-control/temporary-browser-relay.mjs` provides an explicitly armed, loopback-only bearer relay into the active Pi worker’s existing `controlBridgeClient`. It is restricted to in-app Browser operations and still requires normal user-approved grants.
+
+The stable client is:
+
+```powershell
+npm run browser:live -- list
+npm run browser:live -- request <target-id> https://www.google.com
+npm run browser:live -- wait-grant <target-id>
+npm run browser:live -- observe <grant-id> <target-id>
+```
+
+Operation policy lives separately in `src/agent-control/temporary-browser-relay-policy.mjs` and is loaded from its current source bytes for every request. Policy fixes therefore apply without restarting the app, relay, thread, or grant. The visual-control contract proves two policy revisions through one live relay process.
+
+This relay is test scaffolding, not a release transport. It starts only when explicitly armed by `ZYRA_ENABLE_TEMP_BROWSER_RELAY=1` or the one-shot temp enable file, stores a random token only in a local temp descriptor, never prints that token through the client, and removes its descriptor when the worker closes. Remove the relay, client, npm script, and enable marker after the live demonstration.
+
 ## Remaining product work
 
 - executable per-action confirmation for irreversible external side effects;

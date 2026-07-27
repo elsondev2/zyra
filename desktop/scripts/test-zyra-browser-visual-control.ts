@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createElement } from 'react'
@@ -57,6 +58,40 @@ assert.equal(relayResponse.status, 200)
 assert.deepEqual(relayedOperation, { operation: 'list_targets', targetKind: 'zyra-browser' })
 relay.stop()
 assert.equal(existsSync(relay.descriptorFile), false)
+
+const policyDirectory = mkdtempSync(path.join(os.tmpdir(), 'zyra-browser-relay-policy-'))
+const policyPath = path.join(policyDirectory, 'policy.mjs')
+const writePolicy = (targetKind: string) => writeFileSync(
+    policyPath,
+    `export function normalizeTemporaryBrowserOperation(){ return { operation: 'list_targets', targetKind: ${JSON.stringify(targetKind)} }; }\n`
+)
+writePolicy('version-one')
+process.env.ZYRA_ENABLE_TEMP_BROWSER_RELAY = '1'
+let hotRelayedOperation: any
+const hotRelay = await startTemporaryBrowserRelay({
+    threadId: 'thread:hot-policy',
+    policyPath,
+    controlClient: { request: async (operation: unknown) => { hotRelayedOperation = operation; return {} } }
+})
+if (relayFlag === undefined) delete process.env.ZYRA_ENABLE_TEMP_BROWSER_RELAY
+else process.env.ZYRA_ENABLE_TEMP_BROWSER_RELAY = relayFlag
+assert(hotRelay)
+const hotDescriptor = JSON.parse(readFileSync(hotRelay.descriptorFile, 'utf8'))
+const postHotPolicy = async () => {
+    const response = await fetch(`http://127.0.0.1:${hotDescriptor.port}/control`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${hotDescriptor.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ operation: { operation: 'list_targets' } })
+    })
+    assert.equal(response.status, 200)
+}
+await postHotPolicy()
+assert.equal(hotRelayedOperation.targetKind, 'version-one')
+writePolicy('version-two-without-restart')
+await postHotPolicy()
+assert.equal(hotRelayedOperation.targetKind, 'version-two-without-restart')
+hotRelay.stop()
+rmSync(policyDirectory, { recursive: true, force: true })
 
 const driver = new FakeControlDriver()
 const broker = new AgentControlBroker({ drivers: [driver] })

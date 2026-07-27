@@ -4,22 +4,20 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
+export { normalizeTemporaryBrowserOperation } from "./temporary-browser-relay-policy.mjs";
+
 export const TEMPORARY_BROWSER_RELAY_ENABLE_FILE = path.join(os.tmpdir(), "zyra-enable-temp-browser-relay");
 const MAX_REQUEST_BYTES = 512 * 1024;
 
-export function normalizeTemporaryBrowserOperation(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Browser relay operation is invalid.");
-  const operation = String(value.operation || "");
-  if (operation === "open_tab") return { operation, reveal: value.reveal !== false };
-  if (operation === "list_targets") return { operation, targetKind: "zyra-browser" };
-  if (!["request_grant", "observe", "act", "release"].includes(operation)) {
-    throw new Error(`Browser relay operation is not allowed: ${operation || "missing"}.`);
+async function loadRelayPolicy(policyPath) {
+  const source = fs.readFileSync(policyPath, "utf8");
+  if (Buffer.byteLength(source, "utf8") > 64 * 1024) throw new Error("Temporary Browser relay policy is too large.");
+  const policyUrl = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
+  const policy = await import(policyUrl);
+  if (typeof policy.normalizeTemporaryBrowserOperation !== "function") {
+    throw new Error("Temporary Browser relay policy is invalid.");
   }
-  if (operation !== "release") {
-    const targetId = String(value.targetId || "");
-    if (!/^(?:control-target:)?zyra-browser:/.test(targetId)) throw new Error("The temporary relay is restricted to in-app Browser targets.");
-  }
-  return JSON.parse(JSON.stringify(value));
+  return policy;
 }
 
 function tokenMatches(request, token) {
@@ -29,7 +27,11 @@ function tokenMatches(request, token) {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-export async function startTemporaryBrowserRelay({ controlClient, threadId }) {
+export async function startTemporaryBrowserRelay({
+  controlClient,
+  threadId,
+  policyPath = path.join(import.meta.dirname, "temporary-browser-relay-policy.mjs")
+}) {
   if (process.env.ZYRA_ENABLE_TEMP_BROWSER_RELAY !== "1" && !fs.existsSync(TEMPORARY_BROWSER_RELAY_ENABLE_FILE)) return null;
   try { fs.unlinkSync(TEMPORARY_BROWSER_RELAY_ENABLE_FILE); } catch {}
 
@@ -71,7 +73,8 @@ export async function startTemporaryBrowserRelay({ controlClient, threadId }) {
       void (async () => {
         try {
           const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-          const operation = normalizeTemporaryBrowserOperation(payload.operation);
+          const policy = await loadRelayPolicy(policyPath);
+          const operation = policy.normalizeTemporaryBrowserOperation(payload.operation);
           const result = await controlClient.request(operation, { timeoutMs: payload.timeoutMs });
           respond(200, { ok: true, result });
         } catch (error) {
