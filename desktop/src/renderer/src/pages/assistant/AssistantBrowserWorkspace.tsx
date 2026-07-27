@@ -25,6 +25,10 @@ import { AssistantBrowserAgentCursor } from './AssistantBrowserAgentCursor'
 import { AssistantBrowserPageIcon } from './AssistantBrowserPageIcon'
 import { AssistantBrowserWebview, type AssistantBrowserWebviewHandle } from './AssistantBrowserWebview'
 import {
+    findRememberedBrowserControlApproval,
+    rememberBrowserControlApproval
+} from './assistant-control-approval-preferences'
+import {
     activateAssistantBrowserTab,
     addAssistantBrowserTab,
     ASSISTANT_BROWSER_TAB_LIMIT,
@@ -106,6 +110,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const [serversError, setServersError] = useState<string | null>(null)
     const [controlState, setControlState] = useState<ControlStateSnapshot | null>(null)
     const [controlTargetsByTab, setControlTargetsByTab] = useState<Record<string, string>>({})
+    const [rememberApproval, setRememberApproval] = useState(false)
     const workspaceStateRef = useRef(workspaceState)
     const webviewRefs = useRef(new Map<string, AssistantBrowserWebviewHandle>())
     const webviewRefCallbacks = useRef(new Map<string, (handle: AssistantBrowserWebviewHandle | null) => void>())
@@ -113,6 +118,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const consumedNavigationRequestsRef = useRef(new Set<number>())
     const consumedSurfaceRequestsRef = useRef(new Set<string>())
     const pendingSurfaceRequestsRef = useRef(new Map<string, BrowserSurfaceOpenRequest>())
+    const attemptedRememberedApprovalsRef = useRef(new Set<string>())
     const onSurfaceRequestHandledRef = useRef(onSurfaceRequestHandled)
     const tabSequenceRef = useRef(tabSequenceSeed(workspaceState))
     const addressFocusedRef = useRef(false)
@@ -126,6 +132,12 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const activeControlTargetId = activeTab ? controlTargetsByTab[activeTab.id] : undefined
     const activeControlGrant = controlState?.grants.find((grant) => grant.targetId === activeControlTargetId && grant.state === 'active') || null
     const activePendingGrant = controlState?.pendingGrants.find((grant) => grant.targetId === activeControlTargetId) || null
+    const activeControlTarget = controlState?.targets.find((target) => target.targetId === activeControlTargetId) || null
+    const canRememberApproval = Boolean(
+        activePendingGrant?.principal.type === 'root'
+        && activeControlTarget?.kind === 'zyra-browser'
+        && activeControlTarget.origin
+    )
     const activeAgentCursor = controlState?.cursors.find((cursor) => cursor.targetId === activeControlTargetId) || null
 
     const commitWorkspaceState = useCallback((nextState: AssistantBrowserWorkspaceState) => {
@@ -205,6 +217,32 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         })
         return () => { cancelled = true; unsubscribe() }
     }, [])
+
+    useEffect(() => {
+        setRememberApproval(false)
+    }, [activePendingGrant?.requestId])
+
+    useEffect(() => {
+        if (!controlState) return
+        for (const request of controlState.pendingGrants) {
+            if (attemptedRememberedApprovalsRef.current.has(request.requestId)) continue
+            const target = controlState.targets.find((entry) => entry.targetId === request.targetId)
+            if (!target) continue
+            const preference = findRememberedBrowserControlApproval(request, target)
+            if (!preference) continue
+            attemptedRememberedApprovalsRef.current.add(request.requestId)
+            const remainingMs = Math.max(1_000, Date.parse(request.expiresAt) - Date.now())
+            void window.devscope.agentControl.approveGrant({
+                pendingRequestId: request.requestId,
+                targetId: request.targetId,
+                capabilities: request.capabilities,
+                durationMs: Math.min(preference.durationMs, remainingMs),
+                maxActions: Math.min(preference.maxActions, request.maxActions),
+                allowedOrigins: request.allowedOrigins,
+                allowedExecutableIdentities: request.allowedExecutableIdentities
+            })
+        }
+    }, [controlState])
 
     const handleControlTargetChange = useCallback((tabId: string, targetId: string | null) => {
         if (targetId) {
@@ -418,16 +456,30 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const approveActivePendingGrant = useCallback(async () => {
         if (!activePendingGrant) return
         const remainingMs = Math.max(1_000, Date.parse(activePendingGrant.expiresAt) - Date.now())
-        await window.devscope.agentControl.approveGrant({
+        const durationMs = Math.min(10 * 60 * 1000, remainingMs)
+        const result = await window.devscope.agentControl.approveGrant({
             pendingRequestId: activePendingGrant.requestId,
             targetId: activePendingGrant.targetId,
             capabilities: activePendingGrant.capabilities,
-            durationMs: Math.min(10 * 60 * 1000, remainingMs),
+            durationMs,
             maxActions: activePendingGrant.maxActions,
             allowedOrigins: activePendingGrant.allowedOrigins,
             allowedExecutableIdentities: activePendingGrant.allowedExecutableIdentities
         })
-    }, [activePendingGrant])
+        if (!result.success) {
+            setAddressError(result.error || 'Could not approve Browser control.')
+            return
+        }
+        if (rememberApproval && activeControlTarget) {
+            rememberBrowserControlApproval({
+                request: activePendingGrant,
+                target: activeControlTarget,
+                capabilities: activePendingGrant.capabilities,
+                durationMs,
+                maxActions: activePendingGrant.maxActions
+            })
+        }
+    }, [activeControlTarget, activePendingGrant, rememberApproval])
 
     const clearLocalBrowserProfile = useCallback(async () => {
         if (!clearProfileArmed) {
@@ -489,13 +541,20 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             <div className="flex h-7 shrink-0 items-end gap-px overflow-x-auto border-b border-white/[0.07] bg-[color-mix(in_srgb,var(--color-bg)_92%,black)] px-1 pt-1 [scrollbar-width:none]">
                 {workspaceState.tabs.map((tab) => {
                     const tabActive = tab.id === activeTab?.id
+                    const tabTargetId = controlTargetsByTab[tab.id]
+                    const tabNeedsAttention = Boolean(tabTargetId && controlState?.pendingGrants.some((grant) => grant.targetId === tabTargetId))
                     return (
-                        <div key={tab.id} className={cn('group/tab flex h-6 min-w-[92px] max-w-[150px] items-center gap-1 border-x border-t px-1.5', tabActive ? 'border-white/[0.09] bg-[color-mix(in_srgb,var(--color-bg)_96%,black)] text-sparkle-text' : 'border-transparent bg-white/[0.018] text-sparkle-text-muted hover:bg-white/[0.04] hover:text-sparkle-text-secondary')}>
+                        <div key={tab.id} className={cn(
+                            'group/tab flex h-6 min-w-[92px] max-w-[150px] items-center gap-1 border-x border-t px-1.5',
+                            tabActive ? 'border-white/[0.09] bg-[color-mix(in_srgb,var(--color-bg)_96%,black)] text-sparkle-text' : 'border-transparent bg-white/[0.018] text-sparkle-text-muted hover:bg-white/[0.04] hover:text-sparkle-text-secondary',
+                            tabNeedsAttention && 'border-amber-300/35 bg-amber-400/[0.08] text-amber-100'
+                        )}>
                             <button type="button" onClick={() => activateTab(tab.id)} className="flex min-w-0 flex-1 items-center gap-1 text-left" title={tab.title || tab.url || 'New tab'}>
                                 {tab.status === 'loading' ? <LoaderCircle size={9} className="shrink-0 animate-spin text-[var(--accent-primary)]" /> : <AssistantBrowserPageIcon faviconUrl={tab.faviconUrl} size={9} />}
                                 <span className="min-w-0 flex-1 truncate text-[9px]">{tab.title || 'New tab'}</span>
                             </button>
                             {tab.audible ? <Volume2 size={10} className="shrink-0 text-[var(--accent-primary)]" aria-label="This tab is playing audio" /> : null}
+                            {tabNeedsAttention ? <ShieldAlert size={10} className="shrink-0 text-amber-300 motion-safe:animate-pulse" aria-label="This tab needs control approval" /> : null}
                             <button type="button" onClick={() => closeTab(tab.id)} className="inline-flex size-4 shrink-0 items-center justify-center opacity-0 hover:bg-white/[0.06] hover:text-sparkle-text group-hover/tab:opacity-100" title={`Close ${tab.title || 'tab'}`}><X size={9} /></button>
                         </div>
                     )
@@ -638,6 +697,38 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                     />
                 ))}
                 <AssistantBrowserAgentCursor cursor={activeAgentCursor} />
+
+                {activePendingGrant ? (
+                    <div className="absolute inset-0 z-[45] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]" role="dialog" aria-modal="true" aria-label="Browser control permission requested">
+                        <section className="w-full max-w-[320px] rounded-xl border border-amber-200/25 bg-[#111927]/[0.98] p-3.5 shadow-2xl shadow-black/55">
+                            <div className="flex items-start gap-2.5">
+                                <span className="mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-amber-200/20 bg-amber-300/[0.08] text-amber-200"><ShieldAlert size={14} /></span>
+                                <div className="min-w-0">
+                                    <h3 className="text-[11px] font-semibold text-sparkle-text">Allow Zyra to control this tab?</h3>
+                                    <p className="mt-1 truncate text-[9px] text-sparkle-text-muted/70">{activeControlTarget?.kind === 'zyra-browser' ? activeControlTarget.origin || 'Blank tab' : 'In-app Browser tab'}</p>
+                                </div>
+                            </div>
+                            <p className="mt-2.5 text-[9px] leading-4 text-sparkle-text-muted/75">
+                                This request is limited to this tab, its approved site, {activePendingGrant.maxActions} successful operations, and the capabilities below.
+                            </p>
+                            <div className="mt-2 flex max-h-20 flex-wrap gap-1 overflow-y-auto">
+                                {activePendingGrant.capabilities.map((capability) => (
+                                    <span key={capability} className="rounded-full border border-white/[0.07] bg-white/[0.025] px-1.5 py-0.5 text-[7px] text-sparkle-text-muted/70">{capability}</span>
+                                ))}
+                            </div>
+                            {canRememberApproval ? (
+                                <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] p-2 text-[9px] leading-4 text-sparkle-text-muted/80">
+                                    <input type="checkbox" checked={rememberApproval} onChange={(event) => setRememberApproval(event.target.checked)} className="mt-0.5" />
+                                    <span><strong className="font-semibold text-sparkle-text-secondary">Don’t ask again for this site.</strong><br />Future root-agent requests remain limited to this exact origin and capability set.</span>
+                                </label>
+                            ) : null}
+                            <div className="mt-3 flex gap-2">
+                                <button type="button" onClick={() => void window.devscope.agentControl.rejectGrant(activePendingGrant.requestId)} className="h-7 flex-1 rounded-md border border-white/[0.08] text-[9px] text-sparkle-text-muted hover:bg-white/[0.04]">Not now</button>
+                                <button type="button" onClick={() => void approveActivePendingGrant()} className="h-7 flex-1 rounded-md border border-emerald-300/25 bg-emerald-400/[0.10] text-[9px] font-semibold text-emerald-100 hover:bg-emerald-400/[0.16]">Allow bounded control</button>
+                            </div>
+                        </section>
+                    </div>
+                ) : null}
 
                 {activeTab?.status === 'idle' && !activeTab.url ? (
                     <div className="absolute inset-0 z-10 flex items-center justify-center overflow-y-auto bg-[color-mix(in_srgb,var(--color-bg)_96%,black)] p-5 text-center">

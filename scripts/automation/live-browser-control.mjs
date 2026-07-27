@@ -3,12 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+const brief = process.argv.includes("--brief");
 const [command = "list", ...args] = process.argv.slice(2);
 const operation = buildOperation(command, args);
 const result = command === "wait-grant"
   ? await waitForGrant(args[0])
   : await requestRelay(operation, command === "open" ? 25_000 : 20_000);
-printResult(result, readOption(args, "--screenshot"));
+printResult(result, readOption(args, "--screenshot"), brief);
 
 function buildOperation(name, values) {
   if (name === "list" || name === "wait-grant") return { operation: "list_targets" };
@@ -91,28 +92,50 @@ async function requestRelay(operation, timeoutMs) {
     .map((name) => path.join(os.tmpdir(), name))
     .sort((left, right) => fs.statSync(right).mtimeMs - fs.statSync(left).mtimeMs);
   if (descriptors.length === 0) throw new Error("The temporary Browser relay is not running.");
-  let lastError;
+  let lastConnectionError;
   for (const descriptorFile of descriptors) {
+    let descriptor;
     try {
-      const descriptor = JSON.parse(fs.readFileSync(descriptorFile, "utf8"));
-      const response = await fetch(`http://127.0.0.1:${descriptor.port}/control`, {
+      descriptor = JSON.parse(fs.readFileSync(descriptorFile, "utf8"));
+    } catch (error) {
+      lastConnectionError = error;
+      continue;
+    }
+    let response;
+    try {
+      response = await fetch(`http://127.0.0.1:${descriptor.port}/control`, {
         method: "POST",
         headers: { authorization: `Bearer ${descriptor.token}`, "content-type": "application/json" },
         body: JSON.stringify({ operation, timeoutMs }),
         signal: AbortSignal.timeout(Math.min(30_000, timeoutMs + 2_000))
       });
-      const payload = await response.json();
-      if (!response.ok || !payload.ok) throw Object.assign(new Error(payload.error || `HTTP ${response.status}`), { code: payload.code });
-      return payload.result || {};
     } catch (error) {
-      lastError = error;
+      lastConnectionError = error;
+      continue;
     }
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw Object.assign(new Error(payload.error || `HTTP ${response.status}`), { code: payload.code });
+    }
+    return payload.result || {};
   }
-  throw lastError || new Error("No live Browser relay accepted the request.");
+  throw lastConnectionError || new Error("No live Browser relay accepted the request.");
 }
 
-function printResult(result, screenshotFile) {
-  const output = structuredClone(result);
+function printResult(result, screenshotFile, briefOutput = false) {
+  const output = briefOutput && result?.observation
+    ? {
+        outcome: result.outcome || "completed",
+        changed: result.changed,
+        observation: {
+          targetId: result.observation.targetId,
+          revision: result.observation.revision,
+          url: result.observation.url,
+          title: result.observation.title,
+          viewport: result.observation.viewport
+        }
+      }
+    : structuredClone(result);
   if (output?.screenshot?.data) {
     const extension = output.screenshot.mimeType === "image/png" ? "png" : "jpg";
     const file = screenshotFile || path.join(os.tmpdir(), `zyra-live-browser-${Date.now()}.${extension}`);

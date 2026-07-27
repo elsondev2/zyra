@@ -11,6 +11,7 @@ export type AssistantInspectorTab = {
     count?: number
     closable?: boolean
     loading?: boolean
+    attention?: boolean
     preview?: string
 }
 
@@ -355,7 +356,9 @@ export function AssistantInspectorSidebar({
                                     dragTargetTabId === tab.id && 'bg-[color-mix(in_srgb,var(--accent-primary)_7%,var(--color-card))]',
                                     active
                                         ? 'border-[color-mix(in_srgb,var(--color-text)_10%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_95%,black)] text-sparkle-text shadow-[inset_0_1px_0_color-mix(in_srgb,var(--color-text)_6%,transparent)]'
-                                        : 'h-7 border-transparent bg-transparent text-sparkle-text-muted/65 hover:bg-[color-mix(in_srgb,var(--color-text)_5%,transparent)] hover:text-sparkle-text-secondary'
+                                        : tab.attention
+                                            ? 'h-7 border-amber-300/25 bg-amber-400/[0.07] text-amber-100 shadow-[inset_0_1px_0_rgba(252,211,77,0.14)]'
+                                            : 'h-7 border-transparent bg-transparent text-sparkle-text-muted/65 hover:bg-[color-mix(in_srgb,var(--color-text)_5%,transparent)] hover:text-sparkle-text-secondary'
                                 )}
                             >
                                 <button

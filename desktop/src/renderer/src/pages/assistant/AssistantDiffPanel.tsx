@@ -1,6 +1,7 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, FolderTree, GitCompareArrows, LayoutGrid, Library, LoaderCircle, MessageSquareText, ShieldCheck, SquareTerminal, TriangleAlert, Volume2 } from 'lucide-react'
+import { Bot, FolderTree, GitCompareArrows, LayoutGrid, Library, LoaderCircle, MessageSquareText, ShieldAlert, ShieldCheck, SquareTerminal, TriangleAlert, Volume2 } from 'lucide-react'
 import type { FleetSnapshot } from '@shared/assistant/contracts'
+import type { ControlStateSnapshot } from '@shared/agent-control/contracts'
 import type { BrowserSurfaceOpenRequest } from '@shared/agent-control/protocol'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import type { AssistantDiffTarget, AssistantDiffTurn } from './assistant-diff-types'
@@ -129,6 +130,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     const [browserNavigationRequest, setBrowserNavigationRequest] = useState<AssistantBrowserNavigationRequest | null>(null)
     const [selectedAgentRunId, setSelectedAgentRunId] = useState<string | null>(null)
     const [selectedWorkflowRunId, setSelectedWorkflowRunId] = useState<string | null>(null)
+    const [controlState, setControlState] = useState<ControlStateSnapshot | null>(null)
 
     const createNewTab = useCallback((): WorkspaceTab => ({
         id: `new:${newTabSequenceRef.current++}`,
@@ -148,6 +150,27 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     }, [activeTabId])
 
     useEffect(() => () => window.clearTimeout(loadingTimerRef.current), [])
+
+    useEffect(() => {
+        let cancelled = false
+        void window.devscope.agentControl.getState().then((result) => {
+            if (!cancelled && result.success) setControlState(result.state)
+        })
+        const unsubscribe = window.devscope.agentControl.onStateChange((state) => {
+            if (!cancelled) setControlState(state)
+        })
+        return () => { cancelled = true; unsubscribe() }
+    }, [])
+
+    const pendingControlCount = controlState?.pendingGrants.length || 0
+    const pendingBrowserCount = controlState?.pendingGrants.filter((request) => (
+        controlState.targets.some((target) => target.targetId === request.targetId && target.kind === 'zyra-browser')
+    )).length || 0
+
+    useEffect(() => {
+        if (pendingControlCount === 0) return
+        setWorkspaceTabs((current) => current.some((tab) => tab.kind === 'control') ? current : [...current, CONTROL_TAB])
+    }, [pendingControlCount])
 
     useEffect(() => {
         const newTab = createNewTab()
@@ -268,7 +291,14 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                 id: tab.id,
                 label: 'Browser',
                 icon: <AssistantBrowserPageIcon faviconUrl={browserFaviconUrl} size={12} />,
-                statusIcon: browserAudible ? <Volume2 size={10} aria-label="A browser tab is playing audio" /> : undefined,
+                statusIcon: browserAudible || pendingBrowserCount > 0 ? (
+                    <span className="flex items-center gap-0.5">
+                        {browserAudible ? <Volume2 size={10} aria-label="A browser tab is playing audio" /> : null}
+                        {pendingBrowserCount > 0 ? <ShieldAlert size={10} className="text-amber-300 motion-safe:animate-pulse" aria-label="Browser control approval needed" /> : null}
+                    </span>
+                ) : undefined,
+                count: pendingBrowserCount || undefined,
+                attention: pendingBrowserCount > 0,
                 closable: true,
                 loading: transitionLoadingTabId === tab.id,
                 preview: projectPath ? `Browser · ${projectPath}` : 'No project attached'
@@ -279,6 +309,9 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                 id: tab.id,
                 label: 'Control',
                 icon: <ShieldCheck size={12} />,
+                statusIcon: pendingControlCount > 0 ? <ShieldAlert size={10} className="text-amber-300 motion-safe:animate-pulse" aria-label="Control approval needed" /> : undefined,
+                count: pendingControlCount || undefined,
+                attention: pendingControlCount > 0,
                 closable: true,
                 loading: transitionLoadingTabId === tab.id,
                 preview: 'Targets, grants, audit, pairing, and emergency stop'
@@ -315,7 +348,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
             loading: transitionLoadingTabId === tab.id || contentLoadingTabId === tab.id,
             preview: turn.prompt
         }] : []
-    }), [browserAudible, browserFaviconUrl, contentLoadingTabId, fleetSnapshot, projectPath, transitionLoadingTabId, turns, workspaceTabs])
+    }), [browserAudible, browserFaviconUrl, contentLoadingTabId, fleetSnapshot, pendingBrowserCount, pendingControlCount, projectPath, transitionLoadingTabId, turns, workspaceTabs])
 
     const activeWorkspaceTab = workspaceTabs.find((tab) => tab.id === activeTabId) || workspaceTabs[0] || null
     const activeTurnTab = activeWorkspaceTab?.kind === 'turn' ? activeWorkspaceTab : null

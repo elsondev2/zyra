@@ -8,6 +8,11 @@ import { AssistantControlEmergencyStop } from './AssistantControlEmergencyStop'
 import { AssistantControlGrantDialog } from './AssistantControlGrantDialog'
 import { AssistantControlTargets } from './AssistantControlTargets'
 import { AssistantWindowsTargetPicker } from './AssistantWindowsTargetPicker'
+import {
+    clearBrowserControlApprovalPreferences,
+    onBrowserControlApprovalPreferencesChange,
+    readBrowserControlApprovalPreferences
+} from './assistant-control-approval-preferences'
 
 type Mode = 'targets' | 'grants' | 'audit' | 'pairing'
 const MODES: Array<{ id: Mode; label: string }> = [
@@ -21,6 +26,7 @@ export function AssistantControlWorkspace({ active }: { active: boolean }) {
     const [busy, setBusy] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [windows, setWindows] = useState<ControlWindowCandidate[]>([])
+    const [rememberedSiteCount, setRememberedSiteCount] = useState(() => readBrowserControlApprovalPreferences().length)
 
     const refresh = useCallback(async () => {
         const result = await window.devscope.agentControl.getState()
@@ -46,6 +52,10 @@ export function AssistantControlWorkspace({ active }: { active: boolean }) {
         finally { setBusy(false) }
     }, [refresh])
 
+    useEffect(() => onBrowserControlApprovalPreferencesChange(() => {
+        setRememberedSiteCount(readBrowserControlApprovalPreferences().length)
+    }), [])
+
     const refreshWindows = useCallback(() => run(async () => {
         const result = await window.devscope.agentControl.listWindows()
         if (!result.success) throw new Error(result.error)
@@ -59,6 +69,11 @@ export function AssistantControlWorkspace({ active }: { active: boolean }) {
             <header className="flex h-9 shrink-0 items-center gap-1 border-b border-white/[0.07] px-2">
                 <ShieldCheck size={12} className={state.active ? 'text-emerald-300' : 'text-sparkle-text-muted/50'} />
                 <span className="min-w-0 flex-1 truncate text-[10px] font-semibold text-sparkle-text-secondary">Control Center</span>
+                {rememberedSiteCount > 0 ? (
+                    <button type="button" onClick={() => clearBrowserControlApprovalPreferences()} className="h-5 border border-white/[0.07] px-1.5 text-[8px] text-sparkle-text-muted hover:bg-white/[0.04] hover:text-sparkle-text-secondary" title="Clear sites remembered with Don’t ask again">
+                        Forget sites · {rememberedSiteCount}
+                    </button>
+                ) : null}
                 <AssistantControlEmergencyStop active={state.active || state.pairing.state !== 'stopped'} onStop={() => void run(async () => {
                     const result = await window.devscope.agentControl.emergencyStop()
                     if (!result.success) throw new Error(result.error)
