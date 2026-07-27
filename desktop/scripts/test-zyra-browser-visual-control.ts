@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { createBrowserControlTool } from '../../src/agent-control/browser-control-tool.mjs'
+import { normalizeTemporaryBrowserOperation, startTemporaryBrowserRelay } from '../../src/agent-control/temporary-browser-relay.mjs'
 import { AgentControlBroker } from '../src/main/agent-control/agent-control-broker'
 import { BrowserSurfaceHost } from '../src/main/agent-control/browser-surface-host'
 import { FakeControlDriver } from '../src/main/agent-control/drivers/fake-driver'
@@ -22,6 +23,36 @@ try {
     if (inheritedZyraRoot === undefined) delete process.env.ZYRA_ROOT
     else process.env.ZYRA_ROOT = inheritedZyraRoot
 }
+
+assert.throws(() => normalizeTemporaryBrowserOperation({ operation: 'list_windows' }), /not allowed/)
+assert.throws(() => normalizeTemporaryBrowserOperation({ operation: 'observe', targetId: 'chrome-tab:1' }), /in-app Browser/)
+const relayFlag = process.env.ZYRA_ENABLE_TEMP_BROWSER_RELAY
+process.env.ZYRA_ENABLE_TEMP_BROWSER_RELAY = '1'
+let relayedOperation: any
+const relay = await startTemporaryBrowserRelay({
+    threadId: 'thread:visual',
+    controlClient: {
+        request: async (operation: unknown) => {
+            relayedOperation = operation
+            return { targets: [] }
+        }
+    }
+})
+if (relayFlag === undefined) delete process.env.ZYRA_ENABLE_TEMP_BROWSER_RELAY
+else process.env.ZYRA_ENABLE_TEMP_BROWSER_RELAY = relayFlag
+assert(relay)
+const relayDescriptor = JSON.parse(readFileSync(relay.descriptorFile, 'utf8'))
+const unauthorizedRelayResponse = await fetch(`http://127.0.0.1:${relayDescriptor.port}/control`, { method: 'POST', body: '{}' })
+assert.equal(unauthorizedRelayResponse.status, 401)
+const relayResponse = await fetch(`http://127.0.0.1:${relayDescriptor.port}/control`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${relayDescriptor.token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ operation: { operation: 'list_targets', targetKind: 'chrome-tab' } })
+})
+assert.equal(relayResponse.status, 200)
+assert.deepEqual(relayedOperation, { operation: 'list_targets', targetKind: 'zyra-browser' })
+relay.stop()
+assert.equal(existsSync(relay.descriptorFile), false)
 
 const driver = new FakeControlDriver()
 const broker = new AgentControlBroker({ drivers: [driver] })

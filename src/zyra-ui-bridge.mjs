@@ -4,6 +4,7 @@ import readline from "node:readline";
 import { pathToFileURL } from "node:url";
 import { normalizeAgentSurfaceTool } from "./agent-surface.mjs";
 import { AgentControlBridgeClient } from "./agent-control/bridge-client.mjs";
+import { startTemporaryBrowserRelay } from "./agent-control/temporary-browser-relay.mjs";
 
 const root = path.resolve(process.env.ZYRA_ROOT ?? path.resolve(import.meta.dirname, ".."));
 const sdkPath = path.join(root, "src", "zyra-sdk.mjs");
@@ -13,6 +14,7 @@ let runtime;
 let unsubscribe;
 let unsubscribeManagedBash;
 let unsubscribeFleet;
+let temporaryBrowserRelay;
 const controlBridgeClient = new AgentControlBridgeClient({ send: (message) => send(message) });
 
 function stringifyProtocol(value) {
@@ -25,6 +27,11 @@ function send(message) {
 
 function sendResponse(id, ok, payload = {}) {
   send({ type: "response", id, ok, ...payload });
+}
+
+function stopTemporaryBrowserRelay() {
+  temporaryBrowserRelay?.stop();
+  temporaryBrowserRelay = undefined;
 }
 
 function modelToInfo(model, sdk) {
@@ -44,6 +51,7 @@ async function loadSdk() {
 }
 
 function disposeRuntime() {
+  stopTemporaryBrowserRelay();
   if (typeof unsubscribe === "function") {
     unsubscribe();
   }
@@ -104,6 +112,14 @@ async function handleConnect(payload) {
   unsubscribeFleet = runtime.fleet?.subscribe?.(({ event, snapshot }) => {
     send({ type: "event", event: { ...summarizeFleetEvent(event), fleet: projectFleetSnapshot(snapshot) } });
   });
+  try {
+    temporaryBrowserRelay = await startTemporaryBrowserRelay({
+      controlClient: controlBridgeClient,
+      threadId: payload.localThreadId
+    });
+  } catch (error) {
+    process.stderr.write(`[temporary-browser-relay] ${error instanceof Error ? error.message : String(error)}\n`);
+  }
   const described = sdk.describeRuntime(runtime);
   const threadId = String(
     runtime.session.sessionManager?.getSessionId?.()
