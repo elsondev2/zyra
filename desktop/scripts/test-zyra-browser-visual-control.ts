@@ -11,6 +11,7 @@ import { AgentControlBroker } from '../src/main/agent-control/agent-control-brok
 import { BrowserSurfaceHost } from '../src/main/agent-control/browser-surface-host'
 import { FakeControlDriver } from '../src/main/agent-control/drivers/fake-driver'
 import { ObservationStore } from '../src/main/agent-control/observation-store'
+import { isTrustedBrowserTabId } from '../src/main/agent-control/trusted-guest-registry'
 import { resolveZyraRoot } from '../src/main/zyra/zyra-root'
 import { AssistantBrowserAgentCursor } from '../src/renderer/src/pages/assistant/AssistantBrowserAgentCursor'
 import type { ControlTarget } from '../src/shared/agent-control/contracts'
@@ -25,6 +26,9 @@ try {
     else process.env.ZYRA_ROOT = inheritedZyraRoot
 }
 
+assert.equal(isTrustedBrowserTabId('browser:8'), true)
+assert.equal(isTrustedBrowserTabId('browser:agent:visual-open'), true, 'agent-created Browser tabs must pass the trusted binding boundary')
+assert.equal(isTrustedBrowserTabId('browser:agent/escape'), false)
 assert.throws(() => normalizeTemporaryBrowserOperation({ operation: 'list_windows' }), /not allowed/)
 assert.throws(() => normalizeTemporaryBrowserOperation({ operation: 'observe', targetId: 'chrome-tab:1' }), /in-app Browser/)
 assert.equal(
