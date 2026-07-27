@@ -167,6 +167,14 @@ assert.equal(assistantStreamPresentation.getSnapshot('message', 'message-1').str
 assert.equal(presentationNotifications, 3)
 unsubscribeMessage()
 
+assistantStreamPresentation.clear()
+assistantStreamPresentation.ingestEvent(textDeltaB, 'Hello ')
+assert.deepEqual(assistantStreamPresentation.getSnapshot('message', 'message-1'), {
+    text: 'Hello world',
+    streaming: true,
+    revision: 1
+}, 'a late presentation subscriber seeds its short-lived stream from the projected authoritative prefix')
+
 assistantStreamPresentation.ingestEvent(activityEvent)
 assert.deepEqual(assistantStreamPresentation.getSnapshot('activity', 'activity-1'), {
     text: 'Checking the project',

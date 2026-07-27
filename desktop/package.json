@@ -32,7 +32,7 @@
         "test:file-preview-performance": "bun scripts/test-file-preview-performance.ts",
         "test:pi-assistant-lifecycle": "bun scripts/test-pi-assistant-lifecycle.ts",
         "test:assistant-startup": "bun scripts/test-assistant-startup-connection.ts",
-        "test:assistant-streaming": "bun scripts/test-assistant-streaming.ts",
+        "test:assistant-streaming": "bun scripts/test-assistant-message-content.ts && bun scripts/test-assistant-streaming.ts",
         "test:assistant-switching": "bun scripts/test-assistant-session-switching.ts",
         "maint:loc": "node scripts/maint/check-loc.mjs",
         "maint:loc:strict": "node scripts/maint/check-loc.mjs --strict",

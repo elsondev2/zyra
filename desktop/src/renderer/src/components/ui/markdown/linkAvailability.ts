@@ -36,10 +36,11 @@ function getParentPath(pathValue: string | undefined): string {
     return separatorIndex > 0 ? value.slice(0, separatorIndex) : ''
 }
 
-function isBareFileHref(href: string): boolean {
-    const pathname = String(href || '').trim().split('#', 1)[0] || ''
+function isProjectRelativeHref(href: string): boolean {
+    const pathname = String(href || '').trim().split('#', 1)[0]?.split('?', 1)[0] || ''
     if (!pathname || /^[a-z][a-z0-9+.-]*:/i.test(pathname)) return false
-    return !pathname.includes('/') && !pathname.includes('\\')
+    if (/^[a-zA-Z]:[\\/]/.test(pathname) || pathname.startsWith('/') || pathname.startsWith('\\\\')) return false
+    return true
 }
 
 function retainAvailabilityEntry(key: string, entry: AvailabilityCacheEntry): void {
@@ -52,7 +53,7 @@ function retainAvailabilityEntry(key: string, entry: AvailabilityCacheEntry): vo
     }
 }
 
-async function resolveBareProjectFile(
+async function resolveProjectShorthand(
     targetPath: string,
     projectRoot: string
 ): Promise<{ state: 'found'; path: string; targetKind: 'file' | 'directory' | null } | { state: 'missing' | 'ambiguous' | 'unknown' }> {
@@ -107,8 +108,8 @@ export async function inspectMarkdownLinkAvailability(
                 }
             }
 
-            if (projectRoot && isBareFileHref(href)) {
-                const projectMatch = await resolveBareProjectFile(target.path, projectRoot)
+            if (projectRoot && isProjectRelativeHref(href)) {
+                const projectMatch = await resolveProjectShorthand(target.path, projectRoot)
                 if (projectMatch.state === 'found') {
                     return {
                         availability: 'available',

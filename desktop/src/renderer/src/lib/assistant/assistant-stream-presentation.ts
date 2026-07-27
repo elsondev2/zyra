@@ -77,12 +77,13 @@ class AssistantStreamPresentationStore {
         }
     }
 
-    ingestEvent(event: AssistantDomainEvent): void {
+    ingestEvent(event: AssistantDomainEvent, projectedText = ''): void {
         if (event.type === 'thread.message.assistant.delta') {
             const id = readMessageId(event)
             if (!id) return
             const previous = this.getSnapshot('message', id)
-            this.publish('message', id, `${previous.text}${String(event.payload['delta'] || '')}`, true)
+            const baseText = previous.revision > 0 ? previous.text : projectedText
+            this.publish('message', id, `${baseText}${String(event.payload['delta'] || '')}`, true)
             return
         }
 

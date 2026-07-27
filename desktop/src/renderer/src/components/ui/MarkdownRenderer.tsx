@@ -25,7 +25,7 @@ import {
     type MarkdownInternalLinkHandler,
     type MarkdownLinkNoticeHandler
 } from './markdown/MarkdownInteractionLayer'
-import { isWindowsPathHref, rewriteMarkdownFileUriHref } from './markdown/linkNavigation'
+import { isWindowsPathHref, normalizeMarkdownHref, rewriteMarkdownFileUriHref } from './markdown/linkNavigation'
 import { looksLikeMarkdownFileReference } from './markdown/fileReferences'
 import { createMarkdownClipboardPayload } from './markdown/markdownClipboard'
 import { useMarkdownVisualTheme } from './markdown/markdownTheme'
@@ -108,7 +108,9 @@ const pendingPreparation = new Map<string, MarkdownRendererProps>()
 let preparationIdleId: number | null = null
 
 function markdownUrlTransform(href: string): string {
-    return rewriteMarkdownFileUriHref(href) ?? (isWindowsPathHref(href) ? href : defaultUrlTransform(href))
+    const rewrittenHref = rewriteMarkdownFileUriHref(href) ?? href
+    const normalizedHref = normalizeMarkdownHref(rewrittenHref)
+    return isWindowsPathHref(normalizedHref) ? normalizedHref : defaultUrlTransform(normalizedHref)
 }
 
 function contentFingerprint(content: string): string {

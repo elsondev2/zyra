@@ -107,6 +107,14 @@ export function findExactIndexedPathMatches(
         return entryPathKey === targetPathKey || (targetRelativeKey && entryRelativeKey === targetRelativeKey)
     })
     if (exactPathMatches.length > 0) return exactPathMatches
+    const shorthandKey = targetRelativeKey.replace(/^(?:\.\/)+/, '')
+    const suffixMatches = shorthandKey
+        ? snapshot.entries.filter((entry) => {
+            const entryRelativeKey = normalizeIndexedPathKey(entry.relativePath)
+            return entryRelativeKey === shorthandKey || entryRelativeKey.endsWith(`/${shorthandKey}`)
+        })
+        : []
+    if (suffixMatches.length > 0) return suffixMatches
     return snapshot.entries.filter((entry) => entry.name.toLowerCase() === targetName)
 }
 

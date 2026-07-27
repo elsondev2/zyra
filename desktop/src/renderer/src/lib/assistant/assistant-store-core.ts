@@ -639,7 +639,7 @@ class AssistantStore {
                     void this.hydrate()
                     return
                 }
-                assistantStreamPresentation.ingestEvent(event)
+                assistantStreamPresentation.ingestEvent(event, this.getProjectedAssistantMessageText(event))
                 this.queueAssistantEvent(event)
             }
         })
@@ -650,6 +650,17 @@ class AssistantStore {
             return this.pendingAssistantEvents[this.pendingAssistantEvents.length - 1].sequence
         }
         return this.state.snapshot.snapshotSequence
+    }
+
+    private getProjectedAssistantMessageText(event: AssistantDomainEvent): string {
+        if (event.type !== 'thread.message.assistant.delta') return ''
+        const threadId = String(event.threadId || event.payload['threadId'] || '')
+        const messageId = String(event.payload['messageId'] || '')
+        if (!threadId || !messageId) return ''
+        const thread = this.state.snapshot.sessions
+            .flatMap((session) => session.threads)
+            .find((candidate) => candidate.id === threadId)
+        return thread?.messages.find((message) => message.id === messageId)?.text || ''
     }
 
     private isStreamRecordProjected(event: AssistantDomainEvent): boolean {

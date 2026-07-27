@@ -4,7 +4,11 @@ import {
     inspectMarkdownLinkAvailability,
     resetMarkdownLinkAvailabilityCache
 } from '../src/renderer/src/components/ui/markdown/linkAvailability'
-import { navigateMarkdownLink, resolveMarkdownLinkTarget } from '../src/renderer/src/components/ui/markdown/linkNavigation'
+import {
+    navigateMarkdownLink,
+    normalizeMarkdownHref,
+    resolveMarkdownLinkTarget
+} from '../src/renderer/src/components/ui/markdown/linkNavigation'
 import { looksLikeMarkdownFileReference, resolveMarkdownPackageReference } from '../src/renderer/src/components/ui/markdown/fileReferences'
 
 type PathInfoResult = {
@@ -65,6 +69,13 @@ for (const conceptualPair of ['dev/prod', 'light/dark', 'foreground/background',
 }
 assert.equal(looksLikeMarkdownFileReference('src/components'), true, 'known project-root directory paths remain navigable')
 assert.equal(looksLikeMarkdownFileReference('desktop/resources/icon.ico'), true, 'real nested file paths remain navigable')
+assert.equal(normalizeMarkdownHref('github.com/openai/codex'), 'https://github.com/openai/codex')
+assert.equal(normalizeMarkdownHref('localhost:5173/docs'), 'http://localhost:5173/docs')
+assert.equal(
+    resolveMarkdownLinkTarget('github.com/openai/codex', 'C:\\workspace\\README.md'),
+    null,
+    'scheme-less website links must not be classified as project files'
+)
 
 assert.equal(
     resolveMarkdownLinkTarget('./docs/guide.md', 'C:\\workspace\\README.md')?.path,
@@ -142,6 +153,16 @@ const recoveredBareFile = await inspectMarkdownLinkAvailability(
 assert.equal(recoveredBareFile?.availability, 'available', 'bare filenames fall back to exact project-index resolution')
 assert.equal(recoveredBareFile?.resolvedBy, 'project-search')
 assert.equal(recoveredBareFile?.path, existingProjectPath)
+
+resetMarkdownLinkAvailabilityCache()
+const recoveredShorthandPath = await inspectMarkdownLinkAvailability(
+    'assistant/AssistantVirtualTimeline.tsx',
+    'C:\\workspace\\__assistant__.md',
+    'C:\\workspace'
+)
+assert.equal(recoveredShorthandPath?.availability, 'available', 'unique trailing project paths recover shortened agent links')
+assert.equal(recoveredShorthandPath?.resolvedBy, 'project-search')
+assert.equal(recoveredShorthandPath?.path, existingProjectPath)
 
 pathInfoResult = { success: true, exists: true, path: 'C:\\workspace\\src', name: 'src', type: 'directory' }
 resetMarkdownLinkAvailabilityCache()

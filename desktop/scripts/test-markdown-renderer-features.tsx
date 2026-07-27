@@ -39,6 +39,8 @@ The implementation also lives in desktop/src/renderer/src/pages/assistant/Assist
 
 [External docs](https://example.com/docs)
 
+[Scheme-less website](github.com/openai/codex)
+
 \`AssistantVirtualTimeline.tsx\`
 
 \`@pierre/trees\` and \`@pierre/trees/react\`
@@ -97,6 +99,9 @@ assert.doesNotMatch(linkedPackageMarkup.replace(/^<a\b[^>]*>/, ''), /<a\b/, 'lin
 assert.equal((linkedPackageMarkup.match(/markdown-inline-site-icon/g) || []).length, 1, 'a linked package renders one source favicon')
 assert.match(markup, /file_type_(?:reactts|typescript)[^" ]*\.svg/, 'TypeScript file tags use the existing VS Code icon resolver')
 assert.match(markup, /google\.com\/s2\/favicons\?domain=example\.com/, 'external links lazily request the source favicon')
+const schemeLessWebsiteMarkup = markup.match(/<a href="https:\/\/github\.com\/openai\/codex"[\s\S]*?<\/a>/)?.[0] || ''
+assert.match(schemeLessWebsiteMarkup, /Scheme-less website/, 'scheme-less websites receive a safe HTTPS target')
+assert.doesNotMatch(schemeLessWebsiteMarkup, /data-markdown-file-link/, 'scheme-less websites never render as project files')
 assert.match(markup, /data-language="tsx"/, 'code blocks retain their language semantics')
 assert.match(markup, /AssistantVirtualTimeline\.tsx/, 'fence titles remain visible in code-block chrome')
 assert.match(markup, /data-markdown-details=""/, 'safe details sections get shared disclosure styling')

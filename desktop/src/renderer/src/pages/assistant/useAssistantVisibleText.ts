@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { AssistantTextStreamingMode } from '@/lib/settings'
 import {
     assistantStreamPresentation,
-    mergeAssistantPresentationText,
     type AssistantStreamPresentationChannel
 } from '@/lib/assistant/assistant-stream-presentation'
 
@@ -99,17 +98,12 @@ export function revealAssistantStreamText(
 }
 
 function resolvePresentationTarget(
-    channel: AssistantStreamPresentationChannel,
     authoritativeText: string,
     streamText: string,
-    streamRevision: number,
-    streamIsComplete: boolean
+    streamRevision: number
 ): string {
     if (streamRevision === 0) return authoritativeText
-    if (streamIsComplete) return streamText || authoritativeText
-    return channel === 'message'
-        ? mergeAssistantPresentationText(authoritativeText, streamText)
-        : streamText || authoritativeText
+    return streamText || authoritativeText
 }
 
 export function useAssistantVisibleText({
@@ -130,13 +124,11 @@ export function useAssistantVisibleText({
     const streamSnapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
     const targetText = useMemo(
         () => resolvePresentationTarget(
-            channel,
             text,
             streamSnapshot.text,
-            streamSnapshot.revision,
-            !streamSnapshot.streaming
+            streamSnapshot.revision
         ),
-        [channel, streamSnapshot.revision, streamSnapshot.streaming, streamSnapshot.text, text]
+        [streamSnapshot.revision, streamSnapshot.text, text]
     )
     const sourceStreaming = streamSnapshot.revision > 0 ? streamSnapshot.streaming : streaming
     const shouldReplayInitialStream = streaming && streamSnapshot.revision > 0
