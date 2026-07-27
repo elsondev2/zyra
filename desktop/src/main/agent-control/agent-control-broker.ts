@@ -3,6 +3,7 @@ import type {
     ControlAction,
     ControlActionRequest,
     ControlCapability,
+    ControlCursorState,
     ControlGrant,
     ControlObservation,
     ControlPairingState,
@@ -45,6 +46,7 @@ export class AgentControlBroker extends EventEmitter {
     readonly audit: AuditStore
     private sequence = 0
     private disposed = false
+    private readonly cursors = new Map<string, ControlCursorState>()
 
     constructor(
         private readonly options: {
@@ -79,6 +81,9 @@ export class AgentControlBroker extends EventEmitter {
         if (registered.target.kind === 'zyra-browser' || registered.target.kind === 'chrome-tab') {
             registered.target.origin = origin
         }
+        if (registered.target.kind === 'zyra-browser') {
+            registered.target.url = /^https?:\/\//.test(url) ? url.slice(0, CONTROL_BOUNDS.maxUrlLength) : null
+        }
         this.observations.invalidate(targetId)
         for (const grant of this.grants.list()) {
             if (grant.targetId !== targetId || grant.state !== 'active' || !grant.allowedOrigins?.length) continue
@@ -87,11 +92,19 @@ export class AgentControlBroker extends EventEmitter {
         this.changed()
     }
 
+    handleTargetTitle(targetId: string, title: string): void {
+        const registered = this.targets.get(targetId)
+        if (registered.target.kind !== 'zyra-browser') return
+        registered.target.title = String(title || '').slice(0, 512) || null
+        this.changed()
+    }
+
     removeTarget(targetId: string, reason = 'Target closed.'): void {
         const registered = this.targets.remove(targetId)
         if (!registered) return
         this.grants.revokeByTarget(targetId)
         this.observations.remove(targetId)
+        this.cursors.delete(targetId)
         void registered.driver.release?.(registered)
         this.audit.append({
             eventType: 'target', targetId, targetKind: registered.target.kind,
@@ -248,17 +261,20 @@ export class AgentControlBroker extends EventEmitter {
         assertActionAllowed(grant, registered.target, request.action)
         const requestedObservation = this.observations.requireRevision(request.targetId, request.observationRevision)
         assertSafeObservedElementAction(requestedObservation, request.action)
+        assertVisualActionInsideObservation(requestedObservation, request.action)
         return this.actions.enqueue(request.targetId, async () => {
             const currentGrant = this.grants.requireActive(request.grantId, principal)
             const previousObservation = this.observations.requireRevision(request.targetId, request.observationRevision)
             assertActionAllowed(currentGrant, registered.target, request.action)
             assertSafeObservedElementAction(previousObservation, request.action)
+            assertVisualActionInsideObservation(previousObservation, request.action)
             const startedAt = Date.now()
             try {
                 const result = await registered.driver.act(registered, request.action, {
                     revision: request.observationRevision,
                     previousObservation,
-                    signal
+                    signal,
+                    updateCursor: (patch) => this.updateCursor(request.targetId, principal, request.action.type, patch)
                 })
                 const revision = this.observations.nextRevision(request.targetId)
                 const observation = boundObservation(redactObservation(await registered.driver.observe(registered, {
@@ -310,19 +326,27 @@ export class AgentControlBroker extends EventEmitter {
 
     revokePrincipal(principal: ControlPrincipal, reason = 'Principal control cancelled.'): void {
         const revoked = this.grants.revokeByPrincipal(principal)
+        const pending = this.grants.removePendingByPrincipal(principal)
         for (const grant of revoked) {
             this.audit.append({
                 eventType: 'grant.revoked', principal: grant.principal, targetId: grant.targetId,
                 grantId: grant.grantId, outcome: 'cancelled', message: reason, redactions: []
             })
         }
-        if (revoked.length) this.changed()
+        for (const request of pending) {
+            this.audit.append({
+                eventType: 'grant.revoked', principal: request.principal, targetId: request.targetId,
+                outcome: 'cancelled', message: `${reason} Pending request removed.`, redactions: []
+            })
+        }
+        if (revoked.length || pending.length) this.changed()
     }
 
     async emergencyStop(reason = 'Emergency stop requested by user.'): Promise<void> {
         this.actions.cancelAll(reason)
         this.grants.revokeAll()
         this.observations.invalidateAll()
+        this.cursors.clear()
         await Promise.allSettled((this.options.drivers || []).map((driver) => Promise.resolve(driver.emergencyStop?.())))
         await this.options.pairing?.stop('emergency-stop')
         this.audit.append({ eventType: 'emergency-stop', outcome: 'cancelled', message: reason, redactions: [] })
@@ -370,6 +394,7 @@ export class AgentControlBroker extends EventEmitter {
                 ...(driver.health?.() || { state: 'ready' as const }),
                 updatedAt: new Date().toISOString()
             })),
+            cursors: [...this.cursors.values()],
             pairing: this.options.pairing?.state() || { state: 'stopped' },
             active: grants.some((grant) => grant.state === 'active'),
             sequence: this.sequence
@@ -387,15 +412,24 @@ export class AgentControlBroker extends EventEmitter {
         switch (operation.operation) {
             case 'list_targets': {
                 const kind = operation.targetKind
-                if (principal.type === 'root') return { targets: this.targets.list(kind).map((entry) => entry.target) }
-                const targetIds = new Set(this.grants.listForPrincipal(principal).filter((grant) => grant.state === 'active').map((grant) => grant.targetId))
-                return { targets: this.targets.list(kind).filter((entry) => targetIds.has(entry.target.targetId)).map((entry) => entry.target) }
+                const activeGrants = this.grants.listForPrincipal(principal).filter((grant) => grant.state === 'active')
+                if (principal.type === 'root') {
+                    return { targets: this.targets.list(kind).map((entry) => entry.target), grants: activeGrants }
+                }
+                const grantedTargetIds = new Set(activeGrants.map((grant) => grant.targetId))
+                const targets = this.targets.list(kind).filter((entry) => (
+                    entry.target.kind === 'zyra-browser' || grantedTargetIds.has(entry.target.targetId)
+                )).map((entry) => entry.target)
+                return { targets, grants: activeGrants }
             }
             case 'list_windows':
                 if (principal.type !== 'root') throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents cannot enumerate or select Windows targets.')
                 return { windows: await this.listWindows() }
             case 'request_grant': {
-                if (principal.type !== 'root') throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Only the root agent may request a new control grant.')
+                const requestedTarget = this.targets.get(operation.targetId).target
+                if (principal.type === 'agent' && requestedTarget.kind !== 'zyra-browser') {
+                    throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents may request only an integrated Zyra Browser tab. Chrome and Windows require root delegation.')
+                }
                 const request = this.requestGrant({
                     principal,
                     targetId: operation.targetId,
@@ -432,8 +466,15 @@ export class AgentControlBroker extends EventEmitter {
                 if (principal.type !== 'agent') throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Only a delegated child runtime may revoke its principal lease through this operation.')
                 this.revokePrincipal(principal, operation.reason || 'Child run ended or was cancelled.')
                 return { revoked: true }
-            case 'observe':
-                return { observation: await this.observe(principal, operation.grantId, operation.targetId, Boolean(operation.includeScreenshot), signal) }
+            case 'observe': {
+                const includeScreenshot = Boolean(operation.includeScreenshot)
+                const observation = await this.observe(principal, operation.grantId, operation.targetId, includeScreenshot, signal)
+                const registered = this.targets.get(operation.targetId)
+                const screenshot = includeScreenshot && observation.screenshotRef
+                    ? registered.driver.readScreenshot?.(observation.screenshotRef)
+                    : undefined
+                return { observation, ...(screenshot ? { screenshot } : {}) }
+            }
             case 'act':
                 return await this.act(principal, operation, signal) as unknown as Record<string, unknown>
             case 'release':
@@ -455,6 +496,29 @@ export class AgentControlBroker extends EventEmitter {
         this.disposed = true
         await Promise.allSettled((this.options.drivers || []).map((driver) => Promise.resolve(driver.dispose?.())))
         this.removeAllListeners()
+    }
+
+    private updateCursor(
+        targetId: string,
+        principal: ControlPrincipal,
+        actionType: ControlAction['type'],
+        patch: Partial<Omit<ControlCursorState, 'targetId' | 'updatedAt'>>
+    ): void {
+        const current = this.cursors.get(targetId)
+        const x = Number(patch.x ?? current?.x ?? 0)
+        const y = Number(patch.y ?? current?.y ?? 0)
+        this.cursors.set(targetId, {
+            targetId,
+            x: Number.isFinite(x) ? Math.max(0, Math.min(100_000, x)) : 0,
+            y: Number.isFinite(y) ? Math.max(0, Math.min(100_000, y)) : 0,
+            visible: patch.visible ?? current?.visible ?? true,
+            phase: patch.phase ?? current?.phase ?? 'idle',
+            actionType,
+            principal,
+            durationMs: patch.durationMs ?? current?.durationMs,
+            updatedAt: new Date().toISOString()
+        })
+        this.changed()
     }
 
     private changed(): void {
@@ -493,6 +557,23 @@ function assertSafeObservedElementAction(observation: ControlObservation, action
     if ((action.type === 'click' || action.type === 'type' || action.type === 'select')
         && /buy|purchase|pay|send|publish|post|delete|remove account|install|accept terms|agree|upload/i.test(semantics)) {
         throw new AgentControlError('CONTROL_SIDE_EFFECT_APPROVAL_REQUIRED', 'This observed control may cause an external side effect and requires explicit per-action approval.')
+    }
+}
+
+function assertVisualActionInsideObservation(observation: ControlObservation, action: ControlAction): void {
+    const viewport = observation.viewport
+    if (!viewport) return
+    const points = action.type === 'move'
+        ? [{ x: action.x, y: action.y }]
+        : action.type === 'drag'
+            ? [{ x: action.fromX, y: action.fromY }, { x: action.toX, y: action.toY }]
+            : action.type === 'click' && action.x !== undefined && action.y !== undefined
+                ? [{ x: action.x, y: action.y }]
+                : action.type === 'scroll' && action.x !== undefined && action.y !== undefined
+                    ? [{ x: action.x, y: action.y }]
+                    : []
+    if (points.some((point) => point.x < 0 || point.y < 0 || point.x > viewport.width || point.y > viewport.height)) {
+        throw new AgentControlError('CONTROL_SCOPE_DENIED', 'Pointer coordinates are outside the latest observed viewport.')
     }
 }
 

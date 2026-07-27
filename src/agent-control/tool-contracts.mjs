@@ -8,6 +8,15 @@ const common = {
   grantId: Type.Optional(Type.String()),
   observationRevision: Type.Optional(Type.Number()),
   elementRef: Type.Optional(Type.String()),
+  x: Type.Optional(Type.Number()),
+  y: Type.Optional(Type.Number()),
+  fromX: Type.Optional(Type.Number()),
+  fromY: Type.Optional(Type.Number()),
+  toX: Type.Optional(Type.Number()),
+  toY: Type.Optional(Type.Number()),
+  durationMs: Type.Optional(Type.Number()),
+  button: Type.Optional(Type.Union([Type.Literal("left"), Type.Literal("middle"), Type.Literal("right")])),
+  clickCount: Type.Optional(Type.Number()),
   includeScreenshot: Type.Optional(Type.Boolean()),
   capabilities: Type.Optional(Type.Array(capability, { maxItems: CONTROL_CAPABILITIES.length })),
   durationMs: Type.Optional(Type.Number()),
@@ -31,7 +40,7 @@ export const browserControlSchema = Type.Object(common, { additionalProperties: 
 export const computerControlSchema = Type.Object(common, { additionalProperties: false });
 
 export const BROWSER_CONTROL_OPERATIONS = Object.freeze([
-  "list_targets", "request_grant", "observe", "navigate", "click", "type", "key", "scroll", "select", "wait", "release",
+  "list_targets", "request_grant", "observe", "navigate", "move", "click", "drag", "type", "key", "scroll", "select", "wait", "release",
 ]);
 export const COMPUTER_CONTROL_OPERATIONS = Object.freeze([
   "list_windows", "request_grant", "observe", "focus", "click", "type", "key", "scroll", "wait", "release",

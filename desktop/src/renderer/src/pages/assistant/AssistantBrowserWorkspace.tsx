@@ -20,6 +20,7 @@ import {
 import type { DevScopeBrowserPreviewConfig, DevScopeProcessInfo } from '@shared/contracts/devscope-api'
 import type { ControlStateSnapshot } from '@shared/agent-control/contracts'
 import { cn } from '@/lib/utils'
+import { AssistantBrowserAgentCursor } from './AssistantBrowserAgentCursor'
 import { AssistantBrowserPageIcon } from './AssistantBrowserPageIcon'
 import { AssistantBrowserWebview, type AssistantBrowserWebviewHandle } from './AssistantBrowserWebview'
 import {
@@ -115,6 +116,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const hasAudibleTab = workspaceState.tabs.some((tab) => tab.audible)
     const activeControlTargetId = activeTab ? controlTargetsByTab[activeTab.id] : undefined
     const activeControlGrant = controlState?.grants.find((grant) => grant.targetId === activeControlTargetId && grant.state === 'active') || null
+    const activeAgentCursor = controlState?.cursors.find((cursor) => cursor.targetId === activeControlTargetId) || null
 
     const commitWorkspaceState = useCallback((nextState: AssistantBrowserWorkspaceState) => {
         workspaceStateRef.current = nextState
@@ -546,6 +548,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                         onControlTargetChange={handleControlTargetChange}
                     />
                 ))}
+                <AssistantBrowserAgentCursor cursor={activeAgentCursor} />
 
                 {activeTab?.status === 'idle' && !activeTab.url ? (
                     <div className="absolute inset-0 z-10 flex items-center justify-center overflow-y-auto bg-[color-mix(in_srgb,var(--color-bg)_96%,black)] p-5 text-center">

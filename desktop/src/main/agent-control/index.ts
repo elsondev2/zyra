@@ -50,7 +50,11 @@ export function bindTrustedBrowserTarget(ownerWebContentsId: number, guestWebCon
     const url = guestEntry.guest.getURL()
     const origin = /^https?:/.test(url) ? new URL(url).origin : null
     const target = controlBroker.registerTarget({
-        target: { kind: 'zyra-browser', targetId, tabId, guestIdentity: guestEntry.guestIdentity, origin },
+        target: {
+            kind: 'zyra-browser', targetId, tabId, guestIdentity: guestEntry.guestIdentity, origin,
+            url: /^https?:/.test(url) ? url : null,
+            title: guestEntry.guest.getTitle().slice(0, 512) || null
+        },
         driver: browserDriver,
         trustedIdentity: guestEntry.guest,
         ownerWebContentsId
@@ -65,9 +69,12 @@ function installGuestLifecycle(guest: WebContents, targetId: string, controlBrok
         if (isMainFrame === false || !/^https?:\/\//.test(url)) return
         controlBroker.handleTargetNavigation(targetId, url)
     }
+    const title = (_event: unknown, value: string) => controlBroker.handleTargetTitle(targetId, value)
     guest.on('did-start-navigation', navigation)
+    guest.on('page-title-updated', title)
     guest.once('destroyed', () => {
         guest.removeListener('did-start-navigation', navigation)
+        guest.removeListener('page-title-updated', title)
     })
 }
 

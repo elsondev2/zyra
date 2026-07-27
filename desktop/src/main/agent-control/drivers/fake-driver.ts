@@ -28,22 +28,34 @@ export class FakeControlDriver implements AgentControlDriver {
             url: this.kind === 'windows-window' ? undefined : this.url,
             title: this.title,
             origin: this.kind === 'windows-window' ? undefined : new URL(this.url).origin,
+            viewport: { width: 800, height: 600, scale: 1 },
             elements: [...this.elements.values()],
             screenshotRef: options.includeScreenshot ? 'control-artifact:fixture' : undefined,
             redactions: []
         }
     }
 
-    async act(_target: RegisteredControlTarget, action: ControlAction, _context: DriverActionContext): Promise<{ changed: boolean }> {
+    async act(_target: RegisteredControlTarget, action: ControlAction, context: DriverActionContext): Promise<{ changed: boolean }> {
         if (this.stopped) throw new Error('Fake driver stopped.')
         if (action.type === 'navigate') this.url = action.url
-        if (action.type === 'click') this.title = 'Clicked'
+        if (action.type === 'move') context.updateCursor?.({ x: action.x, y: action.y, phase: 'idle', visible: true })
+        if (action.type === 'click') {
+            context.updateCursor?.({ x: action.x ?? 100, y: action.y ?? 80, phase: 'pressing', visible: true })
+            this.title = 'Clicked'
+        }
+        if (action.type === 'drag') context.updateCursor?.({ x: action.toX, y: action.toY, phase: 'idle', visible: true })
         if (action.type === 'type') this.title = `Typed ${action.text.length} characters`
         if (action.type === 'wait') {
             const condition = action.condition
             if (condition.type === 'delay') await new Promise((resolve) => setTimeout(resolve, condition.durationMs))
         }
-        return { changed: action.type !== 'wait' }
+        return { changed: !['wait', 'move'].includes(action.type) }
+    }
+
+    readScreenshot(screenshotRef: string) {
+        if (screenshotRef !== 'control-artifact:fixture') return undefined
+        const data = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+        return { data, mimeType: 'image/png' as const, bytes: Buffer.from(data, 'base64').length }
     }
 
     emergencyStop(): void {

@@ -137,12 +137,20 @@ export class AgentFleetController {
       throw new Error("Delegated control requires a connected desktop control broker.");
     }
     const allowDelegatedControl = Boolean(controlLeaseRequest && this.controlBridgeClient?.request);
-    const capability = attenuateAgentCapabilities(definition, { ...request, controlLease: controlLeaseRequest }, {
+    const allowOnDemandBrowser = Boolean(this.controlBridgeClient?.request);
+    const requestedTools = request.tools ?? definition.tools ?? ["read", "grep", "find", "ls"];
+    const capability = attenuateAgentCapabilities(definition, {
+      ...request,
+      tools: allowOnDemandBrowser ? [...new Set([...requestedTools, "browser_control"])] : requestedTools,
+      controlLease: controlLeaseRequest,
+    }, {
       ...request.policy,
       allowDelegatedControl,
+      allowOnDemandBrowser,
     });
     assertNoControlCapabilities(capability.tools, capability.capabilities, {
       allowDelegatedControl,
+      allowOnDemandBrowser,
       delegatedCapabilities: controlLeaseRequest?.capabilities,
     });
     const delegatedTools = capability.tools.filter((tool) => tool === "browser_control" || tool === "computer_control");
@@ -159,11 +167,19 @@ export class AgentFleetController {
       policy: request.modelPolicy,
     });
     const attemptId = randomUUID();
-    const childPrincipal = controlLeaseRequest ? {
+    const childPrincipal = this.controlBridgeClient?.request ? {
       type: "agent",
       fleetId: this.fleetId,
       agentRunId,
       parentThreadId: this.rootThreadId,
+    } : null;
+    const onDemandControl = childPrincipal ? {
+      childPrincipal,
+      client: typeof this.controlBridgeClient.forPrincipal === "function"
+        ? this.controlBridgeClient.forPrincipal(childPrincipal)
+        : Object.freeze({ request: (operation, options = {}) => this.controlBridgeClient.request(operation, { ...options, principal: childPrincipal }) }),
+      revoked: false,
+      revoking: false,
     } : null;
     const run = normalizeAgentRun({
       fleetId: this.fleetId,
@@ -205,10 +221,11 @@ export class AgentFleetController {
       await this.emit("agent.created", { agent: run, warnings: capability.warnings }, { agentRunId });
       this.cancellation.create(agentRunId, request.parentAgentRunId ?? this.fleetId);
       cancellationCreated = true;
-      if (delegatedControl) {
-        this.cancellation.addCleanup(agentRunId, (reason) => this.revokeDelegatedControl(agentRunId, delegatedControl, reason));
+      const controlSession = delegatedControl ?? onDemandControl;
+      if (controlSession) {
+        this.cancellation.addCleanup(agentRunId, (reason) => this.revokeDelegatedControl(agentRunId, controlSession, reason));
       }
-      const queueItem = { run, route, request, delegatedControl };
+      const queueItem = { run, route, request, delegatedControl, controlSession };
       this.queue.push(queueItem);
     } catch (error) {
       if (delegatedControl) await this.revokeDelegatedControl(agentRunId, delegatedControl, "agent spawn failed");
@@ -342,7 +359,7 @@ export class AgentFleetController {
   }
 
   async execute(item) {
-    const { run, route, request, delegatedControl } = item;
+    const { run, route, request, delegatedControl, controlSession } = item;
     const agentRunId = run.agentRunId;
     let lock;
     let worktree;
@@ -365,7 +382,7 @@ export class AgentFleetController {
         model: route.selectedModel,
         sessionFile: request.sessionFile,
         signal: this.cancellation.signal(agentRunId),
-        controlClient: delegatedControl?.client,
+        controlClient: controlSession?.client,
         controlLease: delegatedControl?.grant,
         onLinked: async (linked) => {
           active.host = linked.host ?? active.host;
@@ -411,7 +428,7 @@ export class AgentFleetController {
       this.resolveWaiters(agentRunId, this.snapshot().agents[agentRunId]);
     } finally {
       lock?.release?.();
-      if (delegatedControl) await this.revokeDelegatedControl(agentRunId, delegatedControl, "agent run ended");
+      if (controlSession) await this.revokeDelegatedControl(agentRunId, controlSession, "agent run ended");
       this.launching.delete(agentRunId);
       this.active.delete(agentRunId);
       this.cancellation.remove(agentRunId);

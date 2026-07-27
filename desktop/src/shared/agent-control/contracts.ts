@@ -6,6 +6,7 @@ export const CONTROL_CAPABILITIES = [
     'navigate',
     'pointer.click',
     'pointer.move',
+    'pointer.drag',
     'keyboard.type',
     'keyboard.key',
     'scroll',
@@ -26,6 +27,8 @@ export type ControlTarget =
         tabId: string
         guestIdentity: string
         origin: string | null
+        url?: string | null
+        title?: string | null
     }
     | {
         kind: 'chrome-tab'
@@ -98,11 +101,15 @@ export type ControlWaitCondition =
     | { type: 'target-ready' }
     | { type: 'delay'; durationMs: number }
 
+export type ControlPointerButton = 'left' | 'middle' | 'right'
+
 export type ControlAction =
-    | { type: 'click'; elementRef: string; sideEffect?: ControlSideEffectClass }
+    | { type: 'move'; x: number; y: number; durationMs?: number }
+    | { type: 'click'; elementRef?: string; x?: number; y?: number; button?: ControlPointerButton; clickCount?: number; sideEffect?: ControlSideEffectClass }
+    | { type: 'drag'; fromX: number; fromY: number; toX: number; toY: number; durationMs?: number; button?: ControlPointerButton }
     | { type: 'type'; elementRef: string; text: string; replace?: boolean; sideEffect?: ControlSideEffectClass }
     | { type: 'key'; key: string; modifiers?: string[]; sideEffect?: ControlSideEffectClass }
-    | { type: 'scroll'; elementRef?: string; deltaX: number; deltaY: number }
+    | { type: 'scroll'; elementRef?: string; x?: number; y?: number; deltaX: number; deltaY: number }
     | { type: 'select'; elementRef: string; values: string[]; sideEffect?: ControlSideEffectClass }
     | { type: 'navigate'; url: string }
     | { type: 'focus' }
@@ -149,6 +156,18 @@ export interface DelegatedControlLeaseRequest {
     maxActions: number
     allowedOrigins?: string[]
     allowedExecutableIdentities?: string[]
+}
+
+export type ControlCursorState = {
+    targetId: string
+    x: number
+    y: number
+    visible: boolean
+    phase: 'idle' | 'moving' | 'pressing' | 'dragging' | 'typing' | 'scrolling'
+    actionType?: ControlAction['type']
+    principal?: ControlPrincipal
+    durationMs?: number
+    updatedAt: string
 }
 
 export type ControlDriverHealth = {
@@ -208,6 +227,7 @@ export type ControlStateSnapshot = {
     pendingGrants: ControlPendingGrant[]
     audit: ControlAuditEvent[]
     health: ControlDriverHealth[]
+    cursors: ControlCursorState[]
     pairing: ControlPairingState
     active: boolean
     sequence: number

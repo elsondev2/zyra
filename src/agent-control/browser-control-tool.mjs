@@ -45,6 +45,15 @@ function toBridgeOperation(input) {
     action: {
       type: input.operation,
       ...(input.elementRef ? { elementRef: input.elementRef } : {}),
+      ...(input.x !== undefined ? { x: input.x } : {}),
+      ...(input.y !== undefined ? { y: input.y } : {}),
+      ...(input.fromX !== undefined ? { fromX: input.fromX } : {}),
+      ...(input.fromY !== undefined ? { fromY: input.fromY } : {}),
+      ...(input.toX !== undefined ? { toX: input.toX } : {}),
+      ...(input.toY !== undefined ? { toY: input.toY } : {}),
+      ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {}),
+      ...(input.button ? { button: input.button } : {}),
+      ...(input.clickCount !== undefined ? { clickCount: input.clickCount } : {}),
       ...(input.url ? { url: input.url } : {}),
       ...(input.text !== undefined ? { text: input.text } : {}),
       ...(input.replace !== undefined ? { replace: input.replace } : {}),
@@ -61,13 +70,45 @@ function toBridgeOperation(input) {
 }
 
 function formatControlResult(operation, result) {
-  if (operation === "list_targets") return `Available Browser targets: ${Array.isArray(result.targets) ? result.targets.length : 0}`;
-  if (operation === "request_grant") return result.pending ? "Control grant is waiting for explicit user approval in Control Center." : "Control grant issued.";
+  if (operation === "list_targets") {
+    const targets = (Array.isArray(result.targets) ? result.targets : []).slice(0, 32).map((target) => ({
+      targetId: target.targetId,
+      kind: target.kind,
+      tabId: target.tabId,
+      title: target.title,
+      url: target.url,
+      origin: target.origin,
+    }));
+    const grants = (Array.isArray(result.grants) ? result.grants : []).slice(0, 32).map((grant) => ({
+      grantId: grant.grantId,
+      targetId: grant.targetId,
+      capabilities: grant.capabilities,
+      expiresAt: grant.expiresAt,
+      remainingActions: Math.max(0, Number(grant.maxActions) - Number(grant.actionCount)),
+    }));
+    return `Available Browser targets and your active grants:\n${JSON.stringify({ targets, grants }, null, 2)}`;
+  }
+  if (operation === "request_grant") {
+    return result.pending
+      ? `Browser access is waiting for explicit user approval in Control Center.\n${JSON.stringify({ requestId: result.request?.requestId, targetId: result.request?.targetId, capabilities: result.request?.capabilities, expiresAt: result.request?.expiresAt }, null, 2)}`
+      : "Control grant issued.";
+  }
   if (operation === "release") return "Control grant released.";
-  if (result.observation) return `Browser ${operation} completed at revision ${result.observation.revision}.`;
+  if (result.observation) {
+    const observation = result.observation;
+    return `Browser ${operation} completed.\n${JSON.stringify({ revision: observation.revision, targetId: observation.targetId, url: observation.url, title: observation.title, viewport: observation.viewport, screenshotAttached: Boolean(result.screenshot) }, null, 2)}`;
+  }
   return `Browser ${operation} completed.`;
 }
 
 function toolResult(text, details) {
-  return { content: [{ type: "text", text }], details };
+  const screenshot = details?.screenshot;
+  const content = [{ type: "text", text }];
+  if (screenshot?.data && /^image\/(?:jpeg|png|webp)$/.test(String(screenshot.mimeType || ""))) {
+    content.push({ type: "image", data: screenshot.data, mimeType: screenshot.mimeType });
+  }
+  const boundedDetails = screenshot
+    ? { ...details, screenshot: { mimeType: screenshot.mimeType, bytes: screenshot.bytes } }
+    : details;
+  return { content, details: boundedDetails };
 }

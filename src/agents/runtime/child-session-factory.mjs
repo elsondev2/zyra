@@ -106,7 +106,7 @@ export function createScopedFileTools(pi, cwd, options = {}) {
 }
 
 function createDelegatedControlTools(options = {}) {
-  if (!options.controlClient || !options.controlLease) return [];
+  if (!options.controlClient) return [];
   const selected = new Set(options.tools ?? []);
   return [
     ...(selected.has("browser_control") ? [createBrowserControlTool({ client: options.controlClient })] : []),
@@ -153,7 +153,9 @@ export function buildChildSystemPrompt(options = {}) {
   const success = Array.isArray(options.successCriteria) ? options.successCriteria.map((item) => `- ${item}`).join("\n") : String(options.successCriteria ?? "Return evidence for the delegated goal.");
   const controlPolicy = options.controlLease
     ? `Control is limited to delegated grant ${options.controlLease.grantId} for target ${options.controlLease.targetId}; capabilities: ${options.controlLease.capabilities.join(", ")}; expiry: ${options.controlLease.expiresAt}. You cannot request, widen, renew, or redelegate it.`
-    : "Browser, paired Chrome, Windows, and computer-control capabilities are unavailable.";
+    : options.controlClient
+      ? "The integrated Zyra Browser can be discovered and requested on demand with browser_control. You receive no authority until the user approves a bounded tab grant. Paired Chrome, Windows, and computer control remain unavailable."
+      : "Browser, paired Chrome, Windows, and computer-control capabilities are unavailable.";
   return [
     "You are a focused child agent inside Zyra's local agent fleet.",
     "Work only on the delegated goal and declared scope.",

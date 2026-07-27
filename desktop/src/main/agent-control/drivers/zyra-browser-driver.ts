@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto'
-import { mkdirSync, unlinkSync, writeFileSync } from 'fs'
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import type { WebContents } from 'electron'
+import { nativeImage, type WebContents } from 'electron'
 import type { ControlAction, ControlElement, ControlObservation } from '../../../shared/agent-control/contracts'
 import { CONTROL_BOUNDS, normalizedOrigin } from '../../../shared/agent-control/policy'
 import { AgentControlError } from '../control-errors'
@@ -16,6 +16,7 @@ export const ZYRA_BROWSER_CDP_ALLOWLIST = new Set([
     'DOM.focus',
     'Page.enable',
     'Page.captureScreenshot',
+    'Page.getLayoutMetrics',
     'Page.navigate',
     'Input.dispatchMouseEvent',
     'Input.dispatchKeyEvent',
@@ -47,8 +48,19 @@ export class ZyraBrowserDriver implements AgentControlDriver {
     async observe(target: RegisteredControlTarget, options: DriverObservationOptions): Promise<ControlObservation> {
         const guest = this.getGuest(target)
         await this.ensureAttached(guest)
-        const response = await this.command(guest, 'Accessibility.getFullAXTree', { depth: 12 }) as { nodes?: AxNode[] }
+        const [response, metrics] = await Promise.all([
+            this.command(guest, 'Accessibility.getFullAXTree', { depth: 12 }) as Promise<{ nodes?: AxNode[] }>,
+            this.command(guest, 'Page.getLayoutMetrics') as Promise<{
+                cssVisualViewport?: { clientWidth?: number; clientHeight?: number; scale?: number }
+                cssLayoutViewport?: { clientWidth?: number; clientHeight?: number }
+            }>
+        ])
         const nodes = Array.isArray(response.nodes) ? response.nodes : []
+        const viewport = {
+            width: Math.max(1, Math.round(Number(metrics.cssVisualViewport?.clientWidth || metrics.cssLayoutViewport?.clientWidth || 1))),
+            height: Math.max(1, Math.round(Number(metrics.cssVisualViewport?.clientHeight || metrics.cssLayoutViewport?.clientHeight || 1))),
+            scale: Number(metrics.cssVisualViewport?.scale || 1)
+        }
         const refs = new Map<string, { backendNodeId: number; role: string }>()
         const elements: ControlElement[] = []
         for (const node of nodes) {
@@ -86,9 +98,17 @@ export class ZyraBrowserDriver implements AgentControlDriver {
             const screenshot = await this.command(guest, 'Page.captureScreenshot', {
                 format: 'jpeg', quality: 70, fromSurface: true, captureBeyondViewport: false
             }) as { data?: string }
-            const data = String(screenshot.data || '')
-            const bytes = Buffer.from(data, 'base64')
-            if (bytes.length > CONTROL_BOUNDS.maxScreenshotBytes) {
+            const sourceBytes = Buffer.from(String(screenshot.data || ''), 'base64')
+            const sourceImage = nativeImage.createFromBuffer(sourceBytes)
+            const visualImage = sourceImage.isEmpty()
+                ? sourceImage
+                : sourceImage.resize({ width: viewport.width, height: viewport.height, quality: 'good' })
+            let bytes: Buffer<ArrayBufferLike> = Buffer.alloc(0)
+            for (const quality of [65, 50, 35]) {
+                bytes = visualImage.isEmpty() ? sourceBytes : visualImage.toJPEG(quality)
+                if (bytes.length <= CONTROL_BOUNDS.maxVisualScreenshotBytes) break
+            }
+            if (bytes.length > CONTROL_BOUNDS.maxVisualScreenshotBytes) {
                 redactions.push('screenshot-size-limit')
             } else if (bytes.length > 0) {
                 mkdirSync(this.artifactDirectory, { recursive: true })
@@ -120,6 +140,7 @@ export class ZyraBrowserDriver implements AgentControlDriver {
             url,
             title: guest.getTitle().slice(0, 512) || undefined,
             origin,
+            viewport,
             elements,
             screenshotRef,
             truncation: nodes.length > elements.length ? { totalElements: nodes.length, returnedElements: elements.length } : undefined,
@@ -142,36 +163,82 @@ export class ZyraBrowserDriver implements AgentControlDriver {
             case 'wait':
                 await this.waitForCondition(guest, action, context)
                 return { changed: false }
+            case 'move': {
+                const point = { x: action.x, y: action.y }
+                await this.movePointer(guest, point, action.durationMs, context)
+                context.updateCursor?.({ phase: 'idle', visible: true })
+                return { changed: false }
+            }
             case 'click': {
-                const point = await this.elementPoint(guest, target.target.targetId, context.revision, action.elementRef)
-                await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 })
-                await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 })
-                await delay(120, context.signal)
+                const point = action.x !== undefined && action.y !== undefined
+                    ? { x: action.x, y: action.y }
+                    : await this.elementPoint(guest, target.target.targetId, context.revision, action.elementRef!)
+                await this.movePointer(guest, point, 180, context)
+                const button = action.button || 'left'
+                const clickCount = action.clickCount || 1
+                context.updateCursor?.({ ...point, phase: 'pressing', visible: true, durationMs: 70 })
+                await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button, clickCount })
+                await delay(70, context.signal)
+                await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button, clickCount })
+                context.updateCursor?.({ ...point, phase: 'idle', visible: true, durationMs: 90 })
+                await delay(90, context.signal)
+                return { changed: true }
+            }
+            case 'drag': {
+                const from = { x: action.fromX, y: action.fromY }
+                const to = { x: action.toX, y: action.toY }
+                const button = action.button || 'left'
+                const durationMs = Math.max(120, Math.min(2_000, action.durationMs || 420))
+                await this.movePointer(guest, from, 160, context)
+                await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mousePressed', ...from, button, clickCount: 1 })
+                context.updateCursor?.({ ...to, phase: 'dragging', visible: true, durationMs })
+                const steps = Math.max(4, Math.min(20, Math.round(durationMs / 35)))
+                for (let step = 1; step <= steps; step += 1) {
+                    const progress = step / steps
+                    const point = { x: from.x + (to.x - from.x) * progress, y: from.y + (to.y - from.y) * progress }
+                    await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mouseMoved', ...point, button, buttons: 1 })
+                    await delay(durationMs / steps, context.signal)
+                }
+                await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...to, button, clickCount: 1 })
+                context.updateCursor?.({ ...to, phase: 'idle', visible: true, durationMs: 100 })
                 return { changed: true }
             }
             case 'type': {
+                const point = await this.elementPoint(guest, target.target.targetId, context.revision, action.elementRef)
+                await this.movePointer(guest, point, 160, context)
                 const reference = this.element(target.target.targetId, context.revision, action.elementRef)
                 await this.command(guest, 'DOM.focus', { backendNodeId: reference.backendNodeId })
+                context.updateCursor?.({ ...point, phase: 'typing', visible: true, durationMs: 90 })
                 if (action.replace) {
                     await this.command(guest, 'Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 2 })
                     await this.command(guest, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 2 })
                 }
                 await this.command(guest, 'Input.insertText', { text: action.text })
+                context.updateCursor?.({ ...point, phase: 'idle', visible: true, durationMs: 100 })
                 return { changed: true }
             }
             case 'key':
+                context.updateCursor?.({ phase: 'typing', visible: true, durationMs: 80 })
                 await this.dispatchKey(guest, action.key, action.modifiers)
+                context.updateCursor?.({ phase: 'idle', visible: true, durationMs: 80 })
                 return { changed: true }
             case 'scroll': {
-                const point = action.elementRef
-                    ? await this.elementPoint(guest, target.target.targetId, context.revision, action.elementRef)
-                    : { x: 10, y: 10 }
+                const point = action.x !== undefined && action.y !== undefined
+                    ? { x: action.x, y: action.y }
+                    : action.elementRef
+                        ? await this.elementPoint(guest, target.target.targetId, context.revision, action.elementRef)
+                        : { x: 10, y: 10 }
+                await this.movePointer(guest, point, 120, context)
+                context.updateCursor?.({ ...point, phase: 'scrolling', visible: true, durationMs: 140 })
                 await this.command(guest, 'Input.dispatchMouseEvent', {
                     type: 'mouseWheel', x: point.x, y: point.y, deltaX: action.deltaX, deltaY: action.deltaY
                 })
+                context.updateCursor?.({ ...point, phase: 'idle', visible: true, durationMs: 100 })
                 return { changed: true }
             }
             case 'select': {
+                const point = await this.elementPoint(guest, target.target.targetId, context.revision, action.elementRef)
+                await this.movePointer(guest, point, 160, context)
                 const reference = this.element(target.target.targetId, context.revision, action.elementRef)
                 await this.command(guest, 'DOM.focus', { backendNodeId: reference.backendNodeId })
                 await this.dispatchKey(guest, 'Home')
@@ -179,8 +246,21 @@ export class ZyraBrowserDriver implements AgentControlDriver {
                     await this.command(guest, 'Input.insertText', { text: value })
                     await this.dispatchKey(guest, 'Enter')
                 }
+                context.updateCursor?.({ ...point, phase: 'idle', visible: true, durationMs: 100 })
                 return { changed: true }
             }
+        }
+    }
+
+    readScreenshot(screenshotRef: string) {
+        const file = this.artifacts.get(screenshotRef)
+        if (!file) return undefined
+        try {
+            const bytes = readFileSync(file)
+            if (bytes.length === 0 || bytes.length > CONTROL_BOUNDS.maxVisualScreenshotBytes) return undefined
+            return { data: bytes.toString('base64'), mimeType: 'image/jpeg' as const, bytes: bytes.length }
+        } catch {
+            return undefined
         }
     }
 
@@ -262,6 +342,18 @@ export class ZyraBrowserDriver implements AgentControlDriver {
         return { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 }
     }
 
+    private async movePointer(
+        guest: WebContents,
+        point: { x: number; y: number },
+        durationValue: number | undefined,
+        context: DriverActionContext
+    ): Promise<void> {
+        const durationMs = Math.max(0, Math.min(2_000, durationValue ?? 180))
+        context.updateCursor?.({ ...point, phase: 'moving', visible: true, durationMs })
+        await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mouseMoved', ...point })
+        if (durationMs > 0) await delay(durationMs, context.signal)
+    }
+
     private async dispatchKey(guest: WebContents, key: string, modifiers: string[] = []): Promise<void> {
         const modifierMask = modifiers.reduce((mask, modifier) => mask | ({ alt: 1, control: 2, ctrl: 2, meta: 4, shift: 8 }[modifier.toLowerCase()] || 0), 0)
         await this.command(guest, 'Input.dispatchKeyEvent', { type: 'keyDown', key, modifiers: modifierMask })
@@ -309,9 +401,14 @@ function actionsForRole(role: string): string[] {
 async function delay(ms: number, signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) throw new AgentControlError('CONTROL_CANCELLED', 'Browser action was cancelled.')
     await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, Math.max(0, ms))
+        const finish = () => {
+            signal?.removeEventListener('abort', abort)
+            resolve()
+        }
+        const timer = setTimeout(finish, Math.max(0, ms))
         const abort = () => {
             clearTimeout(timer)
+            signal?.removeEventListener('abort', abort)
             reject(new AgentControlError('CONTROL_CANCELLED', 'Browser action was cancelled.'))
         }
         signal?.addEventListener('abort', abort, { once: true })

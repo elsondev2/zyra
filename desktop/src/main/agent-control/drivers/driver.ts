@@ -1,5 +1,6 @@
 import type {
     ControlAction,
+    ControlCursorState,
     ControlObservation,
     ControlTarget,
     ControlWindowCandidate
@@ -16,12 +17,20 @@ export type DriverActionContext = {
     revision: number
     previousObservation: ControlObservation
     signal?: AbortSignal
+    updateCursor?: (patch: Partial<Omit<ControlCursorState, 'targetId' | 'updatedAt'>>) => void
+}
+
+export type ControlScreenshotPayload = {
+    data: string
+    mimeType: 'image/jpeg' | 'image/png' | 'image/webp'
+    bytes: number
 }
 
 export interface AgentControlDriver {
     readonly kind: ControlTarget['kind']
     observe(target: RegisteredControlTarget, options: DriverObservationOptions): Promise<ControlObservation>
     act(target: RegisteredControlTarget, action: ControlAction, context: DriverActionContext): Promise<{ changed: boolean }>
+    readScreenshot?(screenshotRef: string): ControlScreenshotPayload | undefined
     release?(target: RegisteredControlTarget): Promise<void> | void
     emergencyStop?(): Promise<void> | void
     dispose?(): Promise<void> | void

@@ -12,7 +12,11 @@ export class ObservationStore {
     }
 
     set(observation: ControlObservation): void {
-        this.revisions.set(observation.targetId, Math.max(observation.revision, this.revisions.get(observation.targetId) || 0))
+        const issuedRevision = this.revisions.get(observation.targetId) || 0
+        if (observation.revision < issuedRevision) return
+        const current = this.observations.get(observation.targetId)
+        if (current && observation.revision < current.revision) return
+        this.revisions.set(observation.targetId, observation.revision)
         this.observations.set(observation.targetId, observation)
     }
 
@@ -21,7 +25,7 @@ export class ObservationStore {
     }
 
     currentRevision(targetId: string): number {
-        return this.observations.get(targetId)?.revision || this.revisions.get(targetId) || 0
+        return Math.max(this.observations.get(targetId)?.revision || 0, this.revisions.get(targetId) || 0)
     }
 
     requireRevision(targetId: string, revision: number): ControlObservation {

@@ -1469,6 +1469,7 @@ export class ZyraPiRuntime extends EventEmitter {
             const requestedThreadId = shouldResumeProviderSession ? context.resumeProviderThreadId || undefined : undefined
             const result = await context.worker.request('connect', {
                 cwd: context.cwd,
+                localThreadId: context.localThreadId,
                 threadId: requestedThreadId,
                 providerThreadId: requestedThreadId,
                 noSession: false,

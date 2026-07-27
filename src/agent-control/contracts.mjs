@@ -5,6 +5,7 @@ export const CONTROL_CAPABILITIES = Object.freeze([
   "navigate",
   "pointer.click",
   "pointer.move",
+  "pointer.drag",
   "keyboard.type",
   "keyboard.key",
   "scroll",
@@ -16,6 +17,7 @@ export const CONTROL_BOUNDS = Object.freeze({
   maxObservationElements: 1500,
   maxObservationBytes: 512 * 1024,
   maxScreenshotBytes: 2 * 1024 * 1024,
+  maxVisualScreenshotBytes: 300 * 1024,
   maxPendingActionsPerTarget: 32,
   maxAuditEntries: 500,
   maxPendingPairingRequests: 32,
@@ -81,7 +83,7 @@ export function normalizeControlToolInput(value = {}) {
   if (!value || typeof value !== "object" || Array.isArray(value)) fail("Control tool input is invalid.");
   const operation = String(value.operation || "");
   const allowed = new Set([
-    "list_targets", "list_windows", "request_grant", "observe", "navigate", "click",
+    "list_targets", "list_windows", "request_grant", "observe", "navigate", "move", "click", "drag",
     "type", "key", "scroll", "select", "wait", "focus", "release",
   ]);
   if (!allowed.has(operation)) fail(`Unknown control operation: ${operation || "missing"}`);

@@ -58,19 +58,34 @@ let observedChildPrincipal: ControlPrincipal | undefined
 const runner = {
     async run(run: Record<string, any>, options: Record<string, any>) {
         assert(run.tools.includes('browser_control'))
-        assert.equal(options.controlLease?.issuedBy, 'delegated-parent')
         const childClient = options.controlClient
         const visible = await childClient.request({ operation: 'list_targets', targetKind: 'zyra-browser' })
         assert.deepEqual(visible.targets.map((target: { targetId: string }) => target.targetId), [targetId])
-        await assert.rejects(
-            childClient.request({ operation: 'request_grant', targetId, capabilities: ['observe.structure'] }),
-            /Only the root agent may request/
-        )
+        let grantId = options.controlLease?.grantId
+        if (run.goal === 'request browser on demand') {
+            assert.equal(options.controlLease, undefined)
+            const requested = await childClient.request({
+                operation: 'request_grant', targetId, capabilities: ['observe.structure'], maxActions: 3
+            })
+            assert.equal(requested.pending, true)
+            const childGrant = broker.approvePendingGrant({
+                pendingRequestId: requested.request.requestId,
+                targetId,
+                capabilities: requested.request.capabilities,
+                durationMs: 30_000,
+                maxActions: 3,
+                allowedOrigins: requested.request.allowedOrigins
+            })
+            grantId = childGrant.grantId
+            observedChildPrincipal = childGrant.principal
+        } else {
+            assert.equal(options.controlLease?.issuedBy, 'delegated-parent')
+            observedChildPrincipal = options.controlLease.principal
+        }
         const observed = await childClient.request({
-            operation: 'observe', grantId: options.controlLease.grantId, targetId
+            operation: 'observe', grantId, targetId
         }, { signal: options.signal })
         assert.equal(observed.observation.targetId, targetId)
-        observedChildPrincipal = options.controlLease.principal
         const sessionFile = path.join(project, `${run.agentRunId}.jsonl`)
         await writeFile(sessionFile, '')
         const host = { dispose() {}, async send() {} }
@@ -118,6 +133,20 @@ await waitFor(() => controller.status(completedSpawn.agentRunId).controlLease?.s
 const completedLease = broker.grants.list().find((grant) => grant.principal.type === 'agent' && grant.principal.agentRunId === completedSpawn.agentRunId)
 assert.equal(completedLease?.state, 'revoked')
 assert.equal(broker.grants.list().find((grant) => grant.grantId === parentGrant.grantId)?.actionCount, 1, 'child actions consume the parent action budget')
+
+const onDemandSpawn = await controller.spawn({
+    prompt: 'request browser on demand',
+    model: 'terra',
+    tools: ['read'],
+    background: true
+})
+const onDemand = await controller.wait(onDemandSpawn.agentRunId)
+assert.equal(onDemand.status, 'completed')
+assert(onDemand.tools.includes('browser_control'))
+await waitFor(() => broker.grants.list().some((grant) => grant.principal.type === 'agent' && grant.principal.agentRunId === onDemandSpawn.agentRunId && grant.state === 'revoked'))
+const onDemandGrant = broker.grants.list().find((grant) => grant.principal.type === 'agent' && grant.principal.agentRunId === onDemandSpawn.agentRunId)
+assert.equal(onDemandGrant?.state, 'revoked')
+assert.equal(broker.grants.listPending().some((request) => request.principal.type === 'agent' && request.principal.agentRunId === onDemandSpawn.agentRunId), false)
 
 const cancellationParent = issueRootGrant()
 const cancellableSpawn = await controller.spawn({

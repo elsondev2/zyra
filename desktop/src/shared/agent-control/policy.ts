@@ -4,6 +4,7 @@ export const CONTROL_BOUNDS = {
     maxObservationElements: 1_500,
     maxObservationBytes: 512 * 1024,
     maxScreenshotBytes: 2 * 1024 * 1024,
+    maxVisualScreenshotBytes: 300 * 1024,
     maxPendingActionsPerTarget: 32,
     maxAuditEntries: 500,
     maxPendingPairingRequests: 32,
@@ -16,7 +17,9 @@ export const CONTROL_BOUNDS = {
 } as const
 
 export const CONTROL_ACTION_CAPABILITY: Record<ControlAction['type'], ControlCapability | null> = {
+    move: 'pointer.move',
     click: 'pointer.click',
+    drag: 'pointer.drag',
     type: 'keyboard.type',
     key: 'keyboard.key',
     scroll: 'scroll',
@@ -40,7 +43,7 @@ export const CONTROL_SIDE_EFFECTS_REQUIRING_APPROVAL = new Set<ControlSideEffect
 
 export const TARGET_CAPABILITIES: Record<ControlTarget['kind'], ReadonlySet<ControlCapability>> = {
     'zyra-browser': new Set([
-        'observe.structure', 'observe.screenshot', 'navigate', 'pointer.click', 'pointer.move',
+        'observe.structure', 'observe.screenshot', 'navigate', 'pointer.click', 'pointer.move', 'pointer.drag',
         'keyboard.type', 'keyboard.key', 'scroll', 'form.select', 'window.focus'
     ]),
     'chrome-tab': new Set([

@@ -79,15 +79,36 @@ Browser guests use:
 
 These values are forced during `will-attach-webview`; the renderer-provided attribute string is not treated as the security boundary.
 
-## Current Scope
+## Visual Agent Control
 
-The first milestone intentionally excludes:
+Each trusted Browser guest registers as an on-demand `zyra-browser` control target. The Browser remains usable without an agent; authority is created only after a root or child principal requests a bounded grant and the user approves it in Control Center.
 
-- device emulation and freeform viewport sizing;
-- element picking and component metadata;
-- screenshots and recordings;
-- agent-driven click, type, inspect, or evaluate tools;
+The visual loop is:
+
+1. capture a bounded rendered JPEG from the guest;
+2. return it to the model as an image content block;
+3. bind it to a monotonic observation revision and viewport;
+4. validate a coordinate or element action against that revision and grant;
+5. publish the exact coordinates as `ControlCursorState`;
+6. animate the cyan agent cursor above the retained webview;
+7. dispatch target-local CDP input without moving the Windows pointer;
+8. capture a fresh higher revision before the next action.
+
+Supported in-app actions include move, click, double click, drag, scroll, bounded typing, keys, select, navigation, and waits. DOM and accessibility metadata support safety checks and optional targeting; the rendered frame remains the agent’s primary visual input.
+
+Browser targets expose bounded trusted title, URL, origin, and opaque tab identity so an agent can resolve natural directions such as “the Word Grid tab.” They do not expose cookies, storage, request headers, credentials, or page source.
+
+A desktop child agent has `browser_control` registered without authority. It can discover in-app tabs and create a pending request at any point in its run. User approval binds a grant to that child principal. Completion, cancellation, disconnection, rejection, and Emergency Stop remove active and pending authority.
+
+Coordinate actions run against hidden retained guests and do not activate the Browser Inspector or move the system cursor. Opening Browser shows the live page and current agent cursor. The user can revoke the tab grant or stop all control from the Browser toolbar.
+
+## Remaining Browser Work
+
+- executable per-action approval for irreversible external side effects;
+- trusted user-interaction auto-pause and explicit Take Over/Resume controls;
+- richer agent ownership labels and action history in the Browser toolbar;
 - persisted Chromium back/forward history after the outer Browser workspace is closed;
-- automatic server discovery from terminal output or filesystem watchers.
+- automatic server discovery from terminal output or filesystem watchers;
+- freeform viewport sizing and device emulation.
 
-Those features should build on the existing global local partition, guest owner, and tab identity rather than creating another browser runtime.
+Chrome background visual use is specified separately in `docs/zyra-chrome-visual-browser-use-implementation.md`. Windows isolation is specified in `docs/zyra-windows-isolated-computer-use-implementation.md`.

@@ -715,7 +715,7 @@ export async function createZyraSession(options = {}) {
       project,
       rootSession: result.session,
       rootSessionId: sessionManager.getSessionId?.(),
-      rootThreadId: sessionManager.getSessionId?.(),
+      rootThreadId: options.rootThreadId ?? sessionManager.getSessionId?.(),
       projectTrusted: options.projectTrusted === true || preferences.projectTrusted === true,
       controlBridgeClient: options.controlBridgeClient,
     }).initialize({ installRoot: ROOT });

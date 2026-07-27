@@ -80,6 +80,7 @@ async function handleConnect(payload) {
     surface: "desktop-ui",
     skipMemoryStartup: true,
     skipModelAvailability: true,
+    rootThreadId: payload.localThreadId || undefined,
     controlBridgeClient,
     ...overrides,
   });

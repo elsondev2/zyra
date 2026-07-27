@@ -75,12 +75,57 @@ function sideEffect(value: unknown) {
     return value as 'none' | 'send-or-publish' | 'purchase' | 'account-change' | 'security-change' | 'destructive-delete' | 'file-upload' | 'sensitive-data-submit' | 'software-install' | 'legal-acceptance'
 }
 
+function pointerButton(value: unknown): 'left' | 'middle' | 'right' | undefined {
+    if (value === undefined) return undefined
+    if (value !== 'left' && value !== 'middle' && value !== 'right') fail('Pointer button is invalid.')
+    return value
+}
+
+function pointerCoordinate(value: unknown, label: string): number {
+    return finiteNumber(value, label, 0, 100_000)
+}
+
+function boundedInteger(value: unknown, label: string, min: number, max: number): number {
+    const number = finiteNumber(value, label, min, max)
+    if (!Number.isSafeInteger(number)) fail(`${label} must be an integer.`)
+    return number
+}
+
 export function assertControlAction(value: unknown): ControlAction {
     if (!value || typeof value !== 'object' || Array.isArray(value)) fail('Action is invalid.')
     const action = value as Record<string, unknown>
     switch (action.type) {
-        case 'click':
-            return { type: 'click', elementRef: assertControlIdentifier(action.elementRef, 'elementRef'), ...(sideEffect(action.sideEffect) ? { sideEffect: sideEffect(action.sideEffect) } : {}) }
+        case 'move':
+            return {
+                type: 'move',
+                x: pointerCoordinate(action.x, 'x'),
+                y: pointerCoordinate(action.y, 'y'),
+                durationMs: action.durationMs === undefined ? undefined : finiteNumber(action.durationMs, 'durationMs', 0, 5_000)
+            }
+        case 'click': {
+            const hasElement = action.elementRef !== undefined
+            const hasCoordinates = action.x !== undefined || action.y !== undefined
+            if (!hasElement && !hasCoordinates) fail('Click requires an element reference or screen coordinates.')
+            if (hasCoordinates && (action.x === undefined || action.y === undefined)) fail('Click coordinates require both x and y.')
+            return {
+                type: 'click',
+                ...(hasElement ? { elementRef: assertControlIdentifier(action.elementRef, 'elementRef') } : {}),
+                ...(hasCoordinates ? { x: pointerCoordinate(action.x, 'x'), y: pointerCoordinate(action.y, 'y') } : {}),
+                ...(action.button === undefined ? {} : { button: pointerButton(action.button) }),
+                ...(action.clickCount === undefined ? {} : { clickCount: boundedInteger(action.clickCount, 'clickCount', 1, 3) }),
+                ...(sideEffect(action.sideEffect) ? { sideEffect: sideEffect(action.sideEffect) } : {})
+            }
+        }
+        case 'drag':
+            return {
+                type: 'drag',
+                fromX: pointerCoordinate(action.fromX, 'fromX'),
+                fromY: pointerCoordinate(action.fromY, 'fromY'),
+                toX: pointerCoordinate(action.toX, 'toX'),
+                toY: pointerCoordinate(action.toY, 'toY'),
+                durationMs: action.durationMs === undefined ? undefined : finiteNumber(action.durationMs, 'durationMs', 0, 5_000),
+                button: pointerButton(action.button)
+            }
         case 'type':
             return {
                 type: 'type',
@@ -96,13 +141,18 @@ export function assertControlAction(value: unknown): ControlAction {
                 modifiers: Array.isArray(action.modifiers) ? action.modifiers.slice(0, 8).map((entry) => boundedString(entry, 'modifier', 24)) : undefined,
                 ...(sideEffect(action.sideEffect) ? { sideEffect: sideEffect(action.sideEffect) } : {})
             }
-        case 'scroll':
+        case 'scroll': {
+            const hasCoordinates = action.x !== undefined || action.y !== undefined
+            if (hasCoordinates && (action.x === undefined || action.y === undefined)) fail('Scroll coordinates require both x and y.')
             return {
                 type: 'scroll',
                 elementRef: action.elementRef === undefined ? undefined : assertControlIdentifier(action.elementRef, 'elementRef'),
+                x: hasCoordinates ? pointerCoordinate(action.x, 'x') : undefined,
+                y: hasCoordinates ? pointerCoordinate(action.y, 'y') : undefined,
                 deltaX: finiteNumber(action.deltaX, 'deltaX', -100_000, 100_000),
                 deltaY: finiteNumber(action.deltaY, 'deltaY', -100_000, 100_000)
             }
+        }
         case 'select':
             if (!Array.isArray(action.values) || action.values.length === 0 || action.values.length > 32) fail('Select values are invalid.')
             return {

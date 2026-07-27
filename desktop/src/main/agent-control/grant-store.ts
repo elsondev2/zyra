@@ -62,6 +62,17 @@ export class GrantStore {
         return [...this.pending.values()]
     }
 
+    removePendingByPrincipal(principal: ControlPrincipal): ControlPendingGrant[] {
+        const key = principalKey(principal)
+        const removed: ControlPendingGrant[] = []
+        for (const [requestId, request] of this.pending) {
+            if (principalKey(request.principal) !== key) continue
+            this.pending.delete(requestId)
+            removed.push(request)
+        }
+        return removed
+    }
+
     issue(input: IssueGrantInput): ControlGrant {
         const maxActions = Math.max(1, Math.min(CONTROL_BOUNDS.maxGrantActions, Math.floor(input.maxActions)))
         const grant: ControlGrant = {

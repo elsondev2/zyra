@@ -1,7 +1,7 @@
 const SAFE_READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const DELEGATABLE_CONTROL_TOOLS = new Set(["browser_control", "computer_control"]);
 const CONTROL_CAPABILITIES = new Set([
-  "observe.structure", "observe.screenshot", "navigate", "pointer.click", "pointer.move",
+  "observe.structure", "observe.screenshot", "navigate", "pointer.click", "pointer.move", "pointer.drag",
   "keyboard.type", "keyboard.key", "scroll", "form.select", "window.focus",
 ]);
 const KNOWN_TOOLS = new Set(["read", "grep", "find", "ls", "bash", "edit", "write", "web_search", "web_fetch", ...DELEGATABLE_CONTROL_TOOLS]);
@@ -23,7 +23,9 @@ export function attenuateAgentCapabilities(definition = {}, request = {}, policy
 
   for (const tool of requestedTools) {
     if (DELEGATABLE_CONTROL_TOOLS.has(tool)) {
-      if (policy.allowDelegatedControl === true && request.controlLease) {
+      if (tool === "browser_control" && policy.allowOnDemandBrowser === true) {
+        tools.push(tool);
+      } else if (policy.allowDelegatedControl === true && request.controlLease) {
         tools.push(tool);
       } else {
         denied.push({ tool, reason: "child_control_denied" });
@@ -101,6 +103,7 @@ export function assertNoControlCapabilities(tools = [], capabilities = [], optio
   const delegatedCapabilities = new Set(uniqueStrings(options.delegatedCapabilities));
   const forbidden = [
     ...tools.filter((value) => (CONTROL_TOOL_RE.test(value) || ["agent", "workflow"].includes(value))
+      && !(options.allowOnDemandBrowser === true && value === "browser_control")
       && !(options.allowDelegatedControl === true && DELEGATABLE_CONTROL_TOOLS.has(value))),
     ...capabilities.filter((value) => (CONTROL_TOOL_RE.test(value) || CONTROL_CAPABILITIES.has(value))
       && !(options.allowDelegatedControl === true && delegatedCapabilities.has(value))),
