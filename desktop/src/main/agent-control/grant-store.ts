@@ -93,8 +93,8 @@ export class GrantStore {
         if (!subset(request.allowedOrigins, parent.allowedOrigins)) throw new AgentControlError('CONTROL_SCOPE_DENIED', 'Delegated origin scope is wider than the parent grant.')
         if (!subset(request.allowedExecutableIdentities, parent.allowedExecutableIdentities)) throw new AgentControlError('CONTROL_SCOPE_DENIED', 'Delegated application scope is wider than the parent grant.')
         if (Date.parse(request.expiresAt) > Date.parse(parent.expiresAt)) throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Delegated expiry is later than the parent grant.')
-        const remainingActions = parent.maxActions - parent.actionCount
-        if (request.maxActions < 1 || request.maxActions > remainingActions) throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Delegated action count exceeds the parent grant.')
+        const remainingActions = parent.maxActions - parent.actionCount - this.reservedActions(parent.grantId)
+        if (request.maxActions < 1 || request.maxActions > remainingActions) throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Delegated action count exceeds the parent grant\'s unreserved actions.')
         const sameCapabilities = request.capabilities.length === parent.capabilities.length
         const sameExpiry = Date.parse(request.expiresAt) === Date.parse(parent.expiresAt)
         const sameActions = request.maxActions === remainingActions
@@ -122,13 +122,18 @@ export class GrantStore {
         if (principal && principalKey(grant.principal) !== principalKey(principal)) {
             throw new AgentControlError('CONTROL_PRINCIPAL_MISMATCH', 'The control grant belongs to another principal.')
         }
-        if (grant.state !== 'active') throw new AgentControlError('CONTROL_GRANT_INACTIVE', `The control grant is ${grant.state}.`)
-        if (Date.parse(grant.expiresAt) <= Date.now()) {
-            grant.state = 'expired'
-            this.revokeDescendants(grant.grantId, 'expired')
-            throw new AgentControlError('CONTROL_GRANT_EXPIRED', 'The control grant expired.')
+        if (grant.parentGrantId) {
+            const parent = this.grants.get(grant.parentGrantId)
+            if (!parent) {
+                grant.state = 'revoked'
+                throw new AgentControlError('CONTROL_GRANT_INACTIVE', 'The delegated lease lost its parent grant.')
+            }
+            this.assertLifecycleActive(parent)
         }
-        if (grant.actionCount >= grant.maxActions) {
+        this.assertLifecycleActive(grant)
+        const reservedActions = grant.parentGrantId ? 0 : this.reservedActions(grant.grantId)
+        if (grant.actionCount + reservedActions >= grant.maxActions) {
+            if (reservedActions > 0) throw new AgentControlError('CONTROL_GRANT_INACTIVE', 'The control grant has no unreserved actions while child leases are active.')
             grant.state = 'consumed'
             this.revokeDescendants(grant.grantId, 'revoked')
             throw new AgentControlError('CONTROL_GRANT_INACTIVE', 'The control grant has no remaining actions.')
@@ -139,6 +144,7 @@ export class GrantStore {
     consume(grantId: string): ControlGrant {
         const grant = this.requireActive(grantId)
         grant.actionCount += 1
+        if (grant.parentGrantId) this.consumeAncestor(grant.parentGrantId)
         if (grant.actionCount >= grant.maxActions) grant.state = 'consumed'
         return grant
     }
@@ -155,9 +161,13 @@ export class GrantStore {
         return this.list().filter((grant) => grant.targetId === targetId && grant.state === 'active').map((grant) => this.revoke(grant.grantId)!)
     }
 
-    revokeByPrincipal(principal: ControlPrincipal): ControlGrant[] {
+    listForPrincipal(principal: ControlPrincipal): ControlGrant[] {
         const key = principalKey(principal)
-        return this.list().filter((grant) => principalKey(grant.principal) === key && grant.state === 'active').map((grant) => this.revoke(grant.grantId)!)
+        return this.list().filter((grant) => principalKey(grant.principal) === key)
+    }
+
+    revokeByPrincipal(principal: ControlPrincipal): ControlGrant[] {
+        return this.listForPrincipal(principal).filter((grant) => grant.state === 'active').map((grant) => this.revoke(grant.grantId)!)
     }
 
     revokeAll(): ControlGrant[] {
@@ -179,6 +189,32 @@ export class GrantStore {
     list(): ControlGrant[] {
         this.expire()
         return [...this.grants.values()]
+    }
+
+    private assertLifecycleActive(grant: ControlGrant): void {
+        if (grant.state !== 'active') throw new AgentControlError('CONTROL_GRANT_INACTIVE', `The control grant is ${grant.state}.`)
+        if (Date.parse(grant.expiresAt) <= Date.now()) {
+            grant.state = 'expired'
+            this.revokeDescendants(grant.grantId, 'expired')
+            throw new AgentControlError('CONTROL_GRANT_EXPIRED', 'The control grant expired.')
+        }
+    }
+
+    private reservedActions(parentGrantId: string): number {
+        return [...this.grants.values()]
+            .filter((grant) => grant.parentGrantId === parentGrantId && grant.state === 'active')
+            .reduce((total, grant) => total + Math.max(0, grant.maxActions - grant.actionCount), 0)
+    }
+
+    private consumeAncestor(grantId: string): void {
+        const grant = this.grants.get(grantId)
+        if (!grant || grant.state !== 'active') return
+        grant.actionCount += 1
+        if (grant.parentGrantId) this.consumeAncestor(grant.parentGrantId)
+        if (grant.actionCount >= grant.maxActions) {
+            grant.state = 'consumed'
+            this.revokeDescendants(grant.grantId, 'revoked')
+        }
     }
 
     private revokeDescendants(parentGrantId: string, state: 'expired' | 'revoked'): void {

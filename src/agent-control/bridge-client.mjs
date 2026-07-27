@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { CONTROL_BOUNDS, ControlContractError } from "./contracts.mjs";
+import { assertControlPrincipal, CONTROL_BOUNDS, ControlContractError } from "./contracts.mjs";
 
 export class AgentControlBridgeClient {
   constructor(options = {}) {
@@ -36,7 +36,15 @@ export class AgentControlBridgeClient {
         return;
       }
       options.signal?.addEventListener?.("abort", abort, { once: true });
-      this.send({ type: "control.request", requestId, operation });
+      const principal = options.principal ? assertControlPrincipal(options.principal) : undefined;
+      this.send({ type: "control.request", requestId, operation, ...(principal ? { principal } : {}) });
+    });
+  }
+
+  forPrincipal(principalValue) {
+    const principal = assertControlPrincipal(principalValue);
+    return Object.freeze({
+      request: (operation, options = {}) => this.request(operation, { ...options, principal }),
     });
   }
 

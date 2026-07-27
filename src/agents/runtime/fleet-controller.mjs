@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { assertControlCapabilities, assertControlIdentifier, assertControlPrincipal } from "../../agent-control/contracts.mjs";
 import { attenuateAgentCapabilities, assertNoControlCapabilities } from "../capability-policy.mjs";
 import { normalizeAgentRun, TERMINAL_AGENT_STATES } from "../contracts.mjs";
 import { discoverAgentDefinitions } from "../definition-loader.mjs";
@@ -58,6 +59,7 @@ export class AgentFleetController {
       modelRegistry: options.modelRegistry ?? this.rootSession?.modelRegistry,
     });
     this.runner = options.runner ?? new AgentRunner({ sessionFactory: this.sessionFactory });
+    this.controlBridgeClient = options.controlBridgeClient;
     this.workflowRuntime = null;
   }
 
@@ -126,8 +128,27 @@ export class AgentFleetController {
     }
     const depth = Number(request.depth ?? 1);
     if (depth > this.maxDepth) throw new Error(`Agent depth ${depth} exceeds fleet maximum ${this.maxDepth}.`);
-    const capability = attenuateAgentCapabilities(definition, request, request.policy);
-    assertNoControlCapabilities(capability.tools, capability.capabilities);
+    const agentRunId = String(request.agentRunId ?? randomUUID());
+    const controlLeaseRequest = normalizeControlLeaseRequest(request.controlLease);
+    if (controlLeaseRequest && request.parentAgentRunId) {
+      throw new Error("Only the root agent may delegate a control lease.");
+    }
+    if (controlLeaseRequest && !this.controlBridgeClient?.request) {
+      throw new Error("Delegated control requires a connected desktop control broker.");
+    }
+    const allowDelegatedControl = Boolean(controlLeaseRequest && this.controlBridgeClient?.request);
+    const capability = attenuateAgentCapabilities(definition, { ...request, controlLease: controlLeaseRequest }, {
+      ...request.policy,
+      allowDelegatedControl,
+    });
+    assertNoControlCapabilities(capability.tools, capability.capabilities, {
+      allowDelegatedControl,
+      delegatedCapabilities: controlLeaseRequest?.capabilities,
+    });
+    const delegatedTools = capability.tools.filter((tool) => tool === "browser_control" || tool === "computer_control");
+    if (controlLeaseRequest && delegatedTools.length === 0) {
+      throw new Error("A delegated control lease requires browser_control or computer_control in the child tool allowlist.");
+    }
     if (["writer", "full-access"].includes(capability.permissionMode) && !capability.writeScope.length) {
       throw new Error("Writer agents require an explicit writeScope.");
     }
@@ -137,8 +158,13 @@ export class AgentFleetController {
       envelope: { ...request, tools: capability.tools },
       policy: request.modelPolicy,
     });
-    const agentRunId = String(request.agentRunId ?? randomUUID());
     const attemptId = randomUUID();
+    const childPrincipal = controlLeaseRequest ? {
+      type: "agent",
+      fleetId: this.fleetId,
+      agentRunId,
+      parentThreadId: this.rootThreadId,
+    } : null;
     const run = normalizeAgentRun({
       fleetId: this.fleetId,
       agentRunId,
@@ -161,6 +187,7 @@ export class AgentFleetController {
       effort: request.effort ?? definition.effort,
       tools: capability.tools,
       capabilities: capability.capabilities,
+      controlLease: null,
       permissionMode: capability.permissionMode,
       isolation: capability.isolation,
       readScope: capability.readScope,
@@ -168,10 +195,26 @@ export class AgentFleetController {
       maxTurns: request.maxTurns ?? definition.maxTurns,
       cwd: this.project,
     });
-    await this.emit("agent.created", { agent: run, warnings: capability.warnings }, { agentRunId });
-    this.cancellation.create(agentRunId, request.parentAgentRunId ?? this.fleetId);
-    const queueItem = { run, route, request };
-    this.queue.push(queueItem);
+    let delegatedControl = null;
+    let cancellationCreated = false;
+    try {
+      if (controlLeaseRequest && childPrincipal) {
+        delegatedControl = await this.delegateControlLease(agentRunId, childPrincipal, controlLeaseRequest);
+        run.controlLease = summarizeControlGrant(delegatedControl.grant);
+      }
+      await this.emit("agent.created", { agent: run, warnings: capability.warnings }, { agentRunId });
+      this.cancellation.create(agentRunId, request.parentAgentRunId ?? this.fleetId);
+      cancellationCreated = true;
+      if (delegatedControl) {
+        this.cancellation.addCleanup(agentRunId, (reason) => this.revokeDelegatedControl(agentRunId, delegatedControl, reason));
+      }
+      const queueItem = { run, route, request, delegatedControl };
+      this.queue.push(queueItem);
+    } catch (error) {
+      if (delegatedControl) await this.revokeDelegatedControl(agentRunId, delegatedControl, "agent spawn failed");
+      if (cancellationCreated) this.cancellation.remove(agentRunId);
+      throw error;
+    }
     const resultPromise = this.resultPromise(agentRunId);
     void this.drain();
     if (request.background !== false && definition.background !== false) {
@@ -213,13 +256,15 @@ export class AgentFleetController {
 
   async stop(agentRunId, reason = "stopped by root") {
     const queuedIndex = this.queue.findIndex((item) => item.run.agentRunId === agentRunId);
-    if (queuedIndex >= 0) this.queue.splice(queuedIndex, 1);
+    const wasQueued = queuedIndex >= 0;
+    if (wasQueued) this.queue.splice(queuedIndex, 1);
     await this.cancellation.cancel(agentRunId, reason);
     const run = this.snapshot()?.agents?.[agentRunId];
     if (run && !TERMINAL_AGENT_STATES.has(run.status)) {
       await this.emit("agent.failed", { status: "cancelled", error: { message: reason } }, { agentRunId, flush: true });
       this.resolveWaiters(agentRunId, this.snapshot().agents[agentRunId]);
     }
+    if (wasQueued) this.cancellation.remove(agentRunId);
     return this.snapshot()?.agents?.[agentRunId];
   }
 
@@ -237,6 +282,7 @@ export class AgentFleetController {
       attempt: previous.attempt + 1,
       background: overrides.background ?? true,
       retryOfAttemptId: previous.attemptId,
+      controlLease: overrides.controlLease,
     });
   }
 
@@ -296,7 +342,7 @@ export class AgentFleetController {
   }
 
   async execute(item) {
-    const { run, route, request } = item;
+    const { run, route, request, delegatedControl } = item;
     const agentRunId = run.agentRunId;
     let lock;
     let worktree;
@@ -319,6 +365,8 @@ export class AgentFleetController {
         model: route.selectedModel,
         sessionFile: request.sessionFile,
         signal: this.cancellation.signal(agentRunId),
+        controlClient: delegatedControl?.client,
+        controlLease: delegatedControl?.grant,
         onLinked: async (linked) => {
           active.host = linked.host ?? active.host;
           await this.emit("agent.session.linked", {
@@ -363,10 +411,63 @@ export class AgentFleetController {
       this.resolveWaiters(agentRunId, this.snapshot().agents[agentRunId]);
     } finally {
       lock?.release?.();
+      if (delegatedControl) await this.revokeDelegatedControl(agentRunId, delegatedControl, "agent run ended");
       this.launching.delete(agentRunId);
       this.active.delete(agentRunId);
       this.cancellation.remove(agentRunId);
       void this.drain();
+    }
+  }
+
+  async delegateControlLease(agentRunId, childPrincipal, request) {
+    const result = await this.controlBridgeClient.request({
+      operation: "delegate_lease",
+      parentGrantId: request.parentGrantId,
+      childPrincipal,
+      targetId: request.targetId,
+      capabilities: request.capabilities,
+      expiresAt: request.expiresAt,
+      maxActions: request.maxActions,
+      allowedOrigins: request.allowedOrigins,
+      allowedExecutableIdentities: request.allowedExecutableIdentities,
+    });
+    const grant = result?.grant;
+    if (!grant || typeof grant !== "object") throw new Error("The control broker returned no delegated grant.");
+    const principal = assertControlPrincipal(grant.principal);
+    if (principal.type !== "agent" || principal.fleetId !== this.fleetId || principal.agentRunId !== agentRunId || principal.parentThreadId !== this.rootThreadId) {
+      throw new Error("The control broker returned a lease for another child principal.");
+    }
+    assertControlIdentifier(grant.grantId, "grantId");
+    if (grant.parentGrantId !== request.parentGrantId || grant.targetId !== request.targetId || grant.issuedBy !== "delegated-parent") {
+      throw new Error("The control broker returned a lease outside the requested parent or target scope.");
+    }
+    const client = typeof this.controlBridgeClient.forPrincipal === "function"
+      ? this.controlBridgeClient.forPrincipal(childPrincipal)
+      : Object.freeze({ request: (operation, options = {}) => this.controlBridgeClient.request(operation, { ...options, principal: childPrincipal }) });
+    return { grant, childPrincipal, client, revoked: false, revoking: false };
+  }
+
+  async revokeDelegatedControl(agentRunId, delegatedControl, reason) {
+    if (!delegatedControl || delegatedControl.revoked || delegatedControl.revoking) return;
+    delegatedControl.revoking = true;
+    try {
+      await delegatedControl.client.request({ operation: "revoke_current_principal", reason });
+      delegatedControl.revoked = true;
+      const run = this.snapshot()?.agents?.[agentRunId];
+      if (run?.controlLease) {
+        await this.emit("agent.state.changed", {
+          controlLease: { ...run.controlLease, state: "revoked" },
+        }, { agentRunId });
+      }
+    } catch (error) {
+      await this.emit("agent.activity", {
+        activity: {
+          type: "control-lease-revocation-failed",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      }, { agentRunId });
+    } finally {
+      delegatedControl.revoking = false;
     }
   }
 
@@ -392,4 +493,48 @@ export class AgentFleetController {
   assertUsable() {
     if (this.disposed) throw new Error("Agent fleet is disposed.");
   }
+}
+
+function normalizeControlLeaseRequest(value) {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("controlLease must be an object.");
+  const expiresAtMs = Date.parse(String(value.expiresAt ?? ""));
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) throw new Error("controlLease.expiresAt must be a future timestamp.");
+  const maxActions = Number(value.maxActions);
+  if (!Number.isSafeInteger(maxActions) || maxActions < 1) throw new Error("controlLease.maxActions must be a positive integer.");
+  return {
+    parentGrantId: assertControlIdentifier(value.parentGrantId, "parentGrantId"),
+    targetId: assertControlIdentifier(value.targetId, "targetId"),
+    capabilities: assertControlCapabilities(value.capabilities),
+    expiresAt: new Date(expiresAtMs).toISOString(),
+    maxActions,
+    allowedOrigins: normalizeLeaseScope(value.allowedOrigins, "allowedOrigins"),
+    allowedExecutableIdentities: normalizeLeaseScope(value.allowedExecutableIdentities, "allowedExecutableIdentities"),
+  };
+}
+
+function normalizeLeaseScope(value, label) {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value) || value.length > 32 || value.some((entry) => typeof entry !== "string" || !entry.trim())) {
+    throw new Error(`controlLease.${label} must be a bounded string array.`);
+  }
+  return [...new Set(value.map((entry) => entry.trim()))];
+}
+
+function summarizeControlGrant(grant) {
+  return {
+    version: 1,
+    grantId: grant.grantId,
+    parentGrantId: grant.parentGrantId,
+    targetId: grant.targetId,
+    capabilities: [...grant.capabilities],
+    allowedOrigins: grant.allowedOrigins,
+    allowedExecutableIdentities: grant.allowedExecutableIdentities,
+    issuedAt: grant.issuedAt,
+    expiresAt: grant.expiresAt,
+    maxActions: grant.maxActions,
+    actionCount: grant.actionCount,
+    state: grant.state,
+    issuedBy: grant.issuedBy,
+  };
 }

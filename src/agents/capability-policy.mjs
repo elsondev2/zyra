@@ -1,5 +1,10 @@
 const SAFE_READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
-const KNOWN_TOOLS = new Set(["read", "grep", "find", "ls", "bash", "edit", "write", "web_search", "web_fetch"]);
+const DELEGATABLE_CONTROL_TOOLS = new Set(["browser_control", "computer_control"]);
+const CONTROL_CAPABILITIES = new Set([
+  "observe.structure", "observe.screenshot", "navigate", "pointer.click", "pointer.move",
+  "keyboard.type", "keyboard.key", "scroll", "form.select", "window.focus",
+]);
+const KNOWN_TOOLS = new Set(["read", "grep", "find", "ls", "bash", "edit", "write", "web_search", "web_fetch", ...DELEGATABLE_CONTROL_TOOLS]);
 const CONTROL_TOOL_RE = /(?:browser|chrome|computer|windows|desktop|agent[_-]?control|pair|click|navigate|screenshot)/i;
 const DESTRUCTIVE_GIT_RE = /\bgit\s+(?:reset\s+--hard|clean\s+-[a-z]*f|push\s+--force|rebase|merge|cherry-pick)\b/i;
 const SENSITIVE_COMMAND_RE = /\b(?:deploy|publish|release|terraform\s+apply|kubectl\s+(?:apply|delete)|rm\s+-rf|format\s+[a-z]:|drop\s+(?:database|table))\b/i;
@@ -17,6 +22,14 @@ export function attenuateAgentCapabilities(definition = {}, request = {}, policy
   const tools = [];
 
   for (const tool of requestedTools) {
+    if (DELEGATABLE_CONTROL_TOOLS.has(tool)) {
+      if (policy.allowDelegatedControl === true && request.controlLease) {
+        tools.push(tool);
+      } else {
+        denied.push({ tool, reason: "child_control_denied" });
+      }
+      continue;
+    }
     if (CONTROL_TOOL_RE.test(tool) || ["agent", "workflow"].includes(tool)) {
       denied.push({ tool, reason: "child_control_denied" });
       continue;
@@ -47,8 +60,14 @@ export function attenuateAgentCapabilities(definition = {}, request = {}, policy
     warnings.push("Writer has no declared write scope; execution must remain blocked until scope is declared.");
   }
 
-  const capabilities = uniqueStrings(request.capabilities ?? definition.capabilities).filter((capability) => {
-    if (DEFAULT_CHILD_DENIED_CAPABILITIES.includes(capability) || CONTROL_TOOL_RE.test(capability)) {
+  const delegatedCapabilities = new Set(uniqueStrings(request.controlLease?.capabilities));
+  const requestedCapabilities = uniqueStrings([
+    ...uniqueStrings(request.capabilities ?? definition.capabilities),
+    ...uniqueStrings(request.controlLease?.capabilities),
+  ]);
+  const capabilities = requestedCapabilities.filter((capability) => {
+    if (DEFAULT_CHILD_DENIED_CAPABILITIES.includes(capability) || CONTROL_TOOL_RE.test(capability) || CONTROL_CAPABILITIES.has(capability)) {
+      if (policy.allowDelegatedControl === true && delegatedCapabilities.has(capability)) return true;
       denied.push({ capability, reason: "child_control_denied" });
       return false;
     }
@@ -78,8 +97,14 @@ export function commandRequiresExplicitApproval(command) {
   return { required: false };
 }
 
-export function assertNoControlCapabilities(tools = [], capabilities = []) {
-  const forbidden = [...tools, ...capabilities].filter((value) => CONTROL_TOOL_RE.test(value) || ["agent", "workflow"].includes(value));
+export function assertNoControlCapabilities(tools = [], capabilities = [], options = {}) {
+  const delegatedCapabilities = new Set(uniqueStrings(options.delegatedCapabilities));
+  const forbidden = [
+    ...tools.filter((value) => (CONTROL_TOOL_RE.test(value) || ["agent", "workflow"].includes(value))
+      && !(options.allowDelegatedControl === true && DELEGATABLE_CONTROL_TOOLS.has(value))),
+    ...capabilities.filter((value) => (CONTROL_TOOL_RE.test(value) || CONTROL_CAPABILITIES.has(value))
+      && !(options.allowDelegatedControl === true && delegatedCapabilities.has(value))),
+  ];
   if (forbidden.length) throw new Error(`Child control capabilities are denied: ${forbidden.join(", ")}.`);
 }
 

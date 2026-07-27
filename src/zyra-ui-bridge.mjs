@@ -416,6 +416,7 @@ function projectFleetSnapshot(snapshot) {
     goal: String(run.goal ?? "").slice(0, 1000), status: run.status, depth: run.depth, contextFork: run.contextFork,
     attempt: run.attempt, maxAttempts: 1, requestedModel: run.requestedModel, selectedModel: run.selectedModel, modelRoute: run.modelRoute,
     effort: run.effort, requestedTools: run.tools, grantedTools: run.tools, deniedTools: [], deniedCapabilities: [],
+    controlLease: run.controlLease ?? null,
     permissionMode: run.permissionMode, isolation: run.isolation, readScope: run.readScope, writeScope: run.writeScope,
     worktree: run.worktree, providerSessionId: run.providerSessionId, sessionFile: run.sessionFile,
     createdAt: run.createdAt, queuedAt: run.createdAt, startedAt: run.startedAt, completedAt: run.completedAt, heartbeatAt: run.heartbeatAt,

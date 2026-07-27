@@ -110,6 +110,7 @@ function applyEventMutation(state, event) {
         completedAt: payload.completedAt,
         elapsedMs: payload.elapsedMs,
         activity: payload.activity,
+        controlLease: payload.controlLease,
       });
       return;
     case "agent.activity":

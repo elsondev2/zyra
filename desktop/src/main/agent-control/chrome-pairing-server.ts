@@ -170,6 +170,21 @@ export class ChromePairingServer extends EventEmitter {
 
     private handleExtensionEvent(session: PairSession, body: Record<string, unknown>): void {
         const type = String(body.type || '')
+        if (type === 'session.disconnect') {
+            this.sessions.delete(session.extensionId)
+            if (this.currentState.state === 'paired' && this.currentState.pairId === session.pairId) {
+                const remaining = this.sessions.values().next().value as PairSession | undefined
+                this.currentState = remaining
+                    ? { state: 'paired', pairId: remaining.pairId, port: this.currentState.port, extensionId: remaining.extensionId }
+                    : { state: 'stopped' }
+            }
+            if (this.sessions.size === 0) {
+                this.pairingCode = ''
+                this.pairingExpiresAt = 0
+            }
+            this.emitEvent({ type: 'session.disconnected', pairId: session.pairId, reason: 'extension-disconnected' })
+            return
+        }
         if (type === 'tab.register') {
             const tabId = Number(body.tabId)
             const url = String(body.url || '')

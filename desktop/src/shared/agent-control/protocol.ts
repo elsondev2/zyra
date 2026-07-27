@@ -2,7 +2,8 @@ import type {
     ControlActionRequest,
     ControlCapability,
     ControlPrincipal,
-    ControlSideEffectClass
+    ControlSideEffectClass,
+    DelegatedControlLeaseRequest
 } from './contracts'
 
 export const AGENT_CONTROL_IPC = {
@@ -45,6 +46,8 @@ export type AgentControlBridgeOperation =
     }
     | { operation: 'observe'; grantId: string; targetId: string; includeScreenshot?: boolean }
     | ({ operation: 'act' } & ControlActionRequest)
+    | ({ operation: 'delegate_lease' } & Omit<DelegatedControlLeaseRequest, 'parentPrincipal'>)
+    | { operation: 'revoke_current_principal'; reason?: string }
     | { operation: 'release'; grantId: string }
 
 export type AgentControlBridgeRequest = {

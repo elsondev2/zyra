@@ -34,12 +34,47 @@ test('extension sources keep bearer credentials out of query strings and persist
 
 test('exact-tab and sensitive-field guards are present in executable sources', async () => {
   const tabGrants = await readFile(path.join(root, 'src', 'tab-grants.ts'), 'utf8')
+  const serviceWorker = await readFile(path.join(root, 'src', 'service-worker.ts'), 'utf8')
   const observer = await readFile(path.join(root, 'src', 'content-observer.ts'), 'utf8')
   const action = await readFile(path.join(root, 'src', 'action-runner.ts'), 'utf8')
   assert.match(tabGrants, /requireExactTab/)
   assert.match(tabGrants, /documentId/)
   assert.match(tabGrants, /if \(changeInfo\.url\) void revokeTab\(tabId\)/)
+  assert.match(serviceWorker, /import \{[^}]*sendEvent[^}]*\} from '\.\/pairing\.js'/)
+  assert.match(serviceWorker, /startPolling\(handleBrokerOperation, \(\) => revokeAllTabs\(\{ notify: false \}\)\)/)
+  assert.match(serviceWorker, /sendEvent\(\{ type: 'session\.disconnect' \}\)/)
   assert.match(observer, /role === 'password'/)
   assert.match(action, /stale observation/)
   assert.match(action, /external side effect/)
+})
+
+test('disconnect cleanup removes every exact-tab grant from session storage', async () => {
+  const values = {
+    zyraExactTabGrantsV1: {
+      '41': { tabId: 41, documentId: 'document:one', url: 'https://example.test/', grantedAt: Date.now() },
+      '42': { tabId: 42, documentId: 'document:two', url: 'http://127.0.0.1/', grantedAt: Date.now() }
+    }
+  }
+  globalThis.chrome = {
+    storage: {
+      session: {
+        get: async (key) => ({ [key]: values[key] }),
+        set: async (next) => Object.assign(values, next),
+        remove: async (key) => { delete values[key] }
+      }
+    },
+    tabs: {
+      onRemoved: { addListener() {} },
+      onUpdated: { addListener() {} }
+    }
+  }
+  try {
+    const tabGrants = await import(`${pathToFileURL(path.join(root, 'dist', 'unpacked', 'tab-grants.js')).href}?cleanup=${Date.now()}`)
+    assert.equal((await tabGrants.listTabGrants()).length, 2)
+    assert.deepEqual(await tabGrants.revokeAllTabs({ notify: false }), { revoked: 2 })
+    assert.deepEqual(await tabGrants.listTabGrants(), [])
+    assert.equal(values.zyraExactTabGrantsV1, undefined)
+  } finally {
+    delete globalThis.chrome
+  }
 })

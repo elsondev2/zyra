@@ -45,6 +45,16 @@ export interface AgentRunState {
     grantedTools: string[]
     deniedTools: string[]
     deniedCapabilities: string[]
+    controlLease: {
+        grantId: string
+        parentGrantId: string
+        targetId: string
+        capabilities: string[]
+        expiresAt: string
+        maxActions: number
+        actionCount: number
+        state: 'active' | 'expired' | 'revoked' | 'consumed'
+    } | null
     permissionMode: string
     isolation: AgentIsolationMode
     readScope: string[]

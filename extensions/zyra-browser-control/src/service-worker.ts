@@ -1,6 +1,6 @@
 // @ts-nocheck
-import { pairWithZyra, getPairingSession, clearPairingSession, startPolling, stopPolling } from './pairing.js'
-import { grantActiveTab, listTabGrants, requireExactTab, revokeTab } from './tab-grants.js'
+import { pairWithZyra, getPairingSession, clearPairingSession, sendEvent, startPolling, stopPolling } from './pairing.js'
+import { grantActiveTab, listTabGrants, requireExactTab, revokeAllTabs, revokeTab } from './tab-grants.js'
 import { observePage } from './content-observer.js'
 import { runPageAction } from './action-runner.js'
 import { redactExtensionObservation } from './redaction.js'
@@ -19,24 +19,36 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true
 })
 
-void getPairingSession().then((session) => {
-  if (session) startPolling(handleBrokerOperation)
+void getPairingSession().then(async (session) => {
+  if (session) startControlPolling()
+  else await revokeAllTabs({ notify: false })
 })
 
 async function handlePopupMessage(message) {
   if (message?.type === 'pair') {
+    await disconnectCurrentPairing()
     const paired = await pairWithZyra({ port: Number(message.port), code: String(message.code || '') })
-    startPolling(handleBrokerOperation)
+    startControlPolling()
     return paired
   }
   if (message?.type === 'grant-active-tab') return grantActiveTab()
   if (message?.type === 'disconnect') {
-    stopPolling()
-    await clearPairingSession()
+    await disconnectCurrentPairing()
     return { disconnected: true }
   }
   if (message?.type === 'status') return { session: await getPairingSession(), tabs: await listTabGrants() }
   throw new Error('Unknown extension popup request.')
+}
+
+function startControlPolling() {
+  startPolling(handleBrokerOperation, () => revokeAllTabs({ notify: false }))
+}
+
+async function disconnectCurrentPairing() {
+  stopPolling()
+  await sendEvent({ type: 'session.disconnect' }).catch(() => undefined)
+  await revokeAllTabs({ notify: false })
+  await clearPairingSession()
 }
 
 async function handleBrokerOperation(operation) {

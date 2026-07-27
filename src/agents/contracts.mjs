@@ -97,6 +97,9 @@ export function normalizeAgentRun(input = {}) {
     maxTurns: Math.max(1, Math.min(100, finiteInteger(input.maxTurns, 12))),
     tools: normalizeStringArray(input.tools),
     capabilities: normalizeStringArray(input.capabilities),
+    controlLease: input.controlLease && typeof input.controlLease === "object"
+      ? boundedJsonObject(input.controlLease, 16 * 1024)
+      : null,
     permissionMode: optionalString(input.permissionMode) ?? "read-only",
     isolation: ["shared", "worktree"].includes(input.isolation) ? input.isolation : "shared",
     readScope: normalizeStringArray(input.readScope),

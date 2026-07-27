@@ -39,13 +39,16 @@ export async function sendEvent(event) {
   return result
 }
 
-export function startPolling(handleRequest) {
+export function startPolling(handleRequest, handleDisconnect) {
   if (polling) return
   polling = true
   const loop = async () => {
     while (polling) {
       const session = await getPairingSession()
-      if (!session) break
+      if (!session) {
+        await handleDisconnect?.().catch(() => undefined)
+        break
+      }
       try {
         const result = await authenticatedPost(session, '/v1/poll', {})
         for (const request of result.requests || []) {
@@ -59,6 +62,7 @@ export function startPolling(handleRequest) {
         }
       } catch {
         await clearPairingSession()
+        await handleDisconnect?.().catch(() => undefined)
         break
       }
       await delay(POLL_INTERVAL_MS)

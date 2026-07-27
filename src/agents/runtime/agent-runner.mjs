@@ -24,8 +24,11 @@ export class AgentRunner {
         effort: run.effort,
         tools: run.tools,
         permissionMode: run.permissionMode,
+        readScope: run.readScope,
         writeScope: run.writeScope,
         successCriteria: run.successCriteria,
+        controlClient: options.controlClient,
+        controlLease: options.controlLease,
       });
       options.onLinked?.({ ...linked, host });
       const result = await host.run(buildDelegatedPrompt(run), { signal: options.signal });
@@ -45,6 +48,7 @@ export function buildDelegatedPrompt(run) {
     run.successCriteria?.length ? `Success criteria:\n${run.successCriteria.map((item) => `- ${item}`).join("\n")}` : "",
     run.readScope?.length ? `Read scope:\n${run.readScope.map((item) => `- ${item}`).join("\n")}` : "",
     run.writeScope?.length ? `Write scope:\n${run.writeScope.map((item) => `- ${item}`).join("\n")}` : "",
+    run.controlLease ? `Delegated control lease: ${run.controlLease.grantId}\nTarget: ${run.controlLease.targetId}\nCapabilities: ${run.controlLease.capabilities.join(", ")}\nExpires: ${run.controlLease.expiresAt}` : "",
     `Attempt: ${run.attempt} (${run.attemptId})`,
     "Return only the bounded work result and evidence. Parent policy remains authoritative.",
   ].filter(Boolean).join("\n\n");

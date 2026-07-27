@@ -35,6 +35,15 @@ export async function revokeTab(tabId) {
   await sendEvent({ type: 'tab.closed', tabId }).catch(() => undefined)
 }
 
+export async function revokeAllTabs({ notify = true } = {}) {
+  const grants = Object.values(await readGrants())
+  await chrome.storage.session.remove(GRANTS_KEY)
+  if (notify) {
+    for (const grant of grants) await sendEvent({ type: 'tab.closed', tabId: grant.tabId }).catch(() => undefined)
+  }
+  return { revoked: grants.length }
+}
+
 export async function listTabGrants() {
   return Object.values(await readGrants())
 }

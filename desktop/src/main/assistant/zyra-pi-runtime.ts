@@ -26,6 +26,7 @@ import type { PreparedAssistantPromptImage } from './prompt-images'
 import { getAssistantCanonicalThreadId } from './thread-identity'
 import { getAgentControlBroker } from '../agent-control'
 import { AgentControlError, toAgentControlError } from '../agent-control/control-errors'
+import { assertControlPrincipal } from '../../shared/agent-control/validation'
 
 type ActiveCompactionLifecycle = {
     activityId: string
@@ -68,6 +69,7 @@ type BridgeMessage = {
     id?: number
     requestId?: string
     operation?: unknown
+    principal?: unknown
     ok?: boolean
     result?: Record<string, unknown>
     event?: unknown
@@ -845,7 +847,7 @@ class ZyraPiWorker {
     private readonly pending = new Map<number, PendingBridgeRequest>()
     private readonly eventListeners = new Set<(event: unknown) => void>()
     private readonly controlAbortControllers = new Map<string, AbortController>()
-    private controlRequestHandler: ((operation: unknown, signal: AbortSignal) => Promise<Record<string, unknown>>) | null = null
+    private controlRequestHandler: ((operation: unknown, signal: AbortSignal, principal?: unknown) => Promise<Record<string, unknown>>) | null = null
     private disposed = false
 
     constructor(
@@ -859,7 +861,7 @@ class ZyraPiWorker {
         return () => this.eventListeners.delete(listener)
     }
 
-    setControlRequestHandler(handler: (operation: unknown, signal: AbortSignal) => Promise<Record<string, unknown>>): void {
+    setControlRequestHandler(handler: (operation: unknown, signal: AbortSignal, principal?: unknown) => Promise<Record<string, unknown>>): void {
         this.controlRequestHandler = handler
     }
 
@@ -954,7 +956,7 @@ class ZyraPiWorker {
             return
         }
         if (message.type === 'control.request' && message.requestId) {
-            void this.handleControlRequest(message.requestId, message.operation)
+            void this.handleControlRequest(message.requestId, message.operation, message.principal)
             return
         }
         if (message.type === 'protocol_error') {
@@ -974,13 +976,13 @@ class ZyraPiWorker {
         pending.reject(error)
     }
 
-    private async handleControlRequest(requestId: string, operation: unknown): Promise<void> {
+    private async handleControlRequest(requestId: string, operation: unknown, principal?: unknown): Promise<void> {
         if (!this.child?.stdin.writable) return
         const controller = new AbortController()
         this.controlAbortControllers.set(requestId, controller)
         try {
             if (!this.controlRequestHandler) throw new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', 'Desktop control authority is not bound to this worker.')
-            const result = await this.controlRequestHandler(operation, controller.signal)
+            const result = await this.controlRequestHandler(operation, controller.signal, principal)
             this.child?.stdin.write(`${JSON.stringify({ type: 'control.response', requestId, ok: true, result })}\n`)
         } catch (error) {
             const controlError = toAgentControlError(error)
@@ -1140,9 +1142,16 @@ export class ZyraPiRuntime extends EventEmitter {
             lastAssistantItemId: null,
             lastUsage: null
         }
-        worker.setControlRequestHandler(async (operation, signal) => {
+        worker.setControlRequestHandler(async (operation, signal, principalValue) => {
+            if (principalValue !== undefined) {
+                const principal = assertControlPrincipal(principalValue)
+                if (principal.type !== 'agent' || principal.parentThreadId !== context.localThreadId) {
+                    throw new AgentControlError('CONTROL_PRINCIPAL_MISMATCH', 'The delegated control principal does not belong to this root thread.')
+                }
+                return getAgentControlBroker().handleToolOperation(principal, operation, signal)
+            }
             const turnId = context.activeTurnId
-            if (!turnId) throw new AgentControlError('CONTROL_PRINCIPAL_MISMATCH', 'Control tools require an active root turn.')
+            if (!turnId) throw new AgentControlError('CONTROL_PRINCIPAL_MISMATCH', 'Root control tools require an active root turn.')
             return getAgentControlBroker().handleToolOperation({
                 type: 'root',
                 threadId: context.localThreadId,

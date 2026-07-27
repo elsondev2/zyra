@@ -49,7 +49,8 @@ await new Promise((resolve, reject) => {
 
 function run(executable, args, cwd) {
     return new Promise((resolve, reject) => {
-        const child = spawn(executable, args, { cwd, stdio: 'inherit', shell: false })
+        const requiresCommandShell = process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(executable)
+        const child = spawn(executable, args, { cwd, stdio: 'inherit', shell: requiresCommandShell })
         child.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`${executable} exited with code ${code ?? 'unknown'}`)))
         child.on('error', reject)
     })

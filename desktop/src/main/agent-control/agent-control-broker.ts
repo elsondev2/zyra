@@ -192,7 +192,12 @@ export class AgentControlBroker extends EventEmitter {
     delegate(request: DelegatedControlLeaseRequest): ControlGrant {
         const grant = this.grants.delegate(request)
         const target = this.targets.get(grant.targetId).target
-        assertGrantSupportsTarget(grant, target)
+        try {
+            assertGrantSupportsTarget(grant, target)
+        } catch (error) {
+            this.grants.revoke(grant.grantId)
+            throw error
+        }
         this.audit.append({
             eventType: 'grant.issued', principal: grant.principal, parentPrincipal: request.parentPrincipal,
             targetId: grant.targetId, targetKind: target.kind, grantId: grant.grantId,
@@ -303,8 +308,14 @@ export class AgentControlBroker extends EventEmitter {
         this.changed()
     }
 
-    revokePrincipal(principal: ControlPrincipal): void {
+    revokePrincipal(principal: ControlPrincipal, reason = 'Principal control cancelled.'): void {
         const revoked = this.grants.revokeByPrincipal(principal)
+        for (const grant of revoked) {
+            this.audit.append({
+                eventType: 'grant.revoked', principal: grant.principal, targetId: grant.targetId,
+                grantId: grant.grantId, outcome: 'cancelled', message: reason, redactions: []
+            })
+        }
         if (revoked.length) this.changed()
     }
 
@@ -376,11 +387,15 @@ export class AgentControlBroker extends EventEmitter {
         switch (operation.operation) {
             case 'list_targets': {
                 const kind = operation.targetKind
-                return { targets: this.targets.list(kind).map((entry) => entry.target) }
+                if (principal.type === 'root') return { targets: this.targets.list(kind).map((entry) => entry.target) }
+                const targetIds = new Set(this.grants.listForPrincipal(principal).filter((grant) => grant.state === 'active').map((grant) => grant.targetId))
+                return { targets: this.targets.list(kind).filter((entry) => targetIds.has(entry.target.targetId)).map((entry) => entry.target) }
             }
             case 'list_windows':
+                if (principal.type !== 'root') throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents cannot enumerate or select Windows targets.')
                 return { windows: await this.listWindows() }
             case 'request_grant': {
+                if (principal.type !== 'root') throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Only the root agent may request a new control grant.')
                 const request = this.requestGrant({
                     principal,
                     targetId: operation.targetId,
@@ -392,6 +407,31 @@ export class AgentControlBroker extends EventEmitter {
                 })
                 return { pending: true, request }
             }
+            case 'delegate_lease': {
+                if (principal.type !== 'root') throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Only the root agent may delegate a control lease.')
+                const childPrincipal = assertControlPrincipal(operation.childPrincipal)
+                if (childPrincipal.type !== 'agent' || childPrincipal.parentThreadId !== principal.threadId) {
+                    throw new AgentControlError('CONTROL_PRINCIPAL_MISMATCH', 'The delegated child does not belong to the current root thread.')
+                }
+                const maxActions = Number(operation.maxActions)
+                if (!Number.isSafeInteger(maxActions) || maxActions < 1) throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Delegated maxActions must be a positive integer.')
+                const grant = this.delegate({
+                    parentGrantId: assertControlIdentifier(operation.parentGrantId, 'parentGrantId'),
+                    parentPrincipal: principal,
+                    childPrincipal,
+                    targetId: assertControlIdentifier(operation.targetId, 'targetId'),
+                    capabilities: assertControlCapabilities(operation.capabilities),
+                    expiresAt: String(operation.expiresAt),
+                    maxActions,
+                    allowedOrigins: operation.allowedOrigins,
+                    allowedExecutableIdentities: operation.allowedExecutableIdentities
+                })
+                return { grant }
+            }
+            case 'revoke_current_principal':
+                if (principal.type !== 'agent') throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Only a delegated child runtime may revoke its principal lease through this operation.')
+                this.revokePrincipal(principal, operation.reason || 'Child run ended or was cancelled.')
+                return { revoked: true }
             case 'observe':
                 return { observation: await this.observe(principal, operation.grantId, operation.targetId, Boolean(operation.includeScreenshot), signal) }
             case 'act':

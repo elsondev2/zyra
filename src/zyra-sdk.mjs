@@ -717,6 +717,7 @@ export async function createZyraSession(options = {}) {
       rootSessionId: sessionManager.getSessionId?.(),
       rootThreadId: sessionManager.getSessionId?.(),
       projectTrusted: options.projectTrusted === true || preferences.projectTrusted === true,
+      controlBridgeClient: options.controlBridgeClient,
     }).initialize({ installRoot: ROOT });
     workflows = await new WorkflowRuntime({
       controller: fleet,

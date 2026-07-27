@@ -29,9 +29,15 @@ assert.equal(tabEvent.status, 200)
 const event = await eventPromise
 assert.equal(event.tabId, 42)
 assert.equal(event.extensionId, extensionId)
-await server.stop('test-complete')
+const disconnectPromise = new Promise<any>((resolve) => server.once('extension-event', resolve))
+const disconnected = await post('/v1/event', { type: 'session.disconnect' }, origin, tabEvent.body.nextToken)
+assert.equal(disconnected.status, 200)
+const disconnectEvent = await disconnectPromise
+assert.equal(disconnectEvent.type, 'session.disconnected')
+assert.equal(disconnectEvent.pairId, paired.body.pairId)
 assert.equal(server.state().state, 'stopped')
-console.log('Chrome loopback pairing origin, proof, rotation, replay, and exact-tab event checks passed.')
+await server.stop('test-complete')
+console.log('Chrome loopback pairing origin, proof, rotation, replay, exact-tab events, and explicit disconnect passed.')
 
 async function post(pathname: string, body: unknown, origin: string, token?: string) {
     const response = await fetch(`http://127.0.0.1:${state.port}${pathname}`, {

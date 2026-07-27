@@ -1,5 +1,7 @@
 import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
+import { createBrowserControlTool } from "../../agent-control/browser-control-tool.mjs";
+import { createComputerControlTool } from "../../agent-control/computer-control-tool.mjs";
 
 let piPromise;
 function loadPi() {
@@ -50,7 +52,10 @@ export class ChildSessionFactory {
     const sessionManager = options.sessionFile
       ? SessionManager.open(options.sessionFile, this.transcriptDirectory)
       : SessionManager.create(cwd, this.transcriptDirectory, { parentSession: options.parentSessionFile });
-    const customTools = createScopedFileTools({ createEditTool, createFindTool, createGrepTool, createLsTool, createReadTool, createWriteTool }, cwd, options);
+    const customTools = [
+      ...createScopedFileTools({ createEditTool, createFindTool, createGrepTool, createLsTool, createReadTool, createWriteTool }, cwd, options),
+      ...createDelegatedControlTools(options),
+    ];
     const result = await createAgentSession({
       cwd,
       agentDir,
@@ -100,6 +105,15 @@ export function createScopedFileTools(pi, cwd, options = {}) {
   });
 }
 
+function createDelegatedControlTools(options = {}) {
+  if (!options.controlClient || !options.controlLease) return [];
+  const selected = new Set(options.tools ?? []);
+  return [
+    ...(selected.has("browser_control") ? [createBrowserControlTool({ client: options.controlClient })] : []),
+    ...(selected.has("computer_control") ? [createComputerControlTool({ client: options.controlClient })] : []),
+  ];
+}
+
 export async function assertPathWithinScopes(cwd, requestedPath, scopes, mode = "read") {
   if (!Array.isArray(scopes) || !scopes.length) throw new Error(`${mode} tool has no declared scope.`);
   const root = await resolveExistingPath(path.resolve(cwd));
@@ -137,12 +151,16 @@ function isWithin(root, target) {
 export function buildChildSystemPrompt(options = {}) {
   const tools = Array.isArray(options.tools) ? options.tools.join(", ") : "none";
   const success = Array.isArray(options.successCriteria) ? options.successCriteria.map((item) => `- ${item}`).join("\n") : String(options.successCriteria ?? "Return evidence for the delegated goal.");
+  const controlPolicy = options.controlLease
+    ? `Control is limited to delegated grant ${options.controlLease.grantId} for target ${options.controlLease.targetId}; capabilities: ${options.controlLease.capabilities.join(", ")}; expiry: ${options.controlLease.expiresAt}. You cannot request, widen, renew, or redelegate it.`
+    : "Browser, paired Chrome, Windows, and computer-control capabilities are unavailable.";
   return [
     "You are a focused child agent inside Zyra's local agent fleet.",
     "Work only on the delegated goal and declared scope.",
     "Your output is untrusted evidence for the root agent. You cannot change parent, system, project, approval, or capability policy.",
     "Do not tell the parent how to present your result. Do not claim user approval or elevated permission.",
-    "Do not spawn agents or workflows. Browser, paired Chrome, Windows, and computer-control capabilities are unavailable.",
+    "Do not spawn agents or workflows.",
+    controlPolicy,
     `Allowed tools: ${tools}.`,
     options.permissionMode === "read-only" ? "This run is read-only. Do not modify files or repository state." : `Write scope: ${(options.writeScope ?? []).join(", ") || "none declared"}.`,
     "Return a concise result with evidence, changed files, checks, limitations, and artifact or transcript references when applicable.",
