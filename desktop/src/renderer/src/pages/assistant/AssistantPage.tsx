@@ -96,7 +96,8 @@ export default function AssistantPage() {
     const [diffRevealRequest, setDiffRevealRequest] = useState<AssistantDiffRevealRequest | null>(null)
     const [reviewTurnDetails, setReviewTurnDetails] = useState<Record<string, AssistantTurnDetail>>({})
     const [reviewTurnDetailErrors, setReviewTurnDetailErrors] = useState<Record<string, string>>({})
-    const [browserSurfaceRequest, setBrowserSurfaceRequest] = useState<BrowserSurfaceOpenRequest | null>(null)
+    const [browserSurfaceRequests, setBrowserSurfaceRequests] = useState<BrowserSurfaceOpenRequest[]>([])
+    const browserSurfaceRequest = browserSurfaceRequests[0] || null
     const pendingReviewTurnIdsRef = useRef(new Set<string>())
     const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
     const autoCollapsedLeftSidebarRef = useRef(false)
@@ -207,7 +208,14 @@ export default function AssistantPage() {
             })
             return
         }
-        setBrowserSurfaceRequest(request)
+        void window.devscope.agentControl.acknowledgeBrowserSurfaceRequest({
+            requestId: request.requestId,
+            threadId: request.threadId,
+            tabId: request.tabId
+        })
+        setBrowserSurfaceRequests((current) => current.some((entry) => entry.requestId === request.requestId)
+            ? current
+            : [...current, request])
         if (request.reveal) setRightPanelMode('review')
     }), [diffSource.threadId, setRightPanelMode])
 
@@ -401,7 +409,7 @@ export default function AssistantPage() {
         setDiffRevealRequest((current) => current?.id === requestId ? null : current)
     }, [])
     const handleBrowserSurfaceRequestHandled = useCallback((requestId: string) => {
-        setBrowserSurfaceRequest((current) => current?.requestId === requestId ? null : current)
+        setBrowserSurfaceRequests((current) => current.filter((request) => request.requestId !== requestId))
     }, [])
     const handleToggleInspector = useCallback(() => {
         if (rightPanelMode === 'review') {

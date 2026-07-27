@@ -153,28 +153,15 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         if (nextState !== workspaceStateRef.current) commitWorkspaceState(nextState)
     }, [commitWorkspaceState])
 
-    const completeSurfaceRequest = useCallback((
-        request: BrowserSurfaceOpenRequest,
-        outcome: { targetId: string } | { error: string }
-    ) => {
+    const failSurfaceRequest = useCallback((request: BrowserSurfaceOpenRequest, error: string) => {
         pendingSurfaceRequestsRef.current.delete(request.requestId)
-        const completion = 'targetId' in outcome
-            ? {
-                requestId: request.requestId,
-                threadId: request.threadId,
-                tabId: request.tabId,
-                success: true as const,
-                targetId: outcome.targetId
-            }
-            : {
-                requestId: request.requestId,
-                threadId: request.threadId,
-                tabId: request.tabId,
-                success: false as const,
-                error: outcome.error
-            }
-        void window.devscope.agentControl.completeBrowserSurfaceRequest(completion)
-            .finally(() => onSurfaceRequestHandledRef.current(request.requestId))
+        void window.devscope.agentControl.completeBrowserSurfaceRequest({
+            requestId: request.requestId,
+            threadId: request.threadId,
+            tabId: request.tabId,
+            success: false,
+            error
+        }).finally(() => onSurfaceRequestHandledRef.current(request.requestId))
     }, [])
 
     useEffect(() => {
@@ -185,27 +172,27 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             if (oldest) consumedSurfaceRequestsRef.current.delete(oldest)
         }
         if (!normalizedProjectPath) {
-            completeSurfaceRequest(surfaceRequest, { error: 'Attach a project to this chat before opening the in-app Browser.' })
+            failSurfaceRequest(surfaceRequest, 'Attach a project to this chat before opening the in-app Browser.')
             return
         }
         if (workspaceStateRef.current.tabs.length >= ASSISTANT_BROWSER_TAB_LIMIT) {
-            completeSurfaceRequest(surfaceRequest, { error: `Close a Browser tab first; the ${ASSISTANT_BROWSER_TAB_LIMIT}-tab limit is full.` })
+            failSurfaceRequest(surfaceRequest, `Close a Browser tab first; the ${ASSISTANT_BROWSER_TAB_LIMIT}-tab limit is full.`)
             return
         }
         if (configError) {
-            completeSurfaceRequest(surfaceRequest, { error: configError })
+            failSurfaceRequest(surfaceRequest, configError)
             return
         }
         pendingSurfaceRequestsRef.current.set(surfaceRequest.requestId, surfaceRequest)
         mutateWorkspaceState((current) => addAssistantBrowserTab(current, surfaceRequest.tabId))
-    }, [completeSurfaceRequest, configError, mutateWorkspaceState, normalizedProjectPath, surfaceRequest])
+    }, [configError, failSurfaceRequest, mutateWorkspaceState, normalizedProjectPath, surfaceRequest])
 
     useEffect(() => {
         if (!configError) return
         for (const request of [...pendingSurfaceRequestsRef.current.values()]) {
-            completeSurfaceRequest(request, { error: configError })
+            failSurfaceRequest(request, configError)
         }
-    }, [completeSurfaceRequest, configError])
+    }, [configError, failSurfaceRequest])
 
     useEffect(() => {
         let cancelled = false
@@ -247,7 +234,10 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const handleControlTargetChange = useCallback((tabId: string, targetId: string | null) => {
         if (targetId) {
             const request = [...pendingSurfaceRequestsRef.current.values()].find((entry) => entry.tabId === tabId)
-            if (request) completeSurfaceRequest(request, { targetId })
+            if (request) {
+                pendingSurfaceRequestsRef.current.delete(request.requestId)
+                onSurfaceRequestHandledRef.current(request.requestId)
+            }
         }
         setControlTargetsByTab((current) => {
             if (targetId && current[tabId] === targetId) return current
@@ -257,7 +247,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             else delete next[tabId]
             return next
         })
-    }, [completeSurfaceRequest])
+    }, [])
 
     useEffect(() => {
         onAudibleChange(hasAudibleTab)

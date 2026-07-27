@@ -83,6 +83,7 @@ import type {
     ControlWindowCandidate
 } from '../agent-control/contracts'
 import type {
+    BrowserSurfaceOpenAcknowledgement,
     BrowserSurfaceOpenCompletion,
     BrowserSurfaceOpenRequest,
     RendererControlGrantInput
@@ -230,6 +231,7 @@ export interface DevScopeAgentScopeApi {
 export interface DevScopeAgentControlApi {
     getState: () => Promise<DevScopeResult<{ state: ControlStateSnapshot }>>
     bindBrowserTab: (input: { guestWebContentsId: number; tabId: string }) => Promise<DevScopeResult<{ target: ControlTarget }>>
+    acknowledgeBrowserSurfaceRequest: (input: BrowserSurfaceOpenAcknowledgement) => Promise<DevScopeResult<{ accepted: boolean }>>
     completeBrowserSurfaceRequest: (input: BrowserSurfaceOpenCompletion) => Promise<DevScopeResult<{ completed: boolean }>>
     approveGrant: (input: RendererControlGrantInput) => Promise<DevScopeResult<{ grant: ControlGrant }>>
     rejectGrant: (requestId: string) => Promise<DevScopeResult<{ rejected: boolean }>>

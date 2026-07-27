@@ -198,6 +198,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     const controlHandlers = createAgentControlHandlers(mainWindow)
     ipcMain.handle(AGENT_CONTROL_IPC.getState, controlHandlers.getState)
     ipcMain.handle(AGENT_CONTROL_IPC.bindBrowserTab, controlHandlers.bindBrowserTab)
+    ipcMain.handle(AGENT_CONTROL_IPC.acknowledgeBrowserSurfaceRequest, controlHandlers.acknowledgeBrowserSurfaceRequest)
     ipcMain.handle(AGENT_CONTROL_IPC.completeBrowserSurfaceRequest, controlHandlers.completeBrowserSurfaceRequest)
     ipcMain.handle(AGENT_CONTROL_IPC.approveGrant, controlHandlers.approveGrant)
     ipcMain.handle(AGENT_CONTROL_IPC.rejectGrant, controlHandlers.rejectGrant)

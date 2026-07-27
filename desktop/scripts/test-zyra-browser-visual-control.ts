@@ -150,15 +150,45 @@ const openedTarget = {
     origin: null
 }
 openedTargets.set(openedTarget.targetId, openedTarget)
-surfaceHost.complete({
+const openAcknowledgement = {
     requestId: surfaceRequests[0].requestId,
     threadId: surfaceRequests[0].threadId,
-    tabId: surfaceRequests[0].tabId,
+    tabId: surfaceRequests[0].tabId
+}
+assert.equal(surfaceHost.acknowledge(openAcknowledgement), true)
+assert.equal(surfaceHost.acknowledge(openAcknowledgement), false)
+assert.equal(surfaceHost.completeRegisteredTarget(openedTarget), true)
+assert.equal((await openedPromise).targetId, openedTarget.targetId)
+assert.equal(surfaceHost.complete({
+    ...openAcknowledgement,
     success: true,
     targetId: openedTarget.targetId
-})
-assert.equal((await openedPromise).targetId, openedTarget.targetId)
+}), false)
 surfaceHost.dispose()
+
+const delayedSurfaceRequests: any[] = []
+const delayedSurfaceHost = new BrowserSurfaceHost({
+    send: (request) => delayedSurfaceRequests.push(request),
+    resolveTarget: () => { throw new Error('registration completion should use the trusted target directly') },
+    makeId: () => 'delayed-visual-open',
+    timeoutMs: 1_000
+})
+const delayedOpenedPromise = delayedSurfaceHost.openTab(principal, false)
+await new Promise((resolveDelay) => setTimeout(resolveDelay, 400))
+assert.equal(delayedSurfaceHost.acknowledge({
+    requestId: delayedSurfaceRequests[0].requestId,
+    threadId: delayedSurfaceRequests[0].threadId,
+    tabId: delayedSurfaceRequests[0].tabId
+}), true)
+await new Promise((resolveDelay) => setTimeout(resolveDelay, 700))
+const delayedOpenedTarget = {
+    ...openedTarget,
+    targetId: 'zyra-browser:delayed-opened',
+    tabId: delayedSurfaceRequests[0].tabId
+}
+assert.equal(delayedSurfaceHost.completeRegisteredTarget(delayedOpenedTarget), true)
+assert.equal((await delayedOpenedPromise).targetId, delayedOpenedTarget.targetId)
+delayedSurfaceHost.dispose()
 
 broker.setBrowserSurfaceController({
     openTab: async (_requestPrincipal, reveal) => {
@@ -263,12 +293,15 @@ assert(panelSource.includes('processedBrowserSurfaceRequestRef'))
 assert(panelSource.includes('surfaceRequest={browserSurfaceRequest}'))
 assert(panelSource.includes("'pointer-events-none invisible absolute inset-x-0 bottom-0 top-[76px] flex'"))
 assert(workspaceSource.includes('addAssistantBrowserTab(current, surfaceRequest.tabId)'))
-assert(workspaceSource.includes('completeBrowserSurfaceRequest(completion)'))
+assert(workspaceSource.includes('completeBrowserSurfaceRequest({'))
 assert(workspaceSource.includes('Allow agent?'))
 assert(workspaceSource.includes('rejectGrant(activePendingGrant.requestId)'))
 assert(protocolSource.includes("operation: 'open_tab'"))
+assert(protocolSource.includes('acknowledgeBrowserSurfaceRequest'))
 assert(preloadSource.includes('browserSurfaceRequested'))
+assert(preloadSource.includes('acknowledgeBrowserSurfaceRequest'))
 assert(handlerSource.includes('assertTrustedRenderer(event, mainWindow)'))
+assert(handlerSource.includes('browserSurface.completeRegisteredTarget(target)'))
 assert(hostSource.includes("tabId: `browser:agent:${id}`"))
-assert(hostSource.includes('target.tabId !== pending.request.tabId'))
+assert(hostSource.includes("phase: 'sent' | 'accepted'"))
 console.log('Zyra visual Browser control contract passed.')

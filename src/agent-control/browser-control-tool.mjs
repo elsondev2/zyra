@@ -19,7 +19,8 @@ export function createBrowserControlTool(options = {}) {
       }
       try {
         const operation = toBridgeOperation(normalized);
-        const result = await options.client.request(operation, { signal, timeoutMs: normalized.timeoutMs });
+        const timeoutMs = normalized.timeoutMs ?? (normalized.operation === "open_tab" ? 30000 : undefined);
+        const result = await options.client.request(operation, { signal, timeoutMs });
         return toolResult(formatControlResult(normalized.operation, result), result);
       } catch (error) {
         return toolResult(`Browser control failed: ${error instanceof Error ? error.message : String(error)}`, {

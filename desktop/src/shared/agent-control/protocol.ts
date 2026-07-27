@@ -19,6 +19,7 @@ export const AGENT_CONTROL_IPC = {
     stopChromePairing: 'zyra:agent-control:stop-chrome-pairing',
     listWindows: 'zyra:agent-control:list-windows',
     selectWindow: 'zyra:agent-control:select-window',
+    acknowledgeBrowserSurfaceRequest: 'zyra:agent-control:acknowledge-browser-surface-request',
     completeBrowserSurfaceRequest: 'zyra:agent-control:complete-browser-surface-request',
     browserSurfaceRequested: 'zyra:agent-control:browser-surface-requested',
     stateChanged: 'zyra:agent-control:state-changed'
@@ -33,11 +34,9 @@ export type BrowserSurfaceOpenRequest = {
     requestedBy: ControlPrincipal
 }
 
-export type BrowserSurfaceOpenCompletion = {
-    requestId: string
-    threadId: string
-    tabId: string
-} & (
+export type BrowserSurfaceOpenAcknowledgement = Pick<BrowserSurfaceOpenRequest, 'requestId' | 'threadId' | 'tabId'>
+
+export type BrowserSurfaceOpenCompletion = BrowserSurfaceOpenAcknowledgement & (
     | { success: true; targetId: string }
     | { success: false; error: string }
 )

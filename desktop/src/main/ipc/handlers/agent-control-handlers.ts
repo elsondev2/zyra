@@ -1,5 +1,10 @@
 import { BrowserWindow, type IpcMainInvokeEvent } from 'electron'
-import { AGENT_CONTROL_IPC, type BrowserSurfaceOpenCompletion, type RendererControlGrantInput } from '../../../shared/agent-control/protocol'
+import {
+    AGENT_CONTROL_IPC,
+    type BrowserSurfaceOpenAcknowledgement,
+    type BrowserSurfaceOpenCompletion,
+    type RendererControlGrantInput
+} from '../../../shared/agent-control/protocol'
 import { AgentControlError } from '../../agent-control/control-errors'
 import { bindTrustedBrowserTarget, getAgentControlBroker } from '../../agent-control'
 import { BrowserSurfaceHost } from '../../agent-control/browser-surface-host'
@@ -53,12 +58,16 @@ export function createAgentControlHandlers(mainWindow: BrowserWindow) {
             const guestWebContentsId = Number(input?.guestWebContentsId)
             if (!Number.isInteger(guestWebContentsId) || guestWebContentsId < 1) throw new Error('Browser guest identity is invalid.')
             const target = bindTrustedBrowserTarget(event.sender.id, guestWebContentsId, String(input?.tabId || ''))
+            browserSurface.completeRegisteredTarget(target)
             return { target }
+        }),
+        acknowledgeBrowserSurfaceRequest: (event: IpcMainInvokeEvent, input: BrowserSurfaceOpenAcknowledgement) => result(() => {
+            assertTrustedRenderer(event, mainWindow)
+            return { accepted: browserSurface.acknowledge(input) }
         }),
         completeBrowserSurfaceRequest: (event: IpcMainInvokeEvent, input: BrowserSurfaceOpenCompletion) => result(() => {
             assertTrustedRenderer(event, mainWindow)
-            browserSurface.complete(input)
-            return { completed: true }
+            return { completed: browserSurface.complete(input) }
         }),
         approveGrant: (event: IpcMainInvokeEvent, input: RendererControlGrantInput) => result(() => {
             assertTrustedRenderer(event, mainWindow)

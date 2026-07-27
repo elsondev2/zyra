@@ -1,4 +1,4 @@
-import { createElement, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { createElement, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import type { DevScopeBrowserPreviewConfig } from '@shared/contracts/devscope-api'
 import { normalizeAssistantBrowserFaviconUrl, type AssistantBrowserTabState } from './assistant-browser-workspace-state'
 
@@ -82,7 +82,7 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
         focus: () => webview?.focus()
     }), [tab.id, webview])
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         if (!webview) return
 
         const readNavigation = (): Pick<AssistantBrowserTabState, 'url' | 'title' | 'canGoBack' | 'canGoForward'> => {
@@ -102,7 +102,50 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
             }
         }
         let audibleSyncTimer = 0
+        let controlBindRetryTimer = 0
+        let controlBindAttempts = 0
+        let controlBinding = false
+        let controlTargetId: string | null = null
+        let disposed = false
         let mainFrameFailed = false
+        const bindControlTarget = () => {
+            if (disposed || controlBinding || controlTargetId) return
+            controlBindAttempts += 1
+            let guestWebContentsId = 0
+            try {
+                guestWebContentsId = webview.getWebContentsId()
+            } catch {
+                // The guest may not be attached during the first layout pass.
+            }
+            if (!Number.isInteger(guestWebContentsId) || guestWebContentsId <= 0) {
+                scheduleControlBindRetry()
+                return
+            }
+            controlBinding = true
+            void window.devscope.agentControl.bindBrowserTab({ guestWebContentsId, tabId: tab.id }).then((result) => {
+                controlBinding = false
+                if (disposed) return
+                if (result.success) {
+                    controlTargetId = result.target.targetId
+                    onControlTargetChange(tab.id, controlTargetId)
+                    return
+                }
+                scheduleControlBindRetry()
+            }).catch(() => {
+                controlBinding = false
+                if (!disposed) scheduleControlBindRetry()
+            })
+        }
+        const scheduleControlBindRetry = () => {
+            if (disposed || controlTargetId || controlBindAttempts >= 6 || controlBindRetryTimer) {
+                if (!disposed && !controlTargetId && controlBindAttempts >= 6) onControlTargetChange(tab.id, null)
+                return
+            }
+            controlBindRetryTimer = window.setTimeout(() => {
+                controlBindRetryTimer = 0
+                bindControlTarget()
+            }, controlBindAttempts === 0 ? 50 : Math.min(800, 100 * (2 ** (controlBindAttempts - 1))))
+        }
         const syncAudible = () => {
             window.clearTimeout(audibleSyncTimer)
             const readAudible = () => {
@@ -175,16 +218,11 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
         }
         const handleDomReady = () => {
             syncAudible()
-            try {
-                const guestWebContentsId = webview.getWebContentsId()
-                void window.devscope.agentControl.bindBrowserTab({ guestWebContentsId, tabId: tab.id }).then((result) => {
-                    onControlTargetChange(tab.id, result.success ? result.target.targetId : null)
-                }).catch(() => onControlTargetChange(tab.id, null))
-            } catch {
-                onControlTargetChange(tab.id, null)
-            }
+            bindControlTarget()
         }
+        const handleAttach = () => bindControlTarget()
 
+        webview.addEventListener('did-attach', handleAttach)
         webview.addEventListener('did-start-navigation', handleStartNavigation)
         webview.addEventListener('did-stop-loading', handleStop)
         webview.addEventListener('did-finish-load', handleReady)
@@ -196,8 +234,12 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
         webview.addEventListener('dom-ready', handleDomReady)
         webview.addEventListener('media-started-playing', syncAudible)
         webview.addEventListener('media-paused', syncAudible)
+        scheduleControlBindRetry()
         return () => {
+            disposed = true
             window.clearTimeout(audibleSyncTimer)
+            window.clearTimeout(controlBindRetryTimer)
+            webview.removeEventListener('did-attach', handleAttach)
             webview.removeEventListener('did-start-navigation', handleStartNavigation)
             webview.removeEventListener('did-stop-loading', handleStop)
             webview.removeEventListener('did-finish-load', handleReady)
