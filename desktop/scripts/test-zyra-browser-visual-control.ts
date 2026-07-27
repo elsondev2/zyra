@@ -204,6 +204,23 @@ broker.setBrowserSurfaceController({
 const openedByTool = await tool.execute('visual-open-tab', { operation: 'open_tab', reveal: true })
 assert.equal((openedByTool.details as any).target.targetId, targetId)
 assert.match(String(openedByTool.content[0]?.text), /no navigation or input authority yet/i)
+const modelGrantPromise = tool.execute('visual-request-grant', {
+    operation: 'request_grant', targetId, capabilities: ['observe.structure'], maxActions: 2
+})
+const modelPending = broker.grants.listPending().find((entry) => entry.principal.type === 'root')
+assert(modelPending, 'the model tool call must wait while the approval is visible')
+const modelGrant = broker.approvePendingGrant({
+    pendingRequestId: modelPending.requestId,
+    targetId,
+    capabilities: modelPending.capabilities,
+    durationMs: 30_000,
+    maxActions: 2,
+    allowedOrigins: modelPending.allowedOrigins
+})
+const modelGrantResult = await modelGrantPromise
+assert.equal((modelGrantResult.details as any).grant.grantId, modelGrant.grantId)
+assert.match(String(modelGrantResult.content[0]?.text), new RegExp(modelGrant.grantId))
+broker.revokeGrant(modelGrant.grantId, principal)
 await assert.rejects(
     broker.handleToolOperation(principal, { operation: 'open_tab', reveal: 'yes' }),
     (error: any) => error.code === 'CONTROL_VALIDATION_ERROR'
@@ -259,24 +276,29 @@ await assert.rejects(
 const discovered = await broker.handleToolOperation(childPrincipal, { operation: 'list_targets', targetKind: 'zyra-browser' })
 assert.equal((discovered.targets as unknown[]).length, 1)
 assert.equal((discovered.grants as unknown[]).length, 0)
-const childRequest = await broker.handleToolOperation(childPrincipal, {
+const childGrantPromise = broker.handleToolOperation(childPrincipal, {
     operation: 'request_grant', targetId, capabilities: ['observe.structure', 'observe.screenshot', 'pointer.click'], maxActions: 8
-}) as any
-assert.equal(childRequest.pending, true)
+}) as Promise<any>
+const childPending = broker.grants.listPending().find((entry) => entry.principal.type === 'agent' && entry.principal.agentRunId === childPrincipal.agentRunId)
+assert(childPending, 'the model-facing grant request must remain pending while the tool call waits')
 const childGrant = broker.approvePendingGrant({
-    pendingRequestId: childRequest.request.requestId,
+    pendingRequestId: childPending.requestId,
     targetId,
-    capabilities: childRequest.request.capabilities,
+    capabilities: childPending.capabilities,
     durationMs: 30_000,
     maxActions: 8,
-    allowedOrigins: childRequest.request.allowedOrigins
+    allowedOrigins: childPending.allowedOrigins
 })
+const childRequest = await childGrantPromise
+assert.equal(childRequest.pending, false)
+assert.equal(childRequest.grant.grantId, childGrant.grantId, 'approval must resume the same model tool call with the exact grant')
 const attached = await broker.handleToolOperation(childPrincipal, { operation: 'list_targets', targetKind: 'zyra-browser' })
 assert.equal((attached.grants as Array<{ grantId: string }>)[0]?.grantId, childGrant.grantId)
-void await broker.handleToolOperation(childPrincipal, {
+const cancelledGrantPromise = broker.handleToolOperation(childPrincipal, {
     operation: 'request_grant', targetId, capabilities: ['observe.structure'], maxActions: 2
 })
 broker.revokePrincipal(childPrincipal, 'agent finished')
+await assert.rejects(cancelledGrantPromise, (error: any) => error.code === 'CONTROL_CANCELLED')
 assert.equal(broker.grants.listForPrincipal(childPrincipal).some((entry) => entry.state === 'active'), false)
 assert.equal(broker.grants.listPending().some((entry) => entry.principal.type === 'agent' && entry.principal.agentRunId === childPrincipal.agentRunId), false)
 

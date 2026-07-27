@@ -53,6 +53,10 @@ export class AgentControlBroker extends EventEmitter {
     private disposed = false
     private browserSurface: BrowserSurfaceController | null = null
     private readonly cursors = new Map<string, ControlCursorState>()
+    private readonly pendingGrantWaiters = new Map<string, {
+        resolve: (grant: ControlGrant) => void
+        reject: (error: AgentControlError) => void
+    }>()
 
     constructor(
         private readonly options: {
@@ -199,17 +203,22 @@ export class AgentControlBroker extends EventEmitter {
             grantId: grant.grantId, outcome: 'allowed', message: 'User approved a bounded control grant.', redactions: []
         })
         this.changed()
+        this.pendingGrantWaiters.get(requestId)?.resolve(grant)
         return grant
     }
 
     rejectPendingGrant(requestId: string): void {
-        const pending = this.grants.removePending(assertControlIdentifier(requestId, 'requestId'))
+        const normalizedRequestId = assertControlIdentifier(requestId, 'requestId')
+        const pending = this.grants.removePending(normalizedRequestId)
         if (!pending) return
         this.audit.append({
             eventType: 'grant.revoked', principal: pending.principal, targetId: pending.targetId,
             outcome: 'denied', message: 'User declined the grant request.', redactions: []
         })
         this.changed()
+        this.pendingGrantWaiters.get(normalizedRequestId)?.reject(
+            new AgentControlError('CONTROL_CANCELLED', 'The user declined the Browser control request.')
+        )
     }
 
     delegate(request: DelegatedControlLeaseRequest): ControlGrant {
@@ -348,6 +357,7 @@ export class AgentControlBroker extends EventEmitter {
                 eventType: 'grant.revoked', principal: request.principal, targetId: request.targetId,
                 outcome: 'cancelled', message: `${reason} Pending request removed.`, redactions: []
             })
+            this.pendingGrantWaiters.get(request.requestId)?.reject(new AgentControlError('CONTROL_CANCELLED', reason))
         }
         if (revoked.length || pending.length) this.changed()
     }
@@ -356,6 +366,10 @@ export class AgentControlBroker extends EventEmitter {
         this.actions.cancelAll(reason)
         this.browserSurface?.cancelPending(reason)
         this.grants.revokeAll()
+        for (const pending of this.grants.listPending()) {
+            this.grants.removePending(pending.requestId)
+            this.pendingGrantWaiters.get(pending.requestId)?.reject(new AgentControlError('CONTROL_CANCELLED', reason))
+        }
         this.observations.invalidateAll()
         this.cursors.clear()
         await Promise.allSettled((this.options.drivers || []).map((driver) => Promise.resolve(driver.emergencyStop?.())))
@@ -462,7 +476,8 @@ export class AgentControlBroker extends EventEmitter {
                     allowedOrigins: operation.allowedOrigins,
                     allowedExecutableIdentities: operation.allowedExecutableIdentities
                 })
-                return { pending: true, request }
+                const grant = await this.waitForPendingGrant(request.requestId, signal)
+                return { pending: false, request, grant }
             }
             case 'delegate_lease': {
                 if (principal.type !== 'root') throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Only the root agent may delegate a control lease.')
@@ -511,6 +526,39 @@ export class AgentControlBroker extends EventEmitter {
     clearAudit(): void {
         this.audit.clear()
         this.changed()
+    }
+
+    private waitForPendingGrant(requestId: string, signal?: AbortSignal): Promise<ControlGrant> {
+        if (!this.grants.getPending(requestId)) {
+            return Promise.reject(new AgentControlError('CONTROL_GRANT_NOT_FOUND', 'The pending grant request is no longer available.'))
+        }
+        return new Promise((resolve, reject) => {
+            let settled = false
+            const finish = <T>(callback: (value: T) => void, value: T) => {
+                if (settled) return
+                settled = true
+                signal?.removeEventListener('abort', abort)
+                this.pendingGrantWaiters.delete(requestId)
+                callback(value)
+            }
+            const abort = () => {
+                const pending = this.grants.removePending(requestId)
+                if (pending) {
+                    this.audit.append({
+                        eventType: 'grant.revoked', principal: pending.principal, targetId: pending.targetId,
+                        outcome: 'cancelled', message: 'Browser control approval wait was cancelled.', redactions: []
+                    })
+                    this.changed()
+                }
+                finish(reject, new AgentControlError('CONTROL_CANCELLED', 'Browser control approval was cancelled.'))
+            }
+            this.pendingGrantWaiters.set(requestId, {
+                resolve: (grant) => finish(resolve, grant),
+                reject: (error) => finish(reject, error)
+            })
+            if (signal?.aborted) abort()
+            else signal?.addEventListener('abort', abort, { once: true })
+        })
     }
 
     async dispose(): Promise<void> {

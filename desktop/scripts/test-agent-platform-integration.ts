@@ -74,18 +74,22 @@ const runner = {
             assert.equal(options.controlLease, undefined)
             const opened = await childClient.request({ operation: 'open_tab' })
             assert.equal(opened.target.targetId, targetId)
-            const requested = await childClient.request({
+            const requestedPromise = childClient.request({
                 operation: 'request_grant', targetId, capabilities: ['observe.structure'], maxActions: 3
             })
-            assert.equal(requested.pending, true)
+            const pendingRequest = broker.grants.listPending().find((entry) => entry.targetId === targetId)
+            assert(pendingRequest, 'on-demand Browser approval must keep the child tool call pending')
             const childGrant = broker.approvePendingGrant({
-                pendingRequestId: requested.request.requestId,
+                pendingRequestId: pendingRequest.requestId,
                 targetId,
-                capabilities: requested.request.capabilities,
+                capabilities: pendingRequest.capabilities,
                 durationMs: 30_000,
                 maxActions: 3,
-                allowedOrigins: requested.request.allowedOrigins
+                allowedOrigins: pendingRequest.allowedOrigins
             })
+            const requested = await requestedPromise
+            assert.equal(requested.pending, false)
+            assert.equal(requested.grant.grantId, childGrant.grantId)
             grantId = childGrant.grantId
             observedChildPrincipal = childGrant.principal
         } else {

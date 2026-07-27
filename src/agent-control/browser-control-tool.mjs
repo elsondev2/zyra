@@ -96,7 +96,7 @@ function formatControlResult(operation, result) {
   if (operation === "request_grant") {
     return result.pending
       ? `Browser access is waiting for explicit user approval in Control Center.\n${JSON.stringify({ requestId: result.request?.requestId, targetId: result.request?.targetId, capabilities: result.request?.capabilities, expiresAt: result.request?.expiresAt }, null, 2)}`
-      : "Control grant issued.";
+      : `Control grant issued.\n${JSON.stringify({ grantId: result.grant?.grantId, targetId: result.grant?.targetId, capabilities: result.grant?.capabilities, expiresAt: result.grant?.expiresAt, remainingActions: Math.max(0, Number(result.grant?.maxActions) - Number(result.grant?.actionCount)) }, null, 2)}`;
   }
   if (operation === "release") return "Control grant released.";
   if (result.observation) {
