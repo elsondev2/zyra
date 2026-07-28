@@ -61,6 +61,7 @@ assert.equal(new AgentEventJournal(path.join(stateDirectory, "journal-test"), "c
 const workers = [];
 const server = new ZyraAgentServer({
   root: path.resolve("."), stateDirectory, channel, catalog, idleTimeoutMs: 5_000,
+  desktopAuthorityToken: "test-desktop-authority",
   createWorker: () => {
     const worker = new FakeWorker();
     workers.push(worker);
@@ -156,7 +157,7 @@ try {
 function client(clientId, surface, authorities = []) {
   return new ZyraAgentServerClient({
     root: path.resolve("."), stateDirectory, channel, autoStart: false, clientId, surface, authorities,
-    desktopAuthority: surface === "desktop" && authorities.includes("desktop-control")
+    authorityProof: surface === "desktop" && authorities.includes("desktop-control") ? "test-desktop-authority" : undefined
   });
 }
 

@@ -30,7 +30,7 @@ TUI client ────┘                                  ├─ chat catalog
                                                    └─ fleet/workflow recovery
 ```
 
-The server runs as a detached local user process. It binds only a per-user named pipe on Windows or a user-owned Unix socket elsewhere. A random descriptor token is stored in a mode-0600 local file and is required during the handshake. Desktop control additionally requires a separate server-issued authority proof; declaring a Desktop surface or capability in the handshake is insufficient.
+The server runs as a detached local user process. It binds only a per-user named pipe on Windows or a user-owned Unix socket elsewhere. A random descriptor token is stored in a mode-0600 local file and is required during the handshake. Desktop control additionally requires proof of a random secret retained through Electron `safeStorage`; the server keeps only its SHA-256 verifier. Declaring a Desktop surface or capability in the handshake is insufficient.
 
 The existing `src/zyra-ui-bridge.mjs` remains the first worker implementation. Moving it behind the server gives Zyra durable process ownership without rewriting the Pi adapter and UI projection simultaneously.
 

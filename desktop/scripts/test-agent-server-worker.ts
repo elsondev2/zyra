@@ -20,7 +20,8 @@ class FakeWorker extends EventEmitter {
         this.activePrompt = null
         resolve?.(value)
     }
-    sendControlResponse(): boolean { return true }
+    controlResponses: Array<Record<string, unknown>> = []
+    sendControlResponse(message: Record<string, unknown>): boolean { this.controlResponses.push(message); return true }
     dispose(): void { this.disposed = true }
 }
 
@@ -51,6 +52,7 @@ const server = new serverModule.ZyraAgentServer({
     stateDirectory,
     channel,
     catalog,
+    desktopAuthorityToken: 'desktop-test-authority',
     createWorker: () => {
         const worker = new FakeWorker()
         workers.push(worker)
@@ -59,11 +61,11 @@ const server = new serverModule.ZyraAgentServer({
 })
 
 await server.start()
-const connection = new DesktopAgentServerConnection(root, { stateDirectory, channel, autoStart: false })
+const connection = new DesktopAgentServerConnection(root, { stateDirectory, channel, autoStart: false, authorityProof: 'desktop-test-authority' })
 const worker = connection.createWorker(project)
 const events: Array<{ event: unknown; metadata: Record<string, unknown> | undefined }> = []
 worker.onEvent((event, metadata) => events.push({ event, metadata }))
-worker.setControlRequestHandler(async () => ({ accepted: true }))
+worker.setControlRequestHandler(async () => ({ owner: 'first' }))
 
 try {
     const connected = await worker.request('connect', {
@@ -79,6 +81,7 @@ try {
     const secondWorker = connection.createWorker(project)
     const secondEvents: unknown[] = []
     secondWorker.onEvent((event) => secondEvents.push(event))
+    secondWorker.setControlRequestHandler(async () => ({ owner: 'second' }))
     await secondWorker.request('connect', {
         cwd: project,
         localThreadId: 'assistant-thread:desktop-test-copy',
@@ -88,6 +91,9 @@ try {
 
     const prompt = worker.request('prompt', { prompt: 'continue', turnId: 'turn:desktop-test' })
     await waitUntil(() => workers[0]?.activePrompt !== null)
+    workers[0].emit('control', { type: 'control.request', requestId: 'control:desktop-owner', operation: { action: 'observe' } })
+    await waitUntil(() => workers[0].controlResponses.length === 1)
+    assert.deepEqual(workers[0].controlResponses[0].result, { owner: 'first' }, 'control must follow the Desktop projection that initiated the turn')
     workers[0].emit('event', { type: 'message_update', message: { role: 'assistant', content: 'working' } })
     workers[0].finishPrompt({})
     await prompt
@@ -104,7 +110,7 @@ try {
     secondWorker.dispose()
     connection.close()
 
-    const reconnectConnection = new DesktopAgentServerConnection(root, { stateDirectory, channel, autoStart: false })
+    const reconnectConnection = new DesktopAgentServerConnection(root, { stateDirectory, channel, autoStart: false, authorityProof: 'desktop-test-authority' })
     const reconnectWorker = reconnectConnection.createWorker(project)
     const replay: Array<Record<string, unknown> | undefined> = []
     reconnectWorker.onEvent((_event, metadata) => replay.push(metadata))

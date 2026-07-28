@@ -20,7 +20,7 @@ export class ZyraAgentServerClient extends EventEmitter {
     this.clientId = String(options.clientId || `agent-client:${process.pid}`);
     this.surface = String(options.surface || "unknown");
     this.authorities = Array.isArray(options.authorities) ? [...new Set(options.authorities)] : [];
-    this.desktopAuthority = options.desktopAuthority === true;
+    this.authorityProof = String(options.authorityProof || "");
     this.autoStart = options.autoStart !== false;
     this.socket = null;
     this.cleanupReader = null;
@@ -106,7 +106,7 @@ export class ZyraAgentServerClient extends EventEmitter {
           clientId: this.clientId,
           surface: this.surface,
           authorities: this.authorities,
-          ...(this.desktopAuthority ? { authorityProof: readDesktopAuthority(this.paths.desktopAuthorityFile) } : {})
+          ...(this.authorityProof ? { authorityProof: this.authorityProof } : {})
         });
       });
     });
@@ -238,11 +238,6 @@ export class ZyraAgentServerClient extends EventEmitter {
     }
     this.pending.clear();
   }
-}
-
-function readDesktopAuthority(file) {
-  try { return readFileSync(file, "utf8").trim(); }
-  catch { return ""; }
 }
 
 function readDescriptor(file) {

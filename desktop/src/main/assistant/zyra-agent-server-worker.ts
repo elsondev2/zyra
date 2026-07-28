@@ -1,6 +1,8 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 import { EventEmitter } from 'node:events'
 
 export type ZyraWorkerEventMetadata = {
@@ -55,6 +57,7 @@ type DesktopAgentServerConnectionOptions = {
     stateDirectory?: string
     channel?: string
     autoStart?: boolean
+    authorityProof?: string
 }
 
 export class DesktopAgentServerConnection {
@@ -198,17 +201,21 @@ export class DesktopAgentServerConnection {
         const module = await import(/* @vite-ignore */ moduleUrl) as {
             ZyraAgentServerClient: new (options: Record<string, unknown>) => AgentServerClient
         }
+        const authorityProof = this.options.authorityProof || await loadDesktopAuthorityProof(this.options)
         const client = new module.ZyraAgentServerClient({
             root: this.root,
             clientId: `desktop:${process.pid}:${randomUUID()}`,
             surface: 'desktop',
             authorities: ['desktop-control'],
-            desktopAuthority: true,
+            authorityProof,
             ...this.options
         })
         client.setControlHandler(async (operation, message) => {
             const requestId = String(message['requestId'] || '')
-            const worker = [...(this.workers.get(String(message['sessionKey'] || '')) || [])].find((candidate) => candidate.isAlive())
+            const candidates = [...(this.workers.get(String(message['sessionKey'] || '')) || [])].filter((candidate) => candidate.isAlive())
+            const requestLocalThreadId = asRecord(message['requestContext'])?.['localThreadId']
+            const worker = candidates.find((candidate) => candidate.localThreadId === requestLocalThreadId)
+                || candidates.at(-1)
             if (!worker) throw Object.assign(new Error('No desktop runtime is attached to this canonical chat.'), { code: 'CONTROL_DRIVER_UNAVAILABLE', retryable: true })
             this.controlWorkers.set(requestId, worker)
             try {
@@ -339,6 +346,32 @@ export class ZyraAgentServerWorker implements ZyraWorkerLike {
         this.connection.detach(this)
         this.eventListeners.clear()
     }
+}
+
+async function loadDesktopAuthorityProof(options: DesktopAgentServerConnectionOptions): Promise<string> {
+    const electron = await import('electron')
+    if (!electron.safeStorage?.isEncryptionAvailable?.()) return ''
+    const secretFile = join(electron.app.getPath('userData'), 'agent-control', 'agent-server-authority.bin')
+    let proof = ''
+    try {
+        if (existsSync(secretFile)) proof = electron.safeStorage.decryptString(readFileSync(secretFile))
+    } catch {
+        proof = ''
+    }
+    if (!proof) {
+        proof = randomBytes(32).toString('base64url')
+        mkdirSync(dirname(secretFile), { recursive: true })
+        writeFileSync(secretFile, electron.safeStorage.encryptString(proof), { mode: 0o600 })
+    }
+    const stateDirectory = resolve(options.stateDirectory || process.env.ZYRA_STATE_DIR || join(os.homedir(), '.zyra'))
+    const channel = String(options.channel || process.env.ZYRA_AGENT_SERVER_CHANNEL || 'default').trim().toLowerCase()
+    mkdirSync(stateDirectory, { recursive: true })
+    writeFileSync(
+        join(stateDirectory, `agent-server-${channel}.desktop-authority`),
+        createHash('sha256').update(proof).digest('base64url'),
+        { encoding: 'utf8', mode: 0o600 }
+    )
+    return proof
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

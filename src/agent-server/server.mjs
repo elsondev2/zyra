@@ -1,5 +1,5 @@
-import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { EventEmitter } from "node:events";
@@ -23,6 +23,10 @@ const HANDSHAKE_TIMEOUT_MS = 5_000;
 const ACTIVE_FLEET_STATUSES = new Set(["queued", "starting", "running", "waiting", "paused", "recovering"]);
 const BRIDGE_REQUEST_PATTERN = /^(?:prompt|abort|steer|follow_up|compact|clear_queue|reload|agents\.[a-zA-Z0-9._-]+|workflows\.[a-zA-Z0-9._-]+)$/;
 
+function hashAuthorityProof(value) {
+  return createHash("sha256").update(String(value || "")).digest("base64url");
+}
+
 function tokensMatch(leftValue, rightValue) {
   const left = Buffer.from(String(leftValue || ""));
   const right = Buffer.from(String(rightValue || ""));
@@ -44,7 +48,9 @@ export class ZyraAgentServer extends EventEmitter {
     this.paths = getAgentServerPaths(options);
     this.endpoint = options.endpoint !== undefined ? options.endpoint : this.paths.endpoint;
     this.token = options.token || randomBytes(32).toString("base64url");
-    this.desktopAuthorityToken = options.desktopAuthorityToken || randomBytes(32).toString("base64url");
+    this.desktopAuthorityHash = options.desktopAuthorityToken
+      ? hashAuthorityProof(options.desktopAuthorityToken)
+      : String(options.desktopAuthorityHash || "").trim() || null;
     this.idleTimeoutMs = Math.max(1_000, Number(options.idleTimeoutMs) || DEFAULT_IDLE_TIMEOUT_MS);
     this.createWorker = options.createWorker || ((input) => new AgentBridgeWorker(input));
     this.catalog = options.catalog || new CanonicalChatCatalog(options);
@@ -58,6 +64,11 @@ export class ZyraAgentServer extends EventEmitter {
   async start() {
     if (this.server) return this.descriptor();
     mkdirSync(this.paths.stateDirectory, { recursive: true });
+    if (!this.desktopAuthorityHash) {
+      try {
+        this.desktopAuthorityHash = readFileSync(this.paths.desktopAuthorityFile, "utf8").trim() || null;
+      } catch {}
+    }
     if (process.platform !== "win32" && existsSync(this.endpoint)) rmSync(this.endpoint, { force: true });
     this.server = net.createServer((socket) => this.accept(socket));
     await new Promise((resolve, reject) => {
@@ -70,7 +81,9 @@ export class ZyraAgentServer extends EventEmitter {
       this.endpoint = address.port;
     }
     this.startedAt = new Date().toISOString();
-    writeFileSync(this.paths.desktopAuthorityFile, this.desktopAuthorityToken, { encoding: "utf8", mode: 0o600 });
+    if (this.desktopAuthorityHash) {
+      writeFileSync(this.paths.desktopAuthorityFile, this.desktopAuthorityHash, { encoding: "utf8", mode: 0o600 });
+    }
     this.writeDescriptor();
     return this.descriptor();
   }
@@ -91,7 +104,6 @@ export class ZyraAgentServer extends EventEmitter {
     }
     if (process.platform !== "win32") rmSync(this.endpoint, { force: true });
     rmSync(this.paths.descriptorFile, { force: true });
-    rmSync(this.paths.desktopAuthorityFile, { force: true });
   }
 
   descriptor() {
@@ -168,9 +180,11 @@ export class ZyraAgentServer extends EventEmitter {
     }
     client.clientId = assertAgentServerIdentifier(message.clientId, "client id");
     client.surface = String(message.surface || "unknown").slice(0, 64);
+    const expectedAuthorityHash = this.getDesktopAuthorityHash();
     client.canControl = client.surface === "desktop"
       && message.authorities?.includes?.("desktop-control") === true
-      && tokensMatch(message.authorityProof, this.desktopAuthorityToken);
+      && Boolean(expectedAuthorityHash)
+      && tokensMatch(hashAuthorityProof(message.authorityProof), expectedAuthorityHash);
     client.authenticated = true;
     clearTimeout(client.handshakeTimer);
     this.clients.set(client.connectionId, client);
@@ -180,6 +194,10 @@ export class ZyraAgentServer extends EventEmitter {
       connectionId: client.connectionId,
       server: this.state()
     });
+  }
+
+  getDesktopAuthorityHash() {
+    return this.desktopAuthorityHash;
   }
 
   async handleRequest(client, method, params) {
@@ -293,7 +311,7 @@ export class ZyraAgentServer extends EventEmitter {
   routeControlRequest(session, message) {
     if (message.type === "control.cancel") {
       const owner = session.controlOwners.get(message.requestId);
-      if (owner) this.send(owner, { ...message, sessionKey: session.sessionKey });
+      if (owner) this.send(owner, { ...message, sessionKey: session.sessionKey, requestContext: session.activeRequestContext });
       return;
     }
     const client = [...session.clients].find((candidate) => candidate.authenticated && candidate.canControl && candidate.socket.writable);
@@ -307,7 +325,7 @@ export class ZyraAgentServer extends EventEmitter {
       return;
     }
     session.controlOwners.set(message.requestId, client);
-    this.send(client, { ...message, sessionKey: session.sessionKey });
+    this.send(client, { ...message, sessionKey: session.sessionKey, requestContext: session.activeRequestContext });
   }
 
   handleControlResponse(client, message) {
