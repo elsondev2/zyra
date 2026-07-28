@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import log from 'electron-log'
 import type {
     AssistantAccountOverview,
@@ -13,6 +14,7 @@ import type {
     AssistantDomainEvent,
     AssistantGetHistoryPageInput,
     AssistantGetSessionTurnUsageInput,
+    AssistantMessage,
     AssistantRuntimeStatus,
     AssistantSendPromptOptions,
     AssistantSession,
@@ -27,6 +29,7 @@ import { AssistantActivityDeltaBuffer } from './assistant-activity-delta-buffer'
 import { CodexRealtimeVoiceRuntime } from './codex-realtime-voice'
 import { ZyraPiRuntime } from './zyra-pi-runtime'
 import { nowIso } from './utils'
+import { createAssistantSessionRecord } from './service-records'
 import type { AssistantServiceActionDeps } from './service-action-deps'
 import { AssistantPersistence } from './persistence'
 import { toAssistantShellSnapshot } from './persistence-snapshot'
@@ -68,6 +71,7 @@ import {
 } from './service-runtime-events'
 import {
     type AssistantStateRecord,
+    createAssistantThread,
     findSessionByThreadId,
     findThreadRecord,
     getActiveThread,
@@ -143,6 +147,7 @@ export class AssistantService {
     }
     private pendingBroadcastEvents: AssistantDomainEvent[] = []
     private pendingBroadcastTimer: NodeJS.Timeout | null = null
+    private canonicalImportPromise: Promise<void> | null = null
 
     constructor() {
         this.readyPromise = this.initialize()
@@ -167,6 +172,9 @@ export class AssistantService {
         }
         this.runtime.on('runtime', (event) => {
             this.handleRuntimeEvent(event)
+        })
+        this.runtime.on('catalog.changed', () => {
+            void this.queueCanonicalChatImport()
         })
         this.realtimeVoiceRuntime.on('event', (event) => {
             broadcastAssistantRealtimeVoiceEvent(this.realtimeVoiceSubscribers, event)
@@ -440,6 +448,7 @@ export class AssistantService {
             events: loaded.events || []
         }
         this.state.snapshot.fleetByThreadId ||= {}
+        await this.importCanonicalChats()
         for (const session of this.state.snapshot.sessions) {
             for (const thread of session.threads) {
                 const fleet = await this.persistence.readFleet(thread.id)
@@ -451,6 +460,79 @@ export class AssistantService {
         void this.runtime.prewarm(false).catch((error) => {
             log.warn('[Assistant] Zyra runtime prewarm failed', error)
         })
+    }
+
+    private async queueCanonicalChatImport(): Promise<void> {
+        await this.ensureReady()
+        if (this.canonicalImportPromise) return this.canonicalImportPromise
+        this.canonicalImportPromise = this.importCanonicalChats().finally(() => {
+            this.canonicalImportPromise = null
+        })
+        return this.canonicalImportPromise
+    }
+
+    private async importCanonicalChats(): Promise<void> {
+        let chats
+        try {
+            chats = await this.runtime.listCanonicalChats()
+        } catch (error) {
+            log.warn('[Assistant] Failed to read the canonical Zyra chat catalog', error)
+            return
+        }
+        for (const chat of chats) {
+            if (!chat.canonicalChatId) continue
+            const existing = this.state.snapshot.sessions
+                .flatMap((session) => session.threads.map((thread) => ({ session, thread })))
+                .find(({ thread }) => thread.providerThreadId === chat.canonicalChatId)
+            if (existing) {
+                if (!this.runtime.hasSession(chat.canonicalChatId) && Number(chat.messageCount) !== existing.thread.messageCount) {
+                    try {
+                        const history = await this.runtime.readCanonicalChatHistory(chat.canonicalChatId, chat.project)
+                        const existingKey = createHash('sha256').update(chat.canonicalChatId).digest('hex').slice(0, 24)
+                        const messages = projectCanonicalMessages(history?.entries || [], existingKey, existing.thread.createdAt)
+                        this.appendEvent('thread.updated', normalizeCatalogDate(chat.modifiedAt, existing.thread.updatedAt), {
+                            threadId: existing.thread.id,
+                            patch: { messages, messageCount: messages.length }
+                        }, existing.session.id, existing.thread.id)
+                    } catch (error) {
+                        log.warn('[Assistant] Failed to refresh canonical chat history', { canonicalChatId: chat.canonicalChatId, error })
+                    }
+                }
+                continue
+            }
+            const key = createHash('sha256').update(chat.canonicalChatId).digest('hex').slice(0, 24)
+            const sessionId = `assistant-session:shared:${key}`
+            const threadId = `assistant-thread:shared:${key}`
+            if (this.state.snapshot.sessions.some((session) => session.id === sessionId)) continue
+            const createdAt = normalizeCatalogDate(chat.createdAt)
+            const updatedAt = normalizeCatalogDate(chat.modifiedAt, createdAt)
+            const thread = createAssistantThread(createdAt, null, chat.cwd || chat.project)
+            thread.id = threadId
+            thread.providerThreadId = chat.canonicalChatId
+            thread.messageCount = Math.max(0, Number(chat.messageCount) || 0)
+            thread.updatedAt = updatedAt
+            const session = createAssistantSessionRecord({
+                sessionId,
+                title: chat.title || 'Shared Zyra chat',
+                projectPath: chat.project || chat.cwd || null,
+                createdAt,
+                thread
+            })
+            session.updatedAt = updatedAt
+            this.appendEvent('session.created', createdAt, { session }, sessionId, threadId)
+            try {
+                const history = await this.runtime.readCanonicalChatHistory(chat.canonicalChatId, chat.project)
+                const messages = projectCanonicalMessages(history?.entries || [], key, createdAt)
+                if (messages.length > 0) {
+                    this.appendEvent('thread.updated', updatedAt, {
+                        threadId,
+                        patch: { messages, messageCount: messages.length }
+                    }, sessionId, threadId)
+                }
+            } catch (error) {
+                log.warn('[Assistant] Failed to import canonical chat history', { canonicalChatId: chat.canonicalChatId, error })
+            }
+        }
     }
 
     private async recoverSelectedSessionTitle(): Promise<void> {
@@ -580,4 +662,52 @@ export class AssistantService {
             }
         }, selectedSession.id, activeThread.id)
     }
+}
+
+function normalizeCatalogDate(value: unknown, fallback = nowIso()): string {
+    const date = new Date(typeof value === 'string' || typeof value === 'number' ? value : fallback)
+    return Number.isNaN(date.getTime()) ? fallback : date.toISOString()
+}
+
+function projectCanonicalMessages(entries: unknown[], key: string, fallbackCreatedAt: string): AssistantMessage[] {
+    const messages: AssistantMessage[] = []
+    let turnIndex = 0
+    let activeTurnId: string | null = null
+    for (const entryValue of entries) {
+        if (!entryValue || typeof entryValue !== 'object') continue
+        const entry = entryValue as Record<string, unknown>
+        if (entry['type'] !== 'message') continue
+        const message = entry['message'] as Record<string, unknown> | undefined
+        const role = message?.['role']
+        if (role !== 'user' && role !== 'assistant' && role !== 'system') continue
+        const text = canonicalMessageText(message?.['content'])
+        if (!text) continue
+        if (role === 'user' || (role === 'assistant' && !activeTurnId)) {
+            turnIndex += 1
+            activeTurnId = `shared-turn:${key}:${turnIndex}`
+        }
+        const occurredAt = normalizeCatalogDate(message?.['timestamp'] || entry['timestamp'], fallbackCreatedAt)
+        messages.push({
+            id: String(message?.['id'] || entry['id'] || `shared-message:${key}:${messages.length + 1}`),
+            role,
+            text,
+            turnId: role === 'system' ? null : activeTurnId,
+            streaming: false,
+            timelineSequence: messages.length + 1,
+            createdAt: occurredAt,
+            updatedAt: occurredAt
+        })
+    }
+    return messages
+}
+
+function canonicalMessageText(content: unknown): string {
+    if (typeof content === 'string') return content.trim()
+    if (!Array.isArray(content)) return ''
+    return content
+        .filter((part): part is Record<string, unknown> => Boolean(part && typeof part === 'object'))
+        .filter((part) => part['type'] === 'text')
+        .map((part) => String(part['text'] || ''))
+        .join('')
+        .trim()
 }

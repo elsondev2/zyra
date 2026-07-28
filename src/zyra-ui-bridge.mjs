@@ -85,7 +85,7 @@ async function handleConnect(payload) {
     model: payload.model,
     profile: payload.profile,
     thinking: payload.thinking ?? "medium",
-    surface: "desktop-ui",
+    surface: payload.surface === "memory-worker" ? "memory-worker" : "agent-server",
     skipMemoryStartup: true,
     skipModelAvailability: true,
     rootThreadId: payload.localThreadId || undefined,
@@ -134,6 +134,12 @@ async function handleConnect(payload) {
     model: String(described.model || payload.model || "openai-codex/gpt-5.6-sol"),
     profile: String(described.profile || payload.profile || "default"),
     fleet: projectFleetSnapshot(runtime.fleet?.snapshot?.()),
+    agentDefinitions: cloneJsonValue(runtime.fleet?.listDefinitions?.()),
+    workflowDefinitions: cloneJsonValue(runtime.workflows?.listDefinitions?.()),
+    sessionFile: runtime.session.sessionManager?.getSessionFile?.() || undefined,
+    messages: Array.isArray(runtime.session.state?.messages)
+      ? runtime.session.state.messages.slice(-500).map(normalizeMessage).filter(Boolean)
+      : [],
   };
 }
 
@@ -326,6 +332,12 @@ async function handlePrompt(payload) {
   if (payload.profile) {
     await sdk.setProfile(runtime, payload.profile);
   }
+  if (typeof payload.webSearch === "boolean" || typeof payload.webFetch === "boolean") {
+    sdk.setWebTools(runtime, {
+      webSearch: typeof payload.webSearch === "boolean" ? payload.webSearch : runtime.webSearch,
+      webFetch: typeof payload.webFetch === "boolean" ? payload.webFetch : runtime.webFetch,
+    });
+  }
   const images = normalizePromptImages(payload.images);
   await sdk.runZyraPrompt(runtime, payload.prompt, { images });
   return {};
@@ -385,6 +397,28 @@ async function handleAbort() {
     runtime?.session?.abort?.(),
   ]);
   return {};
+}
+
+async function handleSessionOperation(type, payload = {}) {
+  if (!runtime?.session) throw new Error("Zyra bridge is not connected.");
+  if (type === "steer") {
+    await runtime.session.steer(String(payload.prompt || ""), payload.images);
+    return {};
+  }
+  if (type === "follow_up") {
+    await runtime.session.followUp(String(payload.prompt || ""), payload.images);
+    return {};
+  }
+  if (type === "compact") return runtime.session.compact(String(payload.instructions || "").trim() || undefined);
+  if (type === "clear_queue") {
+    runtime.session.clearQueue?.();
+    return {};
+  }
+  if (type === "reload") {
+    const sdk = await loadSdk();
+    return sdk.reloadZyraRuntime(runtime);
+  }
+  throw new Error(`Unknown session operation: ${type}.`);
 }
 
 async function handleFleetOperation(type, payload = {}) {
@@ -512,6 +546,10 @@ async function handleMessage(message) {
     }
     if (message?.type === "abort") {
       sendResponse(id, true, { result: await handleAbort() });
+      return;
+    }
+    if (["steer", "follow_up", "compact", "clear_queue", "reload"].includes(message?.type)) {
+      sendResponse(id, true, { result: await handleSessionOperation(message.type, message.payload ?? {}) });
       return;
     }
     if (/^(?:agents|workflows)\./.test(message?.type ?? "")) {

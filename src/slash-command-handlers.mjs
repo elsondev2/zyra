@@ -109,6 +109,7 @@ export async function handleSlash(runtime, ui, input, controls = {}) {
     case "consolidate":
       return runMemoryConsolidate(runtime, ui, controls);
     case "chat":
+      if (typeof controls.openChatPicker === "function") return controls.openChatPicker();
       ui.sessionInfo(buildSessionInfo(runtime));
       return true;
     case "thinking":
