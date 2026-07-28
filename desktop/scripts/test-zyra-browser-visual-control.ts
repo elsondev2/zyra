@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { createBrowserControlTool } from '../../src/agent-control/browser-control-tool.mjs'
 import { normalizeTemporaryBrowserOperation, startTemporaryBrowserRelay } from '../../src/agent-control/temporary-browser-relay.mjs'
 import { AgentControlBroker } from '../src/main/agent-control/agent-control-broker'
+import { browserCdpKeyDescriptor, buildBrowserPointerPath } from '../src/main/agent-control/browser-input'
 import { BrowserSurfaceHost } from '../src/main/agent-control/browser-surface-host'
 import { FakeControlDriver } from '../src/main/agent-control/drivers/fake-driver'
 import { ObservationStore } from '../src/main/agent-control/observation-store'
@@ -29,6 +30,13 @@ try {
 assert.equal(isTrustedBrowserTabId('browser:8'), true)
 assert.equal(isTrustedBrowserTabId('browser:agent:visual-open'), true, 'agent-created Browser tabs must pass the trusted binding boundary')
 assert.equal(isTrustedBrowserTabId('browser:agent/escape'), false)
+assert.deepEqual(browserCdpKeyDescriptor('DELETE'), {
+    key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46
+})
+assert.equal(browserCdpKeyDescriptor('ESCAPE').key, 'Escape')
+const pointerPath = buildBrowserPointerPath({ x: 10, y: 20 }, { x: 80, y: 90 }, 210)
+assert(pointerPath.length > 2, 'visible pointer movement is emitted as acknowledged CDP steps')
+assert.deepEqual(pointerPath.at(-1), { x: 80, y: 90 })
 assert.throws(() => normalizeTemporaryBrowserOperation({ operation: 'list_windows' }), /not allowed/)
 assert.throws(() => normalizeTemporaryBrowserOperation({ operation: 'observe', targetId: 'chrome-tab:1' }), /in-app Browser/)
 assert.equal(
@@ -162,6 +170,7 @@ const openAcknowledgement = {
 }
 assert.equal(surfaceHost.acknowledge(openAcknowledgement), true)
 assert.equal(surfaceHost.acknowledge(openAcknowledgement), false)
+assert.equal(surfaceHost.completeRegisteredTarget({ ...openedTarget, ownerThreadId: 'thread:other' }), false, 'tab registration cannot settle another thread\'s open request')
 assert.equal(surfaceHost.completeRegisteredTarget(openedTarget), true)
 assert.equal((await openedPromise).targetId, openedTarget.targetId)
 assert.equal(surfaceHost.complete({
@@ -226,6 +235,13 @@ await completeManagedRequest(revealExistingPromise, managedSurfaceRequests.at(-1
 const splitExistingPromise = managedSurfaceHost.revealTabs(principal, managedPrimary, managedSecondary)
 assert.equal(managedSurfaceRequests.at(-1)?.secondaryTabId, managedSecondary.tabId)
 await completeManagedRequest(splitExistingPromise, managedSurfaceRequests.at(-1), managedPrimary)
+const resizeInspectorPromise = managedSurfaceHost.resizeInspector(principal, managedPrimary, 720)
+const resizeInspectorRequest = managedSurfaceRequests.at(-1)
+assert.equal(resizeInspectorRequest?.mode, 'resize')
+assert.equal(resizeInspectorRequest?.width, 720)
+assert.equal(managedSurfaceHost.acknowledge(resizeInspectorRequest), true)
+assert.equal(managedSurfaceHost.complete({ ...resizeInspectorRequest, success: true, targetId: managedPrimary.targetId, width: 680 }), true)
+assert.deepEqual(await resizeInspectorPromise, { target: managedPrimary, width: 680 })
 const closeExistingPromise = managedSurfaceHost.closeTab(principal, managedPrimary)
 assert.equal(managedSurfaceRequests.at(-1)?.mode, 'close')
 await completeManagedRequest(closeExistingPromise, managedSurfaceRequests.at(-1), managedPrimary)
@@ -256,6 +272,7 @@ assert.equal((await concurrentRevealA).targetId, managedPrimary.targetId)
 managedSurfaceHost.dispose()
 
 const revealedBrowserLayouts: Array<{ primary: string; secondary: string | null }> = []
+const resizedInspectorWidths: number[] = []
 const closedBrowserTabs: string[] = []
 const browserTabCommands: Array<{ targetId: string; mode: string; url: string | null }> = []
 broker.setBrowserSurfaceController({
@@ -266,6 +283,10 @@ broker.setBrowserSurfaceController({
     revealTabs: async (_requestPrincipal, primary, secondary) => {
         revealedBrowserLayouts.push({ primary: primary.targetId, secondary: secondary?.targetId || null })
         return primary
+    },
+    resizeInspector: async (_requestPrincipal, target, width) => {
+        resizedInspectorWidths.push(width)
+        return { target, width }
     },
     closeTab: async (_requestPrincipal, target) => {
         closedBrowserTabs.push(target.targetId)
@@ -359,6 +380,10 @@ await assert.rejects(
     broker.handleToolOperation(childPrincipal, { operation: 'open_tab', reveal: true }),
     (error: any) => error.code === 'CONTROL_CAPABILITY_DENIED'
 )
+await assert.rejects(
+    broker.handleToolOperation(childPrincipal, { operation: 'resize_inspector', targetId, width: 720 }),
+    (error: any) => error.code === 'CONTROL_CAPABILITY_DENIED'
+)
 const discovered = await broker.handleToolOperation(childPrincipal, { operation: 'list_targets', targetKind: 'zyra-browser' })
 assert.equal((discovered.targets as unknown[]).length, 1, 'children discover only Browser targets owned by their parent thread')
 assert.equal((discovered.grants as unknown[]).length, 0)
@@ -407,7 +432,7 @@ broker.registerTarget({
 broker.updateWorkspaceState({
     version: 1,
     threadId: principal.threadId,
-    inspector: { open: true, activeWorkspace: 'browser', openWorkspaces: ['review', 'browser'] },
+    inspector: { open: true, width: 640, activeWorkspace: 'browser', openWorkspaces: ['review', 'browser'] },
     browser: {
         open: true,
         activeTabId: 'browser:visual',
@@ -424,6 +449,7 @@ broker.updateWorkspaceState({
 const workspaceListing = await broker.handleToolOperation(principal, { operation: 'list_targets', targetKind: 'zyra-browser' }) as any
 assert.deepEqual(workspaceListing.workspace.browser.visibleTabIds, ['browser:visual', 'browser:secondary'], 'the broker derives visible Browser tabs from trusted Inspector layout state')
 assert.equal(workspaceListing.workspace.browser.tabs[1].position, 'secondary')
+assert.equal(workspaceListing.workspace.inspector.width, 640, 'the model sees the accepted Inspector width')
 assert.equal(workspaceListing.workspace.browser.tabs[2].targetId, null, 'renderer layout metadata cannot rebind a trusted target to a different tab identity')
 assert.equal(workspaceListing.workspace.browser.tabs[2].trusted, false, 'unbound renderer tab metadata is explicitly marked untrusted')
 const modelWorkspaceListing = await tool.execute('visual-list-workspace', { operation: 'list_targets' })
@@ -435,6 +461,11 @@ assert.deepEqual(revealedBrowserLayouts.slice(-2), [
     { primary: targetId, secondary: null },
     { primary: targetId, secondary: secondaryTargetId }
 ])
+await broker.handleToolOperation(principal, { operation: 'resize_inspector', targetId, width: 720 })
+const clampedInspectorResize = await broker.handleToolOperation(principal, { operation: 'resize_inspector', targetId, width: 10 })
+assert.equal(clampedInspectorResize.requestedWidth, 340)
+assert.equal(clampedInspectorResize.width, 340)
+assert.deepEqual(resizedInspectorWidths, [720, 340])
 
 await assert.rejects(
     broker.handleToolOperation(principal, { operation: 'close_tab', targetId, grantId: grant.grantId }),
@@ -490,8 +521,10 @@ await broker.emergencyStop()
 assert.equal(broker.state().cursors.length, 0)
 
 const pageSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantPage.tsx', import.meta.url), 'utf8')
+const surfaceRequestsSource = readFileSync(new URL('../src/renderer/src/pages/assistant/useAssistantBrowserSurfaceRequests.ts', import.meta.url), 'utf8')
 const panelSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantDiffPanel.tsx', import.meta.url), 'utf8')
 const workspaceSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantBrowserWorkspace.tsx', import.meta.url), 'utf8')
+const webviewSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantBrowserWebview.tsx', import.meta.url), 'utf8')
 const handlerSource = readFileSync(new URL('../src/main/ipc/handlers/agent-control-handlers.ts', import.meta.url), 'utf8')
 const preloadSource = readFileSync(new URL('../src/preload/adapters/agent-control-adapter.ts', import.meta.url), 'utf8')
 const protocolSource = readFileSync(new URL('../src/shared/agent-control/protocol.ts', import.meta.url), 'utf8')
@@ -499,10 +532,15 @@ const hostSource = readFileSync(new URL('../src/main/agent-control/browser-surfa
 const browserDriverSource = readFileSync(new URL('../src/main/agent-control/drivers/zyra-browser-driver.ts', import.meta.url), 'utf8')
 const mainSource = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8')
 const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-pi-runtime.ts', import.meta.url), 'utf8')
-assert(pageSource.includes('onBrowserSurfaceRequest'))
-assert(pageSource.includes('request.threadId !== diffSource.threadId'))
-assert(pageSource.includes("if (request.reveal) setRightPanelMode('review')"))
-assert(pageSource.includes('onBrowserSurfaceCancel'))
+assert(surfaceRequestsSource.includes('onBrowserSurfaceRequest'))
+assert(surfaceRequestsSource.includes('request.threadId !== threadRef.current'))
+assert(surfaceRequestsSource.includes('if (request.reveal) revealInspector()'))
+assert(surfaceRequestsSource.includes('onBrowserSurfaceCancel'))
+assert(surfaceRequestsSource.includes("request.mode === 'resize'"))
+assert(surfaceRequestsSource.includes('threadRef.current !== request.threadId'))
+assert(pageSource.includes('setRightSidebarWidth(width)'))
+assert(surfaceRequestsSource.includes('waitForAppliedInspectorWidth(request, previousWidth)'))
+assert(surfaceRequestsSource.includes('width: appliedWidth'))
 assert(panelSource.includes('processedBrowserSurfaceRequestRef'))
 assert(panelSource.includes('surfaceRequest={browserSurfaceRequest}'))
 assert(panelSource.includes("'pointer-events-none invisible absolute inset-x-0 bottom-0 top-[76px] flex'"))
@@ -513,22 +551,29 @@ assert(workspaceSource.includes('completeBrowserSurfaceRequest({'))
 assert(workspaceSource.includes('claimBrowserSurfaceRequest({'))
 assert(workspaceSource.includes('knownTargetId !== surfaceRequest.targetId'))
 assert(workspaceSource.includes('knownSecondaryTargetId !== surfaceRequest.secondaryTargetId'))
+assert(workspaceSource.includes('surfaceRequest.threadId !== threadId'))
 assert(panelSource.includes('updateWorkspaceState({'))
 assert(panelSource.includes('onWorkspaceStateChange={handleBrowserWorkspaceStateChange}'))
 assert(workspaceSource.includes('Allow agent?'))
 assert(workspaceSource.includes('rejectGrant(activePendingGrant.requestId)'))
 assert(workspaceSource.includes('data-browser-control-owned'))
 assert(workspaceSource.includes('Zyra-controlled Browser surface'))
+assert.equal(workspaceSource.includes('webviewRefs.current.get(activeTab.id)?.focus()'), false, 'revealing Browser never steals physical keyboard focus')
+assert.equal(webviewSource.includes('webview?.focus()'), false, 'retained webviews keep focus user-owned')
 assert(workspaceSource.includes('MousePointer2'))
 assert(browserDriverSource.includes("for (const fromSurface of [true, false])"))
 assert(browserDriverSource.includes('guest.capturePage()'))
 assert(browserDriverSource.includes("await this.command(guest, 'Input.insertText', { text: action.text })"))
+assert(browserDriverSource.includes('Click or focus an observed page element before sending target-local keyboard input.'))
+assert(browserDriverSource.includes('buildBrowserPointerPath'))
+assert(/finally \{[\s\S]{0,240}Input\.dispatchMouseEvent'[\s\S]{0,80}mouseReleased/.test(browserDriverSource), 'pressed pointer actions release even when cursor publication or cancellation fails')
 assert(mainSource.includes('webPreferences.backgroundThrottling = false'))
 assert(runtimeSource.includes("'Root Browser control ended with its turn.'"))
 assert(protocolSource.includes("operation: 'open_tab'"))
 assert(protocolSource.includes("operation: 'reveal_tab'"))
 assert(protocolSource.includes("operation: 'close_tab'"))
 assert(protocolSource.includes("operation: 'set_tab_layout'"))
+assert(protocolSource.includes("operation: 'resize_inspector'"))
 assert(protocolSource.includes("operation: 'open_external'"))
 assert(protocolSource.includes('acknowledgeBrowserSurfaceRequest'))
 assert(protocolSource.includes('claimBrowserSurfaceRequest'))
@@ -543,6 +588,7 @@ assert(handlerSource.includes('browserSurface.completeRegisteredTarget(target)')
 assert(handlerSource.includes('browserSurface.claim(input)'))
 assert(hostSource.includes("tabId: `browser:agent:${id}`"))
 assert(hostSource.includes('revealTabs('))
+assert(hostSource.includes('resizeInspector('))
 assert(hostSource.includes('closeTab('))
 assert(hostSource.includes('commandTab('))
 assert(hostSource.includes("phase: 'sent' | 'accepted' | 'claimed'"))

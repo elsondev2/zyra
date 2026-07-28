@@ -32,6 +32,7 @@ export interface AgentControlDriver {
     act(target: RegisteredControlTarget, action: ControlAction, context: DriverActionContext): Promise<{ changed: boolean }>
     readScreenshot?(screenshotRef: string): ControlScreenshotPayload | undefined
     release?(target: RegisteredControlTarget): Promise<void> | void
+    releaseInputFocus?(target: RegisteredControlTarget): void
     emergencyStop?(): Promise<void> | void
     dispose?(): Promise<void> | void
     health?(): { state: 'ready' | 'degraded' | 'disconnected' | 'unavailable'; lastDisconnectReason?: string }

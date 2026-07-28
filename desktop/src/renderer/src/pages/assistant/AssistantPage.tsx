@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AssistantActivity, AssistantMessage, AssistantTurnDetail, FleetSnapshot } from '@shared/assistant/contracts'
-import type { BrowserSurfaceOpenRequest } from '@shared/agent-control/protocol'
 import { FilePreviewModal } from '@/components/ui/FilePreviewModal'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import { useFilePreview } from '@/components/ui/file-preview/useFilePreview'
@@ -15,6 +14,7 @@ import { openAssistantFileTarget } from './assistant-file-navigation'
 import { resolveAssistantLeftSidebarWidth, resolveAssistantPaneLayout } from './assistant-pane-layout'
 import { mergeAssistantReviewIndex } from './assistant-review-index'
 import { AssistantTransientToast, DeleteHistoryConfirm, useAssistantTransientToast } from './AssistantPageHelpers'
+import { useAssistantBrowserSurfaceRequests } from './useAssistantBrowserSurfaceRequests'
 import { useAssistantPageSidebarState } from './useAssistantPageSidebarState'
 import { useAssistantReviewIndex } from './useAssistantReviewIndex'
 
@@ -96,8 +96,6 @@ export default function AssistantPage() {
     const [diffRevealRequest, setDiffRevealRequest] = useState<AssistantDiffRevealRequest | null>(null)
     const [reviewTurnDetails, setReviewTurnDetails] = useState<Record<string, AssistantTurnDetail>>({})
     const [reviewTurnDetailErrors, setReviewTurnDetailErrors] = useState<Record<string, string>>({})
-    const [browserSurfaceRequests, setBrowserSurfaceRequests] = useState<BrowserSurfaceOpenRequest[]>([])
-    const browserSurfaceRequest = browserSurfaceRequests[0] || null
     const pendingReviewTurnIdsRef = useRef(new Set<string>())
     const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
     const autoCollapsedLeftSidebarRef = useRef(false)
@@ -119,6 +117,19 @@ export default function AssistantPage() {
         }
     }, areAssistantDiffSourceSelectionsEqual)
     const inspectorOpen = rightPanelMode === 'review'
+    const revealBrowserInspector = useCallback(() => setRightPanelMode('review'), [setRightPanelMode])
+    const resizeBrowserInspector = useCallback((width: number) => {
+        setRightPanelMode('review')
+        setRightSidebarWidth(width)
+    }, [setRightPanelMode, setRightSidebarWidth])
+    const {
+        request: browserSurfaceRequest,
+        handleRequest: handleBrowserSurfaceRequestHandled
+    } = useAssistantBrowserSurfaceRequests({
+        threadId: diffSource.threadId,
+        revealInspector: revealBrowserInspector,
+        resizeInspector: resizeBrowserInspector
+    })
     const { reviewIndex, reviewIndexLoading, reviewIndexError } = useAssistantReviewIndex({
         threadId: diffSource.threadId,
         enabled: inspectorOpen,
@@ -197,32 +208,6 @@ export default function AssistantPage() {
         return () => window.removeEventListener('resize', handleResize)
     }, [])
 
-    useEffect(() => window.devscope.agentControl.onBrowserSurfaceRequest((request) => {
-        if (!diffSource.threadId || request.threadId !== diffSource.threadId) {
-            void window.devscope.agentControl.completeBrowserSurfaceRequest({
-                requestId: request.requestId,
-                threadId: request.threadId,
-                tabId: request.tabId,
-                success: false,
-                error: 'Select the requesting chat before opening its Browser tab.'
-            })
-            return
-        }
-        void window.devscope.agentControl.acknowledgeBrowserSurfaceRequest({
-            requestId: request.requestId,
-            threadId: request.threadId,
-            tabId: request.tabId
-        })
-        setBrowserSurfaceRequests((current) => current.some((entry) => entry.requestId === request.requestId)
-            ? current
-            : [...current, request])
-        if (request.reveal) setRightPanelMode('review')
-    }), [diffSource.threadId, setRightPanelMode])
-
-    useEffect(() => window.devscope.agentControl.onBrowserSurfaceCancel((requestId) => {
-        setBrowserSurfaceRequests((current) => current.filter((request) => request.requestId !== requestId))
-    }), [])
-
     const paneLayout = resolveAssistantPaneLayout({
         viewportWidth,
         leftSidebarCollapsed,
@@ -230,6 +215,8 @@ export default function AssistantPage() {
         inspectorOpen,
         inspectorWidth: rightSidebarWidth
     })
+
+
     const pinnedBubbleHeaderInset = paneLayout.leftSidebarCollapsed && bubblePreviewPinned
         ? resolveAssistantLeftSidebarWidth(leftSidebarWidth, paneLayout.maxLeftSidebarWidth) + 8
         : 0
@@ -411,9 +398,6 @@ export default function AssistantPage() {
     }, [diffSource.activities])
     const handleDiffRevealRequestHandled = useCallback((requestId: number) => {
         setDiffRevealRequest((current) => current?.id === requestId ? null : current)
-    }, [])
-    const handleBrowserSurfaceRequestHandled = useCallback((requestId: string) => {
-        setBrowserSurfaceRequests((current) => current.filter((request) => request.requestId !== requestId))
     }, [])
     const handleToggleInspector = useCallback(() => {
         if (rightPanelMode === 'review') {

@@ -1,4 +1,4 @@
-import { createElement, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
+import { createElement, forwardRef, memo, useCallback, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import type { DevScopeBrowserPreviewConfig } from '@shared/contracts/devscope-api'
 import { normalizeAssistantBrowserFaviconUrl, type AssistantBrowserTabState } from './assistant-browser-workspace-state'
 
@@ -8,7 +8,6 @@ export type AssistantBrowserWebviewHandle = {
     goForward: () => void
     reload: () => void
     stop: () => void
-    focus: () => void
 }
 
 type BrowserWebviewElement = HTMLElement & {
@@ -22,7 +21,6 @@ type BrowserWebviewElement = HTMLElement & {
     goForward: () => void
     reload: () => void
     stop: () => void
-    focus: () => void
     isCurrentlyAudible: () => boolean
     getWebContentsId: () => number
 }
@@ -45,11 +43,10 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
     threadId: string
     config: DevScopeBrowserPreviewConfig
     visible: boolean
-    focused: boolean
     placement: 'full' | 'primary' | 'secondary'
     onStateChange: (tabId: string, patch: BrowserStatePatch) => void
     onControlTargetChange: (tabId: string, targetId: string | null) => void
-}>(function AssistantBrowserWebview({ tab, threadId, config, visible, focused, placement, onStateChange, onControlTargetChange }, forwardedRef) {
+}>(function AssistantBrowserWebview({ tab, threadId, config, visible, placement, onStateChange, onControlTargetChange }, forwardedRef) {
     const [webview, setWebview] = useState<BrowserWebviewElement | null>(null)
     const onStateChangeRef = useRef(onStateChange)
     const tabTitleRef = useRef(tab.title)
@@ -81,8 +78,7 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
             onStateChangeRef.current(tab.id, { status: 'loading', error: null })
             webview.reload()
         },
-        stop: () => webview?.stop(),
-        focus: () => webview?.focus()
+        stop: () => webview?.stop()
     }), [tab.id, webview])
 
     useLayoutEffect(() => {
@@ -258,9 +254,6 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
         }
     }, [onControlTargetChange, tab.id, threadId, webview])
 
-    useEffect(() => {
-        if (focused) webview?.focus()
-    }, [focused, webview])
 
     return createElement('webview', {
         ref: setWebviewRef,

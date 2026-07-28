@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
     ArrowLeft,
     ArrowRight,
@@ -79,6 +79,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     threadId,
     projectPath,
     active,
+    controlState,
     navigationRequest,
     surfaceRequest,
     onNavigationRequestHandled,
@@ -91,6 +92,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     threadId: string
     projectPath: string | null
     active: boolean
+    controlState: ControlStateSnapshot | null
     navigationRequest: { id: number; url: string } | null
     surfaceRequest: BrowserSurfaceOpenRequest | null
     onNavigationRequestHandled: (requestId: number) => void
@@ -115,10 +117,13 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const [localServers, setLocalServers] = useState<LocalServerSuggestion[]>([])
     const [serversLoading, setServersLoading] = useState(false)
     const [serversError, setServersError] = useState<string | null>(null)
-    const [controlState, setControlState] = useState<ControlStateSnapshot | null>(null)
-    const [controlTargetsByTab, setControlTargetsByTab] = useState<Record<string, string>>({})
     const [rememberApproval, setRememberApproval] = useState(false)
     const workspaceStateRef = useRef(workspaceState)
+    const controlTargetsByTab = useMemo<Record<string, string>>(() => Object.fromEntries(
+        (controlState?.targets || []).flatMap((target): Array<[string, string]> => (
+            target.kind === 'zyra-browser' && target.ownerThreadId === threadId ? [[target.tabId, target.targetId]] : []
+        ))
+    ), [controlState?.targets, threadId])
     const controlTargetsByTabRef = useRef(controlTargetsByTab)
     const webviewRefs = useRef(new Map<string, AssistantBrowserWebviewHandle>())
     const webviewRefCallbacks = useRef(new Map<string, (handle: AssistantBrowserWebviewHandle | null) => void>())
@@ -193,17 +198,6 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     }), [])
 
     useEffect(() => {
-        let cancelled = false
-        void window.devscope.agentControl.getState().then((result) => {
-            if (!cancelled && result.success) setControlState(result.state)
-        })
-        const unsubscribe = window.devscope.agentControl.onStateChange((state) => {
-            if (!cancelled) setControlState(state)
-        })
-        return () => { cancelled = true; unsubscribe() }
-    }, [])
-
-    useEffect(() => {
         setRememberApproval(false)
     }, [activePendingGrant?.requestId])
 
@@ -230,22 +224,11 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     }, [controlState])
 
     const handleControlTargetChange = useCallback((tabId: string, targetId: string | null) => {
-        if (targetId) {
-            const request = [...pendingSurfaceRequestsRef.current.values()].find((entry) => entry.tabId === tabId)
-            if (request) {
-                pendingSurfaceRequestsRef.current.delete(request.requestId)
-                onSurfaceRequestHandledRef.current(request.requestId)
-            }
-        }
-        setControlTargetsByTab((current) => {
-            if (targetId && current[tabId] === targetId) return current
-            if (!targetId && !current[tabId]) return current
-            const next = { ...current }
-            if (targetId) next[tabId] = targetId
-            else delete next[tabId]
-            controlTargetsByTabRef.current = next
-            return next
-        })
+        if (!targetId) return
+        const request = [...pendingSurfaceRequestsRef.current.values()].find((entry) => entry.tabId === tabId)
+        if (!request) return
+        pendingSurfaceRequestsRef.current.delete(request.requestId)
+        onSurfaceRequestHandledRef.current(request.requestId)
     }, [])
 
     useEffect(() => {
@@ -371,9 +354,6 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         if (normalizedProjectPath) void refreshLocalServers()
     }, [normalizedProjectPath, refreshLocalServers])
 
-    useEffect(() => {
-        if (active && activeTab) webviewRefs.current.get(activeTab.id)?.focus()
-    }, [active, activeTab?.id])
 
     const handleWebviewStateChange = useCallback((tabId: string, patch: Partial<Omit<AssistantBrowserTabState, 'id'>>) => {
         mutateWorkspaceState((current) => updateAssistantBrowserTab(current, tabId, patch))
@@ -481,6 +461,10 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
 
     useEffect(() => {
         if (!surfaceRequest || consumedSurfaceRequestsRef.current.has(surfaceRequest.requestId) || cancelledSurfaceRequestsRef.current.has(surfaceRequest.requestId)) return
+        if (surfaceRequest.threadId !== threadId) {
+            failSurfaceRequest(surfaceRequest, 'The Browser surface request belongs to another chat thread.')
+            return
+        }
         const mode = surfaceRequest.mode || 'open'
         const knownTargetId = controlTargetsByTabRef.current[surfaceRequest.tabId]
         const knownSecondaryTargetId = surfaceRequest.secondaryTabId
@@ -576,7 +560,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         } else {
             pendingSurfaceRequestsRef.current.set(surfaceRequest.requestId, surfaceRequest)
         }
-    }, [closeTab, configError, controlTargetsByTab, failSurfaceRequest, mutateWorkspaceState, normalizedProjectPath, surfaceRequest])
+    }, [closeTab, configError, controlTargetsByTab, failSurfaceRequest, mutateWorkspaceState, normalizedProjectPath, surfaceRequest, threadId])
 
     const openExternal = useCallback(async () => {
         if (!activeTab?.url) return
@@ -866,7 +850,6 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                             threadId={threadId}
                             config={config}
                             visible={visible}
-                            focused={active && primary}
                             placement={splitTab ? primary ? 'primary' : secondary ? 'secondary' : 'full' : 'full'}
                             onStateChange={handleWebviewStateChange}
                             onControlTargetChange={handleControlTargetChange}

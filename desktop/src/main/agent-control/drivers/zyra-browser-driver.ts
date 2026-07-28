@@ -4,6 +4,7 @@ import { join } from 'path'
 import { nativeImage, type NativeImage, type WebContents } from 'electron'
 import type { ControlAction, ControlElement, ControlObservation } from '../../../shared/agent-control/contracts'
 import { CONTROL_BOUNDS, normalizedOrigin } from '../../../shared/agent-control/policy'
+import { browserCdpKeyDescriptor, buildBrowserPointerPath } from '../browser-input'
 import { AgentControlError } from '../control-errors'
 import type { RegisteredControlTarget } from '../target-registry'
 import type { AgentControlDriver, DriverActionContext, DriverObservationOptions } from './driver'
@@ -39,6 +40,8 @@ type RevisionElements = { revision: number; refs: Map<string, { backendNodeId: n
 export class ZyraBrowserDriver implements AgentControlDriver {
     readonly kind = 'zyra-browser' as const
     private readonly revisions = new Map<string, RevisionElements>()
+    private readonly pointerByTarget = new Map<string, { x: number; y: number }>()
+    private readonly inputFocusByTarget = new Set<string>()
     private readonly attached = new Set<number>()
     private readonly artifacts = new Map<string, string>()
     private lastDisconnectReason: string | undefined
@@ -144,38 +147,44 @@ export class ZyraBrowserDriver implements AgentControlDriver {
 
     async act(target: RegisteredControlTarget, action: ControlAction, context: DriverActionContext): Promise<{ changed: boolean }> {
         const guest = this.getGuest(target)
+        const targetId = target.target.targetId
         await this.ensureAttached(guest)
         if (context.signal?.aborted) throw new AgentControlError('CONTROL_CANCELLED', 'Browser action was cancelled.')
         switch (action.type) {
             case 'navigate':
+                this.releaseInputFocus(target)
                 await this.command(guest, 'Page.navigate', { url: action.url })
                 await this.waitForReady(guest, context.signal)
                 return { changed: true }
             case 'focus':
-                guest.focus()
-                return { changed: true }
+                throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Integrated Browser control never takes physical keyboard focus. Click or focus an observed page element instead.')
             case 'wait':
                 await this.waitForCondition(guest, action, context)
                 return { changed: false }
             case 'move': {
                 const point = { x: action.x, y: action.y }
-                await this.movePointer(guest, point, action.durationMs, context)
-                context.updateCursor?.({ phase: 'idle', visible: true })
+                await this.movePointer(guest, targetId, point, action.durationMs, context)
+                context.updateCursor?.({ ...point, phase: 'idle', visible: true, durationMs: 0 })
                 return { changed: false }
             }
             case 'click': {
                 const point = action.x !== undefined && action.y !== undefined
                     ? { x: action.x, y: action.y }
-                    : await this.elementPoint(guest, target.target.targetId, context.revision, action.elementRef!)
-                await this.movePointer(guest, point, 180, context)
+                    : await this.elementPoint(guest, targetId, context.revision, action.elementRef!)
+                await this.movePointer(guest, targetId, point, 180, context)
                 const button = action.button || 'left'
                 const clickCount = action.clickCount || 1
-                context.updateCursor?.({ ...point, phase: 'pressing', visible: true, durationMs: 70 })
                 await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button, clickCount })
-                await delay(70, context.signal)
-                await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button, clickCount })
-                context.updateCursor?.({ ...point, phase: 'idle', visible: true, durationMs: 90 })
-                await delay(90, context.signal)
+                let completed = false
+                try {
+                    context.updateCursor?.({ ...point, phase: 'pressing', visible: true, durationMs: 0 })
+                    await delay(70, context.signal)
+                    completed = true
+                } finally {
+                    await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button, clickCount })
+                    context.updateCursor?.({ ...point, phase: 'idle', visible: true, durationMs: 0 })
+                }
+                if (completed) this.inputFocusByTarget.add(targetId)
                 return { changed: true }
             }
             case 'drag': {
@@ -183,75 +192,93 @@ export class ZyraBrowserDriver implements AgentControlDriver {
                 const to = { x: action.toX, y: action.toY }
                 const button = action.button || 'left'
                 const durationMs = Math.max(120, Math.min(2_000, action.durationMs || 420))
-                await this.movePointer(guest, from, 160, context)
+                await this.movePointer(guest, targetId, from, 160, context)
+                const path = buildBrowserPointerPath(from, to, durationMs)
+                let current = from
+                let completed = false
                 await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mousePressed', ...from, button, clickCount: 1 })
-                context.updateCursor?.({ ...to, phase: 'dragging', visible: true, durationMs })
-                const steps = Math.max(4, Math.min(20, Math.round(durationMs / 35)))
-                for (let step = 1; step <= steps; step += 1) {
-                    const progress = step / steps
-                    const point = { x: from.x + (to.x - from.x) * progress, y: from.y + (to.y - from.y) * progress }
-                    await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mouseMoved', ...point, button, buttons: 1 })
-                    await delay(durationMs / steps, context.signal)
+                try {
+                    context.updateCursor?.({ ...from, phase: 'dragging', visible: true, durationMs: 0 })
+                    for (const [index, point] of path.entries()) {
+                        await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mouseMoved', ...point, button, buttons: 1 })
+                        current = point
+                        this.pointerByTarget.set(targetId, point)
+                        context.updateCursor?.({ ...point, phase: 'dragging', visible: true, durationMs: 0 })
+                        if (index < path.length - 1) await delay(durationMs / path.length, context.signal)
+                    }
+                    completed = true
+                } finally {
+                    await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...current, button, clickCount: 1 })
+                    this.pointerByTarget.set(targetId, current)
+                    context.updateCursor?.({ ...current, phase: 'idle', visible: true, durationMs: 0 })
                 }
-                await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...to, button, clickCount: 1 })
-                context.updateCursor?.({ ...to, phase: 'idle', visible: true, durationMs: 100 })
+                if (completed) this.inputFocusByTarget.add(targetId)
                 return { changed: true }
             }
             case 'type': {
                 let point: { x: number; y: number } | undefined
                 if (action.elementRef) {
-                    point = await this.elementPoint(guest, target.target.targetId, context.revision, action.elementRef)
-                    await this.movePointer(guest, point, 160, context)
-                    const reference = this.element(target.target.targetId, context.revision, action.elementRef)
+                    point = await this.elementPoint(guest, targetId, context.revision, action.elementRef)
+                    await this.movePointer(guest, targetId, point, 160, context)
+                    const reference = this.element(targetId, context.revision, action.elementRef)
                     await this.command(guest, 'DOM.focus', { backendNodeId: reference.backendNodeId })
+                    this.inputFocusByTarget.add(targetId)
                 } else if (action.x !== undefined && action.y !== undefined) {
                     point = { x: action.x, y: action.y }
-                    await this.movePointer(guest, point, 160, context)
-                    context.updateCursor?.({ ...point, phase: 'pressing', visible: true, durationMs: 70 })
+                    await this.movePointer(guest, targetId, point, 160, context)
                     await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 })
-                    await delay(70, context.signal)
-                    await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 })
+                    try {
+                        context.updateCursor?.({ ...point, phase: 'pressing', visible: true, durationMs: 0 })
+                        await delay(70, context.signal)
+                    } finally {
+                        await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 })
+                        context.updateCursor?.({ ...point, phase: 'idle', visible: true, durationMs: 0 })
+                    }
+                    this.inputFocusByTarget.add(targetId)
+                }
+                if (!point && !this.inputFocusByTarget.has(targetId)) {
+                    throw new AgentControlError('CONTROL_TARGET_BLOCKED', 'Click or focus an observed page element before sending target-local keyboard input.')
                 }
                 if (!action.elementRef) await this.assertFocusedTypingSafe(guest)
-                context.updateCursor?.({ ...point, phase: 'typing', visible: true, durationMs: 90 })
-                if (action.replace) {
-                    await this.command(guest, 'Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 2 })
-                    await this.command(guest, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 2 })
-                }
+                context.updateCursor?.({ ...point, phase: 'typing', visible: true, durationMs: 0 })
+                if (action.replace) await this.dispatchKey(guest, 'a', ['control'])
                 await this.command(guest, 'Input.insertText', { text: action.text })
-                context.updateCursor?.({ ...point, phase: 'idle', visible: true, durationMs: 100 })
+                context.updateCursor?.({ ...point, phase: 'idle', visible: true, durationMs: 0 })
                 return { changed: true }
             }
             case 'key':
-                context.updateCursor?.({ phase: 'typing', visible: true, durationMs: 80 })
+                if (!this.inputFocusByTarget.has(targetId)) {
+                    throw new AgentControlError('CONTROL_TARGET_BLOCKED', 'Click or focus an observed page element before sending target-local keyboard input.')
+                }
+                context.updateCursor?.({ phase: 'typing', visible: true, durationMs: 0 })
                 await this.dispatchKey(guest, action.key, action.modifiers)
-                context.updateCursor?.({ phase: 'idle', visible: true, durationMs: 80 })
+                context.updateCursor?.({ phase: 'idle', visible: true, durationMs: 0 })
                 return { changed: true }
             case 'scroll': {
                 const point = action.x !== undefined && action.y !== undefined
                     ? { x: action.x, y: action.y }
                     : action.elementRef
-                        ? await this.elementPoint(guest, target.target.targetId, context.revision, action.elementRef)
+                        ? await this.elementPoint(guest, targetId, context.revision, action.elementRef)
                         : { x: 10, y: 10 }
-                await this.movePointer(guest, point, 120, context)
-                context.updateCursor?.({ ...point, phase: 'scrolling', visible: true, durationMs: 140 })
+                await this.movePointer(guest, targetId, point, 120, context)
                 await this.command(guest, 'Input.dispatchMouseEvent', {
                     type: 'mouseWheel', x: point.x, y: point.y, deltaX: action.deltaX, deltaY: action.deltaY
                 })
-                context.updateCursor?.({ ...point, phase: 'idle', visible: true, durationMs: 100 })
+                context.updateCursor?.({ ...point, phase: 'idle', visible: true, durationMs: 0 })
                 return { changed: true }
             }
             case 'select': {
-                const point = await this.elementPoint(guest, target.target.targetId, context.revision, action.elementRef)
-                await this.movePointer(guest, point, 160, context)
-                const reference = this.element(target.target.targetId, context.revision, action.elementRef)
+                const point = await this.elementPoint(guest, targetId, context.revision, action.elementRef)
+                await this.movePointer(guest, targetId, point, 160, context)
+                const reference = this.element(targetId, context.revision, action.elementRef)
                 await this.command(guest, 'DOM.focus', { backendNodeId: reference.backendNodeId })
+                this.inputFocusByTarget.add(targetId)
                 await this.dispatchKey(guest, 'Home')
                 for (const value of action.values) {
                     await this.command(guest, 'Input.insertText', { text: value })
                     await this.dispatchKey(guest, 'Enter')
                 }
-                context.updateCursor?.({ ...point, phase: 'idle', visible: true, durationMs: 100 })
+                context.updateCursor?.({ ...point, phase: 'idle', visible: true, durationMs: 0 })
                 return { changed: true }
             }
         }
@@ -269,9 +296,15 @@ export class ZyraBrowserDriver implements AgentControlDriver {
         }
     }
 
+    releaseInputFocus(target: RegisteredControlTarget): void {
+        this.inputFocusByTarget.delete(target.target.targetId)
+    }
+
     async release(target: RegisteredControlTarget): Promise<void> {
         const guest = this.getGuest(target, false)
         this.revisions.delete(target.target.targetId)
+        this.pointerByTarget.delete(target.target.targetId)
+        this.releaseInputFocus(target)
         if (!guest || guest.isDestroyed() || !this.attached.has(guest.id)) return
         try {
             guest.debugger.detach()
@@ -284,6 +317,8 @@ export class ZyraBrowserDriver implements AgentControlDriver {
     async emergencyStop(): Promise<void> {
         for (const file of this.artifacts.values()) { try { unlinkSync(file) } catch {} }
         this.artifacts.clear()
+        this.pointerByTarget.clear()
+        this.inputFocusByTarget.clear()
         for (const targetId of this.revisions.keys()) this.revisions.delete(targetId)
         this.lastDisconnectReason = 'emergency-stop'
     }
@@ -403,20 +438,26 @@ export class ZyraBrowserDriver implements AgentControlDriver {
 
     private async movePointer(
         guest: WebContents,
+        targetId: string,
         point: { x: number; y: number },
         durationValue: number | undefined,
         context: DriverActionContext
     ): Promise<void> {
         const durationMs = Math.max(0, Math.min(2_000, durationValue ?? 180))
-        context.updateCursor?.({ ...point, phase: 'moving', visible: true, durationMs })
-        await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mouseMoved', ...point })
-        if (durationMs > 0) await delay(durationMs, context.signal)
+        const path = buildBrowserPointerPath(this.pointerByTarget.get(targetId), point, durationMs)
+        for (const [index, current] of path.entries()) {
+            await this.command(guest, 'Input.dispatchMouseEvent', { type: 'mouseMoved', ...current })
+            this.pointerByTarget.set(targetId, current)
+            context.updateCursor?.({ ...current, phase: 'moving', visible: true, durationMs: 0 })
+            if (index < path.length - 1) await delay(durationMs / path.length, context.signal)
+        }
     }
 
     private async dispatchKey(guest: WebContents, key: string, modifiers: string[] = []): Promise<void> {
         const modifierMask = modifiers.reduce((mask, modifier) => mask | ({ alt: 1, control: 2, ctrl: 2, meta: 4, shift: 8 }[modifier.toLowerCase()] || 0), 0)
-        await this.command(guest, 'Input.dispatchKeyEvent', { type: 'keyDown', key, modifiers: modifierMask })
-        await this.command(guest, 'Input.dispatchKeyEvent', { type: 'keyUp', key, modifiers: modifierMask })
+        const descriptor = browserCdpKeyDescriptor(key)
+        await this.command(guest, 'Input.dispatchKeyEvent', { type: 'keyDown', ...descriptor, modifiers: modifierMask })
+        await this.command(guest, 'Input.dispatchKeyEvent', { type: 'keyUp', ...descriptor, modifiers: modifierMask })
     }
 
     private async waitForReady(guest: WebContents, signal?: AbortSignal): Promise<void> {

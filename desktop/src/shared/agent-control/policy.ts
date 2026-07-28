@@ -13,7 +13,9 @@ export const CONTROL_BOUNDS = {
     maxUrlLength: 2_048,
     maxGrantDurationMs: 30 * 60 * 1000,
     maxGrantActions: 500,
-    defaultActionTimeoutMs: 15_000
+    defaultActionTimeoutMs: 15_000,
+    minInspectorWidth: 340,
+    maxInspectorWidth: 1_600
 } as const
 
 export const CONTROL_ACTION_CAPABILITY: Record<ControlAction['type'], ControlCapability | null> = {
@@ -44,7 +46,7 @@ export const CONTROL_SIDE_EFFECTS_REQUIRING_APPROVAL = new Set<ControlSideEffect
 export const TARGET_CAPABILITIES: Record<ControlTarget['kind'], ReadonlySet<ControlCapability>> = {
     'zyra-browser': new Set([
         'observe.structure', 'observe.screenshot', 'navigate', 'pointer.click', 'pointer.move', 'pointer.drag',
-        'keyboard.type', 'keyboard.key', 'scroll', 'form.select', 'window.focus', 'tab.manage'
+        'keyboard.type', 'keyboard.key', 'scroll', 'form.select', 'tab.manage'
     ]),
     'chrome-tab': new Set([
         'observe.structure', 'observe.screenshot', 'navigate', 'pointer.click', 'pointer.move',

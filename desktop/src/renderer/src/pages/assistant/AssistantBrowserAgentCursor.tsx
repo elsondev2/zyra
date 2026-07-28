@@ -12,18 +12,12 @@ export const AssistantBrowserAgentCursor = memo(function AssistantBrowserAgentCu
     cursor: ControlCursorState | null
 }) {
     if (!cursor?.visible) return null
-    const durationMs = Math.max(0, Math.min(2_000, Number(cursor.durationMs) || 0))
     const active = cursor.phase !== 'idle'
     return (
         <div className="pointer-events-none absolute inset-0 z-[26] overflow-hidden" aria-label={`${cursorLabel(cursor)} Browser cursor`}>
             <div
-                className="absolute left-0 top-0 will-change-transform motion-reduce:transition-none"
-                style={{
-                    transform: `translate3d(${cursor.x}px, ${cursor.y}px, 0)`,
-                    transitionProperty: 'transform',
-                    transitionDuration: `${durationMs}ms`,
-                    transitionTimingFunction: cursor.phase === 'dragging' ? 'linear' : 'cubic-bezier(0.22, 1, 0.36, 1)'
-                }}
+                className="absolute left-0 top-0 will-change-transform"
+                style={{ transform: `translate3d(${cursor.x}px, ${cursor.y}px, 0)` }}
             >
                 <span className={cn(
                     'absolute -left-2.5 -top-2.5 size-5 rounded-full border transition-all motion-reduce:transition-none',

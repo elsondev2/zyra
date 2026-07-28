@@ -399,13 +399,14 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
             threadId,
             inspector: {
                 open,
+                width: open ? width : null,
                 activeWorkspace,
                 openWorkspaces
             },
             browser,
             updatedAt: new Date().toISOString()
         })
-    }, [activeWorkspaceTab, browserOpen, browserWorkspaceState, open, threadId, workspaceTabs])
+    }, [activeWorkspaceTab, browserOpen, browserWorkspaceState, open, threadId, width, workspaceTabs])
 
     useEffect(() => () => {
         void window.devscope.agentControl.updateWorkspaceState(null)
@@ -415,91 +416,28 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
         onSelectTurn(turnId)
     }, [onSelectTurn])
 
+    const openSingletonWorkspace = useCallback((workspace: WorkspaceTab) => {
+        setWorkspaceTabs((current) => {
+            const withoutActiveChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
+            if (current.some((tab) => tab.id === workspace.id)) return withoutActiveChooser
+            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? workspace : tab)
+            return replaced.some((tab) => tab.id === workspace.id) ? replaced : [...replaced, workspace]
+        })
+        setActiveTabId(workspace.id)
+        beginTabTransition(workspace.id)
+    }, [activeTabId, beginTabTransition])
+
     const handleOpenReviewWorkspace = useCallback(() => {
         setFocusedDiffRequestId(null)
-        setWorkspaceTabs((current) => {
-            const reviewExists = current.some((tab) => tab.kind === 'review')
-            const withoutChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
-            if (reviewExists) return withoutChooser
-            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? REVIEW_TAB : tab)
-            return replaced.some((tab) => tab.kind === 'review') ? replaced : [...replaced, REVIEW_TAB]
-        })
-        setActiveTabId('review')
         setReviewTurnId(null)
-        beginTabTransition('review')
-    }, [activeTabId, beginTabTransition])
-
-    const handleOpenExplorerWorkspace = useCallback(() => {
-        setWorkspaceTabs((current) => {
-            const explorerExists = current.some((tab) => tab.kind === 'explorer')
-            const withoutChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
-            if (explorerExists) return withoutChooser
-            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? EXPLORER_TAB : tab)
-            return replaced.some((tab) => tab.kind === 'explorer') ? replaced : [...replaced, EXPLORER_TAB]
-        })
-        setActiveTabId('explorer')
-        beginTabTransition('explorer')
-    }, [activeTabId, beginTabTransition])
-
-    const handleOpenTerminalWorkspace = useCallback(() => {
-        setWorkspaceTabs((current) => {
-            const terminalExists = current.some((tab) => tab.kind === 'terminal')
-            const withoutChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
-            if (terminalExists) return withoutChooser
-            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? TERMINAL_TAB : tab)
-            return replaced.some((tab) => tab.kind === 'terminal') ? replaced : [...replaced, TERMINAL_TAB]
-        })
-        setActiveTabId('terminal')
-        beginTabTransition('terminal')
-    }, [activeTabId, beginTabTransition])
-
-    const handleOpenBrowserWorkspace = useCallback(() => {
-        setWorkspaceTabs((current) => {
-            const browserExists = current.some((tab) => tab.kind === 'browser')
-            const withoutChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
-            if (browserExists) return withoutChooser
-            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? BROWSER_TAB : tab)
-            return replaced.some((tab) => tab.kind === 'browser') ? replaced : [...replaced, BROWSER_TAB]
-        })
-        setActiveTabId('browser')
-        beginTabTransition('browser')
-    }, [activeTabId, beginTabTransition])
-
-    const handleOpenControlWorkspace = useCallback(() => {
-        setWorkspaceTabs((current) => {
-            const controlExists = current.some((tab) => tab.kind === 'control')
-            const withoutChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
-            if (controlExists) return withoutChooser
-            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? CONTROL_TAB : tab)
-            return replaced.some((tab) => tab.kind === 'control') ? replaced : [...replaced, CONTROL_TAB]
-        })
-        setActiveTabId('control')
-        beginTabTransition('control')
-    }, [activeTabId, beginTabTransition])
-
-    const handleOpenResourcesWorkspace = useCallback(() => {
-        setWorkspaceTabs((current) => {
-            const resourcesExists = current.some((tab) => tab.kind === 'resources')
-            const withoutChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
-            if (resourcesExists) return withoutChooser
-            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? RESOURCES_TAB : tab)
-            return replaced.some((tab) => tab.kind === 'resources') ? replaced : [...replaced, RESOURCES_TAB]
-        })
-        setActiveTabId('resources')
-        beginTabTransition('resources')
-    }, [activeTabId, beginTabTransition])
-
-    const handleOpenAgentsWorkspace = useCallback(() => {
-        setWorkspaceTabs((current) => {
-            const exists = current.some((tab) => tab.kind === 'agents')
-            const withoutChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
-            if (exists) return withoutChooser
-            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? AGENTS_TAB : tab)
-            return replaced.some((tab) => tab.kind === 'agents') ? replaced : [...replaced, AGENTS_TAB]
-        })
-        setActiveTabId('agents')
-        beginTabTransition('agents')
-    }, [activeTabId, beginTabTransition])
+        openSingletonWorkspace(REVIEW_TAB)
+    }, [openSingletonWorkspace])
+    const handleOpenExplorerWorkspace = useCallback(() => openSingletonWorkspace(EXPLORER_TAB), [openSingletonWorkspace])
+    const handleOpenTerminalWorkspace = useCallback(() => openSingletonWorkspace(TERMINAL_TAB), [openSingletonWorkspace])
+    const handleOpenBrowserWorkspace = useCallback(() => openSingletonWorkspace(BROWSER_TAB), [openSingletonWorkspace])
+    const handleOpenControlWorkspace = useCallback(() => openSingletonWorkspace(CONTROL_TAB), [openSingletonWorkspace])
+    const handleOpenResourcesWorkspace = useCallback(() => openSingletonWorkspace(RESOURCES_TAB), [openSingletonWorkspace])
+    const handleOpenAgentsWorkspace = useCallback(() => openSingletonWorkspace(AGENTS_TAB), [openSingletonWorkspace])
 
     const handleAgentAction = useCallback((action: 'stop' | 'retry' | 'resume', agentRunId: string) => {
         if (!threadId) return
@@ -689,6 +627,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                                 threadId={threadId || 'thread:detached'}
                                 projectPath={projectPath}
                                 active={open && activeWorkspaceTab?.kind === 'browser'}
+                                controlState={controlState}
                                 navigationRequest={browserNavigationRequest}
                                 surfaceRequest={browserSurfaceRequest}
                                 onNavigationRequestHandled={handleBrowserNavigationRequestHandled}

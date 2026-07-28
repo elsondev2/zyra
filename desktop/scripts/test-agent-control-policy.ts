@@ -12,6 +12,9 @@ broker.registerTarget({
     trustedIdentity: {}
 })
 const principal = { type: 'root' as const, threadId: 'thread:test', turnId: 'turn:test' }
+assert.throws(() => broker.requestGrant({
+    principal, targetId, capabilities: ['window.focus'], maxActions: 1
+}), /window\.focus is unavailable for zyra-browser/, 'integrated Browser control cannot steal physical keyboard focus')
 const blankTargetId = broker.targets.createTargetId('zyra-browser')
 broker.registerTarget({
     target: { kind: 'zyra-browser', targetId: blankTargetId, tabId: 'browser:blank', ownerThreadId: 'thread:test', guestIdentity: 'guest:blank', origin: null },

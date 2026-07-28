@@ -24,6 +24,7 @@ broker.setBrowserSurfaceController({
         return broker.targets.get(targetId).target as Extract<ControlTarget, { kind: 'zyra-browser' }>
     },
     revealTabs: async (_principal, primary) => primary,
+    resizeInspector: async (_principal, target, width) => ({ target, width }),
     closeTab: async (_principal, target) => target,
     commandTab: async (_principal, target) => target,
     cancelPending: () => undefined

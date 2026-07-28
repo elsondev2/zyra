@@ -1,4 +1,4 @@
-import type { ControlAction, ControlGrant, ControlTarget } from '../../shared/agent-control/contracts'
+import type { ControlAction, ControlCapability, ControlGrant, ControlTarget } from '../../shared/agent-control/contracts'
 import {
     CONTROL_ACTION_CAPABILITY,
     CONTROL_SIDE_EFFECTS_REQUIRING_APPROVAL,
@@ -7,11 +7,15 @@ import {
 } from '../../shared/agent-control/policy'
 import { AgentControlError } from './control-errors'
 
-export function assertGrantSupportsTarget(grant: ControlGrant, target: ControlTarget): void {
+export function assertCapabilitiesSupportedByTarget(capabilities: ControlCapability[], target: ControlTarget): void {
     const supported = TARGET_CAPABILITIES[target.kind]
-    for (const capability of grant.capabilities) {
+    for (const capability of capabilities) {
         if (!supported.has(capability)) throw new AgentControlError('CONTROL_CAPABILITY_DENIED', `${capability} is unavailable for ${target.kind}.`)
     }
+}
+
+export function assertGrantSupportsTarget(grant: ControlGrant, target: ControlTarget): void {
+    assertCapabilitiesSupportedByTarget(grant.capabilities, target)
     assertTargetScope(grant, target)
 }
 

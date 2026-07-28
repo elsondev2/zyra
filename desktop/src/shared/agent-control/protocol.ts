@@ -32,12 +32,13 @@ export type BrowserSurfaceOpenRequest = {
     version: 1
     requestId: string
     threadId: string
-    mode?: 'open' | 'reveal' | 'layout' | 'close' | 'refresh' | 'external'
+    mode?: 'open' | 'reveal' | 'layout' | 'resize' | 'close' | 'refresh' | 'external'
     tabId: string
     targetId?: string
     secondaryTabId?: string
     secondaryTargetId?: string
     url?: string
+    width?: number
     reveal: boolean
     requestedBy: ControlPrincipal
 }
@@ -46,7 +47,7 @@ export type BrowserSurfaceOpenAcknowledgement = Pick<BrowserSurfaceOpenRequest, 
 export type BrowserSurfaceClaim = BrowserSurfaceOpenAcknowledgement
 
 export type BrowserSurfaceOpenCompletion = BrowserSurfaceOpenAcknowledgement & (
-    | { success: true; targetId: string }
+    | { success: true; targetId: string; width?: number }
     | { success: false; error: string }
 )
 
@@ -68,6 +69,7 @@ export type AgentControlBridgeOperation =
     | { operation: 'refresh_tab'; targetId: string; grantId: string }
     | { operation: 'open_external'; targetId: string; grantId: string; url?: string }
     | { operation: 'set_tab_layout'; primaryTargetId: string; secondaryTargetId?: string }
+    | { operation: 'resize_inspector'; targetId: string; width: number }
     | { operation: 'list_windows' }
     | {
         operation: 'request_grant'

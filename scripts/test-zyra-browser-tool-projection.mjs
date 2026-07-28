@@ -32,11 +32,12 @@ assert.throws(
   /not registered with Pi/
 )
 
-for (const operation of ['reveal_tab', 'close_tab', 'refresh_tab', 'open_external', 'set_tab_layout']) {
+for (const operation of ['reveal_tab', 'close_tab', 'refresh_tab', 'open_external', 'set_tab_layout', 'resize_inspector']) {
   assert(BROWSER_CONTROL_OPERATIONS.includes(operation), `${operation} must remain callable through browser_control`)
 }
 assert(browserControlSchema.properties.primaryTargetId, 'side-by-side Browser layout requires a primary target field')
 assert(browserControlSchema.properties.secondaryTargetId, 'side-by-side Browser layout requires a secondary target field')
 assert(browserControlSchema.properties.grantId, 'managed tab operations require a grant field')
+assert(browserControlSchema.properties.width, 'Inspector resize requires a bounded width field')
 
 console.log('Zyra Browser callable-tool projection passed.')

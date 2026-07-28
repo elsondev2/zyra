@@ -5,6 +5,7 @@ import type {
     BrowserSurfaceOpenRequest
 } from '../../shared/agent-control/protocol'
 import type { ControlPrincipal, ControlTarget } from '../../shared/agent-control/contracts'
+import { CONTROL_BOUNDS } from '../../shared/agent-control/policy'
 import { AgentControlError } from './control-errors'
 
 const BROWSER_SURFACE_ACCEPT_TIMEOUT_MS = 8_000
@@ -13,10 +14,11 @@ const MAX_PENDING_BROWSER_SURFACE_REQUESTS = 8
 const MAX_SETTLED_BROWSER_SURFACE_REQUESTS = 64
 
 type BrowserTarget = Extract<ControlTarget, { kind: 'zyra-browser' }>
+type BrowserSurfaceResult = { target: BrowserTarget; width?: number }
 
 type PendingSurfaceRequest = {
     request: BrowserSurfaceOpenRequest
-    resolve: (target: BrowserTarget) => void
+    resolve: (result: BrowserSurfaceResult) => void
     reject: (error: Error) => void
     timer: NodeJS.Timeout
     phase: 'sent' | 'accepted' | 'claimed'
@@ -45,7 +47,7 @@ export class BrowserSurfaceHost {
     ): Promise<BrowserTarget> {
         const id = this.options.makeId?.() || randomUUID()
         const threadId = principal.type === 'root' ? principal.threadId : principal.parentThreadId
-        return this.requestSurface({
+        return this.requestTarget({
             version: 1,
             requestId: `browser-open:${id}`,
             threadId,
@@ -67,7 +69,7 @@ export class BrowserSurfaceHost {
         }
         const id = this.options.makeId?.() || randomUUID()
         const threadId = principal.type === 'root' ? principal.threadId : principal.parentThreadId
-        return this.requestSurface({
+        return this.requestTarget({
             version: 1,
             requestId: `browser-reveal:${id}`,
             threadId,
@@ -80,6 +82,30 @@ export class BrowserSurfaceHost {
         }, signal, primary)
     }
 
+    resizeInspector(
+        principal: ControlPrincipal,
+        target: BrowserTarget,
+        width: number,
+        signal?: AbortSignal
+    ): Promise<{ target: BrowserTarget; width: number }> {
+        const id = this.options.makeId?.() || randomUUID()
+        const threadId = principal.type === 'root' ? principal.threadId : principal.parentThreadId
+        return this.requestSurface({
+            version: 1,
+            requestId: `browser-resize:${id}`,
+            threadId,
+            mode: 'resize',
+            tabId: target.tabId,
+            targetId: target.targetId,
+            width,
+            reveal: true,
+            requestedBy: principal
+        }, signal, target).then((result) => {
+            if (!Number.isFinite(result.width)) throw new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', 'The Inspector did not confirm its responsive width.')
+            return { target: result.target, width: result.width! }
+        })
+    }
+
     closeTab(
         principal: ControlPrincipal,
         target: BrowserTarget,
@@ -87,7 +113,7 @@ export class BrowserSurfaceHost {
     ): Promise<BrowserTarget> {
         const id = this.options.makeId?.() || randomUUID()
         const threadId = principal.type === 'root' ? principal.threadId : principal.parentThreadId
-        return this.requestSurface({
+        return this.requestTarget({
             version: 1,
             requestId: `browser-close:${id}`,
             threadId,
@@ -108,7 +134,7 @@ export class BrowserSurfaceHost {
     ): Promise<BrowserTarget> {
         const id = this.options.makeId?.() || randomUUID()
         const threadId = principal.type === 'root' ? principal.threadId : principal.parentThreadId
-        return this.requestSurface({
+        return this.requestTarget({
             version: 1,
             requestId: `browser-${mode}:${id}`,
             threadId,
@@ -121,11 +147,19 @@ export class BrowserSurfaceHost {
         }, signal, target)
     }
 
-    private requestSurface(
+    private requestTarget(
         request: BrowserSurfaceOpenRequest,
         signal?: AbortSignal,
         expectedTarget?: BrowserTarget
     ): Promise<BrowserTarget> {
+        return this.requestSurface(request, signal, expectedTarget).then((result) => result.target)
+    }
+
+    private requestSurface(
+        request: BrowserSurfaceOpenRequest,
+        signal?: AbortSignal,
+        expectedTarget?: BrowserTarget
+    ): Promise<BrowserSurfaceResult> {
         if (this.disposed) {
             return Promise.reject(new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', 'The Browser surface host is unavailable.'))
         }
@@ -189,11 +223,15 @@ export class BrowserSurfaceHost {
 
     completeRegisteredTarget(target: ControlTarget): boolean {
         if (target.kind !== 'zyra-browser') return false
-        const pending = [...this.pending.values()].find((entry) => (entry.request.mode || 'open') === 'open' && entry.request.tabId === target.tabId)
+        const pending = [...this.pending.values()].find((entry) => (
+            (entry.request.mode || 'open') === 'open'
+            && entry.request.tabId === target.tabId
+            && entry.request.threadId === target.ownerThreadId
+        ))
         if (!pending) return false
         const taken = this.takePending(pending.request.requestId)
         if (!taken) return false
-        taken.resolve(target)
+        taken.resolve({ target })
         return true
     }
 
@@ -223,7 +261,7 @@ export class BrowserSurfaceHost {
         }
         let target: ControlTarget
         try {
-            target = pending.expectedTarget?.targetId === value.targetId
+            target = mode === 'close' && pending.expectedTarget?.targetId === value.targetId
                 ? pending.expectedTarget
                 : this.options.resolveTarget(value.targetId)
         } catch {
@@ -236,8 +274,13 @@ export class BrowserSurfaceHost {
             taken?.reject(new AgentControlError('CONTROL_SCOPE_DENIED', 'The Browser response resolved to a different control target.'))
             return Boolean(taken)
         }
+        if (mode === 'resize' && (!Number.isFinite(value.width) || value.width! < CONTROL_BOUNDS.minInspectorWidth || value.width! > CONTROL_BOUNDS.maxInspectorWidth)) {
+            const taken = this.takePending(requestId)
+            taken?.reject(new AgentControlError('CONTROL_VALIDATION_ERROR', 'The Inspector response did not include its applied width.'))
+            return Boolean(taken)
+        }
         const taken = this.takePending(requestId)
-        taken?.resolve(target)
+        taken?.resolve({ target, ...(mode === 'resize' ? { width: Math.round(value.width!) } : {}) })
         return Boolean(taken)
     }
 

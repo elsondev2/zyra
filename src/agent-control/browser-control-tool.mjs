@@ -6,7 +6,7 @@ export function createBrowserControlTool(options = {}) {
   return defineTool({
     name: "browser_control",
     label: "Browser control",
-    description: "Discover and reveal existing in-app Browser tabs, create tabs when needed, arrange two Browser tabs side by side, request user-approved access, then visually observe and control only granted targets.",
+    description: "Discover and reveal existing in-app Browser tabs, create tabs when needed, resize the Inspector, arrange two Browser tabs side by side, request user-approved access, then visually observe and control only granted targets.",
     parameters: browserControlSchema,
     execute: async (_toolCallId, input = {}, signal) => {
       const normalized = normalizeControlToolInput(input);
@@ -35,7 +35,7 @@ export function createBrowserControlTool(options = {}) {
 }
 
 function toBridgeOperation(input) {
-  if (["list_targets", "open_tab", "reveal_tab", "close_tab", "refresh_tab", "open_external", "set_tab_layout", "request_grant", "observe", "release"].includes(input.operation)) return input;
+  if (["list_targets", "open_tab", "reveal_tab", "close_tab", "refresh_tab", "open_external", "set_tab_layout", "resize_inspector", "request_grant", "observe", "release"].includes(input.operation)) return input;
   return {
     operation: "act",
     version: 1,
@@ -103,6 +103,7 @@ function formatControlResult(operation, result) {
   if (operation === "set_tab_layout") {
     return `Browser layout updated.\n${JSON.stringify({ layout: result.layout, primaryTargetId: result.primaryTargetId, secondaryTargetId: result.secondaryTargetId || null }, null, 2)}`;
   }
+  if (operation === "resize_inspector") return `Inspector width updated to ${Number(result.width)}px (requested ${Number(result.requestedWidth)}px).`;
   if (operation === "request_grant") {
     return result.pending
       ? `Browser access is waiting for explicit user approval in Control Center.\n${JSON.stringify({ requestId: result.request?.requestId, targetId: result.request?.targetId, capabilities: result.request?.capabilities, expiresAt: result.request?.expiresAt }, null, 2)}`

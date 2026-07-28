@@ -89,11 +89,12 @@ Root agents can also operate on retained tabs without creating replacements:
 
 - `reveal_tab` makes an already registered target the primary visible Browser tab;
 - `set_tab_layout` selects one primary target or an explicit primary/secondary side-by-side pair;
+- `resize_inspector` expands or contracts the visible Inspector within the same responsive layout bounds and reports the accepted width through workspace state;
 - `refresh_tab` uses the target's bounded `navigate` grant; model-driven history traversal remains disabled until its destination origin can be proven before navigation;
 - `close_tab` and `open_external` require a target-bound `tab.manage` grant with an explicit HTTP(S) origin;
 - closing a tab immediately revokes its tab-management grant and descendants.
 
-The renderer publishes a bounded Inspector/Browser workspace snapshot through trusted IPC. `list_targets` therefore reports whether Inspector is open, its active/open workspaces, all retained Browser tabs and sites, and the primary/secondary visible tab IDs. Renderer metadata cannot create a target or bind a target ID to a different tab; main reconciles by trusted tab identity and owner thread. Metadata without a matching registered guest is explicitly marked untrusted and carries no authoritative origin.
+The renderer publishes a bounded Inspector/Browser workspace snapshot through trusted IPC. `list_targets` therefore reports whether Inspector is open, its accepted width, its active/open workspaces, all retained Browser tabs and sites, and the primary/secondary visible tab IDs. Renderer metadata cannot create a target or bind a target ID to a different tab; main reconciles by trusted tab identity and owner thread. Metadata without a matching registered guest is explicitly marked untrusted and carries no authoritative origin.
 
 Every integrated Browser target is bound to the chat thread that owned its renderer workspace when the guest registered. Root and child discovery, workspace visibility, reveal/layout commands, and grant requests are filtered to that owner thread. A child cannot enumerate or request another thread's Browser tab.
 
@@ -107,12 +108,12 @@ The visual loop is:
 2. return it to the model as an image content block;
 3. bind it to a monotonic observation revision and viewport;
 4. validate a coordinate or element action against that revision and grant;
-5. publish the exact coordinates as `ControlCursorState`;
-6. animate the cyan agent cursor above the retained webview;
-7. dispatch target-local CDP input without moving the Windows pointer;
+5. dispatch each bounded target-local CDP pointer step without moving the Windows pointer;
+6. publish that exact step as `ControlCursorState` only after CDP acknowledges it;
+7. render the cyan agent cursor directly from those acknowledged coordinates;
 8. capture a fresh higher revision before the next action.
 
-Supported in-app actions include move, click, double click, drag, scroll, bounded typing, keys, select, navigation, and waits. DOM and accessibility metadata support safety checks and optional targeting; the rendered frame remains the agent’s primary visual input.
+Supported in-app actions include move, click, double click, drag, scroll, bounded typing, keys, select, navigation, and waits. DOM and accessibility metadata support safety checks and optional targeting; the rendered frame remains the agent’s primary visual input. Revealing a Browser tab never focuses its guest or steals the user's keyboard. Target-local key input requires an agent-established click or observed-element focus, and that proof is cleared on navigation, grant replacement/revocation, or turn shutdown.
 
 Browser targets expose bounded trusted title, URL, origin, and opaque tab identity so an agent can resolve natural directions such as “the Word Grid tab.” They do not expose cookies, storage, request headers, credentials, or page source.
 

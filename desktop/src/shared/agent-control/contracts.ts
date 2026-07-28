@@ -250,6 +250,7 @@ export type ControlWorkspaceSnapshot = {
     threadId: string | null
     inspector: {
         open: boolean
+        width: number | null
         activeWorkspace: ControlInspectorWorkspaceKind | null
         openWorkspaces: ControlInspectorWorkspaceKind[]
     }

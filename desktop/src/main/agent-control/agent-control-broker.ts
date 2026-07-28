@@ -25,7 +25,7 @@ import {
 } from '../../shared/agent-control/validation'
 import { ActionQueue } from './action-queue'
 import { AuditStore } from './audit-store'
-import { assertActionAllowed, assertGrantSupportsTarget } from './capability-policy'
+import { assertActionAllowed, assertCapabilitiesSupportedByTarget, assertGrantSupportsTarget } from './capability-policy'
 import { AgentControlError, toAgentControlError } from './control-errors'
 import { GrantStore } from './grant-store'
 import { ObservationStore } from './observation-store'
@@ -41,6 +41,12 @@ export type BrowserSurfaceController = {
         secondary: Extract<ControlTarget, { kind: 'zyra-browser' }> | null,
         signal?: AbortSignal
     ): Promise<Extract<ControlTarget, { kind: 'zyra-browser' }>>
+    resizeInspector(
+        principal: ControlPrincipal,
+        target: Extract<ControlTarget, { kind: 'zyra-browser' }>,
+        width: number,
+        signal?: AbortSignal
+    ): Promise<{ target: Extract<ControlTarget, { kind: 'zyra-browser' }>; width: number }>
     closeTab(
         principal: ControlPrincipal,
         target: Extract<ControlTarget, { kind: 'zyra-browser' }>,
@@ -49,7 +55,7 @@ export type BrowserSurfaceController = {
     commandTab(
         principal: ControlPrincipal,
         target: Extract<ControlTarget, { kind: 'zyra-browser' }>,
-        mode: 'refresh' | 'back' | 'forward' | 'external',
+        mode: 'refresh' | 'external',
         url: string | null,
         signal?: AbortSignal
     ): Promise<Extract<ControlTarget, { kind: 'zyra-browser' }>>
@@ -121,6 +127,10 @@ export class AgentControlBroker extends EventEmitter {
             .filter((entry): entry is ControlWorkspaceSnapshot['inspector']['openWorkspaces'][number] => workspaceKinds.has(entry as never)))]
             .slice(0, 16)
         const inspectorOpen = inspectorInput.open === true
+        const requestedInspectorWidth = Number(inspectorInput.width)
+        const inspectorWidth = inspectorOpen && Number.isFinite(requestedInspectorWidth)
+            ? Math.max(CONTROL_BOUNDS.minInspectorWidth, Math.min(CONTROL_BOUNDS.maxInspectorWidth, Math.round(requestedInspectorWidth)))
+            : null
         const activeWorkspace = inspectorOpen && inspectorInput.activeWorkspace && workspaceKinds.has(inspectorInput.activeWorkspace)
             ? inspectorInput.activeWorkspace
             : null
@@ -184,7 +194,7 @@ export class AgentControlBroker extends EventEmitter {
         const next: ControlWorkspaceSnapshot = {
             version: 1,
             threadId,
-            inspector: { open: inspectorOpen, activeWorkspace, openWorkspaces },
+            inspector: { open: inspectorOpen, width: inspectorWidth, activeWorkspace, openWorkspaces },
             browser: { open: browserOpen, activeTabId, splitTabId, visibleTabIds, tabs: normalizedTabs },
             updatedAt: new Date().toISOString()
         }
@@ -222,6 +232,7 @@ export class AgentControlBroker extends EventEmitter {
             registered.target.url = /^https?:\/\//.test(url) ? url.slice(0, CONTROL_BOUNDS.maxUrlLength) : null
         }
         this.observations.invalidate(targetId)
+        registered.driver.releaseInputFocus?.(registered)
         for (const grant of this.grants.list()) {
             if (grant.targetId !== targetId || grant.state !== 'active' || !grant.allowedOrigins?.length) continue
             if (!origin || !grant.allowedOrigins.includes(origin)) this.grants.revoke(grant.grantId)
@@ -273,6 +284,7 @@ export class AgentControlBroker extends EventEmitter {
         const principal = assertControlPrincipal(input.principal)
         const target = this.targets.get(assertControlIdentifier(input.targetId, 'targetId')).target
         const capabilities = assertControlCapabilities(input.capabilities)
+        assertCapabilitiesSupportedByTarget(capabilities, target)
         const rawDurationMs = Number(input.durationMs ?? 10 * 60 * 1000)
         const rawMaxActions = Number(input.maxActions ?? 100)
         const durationMs = Math.max(1_000, Math.min(CONTROL_BOUNDS.maxGrantDurationMs, Number.isFinite(rawDurationMs) ? Math.floor(rawDurationMs) : 10 * 60 * 1000))
@@ -319,6 +331,7 @@ export class AgentControlBroker extends EventEmitter {
         const allowedOrigins = narrowScope(input.allowedOrigins, pending.allowedOrigins)
         const allowedExecutableIdentities = narrowScope(input.allowedExecutableIdentities, pending.allowedExecutableIdentities)
         const target = this.targets.get(pending.targetId).target
+        this.releaseInputFocus(pending.targetId)
         const grant = this.grants.issue({
             principal: pending.principal,
             targetId: pending.targetId,
@@ -368,6 +381,7 @@ export class AgentControlBroker extends EventEmitter {
     }
 
     delegate(request: DelegatedControlLeaseRequest): ControlGrant {
+        this.releaseInputFocus(request.targetId)
         const grant = this.grants.delegate(request)
         const target = this.targets.get(grant.targetId).target
         try {
@@ -398,7 +412,8 @@ export class AgentControlBroker extends EventEmitter {
             const revision = this.observations.nextRevision(targetId)
             const observation = boundObservation(redactObservation(await registered.driver.observe(registered, { revision, includeScreenshot, signal })))
             this.observations.set(observation)
-            this.grants.consume(grantId)
+            const consumedGrant = this.grants.consume(grantId)
+            if (consumedGrant.state === 'consumed') registered.driver.releaseInputFocus?.(registered)
             this.audit.append({
                 eventType: 'observation', principal, targetId, targetKind: registered.target.kind, grantId,
                 observationRevision: observation.revision, origin: observation.origin,
@@ -448,7 +463,8 @@ export class AgentControlBroker extends EventEmitter {
                     signal
                 })))
                 this.observations.set(observation)
-                this.grants.consume(request.grantId)
+                const consumedGrant = this.grants.consume(request.grantId)
+                if (consumedGrant.state === 'consumed') registered.driver.releaseInputFocus?.(registered)
                 this.audit.append({
                     eventType: 'action', principal, targetId: request.targetId, targetKind: registered.target.kind,
                     grantId: request.grantId, actionType: request.action.type, origin: observation.origin,
@@ -482,6 +498,7 @@ export class AgentControlBroker extends EventEmitter {
         if (principal) this.grants.requireActive(grantId, principal)
         const grant = this.grants.revoke(grantId)
         if (!grant) return
+        this.releaseInputFocus(grant.targetId)
         this.audit.append({
             eventType: 'grant.revoked', principal: grant.principal, targetId: grant.targetId,
             grantId: grant.grantId, outcome: 'cancelled', message: 'Control grant revoked.', redactions: []
@@ -492,6 +509,7 @@ export class AgentControlBroker extends EventEmitter {
     revokePrincipal(principal: ControlPrincipal, reason = 'Principal control cancelled.'): void {
         const revoked = this.grants.revokeByPrincipal(principal)
         const pending = this.grants.removePendingByPrincipal(principal)
+        for (const targetId of new Set(revoked.map((grant) => grant.targetId))) this.releaseInputFocus(targetId)
         for (const grant of revoked) {
             this.audit.append({
                 eventType: 'grant.revoked', principal: grant.principal, targetId: grant.targetId,
@@ -683,6 +701,16 @@ export class AgentControlBroker extends EventEmitter {
                     workspace: this.workspace
                 }
             }
+            case 'resize_inspector': {
+                if (principal.type !== 'root') throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents cannot resize the visible Inspector workspace.')
+                if (!this.browserSurface) throw new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', 'The in-app Browser workspace is unavailable.')
+                const target = this.requireBrowserTarget(operation.targetId, principal)
+                const requestedWidth = Number(operation.width)
+                if (!Number.isFinite(requestedWidth)) throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Inspector width must be a finite number.')
+                const width = Math.max(CONTROL_BOUNDS.minInspectorWidth, Math.min(CONTROL_BOUNDS.maxInspectorWidth, Math.round(requestedWidth)))
+                const resized = await this.browserSurface.resizeInspector(principal, target, width, signal)
+                return { targetId: target.targetId, tabId: target.tabId, requestedWidth: width, width: resized.width }
+            }
             case 'list_windows':
                 if (principal.type !== 'root') throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents cannot enumerate or select Windows targets.')
                 return { windows: await this.listWindows() }
@@ -754,6 +782,11 @@ export class AgentControlBroker extends EventEmitter {
     clearAudit(): void {
         this.audit.clear()
         this.changed()
+    }
+
+    private releaseInputFocus(targetId: string): void {
+        const registered = this.targets.list().find((entry) => entry.target.targetId === targetId)
+        if (registered) registered.driver.releaseInputFocus?.(registered)
     }
 
     private requireBrowserTarget(
