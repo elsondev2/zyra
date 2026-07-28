@@ -5,7 +5,7 @@ import { FakeControlDriver } from '../src/main/agent-control/drivers/fake-driver
 const driver = new FakeControlDriver()
 const broker = new AgentControlBroker({ drivers: [driver] })
 const targetId = broker.targets.createTargetId('zyra-browser')
-broker.registerTarget({ target: { kind: 'zyra-browser', targetId, tabId: 'browser:test', guestIdentity: 'guest:test', origin: 'http://127.0.0.1' }, driver, trustedIdentity: {} })
+broker.registerTarget({ target: { kind: 'zyra-browser', targetId, tabId: 'browser:test', ownerThreadId: 'thread:test', guestIdentity: 'guest:test', origin: 'http://127.0.0.1' }, driver, trustedIdentity: {} })
 const principal = { type: 'root' as const, threadId: 'thread:test', turnId: 'turn:test' }
 const listed = await broker.handleToolOperation(principal, { operation: 'list_targets', targetKind: 'zyra-browser' })
 assert.equal((listed.targets as unknown[]).length, 1)

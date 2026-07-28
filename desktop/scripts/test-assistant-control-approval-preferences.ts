@@ -60,6 +60,7 @@ const target = (origin = 'https://example.com'): Extract<ControlTarget, { kind: 
     kind: 'zyra-browser',
     targetId: 'control-target:test',
     tabId: 'browser:test',
+    ownerThreadId: 'thread:test',
     guestIdentity: 'guest:test',
     origin
 })

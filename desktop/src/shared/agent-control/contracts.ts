@@ -11,7 +11,8 @@ export const CONTROL_CAPABILITIES = [
     'keyboard.key',
     'scroll',
     'form.select',
-    'window.focus'
+    'window.focus',
+    'tab.manage'
 ] as const
 
 export type ControlCapability = typeof CONTROL_CAPABILITIES[number]
@@ -25,6 +26,7 @@ export type ControlTarget =
         kind: 'zyra-browser'
         targetId: string
         tabId: string
+        ownerThreadId: string
         guestIdentity: string
         origin: string | null
         url?: string | null
@@ -220,6 +222,47 @@ export type ControlPairingState = {
     error?: string
 }
 
+export type ControlInspectorWorkspaceKind =
+    | 'new'
+    | 'review'
+    | 'explorer'
+    | 'terminal'
+    | 'browser'
+    | 'control'
+    | 'resources'
+    | 'agents'
+    | 'turn'
+
+export type ControlBrowserWorkspaceTab = {
+    tabId: string
+    targetId: string | null
+    trusted: boolean
+    url: string | null
+    title: string | null
+    origin: string | null
+    status: 'idle' | 'loading' | 'ready' | 'error'
+    position: 'primary' | 'secondary' | null
+    visible: boolean
+}
+
+export type ControlWorkspaceSnapshot = {
+    version: 1
+    threadId: string | null
+    inspector: {
+        open: boolean
+        activeWorkspace: ControlInspectorWorkspaceKind | null
+        openWorkspaces: ControlInspectorWorkspaceKind[]
+    }
+    browser: {
+        open: boolean
+        activeTabId: string | null
+        splitTabId: string | null
+        visibleTabIds: string[]
+        tabs: ControlBrowserWorkspaceTab[]
+    }
+    updatedAt: string
+}
+
 export type ControlStateSnapshot = {
     version: 1
     targets: ControlTarget[]
@@ -228,6 +271,7 @@ export type ControlStateSnapshot = {
     audit: ControlAuditEvent[]
     health: ControlDriverHealth[]
     cursors: ControlCursorState[]
+    workspace: ControlWorkspaceSnapshot | null
     pairing: ControlPairingState
     active: boolean
     sequence: number

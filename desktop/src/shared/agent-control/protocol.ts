@@ -21,7 +21,10 @@ export const AGENT_CONTROL_IPC = {
     selectWindow: 'zyra:agent-control:select-window',
     acknowledgeBrowserSurfaceRequest: 'zyra:agent-control:acknowledge-browser-surface-request',
     completeBrowserSurfaceRequest: 'zyra:agent-control:complete-browser-surface-request',
+    claimBrowserSurfaceRequest: 'zyra:agent-control:claim-browser-surface-request',
+    updateWorkspaceState: 'zyra:agent-control:update-workspace-state',
     browserSurfaceRequested: 'zyra:agent-control:browser-surface-requested',
+    browserSurfaceCancelled: 'zyra:agent-control:browser-surface-cancelled',
     stateChanged: 'zyra:agent-control:state-changed'
 } as const
 
@@ -29,12 +32,18 @@ export type BrowserSurfaceOpenRequest = {
     version: 1
     requestId: string
     threadId: string
+    mode?: 'open' | 'reveal' | 'layout' | 'close' | 'refresh' | 'external'
     tabId: string
+    targetId?: string
+    secondaryTabId?: string
+    secondaryTargetId?: string
+    url?: string
     reveal: boolean
     requestedBy: ControlPrincipal
 }
 
 export type BrowserSurfaceOpenAcknowledgement = Pick<BrowserSurfaceOpenRequest, 'requestId' | 'threadId' | 'tabId'>
+export type BrowserSurfaceClaim = BrowserSurfaceOpenAcknowledgement
 
 export type BrowserSurfaceOpenCompletion = BrowserSurfaceOpenAcknowledgement & (
     | { success: true; targetId: string }
@@ -54,6 +63,11 @@ export type RendererControlGrantInput = {
 export type AgentControlBridgeOperation =
     | { operation: 'list_targets'; targetKind?: 'zyra-browser' | 'chrome-tab' }
     | { operation: 'open_tab'; reveal?: boolean }
+    | { operation: 'reveal_tab'; targetId: string }
+    | { operation: 'close_tab'; targetId: string; grantId: string }
+    | { operation: 'refresh_tab'; targetId: string; grantId: string }
+    | { operation: 'open_external'; targetId: string; grantId: string; url?: string }
+    | { operation: 'set_tab_layout'; primaryTargetId: string; secondaryTargetId?: string }
     | { operation: 'list_windows' }
     | {
         operation: 'request_grant'

@@ -80,9 +80,11 @@ import type {
     ControlGrant,
     ControlStateSnapshot,
     ControlTarget,
+    ControlWorkspaceSnapshot,
     ControlWindowCandidate
 } from '../agent-control/contracts'
 import type {
+    BrowserSurfaceClaim,
     BrowserSurfaceOpenAcknowledgement,
     BrowserSurfaceOpenCompletion,
     BrowserSurfaceOpenRequest,
@@ -230,9 +232,11 @@ export interface DevScopeAgentScopeApi {
 
 export interface DevScopeAgentControlApi {
     getState: () => Promise<DevScopeResult<{ state: ControlStateSnapshot }>>
-    bindBrowserTab: (input: { guestWebContentsId: number; tabId: string }) => Promise<DevScopeResult<{ target: ControlTarget }>>
+    bindBrowserTab: (input: { guestWebContentsId: number; tabId: string; threadId: string }) => Promise<DevScopeResult<{ target: ControlTarget }>>
     acknowledgeBrowserSurfaceRequest: (input: BrowserSurfaceOpenAcknowledgement) => Promise<DevScopeResult<{ accepted: boolean }>>
     completeBrowserSurfaceRequest: (input: BrowserSurfaceOpenCompletion) => Promise<DevScopeResult<{ completed: boolean }>>
+    claimBrowserSurfaceRequest: (input: BrowserSurfaceClaim) => Promise<DevScopeResult<{ claimed: boolean }>>
+    updateWorkspaceState: (input: ControlWorkspaceSnapshot | null) => Promise<DevScopeResult<{ workspace: ControlWorkspaceSnapshot | null }>>
     approveGrant: (input: RendererControlGrantInput) => Promise<DevScopeResult<{ grant: ControlGrant }>>
     rejectGrant: (requestId: string) => Promise<DevScopeResult<{ rejected: boolean }>>
     revokeGrant: (grantId: string) => Promise<DevScopeResult<{ revoked: boolean }>>
@@ -243,6 +247,7 @@ export interface DevScopeAgentControlApi {
     listWindows: () => Promise<DevScopeResult<{ windows: ControlWindowCandidate[] }>>
     selectWindow: (windowToken: string) => Promise<DevScopeResult<{ target: ControlTarget }>>
     onBrowserSurfaceRequest: (callback: (request: BrowserSurfaceOpenRequest) => void) => () => void
+    onBrowserSurfaceCancel: (callback: (requestId: string) => void) => () => void
     onStateChange: (callback: (state: ControlStateSnapshot) => void) => () => void
 }
 

@@ -6,7 +6,7 @@ export function createBrowserControlTool(options = {}) {
   return defineTool({
     name: "browser_control",
     label: "Browser control",
-    description: "Create a blank in-app Browser tab, discover tabs, request user-approved access, then visually observe and control only the granted tab. Use open_tab with reveal=true when the user wants to watch.",
+    description: "Discover and reveal existing in-app Browser tabs, create tabs when needed, arrange two Browser tabs side by side, request user-approved access, then visually observe and control only granted targets.",
     parameters: browserControlSchema,
     execute: async (_toolCallId, input = {}, signal) => {
       const normalized = normalizeControlToolInput(input);
@@ -35,7 +35,7 @@ export function createBrowserControlTool(options = {}) {
 }
 
 function toBridgeOperation(input) {
-  if (["list_targets", "open_tab", "request_grant", "observe", "release"].includes(input.operation)) return input;
+  if (["list_targets", "open_tab", "reveal_tab", "close_tab", "refresh_tab", "open_external", "set_tab_layout", "request_grant", "observe", "release"].includes(input.operation)) return input;
   return {
     operation: "act",
     version: 1,
@@ -87,11 +87,21 @@ function formatControlResult(operation, result) {
       expiresAt: grant.expiresAt,
       remainingActions: Math.max(0, Number(grant.maxActions) - Number(grant.actionCount)),
     }));
-    return `Available Browser targets and your active grants:\n${JSON.stringify({ targets, grants }, null, 2)}`;
+    return `Available Browser targets, active grants, and visible workspace state:\n${JSON.stringify({ targets, grants, workspace: result.workspace || null }, null, 2)}`;
   }
   if (operation === "open_tab") {
     const target = result.target || {};
     return `A blank in-app Browser tab is registered. It has no navigation or input authority yet. Request a scoped grant before using it.\n${JSON.stringify({ targetId: target.targetId, tabId: target.tabId, title: target.title, url: target.url, revealed: Boolean(result.revealed) }, null, 2)}`;
+  }
+  if (operation === "reveal_tab") {
+    const target = result.target || {};
+    return `The existing Browser tab is now the primary visible tab.\n${JSON.stringify({ targetId: target.targetId, tabId: target.tabId, title: target.title, url: target.url }, null, 2)}`;
+  }
+  if (operation === "close_tab") return "The selected Browser tab was closed and its control authority was revoked.";
+  if (operation === "refresh_tab") return "The selected Browser tab was refreshed.";
+  if (operation === "open_external") return `The approved URL was opened in the default browser.\n${JSON.stringify({ url: result.url }, null, 2)}`;
+  if (operation === "set_tab_layout") {
+    return `Browser layout updated.\n${JSON.stringify({ layout: result.layout, primaryTargetId: result.primaryTargetId, secondaryTargetId: result.secondaryTargetId || null }, null, 2)}`;
   }
   if (operation === "request_grant") {
     return result.pending

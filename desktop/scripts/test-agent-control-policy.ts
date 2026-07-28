@@ -7,11 +7,41 @@ const driver = new FakeControlDriver('zyra-browser')
 const broker = new AgentControlBroker({ drivers: [driver] })
 const targetId = broker.targets.createTargetId('zyra-browser')
 broker.registerTarget({
-    target: { kind: 'zyra-browser', targetId, tabId: 'browser:test', guestIdentity: 'guest:test', origin: 'http://127.0.0.1' },
+    target: { kind: 'zyra-browser', targetId, tabId: 'browser:test', ownerThreadId: 'thread:test', guestIdentity: 'guest:test', origin: 'http://127.0.0.1' },
     driver,
     trustedIdentity: {}
 })
 const principal = { type: 'root' as const, threadId: 'thread:test', turnId: 'turn:test' }
+const blankTargetId = broker.targets.createTargetId('zyra-browser')
+broker.registerTarget({
+    target: { kind: 'zyra-browser', targetId: blankTargetId, tabId: 'browser:blank', ownerThreadId: 'thread:test', guestIdentity: 'guest:blank', origin: null },
+    driver,
+    trustedIdentity: {}
+})
+assert.throws(() => broker.requestGrant({
+    principal, targetId: blankTargetId, capabilities: ['tab.manage'], maxActions: 2
+}), /explicit HTTP\(S\) origin scope/, 'blank tabs cannot become origin-free external browser launchers')
+const approvalRaceTargetId = broker.targets.createTargetId('zyra-browser')
+broker.registerTarget({
+    target: { kind: 'zyra-browser', targetId: approvalRaceTargetId, tabId: 'browser:approval-race', ownerThreadId: 'thread:test', guestIdentity: 'guest:approval-race', origin: 'https://allowed.example' },
+    driver,
+    trustedIdentity: {}
+})
+const approvalRacePending = broker.requestGrant({
+    principal, targetId: approvalRaceTargetId, capabilities: ['observe.structure'], maxActions: 2,
+    allowedOrigins: ['https://allowed.example']
+})
+broker.handleTargetNavigation(approvalRaceTargetId, 'https://outside.example/')
+assert.throws(() => broker.approvePendingGrant({
+    pendingRequestId: approvalRacePending.requestId,
+    targetId: approvalRaceTargetId,
+    capabilities: approvalRacePending.capabilities,
+    durationMs: 30_000,
+    maxActions: 2,
+    allowedOrigins: approvalRacePending.allowedOrigins
+}), /outside the grant scope/, 'approval cannot leave an active grant behind after the target changes origin')
+assert.equal(broker.grants.list().some((entry) => entry.targetId === approvalRaceTargetId && entry.state === 'active'), false)
+assert.equal(broker.grants.getPending(approvalRacePending.requestId), undefined)
 const pending = broker.requestGrant({
     principal, targetId,
     capabilities: ['observe.structure', 'pointer.click', 'keyboard.type', 'navigate'],

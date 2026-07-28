@@ -16,6 +16,7 @@ export type AssistantBrowserTabState = {
 export type AssistantBrowserWorkspaceState = {
     version: 1
     activeTabId: string
+    splitTabId: string | null
     tabs: AssistantBrowserTabState[]
 }
 
@@ -49,6 +50,7 @@ export function createAssistantBrowserWorkspaceState(tabId = 'browser:0'): Assis
     return {
         version: 1,
         activeTabId: tabId,
+        splitTabId: null,
         tabs: [createAssistantBrowserTab(tabId)]
     }
 }
@@ -65,6 +67,7 @@ export function addAssistantBrowserTab(
     }
     if (state.tabs.length >= ASSISTANT_BROWSER_TAB_LIMIT) return state
     return {
+        ...state,
         version: 1,
         activeTabId: tabId,
         tabs: [...state.tabs, createAssistantBrowserTab(tabId, url)]
@@ -75,9 +78,26 @@ export function activateAssistantBrowserTab(
     state: AssistantBrowserWorkspaceState,
     tabId: string
 ): AssistantBrowserWorkspaceState {
-    return state.tabs.some((tab) => tab.id === tabId) && state.activeTabId !== tabId
-        ? { ...state, activeTabId: tabId }
-        : state
+    if (!state.tabs.some((tab) => tab.id === tabId) || state.activeTabId === tabId) return state
+    if (state.splitTabId === tabId) {
+        return { ...state, activeTabId: tabId, splitTabId: state.activeTabId }
+    }
+    return { ...state, activeTabId: tabId }
+}
+
+export function setAssistantBrowserLayout(
+    state: AssistantBrowserWorkspaceState,
+    primaryTabId: string,
+    secondaryTabId: string | null
+): AssistantBrowserWorkspaceState {
+    if (!state.tabs.some((tab) => tab.id === primaryTabId)) return state
+    const splitTabId = secondaryTabId
+        && secondaryTabId !== primaryTabId
+        && state.tabs.some((tab) => tab.id === secondaryTabId)
+        ? secondaryTabId
+        : null
+    if (state.activeTabId === primaryTabId && state.splitTabId === splitTabId) return state
+    return { ...state, activeTabId: primaryTabId, splitTabId }
 }
 
 export function updateAssistantBrowserTab(
@@ -118,9 +138,13 @@ export function closeAssistantBrowserTab(
     if (closingIndex < 0) return state
     const tabs = state.tabs.filter((tab) => tab.id !== tabId)
     if (tabs.length === 0) return createAssistantBrowserWorkspaceState(replacementTabId)
+    if (state.splitTabId === tabId) return { ...state, splitTabId: null, tabs }
     if (state.activeTabId !== tabId) return { ...state, tabs }
+    if (state.splitTabId && tabs.some((tab) => tab.id === state.splitTabId)) {
+        return { ...state, activeTabId: state.splitTabId, splitTabId: null, tabs }
+    }
     const fallback = tabs[Math.min(closingIndex, tabs.length - 1)] || tabs[0]
-    return { ...state, activeTabId: fallback.id, tabs }
+    return { ...state, activeTabId: fallback.id, splitTabId: null, tabs }
 }
 
 export function normalizeAssistantBrowserWorkspaceState(
@@ -156,9 +180,14 @@ export function normalizeAssistantBrowserWorkspaceState(
         .slice(0, ASSISTANT_BROWSER_TAB_LIMIT)
     if (tabs.length === 0) return createAssistantBrowserWorkspaceState(fallbackTabId)
     const requestedActiveTabId = String(input.activeTabId || '')
+    const activeTabId = tabs.some((tab) => tab.id === requestedActiveTabId) ? requestedActiveTabId : tabs[0].id
+    const requestedSplitTabId = String(input.splitTabId || '')
     return {
         version: 1,
-        activeTabId: tabs.some((tab) => tab.id === requestedActiveTabId) ? requestedActiveTabId : tabs[0].id,
+        activeTabId,
+        splitTabId: requestedSplitTabId !== activeTabId && tabs.some((tab) => tab.id === requestedSplitTabId)
+            ? requestedSplitTabId
+            : null,
         tabs
     }
 }

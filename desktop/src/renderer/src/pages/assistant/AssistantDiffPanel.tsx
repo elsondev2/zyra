@@ -1,7 +1,7 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, FolderTree, GitCompareArrows, LayoutGrid, Library, LoaderCircle, MessageSquareText, ShieldAlert, ShieldCheck, SquareTerminal, TriangleAlert, Volume2 } from 'lucide-react'
 import type { FleetSnapshot } from '@shared/assistant/contracts'
-import type { ControlStateSnapshot } from '@shared/agent-control/contracts'
+import type { ControlStateSnapshot, ControlWorkspaceSnapshot } from '@shared/agent-control/contracts'
 import type { BrowserSurfaceOpenRequest } from '@shared/agent-control/protocol'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import type { AssistantDiffTarget, AssistantDiffTurn } from './assistant-diff-types'
@@ -131,6 +131,13 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     const [selectedAgentRunId, setSelectedAgentRunId] = useState<string | null>(null)
     const [selectedWorkflowRunId, setSelectedWorkflowRunId] = useState<string | null>(null)
     const [controlState, setControlState] = useState<ControlStateSnapshot | null>(null)
+    const [browserWorkspaceState, setBrowserWorkspaceState] = useState<ControlWorkspaceSnapshot['browser']>({
+        open: false,
+        activeTabId: null,
+        splitTabId: null,
+        visibleTabIds: [],
+        tabs: []
+    })
 
     const createNewTab = useCallback((): WorkspaceTab => ({
         id: `new:${newTabSequenceRef.current++}`,
@@ -173,6 +180,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     }, [pendingControlCount])
 
     useEffect(() => {
+        void window.devscope.agentControl.updateWorkspaceState(null)
         const newTab = createNewTab()
         setActiveTabId(newTab.id)
         setWorkspaceTabs([newTab])
@@ -183,6 +191,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
         setBrowserAudible(false)
         setBrowserFaviconUrl(null)
         setBrowserNavigationRequest(null)
+        setBrowserWorkspaceState({ open: false, activeTabId: null, splitTabId: null, visibleTabIds: [], tabs: [] })
         processedBrowserSurfaceRequestRef.current = null
     }, [createNewTab, sessionId])
 
@@ -203,6 +212,8 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     useEffect(() => {
         if (!browserSurfaceRequest || processedBrowserSurfaceRequestRef.current === browserSurfaceRequest.requestId) return
         processedBrowserSurfaceRequestRef.current = browserSurfaceRequest.requestId
+        const mode = browserSurfaceRequest.mode || 'open'
+        if (mode === 'close' || mode === 'external') return
         setWorkspaceTabs((current) => {
             const withoutChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
             if (current.some((tab) => tab.kind === 'browser')) return withoutChooser
@@ -362,6 +373,43 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     const controlOpen = workspaceTabs.some((tab) => tab.kind === 'control')
     const resourcesOpen = workspaceTabs.some((tab) => tab.kind === 'resources')
     const agentsOpen = workspaceTabs.some((tab) => tab.kind === 'agents')
+
+    const handleBrowserWorkspaceStateChange = useCallback((next: ControlWorkspaceSnapshot['browser']) => {
+        setBrowserWorkspaceState((current) => JSON.stringify(current) === JSON.stringify(next) ? current : next)
+    }, [])
+
+    useEffect(() => {
+        const activeWorkspace = open && activeWorkspaceTab
+            ? activeWorkspaceTab.kind === 'turn' ? 'turn' : activeWorkspaceTab.kind
+            : null
+        const openWorkspaces = [...new Set(workspaceTabs.map((tab) => tab.kind === 'turn' ? 'turn' as const : tab.kind))]
+        const browserVisible = open && activeWorkspace === 'browser' && browserOpen
+        const browser = {
+            ...browserWorkspaceState,
+            open: browserOpen,
+            visibleTabIds: browserVisible ? browserWorkspaceState.visibleTabIds : [],
+            tabs: browserWorkspaceState.tabs.map((tab) => ({
+                ...tab,
+                position: browserVisible ? tab.position : null,
+                visible: browserVisible && tab.visible
+            }))
+        }
+        void window.devscope.agentControl.updateWorkspaceState({
+            version: 1,
+            threadId,
+            inspector: {
+                open,
+                activeWorkspace,
+                openWorkspaces
+            },
+            browser,
+            updatedAt: new Date().toISOString()
+        })
+    }, [activeWorkspaceTab, browserOpen, browserWorkspaceState, open, threadId, workspaceTabs])
+
+    useEffect(() => () => {
+        void window.devscope.agentControl.updateWorkspaceState(null)
+    }, [])
 
     const selectTurn = useCallback((turnId: string) => {
         onSelectTurn(turnId)
@@ -638,12 +686,14 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                         )}>
                             <AssistantBrowserWorkspace
                                 workspaceKey={sessionId || projectPath || 'detached'}
+                                threadId={threadId || 'thread:detached'}
                                 projectPath={projectPath}
                                 active={open && activeWorkspaceTab?.kind === 'browser'}
                                 navigationRequest={browserNavigationRequest}
                                 surfaceRequest={browserSurfaceRequest}
                                 onNavigationRequestHandled={handleBrowserNavigationRequestHandled}
                                 onSurfaceRequestHandled={onBrowserSurfaceRequestHandled}
+                                onWorkspaceStateChange={handleBrowserWorkspaceStateChange}
                                 onAudibleChange={setBrowserAudible}
                                 onActiveFaviconChange={setBrowserFaviconUrl}
                             />

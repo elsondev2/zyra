@@ -44,7 +44,7 @@ export const CONTROL_SIDE_EFFECTS_REQUIRING_APPROVAL = new Set<ControlSideEffect
 export const TARGET_CAPABILITIES: Record<ControlTarget['kind'], ReadonlySet<ControlCapability>> = {
     'zyra-browser': new Set([
         'observe.structure', 'observe.screenshot', 'navigate', 'pointer.click', 'pointer.move', 'pointer.drag',
-        'keyboard.type', 'keyboard.key', 'scroll', 'form.select', 'window.focus'
+        'keyboard.type', 'keyboard.key', 'scroll', 'form.select', 'window.focus', 'tab.manage'
     ]),
     'chrome-tab': new Set([
         'observe.structure', 'observe.screenshot', 'navigate', 'pointer.click', 'pointer.move',

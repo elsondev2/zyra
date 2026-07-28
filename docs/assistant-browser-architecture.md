@@ -19,7 +19,7 @@ The browser keeps presentation and authority separate:
   - exposes only typed browser configuration and external-open operations.
 - `desktop/src/renderer/src/pages/assistant/assistant-browser-workspace-state.ts`
   - owns bounded per-chat browser-tab metadata and URL normalization;
-  - persists only safe HTTP(S) page URLs, bounded safe favicon references, titles, and active-tab selection.
+  - persists only safe HTTP(S) page URLs, bounded safe favicon references, titles, active-tab selection, and an optional two-tab split.
 - `desktop/src/renderer/src/pages/assistant/AssistantBrowserWorkspace.tsx`
   - owns Browser controls, internal tabs, project server suggestions, and rendered states.
 - `desktop/src/renderer/src/pages/assistant/AssistantBrowserWebview.tsx`
@@ -31,7 +31,7 @@ The guest page never receives Zyra’s preload or `window.devscope` bridge.
 
 Browser is lazy-loaded after the user selects its Inspector tile. Once opened, the Browser workspace stays mounted while Review, Explorer, or Terminal is selected.
 
-Each internal browser tab also keeps its `<webview>` mounted. Inactive guests are hidden and made non-interactive rather than destroyed, preserving Chromium history, form state, scroll position, and application state during ordinary tab switches.
+Each internal browser tab also keeps its `<webview>` mounted. Inactive guests are hidden and made non-interactive rather than destroyed, preserving Chromium history, form state, scroll position, and application state during ordinary tab switches. Browser-only side-by-side mode gives two retained guests independent half-width viewports; it does not clone, reparent, or recreate either guest.
 
 Closing the outer Browser workspace destroys the live guests. Safe current URLs, reported favicons, and tab selection remain in bounded per-chat local persistence and reload when Browser is opened again. Chromium cookies, local storage, IndexedDB, cache storage, service workers, and HTTP authentication live in one Zyra-wide persistent partition, so ordinary site logins survive Browser, thread, chat-session, project, and app restarts.
 
@@ -84,6 +84,22 @@ These values are forced during `will-attach-webview`; the renderer-provided attr
 Each trusted Browser guest registers as an on-demand `zyra-browser` control target. The Browser remains usable without an agent; authority is created only after a root or child principal requests a bounded grant and the user approves it in Control Center or from the exact tab’s Browser toolbar.
 
 `browser_control.open_tab` lets an agent create a blank sandboxed tab without navigation or input authority. Main sends a nonce-bound request only to the selected thread’s renderer and waits until that exact tab registers as a trusted guest. A root agent may set `reveal: true` to open the Inspector Browser for the user. Child agents may create background tabs but cannot reveal or take over Zyra’s interface. The agent must then request a separately scoped grant before it can navigate, observe, or interact.
+
+Root agents can also operate on retained tabs without creating replacements:
+
+- `reveal_tab` makes an already registered target the primary visible Browser tab;
+- `set_tab_layout` selects one primary target or an explicit primary/secondary side-by-side pair;
+- `refresh_tab` uses the target's bounded `navigate` grant; model-driven history traversal remains disabled until its destination origin can be proven before navigation;
+- `close_tab` and `open_external` require a target-bound `tab.manage` grant with an explicit HTTP(S) origin;
+- closing a tab immediately revokes its tab-management grant and descendants.
+
+The renderer publishes a bounded Inspector/Browser workspace snapshot through trusted IPC. `list_targets` therefore reports whether Inspector is open, its active/open workspaces, all retained Browser tabs and sites, and the primary/secondary visible tab IDs. Renderer metadata cannot create a target or bind a target ID to a different tab; main reconciles by trusted tab identity and owner thread. Metadata without a matching registered guest is explicitly marked untrusted and carries no authoritative origin.
+
+Every integrated Browser target is bound to the chat thread that owned its renderer workspace when the guest registered. Root and child discovery, workspace visibility, reveal/layout commands, and grant requests are filtered to that owner thread. A child cannot enumerate or request another thread's Browser tab.
+
+Close, refresh, and external-browser commands use a two-phase surface request. Main may cancel before the renderer atomically claims the request; after a successful claim the command is committed and main waits for its exact request ID to complete. Concurrent commands for one tab cannot resolve each other's promises.
+
+A principal may hold independent grants for several Browser targets in the same turn. Each target keeps its own action queue, monotonic observation revisions, viewport, cursor, audit trail, and remaining-action budget, allowing work on different tabs to proceed independently while preserving one owner per individual surface.
 
 The visual loop is:
 

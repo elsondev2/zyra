@@ -5,6 +5,8 @@ const capability = Type.Union(CONTROL_CAPABILITIES.map((entry) => Type.Literal(e
 const common = {
   operation: Type.String({ description: "Bounded control operation." }),
   targetId: Type.Optional(Type.String()),
+  primaryTargetId: Type.Optional(Type.String()),
+  secondaryTargetId: Type.Optional(Type.String()),
   grantId: Type.Optional(Type.String()),
   observationRevision: Type.Optional(Type.Number()),
   elementRef: Type.Optional(Type.String()),
@@ -41,7 +43,7 @@ export const browserControlSchema = Type.Object(common, { additionalProperties: 
 export const computerControlSchema = Type.Object(common, { additionalProperties: false });
 
 export const BROWSER_CONTROL_OPERATIONS = Object.freeze([
-  "list_targets", "open_tab", "request_grant", "observe", "navigate", "move", "click", "drag", "type", "key", "scroll", "select", "wait", "release",
+  "list_targets", "open_tab", "reveal_tab", "close_tab", "refresh_tab", "open_external", "set_tab_layout", "request_grant", "observe", "navigate", "move", "click", "drag", "type", "key", "scroll", "select", "wait", "release",
 ]);
 export const COMPUTER_CONTROL_OPERATIONS = Object.freeze([
   "list_windows", "request_grant", "observe", "focus", "click", "type", "key", "scroll", "wait", "release",

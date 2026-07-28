@@ -42,11 +42,14 @@ type BrowserStatePatch = Partial<Omit<AssistantBrowserTabState, 'id'>>
 
 export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHandle, {
     tab: AssistantBrowserTabState
+    threadId: string
     config: DevScopeBrowserPreviewConfig
-    active: boolean
+    visible: boolean
+    focused: boolean
+    placement: 'full' | 'primary' | 'secondary'
     onStateChange: (tabId: string, patch: BrowserStatePatch) => void
     onControlTargetChange: (tabId: string, targetId: string | null) => void
-}>(function AssistantBrowserWebview({ tab, config, active, onStateChange, onControlTargetChange }, forwardedRef) {
+}>(function AssistantBrowserWebview({ tab, threadId, config, visible, focused, placement, onStateChange, onControlTargetChange }, forwardedRef) {
     const [webview, setWebview] = useState<BrowserWebviewElement | null>(null)
     const onStateChangeRef = useRef(onStateChange)
     const tabTitleRef = useRef(tab.title)
@@ -122,7 +125,7 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
                 return
             }
             controlBinding = true
-            void window.devscope.agentControl.bindBrowserTab({ guestWebContentsId, tabId: tab.id }).then((result) => {
+            void window.devscope.agentControl.bindBrowserTab({ guestWebContentsId, tabId: tab.id, threadId }).then((result) => {
                 controlBinding = false
                 if (disposed) return
                 if (result.success) {
@@ -253,24 +256,27 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
             webview.removeEventListener('media-paused', syncAudible)
             onControlTargetChange(tab.id, null)
         }
-    }, [onControlTargetChange, tab.id, webview])
+    }, [onControlTargetChange, tab.id, threadId, webview])
 
     useEffect(() => {
-        if (active) webview?.focus()
-    }, [active, webview])
+        if (focused) webview?.focus()
+    }, [focused, webview])
 
     return createElement('webview', {
         ref: setWebviewRef,
         src: initialUrlRef.current,
         partition: config.partition,
         webpreferences: config.webPreferences,
-        className: 'absolute inset-0 flex h-full w-full bg-white',
+        className: 'absolute bottom-0 top-0 flex h-full bg-white',
         style: {
-            visibility: active ? 'visible' : 'hidden',
-            pointerEvents: active ? 'auto' : 'none',
-            zIndex: active ? 1 : 0
+            left: placement === 'secondary' ? '50%' : 0,
+            right: placement === 'primary' ? '50%' : 0,
+            width: placement === 'full' ? '100%' : '50%',
+            visibility: visible ? 'visible' : 'hidden',
+            pointerEvents: visible ? 'auto' : 'none',
+            zIndex: visible ? 1 : 0
         },
-        'aria-hidden': active ? undefined : true,
+        'aria-hidden': visible ? undefined : true,
         'data-assistant-browser-webview': tab.id
     } as never)
 }))

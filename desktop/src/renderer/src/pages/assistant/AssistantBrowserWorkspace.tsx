@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import {
     ArrowLeft,
     ArrowRight,
+    Columns2,
     ExternalLink,
     FolderX,
     Globe2,
@@ -19,7 +20,7 @@ import {
     X
 } from 'lucide-react'
 import type { DevScopeBrowserPreviewConfig, DevScopeProcessInfo } from '@shared/contracts/devscope-api'
-import type { ControlStateSnapshot } from '@shared/agent-control/contracts'
+import type { ControlStateSnapshot, ControlWorkspaceSnapshot } from '@shared/agent-control/contracts'
 import type { BrowserSurfaceOpenRequest } from '@shared/agent-control/protocol'
 import { cn } from '@/lib/utils'
 import { AssistantBrowserAgentCursor } from './AssistantBrowserAgentCursor'
@@ -38,6 +39,7 @@ import {
     loadAssistantBrowserWorkspaceState,
     normalizeAssistantBrowserNavigation,
     persistAssistantBrowserWorkspaceState,
+    setAssistantBrowserLayout,
     updateAssistantBrowserTab,
     type AssistantBrowserTabState,
     type AssistantBrowserWorkspaceState
@@ -74,22 +76,26 @@ function tabSequenceSeed(state: AssistantBrowserWorkspaceState): number {
 
 export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace({
     workspaceKey,
+    threadId,
     projectPath,
     active,
     navigationRequest,
     surfaceRequest,
     onNavigationRequestHandled,
     onSurfaceRequestHandled,
+    onWorkspaceStateChange,
     onAudibleChange,
     onActiveFaviconChange
 }: {
     workspaceKey: string
+    threadId: string
     projectPath: string | null
     active: boolean
     navigationRequest: { id: number; url: string } | null
     surfaceRequest: BrowserSurfaceOpenRequest | null
     onNavigationRequestHandled: (requestId: number) => void
     onSurfaceRequestHandled: (requestId: string) => void
+    onWorkspaceStateChange: (state: ControlWorkspaceSnapshot['browser']) => void
     onAudibleChange: (audible: boolean) => void
     onActiveFaviconChange: (faviconUrl: string | null) => void
 }) {
@@ -113,11 +119,13 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const [controlTargetsByTab, setControlTargetsByTab] = useState<Record<string, string>>({})
     const [rememberApproval, setRememberApproval] = useState(false)
     const workspaceStateRef = useRef(workspaceState)
+    const controlTargetsByTabRef = useRef(controlTargetsByTab)
     const webviewRefs = useRef(new Map<string, AssistantBrowserWebviewHandle>())
     const webviewRefCallbacks = useRef(new Map<string, (handle: AssistantBrowserWebviewHandle | null) => void>())
     const pendingNavigationRef = useRef(new Map<string, string>())
     const consumedNavigationRequestsRef = useRef(new Set<number>())
     const consumedSurfaceRequestsRef = useRef(new Set<string>())
+    const cancelledSurfaceRequestsRef = useRef(new Set<string>())
     const pendingSurfaceRequestsRef = useRef(new Map<string, BrowserSurfaceOpenRequest>())
     const attemptedRememberedApprovalsRef = useRef(new Set<string>())
     const onSurfaceRequestHandledRef = useRef(onSurfaceRequestHandled)
@@ -126,9 +134,14 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const profileMenuRef = useRef<HTMLDivElement | null>(null)
 
     workspaceStateRef.current = workspaceState
+    controlTargetsByTabRef.current = controlTargetsByTab
     onSurfaceRequestHandledRef.current = onSurfaceRequestHandled
     const activeTab = workspaceState.tabs.find((tab) => tab.id === workspaceState.activeTabId)
         || workspaceState.tabs[0]
+    const splitTab = workspaceState.splitTabId
+        ? workspaceState.tabs.find((tab) => tab.id === workspaceState.splitTabId) || null
+        : null
+    const visibleTabs = [activeTab, splitTab].filter((tab): tab is AssistantBrowserTabState => Boolean(tab))
     const hasAudibleTab = workspaceState.tabs.some((tab) => tab.audible)
     const activeControlTargetId = activeTab ? controlTargetsByTab[activeTab.id] : undefined
     const activeControlGrant = controlState?.grants.find((grant) => grant.targetId === activeControlTargetId && grant.state === 'active') || null
@@ -139,8 +152,6 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         && activeControlTarget?.kind === 'zyra-browser'
         && activeControlTarget.origin
     )
-    const activeAgentCursor = controlState?.cursors.find((cursor) => cursor.targetId === activeControlTargetId) || null
-
     const commitWorkspaceState = useCallback((nextState: AssistantBrowserWorkspaceState) => {
         workspaceStateRef.current = nextState
         setWorkspaceState(nextState)
@@ -166,34 +177,20 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     }, [])
 
     useEffect(() => {
-        if (!surfaceRequest || consumedSurfaceRequestsRef.current.has(surfaceRequest.requestId)) return
-        consumedSurfaceRequestsRef.current.add(surfaceRequest.requestId)
-        if (consumedSurfaceRequestsRef.current.size > 100) {
-            const oldest = consumedSurfaceRequestsRef.current.values().next().value
-            if (oldest) consumedSurfaceRequestsRef.current.delete(oldest)
-        }
-        if (!normalizedProjectPath) {
-            failSurfaceRequest(surfaceRequest, 'Attach a project to this chat before opening the in-app Browser.')
-            return
-        }
-        if (workspaceStateRef.current.tabs.length >= ASSISTANT_BROWSER_TAB_LIMIT) {
-            failSurfaceRequest(surfaceRequest, `Close a Browser tab first; the ${ASSISTANT_BROWSER_TAB_LIMIT}-tab limit is full.`)
-            return
-        }
-        if (configError) {
-            failSurfaceRequest(surfaceRequest, configError)
-            return
-        }
-        pendingSurfaceRequestsRef.current.set(surfaceRequest.requestId, surfaceRequest)
-        mutateWorkspaceState((current) => addAssistantBrowserTab(current, surfaceRequest.tabId))
-    }, [configError, failSurfaceRequest, mutateWorkspaceState, normalizedProjectPath, surfaceRequest])
-
-    useEffect(() => {
         if (!configError) return
         for (const request of [...pendingSurfaceRequestsRef.current.values()]) {
             failSurfaceRequest(request, configError)
         }
     }, [configError, failSurfaceRequest])
+
+    useEffect(() => window.devscope.agentControl.onBrowserSurfaceCancel((requestId) => {
+        cancelledSurfaceRequestsRef.current.add(requestId)
+        pendingSurfaceRequestsRef.current.delete(requestId)
+        if (cancelledSurfaceRequestsRef.current.size > 100) {
+            const oldest = cancelledSurfaceRequestsRef.current.values().next().value
+            if (oldest) cancelledSurfaceRequestsRef.current.delete(oldest)
+        }
+    }), [])
 
     useEffect(() => {
         let cancelled = false
@@ -246,6 +243,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             const next = { ...current }
             if (targetId) next[tabId] = targetId
             else delete next[tabId]
+            controlTargetsByTabRef.current = next
             return next
         })
     }, [])
@@ -261,6 +259,37 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     }, [activeTab?.faviconUrl, onActiveFaviconChange])
 
     useEffect(() => () => onActiveFaviconChange(null), [onActiveFaviconChange])
+
+    useEffect(() => {
+        const visibleTabIds = active
+            ? [activeTab?.id, splitTab?.id].filter((tabId): tabId is string => Boolean(tabId))
+            : []
+        onWorkspaceStateChange({
+            open: true,
+            activeTabId: activeTab?.id || null,
+            splitTabId: splitTab?.id || null,
+            visibleTabIds,
+            tabs: workspaceState.tabs.map((tab) => {
+                const targetId = controlTargetsByTab[tab.id] || null
+                const target = targetId ? controlState?.targets.find((entry) => entry.targetId === targetId) : null
+                return {
+                    tabId: tab.id,
+                    targetId,
+                    trusted: Boolean(targetId && target?.kind === 'zyra-browser' && target.tabId === tab.id),
+                    url: tab.url || null,
+                    title: tab.title || null,
+                    origin: target?.kind === 'zyra-browser' ? target.origin : null,
+                    status: tab.status,
+                    position: active && tab.id === activeTab?.id
+                        ? 'primary'
+                        : active && tab.id === splitTab?.id
+                            ? 'secondary'
+                            : null,
+                    visible: visibleTabIds.includes(tab.id)
+                }
+            })
+        })
+    }, [active, activeTab?.id, controlState?.targets, controlTargetsByTab, onWorkspaceStateChange, splitTab?.id, workspaceState.tabs])
 
     useEffect(() => {
         if (!addressFocusedRef.current) setAddressValue(activeTab?.url || '')
@@ -415,6 +444,18 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         mutateWorkspaceState((current) => activateAssistantBrowserTab(current, tabId))
     }, [mutateWorkspaceState])
 
+    const toggleSplit = useCallback(() => {
+        mutateWorkspaceState((current) => {
+            if (current.splitTabId) return setAssistantBrowserLayout(current, current.activeTabId, null)
+            const existingSecondary = current.tabs.find((tab) => tab.id !== current.activeTabId)
+            if (existingSecondary) return setAssistantBrowserLayout(current, current.activeTabId, existingSecondary.id)
+            if (current.tabs.length >= ASSISTANT_BROWSER_TAB_LIMIT) return current
+            const secondaryTabId = `browser:${tabSequenceRef.current++}`
+            const withSecondary = addAssistantBrowserTab(current, secondaryTabId)
+            return setAssistantBrowserLayout(withSecondary, current.activeTabId, secondaryTabId)
+        })
+    }, [mutateWorkspaceState])
+
     const getWebviewRefCallback = useCallback((tabId: string) => {
         const existing = webviewRefCallbacks.current.get(tabId)
         if (existing) return existing
@@ -437,6 +478,105 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         webviewRefCallbacks.current.set(tabId, callback)
         return callback
     }, [mutateWorkspaceState])
+
+    useEffect(() => {
+        if (!surfaceRequest || consumedSurfaceRequestsRef.current.has(surfaceRequest.requestId) || cancelledSurfaceRequestsRef.current.has(surfaceRequest.requestId)) return
+        const mode = surfaceRequest.mode || 'open'
+        const knownTargetId = controlTargetsByTabRef.current[surfaceRequest.tabId]
+        const knownSecondaryTargetId = surfaceRequest.secondaryTabId
+            ? controlTargetsByTabRef.current[surfaceRequest.secondaryTabId]
+            : undefined
+        if (surfaceRequest.targetId && !knownTargetId) return
+        if (surfaceRequest.secondaryTargetId && !knownSecondaryTargetId) return
+        consumedSurfaceRequestsRef.current.add(surfaceRequest.requestId)
+        if (consumedSurfaceRequestsRef.current.size > 100) {
+            const oldest = consumedSurfaceRequestsRef.current.values().next().value
+            if (oldest) consumedSurfaceRequestsRef.current.delete(oldest)
+        }
+        if (surfaceRequest.targetId && knownTargetId !== surfaceRequest.targetId) {
+            failSurfaceRequest(surfaceRequest, 'The selected Browser tab no longer matches its trusted target.')
+            return
+        }
+        if (surfaceRequest.secondaryTargetId && knownSecondaryTargetId !== surfaceRequest.secondaryTargetId) {
+            failSurfaceRequest(surfaceRequest, 'The secondary Browser tab no longer matches its trusted target.')
+            return
+        }
+        if (!normalizedProjectPath) {
+            failSurfaceRequest(surfaceRequest, 'Attach a project to this chat before using the in-app Browser.')
+            return
+        }
+        if (configError) {
+            failSurfaceRequest(surfaceRequest, configError)
+            return
+        }
+        const complete = (success: true | false, error?: string) => window.devscope.agentControl.completeBrowserSurfaceRequest({
+            requestId: surfaceRequest.requestId,
+            threadId: surfaceRequest.threadId,
+            tabId: surfaceRequest.tabId,
+            ...(success ? { success: true as const, targetId: knownTargetId! } : { success: false as const, error: error || 'Browser command failed.' })
+        })
+
+        if (mode === 'close' || mode === 'refresh' || mode === 'external') {
+            if (!knownTargetId) {
+                failSurfaceRequest(surfaceRequest, 'The selected Browser tab is no longer registered.')
+                return
+            }
+            void (async () => {
+                try {
+                    if (cancelledSurfaceRequestsRef.current.has(surfaceRequest.requestId)) return
+                    const claim = await window.devscope.agentControl.claimBrowserSurfaceRequest({
+                        requestId: surfaceRequest.requestId,
+                        threadId: surfaceRequest.threadId,
+                        tabId: surfaceRequest.tabId
+                    })
+                    if (!claim.success) throw new Error(claim.error || 'The Browser command was cancelled before it started.')
+                    if (!claim.claimed) throw new Error('The Browser command was cancelled before it started.')
+                    if (mode === 'external') {
+                        const url = surfaceRequest.url || workspaceStateRef.current.tabs.find((tab) => tab.id === surfaceRequest.tabId)?.url || ''
+                        const result = await window.devscope.openBrowserPreviewExternal(url)
+                        if (!result.success) throw new Error(result.error || 'Could not open the default browser.')
+                    } else if (mode !== 'close') {
+                        const handle = webviewRefs.current.get(surfaceRequest.tabId)
+                        if (!handle) throw new Error('The selected Browser view is not ready.')
+                        handle.reload()
+                    }
+                    if (mode === 'close') {
+                        closeTab(surfaceRequest.tabId)
+                        if (workspaceStateRef.current.tabs.some((tab) => tab.id === surfaceRequest.tabId)) {
+                            throw new Error('The selected Browser tab did not leave the retained workspace.')
+                        }
+                    }
+                    const result = await complete(true)
+                    if (!result.success) throw new Error(result.error || 'Could not finish the Browser command.')
+                } catch (error) {
+                    await complete(false, error instanceof Error ? error.message : 'Browser command failed.')
+                } finally {
+                    onSurfaceRequestHandledRef.current(surfaceRequest.requestId)
+                }
+            })()
+            return
+        }
+
+        const requestedTabIds = [surfaceRequest.tabId, surfaceRequest.secondaryTabId]
+            .filter((tabId): tabId is string => Boolean(tabId))
+        const missingCount = requestedTabIds.filter((tabId) => !workspaceStateRef.current.tabs.some((tab) => tab.id === tabId)).length
+        if (workspaceStateRef.current.tabs.length + missingCount > ASSISTANT_BROWSER_TAB_LIMIT) {
+            failSurfaceRequest(surfaceRequest, `Close a Browser tab first; the ${ASSISTANT_BROWSER_TAB_LIMIT}-tab limit is full.`)
+            return
+        }
+        mutateWorkspaceState((current) => {
+            let next = current
+            for (const tabId of requestedTabIds) next = addAssistantBrowserTab(next, tabId)
+            if (mode === 'layout') return setAssistantBrowserLayout(next, surfaceRequest.tabId, surfaceRequest.secondaryTabId || null)
+            if (mode === 'reveal') return activateAssistantBrowserTab(next, surfaceRequest.tabId)
+            return setAssistantBrowserLayout(next, surfaceRequest.tabId, next.splitTabId)
+        })
+        if (knownTargetId) {
+            void complete(true).finally(() => onSurfaceRequestHandledRef.current(surfaceRequest.requestId))
+        } else {
+            pendingSurfaceRequestsRef.current.set(surfaceRequest.requestId, surfaceRequest)
+        }
+    }, [closeTab, configError, controlTargetsByTab, failSurfaceRequest, mutateWorkspaceState, normalizedProjectPath, surfaceRequest])
 
     const openExternal = useCallback(async () => {
         if (!activeTab?.url) return
@@ -532,6 +672,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             <div className="flex h-7 shrink-0 items-end gap-px overflow-x-auto border-b border-white/[0.07] bg-[color-mix(in_srgb,var(--color-bg)_92%,black)] px-1 pt-1 [scrollbar-width:none]">
                 {workspaceState.tabs.map((tab) => {
                     const tabActive = tab.id === activeTab?.id
+                    const tabSecondary = tab.id === splitTab?.id
                     const tabTargetId = controlTargetsByTab[tab.id]
                     const tabGrant = tabTargetId
                         ? controlState?.grants.find((grant) => grant.targetId === tabTargetId && grant.state === 'active')
@@ -550,6 +691,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                             className={cn(
                                 'group/tab relative flex h-6 min-w-[92px] max-w-[150px] items-center gap-1 border-x border-t px-1.5 transition-[border-color,background-color,box-shadow,color] motion-reduce:transition-none',
                                 tabActive ? 'border-white/[0.09] bg-[color-mix(in_srgb,var(--color-bg)_96%,black)] text-sparkle-text' : 'border-transparent bg-white/[0.018] text-sparkle-text-muted hover:bg-white/[0.04] hover:text-sparkle-text-secondary',
+                                tabSecondary && 'border-violet-300/30 bg-violet-400/[0.06] text-violet-100',
                                 tabControlled && 'border-cyan-300/45 bg-cyan-400/[0.07] text-cyan-50 shadow-[inset_0_0_0_1px_rgba(103,232,249,0.12),0_0_12px_rgba(34,211,238,0.22)]',
                                 tabNeedsAttention && 'border-amber-300/35 bg-amber-400/[0.08] text-amber-100'
                             )}
@@ -633,6 +775,15 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                     />
                 </div>
                 <button type="button" onClick={() => void openExternal()} disabled={!activeTab?.url} className="inline-flex size-5 items-center justify-center text-sparkle-text-muted hover:bg-white/[0.05] hover:text-sparkle-text disabled:opacity-25" title="Open in default browser"><ExternalLink size={10} /></button>
+                <button
+                    type="button"
+                    onClick={toggleSplit}
+                    className={cn('inline-flex size-5 items-center justify-center text-sparkle-text-muted hover:bg-white/[0.05] hover:text-sparkle-text', splitTab && 'bg-violet-400/[0.09] text-violet-200')}
+                    title={splitTab ? 'Close side-by-side Browser view' : 'Show two Browser tabs side by side'}
+                    aria-pressed={Boolean(splitTab)}
+                >
+                    <Columns2 size={10} />
+                </button>
                 {activePendingGrant ? (
                     <div className="flex h-5 items-center gap-1 border border-sky-300/25 bg-sky-400/[0.08] px-1 text-[8px] text-sky-100" title="An agent is waiting for your approval to control this exact tab.">
                         <ShieldAlert size={9} />
@@ -703,27 +854,49 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             {addressError ? <div className="shrink-0 border-b border-red-500/15 bg-red-500/[0.06] px-2 py-1 text-[9px] text-red-300">{addressError}</div> : null}
 
             <div className="relative min-h-0 flex-1 overflow-hidden bg-white">
-                {workspaceState.tabs.map((tab) => (
-                    <AssistantBrowserWebview
-                        key={tab.id}
-                        ref={getWebviewRefCallback(tab.id)}
-                        tab={tab}
-                        config={config}
-                        active={active && tab.id === activeTab?.id}
-                        onStateChange={handleWebviewStateChange}
-                        onControlTargetChange={handleControlTargetChange}
-                    />
-                ))}
-                {activeControlGrant ? (
-                    <div
-                        className="pointer-events-none absolute inset-0 z-[25] border border-cyan-300/35 shadow-[inset_0_0_20px_rgba(34,211,238,0.08)]"
-                        aria-label="Zyra-controlled Browser surface"
-                    />
-                ) : null}
-                <AssistantBrowserAgentCursor cursor={activeAgentCursor} />
+                {workspaceState.tabs.map((tab) => {
+                    const primary = tab.id === activeTab?.id
+                    const secondary = tab.id === splitTab?.id
+                    const visible = active && (primary || secondary)
+                    return (
+                        <AssistantBrowserWebview
+                            key={tab.id}
+                            ref={getWebviewRefCallback(tab.id)}
+                            tab={tab}
+                            threadId={threadId}
+                            config={config}
+                            visible={visible}
+                            focused={active && primary}
+                            placement={splitTab ? primary ? 'primary' : secondary ? 'secondary' : 'full' : 'full'}
+                            onStateChange={handleWebviewStateChange}
+                            onControlTargetChange={handleControlTargetChange}
+                        />
+                    )
+                })}
+                {active && splitTab ? <div className="pointer-events-none absolute inset-y-0 left-1/2 z-[24] w-px bg-violet-300/45 shadow-[0_0_10px_rgba(196,181,253,0.28)]" aria-hidden="true" /> : null}
+                {active ? visibleTabs.map((tab) => {
+                    const targetId = controlTargetsByTab[tab.id]
+                    const grant = targetId ? controlState?.grants.find((entry) => entry.targetId === targetId && entry.state === 'active') : null
+                    const cursor = targetId ? controlState?.cursors.find((entry) => entry.targetId === targetId) || null : null
+                    const secondary = tab.id === splitTab?.id
+                    return (
+                        <div
+                            key={`control:${tab.id}`}
+                            className={cn('pointer-events-none absolute inset-y-0 z-[25] overflow-hidden', splitTab ? secondary ? 'left-1/2 right-0' : 'left-0 right-1/2' : 'inset-x-0')}
+                        >
+                            {grant ? <div className="absolute inset-0 border border-cyan-300/35 shadow-[inset_0_0_20px_rgba(34,211,238,0.08)]" aria-label="Zyra-controlled Browser surface" /> : null}
+                            <AssistantBrowserAgentCursor cursor={cursor} />
+                        </div>
+                    )
+                }) : null}
 
                 {activePendingGrant ? (
-                    <div className="absolute inset-0 z-[45] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]" role="dialog" aria-modal="true" aria-label="Browser control permission requested">
+                    <div
+                        className={cn('absolute bottom-0 left-0 top-0 z-[45] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]', splitTab ? 'right-1/2' : 'right-0')}
+                        role="dialog"
+                        aria-modal="true"
+                        aria-label="Browser control permission requested"
+                    >
                         <section className="w-full max-w-[320px] rounded-xl border border-amber-200/25 bg-[#111927]/[0.98] p-3.5 shadow-2xl shadow-black/55">
                             <div className="flex items-start gap-2.5">
                                 <span className="mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-amber-200/20 bg-amber-300/[0.08] text-amber-200"><ShieldAlert size={14} /></span>
@@ -755,7 +928,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                 ) : null}
 
                 {activeTab?.status === 'idle' && !activeTab.url ? (
-                    <div className="absolute inset-0 z-10 flex items-center justify-center overflow-y-auto bg-[color-mix(in_srgb,var(--color-bg)_96%,black)] p-5 text-center">
+                    <div className={cn('absolute inset-y-0 left-0 z-10 flex items-center justify-center overflow-y-auto bg-[color-mix(in_srgb,var(--color-bg)_96%,black)] p-5 text-center', splitTab ? 'right-1/2' : 'right-0')}>
                         <div className="w-full max-w-[310px]">
                             <Globe2 size={20} className="mx-auto text-[var(--accent-primary)]/65" />
                             <h3 className="mt-3 text-[12px] font-semibold text-sparkle-text-secondary">Preview your project</h3>
@@ -796,12 +969,12 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                 ) : null}
 
                 {activeTab?.status === 'error' && activeTab.error ? (
-                    <div className="pointer-events-none absolute inset-x-0 top-0 z-20 border-b border-red-500/15 bg-[color-mix(in_srgb,var(--color-bg)_94%,black)] px-2 py-1 text-[9px] text-red-300 shadow-sm">
+                    <div className={cn('pointer-events-none absolute left-0 top-0 z-20 border-b border-red-500/15 bg-[color-mix(in_srgb,var(--color-bg)_94%,black)] px-2 py-1 text-[9px] text-red-300 shadow-sm', splitTab ? 'right-1/2' : 'right-0')}>
                         {activeTab.error}
                     </div>
                 ) : null}
 
-                {activeTab?.status === 'loading' ? <div className="pointer-events-none absolute inset-x-0 top-0 z-30 h-px overflow-hidden bg-[var(--accent-primary)]/15 after:block after:h-full after:w-1/3 after:animate-[browser-loading-slide_1.1s_ease-in-out_infinite] after:bg-[var(--accent-primary)]" /> : null}
+                {activeTab?.status === 'loading' ? <div className={cn('pointer-events-none absolute left-0 top-0 z-30 h-px overflow-hidden bg-[var(--accent-primary)]/15 after:block after:h-full after:w-1/3 after:animate-[browser-loading-slide_1.1s_ease-in-out_infinite] after:bg-[var(--accent-primary)]', splitTab ? 'right-1/2' : 'right-0')} /> : null}
             </div>
         </section>
     )

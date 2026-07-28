@@ -219,6 +219,10 @@ export default function AssistantPage() {
         if (request.reveal) setRightPanelMode('review')
     }), [diffSource.threadId, setRightPanelMode])
 
+    useEffect(() => window.devscope.agentControl.onBrowserSurfaceCancel((requestId) => {
+        setBrowserSurfaceRequests((current) => current.filter((request) => request.requestId !== requestId))
+    }), [])
+
     const paneLayout = resolveAssistantPaneLayout({
         viewportWidth,
         leftSidebarCollapsed,

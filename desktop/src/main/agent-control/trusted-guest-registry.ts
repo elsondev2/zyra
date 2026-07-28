@@ -11,6 +11,7 @@ export type TrustedBrowserGuest = {
     ownerWebContentsId: number
     guest: WebContents
     tabId: string | null
+    ownerThreadId: string | null
     registeredAt: string
 }
 
@@ -26,6 +27,7 @@ class TrustedGuestRegistry {
             ownerWebContentsId,
             guest,
             tabId: null,
+            ownerThreadId: null,
             registeredAt: new Date().toISOString()
         }
         this.byGuestId.set(guest.id, entry)
@@ -36,12 +38,15 @@ class TrustedGuestRegistry {
         return entry
     }
 
-    bind(ownerWebContentsId: number, guestWebContentsId: number, tabId: string): TrustedBrowserGuest {
+    bind(ownerWebContentsId: number, guestWebContentsId: number, tabId: string, ownerThreadId: string): TrustedBrowserGuest {
         const entry = this.byGuestId.get(guestWebContentsId)
         if (!entry || entry.guest.isDestroyed()) throw new AgentControlError('CONTROL_TARGET_NOT_FOUND', 'The Browser guest is not registered in main.')
         if (entry.ownerWebContentsId !== ownerWebContentsId) throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The Browser guest belongs to another window.')
         if (!isTrustedBrowserTabId(tabId)) throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Browser tab identity is invalid.')
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9:._-]{0,191}$/.test(ownerThreadId)) throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Browser owner thread identity is invalid.')
+        if (entry.ownerThreadId && entry.ownerThreadId !== ownerThreadId) throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The Browser guest is already bound to another thread.')
         entry.tabId = tabId
+        entry.ownerThreadId = ownerThreadId
         return entry
     }
 

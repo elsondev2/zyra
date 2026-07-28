@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { ensureBrowserControlToolState } from '../src/zyra-sdk.mjs'
+import { BROWSER_CONTROL_OPERATIONS, browserControlSchema } from '../src/agent-control/tool-contracts.mjs'
 
 function fakeSession(options = {}) {
   return {
@@ -30,5 +31,12 @@ assert.throws(
   () => ensureBrowserControlToolState(fakeSession({ registered: false }), true),
   /not registered with Pi/
 )
+
+for (const operation of ['reveal_tab', 'close_tab', 'refresh_tab', 'open_external', 'set_tab_layout']) {
+  assert(BROWSER_CONTROL_OPERATIONS.includes(operation), `${operation} must remain callable through browser_control`)
+}
+assert(browserControlSchema.properties.primaryTargetId, 'side-by-side Browser layout requires a primary target field')
+assert(browserControlSchema.properties.secondaryTargetId, 'side-by-side Browser layout requires a secondary target field')
+assert(browserControlSchema.properties.grantId, 'managed tab operations require a grant field')
 
 console.log('Zyra Browser callable-tool projection passed.')

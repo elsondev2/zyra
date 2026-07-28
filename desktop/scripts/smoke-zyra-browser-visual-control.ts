@@ -88,7 +88,7 @@ const driver = new ZyraBrowserDriver(join(runDirectory, 'screenshots'))
 const broker = new AgentControlBroker({ drivers: [driver] })
 const targetId = broker.targets.createTargetId('zyra-browser')
 broker.registerTarget({
-    target: { kind: 'zyra-browser', targetId, tabId: 'browser:word-grid', guestIdentity: 'smoke:word-grid', origin: new URL(pageUrl).origin },
+    target: { kind: 'zyra-browser', targetId, tabId: 'browser:word-grid', ownerThreadId: principal.threadId, guestIdentity: 'smoke:word-grid', origin: new URL(pageUrl).origin },
     driver,
     trustedIdentity: targetWindow.webContents
 })

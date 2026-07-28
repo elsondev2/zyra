@@ -11,6 +11,7 @@ import type {
     ControlStateSnapshot,
     ControlTarget,
     ControlWindowCandidate,
+    ControlWorkspaceSnapshot,
     DelegatedControlLeaseRequest
 } from '../../shared/agent-control/contracts'
 import type { AgentControlBridgeOperation, RendererControlGrantInput } from '../../shared/agent-control/protocol'
@@ -34,6 +35,24 @@ import type { AgentControlDriver } from './drivers/driver'
 
 export type BrowserSurfaceController = {
     openTab(principal: ControlPrincipal, reveal: boolean, signal?: AbortSignal): Promise<Extract<ControlTarget, { kind: 'zyra-browser' }>>
+    revealTabs(
+        principal: ControlPrincipal,
+        primary: Extract<ControlTarget, { kind: 'zyra-browser' }>,
+        secondary: Extract<ControlTarget, { kind: 'zyra-browser' }> | null,
+        signal?: AbortSignal
+    ): Promise<Extract<ControlTarget, { kind: 'zyra-browser' }>>
+    closeTab(
+        principal: ControlPrincipal,
+        target: Extract<ControlTarget, { kind: 'zyra-browser' }>,
+        signal?: AbortSignal
+    ): Promise<Extract<ControlTarget, { kind: 'zyra-browser' }>>
+    commandTab(
+        principal: ControlPrincipal,
+        target: Extract<ControlTarget, { kind: 'zyra-browser' }>,
+        mode: 'refresh' | 'back' | 'forward' | 'external',
+        url: string | null,
+        signal?: AbortSignal
+    ): Promise<Extract<ControlTarget, { kind: 'zyra-browser' }>>
     cancelPending(reason?: string): void
 }
 
@@ -52,6 +71,7 @@ export class AgentControlBroker extends EventEmitter {
     private sequence = 0
     private disposed = false
     private browserSurface: BrowserSurfaceController | null = null
+    private workspace: ControlWorkspaceSnapshot | null = null
     private readonly cursors = new Map<string, ControlCursorState>()
     private readonly pendingGrantWaiters = new Map<string, {
         resolve: (grant: ControlGrant) => void
@@ -71,6 +91,109 @@ export class AgentControlBroker extends EventEmitter {
 
     setBrowserSurfaceController(controller: BrowserSurfaceController | null): void {
         this.browserSurface = controller
+    }
+
+    updateWorkspaceState(value: unknown): ControlWorkspaceSnapshot | null {
+        this.assertAlive()
+        if (value === null) {
+            if (this.workspace) {
+                this.workspace = null
+                this.changed()
+            }
+            return null
+        }
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Browser workspace state is invalid.')
+        }
+        const input = value as Partial<ControlWorkspaceSnapshot>
+        const threadId = input.threadId === null || input.threadId === undefined
+            ? null
+            : assertControlIdentifier(input.threadId, 'threadId')
+        const inspectorInput = input.inspector && typeof input.inspector === 'object' ? input.inspector : null
+        const browserInput = input.browser && typeof input.browser === 'object' ? input.browser : null
+        if (!inspectorInput || !browserInput) {
+            throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Browser workspace state is incomplete.')
+        }
+        const workspaceKinds = new Set<ControlWorkspaceSnapshot['inspector']['openWorkspaces'][number]>([
+            'new', 'review', 'explorer', 'terminal', 'browser', 'control', 'resources', 'agents', 'turn'
+        ])
+        const openWorkspaces = [...new Set((Array.isArray(inspectorInput.openWorkspaces) ? inspectorInput.openWorkspaces : [])
+            .filter((entry): entry is ControlWorkspaceSnapshot['inspector']['openWorkspaces'][number] => workspaceKinds.has(entry as never)))]
+            .slice(0, 16)
+        const inspectorOpen = inspectorInput.open === true
+        const activeWorkspace = inspectorOpen && inspectorInput.activeWorkspace && workspaceKinds.has(inspectorInput.activeWorkspace)
+            ? inspectorInput.activeWorkspace
+            : null
+        const seenTabs = new Set<string>()
+        const tabs = (Array.isArray(browserInput.tabs) ? browserInput.tabs : []).flatMap((entry) => {
+            if (!entry || typeof entry !== 'object') return []
+            const raw = entry as ControlWorkspaceSnapshot['browser']['tabs'][number]
+            let tabId: string
+            try {
+                tabId = assertControlIdentifier(raw.tabId, 'tabId')
+            } catch {
+                return []
+            }
+            if (seenTabs.has(tabId)) return []
+            seenTabs.add(tabId)
+            const candidate = this.targets.list('zyra-browser')
+                .map((registered) => registered.target)
+                .find((target): target is Extract<ControlTarget, { kind: 'zyra-browser' }> => (
+                    target.kind === 'zyra-browser'
+                    && target.tabId === tabId
+                    && target.ownerThreadId === threadId
+                )) || null
+            let target: Extract<ControlTarget, { kind: 'zyra-browser' }> | null = null
+            if (candidate && (!raw.targetId || raw.targetId === candidate.targetId)) target = candidate
+            const rendererUrl = typeof raw.url === 'string' && /^https?:\/\//.test(raw.url)
+                ? raw.url.slice(0, CONTROL_BOUNDS.maxUrlLength)
+                : null
+            const url = target?.url || rendererUrl
+            const status = ['idle', 'loading', 'ready', 'error'].includes(raw.status) ? raw.status : 'idle'
+            return [{
+                tabId,
+                targetId: target?.targetId || null,
+                trusted: Boolean(target),
+                url,
+                title: target?.title || (typeof raw.title === 'string' ? raw.title.slice(0, 512) || null : null),
+                origin: target?.origin || null,
+                status: status as ControlWorkspaceSnapshot['browser']['tabs'][number]['status'],
+                position: null,
+                visible: false
+            }]
+        }).slice(0, 8)
+        const requestedActiveTabId = typeof browserInput.activeTabId === 'string' ? browserInput.activeTabId : null
+        const activeTabId = tabs.some((tab) => tab.tabId === requestedActiveTabId) ? requestedActiveTabId : tabs[0]?.tabId || null
+        const requestedSplitTabId = typeof browserInput.splitTabId === 'string' ? browserInput.splitTabId : null
+        const splitTabId = requestedSplitTabId !== activeTabId && tabs.some((tab) => tab.tabId === requestedSplitTabId)
+            ? requestedSplitTabId
+            : null
+        const browserOpen = browserInput.open === true
+        const browserVisible = inspectorOpen && activeWorkspace === 'browser' && browserOpen
+        const visibleTabIds = browserVisible ? [activeTabId, splitTabId].filter((entry): entry is string => Boolean(entry)) : []
+        const visibleSet = new Set(visibleTabIds)
+        const normalizedTabs = tabs.map((tab) => ({
+            ...tab,
+            position: tab.tabId === activeTabId && browserVisible
+                ? 'primary' as const
+                : tab.tabId === splitTabId && browserVisible
+                    ? 'secondary' as const
+                    : null,
+            visible: visibleSet.has(tab.tabId)
+        }))
+        const next: ControlWorkspaceSnapshot = {
+            version: 1,
+            threadId,
+            inspector: { open: inspectorOpen, activeWorkspace, openWorkspaces },
+            browser: { open: browserOpen, activeTabId, splitTabId, visibleTabIds, tabs: normalizedTabs },
+            updatedAt: new Date().toISOString()
+        }
+        const comparable = (snapshot: ControlWorkspaceSnapshot | null) => snapshot ? { ...snapshot, updatedAt: '' } : null
+        if (JSON.stringify(comparable(this.workspace)) !== JSON.stringify(comparable(next))) {
+            this.workspace = next
+            this.changed()
+        }
+        return this.workspace
     }
 
     registerTarget(input: {
@@ -119,6 +242,16 @@ export class AgentControlBroker extends EventEmitter {
         this.grants.revokeByTarget(targetId)
         this.observations.remove(targetId)
         this.cursors.delete(targetId)
+        if (this.workspace?.browser.tabs.some((tab) => tab.targetId === targetId)) {
+            this.workspace = {
+                ...this.workspace,
+                browser: {
+                    ...this.workspace.browser,
+                    tabs: this.workspace.browser.tabs.map((tab) => tab.targetId === targetId ? { ...tab, targetId: null } : tab)
+                },
+                updatedAt: new Date().toISOString()
+            }
+        }
         void registered.driver.release?.(registered)
         this.audit.append({
             eventType: 'target', targetId, targetKind: registered.target.kind,
@@ -148,8 +281,8 @@ export class AgentControlBroker extends EventEmitter {
         const defaultScopes = defaultGrantScopes(target)
         const allowedOrigins = input.allowedOrigins?.length ? input.allowedOrigins.slice(0, 32) : defaultScopes.allowedOrigins
         const allowedExecutableIdentities = input.allowedExecutableIdentities?.length ? input.allowedExecutableIdentities.slice(0, 32) : defaultScopes.allowedExecutableIdentities
-        if (capabilities.includes('navigate') && target.kind !== 'windows-window' && !allowedOrigins?.length) {
-            throw new AgentControlError('CONTROL_SCOPE_DENIED', 'Navigation grants require an explicit HTTP(S) origin scope.')
+        if ((capabilities.includes('navigate') || capabilities.includes('tab.manage')) && target.kind !== 'windows-window' && !allowedOrigins?.length) {
+            throw new AgentControlError('CONTROL_SCOPE_DENIED', 'Navigation and tab-management grants require an explicit HTTP(S) origin scope.')
         }
         const request = this.grants.addPending({
             principal,
@@ -196,7 +329,20 @@ export class AgentControlBroker extends EventEmitter {
             allowedExecutableIdentities,
             issuedBy: 'user'
         })
-        assertGrantSupportsTarget(grant, target)
+        try {
+            assertGrantSupportsTarget(grant, target)
+        } catch (error) {
+            this.grants.revoke(grant.grantId)
+            this.grants.removePending(requestId)
+            const controlError = toAgentControlError(error)
+            this.audit.append({
+                eventType: 'grant.revoked', principal: pending.principal, targetId: pending.targetId, targetKind: target.kind,
+                grantId: grant.grantId, outcome: 'denied', message: controlError.message, redactions: []
+            })
+            this.changed()
+            this.pendingGrantWaiters.get(requestId)?.reject(controlError)
+            throw controlError
+        }
         this.grants.removePending(requestId)
         this.audit.append({
             eventType: 'grant.issued', principal: grant.principal, targetId: grant.targetId, targetKind: target.kind,
@@ -420,6 +566,7 @@ export class AgentControlBroker extends EventEmitter {
                 updatedAt: new Date().toISOString()
             })),
             cursors: [...this.cursors.values()],
+            workspace: this.workspace,
             pairing: this.options.pairing?.state() || { state: 'stopped' },
             active: grants.some((grant) => grant.state === 'active'),
             sequence: this.sequence
@@ -445,19 +592,96 @@ export class AgentControlBroker extends EventEmitter {
                 }
                 const revealed = principal.type === 'root' && operation.reveal === true
                 const target = await this.browserSurface.openTab(principal, revealed, signal)
+                this.assertBrowserTargetOwnedByPrincipal(principal, target)
                 return { target, revealed }
             }
             case 'list_targets': {
                 const kind = operation.targetKind
+                const ownerThreadId = principal.type === 'root' ? principal.threadId : principal.parentThreadId
                 const activeGrants = this.grants.listForPrincipal(principal).filter((grant) => grant.state === 'active')
+                const ownedTargets = this.targets.list(kind).filter((entry) => (
+                    entry.target.kind !== 'zyra-browser' || entry.target.ownerThreadId === ownerThreadId
+                ))
+                const workspace = this.workspace?.threadId === ownerThreadId ? this.workspace : null
                 if (principal.type === 'root') {
-                    return { targets: this.targets.list(kind).map((entry) => entry.target), grants: activeGrants }
+                    return { targets: ownedTargets.map((entry) => entry.target), grants: activeGrants, workspace }
                 }
                 const grantedTargetIds = new Set(activeGrants.map((grant) => grant.targetId))
-                const targets = this.targets.list(kind).filter((entry) => (
+                const targets = ownedTargets.filter((entry) => (
                     entry.target.kind === 'zyra-browser' || grantedTargetIds.has(entry.target.targetId)
                 )).map((entry) => entry.target)
-                return { targets, grants: activeGrants }
+                return { targets, grants: activeGrants, workspace }
+            }
+            case 'reveal_tab': {
+                if (principal.type !== 'root') throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents cannot reveal or take over the Browser workspace.')
+                if (!this.browserSurface) throw new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', 'The in-app Browser workspace is unavailable.')
+                const target = this.requireBrowserTarget(operation.targetId, principal)
+                await this.browserSurface.revealTabs(principal, target, null, signal)
+                return { target, workspace: this.workspace }
+            }
+            case 'close_tab': {
+                if (principal.type !== 'root') throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents cannot close Browser tabs.')
+                if (!this.browserSurface) throw new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', 'The in-app Browser workspace is unavailable.')
+                const target = this.requireBrowserTarget(operation.targetId, principal)
+                const grant = this.grants.requireActive(assertControlIdentifier(operation.grantId, 'grantId'), principal)
+                if (grant.targetId !== target.targetId) throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The grant is bound to another Browser tab.')
+                if (!grant.capabilities.includes('tab.manage')) {
+                    throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Closing a Browser tab requires an explicit tab.manage grant.')
+                }
+                assertGrantSupportsTarget(grant, target)
+                await this.browserSurface.closeTab(principal, target, signal)
+                this.grants.consume(grant.grantId)
+                this.grants.revoke(grant.grantId)
+                this.audit.append({
+                    eventType: 'action', principal, targetId: target.targetId, targetKind: target.kind,
+                    grantId: grant.grantId, outcome: 'completed', message: 'Browser tab closed through bounded tab management.', redactions: []
+                })
+                this.audit.append({
+                    eventType: 'grant.revoked', principal, targetId: target.targetId, targetKind: target.kind,
+                    grantId: grant.grantId, outcome: 'cancelled', message: 'Tab management authority ended when the Browser tab closed.', redactions: []
+                })
+                this.changed()
+                return { closed: true, targetId: target.targetId, tabId: target.tabId }
+            }
+            case 'refresh_tab': {
+                if (principal.type !== 'root') throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents cannot refresh the visible Browser tab.')
+                if (!this.browserSurface) throw new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', 'The in-app Browser workspace is unavailable.')
+                const target = this.requireBrowserTarget(operation.targetId, principal)
+                const grant = this.requireBrowserGrant(principal, target, operation.grantId, 'navigate')
+                await this.browserSurface.commandTab(principal, target, 'refresh', null, signal)
+                this.completeBrowserTabCommand(principal, target, grant, 'Browser tab refresh completed.')
+                return { completed: true, targetId: target.targetId, tabId: target.tabId }
+            }
+            case 'open_external': {
+                if (principal.type !== 'root') throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents cannot open the user\'s default browser.')
+                if (!this.browserSurface) throw new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', 'The in-app Browser workspace is unavailable.')
+                const target = this.requireBrowserTarget(operation.targetId, principal)
+                const grant = this.requireBrowserGrant(principal, target, operation.grantId, 'tab.manage')
+                const url = String(operation.url || target.url || '')
+                const origin = normalizedOrigin(url)
+                if (!origin || url.length > CONTROL_BOUNDS.maxUrlLength) {
+                    throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Opening the default browser requires a bounded HTTP(S) URL.')
+                }
+                if (!grant.allowedOrigins?.includes(origin)) {
+                    throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The external URL is outside the grant origin scope.')
+                }
+                await this.browserSurface.commandTab(principal, target, 'external', url, signal)
+                this.completeBrowserTabCommand(principal, target, grant, 'Approved URL opened in the default browser.')
+                return { completed: true, targetId: target.targetId, tabId: target.tabId, url }
+            }
+            case 'set_tab_layout': {
+                if (principal.type !== 'root') throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents cannot change the visible Browser layout.')
+                if (!this.browserSurface) throw new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', 'The in-app Browser workspace is unavailable.')
+                const primary = this.requireBrowserTarget(operation.primaryTargetId, principal)
+                const secondary = operation.secondaryTargetId ? this.requireBrowserTarget(operation.secondaryTargetId, principal) : null
+                if (secondary?.targetId === primary.targetId) throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'A Browser split requires two different targets.')
+                await this.browserSurface.revealTabs(principal, primary, secondary, signal)
+                return {
+                    layout: secondary ? 'split' : 'single',
+                    primaryTargetId: primary.targetId,
+                    secondaryTargetId: secondary?.targetId,
+                    workspace: this.workspace
+                }
             }
             case 'list_windows':
                 if (principal.type !== 'root') throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents cannot enumerate or select Windows targets.')
@@ -466,6 +690,10 @@ export class AgentControlBroker extends EventEmitter {
                 const requestedTarget = this.targets.get(operation.targetId).target
                 if (principal.type === 'agent' && requestedTarget.kind !== 'zyra-browser') {
                     throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents may request only an integrated Zyra Browser tab. Chrome and Windows require root delegation.')
+                }
+                if (requestedTarget.kind === 'zyra-browser') this.assertBrowserTargetOwnedByPrincipal(principal, requestedTarget)
+                if (principal.type === 'root' && requestedTarget.kind === 'zyra-browser' && this.browserSurface) {
+                    await this.browserSurface.revealTabs(principal, requestedTarget, null, signal)
                 }
                 const request = this.requestGrant({
                     principal,
@@ -525,6 +753,57 @@ export class AgentControlBroker extends EventEmitter {
 
     clearAudit(): void {
         this.audit.clear()
+        this.changed()
+    }
+
+    private requireBrowserTarget(
+        targetIdValue: unknown,
+        principal?: ControlPrincipal
+    ): Extract<ControlTarget, { kind: 'zyra-browser' }> {
+        const target = this.targets.get(assertControlIdentifier(targetIdValue, 'targetId')).target
+        if (target.kind !== 'zyra-browser') {
+            throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The selected target is not an integrated Zyra Browser tab.')
+        }
+        if (principal) this.assertBrowserTargetOwnedByPrincipal(principal, target)
+        return target
+    }
+
+    private assertBrowserTargetOwnedByPrincipal(
+        principal: ControlPrincipal,
+        target: Extract<ControlTarget, { kind: 'zyra-browser' }>
+    ): void {
+        const ownerThreadId = principal.type === 'root' ? principal.threadId : principal.parentThreadId
+        if (target.ownerThreadId !== ownerThreadId) {
+            throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The Browser tab belongs to another chat thread.')
+        }
+    }
+
+    private requireBrowserGrant(
+        principal: ControlPrincipal,
+        target: Extract<ControlTarget, { kind: 'zyra-browser' }>,
+        grantIdValue: unknown,
+        capability: ControlCapability
+    ): ControlGrant {
+        const grant = this.grants.requireActive(assertControlIdentifier(grantIdValue, 'grantId'), principal)
+        if (grant.targetId !== target.targetId) throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The grant is bound to another Browser tab.')
+        if (!grant.capabilities.includes(capability)) {
+            throw new AgentControlError('CONTROL_CAPABILITY_DENIED', `This Browser tab command requires an explicit ${capability} grant.`)
+        }
+        assertGrantSupportsTarget(grant, target)
+        return grant
+    }
+
+    private completeBrowserTabCommand(
+        principal: ControlPrincipal,
+        target: Extract<ControlTarget, { kind: 'zyra-browser' }>,
+        grant: ControlGrant,
+        message: string
+    ): void {
+        this.grants.consume(grant.grantId)
+        this.audit.append({
+            eventType: 'action', principal, targetId: target.targetId, targetKind: target.kind,
+            grantId: grant.grantId, outcome: 'completed', message, redactions: []
+        })
         this.changed()
     }
 

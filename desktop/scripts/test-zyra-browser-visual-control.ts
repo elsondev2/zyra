@@ -101,7 +101,7 @@ const driver = new FakeControlDriver()
 const broker = new AgentControlBroker({ drivers: [driver] })
 const targetId = broker.targets.createTargetId('zyra-browser')
 broker.registerTarget({
-    target: { kind: 'zyra-browser', targetId, tabId: 'browser:visual', guestIdentity: 'guest:visual', origin: 'http://127.0.0.1' },
+    target: { kind: 'zyra-browser', targetId, tabId: 'browser:visual', ownerThreadId: 'thread:visual', guestIdentity: 'guest:visual', origin: 'http://127.0.0.1' },
     driver,
     trustedIdentity: {}
 })
@@ -150,6 +150,7 @@ const openedTarget = {
     kind: 'zyra-browser' as const,
     targetId: 'zyra-browser:opened',
     tabId: surfaceRequests[0].tabId,
+    ownerThreadId: principal.threadId,
     guestIdentity: 'guest:opened',
     origin: null
 }
@@ -194,10 +195,85 @@ assert.equal(delayedSurfaceHost.completeRegisteredTarget(delayedOpenedTarget), t
 assert.equal((await delayedOpenedPromise).targetId, delayedOpenedTarget.targetId)
 delayedSurfaceHost.dispose()
 
+const managedSurfaceRequests: any[] = []
+const cancelledManagedSurfaceRequests: string[] = []
+const managedTargets = new Map<string, any>()
+let managedSurfaceSequence = 0
+const managedSurfaceHost = new BrowserSurfaceHost({
+    send: (request) => managedSurfaceRequests.push(request),
+    cancel: (requestId) => cancelledManagedSurfaceRequests.push(requestId),
+    resolveTarget: (managedTargetId) => {
+        const target = managedTargets.get(managedTargetId)
+        if (!target) throw new Error('missing managed target')
+        return target
+    },
+    makeId: () => `managed-${managedSurfaceSequence++}`,
+    timeoutMs: 2_000
+})
+const managedPrimary = { ...openedTarget, targetId: 'zyra-browser:managed-primary', tabId: 'browser:managed-primary' }
+const managedSecondary = { ...openedTarget, targetId: 'zyra-browser:managed-secondary', tabId: 'browser:managed-secondary' }
+managedTargets.set(managedPrimary.targetId, managedPrimary)
+managedTargets.set(managedSecondary.targetId, managedSecondary)
+const completeManagedRequest = async (promise: Promise<any>, request: any, target: any) => {
+    assert.equal(managedSurfaceHost.acknowledge(request), true)
+    if (['close', 'refresh', 'external'].includes(request.mode)) assert.equal(managedSurfaceHost.claim(request), true)
+    assert.equal(managedSurfaceHost.complete({ ...request, success: true, targetId: target.targetId }), true)
+    assert.equal((await promise).targetId, target.targetId)
+}
+const revealExistingPromise = managedSurfaceHost.revealTabs(principal, managedPrimary, null)
+assert.equal(managedSurfaceRequests.at(-1)?.mode, 'reveal')
+await completeManagedRequest(revealExistingPromise, managedSurfaceRequests.at(-1), managedPrimary)
+const splitExistingPromise = managedSurfaceHost.revealTabs(principal, managedPrimary, managedSecondary)
+assert.equal(managedSurfaceRequests.at(-1)?.secondaryTabId, managedSecondary.tabId)
+await completeManagedRequest(splitExistingPromise, managedSurfaceRequests.at(-1), managedPrimary)
+const closeExistingPromise = managedSurfaceHost.closeTab(principal, managedPrimary)
+assert.equal(managedSurfaceRequests.at(-1)?.mode, 'close')
+await completeManagedRequest(closeExistingPromise, managedSurfaceRequests.at(-1), managedPrimary)
+const externalExistingPromise = managedSurfaceHost.commandTab(principal, managedPrimary, 'external', 'https://example.com/')
+assert.equal(managedSurfaceRequests.at(-1)?.url, 'https://example.com/')
+await completeManagedRequest(externalExistingPromise, managedSurfaceRequests.at(-1), managedPrimary)
+const cancelledRefreshPromise = managedSurfaceHost.commandTab(principal, managedPrimary, 'refresh', null)
+const cancelledRefreshRequest = managedSurfaceRequests.at(-1)
+assert.equal(managedSurfaceHost.acknowledge(cancelledRefreshRequest), true)
+managedSurfaceHost.cancelPending('turn cancelled before claim')
+await assert.rejects(cancelledRefreshPromise, (error: any) => error.code === 'CONTROL_CANCELLED')
+assert.deepEqual(cancelledManagedSurfaceRequests, [cancelledRefreshRequest.requestId], 'unclaimed Browser commands notify the renderer when cancellation wins')
+const mismatchedRevealPromise = managedSurfaceHost.revealTabs(principal, managedPrimary, null)
+const mismatchedRevealRequest = managedSurfaceRequests.at(-1)
+assert.equal(managedSurfaceHost.acknowledge(mismatchedRevealRequest), true)
+assert.equal(managedSurfaceHost.complete({ ...mismatchedRevealRequest, success: true, targetId: managedSecondary.targetId }), true)
+await assert.rejects(mismatchedRevealPromise, (error: any) => error.code === 'CONTROL_SCOPE_DENIED', 'surface completion cannot substitute another trusted target ID')
+const concurrentRevealA = managedSurfaceHost.revealTabs(principal, managedPrimary, null)
+const concurrentRequestA = managedSurfaceRequests.at(-1)
+const concurrentRevealB = managedSurfaceHost.revealTabs(principal, managedPrimary, null)
+const concurrentRequestB = managedSurfaceRequests.at(-1)
+assert.equal(managedSurfaceHost.acknowledge(concurrentRequestA), true)
+assert.equal(managedSurfaceHost.acknowledge(concurrentRequestB), true)
+assert.equal(managedSurfaceHost.complete({ ...concurrentRequestB, success: true, targetId: managedPrimary.targetId }), true)
+assert.equal((await concurrentRevealB).targetId, managedPrimary.targetId, 'same-tab completion resolves the exact request ID')
+assert.equal(managedSurfaceHost.complete({ ...concurrentRequestA, success: true, targetId: managedPrimary.targetId }), true)
+assert.equal((await concurrentRevealA).targetId, managedPrimary.targetId)
+managedSurfaceHost.dispose()
+
+const revealedBrowserLayouts: Array<{ primary: string; secondary: string | null }> = []
+const closedBrowserTabs: string[] = []
+const browserTabCommands: Array<{ targetId: string; mode: string; url: string | null }> = []
 broker.setBrowserSurfaceController({
     openTab: async (_requestPrincipal, reveal) => {
         assert.equal(reveal, true)
         return broker.targets.get(targetId).target as Extract<ControlTarget, { kind: 'zyra-browser' }>
+    },
+    revealTabs: async (_requestPrincipal, primary, secondary) => {
+        revealedBrowserLayouts.push({ primary: primary.targetId, secondary: secondary?.targetId || null })
+        return primary
+    },
+    closeTab: async (_requestPrincipal, target) => {
+        closedBrowserTabs.push(target.targetId)
+        return target
+    },
+    commandTab: async (_requestPrincipal, target, mode, url) => {
+        browserTabCommands.push({ targetId: target.targetId, mode, url })
+        return target
     },
     cancelPending: () => undefined
 })
@@ -207,6 +283,7 @@ assert.match(String(openedByTool.content[0]?.text), /no navigation or input auth
 const modelGrantPromise = tool.execute('visual-request-grant', {
     operation: 'request_grant', targetId, capabilities: ['observe.structure'], maxActions: 2
 })
+await Promise.resolve()
 const modelPending = broker.grants.listPending().find((entry) => entry.principal.type === 'root')
 assert(modelPending, 'the model tool call must wait while the approval is visible')
 const modelGrant = broker.approvePendingGrant({
@@ -268,14 +345,30 @@ races.set({ ...base, observationId: 'older', revision: older })
 assert.equal(races.currentRevision(base.targetId), newer)
 assert.throws(() => races.requireRevision(base.targetId, older), (error: any) => error.code === 'CONTROL_STALE_OBSERVATION')
 
+const otherThreadTargetId = broker.targets.createTargetId('zyra-browser')
+broker.registerTarget({
+    target: {
+        kind: 'zyra-browser', targetId: otherThreadTargetId, tabId: 'browser:other-thread', ownerThreadId: 'thread:other',
+        guestIdentity: 'guest:other-thread', origin: 'https://other.example'
+    },
+    driver,
+    trustedIdentity: {}
+})
 const childPrincipal = { type: 'agent' as const, fleetId: 'fleet:visual', agentRunId: 'agent:visual', parentThreadId: 'thread:visual' }
 await assert.rejects(
     broker.handleToolOperation(childPrincipal, { operation: 'open_tab', reveal: true }),
     (error: any) => error.code === 'CONTROL_CAPABILITY_DENIED'
 )
 const discovered = await broker.handleToolOperation(childPrincipal, { operation: 'list_targets', targetKind: 'zyra-browser' })
-assert.equal((discovered.targets as unknown[]).length, 1)
+assert.equal((discovered.targets as unknown[]).length, 1, 'children discover only Browser targets owned by their parent thread')
 assert.equal((discovered.grants as unknown[]).length, 0)
+await assert.rejects(
+    broker.handleToolOperation(childPrincipal, {
+        operation: 'request_grant', targetId: otherThreadTargetId, capabilities: ['observe.structure'], maxActions: 2
+    }),
+    (error: any) => error.code === 'CONTROL_SCOPE_DENIED',
+    'children cannot request authority over another thread\'s Browser tab'
+)
 const childGrantPromise = broker.handleToolOperation(childPrincipal, {
     operation: 'request_grant', targetId, capabilities: ['observe.structure', 'observe.screenshot', 'pointer.click'], maxActions: 8
 }) as Promise<any>
@@ -302,6 +395,97 @@ await assert.rejects(cancelledGrantPromise, (error: any) => error.code === 'CONT
 assert.equal(broker.grants.listForPrincipal(childPrincipal).some((entry) => entry.state === 'active'), false)
 assert.equal(broker.grants.listPending().some((entry) => entry.principal.type === 'agent' && entry.principal.agentRunId === childPrincipal.agentRunId), false)
 
+const secondaryTargetId = broker.targets.createTargetId('zyra-browser')
+broker.registerTarget({
+    target: {
+        kind: 'zyra-browser', targetId: secondaryTargetId, tabId: 'browser:secondary', ownerThreadId: principal.threadId, guestIdentity: 'guest:secondary',
+        origin: 'https://secondary.example', url: 'https://secondary.example/', title: 'Secondary'
+    },
+    driver,
+    trustedIdentity: {}
+})
+broker.updateWorkspaceState({
+    version: 1,
+    threadId: principal.threadId,
+    inspector: { open: true, activeWorkspace: 'browser', openWorkspaces: ['review', 'browser'] },
+    browser: {
+        open: true,
+        activeTabId: 'browser:visual',
+        splitTabId: 'browser:secondary',
+        visibleTabIds: ['renderer-values-are-derived'],
+        tabs: [
+            { tabId: 'browser:visual', targetId, url: 'http://127.0.0.1/', title: 'Primary', origin: null, status: 'ready', position: null, visible: false },
+            { tabId: 'browser:secondary', targetId: secondaryTargetId, url: 'https://secondary.example/', title: 'Secondary', origin: null, status: 'ready', position: null, visible: false },
+            { tabId: 'browser:forged', targetId: secondaryTargetId, url: 'https://forged.example/', title: 'Forged', origin: null, status: 'ready', position: null, visible: false }
+        ]
+    },
+    updatedAt: new Date().toISOString()
+})
+const workspaceListing = await broker.handleToolOperation(principal, { operation: 'list_targets', targetKind: 'zyra-browser' }) as any
+assert.deepEqual(workspaceListing.workspace.browser.visibleTabIds, ['browser:visual', 'browser:secondary'], 'the broker derives visible Browser tabs from trusted Inspector layout state')
+assert.equal(workspaceListing.workspace.browser.tabs[1].position, 'secondary')
+assert.equal(workspaceListing.workspace.browser.tabs[2].targetId, null, 'renderer layout metadata cannot rebind a trusted target to a different tab identity')
+assert.equal(workspaceListing.workspace.browser.tabs[2].trusted, false, 'unbound renderer tab metadata is explicitly marked untrusted')
+const modelWorkspaceListing = await tool.execute('visual-list-workspace', { operation: 'list_targets' })
+assert.match(String(modelWorkspaceListing.content[0]?.text), /visible workspace state/)
+assert.match(String(modelWorkspaceListing.content[0]?.text), /browser:secondary/, 'the model-facing tool receives open sites and visible pane identity')
+await broker.handleToolOperation(principal, { operation: 'reveal_tab', targetId })
+await broker.handleToolOperation(principal, { operation: 'set_tab_layout', primaryTargetId: targetId, secondaryTargetId })
+assert.deepEqual(revealedBrowserLayouts.slice(-2), [
+    { primary: targetId, secondary: null },
+    { primary: targetId, secondary: secondaryTargetId }
+])
+
+await assert.rejects(
+    broker.handleToolOperation(principal, { operation: 'close_tab', targetId, grantId: grant.grantId }),
+    (error: any) => error.code === 'CONTROL_CAPABILITY_DENIED',
+    'closing an existing Browser tab requires explicit tab.manage authority'
+)
+const managedPending = broker.requestGrant({
+    principal,
+    targetId,
+    capabilities: ['navigate', 'tab.manage'],
+    durationMs: 60_000,
+    maxActions: 10,
+    allowedOrigins: ['http://127.0.0.1']
+})
+const managedGrant = broker.approvePendingGrant({
+    pendingRequestId: managedPending.requestId,
+    targetId,
+    capabilities: managedPending.capabilities,
+    durationMs: 60_000,
+    maxActions: 10,
+    allowedOrigins: managedPending.allowedOrigins
+})
+const secondaryPending = broker.requestGrant({ principal, targetId: secondaryTargetId, capabilities: ['observe.structure'], maxActions: 2 })
+const secondaryGrant = broker.approvePendingGrant({
+    pendingRequestId: secondaryPending.requestId,
+    targetId: secondaryTargetId,
+    capabilities: secondaryPending.capabilities,
+    durationMs: 30_000,
+    maxActions: 2,
+    allowedOrigins: secondaryPending.allowedOrigins
+})
+const multiGrantListing = await broker.handleToolOperation(principal, { operation: 'list_targets', targetKind: 'zyra-browser' }) as any
+assert(multiGrantListing.grants.some((entry: { grantId: string }) => entry.grantId === managedGrant.grantId))
+assert(multiGrantListing.grants.some((entry: { grantId: string }) => entry.grantId === secondaryGrant.grantId), 'one principal may hold independent bounded grants for multiple Browser tabs')
+
+await broker.handleToolOperation(principal, { operation: 'refresh_tab', targetId, grantId: managedGrant.grantId })
+await assert.rejects(
+    broker.handleToolOperation(principal, {
+        operation: 'open_external', targetId, grantId: managedGrant.grantId, url: 'https://outside.example/'
+    }),
+    (error: any) => error.code === 'CONTROL_SCOPE_DENIED'
+)
+await broker.handleToolOperation(principal, {
+    operation: 'open_external', targetId, grantId: managedGrant.grantId, url: 'http://127.0.0.1/external'
+})
+await broker.handleToolOperation(principal, { operation: 'close_tab', targetId, grantId: managedGrant.grantId })
+assert.deepEqual(browserTabCommands.map((entry) => entry.mode), ['refresh', 'external'])
+assert.equal(browserTabCommands.at(-1)?.url, 'http://127.0.0.1/external')
+assert.deepEqual(closedBrowserTabs, [targetId])
+assert.equal(broker.grants.list().find((entry) => entry.grantId === managedGrant.grantId)?.state, 'revoked', 'closing a Browser tab immediately ends its tab-management authority')
+
 await broker.emergencyStop()
 assert.equal(broker.state().cursors.length, 0)
 
@@ -318,11 +502,19 @@ const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-pi-runtim
 assert(pageSource.includes('onBrowserSurfaceRequest'))
 assert(pageSource.includes('request.threadId !== diffSource.threadId'))
 assert(pageSource.includes("if (request.reveal) setRightPanelMode('review')"))
+assert(pageSource.includes('onBrowserSurfaceCancel'))
 assert(panelSource.includes('processedBrowserSurfaceRequestRef'))
 assert(panelSource.includes('surfaceRequest={browserSurfaceRequest}'))
 assert(panelSource.includes("'pointer-events-none invisible absolute inset-x-0 bottom-0 top-[76px] flex'"))
-assert(workspaceSource.includes('addAssistantBrowserTab(current, surfaceRequest.tabId)'))
+assert(workspaceSource.includes('for (const tabId of requestedTabIds) next = addAssistantBrowserTab(next, tabId)'))
+assert(workspaceSource.includes('setAssistantBrowserLayout(next, surfaceRequest.tabId, surfaceRequest.secondaryTabId || null)'))
+assert(workspaceSource.includes("mode === 'close' || mode === 'refresh' || mode === 'external'"))
 assert(workspaceSource.includes('completeBrowserSurfaceRequest({'))
+assert(workspaceSource.includes('claimBrowserSurfaceRequest({'))
+assert(workspaceSource.includes('knownTargetId !== surfaceRequest.targetId'))
+assert(workspaceSource.includes('knownSecondaryTargetId !== surfaceRequest.secondaryTargetId'))
+assert(panelSource.includes('updateWorkspaceState({'))
+assert(panelSource.includes('onWorkspaceStateChange={handleBrowserWorkspaceStateChange}'))
 assert(workspaceSource.includes('Allow agent?'))
 assert(workspaceSource.includes('rejectGrant(activePendingGrant.requestId)'))
 assert(workspaceSource.includes('data-browser-control-owned'))
@@ -334,11 +526,24 @@ assert(browserDriverSource.includes("await this.command(guest, 'Input.insertText
 assert(mainSource.includes('webPreferences.backgroundThrottling = false'))
 assert(runtimeSource.includes("'Root Browser control ended with its turn.'"))
 assert(protocolSource.includes("operation: 'open_tab'"))
+assert(protocolSource.includes("operation: 'reveal_tab'"))
+assert(protocolSource.includes("operation: 'close_tab'"))
+assert(protocolSource.includes("operation: 'set_tab_layout'"))
+assert(protocolSource.includes("operation: 'open_external'"))
 assert(protocolSource.includes('acknowledgeBrowserSurfaceRequest'))
+assert(protocolSource.includes('claimBrowserSurfaceRequest'))
+assert(protocolSource.includes('browserSurfaceCancelled'))
 assert(preloadSource.includes('browserSurfaceRequested'))
 assert(preloadSource.includes('acknowledgeBrowserSurfaceRequest'))
+assert(preloadSource.includes('claimBrowserSurfaceRequest'))
+assert(preloadSource.includes('onBrowserSurfaceCancel'))
+assert(preloadSource.includes('updateWorkspaceState'))
 assert(handlerSource.includes('assertTrustedRenderer(event, mainWindow)'))
 assert(handlerSource.includes('browserSurface.completeRegisteredTarget(target)'))
+assert(handlerSource.includes('browserSurface.claim(input)'))
 assert(hostSource.includes("tabId: `browser:agent:${id}`"))
-assert(hostSource.includes("phase: 'sent' | 'accepted'"))
+assert(hostSource.includes('revealTabs('))
+assert(hostSource.includes('closeTab('))
+assert(hostSource.includes('commandTab('))
+assert(hostSource.includes("phase: 'sent' | 'accepted' | 'claimed'"))
 console.log('Zyra visual Browser control contract passed.')

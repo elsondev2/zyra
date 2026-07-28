@@ -18,13 +18,15 @@ import {
     parseBrowserLinkPreviewHtml
 } from '../src/main/ipc/handlers/browser-link-preview'
 import {
+    activateAssistantBrowserTab,
     addAssistantBrowserTab,
     ASSISTANT_BROWSER_TAB_LIMIT,
     closeAssistantBrowserTab,
     createAssistantBrowserWorkspaceState,
     normalizeAssistantBrowserFaviconUrl,
     normalizeAssistantBrowserNavigation,
-    normalizeAssistantBrowserWorkspaceState
+    normalizeAssistantBrowserWorkspaceState,
+    setAssistantBrowserLayout
 } from '../src/renderer/src/pages/assistant/assistant-browser-workspace-state'
 
 let terminalWorkspaceState = addAssistantTerminalSession(
@@ -72,18 +74,29 @@ const activeBrowserTabId = browserWorkspaceState.activeTabId
 browserWorkspaceState = closeAssistantBrowserTab(browserWorkspaceState, activeBrowserTabId, 'browser:replacement')
 assert.equal(browserWorkspaceState.tabs.some((tab) => tab.id === activeBrowserTabId), false, 'closed browser tabs release their persisted metadata')
 assert.equal(browserWorkspaceState.tabs.some((tab) => tab.id === browserWorkspaceState.activeTabId), true, 'closing the active browser tab selects a real neighbor')
+let splitBrowserState = createAssistantBrowserWorkspaceState('browser:primary')
+splitBrowserState = addAssistantBrowserTab(splitBrowserState, 'browser:secondary')
+splitBrowserState = setAssistantBrowserLayout(splitBrowserState, 'browser:primary', 'browser:secondary')
+assert.deepEqual([splitBrowserState.activeTabId, splitBrowserState.splitTabId], ['browser:primary', 'browser:secondary'], 'Browser split layout retains explicit primary and secondary tabs')
+splitBrowserState = activateAssistantBrowserTab(splitBrowserState, 'browser:secondary')
+assert.deepEqual([splitBrowserState.activeTabId, splitBrowserState.splitTabId], ['browser:secondary', 'browser:primary'], 'selecting the secondary pane swaps focus without destroying the split')
+splitBrowserState = closeAssistantBrowserTab(splitBrowserState, 'browser:secondary', 'browser:replacement')
+assert.equal(splitBrowserState.activeTabId, 'browser:primary', 'closing the primary split pane promotes the retained secondary tab')
+assert.equal(splitBrowserState.splitTabId, null, 'closing either visible split pane safely collapses the layout')
 const sanitizedBrowserState = normalizeAssistantBrowserWorkspaceState({
     activeTabId: 'unsafe',
     tabs: [
         { id: 'safe', url: 'http://localhost:3000/', title: 'Local', faviconUrl: 'http://localhost:3000/favicon.ico' },
         { id: 'unsafe', url: 'javascript:alert(1)', title: 'Unsafe', faviconUrl: 'javascript:alert(2)' }
-    ]
+    ],
+    splitTabId: 'unsafe'
 })
 assert.equal(sanitizedBrowserState.tabs.find((tab) => tab.id === 'unsafe')?.url, '', 'unsafe persisted URLs reopen as blank tabs')
 assert.equal(sanitizedBrowserState.tabs.every((tab) => tab.status === 'idle'), true, 'restored tabs wait for their live webviews to report status')
 assert.equal(sanitizedBrowserState.tabs.every((tab) => tab.audible === false), true, 'stale audio indicators never survive a webview remount')
 assert.equal(sanitizedBrowserState.tabs.find((tab) => tab.id === 'safe')?.faviconUrl, 'http://localhost:3000/favicon.ico', 'safe page favicons survive workspace restoration')
 assert.equal(sanitizedBrowserState.tabs.find((tab) => tab.id === 'unsafe')?.faviconUrl, null, 'unsafe persisted favicon sources are discarded')
+assert.equal(sanitizedBrowserState.splitTabId, null, 'a persisted split cannot point at the active or missing Browser tab')
 assert.equal(isPublicBrowserLinkPreviewAddress('127.0.0.1'), false, 'website metadata cannot reach IPv4 loopback services')
 assert.equal(isPublicBrowserLinkPreviewAddress('192.168.1.4'), false, 'website metadata cannot reach private LAN services')
 assert.equal(isPublicBrowserLinkPreviewAddress('::1'), false, 'website metadata cannot reach IPv6 loopback services')
@@ -608,7 +621,10 @@ assert.equal(browserPageIconSource.includes('onError={() => setFailed(true)}'), 
 assert.equal(browserWebviewSource.includes("addEventListener('media-started-playing'"), true, 'Chromium media starts trigger an audio-state check')
 assert.equal(browserWebviewSource.includes("addEventListener('media-paused'"), true, 'Chromium media pauses clear or reconcile the audio mark')
 assert.equal(browserWebviewSource.includes('webview.isCurrentlyAudible()'), true, 'muted video does not create a false site-audio mark')
-assert.equal(browserWebviewSource.includes("visibility: active ? 'visible' : 'hidden'"), true, 'inactive browser tabs retain their live webview history')
+assert.equal(browserWebviewSource.includes("visibility: visible ? 'visible' : 'hidden'"), true, 'inactive browser tabs retain their live webview history')
+assert.equal(browserWebviewSource.includes("placement === 'secondary' ? '50%' : 0"), true, 'retained Chromium guests can occupy the secondary Browser pane without remounting')
+assert.equal(browserWorkspaceSource.includes('setAssistantBrowserLayout'), true, 'Browser side-by-side layout is an explicit persisted state transition')
+assert.equal(browserWorkspaceSource.includes('Show two Browser tabs side by side'), true, 'users can enter the two-pane Browser layout directly')
 assert.equal(browserWorkspaceSource.includes('consumedNavigationRequestsRef'), true, 'resource links enter Browser through a bounded one-shot request')
 assert.equal(panelSource.includes("kind: 'resources'"), true, 'Resources participates in the shared closable workspace-tab model')
 assert.equal(panelSource.includes("import('./AssistantResourcesWorkspace')"), true, 'the Resources index and UI load only after workspace selection')

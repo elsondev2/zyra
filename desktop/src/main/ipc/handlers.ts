@@ -200,6 +200,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     ipcMain.handle(AGENT_CONTROL_IPC.bindBrowserTab, controlHandlers.bindBrowserTab)
     ipcMain.handle(AGENT_CONTROL_IPC.acknowledgeBrowserSurfaceRequest, controlHandlers.acknowledgeBrowserSurfaceRequest)
     ipcMain.handle(AGENT_CONTROL_IPC.completeBrowserSurfaceRequest, controlHandlers.completeBrowserSurfaceRequest)
+    ipcMain.handle(AGENT_CONTROL_IPC.claimBrowserSurfaceRequest, controlHandlers.claimBrowserSurfaceRequest)
+    ipcMain.handle(AGENT_CONTROL_IPC.updateWorkspaceState, controlHandlers.updateWorkspaceState)
     ipcMain.handle(AGENT_CONTROL_IPC.approveGrant, controlHandlers.approveGrant)
     ipcMain.handle(AGENT_CONTROL_IPC.rejectGrant, controlHandlers.rejectGrant)
     ipcMain.handle(AGENT_CONTROL_IPC.revokeGrant, controlHandlers.revokeGrant)

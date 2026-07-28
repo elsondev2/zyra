@@ -13,7 +13,7 @@ const driver = new FakeControlDriver('zyra-browser')
 const broker = new AgentControlBroker({ drivers: [driver] })
 const targetId = broker.targets.createTargetId('zyra-browser')
 broker.registerTarget({
-    target: { kind: 'zyra-browser', targetId, tabId: 'browser:integration', guestIdentity: 'guest:integration', origin: 'http://127.0.0.1' },
+    target: { kind: 'zyra-browser', targetId, tabId: 'browser:integration', ownerThreadId: rootPrincipal.threadId, guestIdentity: 'guest:integration', origin: 'http://127.0.0.1' },
     driver,
     trustedIdentity: {}
 })
@@ -23,6 +23,9 @@ broker.setBrowserSurfaceController({
         assert.equal(reveal, false)
         return broker.targets.get(targetId).target as Extract<ControlTarget, { kind: 'zyra-browser' }>
     },
+    revealTabs: async (_principal, primary) => primary,
+    closeTab: async (_principal, target) => target,
+    commandTab: async (_principal, target) => target,
     cancelPending: () => undefined
 })
 

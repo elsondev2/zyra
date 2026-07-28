@@ -40,9 +40,9 @@ export function getAgentControlBroker(): AgentControlBroker {
     return broker
 }
 
-export function bindTrustedBrowserTarget(ownerWebContentsId: number, guestWebContentsId: number, tabId: string) {
+export function bindTrustedBrowserTarget(ownerWebContentsId: number, guestWebContentsId: number, tabId: string, ownerThreadId: string) {
     const controlBroker = getAgentControlBroker()
-    const guestEntry = trustedBrowserGuests.bind(ownerWebContentsId, guestWebContentsId, tabId)
+    const guestEntry = trustedBrowserGuests.bind(ownerWebContentsId, guestWebContentsId, tabId, ownerThreadId)
     const existingTargetId = browserTargetByGuestIdentity.get(guestEntry.guestIdentity)
     if (existingTargetId) return controlBroker.targets.get(existingTargetId).target
     if (!browserDriver) throw new Error('Integrated Browser control driver is unavailable.')
@@ -51,7 +51,7 @@ export function bindTrustedBrowserTarget(ownerWebContentsId: number, guestWebCon
     const origin = /^https?:/.test(url) ? new URL(url).origin : null
     const target = controlBroker.registerTarget({
         target: {
-            kind: 'zyra-browser', targetId, tabId, guestIdentity: guestEntry.guestIdentity, origin,
+            kind: 'zyra-browser', targetId, tabId, ownerThreadId, guestIdentity: guestEntry.guestIdentity, origin,
             url: /^https?:/.test(url) ? url : null,
             title: guestEntry.guest.getTitle().slice(0, 512) || null
         },
