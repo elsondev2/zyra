@@ -3,7 +3,10 @@ import {
     type ControlAction,
     type ControlActionRequest,
     type ControlCapability,
-    type ControlPrincipal
+    type ControlObservationMode,
+    type ControlPlanRequest,
+    type ControlPrincipal,
+    type ControlStageIntent
 } from './contracts'
 import { CONTROL_BOUNDS, isSafeControlUrl } from './policy'
 
@@ -126,6 +129,21 @@ export function assertControlAction(value: unknown): ControlAction {
                 durationMs: action.durationMs === undefined ? undefined : finiteNumber(action.durationMs, 'durationMs', 0, 5_000),
                 button: pointerButton(action.button)
             }
+        case 'stroke': {
+            if (!Array.isArray(action.points) || action.points.length < 2 || action.points.length > 512) {
+                fail('Stroke points must contain 2 to 512 bounded points.')
+            }
+            return {
+                type: 'stroke',
+                points: action.points.map((point, index) => {
+                    if (!point || typeof point !== 'object' || Array.isArray(point)) fail(`Stroke point ${index + 1} is invalid.`)
+                    const value = point as Record<string, unknown>
+                    return { x: pointerCoordinate(value.x, `points[${index}].x`), y: pointerCoordinate(value.y, `points[${index}].y`) }
+                }),
+                durationMs: action.durationMs === undefined ? undefined : finiteNumber(action.durationMs, 'durationMs', 0, 12_000),
+                button: pointerButton(action.button)
+            }
+        }
         case 'type': {
             const hasCoordinates = action.x !== undefined || action.y !== undefined
             if (hasCoordinates && (action.x === undefined || action.y === undefined)) fail('Type coordinates require both x and y.')
@@ -200,6 +218,61 @@ export function assertControlActionRequest(value: unknown): ControlActionRequest
         targetId: assertControlIdentifier(request.targetId, 'targetId'),
         observationRevision: finiteNumber(request.observationRevision, 'observationRevision', 1, Number.MAX_SAFE_INTEGER),
         action: assertControlAction(request.action)
+    }
+}
+
+function assertObservationMode(value: unknown): ControlObservationMode {
+    if (value !== 'visual' && value !== 'structure' && value !== 'both') fail('Observation mode is invalid.')
+    return value
+}
+
+function assertStageIntent(value: unknown): ControlStageIntent {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) fail('Stage intent is invalid.')
+    const intent = value as Record<string, unknown>
+    if (!['pointer', 'keyboard', 'scroll', 'mixed'].includes(String(intent.expectedActivity))) fail('Stage activity is invalid.')
+    let expectedRegion: ControlStageIntent['expectedRegion']
+    if (intent.expectedRegion !== undefined) {
+        if (!intent.expectedRegion || typeof intent.expectedRegion !== 'object' || Array.isArray(intent.expectedRegion)) fail('Stage region is invalid.')
+        const region = intent.expectedRegion as Record<string, unknown>
+        expectedRegion = {
+            x: pointerCoordinate(region.x, 'stage.expectedRegion.x'),
+            y: pointerCoordinate(region.y, 'stage.expectedRegion.y'),
+            width: finiteNumber(region.width, 'stage.expectedRegion.width', 1, 100_000),
+            height: finiteNumber(region.height, 'stage.expectedRegion.height', 1, 100_000)
+        }
+    }
+    return {
+        summary: boundedString(intent.summary, 'stage.summary', 512),
+        expectedActivity: intent.expectedActivity as ControlStageIntent['expectedActivity'],
+        ...(expectedRegion ? { expectedRegion } : {})
+    }
+}
+
+export function assertControlPlanRequest(value: unknown): ControlPlanRequest {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) fail('Control plan is invalid.')
+    const request = value as Record<string, unknown>
+    if (request.version !== 1) fail('Unsupported control protocol version.')
+    if (!Array.isArray(request.steps) || request.steps.length < 1 || request.steps.length > 64) fail('A Browser stage requires 1 to 64 bounded steps.')
+    const steps = request.steps.map(assertControlAction)
+    const navigationIndex = steps.findIndex((action) => action.type === 'navigate')
+    if (navigationIndex >= 0 && navigationIndex !== steps.length - 1) fail('Navigation must be the final step in a Browser stage.')
+    const estimatedDuration = steps.reduce((total, action) => total + (
+        action.type === 'wait' && action.condition.type === 'delay' ? action.condition.durationMs
+            : action.type === 'stroke' ? action.durationMs || 420
+                : 'durationMs' in action && typeof action.durationMs === 'number' ? action.durationMs
+                    : 250
+    ), 0)
+    if (estimatedDuration > 12_000) fail('A Browser stage must stay within the 12 second execution bound.')
+    return {
+        version: 1,
+        requestId: assertControlIdentifier(request.requestId, 'requestId'),
+        grantId: assertControlIdentifier(request.grantId, 'grantId'),
+        targetId: assertControlIdentifier(request.targetId, 'targetId'),
+        observationRevision: finiteNumber(request.observationRevision, 'observationRevision', 1, Number.MAX_SAFE_INTEGER),
+        stage: assertStageIntent(request.stage),
+        steps,
+        observationMode: assertObservationMode(request.observationMode),
+        includeScreenshot: request.includeScreenshot === true
     }
 }
 

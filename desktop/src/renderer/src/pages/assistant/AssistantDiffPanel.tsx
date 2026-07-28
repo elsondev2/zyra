@@ -166,7 +166,14 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
         const unsubscribe = window.devscope.agentControl.onStateChange((state) => {
             if (!cancelled) setControlState(state)
         })
-        return () => { cancelled = true; unsubscribe() }
+        const unsubscribeCursor = window.devscope.agentControl.onCursorChange((cursor) => {
+            if (cancelled) return
+            setControlState((current) => current ? {
+                ...current,
+                cursors: [...current.cursors.filter((entry) => entry.targetId !== cursor.targetId), cursor]
+            } : current)
+        })
+        return () => { cancelled = true; unsubscribe(); unsubscribeCursor() }
     }, [])
 
     const pendingControlCount = controlState?.pendingGrants.length || 0

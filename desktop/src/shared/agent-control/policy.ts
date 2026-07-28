@@ -22,6 +22,7 @@ export const CONTROL_ACTION_CAPABILITY: Record<ControlAction['type'], ControlCap
     move: 'pointer.move',
     click: 'pointer.click',
     drag: 'pointer.drag',
+    stroke: 'pointer.drag',
     type: 'keyboard.type',
     key: 'keyboard.key',
     scroll: 'scroll',

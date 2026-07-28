@@ -2,6 +2,7 @@ import type {
     ControlAction,
     ControlCursorState,
     ControlObservation,
+    ControlObservationMode,
     ControlTarget,
     ControlWindowCandidate
 } from '../../../shared/agent-control/contracts'
@@ -10,6 +11,7 @@ import type { RegisteredControlTarget } from '../target-registry'
 export type DriverObservationOptions = {
     revision: number
     includeScreenshot: boolean
+    mode?: ControlObservationMode
     signal?: AbortSignal
 }
 
@@ -18,6 +20,7 @@ export type DriverActionContext = {
     previousObservation: ControlObservation
     signal?: AbortSignal
     updateCursor?: (patch: Partial<Omit<ControlCursorState, 'targetId' | 'updatedAt'>>) => void
+    runAgentInput?: <T>(operation: () => Promise<T>) => Promise<T>
 }
 
 export type ControlScreenshotPayload = {

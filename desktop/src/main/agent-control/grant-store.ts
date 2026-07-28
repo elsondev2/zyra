@@ -152,6 +152,17 @@ export class GrantStore {
         return grant
     }
 
+    requireRemaining(grantId: string, principal: ControlPrincipal, count: number): ControlGrant {
+        const grant = this.requireActive(grantId, principal)
+        if (!Number.isSafeInteger(count) || count < 1) throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Reserved action count is invalid.')
+        const delegatedReservation = grant.parentGrantId ? 0 : this.reservedActions(grant.grantId)
+        const remaining = grant.maxActions - grant.actionCount - delegatedReservation
+        if (count > remaining) {
+            throw new AgentControlError('CONTROL_GRANT_INACTIVE', `The control grant has ${Math.max(0, remaining)} actions remaining; this stage requires ${count}.`)
+        }
+        return grant
+    }
+
     consume(grantId: string): ControlGrant {
         const grant = this.requireActive(grantId)
         grant.actionCount += 1

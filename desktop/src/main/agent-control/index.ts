@@ -1,4 +1,4 @@
-import { app, type WebContents } from 'electron'
+import { app, BrowserWindow, screen, type WebContents } from 'electron'
 import { rmSync } from 'fs'
 import { join } from 'path'
 import { AgentControlBroker } from './agent-control-broker'
@@ -7,6 +7,7 @@ import { ChromeExtensionDriver } from './drivers/chrome-extension-driver'
 import { WindowsDesktopDriver } from './drivers/windows-desktop-driver'
 import { ZyraBrowserDriver } from './drivers/zyra-browser-driver'
 import { trustedBrowserGuests } from './trusted-guest-registry'
+import { controlInteractionCategory } from './interaction-arbiter'
 
 let broker: AgentControlBroker | null = null
 let chromeDriver: ChromeExtensionDriver | null = null
@@ -60,21 +61,36 @@ export function bindTrustedBrowserTarget(ownerWebContentsId: number, guestWebCon
         ownerWebContentsId
     })
     browserTargetByGuestIdentity.set(guestEntry.guestIdentity, targetId)
-    installGuestLifecycle(guestEntry.guest, targetId, controlBroker)
+    installGuestLifecycle(guestEntry.guest, targetId, controlBroker, ownerWebContentsId)
     return target
 }
 
-function installGuestLifecycle(guest: WebContents, targetId: string, controlBroker: AgentControlBroker): void {
+function installGuestLifecycle(guest: WebContents, targetId: string, controlBroker: AgentControlBroker, ownerWebContentsId: number): void {
     const navigation = (_event: unknown, url: string, _isInPlace?: boolean, isMainFrame?: boolean) => {
         if (isMainFrame === false || !/^https?:\/\//.test(url)) return
         controlBroker.handleTargetNavigation(targetId, url)
     }
     const title = (_event: unknown, value: string) => controlBroker.handleTargetTitle(targetId, value)
+    const input = (_event: unknown, value: Electron.InputEvent) => {
+        const category = controlInteractionCategory(value.type)
+        if (!category) return
+        const owner = BrowserWindow.getAllWindows().find((window) => window.webContents.id === ownerWebContentsId)
+        const contentBounds = owner?.getContentBounds()
+        const cursor = category === 'pointer-action' || category === 'scroll' || category === 'gesture'
+            ? screen.getCursorScreenPoint()
+            : null
+        const point = cursor && contentBounds
+            ? { x: cursor.x - contentBounds.x, y: cursor.y - contentBounds.y }
+            : undefined
+        controlBroker.recordUserInteraction(targetId, category, value.type, point)
+    }
     guest.on('did-start-navigation', navigation)
     guest.on('page-title-updated', title)
+    guest.on('input-event', input)
     guest.once('destroyed', () => {
         guest.removeListener('did-start-navigation', navigation)
         guest.removeListener('page-title-updated', title)
+        guest.removeListener('input-event', input)
     })
 }
 

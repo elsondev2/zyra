@@ -29,7 +29,7 @@ export class FakeControlDriver implements AgentControlDriver {
             title: this.title,
             origin: this.kind === 'windows-window' ? undefined : new URL(this.url).origin,
             viewport: { width: 800, height: 600, scale: 1 },
-            elements: [...this.elements.values()],
+            elements: options.mode === 'visual' ? [] : [...this.elements.values()],
             screenshotRef: options.includeScreenshot ? 'control-artifact:fixture' : undefined,
             redactions: []
         }
@@ -44,6 +44,11 @@ export class FakeControlDriver implements AgentControlDriver {
             this.title = 'Clicked'
         }
         if (action.type === 'drag') context.updateCursor?.({ x: action.toX, y: action.toY, phase: 'idle', visible: true })
+        if (action.type === 'stroke') {
+            for (const point of action.points) context.updateCursor?.({ ...point, phase: 'dragging', visible: true })
+            const last = action.points[action.points.length - 1]
+            context.updateCursor?.({ x: last.x, y: last.y, phase: 'idle', visible: true })
+        }
         if (action.type === 'type') this.title = `Typed ${action.text.length} characters`
         if (action.type === 'wait') {
             const condition = action.condition

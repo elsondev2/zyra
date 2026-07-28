@@ -62,7 +62,8 @@ export class BrowserSurfaceHost {
         principal: ControlPrincipal,
         primary: BrowserTarget,
         secondary: BrowserTarget | null,
-        signal?: AbortSignal
+        signal?: AbortSignal,
+        explicitLayout = false
     ): Promise<BrowserTarget> {
         if (secondary?.tabId === primary.tabId) {
             return Promise.reject(new AgentControlError('CONTROL_VALIDATION_ERROR', 'A Browser split requires two different tabs.'))
@@ -73,7 +74,7 @@ export class BrowserSurfaceHost {
             version: 1,
             requestId: `browser-reveal:${id}`,
             threadId,
-            mode: secondary ? 'layout' : 'reveal',
+            mode: secondary || explicitLayout ? 'layout' : 'reveal',
             tabId: primary.tabId,
             targetId: primary.targetId,
             ...(secondary ? { secondaryTabId: secondary.tabId, secondaryTargetId: secondary.targetId } : {}),

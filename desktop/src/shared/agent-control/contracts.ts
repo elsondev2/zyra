@@ -109,6 +109,7 @@ export type ControlAction =
     | { type: 'move'; x: number; y: number; durationMs?: number }
     | { type: 'click'; elementRef?: string; x?: number; y?: number; button?: ControlPointerButton; clickCount?: number; sideEffect?: ControlSideEffectClass }
     | { type: 'drag'; fromX: number; fromY: number; toX: number; toY: number; durationMs?: number; button?: ControlPointerButton }
+    | { type: 'stroke'; points: Array<{ x: number; y: number }>; durationMs?: number; button?: ControlPointerButton }
     | { type: 'type'; elementRef?: string; x?: number; y?: number; text: string; replace?: boolean; sideEffect?: ControlSideEffectClass }
     | { type: 'key'; key: string; modifiers?: string[]; sideEffect?: ControlSideEffectClass }
     | { type: 'scroll'; elementRef?: string; x?: number; y?: number; deltaX: number; deltaY: number }
@@ -148,6 +149,58 @@ export interface ControlActionResult {
     outcome: 'completed' | 'blocked' | 'cancelled'
 }
 
+export type ControlObservationMode = 'visual' | 'structure' | 'both'
+
+export type ControlStageIntent = {
+    summary: string
+    expectedActivity: 'pointer' | 'keyboard' | 'scroll' | 'mixed'
+    expectedRegion?: { x: number; y: number; width: number; height: number }
+}
+
+export interface ControlPlanRequest {
+    version: 1
+    requestId: string
+    grantId: string
+    targetId: string
+    observationRevision: number
+    stage: ControlStageIntent
+    steps: ControlAction[]
+    observationMode: ControlObservationMode
+    includeScreenshot: boolean
+}
+
+export type ControlInteractionCategory = 'pointer-move' | 'pointer-action' | 'keyboard' | 'scroll' | 'gesture'
+
+export type ControlInteractionEvent = {
+    sequence: number
+    actor: 'user'
+    targetId: string
+    category: ControlInteractionCategory
+    inputType: string
+    x?: number
+    y?: number
+    stageId?: string
+    occurredAt: string
+}
+
+export interface ControlPlanResult {
+    version: 1
+    requestId: string
+    planId: string
+    targetId: string
+    previousRevision: number
+    completedSteps: number
+    totalSteps: number
+    observation: ControlObservation
+    changed: boolean
+    outcome: 'completed' | 'paused' | 'cancelled'
+    pause?: {
+        reason: string
+        evidence: Array<Pick<ControlInteractionEvent, 'actor' | 'category' | 'targetId' | 'x' | 'y' | 'stageId' | 'occurredAt'>>
+        choices: ['continue-with-changes', 'replan-from-here', 'user-takeover']
+    }
+}
+
 export interface DelegatedControlLeaseRequest {
     parentGrantId: string
     parentPrincipal: ControlPrincipal
@@ -183,13 +236,17 @@ export type ControlAuditEvent = {
     version: 1
     auditId: string
     occurredAt: string
-    eventType: 'grant.requested' | 'grant.issued' | 'grant.revoked' | 'grant.expired' | 'action' | 'observation' | 'emergency-stop' | 'pairing' | 'target'
+    eventType: 'grant.requested' | 'grant.issued' | 'grant.revoked' | 'grant.expired' | 'action' | 'plan' | 'interaction' | 'observation' | 'emergency-stop' | 'pairing' | 'target'
     principal?: ControlPrincipal
     parentPrincipal?: ControlPrincipal
     targetId?: string
     targetKind?: ControlTarget['kind']
     grantId?: string
     actionType?: ControlAction['type']
+    actor?: 'agent' | 'user'
+    interactionCategory?: ControlInteractionCategory
+    stageId?: string
+    coordinates?: { x: number; y: number }
     origin?: string
     executableIdentity?: string
     observationRevision?: number
@@ -243,6 +300,7 @@ export type ControlBrowserWorkspaceTab = {
     status: 'idle' | 'loading' | 'ready' | 'error'
     position: 'primary' | 'secondary' | null
     visible: boolean
+    viewportRect: { x: number; y: number; width: number; height: number } | null
 }
 
 export type ControlWorkspaceSnapshot = {

@@ -77,6 +77,7 @@ import type {
 } from './devscope-project-contracts'
 import type { ZyraMemoryApi } from './memory-contracts'
 import type {
+    ControlCursorState,
     ControlGrant,
     ControlStateSnapshot,
     ControlTarget,
@@ -249,6 +250,7 @@ export interface DevScopeAgentControlApi {
     onBrowserSurfaceRequest: (callback: (request: BrowserSurfaceOpenRequest) => void) => () => void
     onBrowserSurfaceCancel: (callback: (requestId: string) => void) => () => void
     onStateChange: (callback: (state: ControlStateSnapshot) => void) => () => void
+    onCursorChange: (callback: (cursor: ControlCursorState) => void) => () => void
 }
 
 export interface DevScopeAssistantApi {

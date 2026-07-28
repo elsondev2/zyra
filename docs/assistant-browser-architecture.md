@@ -83,7 +83,9 @@ These values are forced during `will-attach-webview`; the renderer-provided attr
 
 Each trusted Browser guest registers as an on-demand `zyra-browser` control target. The Browser remains usable without an agent; authority is created only after a root or child principal requests a bounded grant and the user approves it in Control Center or from the exact tab’s Browser toolbar.
 
-`browser_control.open_tab` lets an agent create a blank sandboxed tab without navigation or input authority. Main sends a nonce-bound request only to the selected thread’s renderer and waits until that exact tab registers as a trusted guest. A root agent may set `reveal: true` to open the Inspector Browser for the user. Child agents may create background tabs but cannot reveal or take over Zyra’s interface. The agent must then request a separately scoped grant before it can navigate, observe, or interact.
+Fresh chats receive only the small `browser_use` loader. `browser_use({ action: "load" })` activates `browser_tabs`, `browser_access`, `browser_observe`, `browser_perform`, and `browser_session` for that Pi session; the legacy `browser_control` definition stays registered only as an inactive compatibility path. Unloading removes the full Browser schemas again while preserving the loader.
+
+`browser_tabs.open` lets an agent create a blank sandboxed tab without navigation or input authority. Main sends a nonce-bound request only to the selected thread’s renderer and waits until that exact tab registers as a trusted guest. A root agent may reveal it in the Inspector. Child agents may create background tabs but cannot reveal or take over Zyra’s interface. The agent must then request a separately scoped grant through `browser_access` before it can navigate, observe, or interact.
 
 Root agents can also operate on retained tabs without creating replacements:
 
@@ -102,29 +104,33 @@ Close, refresh, and external-browser commands use a two-phase surface request. M
 
 A principal may hold independent grants for several Browser targets in the same turn. Each target keeps its own action queue, monotonic observation revisions, viewport, cursor, audit trail, and remaining-action budget, allowing work on different tabs to proceed independently while preserving one owner per individual surface.
 
-The visual loop is:
+The staged visual loop is:
 
-1. capture a bounded rendered JPEG from the guest;
-2. return it to the model as an image content block;
-3. bind it to a monotonic observation revision and viewport;
-4. validate a coordinate or element action against that revision and grant;
-5. dispatch each bounded target-local CDP pointer step without moving the Windows pointer;
-6. publish that exact step as `ControlCursorState` only after CDP acknowledges it;
-7. render the cyan agent cursor directly from those acknowledged coordinates;
-8. capture a fresh higher revision before the next action.
+1. capture a bounded visual, structural, or combined observation;
+2. bind it to one exact target, grant, monotonic revision, viewport, and stage intent;
+3. reserve enough remaining grant budget for 1–64 bounded steps plus the checkpoint;
+4. execute the target-local stage continuously for at most 12 seconds;
+5. dispatch multi-point `stroke` input as one press, acknowledged point sequence, and guaranteed release;
+6. publish cursor truth on a dedicated coalesced channel at up to roughly 30 FPS, with no CSS prediction;
+7. stop at a clean action boundary if purposeful user divergence is detected on that exact target;
+8. capture one higher-revision checkpoint for the model to inspect before the next stage.
 
-Supported in-app actions include move, click, double click, drag, scroll, bounded typing, keys, select, navigation, and waits. DOM and accessibility metadata support safety checks and optional targeting; the rendered frame remains the agent’s primary visual input. Revealing a Browser tab never focuses its guest or steals the user's keyboard. Target-local key input requires an agent-established click or observed-element focus, and that proof is cleared on navigation, grant replacement/revocation, or turn shutdown.
+Visual-only checkpoints avoid rebuilding the accessibility tree after every canvas stroke. Structure and combined modes remain available for semantic controls and safety checks. Supported in-app actions include move, click, double click, drag, multi-point stroke, scroll, bounded typing, keys, select, navigation, and waits. Revealing a Browser tab never focuses its guest or steals the user's keyboard. Target-local key input requires an agent-established click or observed-element focus, and that proof is cleared on navigation, grant replacement/revocation, or turn shutdown.
+
+Native guest `input-event` records feed a rolling per-target interaction arbiter. Agent CDP dispatch is suppressed only for the exact dispatch call. One accidental input, passive pointer motion, or matching collaboration inside the stage’s declared activity/region causes a fresh checkpoint without pausing. Repeated target-local interaction outside that intent pauses at the next safe boundary. Activity in another Browser tab has a different target ID and cannot pause, cancel, or otherwise interrupt the agent’s tab. Audit records may include actor, category, target, bounded coordinates, stage, and time, but never raw typed content.
+
+A paused result explains its target-local evidence and offers **Continue with your changes**, **Replan from here**, and **I’m taking over**. Resume captures a fresh observation, invalidates the old continuation, and requires a new stage; it never blindly replays uncertain remaining input.
 
 Browser targets expose bounded trusted title, URL, origin, and opaque tab identity so an agent can resolve natural directions such as “the Word Grid tab.” They do not expose cookies, storage, request headers, credentials, or page source.
 
-A desktop child agent has `browser_control` registered without authority. It can discover in-app tabs and create a pending request at any point in its run. User approval binds a grant to that child principal. Completion, cancellation, disconnection, rejection, and Emergency Stop remove active and pending authority.
+A desktop child agent with delegated Browser capability starts with `browser_use` but no authority. It can load the bounded tools, discover its owner thread’s in-app tabs, and create a pending request. User approval binds a grant to that child principal. Completion, cancellation, disconnection, rejection, and Emergency Stop remove active and pending authority.
 
 Coordinate actions run against hidden retained guests and do not activate the Browser Inspector or move the system cursor. Opening Browser shows the live page and current agent cursor. The user can revoke the tab grant or stop all control from the Browser toolbar.
 
 ## Remaining Browser Work
 
 - executable per-action approval for irreversible external side effects;
-- trusted user-interaction auto-pause and explicit Take Over/Resume controls;
+- richer visible Take Over/Resume controls beyond the structured chat choices;
 - richer agent ownership labels and action history in the Browser toolbar;
 - persisted Chromium back/forward history after the outer Browser workspace is closed;
 - automatic server discovery from terminal output or filesystem watchers;

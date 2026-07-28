@@ -185,8 +185,9 @@ async function loadZyraToolModules() {
     import("./web-search-tool.mjs"),
     import("./write-diff-tool.mjs"),
     import("./agent-control/browser-control-tool.mjs"),
+    import("./agent-control/browser-toolset.mjs"),
     import("./agent-control/computer-control-tool.mjs"),
-  ]).then(([managedBash, web, writeDiff, browserControl, computerControl]) => ({
+  ]).then(([managedBash, web, writeDiff, browserControl, browserToolset, computerControl]) => ({
     createManagedBashState: managedBash.createManagedBashState,
     createManagedBashTool: managedBash.createManagedBashTool,
     waitForManagedBashAutoUpdate: managedBash.waitForManagedBashAutoUpdate,
@@ -194,6 +195,10 @@ async function loadZyraToolModules() {
     createZyraWebFetchTool: web.createZyraWebFetchTool,
     createZyraWriteTool: writeDiff.createZyraWriteTool,
     createBrowserControlTool: browserControl.createBrowserControlTool,
+    createBrowserToolSet: browserToolset.createBrowserToolSet,
+    applyBrowserLoaderOnlyState: browserToolset.applyBrowserLoaderOnlyState,
+    browserToolsetNames: browserToolset.BROWSER_TOOLSET_NAMES,
+    browserLoaderToolName: browserToolset.BROWSER_LOADER_TOOL_NAME,
     createComputerControlTool: computerControl.createComputerControlTool,
   }));
   return zyraToolModulesPromise;
@@ -560,20 +565,17 @@ function isToolActive(session, name) {
   return Boolean(session?.getActiveToolNames?.().includes(name));
 }
 
-export function ensureBrowserControlToolState(session, enabled) {
-  if (!enabled) return false;
-  if (typeof session?.getToolDefinition !== "function" || !session.getToolDefinition("browser_control")) {
-    throw new Error("The desktop Browser control tool was not registered with Pi.");
+export function ensureBrowserControlToolState(session, enabled, applyLoaderOnly, browserToolNames = []) {
+  if (typeof session?.getActiveToolNames !== "function" || typeof session?.setActiveToolsByName !== "function") return false;
+  const before = session.getActiveToolNames();
+  if (enabled) {
+    if (typeof applyLoaderOnly !== "function") throw new Error("The desktop Browser tool loader was not registered with Pi.");
+    applyLoaderOnly(session);
+  } else {
+    const blocked = new Set(["browser_control", "browser_use", ...browserToolNames]);
+    session.setActiveToolsByName(before.filter((name) => !blocked.has(name)));
   }
-  if (isToolActive(session, "browser_control")) return false;
-  if (typeof session.setActiveToolsByName !== "function") {
-    throw new Error("The desktop Pi session cannot project Browser control into model turns.");
-  }
-  session.setActiveToolsByName([...new Set([...session.getActiveToolNames(), "browser_control"])]);
-  if (!isToolActive(session, "browser_control")) {
-    throw new Error("The desktop Pi session omitted Browser control from the callable tool manifest.");
-  }
-  return true;
+  return JSON.stringify(before) !== JSON.stringify(session.getActiveToolNames());
 }
 
 export async function createZyraSession(options = {}) {
@@ -606,6 +608,9 @@ export async function createZyraSession(options = {}) {
     createZyraWebFetchTool,
     createZyraWriteTool,
     createBrowserControlTool,
+    createBrowserToolSet,
+    applyBrowserLoaderOnlyState,
+    browserToolsetNames,
     createComputerControlTool,
   } = toolModules;
 
@@ -636,6 +641,8 @@ export async function createZyraSession(options = {}) {
   const fleetEnabled = options.enableFleet !== false && options.surface !== "memory-worker";
   const fleetHolder = {};
   const fleetTools = fleetEnabled ? createFleetTools(fleetHolder) : [];
+  const browserSessionRef = { current: null };
+  const browserTools = createBrowserToolSet({ client: options.controlBridgeClient, sessionRef: browserSessionRef });
 
   const result = await createAgentSession({
     cwd,
@@ -660,19 +667,26 @@ export async function createZyraSession(options = {}) {
       }),
       ...fleetTools,
       createBrowserControlTool({ client: options.controlBridgeClient }),
+      ...browserTools,
       createComputerControlTool({ client: options.controlBridgeClient }),
       ...(Array.isArray(options.customTools) ? options.customTools : []),
     ],
     ...startupResources,
   });
 
+  browserSessionRef.current = result.session;
   installManagedBashAutoPoll(result.session, managedBash, {
     intervalMs: options.managedBashAutoPollMs ?? DEFAULT_MANAGED_BASH_AUTO_POLL_MS,
     waitForUpdate: waitForManagedBashAutoUpdate,
   });
   registerZyraRuntimeModels(result.session.modelRegistry);
   applyWebToolState(result.session, startupPreferences);
-  ensureBrowserControlToolState(result.session, Boolean(options.controlBridgeClient));
+  ensureBrowserControlToolState(
+    result.session,
+    Boolean(options.controlBridgeClient),
+    applyBrowserLoaderOnlyState,
+    browserToolsetNames,
+  );
   const modelAvailability = options.skipModelAvailability
     ? {
         checked: [],

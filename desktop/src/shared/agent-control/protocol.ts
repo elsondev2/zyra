@@ -1,6 +1,8 @@
 import type {
     ControlActionRequest,
     ControlCapability,
+    ControlObservationMode,
+    ControlPlanRequest,
     ControlPrincipal,
     ControlSideEffectClass,
     DelegatedControlLeaseRequest
@@ -25,7 +27,8 @@ export const AGENT_CONTROL_IPC = {
     updateWorkspaceState: 'zyra:agent-control:update-workspace-state',
     browserSurfaceRequested: 'zyra:agent-control:browser-surface-requested',
     browserSurfaceCancelled: 'zyra:agent-control:browser-surface-cancelled',
-    stateChanged: 'zyra:agent-control:state-changed'
+    stateChanged: 'zyra:agent-control:state-changed',
+    cursorChanged: 'zyra:agent-control:cursor-changed'
 } as const
 
 export type BrowserSurfaceOpenRequest = {
@@ -80,8 +83,12 @@ export type AgentControlBridgeOperation =
         allowedOrigins?: string[]
         allowedExecutableIdentities?: string[]
     }
-    | { operation: 'observe'; grantId: string; targetId: string; includeScreenshot?: boolean }
+    | { operation: 'observe'; grantId: string; targetId: string; includeScreenshot?: boolean; mode?: ControlObservationMode }
     | ({ operation: 'act' } & ControlActionRequest)
+    | ({ operation: 'perform' } & ControlPlanRequest)
+    | { operation: 'plan_status'; planId?: string }
+    | { operation: 'resume_plan'; planId: string; disposition: 'continue-with-changes' | 'replan-from-here' }
+    | { operation: 'cancel_plan'; planId: string; releaseGrant?: boolean }
     | ({ operation: 'delegate_lease' } & Omit<DelegatedControlLeaseRequest, 'parentPrincipal'>)
     | { operation: 'revoke_current_principal'; reason?: string }
     | { operation: 'release'; grantId: string }

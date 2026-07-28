@@ -1,5 +1,5 @@
 import { ipcRenderer } from 'electron'
-import type { ControlStateSnapshot, ControlWindowCandidate, ControlWorkspaceSnapshot } from '../../shared/agent-control/contracts'
+import type { ControlCursorState, ControlStateSnapshot, ControlWindowCandidate, ControlWorkspaceSnapshot } from '../../shared/agent-control/contracts'
 import {
     AGENT_CONTROL_IPC,
     type BrowserSurfaceClaim,
@@ -40,6 +40,11 @@ export function createAgentControlAdapter() {
             const listener = (_event: Electron.IpcRendererEvent, state: ControlStateSnapshot) => callback(state)
             ipcRenderer.on(AGENT_CONTROL_IPC.stateChanged, listener)
             return () => ipcRenderer.removeListener(AGENT_CONTROL_IPC.stateChanged, listener)
+        },
+        onCursorChange: (callback: (cursor: ControlCursorState) => void) => {
+            const listener = (_event: Electron.IpcRendererEvent, cursor: ControlCursorState) => callback(cursor)
+            ipcRenderer.on(AGENT_CONTROL_IPC.cursorChanged, listener)
+            return () => ipcRenderer.removeListener(AGENT_CONTROL_IPC.cursorChanged, listener)
         }
     }
 }

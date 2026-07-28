@@ -46,7 +46,8 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
     placement: 'full' | 'primary' | 'secondary'
     onStateChange: (tabId: string, patch: BrowserStatePatch) => void
     onControlTargetChange: (tabId: string, targetId: string | null) => void
-}>(function AssistantBrowserWebview({ tab, threadId, config, visible, placement, onStateChange, onControlTargetChange }, forwardedRef) {
+    onViewportRectChange: (tabId: string, rect: { x: number; y: number; width: number; height: number } | null) => void
+}>(function AssistantBrowserWebview({ tab, threadId, config, visible, placement, onStateChange, onControlTargetChange, onViewportRectChange }, forwardedRef) {
     const [webview, setWebview] = useState<BrowserWebviewElement | null>(null)
     const onStateChangeRef = useRef(onStateChange)
     const tabTitleRef = useRef(tab.title)
@@ -253,6 +254,31 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
             onControlTargetChange(tab.id, null)
         }
     }, [onControlTargetChange, tab.id, threadId, webview])
+
+    useLayoutEffect(() => {
+        if (!webview || !visible) {
+            onViewportRectChange(tab.id, null)
+            return
+        }
+        const report = () => {
+            const rect = webview.getBoundingClientRect()
+            onViewportRectChange(tab.id, {
+                x: Math.max(0, rect.left),
+                y: Math.max(0, rect.top),
+                width: Math.max(1, rect.width),
+                height: Math.max(1, rect.height)
+            })
+        }
+        report()
+        const observer = new ResizeObserver(report)
+        observer.observe(webview)
+        window.addEventListener('resize', report)
+        return () => {
+            observer.disconnect()
+            window.removeEventListener('resize', report)
+            onViewportRectChange(tab.id, null)
+        }
+    }, [onViewportRectChange, placement, tab.id, visible, webview])
 
 
     return createElement('webview', {

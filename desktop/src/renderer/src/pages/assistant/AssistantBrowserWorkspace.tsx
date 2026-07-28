@@ -105,6 +105,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const [workspaceState, setWorkspaceState] = useState<AssistantBrowserWorkspaceState>(() => (
         loadAssistantBrowserWorkspaceState(workspaceKey)
     ))
+    const [viewportRects, setViewportRects] = useState<Record<string, { x: number; y: number; width: number; height: number }>>({})
     const [config, setConfig] = useState<DevScopeBrowserPreviewConfig | null>(null)
     const [configLoading, setConfigLoading] = useState(Boolean(normalizedProjectPath))
     const [configError, setConfigError] = useState<string | null>(null)
@@ -223,6 +224,20 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         }
     }, [controlState])
 
+    const handleViewportRectChange = useCallback((tabId: string, rect: { x: number; y: number; width: number; height: number } | null) => {
+        setViewportRects((current) => {
+            if (!rect) {
+                if (!current[tabId]) return current
+                const next = { ...current }
+                delete next[tabId]
+                return next
+            }
+            const previous = current[tabId]
+            if (previous && previous.x === rect.x && previous.y === rect.y && previous.width === rect.width && previous.height === rect.height) return current
+            return { ...current, [tabId]: rect }
+        })
+    }, [])
+
     const handleControlTargetChange = useCallback((tabId: string, targetId: string | null) => {
         if (!targetId) return
         const request = [...pendingSurfaceRequestsRef.current.values()].find((entry) => entry.tabId === tabId)
@@ -268,11 +283,12 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                         : active && tab.id === splitTab?.id
                             ? 'secondary'
                             : null,
-                    visible: visibleTabIds.includes(tab.id)
+                    visible: visibleTabIds.includes(tab.id),
+                    viewportRect: viewportRects[tab.id] || null
                 }
             })
         })
-    }, [active, activeTab?.id, controlState?.targets, controlTargetsByTab, onWorkspaceStateChange, splitTab?.id, workspaceState.tabs])
+    }, [active, activeTab?.id, controlState?.targets, controlTargetsByTab, onWorkspaceStateChange, splitTab?.id, viewportRects, workspaceState.tabs])
 
     useEffect(() => {
         if (!addressFocusedRef.current) setAddressValue(activeTab?.url || '')
@@ -853,6 +869,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                             placement={splitTab ? primary ? 'primary' : secondary ? 'secondary' : 'full' : 'full'}
                             onStateChange={handleWebviewStateChange}
                             onControlTargetChange={handleControlTargetChange}
+                            onViewportRectChange={handleViewportRectChange}
                         />
                     )
                 })}

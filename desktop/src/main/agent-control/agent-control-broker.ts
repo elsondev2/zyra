@@ -5,8 +5,12 @@ import type {
     ControlCapability,
     ControlCursorState,
     ControlGrant,
+    ControlInteractionCategory,
     ControlObservation,
+    ControlObservationMode,
     ControlPairingState,
+    ControlPlanRequest,
+    ControlPlanResult,
     ControlPrincipal,
     ControlStateSnapshot,
     ControlTarget,
@@ -20,6 +24,7 @@ import {
     assertBridgeMessageSize,
     assertControlActionRequest,
     assertControlCapabilities,
+    assertControlPlanRequest,
     assertControlIdentifier,
     assertControlPrincipal
 } from '../../shared/agent-control/validation'
@@ -29,6 +34,7 @@ import { assertActionAllowed, assertCapabilitiesSupportedByTarget, assertGrantSu
 import { AgentControlError, toAgentControlError } from './control-errors'
 import { GrantStore } from './grant-store'
 import { ObservationStore } from './observation-store'
+import { TargetInteractionArbiter } from './interaction-arbiter'
 import { redactObservation } from './redaction'
 import { TargetRegistry } from './target-registry'
 import type { AgentControlDriver } from './drivers/driver'
@@ -39,7 +45,8 @@ export type BrowserSurfaceController = {
         principal: ControlPrincipal,
         primary: Extract<ControlTarget, { kind: 'zyra-browser' }>,
         secondary: Extract<ControlTarget, { kind: 'zyra-browser' }> | null,
-        signal?: AbortSignal
+        signal?: AbortSignal,
+        explicitLayout?: boolean
     ): Promise<Extract<ControlTarget, { kind: 'zyra-browser' }>>
     resizeInspector(
         principal: ControlPrincipal,
@@ -79,6 +86,18 @@ export class AgentControlBroker extends EventEmitter {
     private browserSurface: BrowserSurfaceController | null = null
     private workspace: ControlWorkspaceSnapshot | null = null
     private readonly cursors = new Map<string, ControlCursorState>()
+    private readonly interactionArbiter = new TargetInteractionArbiter()
+    private readonly agentInputDepth = new Map<string, number>()
+    private readonly activeStageByTarget = new Map<string, string>()
+    private readonly pausedPlans = new Map<string, {
+        planId: string
+        request: ControlPlanRequest
+        principal: ControlPrincipal
+        completedSteps: number
+        pausedAt: string
+    }>()
+    private readonly cursorPublishTimers = new Map<string, NodeJS.Timeout>()
+    private readonly cursorPublishedAt = new Map<string, number>()
     private readonly pendingGrantWaiters = new Map<string, {
         resolve: (grant: ControlGrant) => void
         reject: (error: AgentControlError) => void
@@ -160,6 +179,20 @@ export class AgentControlBroker extends EventEmitter {
                 : null
             const url = target?.url || rendererUrl
             const status = ['idle', 'loading', 'ready', 'error'].includes(raw.status) ? raw.status : 'idle'
+            const viewportInput = raw.viewportRect && typeof raw.viewportRect === 'object' ? raw.viewportRect : null
+            const viewportNumbers = viewportInput
+                ? [viewportInput.x, viewportInput.y, viewportInput.width, viewportInput.height].map(Number)
+                : []
+            const viewportRect = viewportNumbers.length === 4 && viewportNumbers.every(Number.isFinite)
+                && viewportNumbers[0] >= 0 && viewportNumbers[1] >= 0
+                && viewportNumbers[2] >= 1 && viewportNumbers[3] >= 1
+                ? {
+                    x: Math.round(viewportNumbers[0]),
+                    y: Math.round(viewportNumbers[1]),
+                    width: Math.round(viewportNumbers[2]),
+                    height: Math.round(viewportNumbers[3])
+                }
+                : null
             return [{
                 tabId,
                 targetId: target?.targetId || null,
@@ -169,7 +202,8 @@ export class AgentControlBroker extends EventEmitter {
                 origin: target?.origin || null,
                 status: status as ControlWorkspaceSnapshot['browser']['tabs'][number]['status'],
                 position: null,
-                visible: false
+                visible: false,
+                viewportRect
             }]
         }).slice(0, 8)
         const requestedActiveTabId = typeof browserInput.activeTabId === 'string' ? browserInput.activeTabId : null
@@ -200,6 +234,14 @@ export class AgentControlBroker extends EventEmitter {
         }
         const comparable = (snapshot: ControlWorkspaceSnapshot | null) => snapshot ? { ...snapshot, updatedAt: '' } : null
         if (JSON.stringify(comparable(this.workspace)) !== JSON.stringify(comparable(next))) {
+            const previousTabs = new Map((this.workspace?.browser.tabs || []).map((tab) => [tab.targetId, tab]))
+            for (const tab of next.browser.tabs) {
+                if (!tab.targetId) continue
+                const previous = previousTabs.get(tab.targetId)
+                if (previous && viewportGeometryKey(previous.viewportRect) !== viewportGeometryKey(tab.viewportRect)) {
+                    this.observations.invalidate(tab.targetId)
+                }
+            }
             this.workspace = next
             this.changed()
         }
@@ -240,6 +282,27 @@ export class AgentControlBroker extends EventEmitter {
         this.changed()
     }
 
+    recordUserInteraction(targetId: string, category: ControlInteractionCategory, inputType: string, windowPoint?: { x: number; y: number }): void {
+        if ((this.agentInputDepth.get(targetId) || 0) > 0) return
+        const registered = this.targets.list().find((entry) => entry.target.targetId === targetId)
+        if (!registered) return
+        const viewportRect = this.workspace?.browser.tabs.find((tab) => tab.targetId === targetId)?.viewportRect
+        const point = windowPoint && viewportRect
+            ? { x: windowPoint.x - viewportRect.x, y: windowPoint.y - viewportRect.y }
+            : undefined
+        const previousSequence = this.interactionArbiter.checkpoint(targetId)
+        const interaction = this.interactionArbiter.record(targetId, category, inputType, this.activeStageByTarget.get(targetId), point)
+        if (category !== 'pointer-move' && interaction.sequence > previousSequence) {
+            this.audit.append({
+                eventType: 'interaction', actor: 'user', targetId, targetKind: registered.target.kind,
+                interactionCategory: category, stageId: interaction.stageId,
+                coordinates: point,
+                outcome: 'completed', message: `User ${category} activity occurred on this exact control target.`,
+                redactions: ['typed-content']
+            })
+        }
+    }
+
     handleTargetTitle(targetId: string, title: string): void {
         const registered = this.targets.get(targetId)
         if (registered.target.kind !== 'zyra-browser') return
@@ -253,6 +316,16 @@ export class AgentControlBroker extends EventEmitter {
         this.grants.revokeByTarget(targetId)
         this.observations.remove(targetId)
         this.cursors.delete(targetId)
+        this.interactionArbiter.clear(targetId)
+        this.activeStageByTarget.delete(targetId)
+        this.agentInputDepth.delete(targetId)
+        const cursorTimer = this.cursorPublishTimers.get(targetId)
+        if (cursorTimer) clearTimeout(cursorTimer)
+        this.cursorPublishTimers.delete(targetId)
+        this.cursorPublishedAt.delete(targetId)
+        for (const [planId, plan] of this.pausedPlans) {
+            if (plan.request.targetId === targetId) this.pausedPlans.delete(planId)
+        }
         if (this.workspace?.browser.tabs.some((tab) => tab.targetId === targetId)) {
             this.workspace = {
                 ...this.workspace,
@@ -332,6 +405,7 @@ export class AgentControlBroker extends EventEmitter {
         const allowedExecutableIdentities = narrowScope(input.allowedExecutableIdentities, pending.allowedExecutableIdentities)
         const target = this.targets.get(pending.targetId).target
         this.releaseInputFocus(pending.targetId)
+        this.clearCursor(pending.targetId)
         const grant = this.grants.issue({
             principal: pending.principal,
             targetId: pending.targetId,
@@ -382,6 +456,7 @@ export class AgentControlBroker extends EventEmitter {
 
     delegate(request: DelegatedControlLeaseRequest): ControlGrant {
         this.releaseInputFocus(request.targetId)
+        this.clearCursor(request.targetId)
         const grant = this.grants.delegate(request)
         const target = this.targets.get(grant.targetId).target
         try {
@@ -399,21 +474,31 @@ export class AgentControlBroker extends EventEmitter {
         return grant
     }
 
-    async observe(principal: ControlPrincipal, grantId: string, targetId: string, includeScreenshot = false, signal?: AbortSignal): Promise<ControlObservation> {
+    async observe(
+        principal: ControlPrincipal,
+        grantId: string,
+        targetId: string,
+        includeScreenshot = false,
+        signal?: AbortSignal,
+        mode: ControlObservationMode = 'both'
+    ): Promise<ControlObservation> {
         this.assertAlive()
         const grant = this.grants.requireActive(grantId, principal)
         if (grant.targetId !== targetId) throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The grant is bound to another target.')
-        if (!grant.capabilities.includes('observe.structure')) throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'The grant does not allow structure observation.')
-        if (includeScreenshot && !grant.capabilities.includes('observe.screenshot')) throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'The grant does not allow screenshots.')
+        if (mode !== 'visual' && !grant.capabilities.includes('observe.structure')) throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'The grant does not allow structure observation.')
+        if ((includeScreenshot || mode === 'visual') && !grant.capabilities.includes('observe.screenshot')) throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'The grant does not allow screenshots.')
         const registered = this.targets.get(targetId)
         assertGrantSupportsTarget(grant, registered.target)
         const startedAt = Date.now()
         try {
             const revision = this.observations.nextRevision(targetId)
-            const observation = boundObservation(redactObservation(await registered.driver.observe(registered, { revision, includeScreenshot, signal })))
-            this.observations.set(observation)
+            const observation = boundObservation(redactObservation(await registered.driver.observe(registered, { revision, includeScreenshot, mode, signal })))
+            this.commitObservation(observation)
             const consumedGrant = this.grants.consume(grantId)
-            if (consumedGrant.state === 'consumed') registered.driver.releaseInputFocus?.(registered)
+            if (consumedGrant.state === 'consumed') {
+                registered.driver.releaseInputFocus?.(registered)
+                this.clearCursorIfNoActiveGrant(targetId)
+            }
             this.audit.append({
                 eventType: 'observation', principal, targetId, targetKind: registered.target.kind, grantId,
                 observationRevision: observation.revision, origin: observation.origin,
@@ -454,17 +539,22 @@ export class AgentControlBroker extends EventEmitter {
                     revision: request.observationRevision,
                     previousObservation,
                     signal,
-                    updateCursor: (patch) => this.updateCursor(request.targetId, principal, request.action.type, patch)
+                    updateCursor: (patch) => this.updateCursor(request.targetId, principal, request.action.type, patch),
+                    runAgentInput: (operation) => this.runAgentInput(request.targetId, operation)
                 })
                 const revision = this.observations.nextRevision(request.targetId)
                 const observation = boundObservation(redactObservation(await registered.driver.observe(registered, {
                     revision,
                     includeScreenshot: false,
+                    mode: 'structure',
                     signal
                 })))
-                this.observations.set(observation)
+                this.commitObservation(observation)
                 const consumedGrant = this.grants.consume(request.grantId)
-                if (consumedGrant.state === 'consumed') registered.driver.releaseInputFocus?.(registered)
+                if (consumedGrant.state === 'consumed') {
+                    registered.driver.releaseInputFocus?.(registered)
+                    this.clearCursorIfNoActiveGrant(request.targetId)
+                }
                 this.audit.append({
                     eventType: 'action', principal, targetId: request.targetId, targetKind: registered.target.kind,
                     grantId: request.grantId, actionType: request.action.type, origin: observation.origin,
@@ -494,11 +584,140 @@ export class AgentControlBroker extends EventEmitter {
         }, signal)
     }
 
+    async perform(principal: ControlPrincipal, requestValue: unknown, signal?: AbortSignal): Promise<ControlPlanResult> {
+        this.assertAlive()
+        const request = assertControlPlanRequest(requestValue)
+        const grant = this.grants.requireRemaining(request.grantId, principal, request.steps.length + 1)
+        if (grant.targetId !== request.targetId) throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The grant is bound to another target.')
+        if (request.observationMode !== 'visual' && !grant.capabilities.includes('observe.structure')) {
+            throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'The stage checkpoint requires structure observation authority.')
+        }
+        if ((request.includeScreenshot || request.observationMode === 'visual') && !grant.capabilities.includes('observe.screenshot')) {
+            throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'The stage checkpoint requires screenshot authority.')
+        }
+        if (request.observationMode === 'visual' && !request.includeScreenshot) {
+            throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Visual stage checkpoints must include a screenshot.')
+        }
+        const registered = this.targets.get(request.targetId)
+        if (registered.target.kind !== 'zyra-browser') {
+            throw new AgentControlError('CONTROL_SCOPE_DENIED', 'Staged Browser execution currently supports only integrated Zyra Browser tabs.')
+        }
+        assertGrantSupportsTarget(grant, registered.target)
+        const requestedObservation = this.observations.requireRevision(request.targetId, request.observationRevision)
+        for (const action of request.steps) {
+            assertActionAllowed(grant, registered.target, action)
+            assertSafeObservedElementAction(requestedObservation, action)
+            assertVisualActionInsideObservation(requestedObservation, action)
+            assertActionInsideStageRegion(request.stage.expectedRegion, action)
+        }
+        return this.actions.enqueue(request.targetId, async () => {
+            const currentGrant = this.grants.requireRemaining(request.grantId, principal, request.steps.length + 1)
+            const previousObservation = this.observations.requireRevision(request.targetId, request.observationRevision)
+            const planId = `control-plan:${request.requestId}`
+            const interactionCheckpoint = this.interactionArbiter.checkpoint(request.targetId)
+            const bounded = boundedControlSignal(signal, 12_000)
+            let completedSteps = 0
+            let changed = false
+            let pauseDecision: ReturnType<TargetInteractionArbiter['decide']> | null = null
+            const startedAt = Date.now()
+            this.activeStageByTarget.set(request.targetId, planId)
+            try {
+                for (const action of request.steps) {
+                    this.grants.requireActive(currentGrant.grantId, principal)
+                    assertActionAllowed(currentGrant, registered.target, action)
+                    assertSafeObservedElementAction(previousObservation, action)
+                    assertVisualActionInsideObservation(previousObservation, action)
+                    const actionResult = await registered.driver.act(registered, action, {
+                        revision: request.observationRevision,
+                        previousObservation,
+                        signal: bounded.signal,
+                        updateCursor: (patch) => this.updateCursor(request.targetId, principal, action.type, patch),
+                        runAgentInput: (operation) => this.runAgentInput(request.targetId, operation)
+                    })
+                    changed = changed || actionResult.changed
+                    completedSteps += 1
+                    const consumed = this.grants.consume(request.grantId)
+                    if (consumed.state === 'consumed') {
+                        registered.driver.releaseInputFocus?.(registered)
+                        this.clearCursorIfNoActiveGrant(request.targetId)
+                    }
+                    const decision = this.interactionArbiter.decide(request.targetId, interactionCheckpoint, request.stage)
+                    if (decision.disposition === 'pause') {
+                        pauseDecision = decision
+                        break
+                    }
+                }
+                bounded.dispose()
+                const revision = this.observations.nextRevision(request.targetId)
+                const observation = boundObservation(redactObservation(await registered.driver.observe(registered, {
+                    revision,
+                    includeScreenshot: request.includeScreenshot,
+                    mode: request.observationMode,
+                    signal
+                })))
+                this.commitObservation(observation)
+                const consumed = this.grants.consume(request.grantId)
+                if (consumed.state === 'consumed') {
+                    registered.driver.releaseInputFocus?.(registered)
+                    this.clearCursorIfNoActiveGrant(request.targetId)
+                }
+                if (pauseDecision) {
+                    this.pausedPlans.set(planId, { planId, request, principal, completedSteps, pausedAt: new Date().toISOString() })
+                } else {
+                    this.pausedPlans.delete(planId)
+                }
+                this.audit.append({
+                    eventType: 'plan', actor: 'agent', principal, targetId: request.targetId, targetKind: registered.target.kind,
+                    grantId: request.grantId, stageId: planId, origin: observation.origin,
+                    observationRevision: observation.revision, outcome: pauseDecision ? 'cancelled' : 'completed',
+                    elapsedMs: Date.now() - startedAt,
+                    message: pauseDecision ? `Stage paused after ${completedSteps} of ${request.steps.length} steps at a clean action boundary.` : `Stage completed ${completedSteps} bounded steps.`,
+                    redactions: ['typed-text']
+                })
+                this.changed()
+                return {
+                    version: 1,
+                    requestId: request.requestId,
+                    planId,
+                    targetId: request.targetId,
+                    previousRevision: request.observationRevision,
+                    completedSteps,
+                    totalSteps: request.steps.length,
+                    observation,
+                    changed,
+                    outcome: pauseDecision ? 'paused' : 'completed',
+                    ...(pauseDecision ? {
+                        pause: {
+                            reason: pauseDecision.reason || 'Purposeful target-local user activity diverged from the active stage.',
+                            evidence: pauseDecision.evidence.map(({ actor, category, targetId, x, y, stageId, occurredAt }) => ({ actor, category, targetId, x, y, stageId, occurredAt })),
+                            choices: ['continue-with-changes', 'replan-from-here', 'user-takeover'] as const
+                        }
+                    } : {})
+                }
+            } catch (error) {
+                this.audit.append({
+                    eventType: 'plan', actor: 'agent', principal, targetId: request.targetId, targetKind: registered.target.kind,
+                    grantId: request.grantId, stageId: planId,
+                    outcome: signal?.aborted || bounded.signal.aborted ? 'cancelled' : 'failed', elapsedMs: Date.now() - startedAt,
+                    message: error instanceof Error ? error.message : 'Browser stage failed.', redactions: ['typed-text']
+                })
+                throw toAgentControlError(error)
+            } finally {
+                bounded.dispose()
+                if (this.activeStageByTarget.get(request.targetId) === planId) this.activeStageByTarget.delete(request.targetId)
+            }
+        }, signal)
+    }
+
     revokeGrant(grantId: string, principal?: ControlPrincipal): void {
         if (principal) this.grants.requireActive(grantId, principal)
         const grant = this.grants.revoke(grantId)
         if (!grant) return
         this.releaseInputFocus(grant.targetId)
+        this.clearCursorIfNoActiveGrant(grant.targetId)
+        for (const [planId, plan] of this.pausedPlans) {
+            if (plan.request.grantId === grantId) this.pausedPlans.delete(planId)
+        }
         this.audit.append({
             eventType: 'grant.revoked', principal: grant.principal, targetId: grant.targetId,
             grantId: grant.grantId, outcome: 'cancelled', message: 'Control grant revoked.', redactions: []
@@ -509,7 +728,10 @@ export class AgentControlBroker extends EventEmitter {
     revokePrincipal(principal: ControlPrincipal, reason = 'Principal control cancelled.'): void {
         const revoked = this.grants.revokeByPrincipal(principal)
         const pending = this.grants.removePendingByPrincipal(principal)
-        for (const targetId of new Set(revoked.map((grant) => grant.targetId))) this.releaseInputFocus(targetId)
+        for (const targetId of new Set(revoked.map((grant) => grant.targetId))) {
+            this.releaseInputFocus(targetId)
+            this.clearCursorIfNoActiveGrant(targetId)
+        }
         for (const grant of revoked) {
             this.audit.append({
                 eventType: 'grant.revoked', principal: grant.principal, targetId: grant.targetId,
@@ -536,6 +758,13 @@ export class AgentControlBroker extends EventEmitter {
         }
         this.observations.invalidateAll()
         this.cursors.clear()
+        this.interactionArbiter.clear()
+        this.activeStageByTarget.clear()
+        this.agentInputDepth.clear()
+        this.pausedPlans.clear()
+        for (const timer of this.cursorPublishTimers.values()) clearTimeout(timer)
+        this.cursorPublishTimers.clear()
+        this.cursorPublishedAt.clear()
         await Promise.allSettled((this.options.drivers || []).map((driver) => Promise.resolve(driver.emergencyStop?.())))
         await this.options.pairing?.stop('emergency-stop')
         this.audit.append({ eventType: 'emergency-stop', outcome: 'cancelled', message: reason, redactions: [] })
@@ -693,7 +922,7 @@ export class AgentControlBroker extends EventEmitter {
                 const primary = this.requireBrowserTarget(operation.primaryTargetId, principal)
                 const secondary = operation.secondaryTargetId ? this.requireBrowserTarget(operation.secondaryTargetId, principal) : null
                 if (secondary?.targetId === primary.targetId) throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'A Browser split requires two different targets.')
-                await this.browserSurface.revealTabs(principal, primary, secondary, signal)
+                await this.browserSurface.revealTabs(principal, primary, secondary, signal, true)
                 return {
                     layout: secondary ? 'split' : 'single',
                     primaryTargetId: primary.targetId,
@@ -762,7 +991,8 @@ export class AgentControlBroker extends EventEmitter {
                 return { revoked: true }
             case 'observe': {
                 const includeScreenshot = Boolean(operation.includeScreenshot)
-                const observation = await this.observe(principal, operation.grantId, operation.targetId, includeScreenshot, signal)
+                const mode = operation.mode || 'both'
+                const observation = await this.observe(principal, operation.grantId, operation.targetId, includeScreenshot, signal, mode)
                 const registered = this.targets.get(operation.targetId)
                 const screenshot = includeScreenshot && observation.screenshotRef
                     ? registered.driver.readScreenshot?.(observation.screenshotRef)
@@ -771,6 +1001,61 @@ export class AgentControlBroker extends EventEmitter {
             }
             case 'act':
                 return await this.act(principal, operation, signal) as unknown as Record<string, unknown>
+            case 'perform': {
+                const plan = await this.perform(principal, operation, signal)
+                const registered = this.targets.get(plan.targetId)
+                const screenshot = plan.observation.screenshotRef
+                    ? registered.driver.readScreenshot?.(plan.observation.screenshotRef)
+                    : undefined
+                return { ...plan, ...(screenshot ? { screenshot } : {}) } as unknown as Record<string, unknown>
+            }
+            case 'plan_status': {
+                const plans = [...this.pausedPlans.values()].filter((plan) => sameControlPrincipal(plan.principal, principal))
+                    .filter((plan) => !operation.planId || plan.planId === operation.planId)
+                    .map((plan) => ({
+                        planId: plan.planId,
+                        targetId: plan.request.targetId,
+                        grantId: plan.request.grantId,
+                        stage: plan.request.stage,
+                        completedSteps: plan.completedSteps,
+                        totalSteps: plan.request.steps.length,
+                        remainingSteps: plan.request.steps.length - plan.completedSteps,
+                        pausedAt: plan.pausedAt
+                    }))
+                return { plans }
+            }
+            case 'resume_plan': {
+                const plan = this.requirePausedPlan(operation.planId, principal)
+                const observation = await this.observe(
+                    principal,
+                    plan.request.grantId,
+                    plan.request.targetId,
+                    plan.request.includeScreenshot,
+                    signal,
+                    plan.request.observationMode
+                )
+                this.pausedPlans.delete(plan.planId)
+                const registered = this.targets.get(plan.request.targetId)
+                const screenshot = observation.screenshotRef
+                    ? registered.driver.readScreenshot?.(observation.screenshotRef)
+                    : undefined
+                return {
+                    planId: plan.planId,
+                    disposition: operation.disposition,
+                    replanningRequired: true,
+                    completedSteps: plan.completedSteps,
+                    remainingSteps: plan.request.steps.length - plan.completedSteps,
+                    observation,
+                    ...(screenshot ? { screenshot } : {})
+                }
+            }
+            case 'cancel_plan': {
+                const plan = this.requirePausedPlan(operation.planId, principal)
+                this.pausedPlans.delete(plan.planId)
+                if (operation.releaseGrant) this.revokeGrant(plan.request.grantId, principal)
+                this.changed()
+                return { cancelled: true, planId: plan.planId, grantReleased: Boolean(operation.releaseGrant) }
+            }
             case 'release':
                 this.revokeGrant(operation.grantId, principal)
                 return { released: true }
@@ -782,6 +1067,32 @@ export class AgentControlBroker extends EventEmitter {
     clearAudit(): void {
         this.audit.clear()
         this.changed()
+    }
+
+    private commitObservation(observation: ControlObservation): void {
+        this.observations.set(observation)
+        const current = this.observations.get(observation.targetId)
+        const currentRevision = this.observations.currentRevision(observation.targetId)
+        if (currentRevision !== observation.revision || current?.observationId !== observation.observationId) {
+            throw new AgentControlError(
+                'CONTROL_STALE_OBSERVATION',
+                'The Browser viewport or document changed while the observation was captured. Observe it again before acting.',
+                { retryable: true, freshRevision: currentRevision || undefined }
+            )
+        }
+    }
+
+    private clearCursorIfNoActiveGrant(targetId: string): void {
+        if (this.grants.list().some((grant) => grant.targetId === targetId && grant.state === 'active')) return
+        this.clearCursor(targetId)
+    }
+
+    private clearCursor(targetId: string): void {
+        this.cursors.delete(targetId)
+        const timer = this.cursorPublishTimers.get(targetId)
+        if (timer) clearTimeout(timer)
+        this.cursorPublishTimers.delete(targetId)
+        this.cursorPublishedAt.delete(targetId)
     }
 
     private releaseInputFocus(targetId: string): void {
@@ -832,7 +1143,11 @@ export class AgentControlBroker extends EventEmitter {
         grant: ControlGrant,
         message: string
     ): void {
-        this.grants.consume(grant.grantId)
+        const consumed = this.grants.consume(grant.grantId)
+        if (consumed.state === 'consumed') {
+            this.releaseInputFocus(target.targetId)
+            this.clearCursorIfNoActiveGrant(target.targetId)
+        }
         this.audit.append({
             eventType: 'action', principal, targetId: target.targetId, targetKind: target.kind,
             grantId: grant.grantId, outcome: 'completed', message, redactions: []
@@ -881,6 +1196,27 @@ export class AgentControlBroker extends EventEmitter {
         this.removeAllListeners()
     }
 
+    private async runAgentInput<T>(targetId: string, operation: () => Promise<T>): Promise<T> {
+        this.agentInputDepth.set(targetId, (this.agentInputDepth.get(targetId) || 0) + 1)
+        try {
+            return await operation()
+        } finally {
+            const depth = Math.max(0, (this.agentInputDepth.get(targetId) || 0) - 1)
+            if (depth) this.agentInputDepth.set(targetId, depth)
+            else this.agentInputDepth.delete(targetId)
+        }
+    }
+
+    private requirePausedPlan(planIdValue: unknown, principal: ControlPrincipal) {
+        const planId = assertControlIdentifier(planIdValue, 'planId')
+        const plan = this.pausedPlans.get(planId)
+        if (!plan) throw new AgentControlError('CONTROL_TARGET_NOT_FOUND', 'The paused Browser stage is no longer available.')
+        if (!sameControlPrincipal(plan.principal, principal)) {
+            throw new AgentControlError('CONTROL_PRINCIPAL_MISMATCH', 'The paused Browser stage belongs to another principal.')
+        }
+        return plan
+    }
+
     private updateCursor(
         targetId: string,
         principal: ControlPrincipal,
@@ -890,7 +1226,7 @@ export class AgentControlBroker extends EventEmitter {
         const current = this.cursors.get(targetId)
         const x = Number(patch.x ?? current?.x ?? 0)
         const y = Number(patch.y ?? current?.y ?? 0)
-        this.cursors.set(targetId, {
+        const cursor: ControlCursorState = {
             targetId,
             x: Number.isFinite(x) ? Math.max(0, Math.min(100_000, x)) : 0,
             y: Number.isFinite(y) ? Math.max(0, Math.min(100_000, y)) : 0,
@@ -900,8 +1236,34 @@ export class AgentControlBroker extends EventEmitter {
             principal,
             durationMs: patch.durationMs ?? current?.durationMs,
             updatedAt: new Date().toISOString()
-        })
-        this.changed()
+        }
+        this.cursors.set(targetId, cursor)
+        this.publishCursor(targetId, cursor.phase === 'idle' || cursor.phase === 'pressing' || cursor.phase === 'typing')
+    }
+
+    private publishCursor(targetId: string, immediate: boolean): void {
+        const publish = () => {
+            const cursor = this.cursors.get(targetId)
+            if (!cursor) return
+            this.cursorPublishedAt.set(targetId, Date.now())
+            this.emit('cursor', cursor)
+        }
+        const currentTimer = this.cursorPublishTimers.get(targetId)
+        if (immediate) {
+            if (currentTimer) clearTimeout(currentTimer)
+            this.cursorPublishTimers.delete(targetId)
+            publish()
+            return
+        }
+        if (currentTimer) return
+        const elapsed = Date.now() - (this.cursorPublishedAt.get(targetId) || 0)
+        const waitMs = Math.max(0, 33 - elapsed)
+        const timer = setTimeout(() => {
+            this.cursorPublishTimers.delete(targetId)
+            publish()
+        }, waitMs)
+        timer.unref?.()
+        this.cursorPublishTimers.set(targetId, timer)
     }
 
     private changed(): void {
@@ -950,13 +1312,66 @@ function assertVisualActionInsideObservation(observation: ControlObservation, ac
         ? [{ x: action.x, y: action.y }]
         : action.type === 'drag'
             ? [{ x: action.fromX, y: action.fromY }, { x: action.toX, y: action.toY }]
-            : (action.type === 'click' || action.type === 'type') && action.x !== undefined && action.y !== undefined
+            : action.type === 'stroke'
+                ? action.points
+                : (action.type === 'click' || action.type === 'type') && action.x !== undefined && action.y !== undefined
                 ? [{ x: action.x, y: action.y }]
                 : action.type === 'scroll' && action.x !== undefined && action.y !== undefined
                     ? [{ x: action.x, y: action.y }]
                     : []
     if (points.some((point) => point.x < 0 || point.y < 0 || point.x > viewport.width || point.y > viewport.height)) {
         throw new AgentControlError('CONTROL_SCOPE_DENIED', 'Pointer coordinates are outside the latest observed viewport.')
+    }
+}
+
+function viewportGeometryKey(rect: ControlWorkspaceSnapshot['browser']['tabs'][number]['viewportRect']): string {
+    return rect ? `${rect.x}:${rect.y}:${rect.width}:${rect.height}` : 'none'
+}
+
+function assertActionInsideStageRegion(region: ControlPlanRequest['stage']['expectedRegion'], action: ControlAction): void {
+    if (!region) return
+    const points = action.type === 'move'
+        ? [{ x: action.x, y: action.y }]
+        : action.type === 'drag'
+            ? [{ x: action.fromX, y: action.fromY }, { x: action.toX, y: action.toY }]
+            : action.type === 'stroke'
+                ? action.points
+                : (action.type === 'click' || action.type === 'type') && action.x !== undefined && action.y !== undefined
+                    ? [{ x: action.x, y: action.y }]
+                    : action.type === 'scroll' && action.x !== undefined && action.y !== undefined
+                        ? [{ x: action.x, y: action.y }]
+                        : []
+    if (points.some((point) => (
+        point.x < region.x || point.y < region.y
+        || point.x > region.x + region.width || point.y > region.y + region.height
+    ))) {
+        throw new AgentControlError('CONTROL_SCOPE_DENIED', 'A pointer step is outside the stage intent region.')
+    }
+}
+
+function sameControlPrincipal(left: ControlPrincipal, right: ControlPrincipal): boolean {
+    if (left.type !== right.type) return false
+    return left.type === 'root' && right.type === 'root'
+        ? left.threadId === right.threadId && left.turnId === right.turnId
+        : left.type === 'agent' && right.type === 'agent'
+            && left.fleetId === right.fleetId
+            && left.agentRunId === right.agentRunId
+            && left.parentThreadId === right.parentThreadId
+}
+
+function boundedControlSignal(parent: AbortSignal | undefined, timeoutMs: number): { signal: AbortSignal; dispose: () => void } {
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    const timer = setTimeout(abort, timeoutMs)
+    timer.unref?.()
+    if (parent?.aborted) abort()
+    else parent?.addEventListener('abort', abort, { once: true })
+    return {
+        signal: controller.signal,
+        dispose: () => {
+            clearTimeout(timer)
+            parent?.removeEventListener('abort', abort)
+        }
     }
 }
 

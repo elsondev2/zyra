@@ -43,11 +43,16 @@ export function createAgentControlHandlers(mainWindow: BrowserWindow) {
     })
     broker.setBrowserSurfaceController(browserSurface)
     const broadcast = () => {
-        if (!mainWindow.isDestroyed()) mainWindow.webContents.send('zyra:agent-control:state-changed', broker.state())
+        if (!mainWindow.isDestroyed()) mainWindow.webContents.send(AGENT_CONTROL_IPC.stateChanged, broker.state())
+    }
+    const broadcastCursor = (cursor: unknown) => {
+        if (!mainWindow.isDestroyed()) mainWindow.webContents.send(AGENT_CONTROL_IPC.cursorChanged, cursor)
     }
     broker.on('changed', broadcast)
+    broker.on('cursor', broadcastCursor)
     mainWindow.once('closed', () => {
         broker.removeListener('changed', broadcast)
+        broker.removeListener('cursor', broadcastCursor)
         browserSurface.dispose()
         broker.setBrowserSurfaceController(null)
     })

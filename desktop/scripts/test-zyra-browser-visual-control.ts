@@ -235,6 +235,9 @@ await completeManagedRequest(revealExistingPromise, managedSurfaceRequests.at(-1
 const splitExistingPromise = managedSurfaceHost.revealTabs(principal, managedPrimary, managedSecondary)
 assert.equal(managedSurfaceRequests.at(-1)?.secondaryTabId, managedSecondary.tabId)
 await completeManagedRequest(splitExistingPromise, managedSurfaceRequests.at(-1), managedPrimary)
+const singleLayoutPromise = managedSurfaceHost.revealTabs(principal, managedPrimary, null, undefined, true)
+assert.equal(managedSurfaceRequests.at(-1)?.mode, 'layout', 'explicit single layout must clear a retained split instead of routing as reveal')
+await completeManagedRequest(singleLayoutPromise, managedSurfaceRequests.at(-1), managedPrimary)
 const resizeInspectorPromise = managedSurfaceHost.resizeInspector(principal, managedPrimary, 720)
 const resizeInspectorRequest = managedSurfaceRequests.at(-1)
 assert.equal(resizeInspectorRequest?.mode, 'resize')
@@ -271,7 +274,7 @@ assert.equal(managedSurfaceHost.complete({ ...concurrentRequestA, success: true,
 assert.equal((await concurrentRevealA).targetId, managedPrimary.targetId)
 managedSurfaceHost.dispose()
 
-const revealedBrowserLayouts: Array<{ primary: string; secondary: string | null }> = []
+const revealedBrowserLayouts: Array<{ primary: string; secondary: string | null; explicitLayout: boolean }> = []
 const resizedInspectorWidths: number[] = []
 const closedBrowserTabs: string[] = []
 const browserTabCommands: Array<{ targetId: string; mode: string; url: string | null }> = []
@@ -280,8 +283,8 @@ broker.setBrowserSurfaceController({
         assert.equal(reveal, true)
         return broker.targets.get(targetId).target as Extract<ControlTarget, { kind: 'zyra-browser' }>
     },
-    revealTabs: async (_requestPrincipal, primary, secondary) => {
-        revealedBrowserLayouts.push({ primary: primary.targetId, secondary: secondary?.targetId || null })
+    revealTabs: async (_requestPrincipal, primary, secondary, _signal, explicitLayout) => {
+        revealedBrowserLayouts.push({ primary: primary.targetId, secondary: secondary?.targetId || null, explicitLayout: Boolean(explicitLayout) })
         return primary
     },
     resizeInspector: async (_requestPrincipal, target, width) => {
@@ -456,10 +459,12 @@ const modelWorkspaceListing = await tool.execute('visual-list-workspace', { oper
 assert.match(String(modelWorkspaceListing.content[0]?.text), /visible workspace state/)
 assert.match(String(modelWorkspaceListing.content[0]?.text), /browser:secondary/, 'the model-facing tool receives open sites and visible pane identity')
 await broker.handleToolOperation(principal, { operation: 'reveal_tab', targetId })
+await broker.handleToolOperation(principal, { operation: 'set_tab_layout', primaryTargetId: targetId })
 await broker.handleToolOperation(principal, { operation: 'set_tab_layout', primaryTargetId: targetId, secondaryTargetId })
-assert.deepEqual(revealedBrowserLayouts.slice(-2), [
-    { primary: targetId, secondary: null },
-    { primary: targetId, secondary: secondaryTargetId }
+assert.deepEqual(revealedBrowserLayouts.slice(-3), [
+    { primary: targetId, secondary: null, explicitLayout: false },
+    { primary: targetId, secondary: null, explicitLayout: true },
+    { primary: targetId, secondary: secondaryTargetId, explicitLayout: true }
 ])
 await broker.handleToolOperation(principal, { operation: 'resize_inspector', targetId, width: 720 })
 const clampedInspectorResize = await broker.handleToolOperation(principal, { operation: 'resize_inspector', targetId, width: 10 })
@@ -563,7 +568,7 @@ assert.equal(webviewSource.includes('webview?.focus()'), false, 'retained webvie
 assert(workspaceSource.includes('MousePointer2'))
 assert(browserDriverSource.includes("for (const fromSurface of [true, false])"))
 assert(browserDriverSource.includes('guest.capturePage()'))
-assert(browserDriverSource.includes("await this.command(guest, 'Input.insertText', { text: action.text })"))
+assert(browserDriverSource.includes("await this.inputCommand(guest, 'Input.insertText', { text: action.text }, context)"))
 assert(browserDriverSource.includes('Click or focus an observed page element before sending target-local keyboard input.'))
 assert(browserDriverSource.includes('buildBrowserPointerPath'))
 assert(/finally \{[\s\S]{0,240}Input\.dispatchMouseEvent'[\s\S]{0,80}mouseReleased/.test(browserDriverSource), 'pressed pointer actions release even when cursor publication or cancellation fails')
@@ -583,6 +588,8 @@ assert(preloadSource.includes('acknowledgeBrowserSurfaceRequest'))
 assert(preloadSource.includes('claimBrowserSurfaceRequest'))
 assert(preloadSource.includes('onBrowserSurfaceCancel'))
 assert(preloadSource.includes('updateWorkspaceState'))
+assert(preloadSource.includes('onCursorChange'))
+assert(protocolSource.includes('cursorChanged'))
 assert(handlerSource.includes('assertTrustedRenderer(event, mainWindow)'))
 assert(handlerSource.includes('browserSurface.completeRegisteredTarget(target)'))
 assert(handlerSource.includes('browserSurface.claim(input)'))

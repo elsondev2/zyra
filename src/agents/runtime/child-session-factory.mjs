@@ -1,6 +1,7 @@
 import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { createBrowserControlTool } from "../../agent-control/browser-control-tool.mjs";
+import { applyBrowserLoaderOnlyState, createBrowserToolSet } from "../../agent-control/browser-toolset.mjs";
 import { createComputerControlTool } from "../../agent-control/computer-control-tool.mjs";
 
 let piPromise;
@@ -52,9 +53,10 @@ export class ChildSessionFactory {
     const sessionManager = options.sessionFile
       ? SessionManager.open(options.sessionFile, this.transcriptDirectory)
       : SessionManager.create(cwd, this.transcriptDirectory, { parentSession: options.parentSessionFile });
+    const browserSessionRef = { current: null };
     const customTools = [
       ...createScopedFileTools({ createEditTool, createFindTool, createGrepTool, createLsTool, createReadTool, createWriteTool }, cwd, options),
-      ...createDelegatedControlTools(options),
+      ...createDelegatedControlTools(options, browserSessionRef),
     ];
     const result = await createAgentSession({
       cwd,
@@ -71,6 +73,8 @@ export class ChildSessionFactory {
       resourceLoader,
       sessionStartEvent: { type: "session_start", reason: options.sessionFile ? "resume" : "new" },
     });
+    browserSessionRef.current = result.session;
+    if (options.controlClient && new Set(options.tools ?? []).has("browser_control")) applyBrowserLoaderOnlyState(result.session);
     return {
       session: result.session,
       sessionId: result.session.sessionId ?? sessionManager.getSessionId?.(),
@@ -105,11 +109,14 @@ export function createScopedFileTools(pi, cwd, options = {}) {
   });
 }
 
-function createDelegatedControlTools(options = {}) {
+function createDelegatedControlTools(options = {}, browserSessionRef = { current: null }) {
   if (!options.controlClient) return [];
   const selected = new Set(options.tools ?? []);
   return [
-    ...(selected.has("browser_control") ? [createBrowserControlTool({ client: options.controlClient })] : []),
+    ...(selected.has("browser_control") ? [
+      createBrowserControlTool({ client: options.controlClient }),
+      ...createBrowserToolSet({ client: options.controlClient, sessionRef: browserSessionRef }),
+    ] : []),
     ...(selected.has("computer_control") ? [createComputerControlTool({ client: options.controlClient })] : []),
   ];
 }
@@ -154,7 +161,7 @@ export function buildChildSystemPrompt(options = {}) {
   const controlPolicy = options.controlLease
     ? `Control is limited to delegated grant ${options.controlLease.grantId} for target ${options.controlLease.targetId}; capabilities: ${options.controlLease.capabilities.join(", ")}; expiry: ${options.controlLease.expiresAt}. You cannot request, widen, renew, or redelegate it.`
     : options.controlClient
-      ? "The integrated Zyra Browser can be discovered and requested on demand with browser_control. You receive no authority until the user approves a bounded tab grant. Paired Chrome, Windows, and computer control remain unavailable."
+      ? "Load the integrated Browser tool set on demand with browser_use. You receive no authority until the user approves a bounded exact-tab grant. Activity in other tabs never interrupts your target. Paired Chrome, Windows, and computer control remain unavailable."
       : "Browser, paired Chrome, Windows, and computer-control capabilities are unavailable.";
   return [
     "You are a focused child agent inside Zyra's local agent fleet.",
