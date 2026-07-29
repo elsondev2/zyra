@@ -1,14 +1,25 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ExternalLink, FileCode2, FilePenLine, FileText, MessageSquareQuote, Search, Wrench } from 'lucide-react'
-import type { AssistantActivity, AssistantUserInputQuestion } from '@shared/assistant/contracts'
+import { ChevronDown, FilePenLine, FileText, MessageSquareQuote, Search, Wrench } from 'lucide-react'
+import type { AssistantActivity, AssistantUserInputQuestion, FileChangeKind } from '@shared/assistant/contracts'
+import {
+    analyzeAssistantReadResult,
+    buildAssistantReadPreview,
+    type AssistantReadMetadata
+} from '@shared/assistant/read-activity'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import type { AssistantToolOutputDefaultMode } from '@/lib/settings'
 import { cn } from '@/lib/utils'
 import { formatAssistantDateTime } from '@/lib/assistant/selectors'
-import { scanPatchFileSummaries } from '@/lib/diffRendering'
+import { extractFilePatch, scanPatchFileSummaries } from '@/lib/diffRendering'
+import { AssistantInlineDiffPreview } from './AssistantInlineDiffPreview'
 import type { AssistantDiffTarget } from './assistant-diff-types'
+import {
+    AssistantFileChangeStatusPill,
+    resolveAssistantFileChangeStatus
+} from './AssistantFileChangeStatusPill'
 import { getAssistantRelativeFilePath } from './assistant-file-navigation'
 import { getTerminalOutputHeightClass } from './assistant-timeline-layout'
+import { useAssistantVisibleText } from './useAssistantVisibleText'
 import {
     areActivitiesEquivalent,
     getActivityCommand,
@@ -52,8 +63,15 @@ function getToolTextShimmerStyle(isRunning: boolean): React.CSSProperties | unde
     }
 }
 
+function isReadActivity(activity: AssistantActivity): boolean {
+    return activity.kind === 'file-read'
+}
+
 function isRawToolActivity(activity: AssistantActivity): boolean {
-    return !isCommandActivity(activity) && activity.kind !== 'file-change' && activity.kind !== 'user-input.resolved'
+    return !isCommandActivity(activity)
+        && !isReadActivity(activity)
+        && activity.kind !== 'file-change'
+        && activity.kind !== 'user-input.resolved'
 }
 
 function shouldAutoExpandTerminalTool(activity: AssistantActivity, mode: AssistantToolOutputDefaultMode): boolean {
@@ -80,6 +98,30 @@ function isKnownFilePathReference(line: string, knownPaths: Set<string>): boolea
     return false
 }
 
+function getActivityFileChangeKind(
+    activity: AssistantActivity,
+    filePath: string,
+    previousPath?: string
+): FileChangeKind | undefined {
+    const targetPaths = new Set([filePath, previousPath]
+        .filter((value): value is string => Boolean(value))
+        .map(normalizeComparablePath))
+    const changes = Array.isArray(activity.payload?.changes) ? activity.payload.changes : []
+
+    for (const value of changes) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+        const change = value as Record<string, unknown>
+        const changePaths = [change.path, change.filePath, change.file_path, change.previousPath, change.previous_path]
+            .filter((entry): entry is string => typeof entry === 'string' && Boolean(entry.trim()))
+            .map(normalizeComparablePath)
+        if (!changePaths.some((entry) => targetPaths.has(entry))) continue
+        const kind = change.kind
+        if (kind === 'add' || kind === 'delete' || kind === 'update' || kind === 'move') return kind
+    }
+
+    return undefined
+}
+
 function getVisibleFileChangeOutput(output: string, knownPaths: Set<string>): string {
     const lines = output.split(/\r?\n/)
     const visibleLines = lines.filter((line) => {
@@ -91,6 +133,41 @@ function getVisibleFileChangeOutput(output: string, knownPaths: Set<string>): st
     })
 
     return visibleLines.join('\n').trim()
+}
+
+function readOptionalActivityNumber(value: unknown): number | undefined {
+    const number = typeof value === 'number' ? value : Number(value)
+    return Number.isFinite(number) && number >= 0 ? number : undefined
+}
+
+function getReadActivityMetadata(
+    activity: AssistantActivity,
+    output: string,
+    status: 'success' | 'running' | 'failed'
+): AssistantReadMetadata {
+    const analyzed = analyzeAssistantReadResult({
+        args: activity.payload?.args,
+        result: activity.payload?.result,
+        output,
+        status: status === 'success' ? 'completed' : status
+    })
+    const payload = activity.payload || {}
+    return {
+        readStartLine: readOptionalActivityNumber(payload.readStartLine) || analyzed.readStartLine,
+        readEndLine: readOptionalActivityNumber(payload.readEndLine) ?? analyzed.readEndLine,
+        readLineCount: readOptionalActivityNumber(payload.readLineCount) ?? analyzed.readLineCount,
+        readTotalLines: readOptionalActivityNumber(payload.readTotalLines) ?? analyzed.readTotalLines,
+        readRequestedLimit: readOptionalActivityNumber(payload.readRequestedLimit) ?? analyzed.readRequestedLimit,
+        readComplete: typeof payload.readComplete === 'boolean' ? payload.readComplete : analyzed.readComplete,
+        readTruncated: typeof payload.readTruncated === 'boolean' ? payload.readTruncated : analyzed.readTruncated,
+        readIsImage: typeof payload.readIsImage === 'boolean' ? payload.readIsImage : analyzed.readIsImage
+    }
+}
+
+function getReadLineRangeLabel(metadata: AssistantReadMetadata): string | null {
+    if (metadata.readIsImage || metadata.readComplete || metadata.readLineCount === undefined || metadata.readLineCount < 1) return null
+    const endLine = metadata.readEndLine ?? metadata.readStartLine + metadata.readLineCount - 1
+    return `(line ${metadata.readStartLine} to ${endLine})`
 }
 
 function getActivityIcon(activity: AssistantActivity) {
@@ -128,91 +205,6 @@ function InlineDiffStats({ additions, deletions, className }: { additions: numbe
             <span className="text-emerald-300/80">+{additions}</span>
             <span className="text-red-300/75">-{deletions}</span>
         </span>
-    )
-}
-
-function TimelineEditedFileRow({
-    activityId,
-    index,
-    isMultiFileChange,
-    fullPath,
-    displayPath,
-    previousPath,
-    isNew,
-    additions,
-    deletions,
-    onOpen,
-    onViewDiff
-}: {
-    activityId: string
-    index: number
-    isMultiFileChange: boolean
-    fullPath: string
-    displayPath: string
-    previousPath?: string
-    isNew: boolean
-    additions: number | null
-    deletions: number | null
-    onOpen?: (filePath: string) => Promise<void> | void
-    onViewDiff?: () => void
-}) {
-    const pathContent = (
-        <span className="flex min-w-0 items-center gap-2">
-            {isMultiFileChange ? (
-                <span className="w-4 shrink-0 text-right font-mono text-[9px] tabular-nums text-white/22">
-                    {index + 1}
-                </span>
-            ) : null}
-            {isNew ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400 shadow-[0_0_10px_rgba(56,189,248,0.75)]" /> : null}
-            <span className="block min-w-0 truncate">{displayPath}</span>
-        </span>
-    )
-
-    return (
-        <div
-            key={`${activityId}-${fullPath}-${previousPath || index}`}
-            className="group flex min-w-0 items-center gap-2 rounded-md border border-transparent bg-white/[0.025] px-2 py-1 transition-colors hover:bg-white/[0.045]"
-        >
-            <div className="min-w-0 flex flex-1 items-center gap-1.5 font-mono text-[11px] leading-[1.15rem] text-[var(--accent-primary)]">
-                <div className="min-w-0 shrink">
-                    {pathContent}
-                </div>
-                {onOpen ? (
-                    <button
-                        type="button"
-                        onClick={() => void onOpen(fullPath)}
-                        className="inline-flex h-5.5 shrink-0 items-center gap-1 rounded bg-white/[0.03] px-1.5 text-[10px] font-medium text-[var(--accent-primary)] transition-colors hover:bg-white/[0.055] hover:text-white"
-                        title={`Open ${displayPath}`}
-                    >
-                        <ExternalLink size={10} />
-                        <span className="hidden sm:inline">Open</span>
-                    </button>
-                ) : null}
-                <div className="flex-1" />
-            </div>
-            {previousPath ? (
-                <span className="hidden shrink-0 rounded bg-white/[0.04] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.12em] text-white/28 sm:inline">
-                    renamed
-                </span>
-            ) : null}
-            {additions !== null && deletions !== null ? (
-                <InlineDiffStats additions={additions} deletions={deletions} className="hidden shrink-0 gap-1.5 sm:flex" />
-            ) : null}
-            <div className="flex shrink-0 items-center gap-1">
-                {onViewDiff ? (
-                    <button
-                        type="button"
-                        onClick={onViewDiff}
-                        className="inline-flex h-6 items-center gap-1 rounded bg-white/[0.03] px-1.5 text-[10px] font-medium text-[var(--accent-primary)] transition-colors hover:bg-white/[0.055] hover:text-white"
-                        title={`View AI runtime diff for ${displayPath}`}
-                    >
-                        <FileCode2 size={10} />
-                        <span className="hidden sm:inline">Diff</span>
-                    </button>
-                ) : null}
-                <TimelineCopyButton value={displayPath} compact />
-            </div>
-        </div>
     )
 }
 
@@ -254,7 +246,26 @@ export const TimelineToolCallCard = memo(({
     const diffStats = useMemo(() => getActivityDiffStats(activity), [activity])
     const uniqueFileCount = useMemo(() => new Set(filePaths).size, [filePaths])
     const patch = useMemo(() => expanded ? getActivityPatch(activity) : null, [activity, expanded])
-    const rawOutput = useMemo(() => getActivityOutput(activity), [activity])
+    const authoritativeRawOutput = useMemo(() => getActivityOutput(activity), [activity])
+    const readMetadata = useMemo(
+        () => isReadActivity(activity) ? getReadActivityMetadata(activity, authoritativeRawOutput, status) : null,
+        [activity, authoritativeRawOutput, status]
+    )
+    const readLineRangeLabel = useMemo(() => readMetadata ? getReadLineRangeLabel(readMetadata) : null, [readMetadata])
+    const readPreview = useMemo(
+        () => isReadActivity(activity) ? buildAssistantReadPreview(authoritativeRawOutput) : null,
+        [activity, authoritativeRawOutput]
+    )
+    const outputPresentation = useAssistantVisibleText({
+        streamId: activity.id,
+        channel: 'activity',
+        text: authoritativeRawOutput,
+        streaming: status === 'running',
+        mode: 'stream'
+    })
+    const rawOutput = status === 'running' || outputPresentation.presenting
+        ? outputPresentation.text
+        : authoritativeRawOutput
     const output = expanded ? rawOutput : ''
     const resolvedUserInputEntries = useMemo(
         () => activity.kind === 'user-input.resolved' ? getResolvedUserInputEntries(activity) : [],
@@ -271,14 +282,19 @@ export const TimelineToolCallCard = memo(({
         if (!expanded) return []
 
         if (patchFileSummaries.length > 0) {
-            return patchFileSummaries.map((summary) => ({
-                fullPath: summary.path,
-                displayPath: getAssistantRelativeFilePath(summary.path, projectRootPath) || summary.path,
-                previousPath: summary.previousPath,
-                isNew: createdFilePathSet.has(summary.path),
-                additions: summary.additions,
-                deletions: summary.deletions
-            }))
+            return patchFileSummaries.map((summary) => {
+                const isNew = createdFilePathSet.has(summary.path)
+                const changeKind = getActivityFileChangeKind(activity, summary.path, summary.previousPath)
+                return {
+                    fullPath: summary.path,
+                    displayPath: getAssistantRelativeFilePath(summary.path, projectRootPath) || summary.path,
+                    previousPath: summary.previousPath,
+                    isNew,
+                    changeKind,
+                    additions: summary.additions,
+                    deletions: summary.deletions
+                }
+            })
         }
 
         if (activity.kind === 'file-change') {
@@ -292,11 +308,14 @@ export const TimelineToolCallCard = memo(({
 
             return uniquePaths.map((fullPath) => {
                 const originalIndex = filePaths.indexOf(fullPath)
+                const isNew = createdFilePathSet.has(fullPath)
+                const changeKind = getActivityFileChangeKind(activity, fullPath)
                 return {
                     fullPath,
                     displayPath: displayFilePaths[originalIndex] || fullPath,
                     previousPath: undefined,
-                    isNew: createdFilePathSet.has(fullPath),
+                    isNew,
+                    changeKind,
                     additions: null,
                     deletions: null
                 }
@@ -307,16 +326,19 @@ export const TimelineToolCallCard = memo(({
         return filePaths.flatMap((fullPath, index) => {
             if (seen.has(fullPath)) return []
             seen.add(fullPath)
+            const isNew = createdFilePathSet.has(fullPath)
+            const changeKind = getActivityFileChangeKind(activity, fullPath)
             return [{
                 fullPath,
                 displayPath: displayFilePaths[index] || fullPath,
                 previousPath: undefined,
-                isNew: createdFilePathSet.has(fullPath),
+                isNew,
+                changeKind,
                 additions: null,
                 deletions: null
             }]
         })
-    }, [activity.kind, createdFilePathSet, diffStats?.fileCount, displayFilePaths, expanded, filePaths, patchFileSummaries, projectRootPath])
+    }, [activity, createdFilePathSet, diffStats?.fileCount, displayFilePaths, expanded, filePaths, patchFileSummaries, projectRootPath])
     const displayedComparablePathSet = useMemo(() => {
         const comparablePaths = new Set<string>()
         for (const entry of fileSectionEntries) {
@@ -336,13 +358,16 @@ export const TimelineToolCallCard = memo(({
     const effectiveFileCount = diffStats?.fileCount ?? uniqueFileCount
     const isMultiFileChange = activity.kind === 'file-change' && effectiveFileCount > 1
     const isCommand = isCommandActivity(activity)
+    const isRead = isReadActivity(activity)
     const isRawTool = isRawToolActivity(activity)
     const isTerminalLikeTool = isCommand || isRawTool
     const toolTextStyle = useMemo(() => getToolTextShimmerStyle(isTerminalLikeTool && status === 'running'), [isTerminalLikeTool, status])
     const primaryLabel = isResolvedUserInput
         ? (primaryValue || `${resolvedUserInputEntries.length} answers captured`)
         : activity.kind === 'file-change'
-            ? (isMultiFileChange ? `Edited files (${effectiveFileCount})` : displayFilePaths[0] || primaryValue || title)
+            ? (displayFilePaths[0]
+                ? `${displayFilePaths[0]}${isMultiFileChange ? ` +${Math.max(0, effectiveFileCount - 1)}` : ''}`
+                : primaryValue || title)
             : primaryValue || title
     const filteredOutput = useMemo(() => {
         if (!expanded || activity.kind !== 'file-change' || !output) return output
@@ -361,6 +386,9 @@ export const TimelineToolCallCard = memo(({
         if (activity.kind !== 'file-change') return filteredOutput
         return getVisibleFileChangeOutput(filteredOutput, displayedComparablePathSet)
     }, [activity.kind, displayedComparablePathSet, filteredOutput])
+    const failedFileChangeOutput = activity.kind === 'file-change' && status === 'failed'
+        ? visibleResultOutput || 'The write failed before any file changes were applied.'
+        : ''
     const visibleDetailLines = useMemo(() => {
         if (activity.kind !== 'file-change') return filteredDetailLines
         return filteredDetailLines.filter((line) => {
@@ -412,6 +440,7 @@ export const TimelineToolCallCard = memo(({
                 .map((entry, index) => `${index + 1}. ${entry.header}\n${entry.question}\nAnswer: ${entry.answer}`)
                 .join('\n\n')
         }
+        if (isRead) return authoritativeRawOutput
         if (isCommand) {
             return [
                 primaryValue ? `Input\n${primaryValue}` : '',
@@ -419,21 +448,38 @@ export const TimelineToolCallCard = memo(({
             ].filter((value) => String(value || '').trim()).join('\n\n')
         }
         return [primaryValue, filteredOutput, ...filteredDetailLines].filter((value) => String(value || '').trim()).join('\n\n')
-    }, [activity.kind, expanded, filteredDetailLines, filteredOutput, isCommand, primaryValue, resolvedUserInputEntries])
-    const canOpenFileSections = Boolean(onOpenFilePath && activity.kind === 'file-change')
-    const canViewDiff = Boolean(expanded && onViewDiff && activity.kind === 'file-change' && patch)
+    }, [activity.kind, authoritativeRawOutput, expanded, filteredDetailLines, filteredOutput, isCommand, isRead, primaryValue, resolvedUserInputEntries])
+    const canViewDiff = Boolean(expanded && onViewDiff && activity.kind === 'file-change' && status !== 'failed' && patch)
+    const inlineDiffTarget = fileSectionEntries[0]
+    const inlinePreviewPatch = useMemo(() => {
+        if (!patch || !inlineDiffTarget) return ''
+        return extractFilePatch(patch, inlineDiffTarget.fullPath, inlineDiffTarget.previousPath) || patch
+    }, [inlineDiffTarget, patch])
     const primaryPathIsNew = Boolean(filePaths[0] && createdFilePathSet.has(filePaths[0]))
+    const primaryPathChangeKind = filePaths[0] ? getActivityFileChangeKind(activity, filePaths[0]) : undefined
+    const primaryPathChangeStatus = resolveAssistantFileChangeStatus({
+        kind: primaryPathChangeKind,
+        isNew: primaryPathIsNew
+    })
     const activityStartedAt = useMemo(() => getActivityStartedAt(activity), [activity])
-    const viewDiffForPath = useCallback((filePath: string, displayPath: string, previousPath?: string, isNew = false) => {
+    const viewDiffForPath = useCallback((
+        filePath: string,
+        displayPath: string,
+        previousPath?: string,
+        isNew = false,
+        changeKind?: FileChangeKind
+    ) => {
         if (!onViewDiff || !patch) return
         onViewDiff({
             activityId: activity.id,
+            turnId: activity.turnId,
             filePath,
             displayPath,
             patch,
             previousPath,
             createdAt: activity.createdAt,
             isNew,
+            changeKind,
             provisional: status === 'running' || activity.payload?.authoritative !== true,
             truncated: activity.payload?.truncated === true,
             unavailableReason: typeof activity.payload?.diffUnavailableReason === 'string'
@@ -441,6 +487,16 @@ export const TimelineToolCallCard = memo(({
                 : undefined
         })
     }, [activity.createdAt, activity.id, activity.payload, onViewDiff, patch, status])
+    const handleOpenInlineDiff = useCallback(() => {
+        if (!canViewDiff || !inlineDiffTarget) return
+        viewDiffForPath(
+            inlineDiffTarget.fullPath,
+            inlineDiffTarget.displayPath,
+            inlineDiffTarget.previousPath,
+            inlineDiffTarget.isNew,
+            inlineDiffTarget.changeKind
+        )
+    }, [canViewDiff, inlineDiffTarget, viewDiffForPath])
     const handleToggleExpanded = useCallback(() => {
         if (!hasExpandableBody) return
         userChangedExpansionRef.current = true
@@ -448,11 +504,11 @@ export const TimelineToolCallCard = memo(({
     }, [hasExpandableBody])
 
     useEffect(() => {
-        if (status !== 'running') return
+        if (status !== 'running' || isRead) return
         setNowIso(new Date().toISOString())
         const intervalId = window.setInterval(() => setNowIso(new Date().toISOString()), 1000)
         return () => window.clearInterval(intervalId)
-    }, [status])
+    }, [isRead, status])
 
     useLayoutEffect(() => {
         if (!isTerminalLikeTool || !expanded || !terminalOutputText) return
@@ -518,18 +574,30 @@ export const TimelineToolCallCard = memo(({
                 <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 items-center gap-2">
                         <p className={cn('min-w-0 flex-1 truncate font-mono text-[11px] leading-5', isTerminalLikeTool ? 'whitespace-nowrap text-emerald-100/85' : 'text-sparkle-text-secondary')}>
-                            <span className="inline-flex min-w-0 items-center gap-2">
-                                {!isMultiFileChange && primaryPathIsNew ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400 shadow-[0_0_10px_rgba(56,189,248,0.75)]" /> : null}
+                            <span className="inline-flex min-w-0 items-center gap-1.5">
                                 <span className="truncate" style={toolTextStyle}>{primaryLabel}</span>
+                                {readLineRangeLabel ? (
+                                    <span className="shrink-0 text-[9px] text-white/25">
+                                        {readLineRangeLabel}
+                                    </span>
+                                ) : null}
+                                {activity.kind === 'file-change' ? <AssistantFileChangeStatusPill status={primaryPathChangeStatus} /> : null}
                             </span>
                         </p>
-                        {diffStats ? <InlineDiffStats additions={diffStats.additions} deletions={diffStats.deletions} className="shrink-0 gap-1.5" /> : null}
+                        {diffStats && status !== 'failed' ? <InlineDiffStats additions={diffStats.additions} deletions={diffStats.deletions} className="shrink-0 gap-1.5" /> : null}
                         {completedWithoutOutput ? (
                             <span className="hidden shrink-0 rounded-full bg-white/[0.04] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.12em] text-white/25 sm:inline">
                                 no output
                             </span>
                         ) : null}
-                        {isTerminalLikeTool ? (
+                        {isRead ? (
+                            <span className={cn(
+                                'hidden shrink-0 text-[9px] font-medium uppercase tracking-[0.14em] sm:inline',
+                                status === 'running' ? 'text-amber-200/45' : status === 'failed' ? 'text-red-200/45' : 'text-white/22'
+                            )}>
+                                {status === 'running' ? 'Reading' : status === 'failed' ? 'Read failed' : 'Read'}
+                            </span>
+                        ) : isTerminalLikeTool ? (
                             <span className={cn(
                                 'w-14 shrink-0 text-right font-mono text-[9px] tabular-nums transition-colors',
                                 status === 'running'
@@ -538,13 +606,17 @@ export const TimelineToolCallCard = memo(({
                             )}>
                                 {elapsed || ''}
                             </span>
+                        ) : activity.kind === 'file-change' ? (
+                            <span className="shrink-0 font-mono text-[9px] tabular-nums text-white/25 transition-colors group-hover:text-white/35">
+                                {elapsed || ''}
+                            </span>
                         ) : (
                             <span className="hidden shrink-0 text-[9px] font-medium uppercase tracking-[0.14em] text-white/22 sm:inline">
                                 {title}{elapsed ? <span className="ml-1.5 normal-case tracking-normal text-white/25"> - {elapsed}</span> : null}
                             </span>
                         )}
                     </div>
-                    {!isTerminalLikeTool && activity.kind !== 'file-change' ? (
+                    {!isRead && !isTerminalLikeTool && activity.kind !== 'file-change' ? (
                         <p className="truncate text-[9px] font-medium uppercase tracking-[0.14em] text-white/20">{title}{elapsed ? <span className="ml-1.5 normal-case tracking-normal text-white/22"> - {elapsed}</span> : null}</p>
                     ) : null}
                 </div>
@@ -554,16 +626,27 @@ export const TimelineToolCallCard = memo(({
                     ) : null}
                 </span>
             </button>
-            <AnimatedHeight isOpen={expanded && hasExpandableBody && (!isTerminalLikeTool || hasTerminalOutput)} duration={240}>
-                <div className={cn('mt-2 rounded-lg border border-white/5', isTerminalLikeTool ? 'bg-[#050606] p-0' : activity.kind === 'file-change' ? 'bg-black/20 p-2' : 'bg-black/20 p-2.5')}>
-                    <div className={cn('flex items-start justify-between gap-3', (isTerminalLikeTool || activity.kind === 'file-change') && 'hidden')}>
-                        <div className="min-w-0">
-                            <p className="text-[10px] text-white/18">{formatAssistantDateTime(activity.createdAt)}{elapsed ? <span className="ml-1.5"> - {elapsed}</span> : null}</p>
-                            <p className="mt-1 text-[9px] font-medium uppercase tracking-[0.14em] text-white/18">{title}</p>
-                            {diffStats ? <InlineDiffStats additions={diffStats.additions} deletions={diffStats.deletions} className="mt-1.5 gap-1.5" /> : null}
+            <AnimatedHeight
+                isOpen={expanded && hasExpandableBody && (!isTerminalLikeTool || hasTerminalOutput)}
+                duration={activity.kind === 'file-change' ? 220 : 240}
+                crispContent={activity.kind === 'file-change'}
+            >
+                <div className={cn(
+                    activity.kind === 'file-change'
+                        ? 'relative mt-1 h-60 min-h-0 overflow-hidden'
+                        : 'mt-2 rounded-lg border border-white/5',
+                    isTerminalLikeTool ? 'bg-[#050606] p-0' : activity.kind !== 'file-change' && 'bg-black/20 p-2.5'
+                )}>
+                    {!isTerminalLikeTool && activity.kind !== 'file-change' ? (
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                                <p className="text-[10px] text-white/18">{formatAssistantDateTime(activity.createdAt)}{!isRead && elapsed ? <span className="ml-1.5"> - {elapsed}</span> : null}</p>
+                                <p className="mt-1 text-[9px] font-medium uppercase tracking-[0.14em] text-white/18">{title}</p>
+                                {diffStats ? <InlineDiffStats additions={diffStats.additions} deletions={diffStats.deletions} className="mt-1.5 gap-1.5" /> : null}
+                            </div>
+                            {copyValue ? <TimelineCopyButton value={copyValue} /> : null}
                         </div>
-                        {copyValue && activity.kind !== 'file-change' ? <TimelineCopyButton value={copyValue} /> : null}
-                    </div>
+                    ) : null}
                     {isCommand ? (
                         <div className="flex items-center justify-between gap-3 border-b border-white/[0.05] px-3 py-2 text-[9px] text-white/24">
                             <span>{formatAssistantDateTime(activityStartedAt)}{elapsed ? <span className="ml-1.5 text-white/32">· {elapsed}</span> : null}</span>
@@ -625,26 +708,47 @@ export const TimelineToolCallCard = memo(({
                                 </div>
                             ))}
                         </div>
-                    ) : activity.kind === 'file-change' && fileSectionEntries.length > 0 ? (
-                        <div className="mt-1 rounded-md bg-black/[0.18] p-0.5">
-                            <div className="space-y-1">
-                                {fileSectionEntries.map(({ fullPath, displayPath, previousPath, isNew, additions, deletions }, index) => (
-                                    <TimelineEditedFileRow
-                                        key={`${activity.id}-${fullPath}-${previousPath || index}`}
-                                        activityId={activity.id}
-                                        index={index}
-                                        isMultiFileChange={isMultiFileChange}
-                                        fullPath={fullPath}
-                                        displayPath={displayPath}
-                                        previousPath={previousPath}
-                                        isNew={isNew}
-                                        additions={additions}
-                                        deletions={deletions}
-                                        onOpen={canOpenFileSections ? onOpenFilePath : undefined}
-                                        onViewDiff={canViewDiff ? () => viewDiffForPath(fullPath, displayPath, previousPath, isNew) : undefined}
-                                    />
-                                ))}
+                    ) : activity.kind === 'file-change' && status === 'failed' ? (
+                        <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-red-400/20 bg-red-500/[0.035]">
+                            <div className="shrink-0 border-b border-red-400/15 px-3 py-2">
+                                <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-red-300/80">Write failed</div>
+                                <p className="custom-scrollbar mt-1 max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-4 text-red-100/70">{failedFileChangeOutput}</p>
                             </div>
+                            {inlinePreviewPatch && inlineDiffTarget ? (
+                                <div className="min-h-0 flex-1 border-t border-white/[0.04]">
+                                    <AssistantInlineDiffPreview
+                                        patch={inlinePreviewPatch}
+                                        displayPath={inlineDiffTarget.displayPath}
+                                        additions={inlineDiffTarget.additions ?? diffStats?.additions ?? 0}
+                                        deletions={inlineDiffTarget.deletions ?? diffStats?.deletions ?? 0}
+                                    />
+                                </div>
+                            ) : null}
+                        </div>
+                    ) : activity.kind === 'file-change' && inlinePreviewPatch && inlineDiffTarget ? (
+                        <AssistantInlineDiffPreview
+                            patch={inlinePreviewPatch}
+                            displayPath={inlineDiffTarget.displayPath}
+                            additions={inlineDiffTarget.additions ?? diffStats?.additions ?? 0}
+                            deletions={inlineDiffTarget.deletions ?? diffStats?.deletions ?? 0}
+                            onOpenFullDiff={canViewDiff ? handleOpenInlineDiff : undefined}
+                        />
+                    ) : isRead && readPreview ? (
+                        <div className="mt-2 overflow-hidden rounded-md border border-white/[0.055] bg-[#070a0d]">
+                            <div className="custom-scrollbar max-h-[32rem] overflow-auto px-3 py-2.5">
+                                <pre className="min-w-full w-max whitespace-pre font-mono text-[11px] leading-5 text-[#cbd6df]/75">
+                                    {readPreview.text || (status === 'running' ? 'Waiting for file contents…' : 'This read returned no text content.')}
+                                </pre>
+                            </div>
+                            {readPreview.presentationTruncated || (readMetadata && !readMetadata.readComplete) ? (
+                                <div className="border-t border-white/[0.05] px-3 py-1.5 font-mono text-[9px] text-white/28">
+                                    {readPreview.presentationTruncated
+                                        ? `Showing first ${readPreview.displayedLines} of ${readPreview.totalReadLines} lines returned by Read.`
+                                        : readMetadata?.readEndLine !== undefined && readMetadata.readTotalLines !== undefined
+                                            ? `Read lines ${readMetadata.readStartLine}-${readMetadata.readEndLine} of ${readMetadata.readTotalLines}.`
+                                            : readPreview.continuationNotice?.replace(/^\[|\]$/g, '') || 'This Read covered part of the file.'}
+                                </div>
+                            ) : null}
                         </div>
                     ) : (
                         <p className="mt-1.5 whitespace-pre-wrap break-all font-mono text-[11px] leading-5 text-white/20">{primaryLabel}</p>
@@ -659,7 +763,7 @@ export const TimelineToolCallCard = memo(({
                             onViewDiff={canViewDiff ? () => viewDiffForPath(fullPath, displayPath, undefined, isNew) : undefined}
                         />
                     )) : null}
-                    {!isTerminalLikeTool && visibleResultOutput ? (
+                    {!isRead && !isTerminalLikeTool && activity.kind !== 'file-change' && visibleResultOutput ? (
                         <div className="mt-2 rounded-md border border-white/5 bg-black/25 p-2">
                             <p className="text-[9px] font-medium uppercase tracking-[0.14em] text-white/18">Result</p>
                             <TimelinePathAwareTextBlock
@@ -670,7 +774,7 @@ export const TimelineToolCallCard = memo(({
                             />
                         </div>
                     ) : null}
-                    {!isTerminalLikeTool && activity.kind !== 'file-change' ? visibleDetailLines.map((line, index) => (
+                    {!isRead && !isTerminalLikeTool && activity.kind !== 'file-change' ? visibleDetailLines.map((line, index) => (
                         isAbsoluteFilesystemPathLine(line.trim()) && onOpenFilePath ? (
                             <TimelineFilePathRow
                                 key={`${activity.id}-path-${index}`}

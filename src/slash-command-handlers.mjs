@@ -32,6 +32,8 @@ import {
   switchZyraAuthMethod,
 } from "./zyra-sdk.mjs";
 import { normalizeZyraAuthMethod, providerForZyraAuthMethod } from "./auth-methods.mjs";
+import { importClaudeAgentPreviews, previewClaudeAgentImports } from "./agents/claude-importer.mjs";
+import { formatAgentDoctorReport } from "./agents/definition-validator.mjs";
 import { buildProjectStartPrompt } from "./project-start.mjs";
 import { getSlashCommand, parseSlashInput } from "./slash-commands.mjs";
 import { normalizeWebToolsMode } from "./web-tools-picker.mjs";
@@ -60,6 +62,16 @@ export async function handleSlash(runtime, ui, input, controls = {}) {
     case "commands":
       ui.commands();
       return true;
+    case "agents":
+      return runAgents(runtime, ui, arg);
+    case "agent":
+      return runAgent(runtime, ui, arg);
+    case "subtask":
+      return runSubtask(runtime, ui, arg);
+    case "workflows":
+      return runWorkflows(runtime, ui);
+    case "workflow":
+      return runWorkflow(runtime, ui, arg);
     case "start":
       return runStart(runtime, ui, arg, controls);
     case "session":
@@ -97,6 +109,7 @@ export async function handleSlash(runtime, ui, input, controls = {}) {
     case "consolidate":
       return runMemoryConsolidate(runtime, ui, controls);
     case "chat":
+      if (typeof controls.openChatPicker === "function") return controls.openChatPicker();
       ui.sessionInfo(buildSessionInfo(runtime));
       return true;
     case "thinking":
@@ -116,6 +129,111 @@ export async function handleSlash(runtime, ui, input, controls = {}) {
     default:
       return runCustomSlashCommand(runtime, ui, `/${parsed.commandName}`, arg, controls);
   }
+}
+
+async function runAgents(runtime, ui, arg) {
+  if (!runtime.fleet) throw new Error("Agent fleet is unavailable in this session.");
+  const action = String(arg ?? "").trim().toLowerCase();
+  if (!action) {
+    const result = await ui.openAgents?.(runtime.fleet);
+    if (result?.action === "steer") {
+      ui._host?.inputComponent?.setText?.(`/agent send ${result.agentRunId} `);
+    }
+    return true;
+  }
+  if (action === "doctor") {
+    ui.block(formatAgentDoctorReport(runtime.fleet.listDefinitions().all).split("\n"));
+    return true;
+  }
+  if (action === "import claude" || action.startsWith("import claude confirm")) {
+    const definitions = runtime.fleet.listDefinitions();
+    const preview = await previewClaudeAgentImports({
+      project: runtime.project,
+      existingNames: definitions.active.map((entry) => entry.name),
+    });
+    if (action.startsWith("import claude confirm")) {
+      const selections = action.slice("import claude confirm".length).trim().split(/\s+/).filter(Boolean);
+      const scope = selections.includes("project") ? "project" : "user";
+      const names = selections.filter((entry) => !["all", "project", "user"].includes(entry));
+      const imported = await importClaudeAgentPreviews(preview, { confirmed: true, project: runtime.project, scope, names });
+      await runtime.fleet.reloadDefinitions();
+      ui.info(`Imported ${imported.copied} Claude agent definition${imported.copied === 1 ? "" : "s"} into ${scope} scope. Run /reload to refresh the root agent guide.`);
+      return true;
+    }
+    const lines = ["Claude agent import preview (nothing copied):"];
+    for (const item of preview.previews) {
+      lines.push(`${item.valid ? "READY" : "BLOCKED"} ${item.candidate.name}`);
+      for (const warning of item.warnings) lines.push(`  warning: ${warning}`);
+      for (const error of item.errors) lines.push(`  error: ${error}`);
+    }
+    if (!preview.previews.length) lines.push("No Claude agent definitions found.");
+    else lines.push("Confirm with /agents import claude confirm <name|all> [user|project].");
+    ui.block(lines);
+    return true;
+  }
+  ui.info("Usage: /agents, /agents doctor, /agents import claude");
+  return true;
+}
+
+async function runAgent(runtime, ui, arg) {
+  if (!runtime.fleet) throw new Error("Agent fleet is unavailable in this session.");
+  const [name, ...rest] = String(arg ?? "").trim().split(/\s+/).filter(Boolean);
+  if (!name) { ui.info("Usage: /agent <name> <task>"); return true; }
+  if (["send", "stop", "retry", "resume", "status", "wait"].includes(name)) {
+    const [agentRunId, ...messageParts] = rest;
+    if (!agentRunId) throw new Error(`/agent ${name} requires an agent run id.`);
+    let result;
+    if (name === "send") result = await runtime.fleet.send(agentRunId, messageParts.join(" "));
+    if (name === "stop") result = await runtime.fleet.stop(agentRunId);
+    if (name === "retry") result = await runtime.fleet.retry(agentRunId, messageParts.length ? { goal: messageParts.join(" ") } : {});
+    if (name === "resume") result = await runtime.fleet.resume(agentRunId, messageParts.join(" ") || undefined);
+    if (name === "status") result = runtime.fleet.status(agentRunId);
+    if (name === "wait") result = await runtime.fleet.wait(agentRunId);
+    ui.info(formatFleetActionResult(result));
+    return true;
+  }
+  const prompt = rest.join(" ");
+  if (!prompt) throw new Error("Named agent invocation requires a task.");
+  const result = await runtime.fleet.spawn({ agent: name.replace(/^@agent-/, ""), prompt, goal: prompt, background: true });
+  ui.info(`Agent queued: ${result.agentRunId} · ${result.model}. Keep chatting or open /agents.`);
+  return true;
+}
+
+async function runSubtask(runtime, ui, arg) {
+  const prompt = String(arg ?? "").trim();
+  if (!prompt) throw new Error("Usage: /subtask <task>");
+  const result = await runtime.fleet.spawn({ prompt, goal: prompt, contextFork: true, label: "subtask", background: true });
+  ui.info(`Context-forked subtask queued: ${result.agentRunId}.`);
+  return true;
+}
+
+async function runWorkflows(runtime, ui) {
+  if (!runtime.workflows) throw new Error("Workflow runtime is unavailable in this session.");
+  const result = await ui.openWorkflows?.(runtime.workflows);
+  if (result?.action === "save") {
+    const saved = await runtime.workflows.save(result.workflowRunId, { scope: "personal" });
+    ui.info(`Workflow saved: ${saved.file}. Use /reload after editing definition files.`);
+  }
+  return true;
+}
+
+async function runWorkflow(runtime, ui, arg) {
+  if (!runtime.workflows) throw new Error("Workflow runtime is unavailable in this session.");
+  const match = String(arg ?? "").trim().match(/^(\S+)(?:\s+([\s\S]+))?$/);
+  if (!match) { ui.info("Usage: /workflow <name> [json args]"); return true; }
+  let args = {};
+  if (match[2]) {
+    try { args = JSON.parse(match[2]); } catch (error) { throw new Error(`Workflow arguments must be JSON: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+  const run = await runtime.workflows.run(match[1], args, { approved: true, background: true });
+  ui.info(`Workflow queued: ${run.workflowRunId} · ${run.definitionName}. Keep chatting or open /workflows.`);
+  return true;
+}
+
+function formatFleetActionResult(result) {
+  if (!result) return "Agent action completed.";
+  if (result.agentRunId) return `${result.label ?? result.agentId ?? "Agent"}: ${result.status ?? "updated"} · ${result.agentRunId}`;
+  return JSON.stringify(result);
 }
 
 async function runStart(runtime, ui, arg, controls) {

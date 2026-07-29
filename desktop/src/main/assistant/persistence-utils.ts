@@ -229,6 +229,65 @@ export function initializeAssistantPersistenceSchema(db: SqlDatabase): void {
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS assistant_fleet_snapshots (
+            root_thread_id TEXT PRIMARY KEY,
+            sequence INTEGER NOT NULL,
+            updated_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS assistant_agent_runs (
+            agent_run_id TEXT PRIMARY KEY,
+            root_thread_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            parent_agent_run_id TEXT,
+            workflow_run_id TEXT,
+            session_file TEXT,
+            updated_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS assistant_workflow_runs (
+            workflow_run_id TEXT PRIMARY KEY,
+            root_thread_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            definition_name TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS assistant_workflow_phases (
+            workflow_run_id TEXT NOT NULL,
+            root_thread_id TEXT NOT NULL,
+            phase_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            PRIMARY KEY(workflow_run_id, phase_id)
+        );
+        CREATE TABLE IF NOT EXISTS assistant_workflow_calls (
+            workflow_run_id TEXT NOT NULL,
+            root_thread_id TEXT NOT NULL,
+            call_id TEXT NOT NULL,
+            agent_run_id TEXT,
+            status TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            PRIMARY KEY(workflow_run_id, call_id)
+        );
+        CREATE TABLE IF NOT EXISTS assistant_agent_relationships (
+            root_thread_id TEXT NOT NULL,
+            child_agent_run_id TEXT NOT NULL,
+            parent_agent_run_id TEXT,
+            workflow_run_id TEXT,
+            workflow_phase_id TEXT,
+            PRIMARY KEY(root_thread_id, child_agent_run_id)
+        );
+        CREATE TABLE IF NOT EXISTS assistant_agent_artifacts (
+            artifact_id TEXT PRIMARY KEY,
+            root_thread_id TEXT NOT NULL,
+            agent_run_id TEXT,
+            workflow_run_id TEXT,
+            kind TEXT NOT NULL,
+            path TEXT,
+            created_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL
+        );
         CREATE INDEX IF NOT EXISTS idx_assistant_threads_session ON assistant_threads(session_id, updated_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_assistant_turns_thread ON assistant_turns(thread_id, requested_at ASC, id ASC);
         CREATE INDEX IF NOT EXISTS idx_assistant_messages_thread ON assistant_messages(thread_id, created_at ASC, id ASC);
@@ -237,6 +296,12 @@ export function initializeAssistantPersistenceSchema(db: SqlDatabase): void {
         CREATE INDEX IF NOT EXISTS idx_assistant_approvals_thread ON assistant_pending_approvals(thread_id, created_at ASC, id ASC);
         CREATE INDEX IF NOT EXISTS idx_assistant_user_inputs_thread ON assistant_pending_user_inputs(thread_id, created_at ASC, id ASC);
         CREATE INDEX IF NOT EXISTS idx_assistant_playground_labs_updated ON assistant_playground_labs(updated_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_assistant_agent_runs_root ON assistant_agent_runs(root_thread_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_assistant_agent_runs_parent ON assistant_agent_runs(parent_agent_run_id);
+        CREATE INDEX IF NOT EXISTS idx_assistant_agent_runs_workflow ON assistant_agent_runs(workflow_run_id);
+        CREATE INDEX IF NOT EXISTS idx_assistant_workflows_root ON assistant_workflow_runs(root_thread_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_assistant_workflow_calls_agent ON assistant_workflow_calls(agent_run_id);
+        CREATE INDEX IF NOT EXISTS idx_assistant_artifacts_root ON assistant_agent_artifacts(root_thread_id, created_at DESC);
     `)
     ensureTableColumn(db, 'assistant_sessions', 'mode', `TEXT NOT NULL DEFAULT 'work'`)
     ensureTableColumn(db, 'assistant_sessions', 'playground_lab_id', 'TEXT')
@@ -250,6 +315,14 @@ export function initializeAssistantPersistenceSchema(db: SqlDatabase): void {
     ensureTableColumn(db, 'assistant_messages', 'timeline_sequence', 'INTEGER')
     ensureTableColumn(db, 'assistant_activities', 'timeline_sequence', 'INTEGER')
     ensureTableColumn(db, 'assistant_proposed_plans', 'timeline_sequence', 'INTEGER')
+    db.run(`
+        CREATE INDEX IF NOT EXISTS idx_assistant_messages_history ON assistant_messages(thread_id, created_at DESC, timeline_sequence DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_assistant_activities_history ON assistant_activities(thread_id, created_at DESC, timeline_sequence DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_assistant_plans_history ON assistant_proposed_plans(thread_id, created_at DESC, timeline_sequence DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_assistant_messages_turn ON assistant_messages(thread_id, turn_id, created_at ASC, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_assistant_activities_turn ON assistant_activities(thread_id, turn_id, created_at ASC, id ASC);
+        CREATE INDEX IF NOT EXISTS idx_assistant_plans_turn ON assistant_proposed_plans(thread_id, turn_id, created_at ASC, id ASC);
+    `)
 }
 
 function ensureTableColumn(db: SqlDatabase, tableName: string, columnName: string, definition: string): void {

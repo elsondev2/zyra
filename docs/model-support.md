@@ -11,6 +11,23 @@ Zyra keeps model registration separate from provider transport support. A model 
 
 When Pi adds Luna to its own model registry, `registerZyraRuntimeModels()` finds the official entry and leaves it untouched. The pending compatibility marker only belongs to Zyra's temporary injected entry, so removing the bridge later should be a small merge rather than a transport rewrite.
 
+## Subagent Fleet Routing
+
+Subagents and workflows use a Codex-only routing catalog. Fleet candidates must use `openai-codex/*`; `openai/*` API models and third-party providers are excluded even if the root chat can use them.
+
+Selectors are semantic tiers:
+
+- `sol`: orchestration, difficult synthesis, architecture, and high-risk review
+- `terra`: implementation, debugging, review, and verification
+- `luna`: fast search/extraction when Pi transport support and live account availability both pass
+- `inherit`: the current root model only when it is an eligible Codex model
+
+The router evaluates authentication, Pi compatibility, cached/live availability, context window, reasoning/tool requirements, and policy allow/deny lists. Every rejected candidate and fallback reason is persisted with the run. Previous-generation fallbacks are GPT-5.5, GPT-5.4, GPT-5.4 mini, and GPT-5.3 Codex Spark.
+
+Luna's fleet alias does not bypass its support-pending state. When the locally registered Luna entry remains blocked, a Luna-preferring task records that rejection and chooses its first live compatible fallback. Bounded escalation to Terra or Sol requires a concrete recorded reason; a child cannot promote itself.
+
+See [subagents-workflows.md](subagents-workflows.md) for definition formats, controls, safety boundaries, and workflow behavior.
+
 ## Authentication Methods
 
 Zyra treats the active model provider as the active authentication method:

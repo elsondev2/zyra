@@ -204,6 +204,8 @@ export function createProjectsAdapter() {
             ipcRenderer.invoke('devscope:previewTerminal:setTitle', input),
         resizePreviewTerminal: (input: { sessionId: string; cols: number; rows: number }) =>
             ipcRenderer.invoke('devscope:previewTerminal:resize', input),
+        clearPreviewTerminal: (sessionId: string) =>
+            ipcRenderer.invoke('devscope:previewTerminal:clear', sessionId),
         closePreviewTerminal: (sessionId: string) =>
             ipcRenderer.invoke('devscope:previewTerminal:close', sessionId),
         onPreviewTerminalEvent: (callback: (event: DevScopePreviewTerminalEvent) => void) => {
@@ -215,6 +217,14 @@ export function createProjectsAdapter() {
                 ipcRenderer.removeListener(PREVIEW_TERMINAL_EVENT_CHANNEL, listener)
             }
         },
+        getBrowserPreviewConfig: () =>
+            ipcRenderer.invoke('devscope:browserPreview:getConfig'),
+        clearBrowserPreviewData: () =>
+            ipcRenderer.invoke('devscope:browserPreview:clearData'),
+        getBrowserLinkPreview: (input: { url: string }) =>
+            ipcRenderer.invoke('devscope:browserPreview:getLinkPreview', input),
+        openBrowserPreviewExternal: (url: string) =>
+            ipcRenderer.invoke('devscope:browserPreview:openExternal', url),
         openFile: (filePath: string) => ipcRenderer.invoke('devscope:openFile', filePath),
         openWith: (filePath: string) => ipcRenderer.invoke('devscope:openWith', filePath),
         createFileSystemItem: (destinationDirectory: string, name: string, type: 'file' | 'directory') =>

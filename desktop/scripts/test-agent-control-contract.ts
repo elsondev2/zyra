@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+import {
+    CONTROL_CAPABILITIES,
+    CONTROL_PROTOCOL_VERSION
+} from '../src/shared/agent-control/contracts'
+import { CONTROL_BOUNDS } from '../src/shared/agent-control/policy'
+import {
+    assertControlActionRequest,
+    assertControlCapabilities,
+    assertControlPrincipal
+} from '../src/shared/agent-control/validation'
+
+const fixture = JSON.parse(await readFile(path.resolve('scripts/fixtures/agent-control-wire-v1.json'), 'utf8'))
+const js = await import(pathToFileURL(path.resolve('../src/agent-control/contracts.mjs')).href)
+assert.equal(CONTROL_PROTOCOL_VERSION, js.CONTROL_PROTOCOL_VERSION)
+assert.deepEqual([...CONTROL_CAPABILITIES], [...js.CONTROL_CAPABILITIES])
+assert.deepEqual(CONTROL_BOUNDS, js.CONTROL_BOUNDS)
+assert.deepEqual(assertControlPrincipal(fixture.principal), fixture.principal)
+assert.deepEqual(assertControlCapabilities(fixture.capabilities), fixture.capabilities)
+assert.deepEqual(assertControlActionRequest(fixture.action), fixture.action)
+assert.throws(() => assertControlCapabilities(['cookie.read']), /Unknown control capability/)
+assert.throws(() => assertControlActionRequest({ ...fixture.action, observationRevision: 0 }), /observationRevision/)
+assert.throws(() => assertControlActionRequest({ ...fixture.action, action: { type: 'navigate', url: 'file:///secret' } }), /HTTP and HTTPS/)
+assert.throws(() => assertControlActionRequest({ ...fixture.action, action: { type: 'click', elementRef: 'element:1:1', sideEffect: 'harmless-trust-me' } }), /Side-effect class/)
+const focusedType = assertControlActionRequest({ ...fixture.action, action: { type: 'type', text: 'Canvas text' } })
+assert.equal(focusedType.action.type, 'type')
+assert.equal(focusedType.action.type === 'type' ? focusedType.action.elementRef : null, undefined, 'typing may use the page current focus without a DOM reference')
+const coordinateType = assertControlActionRequest({ ...fixture.action, action: { type: 'type', x: 320, y: 220, text: 'Canvas text' } })
+assert.deepEqual(coordinateType.action.type === 'type' ? [coordinateType.action.x, coordinateType.action.y] : null, [320, 220])
+assert.throws(
+    () => assertControlActionRequest({ ...fixture.action, action: { type: 'type', x: 320, text: 'partial coordinates' } }),
+    /both x and y/
+)
+console.log('Agent control contract equivalence passed.')

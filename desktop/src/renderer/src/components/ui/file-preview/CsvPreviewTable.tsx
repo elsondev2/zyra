@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { MAX_CSV_ROWS } from './constants'
+import { schedulePreviewWork } from './schedule-preview-work'
 import { detectCsvDelimiter, extractColorValues, parseDelimitedContent } from './utils'
 
 interface CsvPreviewTableProps {
@@ -97,7 +98,7 @@ export default function CsvPreviewTable({ content, language, useDistinctColumnCo
         let cancelled = false
         setIsRendering(true)
 
-        const timeoutId = window.setTimeout(() => {
+        const cancelScheduledWork = schedulePreviewWork(() => {
             if (cancelled) return
             const delimiter = language === 'tsv' ? '\t' : detectCsvDelimiter(content)
             const rows = parseDelimitedContent(content, delimiter).filter(row => row.some(cell => cell.trim().length > 0))
@@ -117,11 +118,11 @@ export default function CsvPreviewTable({ content, language, useDistinctColumnCo
                 totalRows: bodyRows.length
             })
             setIsRendering(false)
-        }, 0)
+        }, content.length > 100_000)
 
         return () => {
             cancelled = true
-            window.clearTimeout(timeoutId)
+            cancelScheduledWork()
         }
     }, [content, language])
 

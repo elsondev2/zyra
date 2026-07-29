@@ -23,6 +23,7 @@ import {
     handleAssistantApprovePendingPlaygroundLabRequest,
     handleAssistantArchiveSession,
     handleAssistantAttachSessionToPlaygroundLab,
+    handleAssistantAgentAction,
     handleAssistantBootstrap,
     handleAssistantClearLogs,
     handleAssistantConnect,
@@ -35,11 +36,15 @@ import {
     handleAssistantDownloadTranscriptionModel,
     handleAssistantDisconnect,
     handleAssistantGetAccountOverview,
+    handleAssistantGetFleetSnapshot,
+    handleAssistantGetHistoryPage,
+    handleAssistantGetReviewIndex,
     handleAssistantGetSessionTurnUsage,
+    handleAssistantGetThreadDetailBootstrap,
     handleAssistantGetTranscriptionModelState,
+    handleAssistantGetTurnDetail,
     handleAssistantGetSnapshot,
     handleAssistantGetStatus,
-    handleAssistantHydrateSession,
     handleAssistantInterruptTurn,
     handleAssistantListModels,
     handleAssistantNewThread,
@@ -47,8 +52,14 @@ import {
     handleAssistantResolveClipboardAttachment,
     handleAssistantRenameSession,
     handleAssistantRespondApproval,
-    handleAssistantTranscribeAudioWithLocalModel,
     handleAssistantRespondUserInput,
+    handleAssistantStartRealtimeVoice,
+    handleAssistantStopRealtimeVoice,
+    handleAssistantSubscribeRealtimeVoice,
+    handleAssistantTranscribeAudioWithLocalModel,
+    handleAssistantUnsubscribeRealtimeVoice,
+    handleAssistantWorkflowAction,
+    handleAssistantSearchTurns,
     handleAssistantSelectSession,
     handleAssistantSelectThread,
     handleAssistantSendPrompt,
@@ -93,6 +104,7 @@ import {
 } from './handlers/file-tree-handlers'
 import { handleOpenInTerminal } from './handlers/terminal-handlers'
 import {
+    handleClearPreviewTerminal,
     handleClosePreviewTerminal,
     handleCreatePreviewTerminal,
     handleListPreviewTerminalSessions,
@@ -101,6 +113,12 @@ import {
     handleWritePreviewTerminal
 } from './handlers/preview-terminal-handlers'
 import { handleRunPythonPreview, handleStopPythonPreview } from './handlers/python-preview-handlers'
+import {
+    handleClearBrowserPreviewData,
+    handleGetBrowserLinkPreview,
+    handleGetBrowserPreviewConfig,
+    handleOpenBrowserPreviewExternal
+} from './handlers/browser-preview-handlers'
 import {
     handleCheckForUpdates,
     handleDownloadUpdate,
@@ -165,6 +183,8 @@ import {
     handleStageFiles,
     handleUnstageFiles
 } from './handlers/git-write-handlers'
+import { createAgentControlHandlers } from './handlers/agent-control-handlers'
+import { AGENT_CONTROL_IPC } from '../../shared/agent-control/protocol'
 import {
     UPDATE_CHECK_CHANNEL,
     UPDATE_DOWNLOAD_CHANNEL,
@@ -174,6 +194,23 @@ import {
 
 export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     log.info('Registering IPC handlers...')
+
+    const controlHandlers = createAgentControlHandlers(mainWindow)
+    ipcMain.handle(AGENT_CONTROL_IPC.getState, controlHandlers.getState)
+    ipcMain.handle(AGENT_CONTROL_IPC.bindBrowserTab, controlHandlers.bindBrowserTab)
+    ipcMain.handle(AGENT_CONTROL_IPC.acknowledgeBrowserSurfaceRequest, controlHandlers.acknowledgeBrowserSurfaceRequest)
+    ipcMain.handle(AGENT_CONTROL_IPC.completeBrowserSurfaceRequest, controlHandlers.completeBrowserSurfaceRequest)
+    ipcMain.handle(AGENT_CONTROL_IPC.claimBrowserSurfaceRequest, controlHandlers.claimBrowserSurfaceRequest)
+    ipcMain.handle(AGENT_CONTROL_IPC.updateWorkspaceState, controlHandlers.updateWorkspaceState)
+    ipcMain.handle(AGENT_CONTROL_IPC.approveGrant, controlHandlers.approveGrant)
+    ipcMain.handle(AGENT_CONTROL_IPC.rejectGrant, controlHandlers.rejectGrant)
+    ipcMain.handle(AGENT_CONTROL_IPC.revokeGrant, controlHandlers.revokeGrant)
+    ipcMain.handle(AGENT_CONTROL_IPC.emergencyStop, controlHandlers.emergencyStop)
+    ipcMain.handle(AGENT_CONTROL_IPC.clearAudit, controlHandlers.clearAudit)
+    ipcMain.handle(AGENT_CONTROL_IPC.startChromePairing, controlHandlers.startChromePairing)
+    ipcMain.handle(AGENT_CONTROL_IPC.stopChromePairing, controlHandlers.stopChromePairing)
+    ipcMain.handle(AGENT_CONTROL_IPC.listWindows, controlHandlers.listWindows)
+    ipcMain.handle(AGENT_CONTROL_IPC.selectWindow, controlHandlers.selectWindow)
 
     ipcMain.handle('devscope:getFileSystemRoots', handleGetFileSystemRoots)
     ipcMain.handle(UPDATE_GET_STATE_CHANNEL, handleGetUpdateState)
@@ -195,6 +232,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     ipcMain.handle(ASSISTANT_IPC.unsubscribe, handleAssistantUnsubscribe)
     ipcMain.handle(ASSISTANT_IPC.bootstrap, handleAssistantBootstrap)
     ipcMain.handle(ASSISTANT_IPC.getSnapshot, handleAssistantGetSnapshot)
+    ipcMain.handle(ASSISTANT_IPC.getFleetSnapshot, handleAssistantGetFleetSnapshot)
+    ipcMain.handle(ASSISTANT_IPC.agentAction, handleAssistantAgentAction)
+    ipcMain.handle(ASSISTANT_IPC.workflowAction, handleAssistantWorkflowAction)
     ipcMain.handle(ASSISTANT_IPC.getStatus, handleAssistantGetStatus)
     ipcMain.handle(ASSISTANT_IPC.getAccountOverview, handleAssistantGetAccountOverview)
     ipcMain.handle(ASSISTANT_IPC.getSessionTurnUsage, handleAssistantGetSessionTurnUsage)
@@ -204,7 +244,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     ipcMain.handle(ASSISTANT_IPC.createSession, handleAssistantCreateSession)
     ipcMain.handle(ASSISTANT_IPC.selectSession, handleAssistantSelectSession)
     ipcMain.handle(ASSISTANT_IPC.selectThread, handleAssistantSelectThread)
-    ipcMain.handle(ASSISTANT_IPC.hydrateSession, handleAssistantHydrateSession)
+    ipcMain.handle(ASSISTANT_IPC.getThreadDetailBootstrap, handleAssistantGetThreadDetailBootstrap)
+    ipcMain.handle(ASSISTANT_IPC.getHistoryPage, handleAssistantGetHistoryPage)
+    ipcMain.handle(ASSISTANT_IPC.getReviewIndex, handleAssistantGetReviewIndex)
+    ipcMain.handle(ASSISTANT_IPC.getTurnDetail, handleAssistantGetTurnDetail)
+    ipcMain.handle(ASSISTANT_IPC.searchTurns, handleAssistantSearchTurns)
     ipcMain.handle(ASSISTANT_IPC.renameSession, handleAssistantRenameSession)
     ipcMain.handle(ASSISTANT_IPC.archiveSession, handleAssistantArchiveSession)
     ipcMain.handle(ASSISTANT_IPC.deleteSession, handleAssistantDeleteSession)
@@ -224,6 +268,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     ipcMain.handle(ASSISTANT_IPC.interruptTurn, handleAssistantInterruptTurn)
     ipcMain.handle(ASSISTANT_IPC.respondApproval, handleAssistantRespondApproval)
     ipcMain.handle(ASSISTANT_IPC.respondUserInput, handleAssistantRespondUserInput)
+    ipcMain.handle(ASSISTANT_IPC.subscribeRealtimeVoice, handleAssistantSubscribeRealtimeVoice)
+    ipcMain.handle(ASSISTANT_IPC.unsubscribeRealtimeVoice, handleAssistantUnsubscribeRealtimeVoice)
+    ipcMain.handle(ASSISTANT_IPC.startRealtimeVoice, handleAssistantStartRealtimeVoice)
+    ipcMain.handle(ASSISTANT_IPC.stopRealtimeVoice, handleAssistantStopRealtimeVoice)
     ipcMain.handle(ASSISTANT_IPC.getTranscriptionModelState, handleAssistantGetTranscriptionModelState)
     ipcMain.handle(ASSISTANT_IPC.downloadTranscriptionModel, handleAssistantDownloadTranscriptionModel)
     ipcMain.handle(ASSISTANT_IPC.transcribeAudioWithLocalModel, handleAssistantTranscribeAudioWithLocalModel)
@@ -243,7 +291,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     ipcMain.handle('devscope:previewTerminal:write', handleWritePreviewTerminal)
     ipcMain.handle('devscope:previewTerminal:setTitle', handleSetPreviewTerminalTitle)
     ipcMain.handle('devscope:previewTerminal:resize', handleResizePreviewTerminal)
+    ipcMain.handle('devscope:previewTerminal:clear', handleClearPreviewTerminal)
     ipcMain.handle('devscope:previewTerminal:close', handleClosePreviewTerminal)
+    ipcMain.handle('devscope:browserPreview:getConfig', handleGetBrowserPreviewConfig)
+    ipcMain.handle('devscope:browserPreview:clearData', handleClearBrowserPreviewData)
+    ipcMain.handle('devscope:browserPreview:getLinkPreview', handleGetBrowserLinkPreview)
+    ipcMain.handle('devscope:browserPreview:openExternal', handleOpenBrowserPreviewExternal)
     ipcMain.handle('devscope:pythonPreview:run', handleRunPythonPreview)
     ipcMain.handle('devscope:pythonPreview:stop', handleStopPythonPreview)
     ipcMain.handle('devscope:copyToClipboard', handleCopyToClipboard)
@@ -348,6 +401,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     })
 
     mainWindow.webContents.once('destroyed', () => {
-        peekAssistantService()?.unsubscribe(mainWindow.webContents.id)
+        const service = peekAssistantService()
+        service?.unsubscribe(mainWindow.webContents.id)
+        service?.unsubscribeRealtimeVoice(mainWindow.webContents.id)
     })
 }

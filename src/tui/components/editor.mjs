@@ -263,6 +263,7 @@ export class EditorComponent {
       this.invalidateInput();
       return;
     }
+    if (key?.name === "down" && !this.buffer.trim() && suggestions.length === 0 && this.host?.focusNextAuxiliary?.()) return;
     if (key?.name === "up") {
       if (this.moveCursorVertical(-1)) return;
       if (this.recallInputHistory(-1)) this.invalidateInput();

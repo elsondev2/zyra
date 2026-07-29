@@ -19,6 +19,7 @@ import {
     shouldPersistAssistantSession,
     sqlBool
 } from './persistence-utils'
+import { serializeAssistantActivityPayload } from './persistence-activity-payload'
 import { sanitizeOptionalPath } from './utils'
 
 export function persistAssistantEvent(db: SqlDatabase, event: AssistantDomainEvent, snapshot: AssistantSnapshot): void {
@@ -62,14 +63,36 @@ export function persistAssistantEvent(db: SqlDatabase, event: AssistantDomainEve
                     if (session && !syncAssistantSessionPersistence(db, session)) break
                     upsertAssistantThreadSummary(db, thread.sessionId, thread.thread)
                     const patch = (event.payload['patch'] as Record<string, unknown> | undefined) || {}
-                    const removedTurnIds = Array.isArray(event.payload['removedTurnIds'])
-                        ? event.payload['removedTurnIds'].map((entry) => String(entry || '')).filter(Boolean)
+                    const readRemovedIds = (key: string) => Array.isArray(event.payload[key])
+                        ? event.payload[key].map((entry) => String(entry || '')).filter(Boolean)
                         : []
-                    if (Object.prototype.hasOwnProperty.call(patch, 'messages')) replaceAssistantMessages(db, thread.thread)
-                    if (Object.prototype.hasOwnProperty.call(patch, 'activities')) replaceAssistantActivities(db, thread.thread)
-                    if (Object.prototype.hasOwnProperty.call(patch, 'proposedPlans')) replaceAssistantProposedPlans(db, thread.thread)
-                    if (Object.prototype.hasOwnProperty.call(patch, 'pendingApprovals')) replaceAssistantPendingApprovals(db, thread.thread)
-                    if (Object.prototype.hasOwnProperty.call(patch, 'pendingUserInputs')) replaceAssistantPendingUserInputs(db, thread.thread)
+                    const removedTurnIds = readRemovedIds('removedTurnIds')
+                    const removedMessageIds = readRemovedIds('removedMessageIds')
+                    const removedActivityIds = readRemovedIds('removedActivityIds')
+                    const removedProposedPlanIds = readRemovedIds('removedProposedPlanIds')
+                    const removedPendingApprovalIds = readRemovedIds('removedPendingApprovalIds')
+                    const removedPendingUserInputIds = readRemovedIds('removedPendingUserInputIds')
+                    if (Object.prototype.hasOwnProperty.call(patch, 'messages')) upsertAssistantMessages(db, thread.thread)
+                    if (Object.prototype.hasOwnProperty.call(patch, 'messages') || removedMessageIds.length > 0) {
+                        deleteAssistantThreadRowsById(db, 'assistant_messages', thread.thread.id, removedMessageIds)
+                        updateAssistantThreadMessageCount(db, thread.thread.id)
+                    }
+                    if (Object.prototype.hasOwnProperty.call(patch, 'activities')) upsertAssistantActivities(db, thread.thread)
+                    if (Object.prototype.hasOwnProperty.call(patch, 'activities') || removedActivityIds.length > 0) {
+                        deleteAssistantThreadRowsById(db, 'assistant_activities', thread.thread.id, removedActivityIds)
+                    }
+                    if (Object.prototype.hasOwnProperty.call(patch, 'proposedPlans')) upsertAssistantProposedPlans(db, thread.thread)
+                    if (Object.prototype.hasOwnProperty.call(patch, 'proposedPlans') || removedProposedPlanIds.length > 0) {
+                        deleteAssistantThreadRowsById(db, 'assistant_proposed_plans', thread.thread.id, removedProposedPlanIds)
+                    }
+                    if (Object.prototype.hasOwnProperty.call(patch, 'pendingApprovals')) upsertAssistantPendingApprovals(db, thread.thread)
+                    if (Object.prototype.hasOwnProperty.call(patch, 'pendingApprovals') || removedPendingApprovalIds.length > 0) {
+                        deleteAssistantThreadRowsById(db, 'assistant_pending_approvals', thread.thread.id, removedPendingApprovalIds)
+                    }
+                    if (Object.prototype.hasOwnProperty.call(patch, 'pendingUserInputs')) upsertAssistantPendingUserInputs(db, thread.thread)
+                    if (Object.prototype.hasOwnProperty.call(patch, 'pendingUserInputs') || removedPendingUserInputIds.length > 0) {
+                        deleteAssistantThreadRowsById(db, 'assistant_pending_user_inputs', thread.thread.id, removedPendingUserInputIds)
+                    }
                     if (removedTurnIds.length > 0) deleteAssistantTurns(db, removedTurnIds)
                     if (Object.prototype.hasOwnProperty.call(patch, 'latestTurn') && thread.thread.latestTurn) {
                         upsertAssistantTurn(db, thread.thread.id, thread.thread.model, thread.thread.latestTurn)
@@ -307,30 +330,56 @@ function upsertAssistantThreadSummary(db: SqlDatabase, sessionId: string, thread
     ])
 }
 
+function deleteAssistantThreadRowsById(db: SqlDatabase, tableName: string, threadId: string, rowIds: string[]): void {
+    if (rowIds.length === 0) return
+    const placeholders = rowIds.map(() => '?').join(', ')
+    db.run(`DELETE FROM ${tableName} WHERE thread_id = ? AND id IN (${placeholders})`, [threadId, ...rowIds])
+}
+
+function upsertAssistantMessages(db: SqlDatabase, thread: AssistantThread): void {
+    for (const message of thread.messages) upsertAssistantMessage(db, thread.id, message)
+}
+
+function upsertAssistantActivities(db: SqlDatabase, thread: AssistantThread): void {
+    for (const activity of thread.activities) upsertAssistantActivity(db, thread.id, activity)
+}
+
+function upsertAssistantProposedPlans(db: SqlDatabase, thread: AssistantThread): void {
+    for (const plan of thread.proposedPlans) upsertAssistantProposedPlan(db, thread.id, plan)
+}
+
+function upsertAssistantPendingApprovals(db: SqlDatabase, thread: AssistantThread): void {
+    for (const approval of thread.pendingApprovals) upsertAssistantPendingApproval(db, thread.id, approval)
+}
+
+function upsertAssistantPendingUserInputs(db: SqlDatabase, thread: AssistantThread): void {
+    for (const input of thread.pendingUserInputs) upsertAssistantPendingUserInput(db, thread.id, input)
+}
+
 function replaceAssistantMessages(db: SqlDatabase, thread: AssistantThread): void {
     db.run('DELETE FROM assistant_messages WHERE thread_id = ?', [thread.id])
-    for (const message of thread.messages) upsertAssistantMessage(db, thread.id, message)
+    upsertAssistantMessages(db, thread)
     updateAssistantThreadMessageCount(db, thread.id)
 }
 
 function replaceAssistantActivities(db: SqlDatabase, thread: AssistantThread): void {
     db.run('DELETE FROM assistant_activities WHERE thread_id = ?', [thread.id])
-    for (const activity of thread.activities) upsertAssistantActivity(db, thread.id, activity)
+    upsertAssistantActivities(db, thread)
 }
 
 function replaceAssistantProposedPlans(db: SqlDatabase, thread: AssistantThread): void {
     db.run('DELETE FROM assistant_proposed_plans WHERE thread_id = ?', [thread.id])
-    for (const plan of thread.proposedPlans) upsertAssistantProposedPlan(db, thread.id, plan)
+    upsertAssistantProposedPlans(db, thread)
 }
 
 function replaceAssistantPendingApprovals(db: SqlDatabase, thread: AssistantThread): void {
     db.run('DELETE FROM assistant_pending_approvals WHERE thread_id = ?', [thread.id])
-    for (const approval of thread.pendingApprovals) upsertAssistantPendingApproval(db, thread.id, approval)
+    upsertAssistantPendingApprovals(db, thread)
 }
 
 function replaceAssistantPendingUserInputs(db: SqlDatabase, thread: AssistantThread): void {
     db.run('DELETE FROM assistant_pending_user_inputs WHERE thread_id = ?', [thread.id])
-    for (const input of thread.pendingUserInputs) upsertAssistantPendingUserInput(db, thread.id, input)
+    upsertAssistantPendingUserInputs(db, thread)
 }
 
 function upsertAssistantTurn(db: SqlDatabase, threadId: string, model: string, turn: AssistantLatestTurn): void {
@@ -416,7 +465,7 @@ function upsertAssistantActivity(db: SqlDatabase, threadId: string, activity: As
             timeline_sequence = excluded.timeline_sequence,
             created_at = excluded.created_at,
             payload_json = excluded.payload_json
-    `, [activity.id, threadId, activity.kind, activity.tone, activity.summary, activity.detail || null, activity.turnId, activity.timelineSequence ?? null, activity.createdAt, jsonStringify(activity.payload)])
+    `, [activity.id, threadId, activity.kind, activity.tone, activity.summary, activity.detail || null, activity.turnId, activity.timelineSequence ?? null, activity.createdAt, serializeAssistantActivityPayload(activity.payload)])
 }
 
 function upsertAssistantProposedPlan(db: SqlDatabase, threadId: string, plan: AssistantProposedPlan): void {

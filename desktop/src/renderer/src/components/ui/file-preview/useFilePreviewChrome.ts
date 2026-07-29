@@ -76,8 +76,6 @@ export function useFilePreviewChrome({
     }, [rightPanelWidth])
 
     useEffect(() => {
-        if (!isExpanded) return
-
         const applyBodyDragState = (active: boolean) => {
             if (active) {
                 document.documentElement.style.setProperty('cursor', 'col-resize', 'important')
@@ -139,7 +137,7 @@ export function useFilePreviewChrome({
             window.removeEventListener('mousedown', handleMouseDown)
             stopResize()
         }
-    }, [isExpanded])
+    }, [])
 
     const modalStyle = useMemo(() => {
         if (isExpanded) {

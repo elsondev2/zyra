@@ -9,7 +9,7 @@ type AssistantTextDeltaEntry = {
 
 type AssistantTextDeltaTarget = {
     threadId: string
-    messageId: string
+    messageId?: string
 }
 
 type AssistantTextDeltaBufferOptions = {
@@ -49,7 +49,12 @@ export class AssistantTextDeltaBuffer {
 
     flush(target?: AssistantTextDeltaTarget): void {
         const keys = target
-            ? [getBufferKey(target.threadId, target.messageId)]
+            ? [...this.entries.entries()]
+                .filter(([, entry]) => (
+                    entry.threadId === target.threadId
+                    && (!target.messageId || entry.messageId === target.messageId)
+                ))
+                .map(([key]) => key)
             : [...this.entries.keys()]
 
         for (const key of keys) {

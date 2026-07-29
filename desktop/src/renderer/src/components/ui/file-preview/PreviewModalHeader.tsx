@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Copy, Expand, Play, Square, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, Copy, Expand, PanelLeftClose, PanelLeftOpen, Play, Square, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
@@ -9,17 +9,23 @@ import { PreviewExpandedHeaderBar } from './PreviewExpandedHeaderBar'
 import { PreviewHeaderEditMenu } from './PreviewHeaderEditMenu'
 import { PreviewHeaderStatusActions } from './PreviewHeaderStatusActions'
 import { PreviewHeaderHtmlControls } from './PreviewHeaderHtmlControls'
+import { PreviewHistoryNavigation } from './PreviewHistoryNavigation'
 
 interface PreviewModalHeaderProps {
     file: PreviewFile
     showCloseButton?: boolean
     previewModeEnabled: boolean
     mode: 'preview' | 'edit'
+    canNavigateBack: boolean
+    canNavigateForward: boolean
+    onNavigateBack: () => void
+    onNavigateForward: () => void
     isEditable: boolean
     isDirty: boolean
     isSaving: boolean
     isExpanded: boolean
     allowExpanded?: boolean
+    windowedNavigatorEnabled?: boolean
     leftPanelOpen: boolean
     rightPanelOpen: boolean
     loadingEditableContent?: boolean
@@ -75,6 +81,10 @@ export default function PreviewModalHeader(props: PreviewModalHeaderProps) {
                 showCloseButton={props.showCloseButton}
                 previewModeEnabled={props.previewModeEnabled}
                 mode={props.mode}
+                canNavigateBack={props.canNavigateBack}
+                canNavigateForward={props.canNavigateForward}
+                onNavigateBack={props.onNavigateBack}
+                onNavigateForward={props.onNavigateForward}
                 isEditable={props.isEditable}
                 isDirty={props.isDirty}
                 isSaving={props.isSaving}
@@ -119,11 +129,18 @@ function PreviewWindowedHeader({
     showCloseButton = true,
     previewModeEnabled,
     mode,
+    canNavigateBack,
+    canNavigateForward,
+    onNavigateBack,
+    onNavigateForward,
     isEditable,
     isDirty,
     isSaving,
     isExpanded,
     allowExpanded = true,
+    windowedNavigatorEnabled = false,
+    leftPanelOpen,
+    onToggleLeftPanel,
     loadingEditableContent,
     onModeChange,
     onSave,
@@ -186,7 +203,6 @@ function PreviewWindowedHeader({
     const isCompactHtmlHeader = isHtml && headerWidth < 1024
     const isVeryCompactHtmlHeader = isHtml && headerWidth < 820
     const isUltraCompactHtmlHeader = isHtml && headerWidth < 680
-    const isCompactHeader = headerWidth < 980
     const visibleFileName = formatPreviewFileName(file.name, headerWidth < 760 ? 26 : headerWidth < 980 ? 36 : 52)
 
     const controlGroupClass = 'flex items-center gap-0.5 rounded-md border border-white/10 bg-white/[0.035] p-0.5 shrink-0'
@@ -199,49 +215,71 @@ function PreviewWindowedHeader({
         <div
             ref={containerRef}
             className={cn(
-                'flex items-center justify-between gap-2 border-b border-white/5 bg-white/[0.02] shrink-0',
-                isCompactHeader
-                    ? cn('flex-wrap py-1', showCloseButton ? 'pl-2.5 pr-0' : 'px-2.5')
-                    : cn('py-1', showCloseButton ? 'pl-3.5 pr-0' : 'px-3.5'),
-                isUltraCompactHtmlHeader ? 'gap-2' : ''
+                'flex h-10 shrink-0 items-center gap-1.5 border-b border-white/[0.06] bg-white/[0.02]',
+                showCloseButton ? 'pl-2 pr-0' : 'px-2'
             )}
         >
-            <div className={cn('flex items-center gap-2 min-w-0', isCompactHeader ? 'flex-1 flex-wrap w-full' : '', isUltraCompactHtmlHeader ? 'w-full' : '')}>
-                <VscodeEntryIcon
-                    pathValue={file.path || file.name}
-                    kind="file"
-                    theme={iconTheme}
-                    className="size-4 shrink-0"
-                />
-                <div className="min-w-0 flex items-center gap-1.5">
-                    <h3 className="truncate text-[13px] font-semibold text-white" title={file.name}>
-                        {visibleFileName}
-                    </h3>
+            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                {windowedNavigatorEnabled ? (
                     <button
-                        onClick={handleCopyPath}
-                        className={cn(
-                            'p-1 rounded transition-all shrink-0',
-                            copied ? 'text-emerald-400 bg-emerald-400/10' : 'text-white/40 hover:text-white hover:bg-white/10'
-                        )}
-                        title={copied ? 'Copied!' : `Copy path: ${file.path}`}
+                        type="button"
+                        onClick={onToggleLeftPanel}
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#918aa0] transition-colors hover:bg-white/[0.035] hover:text-[#d7d0e3] focus:outline-none focus-visible:ring-1 focus-visible:ring-white/10"
+                        title={leftPanelOpen ? 'Hide file navigator' : 'Show file navigator'}
+                        aria-label={leftPanelOpen ? 'Hide file navigator' : 'Show file navigator'}
+                        aria-pressed={leftPanelOpen}
                     >
-                        {copied ? <Check size={14} /> : <Copy size={14} />}
+                        {leftPanelOpen
+                            ? <PanelLeftClose size={15} strokeWidth={1.7} />
+                            : <PanelLeftOpen size={15} strokeWidth={1.7} />}
                     </button>
+                ) : null}
+                <PreviewHistoryNavigation
+                    canGoBack={canNavigateBack}
+                    canGoForward={canNavigateForward}
+                    onBack={onNavigateBack}
+                    onForward={onNavigateForward}
+                />
+                <span className="mx-0.5 h-4 w-px shrink-0 bg-white/[0.08]" aria-hidden="true" />
+                <div className="group/file flex min-w-0 items-center gap-2">
+                    <VscodeEntryIcon
+                        pathValue={file.path || file.name}
+                        kind={file.type === 'directory' ? 'directory' : 'file'}
+                        theme={iconTheme}
+                        className="size-4 shrink-0"
+                    />
+                    <div className="flex min-w-0 items-center gap-1">
+                        <h3 className="truncate text-[13px] font-semibold text-white" title={file.name}>
+                            {visibleFileName}
+                        </h3>
+                        <button
+                            onClick={handleCopyPath}
+                            className={cn(
+                                'shrink-0 rounded p-1 opacity-0 transition-[opacity,color,background-color] group-hover/file:opacity-100 focus-visible:opacity-100',
+                                copied ? 'bg-emerald-400/10 text-emerald-400 opacity-100' : 'text-white/35 hover:bg-white/[0.07] hover:text-white'
+                            )}
+                            title={copied ? 'Copied!' : `Copy path: ${file.path}`}
+                        >
+                            {copied ? <Check size={14} /> : <Copy size={14} />}
+                        </button>
+                    </div>
                 </div>
 
                 {showWindowedEditMenu ? (
-                    <PreviewHeaderEditMenu
-                        previewModeEnabled={previewModeEnabled}
-                        isEditable={isEditable}
-                        isEditMode={isEditMode}
-                        isDirty={isDirty}
-                        isSaving={isSaving}
-                        loadingEditableContent={loadingEditableContent}
-                        onModeChange={onModeChange}
-                        onSave={onSave}
-                        onRevert={onRevert}
-                    />
-                ) : null}
+                    <div className="ml-auto shrink-0">
+                        <PreviewHeaderEditMenu
+                            previewModeEnabled={previewModeEnabled}
+                            isEditable={isEditable}
+                            isEditMode={isEditMode}
+                            isDirty={isDirty}
+                            isSaving={isSaving}
+                            loadingEditableContent={loadingEditableContent}
+                            onModeChange={onModeChange}
+                            onSave={onSave}
+                            onRevert={onRevert}
+                        />
+                    </div>
+                ) : <span className="ml-auto" />}
 
                 {!isMediaFile && canRunPython ? (
                     <div className={controlGroupClass}>

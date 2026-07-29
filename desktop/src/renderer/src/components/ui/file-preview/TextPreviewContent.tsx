@@ -1,19 +1,30 @@
-import { memo, useEffect, useMemo, useState } from 'react'
+import { lazy, memo, Suspense, useEffect, useMemo, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import MarkdownRenderer from '../MarkdownRenderer'
 import { HIGHLIGHT_MAX_CHARS, HIGHLIGHT_MAX_LINES } from './constants'
 import type { PreviewFile, PreviewMeta } from './types'
 import { formatPreviewBytes } from './utils'
-import CsvPreviewTable from './CsvPreviewTable'
+import { schedulePreviewWork } from './schedule-preview-work'
 import SyntaxPreview from './SyntaxPreview'
+
+const MarkdownRenderer = lazy(() => import('../MarkdownRenderer'))
+const CsvPreviewTable = lazy(() => import('./CsvPreviewTable'))
+
+function PreviewRendererFallback({ label }: { label: string }) {
+    return (
+        <div className="flex min-h-36 w-full items-center justify-center text-xs text-sparkle-text-muted/70">
+            <span className="animate-pulse">{label}</span>
+        </div>
+    )
+}
 
 interface TextPreviewContentProps {
     file: PreviewFile
     content: string
     meta: PreviewMeta
     projectPath?: string
-    onInternalLinkClick?: (href: string) => Promise<void> | void
+    onInternalLinkClick?: (href: string) => Promise<boolean | void> | boolean | void
+    onLinkNotice?: (message: string, tone: 'info' | 'error') => void
     gitDiffText?: string
     csvDistinctColorsEnabled: boolean
     focusLine?: number | null
@@ -41,6 +52,7 @@ function TextPreviewContent({
     meta,
     projectPath,
     onInternalLinkClick,
+    onLinkNotice,
     gitDiffText,
     csvDistinctColorsEnabled,
     focusLine,
@@ -77,7 +89,6 @@ function TextPreviewContent({
         }
 
         let cancelled = false
-        let timeoutId: number | null = null
 
         setJsonState((current) => ({
             formatted: current.formatted && current.formatted === content ? current.formatted : null,
@@ -109,13 +120,11 @@ function TextPreviewContent({
             }
         }
 
-        timeoutId = window.setTimeout(formatJsonPreview, isLargeTextPreview ? 0 : 0)
+        const cancelScheduledWork = schedulePreviewWork(formatJsonPreview, isLargeTextPreview)
 
         return () => {
             cancelled = true
-            if (timeoutId !== null) {
-                window.clearTimeout(timeoutId)
-            }
+            cancelScheduledWork()
         }
     }, [content, file.type, isLargeTextPreview, meta.truncated])
 
@@ -123,7 +132,7 @@ function TextPreviewContent({
     const totalSize = formatPreviewBytes(meta.size)
     const markdownContainerClassName = isExpanded
         ? 'w-full min-h-full bg-sparkle-card p-6'
-        : 'w-full max-w-4xl min-h-full bg-sparkle-card rounded-xl p-6 border border-white/5'
+        : 'w-full max-w-4xl min-h-full bg-sparkle-card p-6'
 
     return (
         <div className={cn(
@@ -142,12 +151,16 @@ function TextPreviewContent({
 
             {file.type === 'md' && (
                 <div className={markdownContainerClassName}>
-                    <MarkdownRenderer
-                        content={content}
-                        filePath={file.path}
-                        onInternalLinkClick={onInternalLinkClick}
-                        lightweight={useLightweightMarkdown}
-                    />
+                    <Suspense fallback={<PreviewRendererFallback label="Preparing Markdown preview…" />}>
+                        <MarkdownRenderer
+                            content={content}
+                            filePath={file.path}
+                            linkSearchRoot={projectPath}
+                            onInternalLinkClick={onInternalLinkClick}
+                            onLinkNotice={onLinkNotice}
+                            lightweight={useLightweightMarkdown}
+                        />
+                    </Suspense>
                 </div>
             )}
 
@@ -180,11 +193,13 @@ function TextPreviewContent({
 
             {file.type === 'csv' && (
                 <div className="w-full h-full min-h-0 flex-1">
-                    <CsvPreviewTable
-                        content={content}
-                        language={file.language}
-                        useDistinctColumnColors={csvDistinctColorsEnabled}
-                    />
+                    <Suspense fallback={<PreviewRendererFallback label="Preparing table preview…" />}>
+                        <CsvPreviewTable
+                            content={content}
+                            language={file.language}
+                            useDistinctColumnColors={csvDistinctColorsEnabled}
+                        />
+                    </Suspense>
                 </div>
             )}
 
@@ -218,12 +233,15 @@ export default memo(TextPreviewContent, (previous, next) => {
     if (!sameBasePreview) return false
 
     if (previous.file.type === 'md' && next.file.type === 'md') {
-        return previous.onInternalLinkClick === next.onInternalLinkClick
+        return previous.projectPath === next.projectPath
+            && previous.onInternalLinkClick === next.onInternalLinkClick
+            && previous.onLinkNotice === next.onLinkNotice
     }
 
     return (
         previous.projectPath === next.projectPath
         && previous.onInternalLinkClick === next.onInternalLinkClick
+        && previous.onLinkNotice === next.onLinkNotice
         && previous.gitDiffText === next.gitDiffText
         && previous.csvDistinctColorsEnabled === next.csvDistinctColorsEnabled
         && previous.focusLine === next.focusLine

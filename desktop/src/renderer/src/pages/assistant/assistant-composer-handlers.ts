@@ -96,6 +96,7 @@ export function createAssistantComposerHandlers(args: AssistantComposerHandlersA
     }
 
     const removeAttachment = (id: string) => {
+        if (removingAttachmentIds.includes(id)) return
         setRemovingAttachmentIds((prev) => prev.includes(id) ? prev : [...prev, id])
         window.setTimeout(() => {
             setContextFiles((prev) => prev.filter((entry) => entry.id !== id))

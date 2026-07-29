@@ -15,7 +15,8 @@ export const TimelineProposedPlan = memo(({
     scrollContainerRef,
     overlayContainerRef,
     filePath = null,
-    onInternalLinkClick
+    onInternalLinkClick,
+    onLinkNotice
 }: {
     plan: AssistantProposedPlan
     canImplement?: boolean
@@ -24,7 +25,8 @@ export const TimelineProposedPlan = memo(({
     scrollContainerRef?: RefObject<HTMLDivElement | null>
     overlayContainerRef?: RefObject<HTMLDivElement | null>
     filePath?: string | null
-    onInternalLinkClick?: (href: string) => Promise<void> | void
+    onInternalLinkClick?: (href: string) => Promise<boolean | void> | boolean | void
+    onLinkNotice?: (message: string, tone: 'info' | 'error') => void
 }) => {
     const [implementing, setImplementing] = useState(false)
     const [expanded, setExpanded] = useState(false)
@@ -164,6 +166,7 @@ export const TimelineProposedPlan = memo(({
                             content={displayedPlanMarkdown || ''}
                             filePath={filePath || undefined}
                             onInternalLinkClick={onInternalLinkClick}
+                            onLinkNotice={onLinkNotice}
                             className={previewClassName}
                         />
                     </div>

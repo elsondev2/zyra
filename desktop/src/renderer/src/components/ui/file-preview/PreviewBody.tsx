@@ -1,4 +1,4 @@
-import { RefreshCw } from 'lucide-react'
+import { FolderOpen, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import TextPreviewContent from './TextPreviewContent'
 import MediaPreviewContent from './MediaPreviewContent'
@@ -16,7 +16,8 @@ interface PreviewBodyProps {
     loading?: boolean
     meta: PreviewMeta
     projectPath?: string
-    onInternalLinkClick?: (href: string) => Promise<void> | void
+    onInternalLinkClick?: (href: string) => Promise<boolean | void> | boolean | void
+    onLinkNotice?: (message: string, tone: 'info' | 'error') => void
     gitDiffText?: string
     viewport: ViewportPreset
     presetConfig: ViewportPresetConfig
@@ -58,6 +59,7 @@ export default function PreviewBody({
     meta,
     projectPath,
     onInternalLinkClick,
+    onLinkNotice,
     gitDiffText,
     viewport,
     presetConfig,
@@ -93,6 +95,22 @@ export default function PreviewBody({
         )
     }
 
+    if (file.type === 'directory') {
+        return (
+            <div className="flex h-full min-h-[16rem] w-full items-center justify-center bg-sparkle-bg px-8 py-12">
+                <div className="flex max-w-sm flex-col items-center text-center">
+                    <span className="mb-4 inline-flex size-12 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.035] text-sparkle-text-muted">
+                        <FolderOpen className="size-6" />
+                    </span>
+                    <h3 className="text-sm font-medium text-sparkle-text">{file.name || 'Folder'}</h3>
+                    <p className="mt-1.5 text-xs leading-5 text-sparkle-text-muted">
+                        Choose a file from the navigator to preview it here.
+                    </p>
+                </div>
+            </div>
+        )
+    }
+
     if (mode === 'edit') {
         if (!isEditable) {
             return (
@@ -103,10 +121,7 @@ export default function PreviewBody({
         }
 
         return (
-            <div className={cn(
-                'w-full h-full max-h-full max-w-[98%] bg-sparkle-card border border-white/5 overflow-hidden',
-                (fillEditorHeight || useFullBleed) ? 'h-full max-h-full max-w-none rounded-none border-0' : ''
-            )}>
+            <div className="h-full max-h-full w-full max-w-none overflow-hidden bg-sparkle-card">
                 <SyntaxPreview
                     content={editableContent}
                     language={resolveEditorLanguage(file)}
@@ -138,6 +153,7 @@ export default function PreviewBody({
                     meta={meta}
                     projectPath={projectPath}
                     onInternalLinkClick={onInternalLinkClick}
+                    onLinkNotice={onLinkNotice}
                     gitDiffText={gitDiffText}
                     csvDistinctColorsEnabled={csvDistinctColorsEnabled}
                     focusLine={previewFocusLine}

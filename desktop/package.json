@@ -15,10 +15,26 @@
         "preview:browser": "vite preview --config vite.browser.config.ts --host 127.0.0.1",
         "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
         "test:activity-rail": "bun scripts/test-activity-rail-contract.ts",
+        "test:agent-surface": "bun scripts/test-agent-surface-contract.ts",
+    "test:agent-server": "bun scripts/test-agent-server-worker.ts",
+        "test:assistant-fleet": "bun scripts/test-assistant-fleet-contract.tsx",
+        "test:agent-control": "bun scripts/test-agent-control-contract.ts && bun scripts/test-agent-control-policy.ts && bun scripts/test-agent-control-revisions.ts && bun scripts/test-browser-plan-executor.ts && bun scripts/test-zyra-browser-visual-control.ts && bun scripts/test-assistant-control-approval-preferences.ts && bun scripts/test-agent-control-bridge.ts && bun scripts/test-agent-control-audit.ts && bun scripts/test-agent-control-pairing.ts",
+        "smoke:browser-visual": "node scripts/maint/run-zyra-browser-visual-smoke.mjs",
         "test:assistant-diff": "bun scripts/test-assistant-diff-contract.ts",
+        "test:assistant-history": "bun scripts/test-assistant-history-persistence.ts && bun scripts/test-assistant-paged-history.ts",
+        "test:assistant-images": "bun scripts/test-assistant-image-pipeline.ts",
+        "test:assistant-markdown": "bun scripts/test-assistant-markdown-cache.tsx",
+        "test:assistant-realtime-voice": "bun scripts/test-assistant-realtime-voice.ts",
+        "test:markdown-links": "bun scripts/test-markdown-link-contract.ts",
+        "test:markdown-renderer": "bun scripts/test-markdown-renderer-features.tsx",
+        "test:assistant-performance": "bun scripts/test-assistant-history-performance.ts",
         "test:file-change-lifecycle": "bun scripts/test-file-change-lifecycle.ts",
+        "test:file-preview-navigation": "bun scripts/test-file-preview-navigation.ts",
+        "test:file-preview-performance": "bun scripts/test-file-preview-performance.ts",
         "test:pi-assistant-lifecycle": "bun scripts/test-pi-assistant-lifecycle.ts",
         "test:assistant-startup": "bun scripts/test-assistant-startup-connection.ts",
+        "test:assistant-streaming": "bun scripts/test-assistant-message-content.ts && bun scripts/test-assistant-streaming.ts",
+        "test:assistant-switching": "bun scripts/test-assistant-session-switching.ts",
         "maint:loc": "node scripts/maint/check-loc.mjs",
         "maint:loc:strict": "node scripts/maint/check-loc.mjs --strict",
         "postinstall": "echo Zyra: skipping native terminal rebuild",
@@ -26,6 +42,7 @@
         "build:unpack": "electron-vite build && node scripts/maint/package-win-release.mjs unpacked",
         "dist:organize": "node scripts/maint/organize-dist.mjs",
         "brand:assets": "python scripts/maint/generate_branding_assets.py",
+        "test:branding": "python scripts/test-branding-assets.py",
         "release:notes": "node scripts/maint/generate-release-notes.mjs",
         "release:publish:local": "node scripts/maint/publish-local-release.mjs",
         "update:test-feed": "node --experimental-strip-types scripts/maint/check-github-update-feed.mjs",
@@ -37,12 +54,15 @@
         "@dnd-kit/modifiers": "^9.0.0",
         "@dnd-kit/sortable": "^10.0.0",
         "@dnd-kit/utilities": "^3.2.2",
+        "@legendapp/list": "3.2.0",
         "@monaco-editor/react": "^4.7.0",
         "@pierre/diffs": "^1.1.0-beta.18",
         "ansi-to-html": "^0.7.2",
         "clsx": "^2.1.1",
         "electron-log": "^5.1.7",
         "electron-updater": "^6.8.3",
+        "hast-util-to-jsx-runtime": "2.3.6",
+        "html-url-attributes": "3.0.1",
         "lucide-react": "^0.469.0",
         "mermaid": "^11.12.3",
         "monaco-editor": "^0.55.1",
@@ -54,10 +74,15 @@
         "react-syntax-highlighter": "^16.1.0",
         "recharts": "^3.6.0",
         "rehype-raw": "^7.0.0",
+        "rehype-sanitize": "^6.0.0",
         "remark-gfm": "^4.0.1",
+        "remark-parse": "11.0.0",
+        "remark-rehype": "11.1.2",
         "simple-git": "^3.31.1",
         "sql.js": "^1.13.0",
         "systeminformation": "^5.23.5",
+        "unified": "11.0.5",
+        "unist-util-visit": "5.0.0",
         "xterm": "^5.3.0",
         "xterm-addon-fit": "^0.8.0",
         "xterm-addon-web-links": "^0.9.0",
@@ -85,11 +110,24 @@
         "artifactName": "Zyra-Setup-${version}.${ext}",
         "icon": "resources/icon.png",
         "files": [
-            "!dist/**"
+            "!dist/**",
+            "!resources/branding/icons/*-source.png"
         ],
         "directories": {
             "output": "dist"
         },
+        "extraResources": [
+            {
+                "from": "../native/zyra-computer-use/publish",
+                "to": "zyra-computer-use",
+                "filter": ["**/*"]
+            },
+            {
+                "from": "../extensions/zyra-browser-control/dist/unpacked",
+                "to": "zyra-browser-control-extension",
+                "filter": ["**/*"]
+            }
+        ],
         "publish": [
             {
                 "provider": "github",

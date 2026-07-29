@@ -213,7 +213,7 @@ export function PreviewHeaderHtmlControls({
                     type="button"
                     onClick={toggleMenu}
                     className={cn(
-                        'inline-flex items-center gap-1.5 rounded-md border border-white/[0.07] bg-[#111927] px-2 text-left text-xs text-white/88 transition-[background-color,color,border-color,box-shadow,border-radius] duration-200 hover:bg-[#172133] hover:text-white focus-visible:border-sky-400/35 focus-visible:bg-[#172133] focus-visible:outline-none',
+                        'inline-flex items-center gap-1.5 rounded-md border border-white/[0.07] bg-transparent px-2 text-left text-xs text-white/88 transition-[background-color,color,border-color,box-shadow,border-radius] duration-200 hover:bg-white/[0.045] hover:text-white focus-visible:border-sky-400/35 focus-visible:bg-white/[0.045] focus-visible:outline-none',
                         menuVisible && (
                             menuPosition?.attachment !== 'top'
                                 ? 'rounded-b-none border-b-transparent border-white/20 shadow-[0_10px_24px_rgba(0,0,0,0.16)]'

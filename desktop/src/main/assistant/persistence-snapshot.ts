@@ -1,4 +1,4 @@
-import type { AssistantSnapshot, AssistantThread } from '../../shared/assistant/contracts'
+import type { AssistantShellSnapshot, AssistantSnapshot, AssistantThread, AssistantThreadShell } from '../../shared/assistant/contracts'
 
 export type AssistantHydratedThreadData = Pick<
     AssistantThread,
@@ -11,6 +11,51 @@ function shouldKeepHydrated(thread: AssistantThread): boolean {
 
 export function shouldKeepHydratedThread(thread: AssistantThread): boolean {
     return shouldKeepHydrated(thread)
+}
+
+export function toAssistantThreadShell(thread: AssistantThread): AssistantThreadShell {
+    return {
+        id: thread.id,
+        providerThreadId: thread.providerThreadId,
+        source: thread.source,
+        parentThreadId: thread.parentThreadId,
+        providerParentThreadId: thread.providerParentThreadId,
+        subagentDepth: thread.subagentDepth,
+        agentNickname: thread.agentNickname,
+        agentRole: thread.agentRole,
+        model: thread.model,
+        cwd: thread.cwd,
+        messageCount: thread.messageCount,
+        activityCount: thread.activityCount,
+        proposedPlanCount: thread.proposedPlanCount,
+        lastSeenCompletedTurnId: thread.lastSeenCompletedTurnId,
+        runtimeMode: thread.runtimeMode,
+        interactionMode: thread.interactionMode,
+        state: thread.state,
+        lastError: thread.lastError,
+        createdAt: thread.createdAt,
+        updatedAt: thread.updatedAt,
+        latestTurn: thread.latestTurn,
+        hasPendingApprovals: thread.hasPendingApprovals || thread.pendingApprovals.some((entry) => entry.status === 'pending'),
+        hasPendingUserInputs: thread.hasPendingUserInputs || thread.pendingUserInputs.some((entry) => entry.status === 'pending'),
+        hasActivePlan: thread.hasActivePlan || Boolean(thread.activePlan)
+    }
+}
+
+export function toAssistantShellSnapshot(snapshot: AssistantSnapshot): AssistantShellSnapshot {
+    return {
+        snapshotSequence: snapshot.snapshotSequence,
+        updatedAt: snapshot.updatedAt,
+        selectedSessionId: snapshot.selectedSessionId,
+        playground: structuredClone(snapshot.playground),
+        knownModels: structuredClone(snapshot.knownModels),
+        fleetByThreadId: structuredClone(snapshot.fleetByThreadId || {}),
+        sessions: snapshot.sessions.map((session) => ({
+            ...session,
+            threadIds: [...session.threadIds],
+            threads: session.threads.map(toAssistantThreadShell)
+        }))
+    }
 }
 
 export function summarizeThread(thread: AssistantThread): AssistantThread {

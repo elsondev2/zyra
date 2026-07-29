@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { MoreVertical } from 'lucide-react'
-import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { cn } from '@/lib/utils'
 
 export interface FileActionsMenuItem {
@@ -39,59 +38,55 @@ export function FileActionsMenu({
     const buttonRef = useRef<HTMLButtonElement | null>(null)
     const menuRef = useRef<HTMLDivElement | null>(null)
     const [inlineDirection, setInlineDirection] = useState<'up' | 'down'>('down')
-    const [menuPosition, setMenuPosition] = useState<{ top: number; left: number; originClassName: string } | null>(null)
+    const [menuPosition, setMenuPosition] = useState<{
+        direction: 'up' | 'down'
+        top?: number
+        bottom?: number
+        right: number
+    } | null>(null)
 
-    const updatePosition = (menuWidth = 180, menuHeight = 220) => {
+    const updatePosition = () => {
         const button = buttonRef.current
         if (!button) return
 
         const viewportPadding = 12
         const gap = 6
+        const estimatedMenuHeight = Math.min(360, items.length * 34 + 10)
         const rect = button.getBoundingClientRect()
         const spaceBelow = window.innerHeight - rect.bottom - viewportPadding
         const spaceAbove = rect.top - viewportPadding
-        const shouldOpenUpward = preferredDirection
-            ? preferredDirection === 'up'
-            : (spaceBelow < menuHeight && spaceAbove > spaceBelow)
-        const originClassName = shouldOpenUpward ? 'origin-bottom-right animate-scaleIn' : 'origin-top-right animate-scaleIn'
+        const direction: 'up' | 'down' = preferredDirection
+            ? preferredDirection
+            : (spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow ? 'up' : 'down')
 
         if (presentation === 'inline') {
-            setInlineDirection(shouldOpenUpward ? 'up' : 'down')
+            setInlineDirection(direction)
             setMenuPosition(null)
             return
         }
 
-        const maxTop = Math.max(viewportPadding, window.innerHeight - menuHeight - viewportPadding)
-        const top = shouldOpenUpward
-            ? Math.max(viewportPadding, rect.top - menuHeight - gap)
-            : Math.max(viewportPadding, Math.min(maxTop, rect.bottom + gap))
-        const maxLeft = Math.max(viewportPadding, window.innerWidth - menuWidth - viewportPadding)
-        const left = Math.max(viewportPadding, Math.min(rect.right - menuWidth, maxLeft))
-
-        setMenuPosition({
-            top,
-            left,
-            originClassName
-        })
+        const right = Math.max(viewportPadding, window.innerWidth - rect.right)
+        setMenuPosition(direction === 'up'
+            ? {
+                direction,
+                bottom: Math.max(viewportPadding, window.innerHeight - rect.top + gap),
+                right
+            }
+            : {
+                direction,
+                top: Math.max(viewportPadding, rect.bottom + gap),
+                right
+            })
     }
 
     useEffect(() => {
         if (!open) return
 
         updatePosition()
-        const handleResize = () => {
-            const width = menuRef.current?.offsetWidth ?? 180
-            const height = menuRef.current?.offsetHeight ?? 220
-            updatePosition(width, height)
-        }
-
-        const rafId = window.requestAnimationFrame(handleResize)
+        const handleResize = () => updatePosition()
         window.addEventListener('resize', handleResize)
-        return () => {
-            window.cancelAnimationFrame(rafId)
-            window.removeEventListener('resize', handleResize)
-        }
-    }, [open, preferredDirection, presentation])
+        return () => window.removeEventListener('resize', handleResize)
+    }, [items.length, open, preferredDirection, presentation])
 
     useEffect(() => {
         if (!open || presentation !== 'portal') return
@@ -126,40 +121,35 @@ export function FileActionsMenu({
 
     if (items.length === 0) return null
 
+    const menuDirection = presentation === 'inline' ? inlineDirection : menuPosition?.direction
     const menuBody = (
-        <AnimatedHeight isOpen={open} duration={220}>
-            <div className={cn(
-                'rounded-xl border border-white/10 bg-sparkle-card p-1 shadow-2xl shadow-black/60',
-                presentation === 'inline'
-                    ? inlineDirection === 'up'
-                        ? 'origin-bottom-right animate-scaleIn'
-                        : 'origin-top-right animate-scaleIn'
-                    : menuPosition?.originClassName
-            )}>
-                {items.map((item) => (
-                    <button
-                        key={item.id}
-                        type="button"
-                        disabled={item.disabled}
-                        onClick={() => {
-                            setOpen(false)
-                            void item.onSelect()
-                        }}
-                        className={cn(
-                            'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors',
-                            item.disabled
-                                ? 'cursor-not-allowed text-white/20'
-                                : item.danger
-                                    ? 'text-red-200 hover:bg-red-500/15 hover:text-red-100'
-                                    : 'text-white/75 hover:bg-white/10 hover:text-white'
-                        )}
-                    >
-                        {item.icon && <span className="shrink-0">{item.icon}</span>}
-                        <span>{item.label}</span>
-                    </button>
-                ))}
-            </div>
-        </AnimatedHeight>
+        <div className={cn(
+            'max-h-[calc(100vh-24px)] overflow-y-auto rounded-lg border border-white/10 bg-sparkle-card p-1 shadow-2xl shadow-black/60',
+            menuDirection === 'up' ? 'assistant-menu-in-up' : 'assistant-menu-in-down'
+        )}>
+            {items.map((item) => (
+                <button
+                    key={item.id}
+                    type="button"
+                    disabled={item.disabled}
+                    onClick={() => {
+                        setOpen(false)
+                        void item.onSelect()
+                    }}
+                    className={cn(
+                        'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors',
+                        item.disabled
+                            ? 'cursor-not-allowed text-white/20'
+                            : item.danger
+                                ? 'text-red-200 hover:bg-red-500/15 hover:text-red-100'
+                                : 'text-white/75 hover:bg-white/10 hover:text-white'
+                    )}
+                >
+                    {item.icon && <span className="shrink-0">{item.icon}</span>}
+                    <span>{item.label}</span>
+                </button>
+            ))}
+        </div>
     )
 
     return (
@@ -169,7 +159,8 @@ export function FileActionsMenu({
                 type="button"
                 onClick={(event) => {
                     event.stopPropagation()
-                    setOpen((current) => !current)
+                    if (!open) setMenuPosition(null)
+                    setOpen(!open)
                 }}
                 className={cn(
                     'h-7 w-7 inline-flex items-center justify-center rounded-[4px] border-0 text-white/45 transition-colors hover:bg-white/10 hover:text-white',
@@ -203,8 +194,9 @@ export function FileActionsMenu({
                         menuClassName
                     )}
                     style={{
-                        top: `${menuPosition.top}px`,
-                        left: `${menuPosition.left}px`
+                        top: menuPosition.top == null ? undefined : `${menuPosition.top}px`,
+                        bottom: menuPosition.bottom == null ? undefined : `${menuPosition.bottom}px`,
+                        right: `${menuPosition.right}px`
                     }}
                     onClick={(event) => event.stopPropagation()}
                 >

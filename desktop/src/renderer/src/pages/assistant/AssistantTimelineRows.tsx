@@ -13,7 +13,12 @@ import { formatAssistantDateTime } from '@/lib/assistant/selectors'
 import AssistantAttachmentPreviewModal from './AssistantAttachmentPreviewModal'
 import { AssistantFileAttachmentCard, AssistantPastedTextCard } from './AssistantAttachmentCards'
 import { AssistantAttachmentImageCard } from './AssistantAttachmentImageCard'
-import { CollapsibleUserMessageBody, StreamingAssistantText } from './AssistantTimelineText'
+import {
+    CollapsibleUserMessageBody,
+    CompletedAssistantMarkdown,
+    StreamingAssistantMarkdown,
+    StreamingAssistantText
+} from './AssistantTimelineText'
 import { getContentTypeTag, getContextFileMeta, toKbLabel } from './assistant-composer-utils'
 import {
     areMessagesEqual,
@@ -37,6 +42,8 @@ import { TimelineToolCallList } from './AssistantTimelineToolCalls'
 export { TimelineToolCallList }
 export { TimelineIssueList } from './AssistantTimelineIssueList'
 export { TimelineProposedPlan } from './AssistantTimelineProposedPlan'
+
+const ASSISTANT_MARKDOWN_CLASS_NAME = 'text-[13px] leading-6 text-sparkle-text [&_h1]:mb-2.5 [&_h1]:mt-5 [&_h1]:border-0 [&_h1]:pb-0 [&_h1]:text-[15px] [&_h1]:font-semibold [&_h2]:mb-2.5 [&_h2]:mt-5 [&_h2]:border-0 [&_h2]:pb-0 [&_h2]:text-[14px] [&_h2]:font-semibold [&_h3]:mb-2 [&_h3]:mt-4 [&_h3]:text-[13px] [&_h3]:font-semibold [&_h4]:mb-2 [&_h4]:mt-4 [&_h4]:text-[13px] [&_h4]:font-semibold [&_h5]:mb-2 [&_h5]:mt-4 [&_h5]:text-[13px] [&_h6]:mb-2 [&_h6]:mt-4 [&_h6]:text-[12px] [&_p]:mb-3 [&_p]:leading-6 [&_li]:leading-6 [&_ul]:text-[13px] [&_ol]:text-[13px] [&_table]:text-[13px] [&_pre]:text-[12px] [&_code]:text-[12px]'
 
 export function sanitizeThoughtContent(content: string): string {
     return String(content || '')
@@ -77,7 +84,19 @@ function getThoughtDisplay(activity: AssistantActivity) {
 export const TimelineThought = memo(({ activity }: { activity: AssistantActivity }) => {
     const [expanded, setExpanded] = useState(false)
     const panelId = useId()
-    const { content, label, body } = getThoughtDisplay(activity)
+    const authoritativeContent = sanitizeThoughtContent(getActivityOutput(activity) || activity.detail || '')
+    const status = getActivityStatus(activity)
+    const thoughtPresentation = useAssistantVisibleText({
+        streamId: activity.id,
+        channel: 'activity',
+        text: authoritativeContent,
+        streaming: status === 'running',
+        mode: 'chunks'
+    })
+    const content = sanitizeThoughtContent(thoughtPresentation.text)
+    const label = getThoughtLabel(content) || 'Thought'
+    const body = getThoughtBody(content)
+    const presentationActive = status === 'running' || thoughtPresentation.presenting
 
     if (!content) return null
     if (!body) {
@@ -113,10 +132,17 @@ export const TimelineThought = memo(({ activity }: { activity: AssistantActivity
             </button>
             <AnimatedHeight isOpen={expanded}>
                     <div id={panelId} className="mt-1.5 w-full text-white/35">
-                        <MarkdownRenderer
-                            content={body}
-                            className="text-[11px] leading-[1.72] text-white/35 [&_h1]:border-0 [&_h1]:pb-0 [&_h1]:text-[11px] [&_h2]:border-0 [&_h2]:pb-0 [&_h2]:text-[11px] [&_h3]:text-[11px] [&_h4]:text-[11px] [&_h5]:text-[11px] [&_h6]:text-[11px] [&_p]:mb-2.5 [&_p]:leading-[1.72] [&_p]:text-white/35 [&_li]:leading-[1.72] [&_li]:text-white/35 [&_strong]:text-white/45 [&_pre]:text-[10px] [&_code]:text-[10px]"
-                        />
+                        {presentationActive ? (
+                            <StreamingAssistantText
+                                content={body}
+                                className="whitespace-pre-wrap break-words text-[11px] leading-[1.72] text-white/35 [overflow-wrap:anywhere]"
+                            />
+                        ) : (
+                            <MarkdownRenderer
+                                content={body}
+                                className="text-[11px] leading-[1.72] text-white/35 [&_h1]:border-0 [&_h1]:pb-0 [&_h1]:text-[11px] [&_h2]:border-0 [&_h2]:pb-0 [&_h2]:text-[11px] [&_h3]:text-[11px] [&_h4]:text-[11px] [&_h5]:text-[11px] [&_h6]:text-[11px] [&_p]:mb-2.5 [&_p]:leading-[1.72] [&_p]:text-white/35 [&_li]:leading-[1.72] [&_li]:text-white/35 [&_strong]:text-white/45 [&_pre]:text-[10px] [&_code]:text-[10px]"
+                            />
+                        )}
                     </div>
             </AnimatedHeight>
         </div>
@@ -496,7 +522,8 @@ export const TimelineMessage = memo(({
     onOpenFilePath = undefined,
     onOpenAttachmentPreview = undefined,
     filePath = null,
-    onInternalLinkClick
+    onInternalLinkClick,
+    onLinkNotice
 }: {
     message: AssistantMessage
     isLatestAssistant?: boolean
@@ -514,7 +541,8 @@ export const TimelineMessage = memo(({
         options?: PreviewOpenOptions
     ) => Promise<void> | void
     filePath?: string | null
-    onInternalLinkClick?: (href: string) => Promise<void> | void
+    onInternalLinkClick?: (href: string) => Promise<boolean | void> | boolean | void
+    onLinkNotice?: (message: string, tone: 'info' | 'error') => void
 }) => {
     const isAssistant = message.role === 'assistant'
     const copyValue = message.text || ''
@@ -526,11 +554,18 @@ export const TimelineMessage = memo(({
     const [copied, setCopied] = useState(false)
     const [nowIso, setNowIso] = useState(() => new Date().toISOString())
     const [previewAttachment, setPreviewAttachment] = useState<ComposerContextFile | null>(null)
-    const visibleAssistantText = useAssistantVisibleText(message.text || '', Boolean(message.streaming), assistantTextStreamingMode)
+    const assistantTextPresentation = useAssistantVisibleText({
+        streamId: message.id,
+        channel: 'message',
+        text: message.text || '',
+        streaming: Boolean(message.streaming),
+        mode: assistantTextStreamingMode
+    })
+    const streamedMessageRef = useRef(Boolean(message.streaming))
+    if (message.streaming) streamedMessageRef.current = true
     const initialCompactNarration = useMemo(() => getSettledLiveNarration(message), [])
     const [compactNarration, setCompactNarration] = useState<CompactLiveNarrationSnapshot | null>(initialCompactNarration)
     const [outgoingCompactNarration, setOutgoingCompactNarration] = useState<CompactLiveNarrationSnapshot | null>(null)
-    const [showFullCompactNarration, setShowFullCompactNarration] = useState(false)
     const compactNarrationRef = useRef<CompactLiveNarrationSnapshot | null>(initialCompactNarration)
 
     useEffect(() => {
@@ -540,7 +575,6 @@ export const TimelineMessage = memo(({
         compactNarrationRef.current = nextNarration
         setOutgoingCompactNarration(previousNarration)
         setCompactNarration(nextNarration)
-        setShowFullCompactNarration(false)
         if (!previousNarration) return
         const timeoutId = window.setTimeout(() => setOutgoingCompactNarration(null), 460)
         return () => window.clearTimeout(timeoutId)
@@ -612,58 +646,72 @@ export const TimelineMessage = memo(({
     ])
 
     if (isAssistant) {
-        const assistantText = message.streaming ? (visibleAssistantText || ' ') : (message.text || ' ')
-        const renderedAssistantText = stripProposedPlanBlocks(assistantText) || (message.streaming ? ' ' : '')
+        const presentationActive = Boolean(message.streaming) || assistantTextPresentation.presenting
+        const assistantText = presentationActive ? (assistantTextPresentation.text || ' ') : (message.text || ' ')
+        const renderedAssistantText = stripProposedPlanBlocks(assistantText) || (presentationActive ? ' ' : '')
         const assistantCopyValue = renderedAssistantText.trim() ? renderedAssistantText : copyValue
-        if (!renderedAssistantText.trim() && !message.streaming) return null
+        if (!renderedAssistantText.trim() && !presentationActive) return null
 
         return (
             <div className={cn('group max-w-4xl py-1', compactLiveNarration && 'py-0.5')}>
                 {compactLiveNarration ? (
-                    compactNarration ? (
-                        <button
-                            type="button"
-                            aria-expanded={showFullCompactNarration}
-                            onClick={() => setShowFullCompactNarration((current) => !current)}
-                            className="block w-full cursor-pointer rounded-sm text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/25"
-                            title={showFullCompactNarration ? 'Show less narration' : 'Show full narration'}
-                        >
-                            <span className="grid">
+                    presentationActive ? (
+                        <div className="block w-full rounded-sm text-left">
+                            <div className="line-clamp-3 [overflow-wrap:anywhere]">
+                                <StreamingAssistantMarkdown
+                                    content={renderedAssistantText || ' '}
+                                    cacheKey={`${message.id}:compact-stream`}
+                                    className="assistant-live-narration-muted text-[11px] leading-5 [&_p]:mb-0 [&_li]:leading-5"
+                                />
+                            </div>
+                        </div>
+                    ) : compactNarration ? (
+                        <div className="block w-full rounded-sm text-left">
+                            <div className="grid">
                                 {outgoingCompactNarration ? (
-                                    <span
+                                    <div
                                         key={outgoingCompactNarration.key}
                                         aria-hidden="true"
-                                        className={cn(
-                                            'assistant-live-narration-muted assistant-live-narration-out col-start-1 row-start-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere]',
-                                            !showFullCompactNarration && 'line-clamp-3'
-                                        )}
+                                        className="assistant-live-narration-out col-start-1 row-start-1 line-clamp-3 [overflow-wrap:anywhere]"
                                     >
-                                        {outgoingCompactNarration.text}
-                                    </span>
+                                        <StreamingAssistantMarkdown
+                                            content={outgoingCompactNarration.text}
+                                            cacheKey={`${outgoingCompactNarration.key}:compact-settled`}
+                                            className="assistant-live-narration-muted text-[11px] leading-5 [&_p]:mb-0 [&_li]:leading-5"
+                                        />
+                                    </div>
                                 ) : null}
-                                <span
+                                <div
                                     key={compactNarration.key}
-                                    className={cn(
-                                        'assistant-live-narration-muted assistant-live-narration-in col-start-1 row-start-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere]',
-                                        !showFullCompactNarration && 'line-clamp-3'
-                                    )}
+                                    className="assistant-live-narration-in col-start-1 row-start-1 line-clamp-3 [overflow-wrap:anywhere]"
                                 >
-                                    {compactNarration.text}
-                                </span>
-                            </span>
-                        </button>
+                                    <StreamingAssistantMarkdown
+                                        content={compactNarration.text}
+                                        cacheKey={`${compactNarration.key}:compact-settled`}
+                                        className="assistant-live-narration-muted text-[11px] leading-5 [&_p]:mb-0 [&_li]:leading-5"
+                                    />
+                                </div>
+                            </div>
+                        </div>
                     ) : null
-                ) : message.streaming ? (
-                    <StreamingAssistantText
+                ) : presentationActive ? (
+                    <StreamingAssistantMarkdown
                         content={renderedAssistantText || ' '}
-                        className="text-[13px] leading-6 text-sparkle-text [overflow-wrap:anywhere]"
-                    />
-                ) : (
-                    <MarkdownRenderer
-                        content={renderedAssistantText}
+                        cacheKey={`${message.id}:stream`}
                         filePath={filePath || undefined}
                         onInternalLinkClick={onInternalLinkClick}
-                        className="text-[13px] leading-6 text-sparkle-text [&_h1]:mb-2.5 [&_h1]:mt-5 [&_h1]:border-0 [&_h1]:pb-0 [&_h1]:text-[15px] [&_h1]:font-semibold [&_h2]:mb-2.5 [&_h2]:mt-5 [&_h2]:border-0 [&_h2]:pb-0 [&_h2]:text-[14px] [&_h2]:font-semibold [&_h3]:mb-2 [&_h3]:mt-4 [&_h3]:text-[13px] [&_h3]:font-semibold [&_h4]:mb-2 [&_h4]:mt-4 [&_h4]:text-[13px] [&_h4]:font-semibold [&_h5]:mb-2 [&_h5]:mt-4 [&_h5]:text-[13px] [&_h6]:mb-2 [&_h6]:mt-4 [&_h6]:text-[12px] [&_p]:mb-3 [&_p]:leading-6 [&_li]:leading-6 [&_ul]:text-[13px] [&_ol]:text-[13px] [&_table]:text-[13px] [&_pre]:text-[12px] [&_code]:text-[12px]"
+                        onLinkNotice={onLinkNotice}
+                        className={ASSISTANT_MARKDOWN_CLASS_NAME}
+                    />
+                ) : (
+                    <CompletedAssistantMarkdown
+                        content={renderedAssistantText}
+                        cacheKey={`${message.id}:${message.updatedAt}:${renderedAssistantText.length}`}
+                        filePath={filePath || undefined}
+                        deferInitialRender={streamedMessageRef.current}
+                        onInternalLinkClick={onInternalLinkClick}
+                        onLinkNotice={onLinkNotice}
+                        className={ASSISTANT_MARKDOWN_CLASS_NAME}
                     />
                 )}
                 {!compactLiveNarration ? <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-sparkle-text-muted">
@@ -822,13 +870,20 @@ export const TimelineMessage = memo(({
         && prev.onOpenAttachmentPreview === next.onOpenAttachmentPreview
         && prev.filePath === next.filePath
         && prev.onInternalLinkClick === next.onInternalLinkClick
+        && prev.onLinkNotice === next.onLinkNotice
         && areMessagesEqual(prev.message, next.message)
 })
 
 export function TimelineContextCompactionMarker({ activity }: { activity: AssistantActivity }) {
     const status = getContextCompactionStatus(activity)
     const isRunning = status === 'running'
-    const label = isRunning ? 'AUTO-COMPACTING' : 'AUTO-COMPACTED'
+    const label = status === 'running'
+        ? 'AUTO-COMPACTING'
+        : status === 'cancelled'
+            ? 'AUTO-COMPACTION CANCELLED'
+            : status === 'failed'
+                ? 'AUTO-COMPACTION FAILED'
+                : 'AUTO-COMPACTED'
     const labelStyle = getCompactionLabelStyle(isRunning)
 
     return (
@@ -840,7 +895,9 @@ export function TimelineContextCompactionMarker({ activity }: { activity: Assist
                 )} />
                 <span className={cn(
                     'relative isolate overflow-hidden rounded-full border border-transparent bg-white/[0.03] px-3 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.24em] text-sparkle-text-secondary shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]',
-                    isRunning && 'bg-sky-500/[0.08] text-sky-100'
+                    isRunning && 'bg-sky-500/[0.08] text-sky-100',
+                    status === 'cancelled' && 'bg-amber-500/[0.08] text-amber-200',
+                    status === 'failed' && 'bg-red-500/[0.08] text-red-200'
                 )}>
                     <span className="relative z-10" style={labelStyle}>{label}</span>
                 </span>
@@ -853,16 +910,26 @@ export function TimelineContextCompactionMarker({ activity }: { activity: Assist
     )
 }
 
+function formatWorkingIndicatorStatus(startedAt: string | null | undefined, label: string): string {
+    if (label === 'Connecting...') return label
+    const elapsed = startedAt ? formatWorkingTimer(startedAt, new Date().toISOString()) : null
+    return elapsed ? `Working for ${elapsed}` : label
+}
+
 export function TimelineWorkingIndicator({ startedAt, label = 'Working...' }: { startedAt?: string | null; label?: string }) {
-    const [nowIso, setNowIso] = useState(() => new Date().toISOString())
+    const statusTextRef = useRef<HTMLSpanElement | null>(null)
+    const statusText = formatWorkingIndicatorStatus(startedAt, label)
     useEffect(() => {
-        const intervalId = window.setInterval(() => setNowIso(new Date().toISOString()), 1000)
+        const updateStatusText = () => {
+            if (statusTextRef.current) {
+                statusTextRef.current.textContent = formatWorkingIndicatorStatus(startedAt, label)
+            }
+        }
+        updateStatusText()
+        if (!startedAt || label === 'Connecting...') return
+        const intervalId = window.setInterval(updateStatusText, 1000)
         return () => window.clearInterval(intervalId)
-    }, [])
-    const elapsed = startedAt ? formatWorkingTimer(startedAt, nowIso) : null
-    const statusText = label === 'Connecting...'
-        ? label
-        : elapsed ? `Working for ${elapsed}` : label
+    }, [label, startedAt])
     return (
         <div className="max-w-4xl py-0.5">
             <div className="flex min-h-7 items-center gap-2 text-[11px] text-white/32">
@@ -871,7 +938,7 @@ export function TimelineWorkingIndicator({ startedAt, label = 'Working...' }: { 
                     <span className="h-1 w-1 animate-pulse rounded-full bg-white/25 [animation-delay:200ms]" />
                     <span className="h-1 w-1 animate-pulse rounded-full bg-white/25 [animation-delay:400ms]" />
                 </span>
-                <span className="shrink-0 font-medium">{statusText}</span>
+                <span ref={statusTextRef} className="shrink-0 font-medium">{statusText}</span>
                 <span className="h-px min-w-5 flex-1 bg-white/[0.07]" aria-hidden="true" />
                 <Loader2 size={11} className="animate-spin text-white/22" />
             </div>

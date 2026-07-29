@@ -8,6 +8,7 @@ import CommandPalette from './components/CommandPalette'
 import LinkHoverStatus from './components/ui/LinkHoverStatus'
 
 const Assistant = lazy(() => import('./pages/Assistant'))
+const InstructorVoiceLab = lazy(() => import('./pages/assistant/InstructorVoiceLab'))
 const Settings = lazy(() => import('./pages/Settings'))
 
 interface TerminalContextType {
@@ -51,6 +52,7 @@ function MainContent() {
                 <Routes>
                     <Route path="/" element={<Navigate to="/assistant" replace />} />
                     <Route path="/assistant" element={<Assistant />} />
+                    <Route path="/assistant/instructor" element={<InstructorVoiceLab />} />
                     <Route path="/assistant/*" element={<Assistant />} />
                     <Route path="/settings" element={<Settings />} />
                     <Route path="/settings/*" element={<Settings />} />

@@ -1,34 +1,21 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Archive, Bot, ChevronDown, Folder, FolderOpen, MoreHorizontal, PanelLeftOpen, Pin, PinOff, Plus, Search, Settings, SquarePen, Trash2, X } from 'lucide-react'
+import { Bot, ChevronDown, Copy, Folder, FolderOpen, MoreHorizontal, PanelLeftOpen, Pin, Plus, Search, Settings, SquarePen, Trash2, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import type { AssistantMessage, AssistantSession, AssistantThread } from '@shared/assistant/contracts'
 import { useCommandPalette } from '@/lib/commandPalette'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
+import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
 import { cn } from '@/lib/utils'
 import type { AssistantToastInput } from './AssistantPageHelpers'
 import { RenameSessionModal } from './AssistantSessionsRailDialogs'
+import { ASSISTANT_MAX_LEFT_SIDEBAR_WIDTH, ASSISTANT_MIN_LEFT_SIDEBAR_WIDTH, resolveAssistantLeftSidebarWidth } from './assistant-pane-layout'
+import { createSessionActionMenuItems } from './assistant-sessions-rail-menus'
 import { isAssistantDraftSession, resolveAssistantThreadStatusPill, resolveSessionProjectPath } from './assistant-sessions-rail-utils'
+import { useAssistantRailContextMenu } from './useAssistantRailContextMenu'
 
 const PINNED_SESSION_IDS_KEY = 'assistant:pinned-session-ids:v1'
-const BUBBLE_PREVIEW_PINNED_KEY = 'assistant:bubble-preview-pinned:v1'
 const EXPANDED_PROJECT_PATH_KEYS_KEY = 'assistant:expanded-project-path-keys:v1'
-
-function readBubblePreviewPinnedPreference(): boolean {
-    try {
-        return localStorage.getItem(BUBBLE_PREVIEW_PINNED_KEY) === 'true'
-    } catch {
-        return false
-    }
-}
-
-function writeBubblePreviewPinnedPreference(pinned: boolean): void {
-    try {
-        localStorage.setItem(BUBBLE_PREVIEW_PINNED_KEY, String(pinned))
-    } catch {
-        // Keep the pin usable in-memory even when storage fails.
-    }
-}
 
 function readPinnedSessionIds(): Set<string> {
     try {
@@ -195,6 +182,8 @@ type ProjectGroup = {
 export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail(props: {
     collapsed: boolean
     width: number
+    maxWidth?: number
+    previewPinned: boolean
     sessions: AssistantSession[]
     activeSessionId: string | null
     activeThreadId: string | null
@@ -207,11 +196,14 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
     onArchiveSession: (sessionId: string, archived?: boolean) => Promise<void> | void
     onDeleteSession: (sessionId: string) => Promise<{ success: true } | { success: false; error: string }>
     onWidthChange?: (width: number) => void
+    onPreviewPinnedChange: (pinned: boolean) => void
     onShowToast: (input: AssistantToastInput) => void
 }) {
     const {
         collapsed,
         width,
+        maxWidth = ASSISTANT_MAX_LEFT_SIDEBAR_WIDTH,
+        previewPinned,
         sessions,
         activeSessionId,
         activeThreadId,
@@ -224,10 +216,12 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         onArchiveSession,
         onDeleteSession,
         onWidthChange,
+        onPreviewPinnedChange,
         onShowToast
     } = props
     const navigate = useNavigate()
     const { open } = useCommandPalette()
+    const { openContextMenu, contextMenuPortal } = useAssistantRailContextMenu()
     const resizeStateRef = useRef<{ pointerId: number; startX: number; startWidth: number; width: number } | null>(null)
     const previewCloseTimerRef = useRef<number | null>(null)
     const wasCollapsedRef = useRef(collapsed)
@@ -238,8 +232,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
     }
     const [isResizing, setIsResizing] = useState(false)
     const [loadingScreenActive, setLoadingScreenActive] = useState(false)
-    const [previewOpen, setPreviewOpen] = useState(() => readBubblePreviewPinnedPreference())
-    const [previewPinned, setPreviewPinned] = useState(() => readBubblePreviewPinnedPreference())
+    const [previewOpen, setPreviewOpen] = useState(previewPinned)
     const [pendingDeleteSession, setPendingDeleteSession] = useState<AssistantSession | null>(null)
     const [renameTarget, setRenameTarget] = useState<AssistantSession | null>(null)
     const [renameDraft, setRenameDraft] = useState('')
@@ -289,7 +282,11 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
             ))
     }, [activeSessions, pinnedSessionIds])
 
-    const resolvedWidth = Math.max(260, Math.min(420, Math.round(width || 322)))
+    const resolvedMaxWidth = Math.max(
+        ASSISTANT_MIN_LEFT_SIDEBAR_WIDTH,
+        Math.min(ASSISTANT_MAX_LEFT_SIDEBAR_WIDTH, Math.round(maxWidth))
+    )
+    const resolvedWidth = resolveAssistantLeftSidebarWidth(width, resolvedMaxWidth)
     const layoutShellStyle = {
         width: collapsed ? '0px' : `${resolvedWidth}px`,
         willChange: 'width'
@@ -362,10 +359,13 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         const resizeState = resizeStateRef.current
         if (!resizeState || resizeState.pointerId !== event.pointerId || !onWidthChange) return
         event.preventDefault()
-        const nextWidth = Math.max(260, Math.min(420, Math.round(resizeState.startWidth + (event.clientX - resizeState.startX))))
+        const nextWidth = Math.max(
+            ASSISTANT_MIN_LEFT_SIDEBAR_WIDTH,
+            Math.min(resolvedMaxWidth, Math.round(resizeState.startWidth + (event.clientX - resizeState.startX)))
+        )
         resizeState.width = nextWidth
         onWidthChange(nextWidth)
-    }, [onWidthChange])
+    }, [onWidthChange, resolvedMaxWidth])
 
     const handleResizePointerEnd = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
         const resizeState = resizeStateRef.current
@@ -434,6 +434,49 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         setPendingDeleteSession(session)
     }
 
+    const getSessionMenuItems = (session: AssistantSession): FileActionsMenuItem[] => (
+        createSessionActionMenuItems({
+            session,
+            pinned: pinnedSessionIds.has(session.id),
+            onOpenRename: (target) => { void renameSession(target) },
+            onTogglePinned: () => togglePinnedSession(session),
+            onArchiveSession: () => { void archiveSession(session) },
+            onDeleteRequest: (target) => { void deleteSession(target) }
+        })
+    )
+
+    const getProjectMenuItems = (group: ProjectGroup, expanded: boolean): FileActionsMenuItem[] => [
+        {
+            id: 'new-chat',
+            label: 'New chat in project',
+            icon: <SquarePen size={13} />,
+            onSelect: () => onCreateProjectChat(group.path)
+        },
+        {
+            id: 'copy-path',
+            label: 'Copy project path',
+            icon: <Copy size={13} />,
+            onSelect: () => {
+                void navigator.clipboard?.writeText(group.path)
+                onShowToast({ message: 'Project path copied' })
+            }
+        },
+        {
+            id: 'toggle-project',
+            label: expanded ? 'Collapse project' : 'Expand project',
+            icon: <ChevronDown size={13} className={cn(!expanded && '-rotate-90')} />,
+            onSelect: () => toggleProject(group.path, expanded)
+        }
+    ]
+
+    const openSessionContextMenu = (event: ReactMouseEvent<HTMLElement>, session: AssistantSession) => {
+        openContextMenu(event, `${getSessionDisplayTitle(session)} actions`, getSessionMenuItems(session))
+    }
+
+    const openProjectContextMenu = (event: ReactMouseEvent<HTMLElement>, group: ProjectGroup, expanded: boolean) => {
+        openContextMenu(event, `${group.label} actions`, getProjectMenuItems(group, expanded))
+    }
+
     const confirmDeleteSession = async () => {
         if (!pendingDeleteSession || deletingSessionId) return
         const session = pendingDeleteSession
@@ -475,10 +518,6 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
     }, [previewPinned])
 
     useEffect(() => {
-        writeBubblePreviewPinnedPreference(previewPinned)
-    }, [previewPinned])
-
-    useEffect(() => {
         const wasCollapsed = wasCollapsedRef.current
         wasCollapsedRef.current = collapsed
 
@@ -488,7 +527,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                 previewCloseTimerRef.current = null
             }
             setPreviewOpen(false)
-            setPreviewPinned(false)
+            onPreviewPinnedChange(false)
             return
         }
 
@@ -496,10 +535,10 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
             setPreviewOpen(true)
             schedulePreviewClose(1100)
         }
-    }, [collapsed, loadingScreenActive, schedulePreviewClose])
+    }, [collapsed, loadingScreenActive, onPreviewPinnedChange, schedulePreviewClose])
 
     const expandCollapsedSidebar = () => {
-        setPreviewPinned(false)
+        onPreviewPinnedChange(false)
         window.dispatchEvent(new CustomEvent('zyra:toggle-assistant-sidebar'))
     }
 
@@ -513,11 +552,11 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
 
     const togglePreviewPinned = () => {
         if (previewPinned) {
-            setPreviewPinned(false)
+            onPreviewPinnedChange(false)
             forceSchedulePreviewClose()
             return
         }
-        setPreviewPinned(true)
+        onPreviewPinnedChange(true)
         openPreview()
     }
 
@@ -680,13 +719,11 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                                     activeSessionId={activeSessionId}
                                     activeThreadId={activeThreadId}
                                     commandPending={commandPending}
-                                    pinned={pinnedSessionIds.has(session.id)}
                                     onSelectSession={onSelectSession}
                                     onSelectThread={onSelectThread}
-                                    onTogglePinned={togglePinnedSession}
                                     onRename={renameSession}
-                                    onArchive={archiveSession}
-                                    onDelete={deleteSession}
+                                    onOpenContextMenu={openSessionContextMenu}
+                                    menuItems={getSessionMenuItems(session)}
                                 />
                             ))}
                         </SidebarSection>
@@ -701,13 +738,11 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                                     activeSessionId={activeSessionId}
                                     activeThreadId={activeThreadId}
                                     commandPending={commandPending}
-                                    pinned={pinnedSessionIds.has(session.id)}
                                     onSelectSession={onSelectSession}
                                     onSelectThread={onSelectThread}
-                                    onTogglePinned={togglePinnedSession}
                                     onRename={renameSession}
-                                    onArchive={archiveSession}
-                                    onDelete={deleteSession}
+                                    onOpenContextMenu={openSessionContextMenu}
+                                    menuItems={getSessionMenuItems(session)}
                                 />
                             ))
                         ) : (
@@ -730,6 +765,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                                             tabIndex={0}
                                             aria-expanded={expanded}
                                             onClick={() => toggleProject(group.path, expanded)}
+                                            onContextMenu={(event) => openProjectContextMenu(event, group, expanded)}
                                             onKeyDown={(event) => {
                                                 if (event.key !== 'Enter' && event.key !== ' ') return
                                                 event.preventDefault()
@@ -754,18 +790,14 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                                                 </span>
                                             </div>
                                             <div className="ml-1 flex shrink-0 items-center gap-0.5 text-sparkle-text-muted/65 opacity-70 transition-opacity group-hover/project-header:opacity-100 focus-within:opacity-100">
-                                                <button
-                                                    type="button"
-                                                    onClick={(event) => {
-                                                        event.stopPropagation()
-                                                        void navigator.clipboard?.writeText(group.path)
-                                                        onShowToast({ message: 'Project path copied' })
-                                                    }}
-                                                    className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-[7px] border border-transparent bg-transparent p-0 transition-colors hover:bg-white/[0.04] hover:text-sparkle-text focus:outline-none focus-visible:ring-1 focus-visible:ring-white/10"
+                                                <FileActionsMenu
+                                                    items={getProjectMenuItems(group, expanded)}
                                                     title={`${group.label} actions`}
-                                                >
-                                                    <MoreHorizontal size={14} />
-                                                </button>
+                                                    triggerIcon={<MoreHorizontal size={14} />}
+                                                    presentation="portal"
+                                                    buttonClassName="h-6 w-6 rounded-[7px] border-transparent bg-transparent p-0 text-sparkle-text-muted/65 hover:border-transparent hover:bg-white/[0.04] hover:text-sparkle-text"
+                                                    openButtonClassName="rounded-[7px] border-transparent bg-white/[0.04] p-0 text-sparkle-text"
+                                                />
                                                 <button
                                                     type="button"
                                                     onClick={(event) => {
@@ -788,15 +820,13 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                                                         activeSessionId={activeSessionId}
                                                         activeThreadId={activeThreadId}
                                                         commandPending={commandPending}
-                                                        pinned={pinnedSessionIds.has(session.id)}
                                                         compact
                                                         projectNested
                                                         onSelectSession={onSelectSession}
                                                         onSelectThread={onSelectThread}
-                                                        onTogglePinned={togglePinnedSession}
                                                         onRename={renameSession}
-                                                        onArchive={archiveSession}
-                                                        onDelete={deleteSession}
+                                                        onOpenContextMenu={openSessionContextMenu}
+                                                        menuItems={getSessionMenuItems(session)}
                                                     />
                                                 ))}
                                             </div>
@@ -832,6 +862,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                 onClose={closeRename}
                 onSubmit={() => void submitRename()}
             />
+            {contextMenuPortal}
             {!collapsed && onWidthChange && !loadingScreenActive ? (
                 <button
                     type="button"
@@ -935,30 +966,26 @@ function ChatRow(props: {
     activeSessionId: string | null
     activeThreadId: string | null
     commandPending: boolean
-    pinned: boolean
     compact?: boolean
     projectNested?: boolean
     onSelectSession: (sessionId: string) => Promise<void> | void
     onSelectThread: (input: { sessionId: string; threadId: string }) => Promise<void> | void
-    onTogglePinned: (session: AssistantSession) => void
     onRename: (session: AssistantSession) => Promise<void> | void
-    onArchive: (session: AssistantSession) => Promise<void> | void
-    onDelete: (session: AssistantSession) => Promise<void> | void
+    onOpenContextMenu: (event: ReactMouseEvent<HTMLElement>, session: AssistantSession) => void
+    menuItems: FileActionsMenuItem[]
 }) {
     const {
         session,
         activeSessionId,
         activeThreadId,
         commandPending,
-        pinned,
         compact = false,
         projectNested = false,
         onSelectSession,
         onSelectThread,
-        onTogglePinned,
         onRename,
-        onArchive,
-        onDelete
+        onOpenContextMenu,
+        menuItems
     } = props
     const statusThread = getSessionStatusThread(session)
     const isActiveSession = session.id === activeSessionId
@@ -980,6 +1007,7 @@ function ChatRow(props: {
                 tabIndex={0}
                 onClick={() => void onSelectSession(session.id)}
                 onDoubleClick={() => void onRename(session)}
+                onContextMenu={(event) => onOpenContextMenu(event, session)}
                 onKeyDown={(event) => {
                     if (event.key !== 'Enter' && event.key !== ' ') return
                     event.preventDefault()
@@ -1016,16 +1044,15 @@ function ChatRow(props: {
                         {timeLabel}
                     </span>
                 </span>
-                <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
-                    <IconAction title={pinned ? 'Unpin chat' : 'Pin chat'} onClick={() => onTogglePinned(session)}>
-                        {pinned ? <PinOff size={12} /> : <Pin size={12} />}
-                    </IconAction>
-                    <IconAction title="Archive chat" onClick={() => void onArchive(session)}>
-                        <Archive size={12} />
-                    </IconAction>
-                    <IconAction danger title="Delete chat" onClick={() => void onDelete(session)}>
-                        <Trash2 size={12} />
-                    </IconAction>
+                <div className="hidden shrink-0 items-center group-hover:flex focus-within:flex">
+                    <FileActionsMenu
+                        items={menuItems}
+                        title="Chat actions"
+                        triggerIcon={<MoreHorizontal size={13} />}
+                        presentation="portal"
+                        buttonClassName="h-5 w-5 rounded-md border-transparent bg-transparent p-0 text-sparkle-text-muted/55 hover:border-transparent hover:bg-white/[0.05] hover:text-sparkle-text"
+                        openButtonClassName="rounded-md border-transparent bg-white/[0.05] p-0 text-sparkle-text"
+                    />
                 </div>
             </div>
             <AnimatedHeight isOpen={showThreads}>
@@ -1098,28 +1125,6 @@ function RailButton(props: {
                     {shortcut}
                 </span>
             ) : null}
-        </button>
-    )
-}
-
-function IconAction(props: { children: ReactNode; title: string; danger?: boolean; onClick: () => void }) {
-    const { children, title, danger = false, onClick } = props
-    return (
-        <button
-            type="button"
-            title={title}
-            onClick={(event) => {
-                event.stopPropagation()
-                onClick()
-            }}
-            className={cn(
-                'inline-flex h-5 w-5 cursor-pointer items-center justify-center rounded-md transition-colors',
-                danger
-                    ? 'text-red-200/65 hover:bg-red-500/10 hover:text-red-100'
-                    : 'text-sparkle-text-muted/60 hover:bg-white/[0.04] hover:text-sparkle-text'
-            )}
-        >
-            {children}
         </button>
     )
 }

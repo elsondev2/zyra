@@ -1,4 +1,4 @@
-import type { AssistantCreateSessionInput, AssistantModelInfo, AssistantSnapshot } from '@shared/assistant/contracts'
+import type { AssistantCreateSessionInput, AssistantModelInfo, AssistantSnapshot, AssistantThreadHistoryState } from '@shared/assistant/contracts'
 import {
     getActiveAssistantThread,
     getAssistantActivePlan,
@@ -60,6 +60,7 @@ export type AssistantConversationSelection = {
     pendingCreateSessionInput: AssistantCreateSessionInput | null
     commandError: string | null
     selectionHydrating: boolean
+    history: AssistantThreadHistoryState | null
     selectedSession: ReturnType<typeof getSelectedAssistantSession>
     activeThread: ReturnType<typeof getActiveAssistantThread>
     timelineMessages: ReturnType<typeof getAssistantTimelineMessages>

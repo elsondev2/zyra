@@ -1,3 +1,4 @@
+import type { FleetOperationInput, FleetSnapshot } from './fleet'
 import type {
     AssistantApprovalDecision,
     AssistantInteractionMode,
@@ -7,10 +8,19 @@ import type {
 import type {
     AssistantAccountOverview,
     AssistantDomainEvent,
+    AssistantGetHistoryPageInput,
+    AssistantGetReviewIndexInput,
+    AssistantGetTurnDetailInput,
+    AssistantHistoryPage,
     AssistantPlaygroundState,
+    AssistantReviewIndex,
     AssistantRuntimeStatus,
+    AssistantSearchTurnsInput,
+    AssistantSearchTurnsResult,
     AssistantSessionTurnUsagePayload,
-    AssistantSnapshot
+    AssistantShellSnapshot,
+    AssistantThreadDetail,
+    AssistantTurnDetail
 } from './read-model'
 
 export const ASSISTANT_IPC = {
@@ -18,6 +28,9 @@ export const ASSISTANT_IPC = {
     unsubscribe: 'devscope:assistant:unsubscribe',
     bootstrap: 'devscope:assistant:bootstrap',
     getSnapshot: 'devscope:assistant:getSnapshot',
+    getFleetSnapshot: 'devscope:assistant:getFleetSnapshot',
+    agentAction: 'devscope:assistant:agentAction',
+    workflowAction: 'devscope:assistant:workflowAction',
     getStatus: 'devscope:assistant:getStatus',
     getAccountOverview: 'devscope:assistant:getAccountOverview',
     getSessionTurnUsage: 'devscope:assistant:getSessionTurnUsage',
@@ -27,7 +40,11 @@ export const ASSISTANT_IPC = {
     createSession: 'devscope:assistant:createSession',
     selectSession: 'devscope:assistant:selectSession',
     selectThread: 'devscope:assistant:selectThread',
-    hydrateSession: 'devscope:assistant:hydrateSession',
+    getThreadDetailBootstrap: 'devscope:assistant:getThreadDetailBootstrap',
+    getHistoryPage: 'devscope:assistant:getHistoryPage',
+    getReviewIndex: 'devscope:assistant:getReviewIndex',
+    getTurnDetail: 'devscope:assistant:getTurnDetail',
+    searchTurns: 'devscope:assistant:searchTurns',
     renameSession: 'devscope:assistant:renameSession',
     archiveSession: 'devscope:assistant:archiveSession',
     deleteSession: 'devscope:assistant:deleteSession',
@@ -47,6 +64,11 @@ export const ASSISTANT_IPC = {
     interruptTurn: 'devscope:assistant:interruptTurn',
     respondApproval: 'devscope:assistant:respondApproval',
     respondUserInput: 'devscope:assistant:respondUserInput',
+    subscribeRealtimeVoice: 'devscope:assistant:realtimeVoice:subscribe',
+    unsubscribeRealtimeVoice: 'devscope:assistant:realtimeVoice:unsubscribe',
+    startRealtimeVoice: 'devscope:assistant:realtimeVoice:start',
+    stopRealtimeVoice: 'devscope:assistant:realtimeVoice:stop',
+    realtimeVoiceEvent: 'devscope:assistant:realtimeVoice:event',
     getTranscriptionModelState: 'devscope:assistant:getTranscriptionModelState',
     downloadTranscriptionModel: 'devscope:assistant:downloadTranscriptionModel',
     transcribeAudioWithLocalModel: 'devscope:assistant:transcribeAudioWithLocalModel',
@@ -60,12 +82,44 @@ export interface AssistantConnectOptions {
 }
 
 export interface AssistantBootstrapPayload {
-    snapshot: AssistantSnapshot
+    snapshot: AssistantShellSnapshot
     status: AssistantRuntimeStatus
 }
 
 export interface AssistantAccountOverviewPayload {
     overview: AssistantAccountOverview
+}
+
+export interface AssistantFleetSnapshotPayload {
+    snapshot: FleetSnapshot | null
+}
+
+export interface AssistantFleetOperationResultPayload {
+    result: Record<string, unknown>
+}
+
+export type { FleetOperationInput }
+
+export type { AssistantGetHistoryPageInput, AssistantGetReviewIndexInput, AssistantGetTurnDetailInput, AssistantSearchTurnsInput }
+
+export interface AssistantThreadDetailResultPayload {
+    detail: AssistantThreadDetail
+}
+
+export interface AssistantHistoryPageResultPayload {
+    page: AssistantHistoryPage
+}
+
+export interface AssistantTurnDetailResultPayload {
+    detail: AssistantTurnDetail
+}
+
+export interface AssistantReviewIndexResultPayload {
+    index: AssistantReviewIndex
+}
+
+export interface AssistantSearchTurnsResultPayload {
+    result: AssistantSearchTurnsResult
 }
 
 export interface AssistantGetSessionTurnUsageInput {
@@ -76,6 +130,12 @@ export interface AssistantSessionTurnUsageResultPayload {
     usage: AssistantSessionTurnUsagePayload
 }
 
+export interface AssistantPromptImageInput {
+    path: string
+    name?: string
+    mimeType?: string
+}
+
 export interface AssistantSendPromptOptions {
     sessionId?: string
     model?: string
@@ -84,6 +144,7 @@ export interface AssistantSendPromptOptions {
     effort?: AssistantReasoningEffort
     serviceTier?: 'fast'
     profile?: string
+    images?: AssistantPromptImageInput[]
     skipPlaygroundLabSetup?: boolean
     playgroundTerminalAccess?: boolean
     skipPlaygroundTerminalAccessRequest?: boolean

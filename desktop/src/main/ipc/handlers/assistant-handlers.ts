@@ -10,14 +10,20 @@ import type {
     AssistantDeclinePendingPlaygroundLabRequestInput,
     AssistantDeletePlaygroundLabInput,
     AssistantDeleteMessageInput,
+    AssistantGetHistoryPageInput,
+    AssistantGetReviewIndexInput,
     AssistantGetSessionTurnUsageInput,
+    AssistantGetTurnDetailInput,
     AssistantPersistClipboardImageInput,
     AssistantResolveClipboardAttachmentInput,
+    AssistantSearchTurnsInput,
     AssistantSendPromptOptions,
     AssistantSelectThreadInput,
+    AssistantStartRealtimeVoiceInput,
     AssistantSetPlaygroundRootInput,
     AssistantTranscribeAudioInput,
-    AssistantUserInputResponseInput
+    AssistantUserInputResponseInput,
+    FleetOperationInput
 } from '../../../shared/assistant/contracts'
 import { getAssistantService } from '../../assistant'
 import { persistAssistantClipboardImage, resolveAssistantClipboardAttachment } from '../../assistant/clipboard-attachments'
@@ -43,6 +49,14 @@ export function handleAssistantUnsubscribe(event: Electron.IpcMainInvokeEvent) {
     return withAssistantResult(() => getAssistantService().unsubscribe(event.sender.id))
 }
 
+export function handleAssistantSubscribeRealtimeVoice(event: Electron.IpcMainInvokeEvent) {
+    return withAssistantResult(() => getAssistantService().subscribeRealtimeVoice(event.sender.id))
+}
+
+export function handleAssistantUnsubscribeRealtimeVoice(event: Electron.IpcMainInvokeEvent) {
+    return withAssistantResult(() => getAssistantService().unsubscribeRealtimeVoice(event.sender.id))
+}
+
 export async function handleAssistantBootstrap() {
     return getAssistantService().getBootstrap()
 }
@@ -53,6 +67,18 @@ export async function handleAssistantGetSnapshot() {
 
 export async function handleAssistantGetStatus() {
     return getAssistantService().getStatus()
+}
+
+export function handleAssistantGetFleetSnapshot(_event: Electron.IpcMainInvokeEvent, threadId: string) {
+    return withAssistantResult(() => getAssistantService().getFleetSnapshot(threadId))
+}
+
+export function handleAssistantAgentAction(_event: Electron.IpcMainInvokeEvent, input: FleetOperationInput) {
+    return withAssistantResult(() => getAssistantService().runFleetOperation('agents', input))
+}
+
+export function handleAssistantWorkflowAction(_event: Electron.IpcMainInvokeEvent, input: FleetOperationInput) {
+    return withAssistantResult(() => getAssistantService().runFleetOperation('workflows', input))
 }
 
 export function handleAssistantGetAccountOverview() {
@@ -94,9 +120,29 @@ export function handleAssistantSelectThread(_event: Electron.IpcMainInvokeEvent,
     return withAssistantResult(() => getAssistantService().selectThread(input.sessionId, input.threadId))
 }
 
-export function handleAssistantHydrateSession(_event: Electron.IpcMainInvokeEvent, sessionId: string) {
-    log.info('IPC: assistant:hydrateSession', { sessionId })
-    return withAssistantResult(() => getAssistantService().hydrateSession(sessionId))
+export function handleAssistantGetThreadDetailBootstrap(_event: Electron.IpcMainInvokeEvent, threadId: string) {
+    log.info('IPC: assistant:getThreadDetailBootstrap', { threadId })
+    return withAssistantResult(() => getAssistantService().getThreadDetailBootstrap(threadId))
+}
+
+export function handleAssistantGetHistoryPage(_event: Electron.IpcMainInvokeEvent, input: AssistantGetHistoryPageInput) {
+    log.info('IPC: assistant:getHistoryPage', { threadId: input?.threadId, hasCursor: Boolean(input?.before) })
+    return withAssistantResult(() => getAssistantService().getHistoryPage(input))
+}
+
+export function handleAssistantGetReviewIndex(_event: Electron.IpcMainInvokeEvent, input: AssistantGetReviewIndexInput) {
+    log.info('IPC: assistant:getReviewIndex', { threadId: input?.threadId })
+    return withAssistantResult(() => getAssistantService().getReviewIndex(input.threadId))
+}
+
+export function handleAssistantGetTurnDetail(_event: Electron.IpcMainInvokeEvent, input: AssistantGetTurnDetailInput) {
+    log.info('IPC: assistant:getTurnDetail', { threadId: input?.threadId, turnId: input?.turnId })
+    return withAssistantResult(() => getAssistantService().getTurnDetail(input.threadId, input.turnId))
+}
+
+export function handleAssistantSearchTurns(_event: Electron.IpcMainInvokeEvent, input: AssistantSearchTurnsInput) {
+    log.info('IPC: assistant:searchTurns', { threadId: input?.threadId, queryLength: input?.query?.length || 0 })
+    return withAssistantResult(() => getAssistantService().searchTurns(input.threadId, input.query, input.limit))
 }
 
 export function handleAssistantRenameSession(_event: Electron.IpcMainInvokeEvent, sessionId: string, title: string) {
@@ -196,6 +242,19 @@ export function handleAssistantRespondApproval(_event: Electron.IpcMainInvokeEve
 export function handleAssistantRespondUserInput(_event: Electron.IpcMainInvokeEvent, input: AssistantUserInputResponseInput) {
     log.info('IPC: assistant:respondUserInput', { requestId: input?.requestId })
     return withAssistantResult(() => getAssistantService().respondUserInput(input))
+}
+
+export function handleAssistantStartRealtimeVoice(_event: Electron.IpcMainInvokeEvent, input: AssistantStartRealtimeVoiceInput) {
+    log.info('IPC: assistant:realtimeVoice:start', {
+        sdpLength: input?.sdp?.length || 0,
+        instructionsLength: input?.instructions?.length || 0
+    })
+    return withAssistantResult(() => getAssistantService().startRealtimeVoice(input))
+}
+
+export function handleAssistantStopRealtimeVoice() {
+    log.info('IPC: assistant:realtimeVoice:stop')
+    return withAssistantResult(() => getAssistantService().stopRealtimeVoice())
 }
 
 export function handleAssistantGetTranscriptionModelState() {

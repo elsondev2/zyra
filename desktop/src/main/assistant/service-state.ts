@@ -4,6 +4,7 @@ import type {
     AssistantSnapshot,
     AssistantThread
 } from '../../shared/assistant/contracts'
+import { matchesAssistantThreadId } from './thread-identity'
 import { createAssistantId } from './utils'
 
 export interface AssistantStateRecord {
@@ -32,6 +33,8 @@ export function createAssistantThread(createdAt: string, previousThread?: Assist
         model: previousThread?.model || '',
         cwd: cwd !== undefined ? cwd : (previousThread?.cwd || null),
         messageCount: 0,
+        activityCount: 0,
+        proposedPlanCount: 0,
         lastSeenCompletedTurnId: null,
         runtimeMode: previousThread?.runtimeMode || 'approval-required',
         interactionMode: previousThread?.interactionMode || 'default',
@@ -40,6 +43,9 @@ export function createAssistantThread(createdAt: string, previousThread?: Assist
         createdAt,
         updatedAt: createdAt,
         latestTurn: null,
+        hasPendingApprovals: false,
+        hasPendingUserInputs: false,
+        hasActivePlan: false,
         activePlan: null,
         messages: [],
         proposedPlans: [],
@@ -83,7 +89,7 @@ export function requireThread(snapshot: AssistantSnapshot, threadId: string) {
 
 export function findThreadRecord(snapshot: AssistantSnapshot, threadId: string) {
     for (const session of snapshot.sessions) {
-        const thread = session.threads.find((entry) => entry.id === threadId || entry.providerThreadId === threadId) || null
+        const thread = session.threads.find((entry) => matchesAssistantThreadId(entry, threadId)) || null
         if (thread) {
             return { session, thread }
         }

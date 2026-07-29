@@ -9,62 +9,6 @@ type TimelineEntriesCache = {
     entries: TimelineEntry[]
 }
 
-type TimelineSourceWindowCache = {
-    sourceMessages: AssistantMessage[]
-    sourceActivities: AssistantActivity[]
-    sourceProposedPlans: AssistantProposedPlan[]
-    messages: AssistantMessage[]
-    activities: AssistantActivity[]
-    proposedPlans: AssistantProposedPlan[]
-    sourceItemLimit: number | null
-}
-
-const TIMELINE_SOURCE_WINDOW_OVERSCAN = 32
-
-function getTimelineSourceWindow(
-    cache: TimelineSourceWindowCache | null,
-    messages: AssistantMessage[],
-    activities: AssistantActivity[],
-    proposedPlans: AssistantProposedPlan[],
-    loadedEntryCount?: number
-): TimelineSourceWindowCache {
-    const sourceItemLimit = typeof loadedEntryCount === 'number'
-        ? Math.max(0, loadedEntryCount + TIMELINE_SOURCE_WINDOW_OVERSCAN)
-        : null
-
-    if (
-        cache
-        && cache.sourceMessages === messages
-        && cache.sourceActivities === activities
-        && cache.sourceProposedPlans === proposedPlans
-        && cache.sourceItemLimit === sourceItemLimit
-    ) {
-        return cache
-    }
-
-    if (sourceItemLimit === null || messages.length + activities.length + proposedPlans.length <= sourceItemLimit * 2) {
-        return {
-            sourceMessages: messages,
-            sourceActivities: activities,
-            sourceProposedPlans: proposedPlans,
-            messages,
-            activities,
-            proposedPlans,
-            sourceItemLimit
-        }
-    }
-
-    return {
-        sourceMessages: messages,
-        sourceActivities: activities,
-        sourceProposedPlans: proposedPlans,
-        messages: messages.slice(-sourceItemLimit),
-        activities: activities.slice(0, sourceItemLimit),
-        proposedPlans: proposedPlans.slice(-sourceItemLimit),
-        sourceItemLimit
-    }
-}
-
 function findLastMessageEntryIndex(entries: TimelineEntry[]): number {
     for (let index = entries.length - 1; index >= 0; index -= 1) {
         if (entries[index]?.type === 'message') {
@@ -86,39 +30,26 @@ function haveStableMessagePrefix(previous: AssistantMessage[], next: AssistantMe
 export function useAssistantTimelineEntries(
     messages: AssistantMessage[],
     activities: AssistantActivity[],
-    proposedPlans: AssistantProposedPlan[] = [],
-    loadedEntryCount?: number
+    proposedPlans: AssistantProposedPlan[] = []
 ): TimelineEntry[] {
     const cacheRef = useRef<TimelineEntriesCache | null>(null)
-    const sourceWindowCacheRef = useRef<TimelineSourceWindowCache | null>(null)
 
     return useMemo(() => {
-        const sourceWindow = getTimelineSourceWindow(
-            sourceWindowCacheRef.current,
-            messages,
-            activities,
-            proposedPlans,
-            loadedEntryCount
-        )
-        sourceWindowCacheRef.current = sourceWindow
-        const sourceMessages = sourceWindow.messages
-        const sourceActivities = sourceWindow.activities
-        const sourceProposedPlans = sourceWindow.proposedPlans
         const cached = cacheRef.current
         if (cached) {
-            if (cached.messages === sourceMessages && cached.activities === sourceActivities && cached.proposedPlans === sourceProposedPlans) {
+            if (cached.messages === messages && cached.activities === activities && cached.proposedPlans === proposedPlans) {
                 return cached.entries
             }
 
-            if (cached.activities === sourceActivities && cached.proposedPlans === sourceProposedPlans && cached.messages.length > 0) {
+            if (cached.activities === activities && cached.proposedPlans === proposedPlans && cached.messages.length > 0) {
                 const previousLastMessage = cached.messages[cached.messages.length - 1]
-                const nextLastMessage = sourceMessages[sourceMessages.length - 1]
+                const nextLastMessage = messages[messages.length - 1]
 
                 if (
-                    sourceMessages.length === cached.messages.length
+                    messages.length === cached.messages.length
                     && nextLastMessage
                     && previousLastMessage
-                    && haveStableMessagePrefix(cached.messages, sourceMessages, Math.max(0, sourceMessages.length - 1))
+                    && haveStableMessagePrefix(cached.messages, messages, Math.max(0, messages.length - 1))
                     && previousLastMessage.id === nextLastMessage.id
                 ) {
                     const messageEntryIndex = findLastMessageEntryIndex(cached.entries)
@@ -134,26 +65,26 @@ export function useAssistantTimelineEntries(
                             type: 'message',
                             message: nextLastMessage
                         }
-                        cacheRef.current = { messages: sourceMessages, activities: sourceActivities, proposedPlans: sourceProposedPlans, entries: nextEntries }
+                        cacheRef.current = { messages, activities, proposedPlans, entries: nextEntries }
                         return nextEntries
                     }
                 }
 
                 if (
-                    sourceMessages.length === cached.messages.length + 1
-                    && haveStableMessagePrefix(cached.messages, sourceMessages, cached.messages.length)
+                    messages.length === cached.messages.length + 1
+                    && haveStableMessagePrefix(cached.messages, messages, cached.messages.length)
                 ) {
-                    const appendedMessage = sourceMessages[sourceMessages.length - 1]
+                    const appendedMessage = messages[messages.length - 1]
                     if (
                         appendedMessage.role === 'assistant'
                         && appendedMessage.turnId
                     ) {
-                        const entries = getTimelineEntries(sourceMessages, sourceActivities, sourceProposedPlans)
-                        cacheRef.current = { messages: sourceMessages, activities: sourceActivities, proposedPlans: sourceProposedPlans, entries }
+                        const entries = getTimelineEntries(messages, activities, proposedPlans)
+                        cacheRef.current = { messages, activities, proposedPlans, entries }
                         return entries
                     }
                     if (!shouldRenderMessage(appendedMessage)) {
-                        cacheRef.current = { messages: sourceMessages, activities: sourceActivities, proposedPlans: sourceProposedPlans, entries: cached.entries }
+                        cacheRef.current = { messages, activities, proposedPlans, entries: cached.entries }
                         return cached.entries
                     }
                     const nextEntries = [
@@ -165,14 +96,14 @@ export function useAssistantTimelineEntries(
                             message: appendedMessage
                         }
                     ]
-                    cacheRef.current = { messages: sourceMessages, activities: sourceActivities, proposedPlans: sourceProposedPlans, entries: nextEntries }
+                    cacheRef.current = { messages, activities, proposedPlans, entries: nextEntries }
                     return nextEntries
                 }
             }
         }
 
-        const entries = getTimelineEntries(sourceMessages, sourceActivities, sourceProposedPlans)
-        cacheRef.current = { messages: sourceMessages, activities: sourceActivities, proposedPlans: sourceProposedPlans, entries }
+        const entries = getTimelineEntries(messages, activities, proposedPlans)
+        cacheRef.current = { messages, activities, proposedPlans, entries }
         return entries
-    }, [activities, loadedEntryCount, messages, proposedPlans])
+    }, [activities, messages, proposedPlans])
 }

@@ -101,7 +101,12 @@ export function useFilePreviewModalInteractions(input: {
             markPreserveSidebarContext(nextFile.path)
             requestExternalIntent(() => onOpenLinkedPreview(nextFile, ext, options))
         }
-        await navigateMarkdownLink({ href, filePath: file.path, navigate, openPreview })
+        return navigateMarkdownLink({
+            href,
+            filePath: file.path,
+            navigate,
+            openPreview: onOpenLinkedPreview ? openPreview : undefined
+        })
     }, [file.path, markPreserveSidebarContext, navigate, onOpenLinkedPreview, requestExternalIntent])
 
     const handleSelectPreviewTab = useCallback((tabId: string) => {
@@ -291,6 +296,7 @@ export function useFilePreviewModalInteractions(input: {
     return {
         folderTreeRefreshToken,
         preserveSidebarContextRequest,
+        markPreserveSidebarContext,
         dndSensors,
         openMediaItem,
         handleInternalMarkdownLink,

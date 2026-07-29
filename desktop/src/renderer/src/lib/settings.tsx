@@ -4,6 +4,7 @@
  */
 
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
+import { dispatchZyraThemeChanged } from './theme-events'
 import type { AssistantReasoningEffort } from '@shared/assistant/contracts'
 import {
     loadLegacyAssistantComposerDefaults,
@@ -32,6 +33,7 @@ export type BrowserContentLayout = 'grouped' | 'explorer'
 export type GitBulkActionScope = 'project' | 'repo'
 export type FilePreviewDefaultMode = 'preview' | 'edit'
 export type FilePreviewPythonRunMode = 'terminal' | 'output'
+export type FilePreviewExplorerNameLayout = 'wrap' | 'horizontal'
 export type PackageRuntimePreference = 'auto' | 'node' | 'npm' | 'pnpm' | 'yarn' | 'bun'
 export type PullRequestGuideSource = 'project' | 'global' | 'repo-template' | 'none'
 export type PullRequestGuideMode = 'text' | 'file'
@@ -44,6 +46,7 @@ export type AssistantDefaultInteractionMode = 'default' | 'plan'
 export type AssistantDefaultEffort = AssistantReasoningEffort
 export type AssistantTranscriptionEngine = 'browser' | 'vosk'
 export type AssistantBusyMessageMode = 'queue' | 'force'
+// Kept dormant until Appearance settings exposes the classic/workspace inspector choice.
 
 export interface PullRequestGuideConfig {
     mode: PullRequestGuideMode
@@ -104,6 +107,7 @@ export interface Settings {
     filePreviewFullscreenShowRightPanel: boolean
     filePreviewDefaultMode: FilePreviewDefaultMode
     filePreviewPythonRunMode: FilePreviewPythonRunMode
+    filePreviewExplorerNameLayout: FilePreviewExplorerNameLayout
     packageRuntimePreference: PackageRuntimePreference
     filePreviewTerminalPanelHeight: number
     projectsFolder: string
@@ -162,6 +166,7 @@ const DEFAULT_SETTINGS: Settings = {
     filePreviewFullscreenShowRightPanel: false,
     filePreviewDefaultMode: 'preview',
     filePreviewPythonRunMode: 'terminal',
+    filePreviewExplorerNameLayout: 'wrap',
     packageRuntimePreference: 'auto',
     filePreviewTerminalPanelHeight: 220,
     projectsFolder: '',
@@ -288,6 +293,7 @@ function loadSettings(): Settings {
                 filePreviewFullscreenShowRightPanel: !!candidate.filePreviewFullscreenShowRightPanel,
                 filePreviewDefaultMode: candidate.filePreviewDefaultMode === 'edit' ? 'edit' : 'preview',
                 filePreviewPythonRunMode: candidate.filePreviewPythonRunMode === 'output' ? 'output' : 'terminal',
+                filePreviewExplorerNameLayout: candidate.filePreviewExplorerNameLayout === 'horizontal' ? 'horizontal' : 'wrap',
                 packageRuntimePreference:
                     candidate.packageRuntimePreference === 'npm'
                     || candidate.packageRuntimePreference === 'node'
@@ -477,6 +483,7 @@ function applyTheme(theme: Theme) {
     root.style.setProperty('--color-primary', themeDefinition.tokens.primary)
     root.style.setProperty('--color-secondary', themeDefinition.tokens.secondary)
     root.style.setProperty('--color-accent', themeDefinition.tokens.accent)
+    dispatchZyraThemeChanged()
 }
 
 function applyAccentColor(accent: AccentColor) {

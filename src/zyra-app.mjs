@@ -34,6 +34,11 @@ import { renderStatusLine } from "./status-line.mjs";
 import { createZyraTerminalTitle } from "./terminal-title.mjs";
 import { normalizeWebToolsMode, selectWebTools } from "./web-tools-picker.mjs";
 import { formatZyraVersion, isZyraVersionRequest } from "./version.mjs";
+import { createZyraTuiClientRuntime, listCanonicalZyraChats } from "./agent-server/tui-runtime.mjs";
+
+const useEmbeddedRuntime = process.env.ZYRA_EMBEDDED_RUNTIME === "1";
+const createCliRuntime = (options) => useEmbeddedRuntime ? createZyraSession(options) : createZyraTuiClientRuntime(options);
+const listCliSessions = (options) => useEmbeddedRuntime ? listZyraSessions(options) : listCanonicalZyraChats(options);
 
 function parse(argv) {
   const args = [...argv];
@@ -266,9 +271,11 @@ async function main() {
     const unsubscribeManagedBash = runtime.managedBash?.subscribe?.((update) => {
       forward({ type: "managed_bash_job_update", ...update });
     });
+    const unsubscribeFleet = runtime.fleet?.subscribe?.(({ event, snapshot }) => ui.fleet?.(event, snapshot));
     return () => {
       unsubscribeSession?.();
       unsubscribeManagedBash?.();
+      unsubscribeFleet?.();
     };
   };
 
@@ -354,10 +361,12 @@ async function main() {
   }
 
   if (parsed.pickSession) {
-    const sessions = await listZyraSessions({ project: parsed.project });
+    const sessions = await listCliSessions({ project: parsed.project });
     const selected = await selectSession(sessions);
     if (!selected) return;
     parsed.session = selected;
+    const selectedChat = sessions.find((chat) => chat.path === selected);
+    if (selectedChat?.project) parsed.project = selectedChat.project;
   }
 
   if (parsed.webMenu) {
@@ -408,7 +417,7 @@ async function main() {
 
   if (parsed.printMode || parsed.prompt) {
     setTerminalTitleState("starting");
-    const runtime = await createZyraSession(runtimeOptions);
+    const runtime = await createCliRuntime(runtimeOptions);
     setTerminalTitleState("ready", runtime);
     ui = createZyraUi({ openingTheme: runtime.theme, terminalTheme: runtime.terminalTheme });
 
@@ -449,11 +458,11 @@ async function main() {
 
   setTerminalTitleState("starting");
   const stopStarting = ui.starting("Starting agent");
-  let runtime = await createZyraSession(runtimeOptions).finally(stopStarting);
+  let runtime = await createCliRuntime(runtimeOptions).finally(stopStarting);
   setTerminalTitleState("ready", runtime);
   ui.setTheme(runtime.terminalTheme);
   ui.banner(describeRuntime(runtime));
-  startZyraMemoryBackgroundStartup(runtime);
+  if (useEmbeddedRuntime) startZyraMemoryBackgroundStartup(runtime);
   let unsubscribe = subscribeRuntimeEvents(runtime);
   if (runtime.modelFallbackMessage) {
     ui.info(runtime.modelFallbackMessage);
@@ -468,34 +477,59 @@ async function main() {
   const abortActiveRuntime = async () => {
     runtime.managedBash?.abortAll?.();
     runtime.session.abortBash?.();
-    await runtime.session.abort?.();
+    await Promise.allSettled([
+      runtime.fleet?.cancelAll?.("root turn cancelled"),
+      runtime.session.abort?.(),
+    ]);
   };
 
-  const startFreshChat = async () => {
-    ui.info("Starting a fresh Zyra chat...");
-    setTerminalTitleState("starting", runtime);
-    const nextRuntime = await createZyraSession({
-      ...runtimeOptions,
-      sessionMode: "new",
-      session: "",
-    });
+  const replaceRuntime = (nextRuntime) => {
     unsubscribe?.();
     runtime.session.dispose();
     runtime = nextRuntime;
     ui.setTheme(runtime.terminalTheme);
     ui.resetSession(describeRuntime(runtime));
     setTerminalTitleState("ready", runtime);
-    startZyraMemoryBackgroundStartup(runtime);
+    if (useEmbeddedRuntime) startZyraMemoryBackgroundStartup(runtime);
     unsubscribe = subscribeRuntimeEvents(runtime);
-    if (runtime.modelFallbackMessage) {
-      ui.info(runtime.modelFallbackMessage);
-    }
+    if (runtime.modelFallbackMessage) ui.info(runtime.modelFallbackMessage);
+  };
+
+  const startFreshChat = async () => {
+    ui.info("Starting a fresh Zyra chat...");
+    setTerminalTitleState("starting", runtime);
+    const nextRuntime = await createCliRuntime({
+      ...runtimeOptions,
+      project: runtime.project,
+      sessionMode: "new",
+      session: "",
+    });
+    replaceRuntime(nextRuntime);
+  };
+
+  const openChatPicker = async () => {
+    const chats = await listCliSessions({ project: runtime.project, allProjects: true });
+    const selectedPath = await selectSession(chats, { theme: runtime.terminalTheme });
+    if (!selectedPath) return true;
+    const selected = chats.find((chat) => chat.path === selectedPath);
+    ui.info("Opening the shared chat...");
+    setTerminalTitleState("starting", runtime);
+    const nextRuntime = await createCliRuntime({
+      ...runtimeOptions,
+      project: selected?.project || runtime.project,
+      sessionMode: "resume",
+      session: selectedPath,
+      noSession: false,
+    });
+    replaceRuntime(nextRuntime);
+    return true;
   };
 
   const runPromptTurn = async (submission) => {
     const text = getSubmissionText(submission);
     const slashResult = await handleSlash(runtime, ui, text, {
       startFreshChat,
+      openChatPicker,
       setTerminalTitleState: (state) => setTerminalTitleState(state, runtime),
       notifyTerminalIfUnfocused: () => notifyTerminalIfUnfocused(runtime),
     });

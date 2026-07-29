@@ -1,19 +1,30 @@
 import { app } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
-import { writeFile } from 'node:fs/promises'
+import { rename as renameFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import log from 'electron-log'
 import initSqlJs, { type Database as SqlDatabase } from 'sql.js/dist/sql-asm.js'
 import type {
     AssistantDomainEvent,
+    AssistantGetHistoryPageInput,
+    AssistantHistoryPage,
+    AssistantReviewIndex,
+    AssistantSearchTurnsResult,
     AssistantSessionTurnUsageEntry,
-    AssistantSnapshot
+    AssistantTurnDetail,
+    AssistantSnapshot,
+    AssistantThreadDetail,
+    FleetSnapshot
 } from '../../shared/assistant/contracts'
 import { is } from '../utils'
 import { createDefaultSnapshot, recoverPersistedSnapshot } from './projector'
+import { readAssistantHistoryPage, readAssistantReviewIndex, readAssistantThreadDetail, readAssistantTurnDetail, searchAssistantTurns } from './persistence-history'
 import { hydrateSnapshotThreads } from './persistence-snapshot'
+import { deleteFleetProjection, projectFleetSnapshot, readFleetSnapshot } from './fleet-persistence'
 import {
     readHydratedThreadDetails,
+    readAssistantFirstUserMessageText,
+    readAssistantLatestUserMessageText,
     readAssistantPersistenceRecord,
     readAssistantSessionTurnUsage
 } from './persistence-read'
@@ -29,14 +40,13 @@ import {
     replaceAssistantSnapshot,
     upsertAssistantMeta
 } from './persistence-write'
+import {
+    coalesceAssistantPersistenceEvents,
+    type PendingAssistantPersistenceEvent
+} from './persistence-event-batching'
 
-const PERSISTENCE_EVENT_BATCH_DELAY_MS = 96
+const PERSISTENCE_EVENT_BATCH_DELAY_MS = 240
 const FORCE_ASSISTANT_DB_RESET_ENV = 'DEVSCOPE_RESET_ASSISTANT_DB'
-
-type PendingPersistenceEvent = {
-    event: AssistantDomainEvent
-    snapshot: AssistantSnapshot
-}
 
 function isRecoverableSqlitePersistenceError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error || '')
@@ -45,6 +55,12 @@ function isRecoverableSqlitePersistenceError(error: unknown): boolean {
         || normalized.includes('file is not a database')
         || normalized.includes('malformed')
         || normalized.includes('not a database')
+}
+
+async function writeFileAtomically(filePath: string, contents: Uint8Array | string): Promise<void> {
+    const temporaryPath = `${filePath}.tmp`
+    await writeFile(temporaryPath, contents)
+    await renameFile(temporaryPath, filePath)
 }
 
 function shouldForceAssistantDbReset(): boolean {
@@ -58,8 +74,10 @@ export class AssistantPersistence {
     private initPromise: Promise<void> | null = null
     private operationQueue: Promise<void> = Promise.resolve()
     private writeTimer: NodeJS.Timeout | null = null
-    private pendingEvents: PendingPersistenceEvent[] = []
+    private pendingEvents: PendingAssistantPersistenceEvent[] = []
     private pendingEventTimer: NodeJS.Timeout | null = null
+    private readonly activeStreamingThreadIds = new Set<string>()
+    private diskFlushDeferred = false
 
     constructor() {
         const assistantDir = join(app.getPath('userData'), 'assistant')
@@ -82,6 +100,27 @@ export class AssistantPersistence {
     appendEvent(event: AssistantDomainEvent, snapshot: AssistantSnapshot): void {
         this.pendingEvents.push({ event, snapshot })
         this.schedulePendingEventProcessing()
+    }
+
+    setStreamingActive(threadId: string, active: boolean): void {
+        const normalizedThreadId = String(threadId || '').trim()
+        if (!normalizedThreadId) return
+
+        if (active) {
+            this.activeStreamingThreadIds.add(normalizedThreadId)
+            if (this.writeTimer) {
+                clearTimeout(this.writeTimer)
+                this.writeTimer = null
+                this.diskFlushDeferred = true
+            }
+            return
+        }
+
+        this.activeStreamingThreadIds.delete(normalizedThreadId)
+        if (this.activeStreamingThreadIds.size === 0 && this.diskFlushDeferred) {
+            this.diskFlushDeferred = false
+            this.scheduleFlush()
+        }
     }
 
     replaceSnapshot(snapshot: AssistantSnapshot): void {
@@ -115,9 +154,77 @@ export class AssistantPersistence {
         ))
     }
 
+    async readThreadDetail(threadId: string): Promise<AssistantThreadDetail> {
+        await this.ensureInitialized()
+        this.clearPendingEventTimer()
+        await this.processPendingEvents()
+        return this.enqueue(() => readAssistantThreadDetail(this.requireDb(), threadId))
+    }
+
+    async readHistoryPage(input: AssistantGetHistoryPageInput): Promise<AssistantHistoryPage> {
+        await this.ensureInitialized()
+        this.clearPendingEventTimer()
+        await this.processPendingEvents()
+        return this.enqueue(() => readAssistantHistoryPage(this.requireDb(), input))
+    }
+
+    async readReviewIndex(threadId: string): Promise<AssistantReviewIndex> {
+        await this.ensureInitialized()
+        this.clearPendingEventTimer()
+        await this.processPendingEvents()
+        return this.enqueue(() => readAssistantReviewIndex(this.requireDb(), threadId))
+    }
+
+    async searchTurns(threadId: string, query: string, limit?: number): Promise<AssistantSearchTurnsResult> {
+        await this.ensureInitialized()
+        return this.enqueue(() => searchAssistantTurns(this.requireDb(), threadId, query, limit))
+    }
+
+    async readTurnDetail(threadId: string, turnId: string): Promise<AssistantTurnDetail> {
+        await this.ensureInitialized()
+        this.clearPendingEventTimer()
+        await this.processPendingEvents()
+        return this.enqueue(() => readAssistantTurnDetail(this.requireDb(), threadId, turnId))
+    }
+
+    async readFirstUserMessageText(sessionId: string): Promise<string | null> {
+        await this.ensureInitialized()
+        this.clearPendingEventTimer()
+        await this.processPendingEvents()
+        return this.enqueue(() => readAssistantFirstUserMessageText(this.requireDb(), sessionId))
+    }
+
+    async readLatestUserMessageText(sessionId: string): Promise<string | null> {
+        await this.ensureInitialized()
+        this.clearPendingEventTimer()
+        await this.processPendingEvents()
+        return this.enqueue(() => readAssistantLatestUserMessageText(this.requireDb(), sessionId))
+    }
+
     async readSessionTurnUsage(sessionId: string): Promise<AssistantSessionTurnUsageEntry[]> {
         await this.ensureInitialized()
         return this.enqueue(() => readAssistantSessionTurnUsage(this.requireDb(), sessionId))
+    }
+
+    projectFleet(threadId: string, snapshot: FleetSnapshot): void {
+        void this.enqueue(() => {
+            projectFleetSnapshot(this.requireDb(), threadId, snapshot)
+            this.scheduleFlush()
+        }).catch((error) => {
+            log.error('[AssistantPersistence] Failed to project fleet snapshot.', error)
+        })
+    }
+
+    async readFleet(threadId: string): Promise<FleetSnapshot | null> {
+        await this.ensureInitialized()
+        return this.enqueue(() => readFleetSnapshot(this.requireDb(), threadId))
+    }
+
+    deleteFleet(threadId: string): void {
+        void this.enqueue(() => {
+            deleteFleetProjection(this.requireDb(), threadId)
+            this.scheduleFlush()
+        }).catch((error) => log.error('[AssistantPersistence] Failed to delete fleet projection.', error))
     }
 
     async flush(): Promise<void> {
@@ -129,6 +236,7 @@ export class AssistantPersistence {
                 clearTimeout(this.writeTimer)
                 this.writeTimer = null
             }
+            this.diskFlushDeferred = false
             await this.flushNow()
         })
     }
@@ -267,7 +375,9 @@ export class AssistantPersistence {
 
     private async processPendingEvents(): Promise<void> {
         if (this.pendingEvents.length === 0) return
-        const eventsToPersist = this.pendingEvents.splice(0, this.pendingEvents.length)
+        const eventsToPersist = coalesceAssistantPersistenceEvents(
+            this.pendingEvents.splice(0, this.pendingEvents.length)
+        )
 
         await this.enqueue(() => {
             for (const entry of eventsToPersist) {
@@ -280,6 +390,16 @@ export class AssistantPersistence {
     }
 
     private scheduleFlush(): void {
+        if (this.activeStreamingThreadIds.size > 0) {
+            if (this.writeTimer) {
+                clearTimeout(this.writeTimer)
+                this.writeTimer = null
+            }
+            this.diskFlushDeferred = true
+            return
+        }
+
+        this.diskFlushDeferred = false
         if (this.writeTimer) {
             clearTimeout(this.writeTimer)
         }
@@ -297,14 +417,14 @@ export class AssistantPersistence {
 
         try {
             const bytes = Buffer.from(db.export())
-            await writeFile(this.filePath, bytes)
+            await writeFileAtomically(this.filePath, bytes)
         } catch (error) {
             log.error('[AssistantPersistence] Failed to write SQLite assistant state.', error)
         }
 
         try {
             const snapshot = readAssistantPersistenceRecord(db).snapshot
-            await writeFile(this.legacyFilePath, JSON.stringify({ snapshot }, null, 2), 'utf-8')
+            await writeFileAtomically(this.legacyFilePath, JSON.stringify({ snapshot }, null, 2))
         } catch (error) {
             log.error('[AssistantPersistence] Failed to write JSON assistant fallback state.', error)
         }

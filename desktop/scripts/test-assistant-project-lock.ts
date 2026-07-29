@@ -1,0 +1,78 @@
+import assert from 'node:assert/strict'
+import type { AssistantSession, AssistantThread } from '../src/shared/assistant/contracts'
+import { isAssistantSessionProjectLocked } from '../src/shared/assistant/session-project'
+
+const createdAt = '2026-07-21T00:00:00.000Z'
+const thread: AssistantThread = {
+    id: 'thread-project-lock',
+    providerThreadId: null,
+    source: 'root',
+    parentThreadId: null,
+    providerParentThreadId: null,
+    subagentDepth: null,
+    agentNickname: null,
+    agentRole: null,
+    model: '',
+    cwd: 'C:/projects/original',
+    messageCount: 0,
+    activityCount: 0,
+    proposedPlanCount: 0,
+    lastSeenCompletedTurnId: null,
+    runtimeMode: 'approval-required',
+    interactionMode: 'default',
+    state: 'idle',
+    lastError: null,
+    createdAt,
+    updatedAt: createdAt,
+    latestTurn: null,
+    hasPendingApprovals: false,
+    hasPendingUserInputs: false,
+    hasActivePlan: false,
+    activePlan: null,
+    messages: [],
+    proposedPlans: [],
+    activities: [],
+    pendingApprovals: [],
+    pendingUserInputs: []
+}
+const session: AssistantSession = {
+    id: 'session-project-lock',
+    title: 'Project lock fixture',
+    mode: 'work',
+    projectPath: 'C:/projects/original',
+    playgroundLabId: null,
+    pendingLabRequest: null,
+    archived: false,
+    createdAt,
+    updatedAt: createdAt,
+    activeThreadId: thread.id,
+    threadIds: [thread.id],
+    threads: [thread]
+}
+
+assert.equal(isAssistantSessionProjectLocked(session), false, 'an untouched chat may still choose a different project')
+
+thread.messageCount = 1
+assert.equal(isAssistantSessionProjectLocked(session), true, 'the first chat message locks the project')
+
+thread.messageCount = 0
+thread.activityCount = 1
+assert.equal(isAssistantSessionProjectLocked(session), true, 'tool or runtime activity also locks the project')
+
+thread.activityCount = 0
+thread.latestTurn = {
+    id: 'turn-project-lock',
+    state: 'running',
+    requestedAt: createdAt,
+    startedAt: createdAt,
+    completedAt: null,
+    assistantMessageId: null,
+    usage: null
+}
+assert.equal(isAssistantSessionProjectLocked(session), true, 'a started turn locks the project even before history hydration')
+
+thread.latestTurn = null
+thread.hasPendingApprovals = true
+assert.equal(isAssistantSessionProjectLocked(session), true, 'pending work keeps the project locked')
+
+console.log('Assistant project lock checks passed.')

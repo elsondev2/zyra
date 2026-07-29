@@ -136,7 +136,7 @@ zyra --update
 
 Inside chat:
 
-- `@file` attaches project files to the prompt.
+- `@file` attaches project files to the prompt. `@agent-<name>` names a reusable child agent and can appear beside file mentions.
 - `/start` scans the current repo and gives a plain starting point.
 - `/new` starts a fresh chat.
 - `/session` shows project/session/model info.
@@ -148,17 +148,22 @@ Inside chat:
 - `/interrupt` opens a picker for what Enter does while Zyra is already working; `/interrupt steer|queue` sets it directly. `/interupt` works too.
 - `/mode normal|fast|cheap|auto` sets the Codex service tier for this session. `fast` uses priority service and can cost more.
 - During an active run, Enter follows `/interrupt`: `steer` sends after the next tool-call boundary, `queue` sends after the active turn finishes. Alt+Enter always queues a follow-up, Alt+Up restores queued messages, and Escape stops the run while restoring queued messages.
+- `/agent <name> <task>` delegates bounded work to a persistent background child; `/subtask <task>` forks the current chat context into a child.
+- `/agents` opens the fleet manager; `/agents doctor` validates definitions and `/agents import claude` previews manual Claude-agent migration.
+- `/workflow <name> [json args]` starts a sandboxed saved workflow; `/workflows` opens its manager.
 - `/consolidate` cleans up Zyra's local memory after meaningful sessions.
 - `/themes`, `/thinking`, and `/models` adjust runtime behavior.
 - `/reload` restarts Zyra from disk and resumes the chat.
 - `/reload --soft` reloads commands, themes, prompt, and memory only.
 
-Current provider compatibility and deferred model work are tracked in [docs/model-support.md](docs/model-support.md).
+The complete agent/workflow guide, safety boundaries, definition formats, persistence layout, and desktop controls are in [docs/subagents-workflows.md](docs/subagents-workflows.md). Current provider compatibility and deferred model work are tracked in [docs/model-support.md](docs/model-support.md).
 
 ## Project Shape
 
 - `src/` is the terminal app: input, status line, slash commands, file mentions, session handling, and Pi SDK wiring.
 - `prompts/` contains the public system prompt, inspect prompt, and built-in profile overlays.
+- `agents/` and `workflows/` contain public built-in specialist and workflow definitions; personal/project definitions live under ignored `.zyra/` locations.
+- `src/agents/` owns event-sourced fleet authority, child Pi sessions, routing, isolation, and output safety. `src/workflows/` owns validation, QuickJS execution, scheduling, caching, approvals, and budgets.
 - `AGENTS.md` keeps project rules that should survive across chats.
 - `commands/` is where repeated workflows can become slash commands.
 - `.zyra/commands/<name>.md` is the project-local command path.

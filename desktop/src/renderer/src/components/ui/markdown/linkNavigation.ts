@@ -36,8 +36,18 @@ function denormalizePath(pathValue: string, sourcePath?: string): string {
     return pathValue
 }
 
+const SCHEMELESS_WEB_HOST_PATTERN = /^(?:www\.)?(?:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\.)+(?:com|org|net|edu|gov|io|dev|app|ai|co|me|info|biz|xyz|tech|cloud|site|online)(?::\d{1,5})?(?:[/?#]|$)/i
+const LOOPBACK_WEB_HOST_PATTERN = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d{1,5})?(?:[/?#]|$)/i
+
+export function normalizeMarkdownHref(href: string | undefined): string {
+    const rawHref = String(href || '').trim()
+    if (SCHEMELESS_WEB_HOST_PATTERN.test(rawHref)) return `https://${rawHref}`
+    if (LOOPBACK_WEB_HOST_PATTERN.test(rawHref)) return `http://${rawHref}`
+    return rawHref
+}
+
 function isExternalHref(href: string): boolean {
-    return /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(href)
+    return normalizeMarkdownHref(href) !== href || /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(href)
 }
 
 export function isWindowsPathHref(pathValue: string | undefined): boolean {
@@ -215,6 +225,15 @@ export async function navigateMarkdownLink({
     }
 
     if (pathInfo.type === 'directory') {
+        if (openPreview) {
+            const { name } = splitFileNameAndExtension(pathInfo.path)
+            await openPreview({ name, path: pathInfo.path }, '', {
+                targetKind: 'directory',
+                openNavigator: true,
+                revealNavigatorTarget: true
+            })
+            return true
+        }
         if (navigate) {
             navigate(`/folder-browse/${encodeURIComponent(pathInfo.path)}`)
             return true
@@ -226,6 +245,9 @@ export async function navigateMarkdownLink({
     const { extension, name } = splitFileNameAndExtension(pathInfo.path)
     if (openPreview) {
         await openPreview({ name, path: pathInfo.path }, extension, {
+            targetKind: 'file',
+            openNavigator: true,
+            revealNavigatorTarget: true,
             focusLine: target.focusLine
         })
         return true

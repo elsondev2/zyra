@@ -22,6 +22,8 @@ export class ZyraComponentHost {
     this.components = [];
     this.inputComponent = null;
     this.footerComponent = null;
+    this.auxiliaryComponents = [];
+    this.focusedAuxiliaryComponent = null;
     this.renderedLines = [];
     this.renderedPhysicalRows = 0;
     this.previousWidth = this.width();
@@ -93,7 +95,45 @@ export class ZyraComponentHost {
   setInputComponent(component) {
     this.inputComponent = component;
     component?.setHost?.(this);
+    if (component) this.focusEditor();
     this.invalidate({ force: true });
+  }
+
+  setAuxiliaryComponent(key, component) {
+    const index = this.auxiliaryComponents.findIndex((entry) => entry.key === key);
+    component?.setHost?.(this);
+    if (index >= 0) this.auxiliaryComponents[index] = component;
+    else this.auxiliaryComponents.push(component);
+    this.invalidate({ fixedOnly: true, force: true });
+    return component;
+  }
+
+  removeAuxiliaryComponent(key) {
+    const removed = this.auxiliaryComponents.find((entry) => entry.key === key);
+    this.auxiliaryComponents = this.auxiliaryComponents.filter((entry) => entry.key !== key);
+    if (this.focusedAuxiliaryComponent === removed) this.focusEditor();
+    this.invalidate({ fixedOnly: true, force: true });
+  }
+
+  focusNextAuxiliary() {
+    const component = this.auxiliaryComponents.find((entry) => entry.focusable && safeRender(entry, this.width()).length > 0);
+    if (!component) return false;
+    this.focusedAuxiliaryComponent?.setFocused?.(false);
+    this.focusedAuxiliaryComponent = component;
+    component.setFocused?.(true);
+    this.invalidate({ fixedOnly: true, force: true });
+    return true;
+  }
+
+  focusEditor() {
+    this.focusedAuxiliaryComponent?.setFocused?.(false);
+    this.focusedAuxiliaryComponent = null;
+    this.invalidate({ fixedOnly: true });
+    return true;
+  }
+
+  activeInputComponent() {
+    return this.focusedAuxiliaryComponent ?? this.inputComponent;
   }
 
   setFooterComponent(component) {
@@ -264,18 +304,24 @@ export class ZyraComponentHost {
     return renderedLines;
   }
 
+  renderAuxiliaryLines(width = this.width()) {
+    return this.auxiliaryComponents.flatMap((component) => component.hidden ? [] : safeRender(component, width));
+  }
+
   renderFixedLines(width = this.width()) {
-    const lines = [];
+    const lines = this.renderAuxiliaryLines(width);
     if (this.inputComponent) lines.push(...safeRender(this.inputComponent, width));
     if (this.footerComponent) lines.push(...safeRender(this.footerComponent, width));
     return renderLinesWithinWidth(lines, width);
   }
 
   cursorTarget(contentLines = [], width = this.width()) {
+    if (this.focusedAuxiliaryComponent) return null;
     const cursor = this.inputComponent?.cursorPosition?.(width);
     if (!cursor || !Number.isFinite(cursor.row) || !Number.isFinite(cursor.col)) return null;
+    const auxiliaryRows = this.renderAuxiliaryLines(width).length;
     return {
-      row: Math.max(0, contentLines.length + Number(cursor.row)),
+      row: Math.max(0, contentLines.length + auxiliaryRows + Number(cursor.row)),
       col: Math.max(0, Math.min(Math.max(0, Number(width) || 0), Number(cursor.col))),
     };
   }
@@ -496,6 +542,8 @@ export class ZyraComponentHost {
     } else if (this.interactive) {
       this.output.write("\n");
     }
+    this.focusedAuxiliaryComponent = null;
+    this.auxiliaryComponents = [];
     this.interactive = false;
   }
 }

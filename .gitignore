@@ -36,6 +36,11 @@ desktop/electron.vite.config.*.mjs
 /[Nn][Uu][Ll]
 !desktop/.env.example
 
+# Native sidecar build output and local agent handoff state
+native/zyra-computer-use/**/bin/
+native/zyra-computer-use/**/obj/
+_last_compaction.md
+
 # The desktop Pi bridge is runtime source and must ship with Zyra.
 
 # Local import/normalization helpers for private exports

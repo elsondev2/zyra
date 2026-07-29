@@ -5,6 +5,13 @@ function formatLinkTarget(anchor: HTMLAnchorElement): string | null {
     if (!rawHref) return null
     if (rawHref.toLowerCase().startsWith('javascript:')) return null
 
+    const markdownLinkState = anchor.dataset.markdownLinkState
+    const markdownLinkPath = anchor.dataset.markdownLinkPath || rawHref
+    if (markdownLinkState === 'missing') return `Missing file · ${markdownLinkPath}`
+    if (markdownLinkState === 'failed') return `Could not open · ${markdownLinkPath}`
+    if (markdownLinkState === 'checking') return `Checking link · ${markdownLinkPath}`
+    if (markdownLinkState === 'unknown') return `Unverified link · ${markdownLinkPath}`
+
     try {
         const resolved = new URL(rawHref, window.location.href)
         if (resolved.origin === window.location.origin) {

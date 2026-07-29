@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import type { PreviewFile, PreviewMediaItem, PreviewMediaSource, PreviewOpenOptions, PreviewTab } from './types'
+import { readPreviewContentCache, writePreviewContentCache, type PreviewContentSnapshot } from './preview-content-cache'
 import { isMediaPreviewType, resolvePreviewType } from './utils'
 
 async function yieldToBrowserPaint(): Promise<void> {
@@ -51,8 +52,15 @@ type PreviewTabState = PreviewTab & {
     requestId: number
 }
 
+let previewNavigatorRevealSequence = 0
+
 function createPreviewTabId(): string {
     return `preview-tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function createPreviewNavigatorRevealRequestId(): string {
+    previewNavigatorRevealSequence += 1
+    return `preview-navigator-reveal-${Date.now()}-${previewNavigatorRevealSequence}`
 }
 
 function normalizePreviewContent(content: unknown): string {
@@ -101,6 +109,7 @@ export function useFilePreview(): UseFilePreviewReturn {
     const [activePreviewTabId, setActivePreviewTabId] = useState<string | null>(null)
     const activePreviewRequestIdRef = useRef(0)
     const focusLineRequestIdRef = useRef(0)
+    const previewContentCacheRef = useRef(new Map<string, PreviewContentSnapshot>())
     const activePreviewTab = useMemo(
         () => previewTabsState.find((tab) => tab.id === activePreviewTabId) || null,
         [activePreviewTabId, previewTabsState]
@@ -127,15 +136,16 @@ export function useFilePreview(): UseFilePreviewReturn {
 
         const requestId = activePreviewRequestIdRef.current + 1
         activePreviewRequestIdRef.current = requestId
+        const cached = readPreviewContentCache(previewContentCacheRef.current, file.path)
 
         updatePreviewTab(tabId, (tab) => ({
             ...tab,
-            loading: true,
-            content: '',
-            truncated: false,
-            size: null,
-            previewBytes: null,
-            modifiedAt: null,
+            loading: !cached,
+            content: cached?.content || '',
+            truncated: cached?.truncated || false,
+            size: cached?.size ?? null,
+            previewBytes: cached?.previewBytes ?? null,
+            modifiedAt: cached?.modifiedAt ?? null,
             requestId
         }))
 
@@ -143,25 +153,28 @@ export function useFilePreview(): UseFilePreviewReturn {
 
         try {
             const res = await window.devscope.readFileContent(file.path)
-            setPreviewTabsState((currentTabs) => currentTabs.map((tab) => {
-                if (tab.id !== tabId || tab.requestId !== requestId) return tab
-                if (!res.success) {
-                    console.error('Failed to load file:', res.error)
-                    return {
-                        ...tab,
-                        loading: false
-                    }
-                }
-                return {
-                    ...tab,
-                    content: normalizePreviewContent(res.content),
-                    loading: false,
-                    truncated: Boolean(res.truncated),
-                    size: typeof res.size === 'number' ? res.size : null,
-                    previewBytes: typeof res.previewBytes === 'number' ? res.previewBytes : null,
-                    modifiedAt: typeof res.modifiedAt === 'number' ? res.modifiedAt : null
-                }
-            }))
+            if (!res.success) {
+                console.error('Failed to load file:', res.error)
+                setPreviewTabsState((currentTabs) => currentTabs.map((tab) => (
+                    tab.id === tabId && tab.requestId === requestId
+                        ? { ...tab, loading: false }
+                        : tab
+                )))
+                return
+            }
+            const snapshot: PreviewContentSnapshot = {
+                content: normalizePreviewContent(res.content),
+                truncated: Boolean(res.truncated),
+                size: typeof res.size === 'number' ? res.size : null,
+                previewBytes: typeof res.previewBytes === 'number' ? res.previewBytes : null,
+                modifiedAt: typeof res.modifiedAt === 'number' ? res.modifiedAt : null
+            }
+            writePreviewContentCache(previewContentCacheRef.current, file.path, snapshot)
+            setPreviewTabsState((currentTabs) => currentTabs.map((tab) => (
+                tab.id === tabId && tab.requestId === requestId
+                    ? { ...tab, ...snapshot, loading: false }
+                    : tab
+            )))
         } catch (err) {
             console.error('Failed to load file:', err)
             setPreviewTabsState((currentTabs) => currentTabs.map((tab) => (
@@ -178,7 +191,9 @@ export function useFilePreview(): UseFilePreviewReturn {
         options: PreviewOpenOptions | undefined,
         mode: 'replace' | 'new-tab'
     ) => {
-        const previewTarget = resolvePreviewType(file.name, ext)
+        const previewTarget = options?.targetKind === 'directory'
+            ? { type: 'directory' as const, needsContent: false }
+            : resolvePreviewType(file.name, ext)
 
         if (!previewTarget) {
             void openFile(file.path)
@@ -199,10 +214,14 @@ export function useFilePreview(): UseFilePreviewReturn {
             name: file.name,
             path: file.path,
             type: previewTarget.type,
-            language: previewTarget.language,
+            language: 'language' in previewTarget ? previewTarget.language : undefined,
             startInEditMode: options?.startInEditMode === true,
             focusLine: requestedFocusLine,
-            focusLineRequestId
+            focusLineRequestId,
+            openNavigator: options?.openNavigator === true || previewTarget.type === 'directory',
+            navigatorRevealRequestId: options?.revealNavigatorTarget === true
+                ? createPreviewNavigatorRevealRequestId()
+                : null
         }
         const nextMediaItems = normalizeMediaItems(options?.mediaItems)
         const existingTab = previewTabsState.find((tab) => tab.file.path.toLowerCase() === file.path.toLowerCase()) || null
@@ -323,6 +342,7 @@ export function useFilePreview(): UseFilePreviewReturn {
 
     const closePreview = () => {
         activePreviewRequestIdRef.current += 1
+        previewContentCacheRef.current.clear()
         setPreviewTabsState([])
         setActivePreviewTabId(null)
     }

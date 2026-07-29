@@ -81,15 +81,19 @@ const assistantStoreActions = {
     selectSession: (sessionId: string, options?: { force?: boolean }) => assistantStore.selectSession(sessionId, options).then(() => undefined),
     selectThread: (input: { sessionId: string; threadId: string }, options?: { force?: boolean }) => assistantStore.selectThread(input, options).then(() => undefined),
     renameSession: (sessionId: string, title: string) => assistantStore.renameSession(sessionId, title).then(() => undefined),
+    renameSessionResult: (sessionId: string, title: string) => assistantStore.renameSession(sessionId, title),
     archiveSession: (sessionId: string, archived = true) => assistantStore.archiveSession(sessionId, archived).then(() => undefined),
+    archiveSessionResult: (sessionId: string, archived = true) => assistantStore.archiveSession(sessionId, archived),
     deleteSession: (sessionId: string) => assistantStore.deleteSession(sessionId).then(() => undefined),
     deleteSessionResult: (sessionId: string) => assistantStore.deleteSession(sessionId),
     deleteMessage: (messageId: string, sessionId?: string) => assistantStore.deleteMessage({ messageId, sessionId }).then(() => undefined),
     deleteMessageResult: (messageId: string, sessionId?: string) => assistantStore.deleteMessage({ messageId, sessionId }),
+    loadOlderHistory: (threadId?: string) => assistantStore.loadOlderHistory(threadId),
     clearLogs: (sessionId?: string) => assistantStore.clearLogs(sessionId ? { sessionId } : undefined).then(() => undefined),
     clearLogsResult: (sessionId?: string) => assistantStore.clearLogs(sessionId ? { sessionId } : undefined),
     clearCommandError: () => assistantStore.clearError(),
     setSessionProjectPath: (sessionId: string, projectPath: string | null) => assistantStore.setSessionProjectPath(sessionId, projectPath).then(() => undefined),
+    setSessionProjectPathResult: (sessionId: string, projectPath: string | null) => assistantStore.setSessionProjectPath(sessionId, projectPath),
     setPlaygroundRoot: (rootPath: string | null) => assistantStore.setPlaygroundRoot(rootPath).then(() => undefined),
     createPlaygroundLab: (input: AssistantCreatePlaygroundLabInput) => assistantStore.createPlaygroundLab(input).then(() => undefined),
     createPlaygroundLabResult: (input: AssistantCreatePlaygroundLabInput) => assistantStore.createPlaygroundLab(input),
@@ -110,6 +114,7 @@ const assistantStoreActions = {
     respondUserInput: (requestId: string, answers: Record<string, string | string[]>) =>
         assistantStore.respondUserInput({ requestId, answers }).then(() => undefined),
     chooseProjectPath: (sessionId: string) => assistantStore.chooseProjectPath(sessionId).then(() => undefined),
+    chooseProjectPathResult: (sessionId: string) => assistantStore.chooseProjectPath(sessionId),
     createProjectSession: () => assistantStore.createProjectSession().then(() => undefined),
     createProjectSessionResult: () => assistantStore.createProjectSession()
 }
@@ -216,6 +221,10 @@ export function useAssistantConversationStore() {
         const activeSelectionHydrationKey = selectedSession && activeThread
             ? `${selectedSession.id}:${activeThread.id}`
             : null
+        const selectionTransitioning = Boolean(
+            activeSelectionHydrationKey
+            && state.selectionTransitionKey === activeSelectionHydrationKey
+        )
 
         return {
             knownModels: state.snapshot.knownModels,
@@ -226,14 +235,15 @@ export function useAssistantConversationStore() {
             commandPending: state.commandPending,
             pendingCreateSessionInput: state.pendingCreateSessionInput,
             commandError: state.error,
-            selectionHydrating: Boolean(activeSelectionHydrationKey && state.selectionHydrationKey === activeSelectionHydrationKey),
+            selectionHydrating: selectionTransitioning || Boolean(activeSelectionHydrationKey && state.selectionHydrationKey === activeSelectionHydrationKey),
+            history: activeThread ? state.historyByThreadId[activeThread.id] || null : null,
             selectedSession,
             activeThread,
-            timelineMessages: getAssistantTimelineMessages(activeThread),
-            activityFeed: getAssistantActivityFeed(activeThread),
-            pendingUserInputs: getAssistantPendingUserInputs(activeThread),
-            activePlan: getAssistantActivePlan(activeThread),
-            latestProposedPlan: getAssistantLatestProposedPlan(activeThread),
+            timelineMessages: selectionTransitioning ? [] : getAssistantTimelineMessages(activeThread),
+            activityFeed: selectionTransitioning ? [] : getAssistantActivityFeed(activeThread),
+            pendingUserInputs: selectionTransitioning ? [] : getAssistantPendingUserInputs(activeThread),
+            activePlan: selectionTransitioning ? null : getAssistantActivePlan(activeThread),
+            latestProposedPlan: selectionTransitioning ? null : getAssistantLatestProposedPlan(activeThread),
             phase,
             phaseLabel: getAssistantThreadPhaseLabel(activeThread)
         }

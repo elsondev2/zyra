@@ -3,7 +3,7 @@
  * Main Process Entry Point
  */
 
-import { app, BrowserWindow, Menu, shell, ipcMain, protocol, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, Menu, shell, ipcMain, nativeTheme, protocol, globalShortcut, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { join } from 'path'
 import { existsSync, statSync } from 'fs'
 import { electronApp, is } from './utils'
@@ -12,6 +12,9 @@ import { registerIpcHandlers } from './ipc'
 import { disposeAssistantService } from './assistant'
 import { disposeUpdater, initializeUpdater, registerUpdateWindow } from './update/manager'
 import { registerFileProtocol } from './file-protocol'
+import { isSafeBrowserNavigationUrl, isZyraBrowserPartition } from './ipc/handlers/browser-preview-handlers'
+import { disposeAgentControlBroker, getAgentControlBroker } from './agent-control'
+import { trustedBrowserGuests } from './agent-control/trusted-guest-registry'
 
 const APP_NAME = "Zyra"
 const DEV_APP_NAME = `${APP_NAME}-dev`
@@ -96,19 +99,30 @@ const getPreloadPath = (): string => {
 }
 
 const getAppIconPath = (): string | undefined => {
-    const candidates = is.dev
-        ? [
-            join(process.cwd(), 'resources/branding/zyra-blueprint.png'),
-            join(process.cwd(), 'resources/icon.png'),
-            join(app.getAppPath(), 'resources/icon.png'),
-            join(process.resourcesPath, 'icon.png')
-        ]
-        : [
-            join(process.resourcesPath, 'icon.png'),
-            join(app.getAppPath(), 'resources/icon.png'),
-            join(process.cwd(), 'resources/icon.png')
-        ]
+    const family = runtimeIdentity.isDevRuntime ? 'dev' : 'prod'
+    const theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+    const variantName = `zyra-${family}-${theme}.png`
+    const masterName = `zyra-${family}.png`
+    const fallbackName = runtimeIdentity.isDevRuntime ? 'icon-dev.png' : 'icon.png'
+    const candidates = [
+        join(process.cwd(), 'resources/branding/icons', variantName),
+        join(app.getAppPath(), 'resources/branding/icons', variantName),
+        join(process.cwd(), 'resources/branding/icons', masterName),
+        join(app.getAppPath(), 'resources/branding/icons', masterName),
+        join(process.resourcesPath, fallbackName),
+        join(app.getAppPath(), 'resources', fallbackName),
+        join(process.cwd(), 'resources', fallbackName)
+    ]
     return candidates.find((candidate) => existsSync(candidate))
+}
+
+function syncOpenWindowIcons(): void {
+    if (process.platform === 'darwin') return
+    const iconPath = getAppIconPath()
+    if (!iconPath) return
+    for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) window.setIcon(iconPath)
+    }
 }
 
 function isDevToolsShortcut(input: Electron.Input): boolean {
@@ -124,6 +138,46 @@ function lockWindowZoom(window: BrowserWindow): void {
     webContents.setZoomLevel(0)
     webContents.setZoomFactor(1)
     void webContents.setVisualZoomLevelLimits(1, 1).catch(() => {})
+}
+
+function registerBrowserPreviewWebviewSecurity(window: BrowserWindow): void {
+    window.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+        const partition = String(params.partition || '')
+        const sourceUrl = String(params.src || 'about:blank')
+        const safeSource = sourceUrl === 'about:blank' || isSafeBrowserNavigationUrl(sourceUrl)
+        if (!isZyraBrowserPartition(partition) || !safeSource || params.preload) {
+            event.preventDefault()
+            return
+        }
+
+        webPreferences.preload = undefined
+        webPreferences.sandbox = true
+        webPreferences.contextIsolation = true
+        webPreferences.nodeIntegration = false
+        webPreferences.nodeIntegrationInSubFrames = false
+        webPreferences.nodeIntegrationInWorker = false
+        webPreferences.backgroundThrottling = false
+        webPreferences.webSecurity = true
+        webPreferences.allowRunningInsecureContent = false
+        webPreferences.navigateOnDragDrop = false
+        webPreferences.safeDialogs = true
+    })
+
+    window.webContents.on('did-attach-webview', (_event, guestContents) => {
+        trustedBrowserGuests.register(window.webContents.id, guestContents)
+        guestContents.setWindowOpenHandler(({ url }) => {
+            if (isSafeBrowserNavigationUrl(url)) void shell.openExternal(url)
+            return { action: 'deny' }
+        })
+        guestContents.on('will-navigate', (event, url) => {
+            if (url === 'about:blank' || isSafeBrowserNavigationUrl(url)) return
+            event.preventDefault()
+        })
+        guestContents.on('will-redirect', (event, url) => {
+            if (isSafeBrowserNavigationUrl(url)) return
+            event.preventDefault()
+        })
+    })
 }
 
 function registerEditableContextMenu(window: BrowserWindow): void {
@@ -267,6 +321,7 @@ function createWindow(showOnReady = true, initialRoute = '/'): BrowserWindow {
         }
     })
 
+    registerBrowserPreviewWebviewSecurity(window)
     registerEditableContextMenu(window)
     lockWindowZoom(window)
     loadRendererRoute(window, initialRoute)
@@ -391,6 +446,10 @@ app.whenReady().then(() => {
     electronApp.setAppUserModelId(runtimeIdentity.appUserModelId)
     void initializeUpdater()
     registerFileProtocol(FILE_PROTOCOL)
+    nativeTheme.on('updated', syncOpenWindowIcons)
+    globalShortcut.register('CommandOrControl+Alt+Escape', () => {
+        void getAgentControlBroker().emergencyStop('Global emergency-stop shortcut pressed.')
+    })
 
     // Keep the full app alive in background for shell file-preview launches.
     const launchHidden = initialShellLaunchTarget?.kind === 'file'
@@ -429,14 +488,17 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
     disposeAssistantService()
     disposeUpdater()
+    void disposeAgentControlBroker()
     if (process.platform !== 'darwin') {
         app.quit()
     }
 })
 
 app.on('before-quit', () => {
+    globalShortcut.unregisterAll()
     disposeAssistantService()
     disposeUpdater()
+    void disposeAgentControlBroker()
 })
 
 // Handle window control IPC

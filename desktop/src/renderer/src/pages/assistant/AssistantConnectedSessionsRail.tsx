@@ -13,6 +13,8 @@ import { isAssistantDraftSession } from './assistant-sessions-rail-utils'
 export const ConnectedAssistantSessionsRail = memo(function ConnectedAssistantSessionsRail(props: {
     collapsed: boolean
     width: number
+    maxWidth: number
+    previewPinned: boolean
     railMode: AssistantRailMode
     railGroupMode: AssistantRailGroupMode
     railSortMode: AssistantRailSortMode
@@ -22,9 +24,10 @@ export const ConnectedAssistantSessionsRail = memo(function ConnectedAssistantSe
     onRailSortModeChange: (next: AssistantRailSortMode) => void
     onRailFilterModeChange: (next: AssistantRailFilterMode) => void
     onWidthChange: (next: number) => void
+    onPreviewPinnedChange: (pinned: boolean) => void
     onShowToast: (input: AssistantToastInput) => void
 }) {
-    const { collapsed, width, onWidthChange, onShowToast } = props
+    const { collapsed, width, maxWidth, previewPinned, onWidthChange, onPreviewPinnedChange, onShowToast } = props
     const railController = useAssistantSessionsRailStore()
     const creatingChatRef = useRef(false)
     const creatingProjectChatRef = useRef(false)
@@ -68,6 +71,8 @@ export const ConnectedAssistantSessionsRail = memo(function ConnectedAssistantSe
         <AssistantChatSessionsRail
             collapsed={collapsed}
             width={width}
+            maxWidth={maxWidth}
+            previewPinned={previewPinned}
             sessions={railController.snapshot.sessions}
             activeSessionId={railController.activeSessionId}
             activeThreadId={railController.activeThreadId}
@@ -80,6 +85,7 @@ export const ConnectedAssistantSessionsRail = memo(function ConnectedAssistantSe
             onArchiveSession={railController.archiveSession}
             onDeleteSession={railController.deleteSessionResult}
             onWidthChange={onWidthChange}
+            onPreviewPinnedChange={onPreviewPinnedChange}
             onShowToast={onShowToast}
         />
     )

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import log from 'electron-log'
 import type {
     AssistantAccountOverview,
@@ -11,17 +12,29 @@ import type {
     AssistantDeleteMessageInput,
     AssistantDeletePlaygroundLabInput,
     AssistantDomainEvent,
+    AssistantGetHistoryPageInput,
     AssistantGetSessionTurnUsageInput,
+    AssistantMessage,
     AssistantRuntimeStatus,
     AssistantSendPromptOptions,
     AssistantSession,
-    AssistantThread
+    AssistantStartRealtimeVoiceInput,
+    AssistantThread,
+    FleetOperationInput,
+    FleetSnapshot
 } from '../../shared/assistant/contracts'
+import { isAssistantToolLifecycleStartEvent } from '../../shared/assistant/tool-lifecycle'
 import { AssistantTextDeltaBuffer } from './assistant-text-delta-buffer'
+import { AssistantActivityDeltaBuffer } from './assistant-activity-delta-buffer'
+import { CodexRealtimeVoiceRuntime } from './codex-realtime-voice'
 import { ZyraPiRuntime } from './zyra-pi-runtime'
 import { nowIso } from './utils'
+import { createAssistantSessionRecord } from './service-records'
 import type { AssistantServiceActionDeps } from './service-action-deps'
 import { AssistantPersistence } from './persistence'
+import { toAssistantShellSnapshot } from './persistence-snapshot'
+import { FleetProjection } from './fleet-projection'
+import { queueGeneratedSessionTitle, shouldGenerateSessionTitleForPrompt } from './session-title-generation'
 import { applyDomainEvent, createDefaultSnapshot } from './projector'
 import { approvePendingPlaygroundLabRequestAction, attachSessionToPlaygroundLabAction, createPlaygroundLabAction, declinePendingPlaygroundLabRequestAction, deletePlaygroundLabAction, setPlaygroundRootAction } from './service-playground-actions'
 import {
@@ -46,13 +59,19 @@ import {
 } from './service-session-actions'
 import {
     broadcastAssistantPayload,
+    broadcastAssistantRealtimeVoiceEvent,
     createAssistantDomainEvent,
     trimAssistantEvents,
     updateLatestTurnAssistantMessage
 } from './service-helpers'
-import { handleAssistantRuntimeEvent } from './service-runtime-events'
+import {
+    buildInternalTextActivity,
+    buildStreamingToolActivity,
+    handleAssistantRuntimeEvent
+} from './service-runtime-events'
 import {
     type AssistantStateRecord,
+    createAssistantThread,
     findSessionByThreadId,
     findThreadRecord,
     getActiveThread,
@@ -64,10 +83,13 @@ import {
 export class AssistantService {
     private static readonly MAX_IN_MEMORY_EVENTS = 256
     private static readonly ASSISTANT_TEXT_DELTA_FLUSH_MS = 40
+    private static readonly ASSISTANT_ACTIVITY_DELTA_FLUSH_MS = 48
     private static readonly ASSISTANT_EVENT_BROADCAST_BATCH_MS = 16
 
     private readonly runtime = new ZyraPiRuntime()
+    private readonly realtimeVoiceRuntime = new CodexRealtimeVoiceRuntime()
     private readonly persistence = new AssistantPersistence()
+    private readonly fleetProjection = new FleetProjection()
     private readonly assistantTextDeltaBuffer = new AssistantTextDeltaBuffer({
         flushDelayMs: AssistantService.ASSISTANT_TEXT_DELTA_FLUSH_MS,
         onFlush: (entry) => {
@@ -79,7 +101,40 @@ export class AssistantService {
             }, entry.sessionId, entry.threadId)
         }
     })
+    private readonly assistantActivityDeltaBuffer = new AssistantActivityDeltaBuffer({
+        flushDelayMs: AssistantService.ASSISTANT_ACTIVITY_DELTA_FLUSH_MS,
+        onFlush: (entry) => {
+            const threadRecord = findThreadRecord(this.state.snapshot, entry.threadId)
+            if (!threadRecord) return
+            const existing = threadRecord.thread.activities.find((activity) => activity.id === entry.activityId) || null
+            const activity = entry.streamKind === 'reasoning_text' || entry.streamKind === 'reasoning_summary_text'
+                ? buildInternalTextActivity({
+                    existing,
+                    activityId: entry.activityId,
+                    text: entry.delta,
+                    turnId: entry.turnId,
+                    itemId: entry.itemId,
+                    occurredAt: entry.occurredAt,
+                    status: 'streaming',
+                    streamKind: entry.streamKind
+                })
+                : buildStreamingToolActivity({
+                    existing,
+                    activityId: entry.activityId,
+                    kind: entry.streamKind === 'command_output' ? 'command' : 'file-change',
+                    delta: entry.delta,
+                    turnId: entry.turnId,
+                    itemId: entry.itemId,
+                    occurredAt: entry.occurredAt
+                })
+            this.appendEvent('thread.activity.appended', entry.occurredAt, {
+                threadId: entry.threadId,
+                activity
+            }, entry.sessionId, entry.threadId)
+        }
+    })
     private readonly subscribers = new Set<number>()
+    private readonly realtimeVoiceSubscribers = new Set<number>()
     private readonly planBuffers = new Map<string, string>()
     private readonly assistantTextBuffers = new Map<string, string>()
     private readonly suppressedAssistantTextTurns = new Set<string>()
@@ -92,6 +147,7 @@ export class AssistantService {
     }
     private pendingBroadcastEvents: AssistantDomainEvent[] = []
     private pendingBroadcastTimer: NodeJS.Timeout | null = null
+    private canonicalImportPromise: Promise<void> | null = null
 
     constructor() {
         this.readyPromise = this.initialize()
@@ -102,6 +158,7 @@ export class AssistantService {
             hydrateSelectedSession: async (sessionId: string) => {
                 this.state.snapshot = await this.persistence.hydrateSelectedSession(this.state.snapshot, sessionId)
             },
+            getFirstUserMessageText: (sessionId: string) => this.persistence.readFirstUserMessageText(sessionId),
             appendEvent: (type, occurredAt, payload, sessionId, threadId) => {
                 this.appendEvent(type, occurredAt, payload, sessionId, threadId)
             },
@@ -116,6 +173,15 @@ export class AssistantService {
         this.runtime.on('runtime', (event) => {
             this.handleRuntimeEvent(event)
         })
+        this.runtime.on('catalog.changed', () => {
+            void this.queueCanonicalChatImport()
+        })
+        this.realtimeVoiceRuntime.on('event', (event) => {
+            broadcastAssistantRealtimeVoiceEvent(this.realtimeVoiceSubscribers, event)
+        })
+        void this.readyPromise
+            .then(() => this.recoverSelectedSessionTitle())
+            .catch((error) => log.warn('[Assistant] Failed to recover the selected chat title', error))
     }
 
     subscribe(senderId: number) {
@@ -128,16 +194,26 @@ export class AssistantService {
         return { success: true as const }
     }
 
+    subscribeRealtimeVoice(senderId: number) {
+        this.realtimeVoiceSubscribers.add(senderId)
+        return { success: true as const }
+    }
+
+    unsubscribeRealtimeVoice(senderId: number) {
+        this.realtimeVoiceSubscribers.delete(senderId)
+        return { success: true as const }
+    }
+
     async getSnapshot() {
         await this.ensureReady()
-        return structuredClone(this.state.snapshot)
+        return toAssistantShellSnapshot(this.state.snapshot)
     }
 
     async getBootstrap() {
         await this.ensureReady()
         const status = await this.getStatus()
         return {
-            snapshot: structuredClone(this.state.snapshot),
+            snapshot: toAssistantShellSnapshot(this.state.snapshot),
             status
         }
     }
@@ -152,6 +228,27 @@ export class AssistantService {
         this.state.snapshot.knownModels = models
         this.persistence.updateMetadata(this.state.snapshot)
         return { success: true as const, models }
+    }
+
+    async getFleetSnapshot(threadId: string) {
+        await this.ensureReady()
+        const localThreadId = requireThread(this.state.snapshot, threadId).id
+        const snapshot = this.fleetProjection.get(localThreadId)
+            || this.state.snapshot.fleetByThreadId[localThreadId]
+            || await this.persistence.readFleet(localThreadId)
+        return { success: true as const, snapshot: snapshot || null }
+    }
+
+    async runFleetOperation(namespace: 'agents' | 'workflows', input: FleetOperationInput) {
+        await this.ensureReady()
+        const localThreadId = requireThread(this.state.snapshot, input.threadId).id
+        const result = await this.runtime.requestFleetOperation(localThreadId, namespace, input.action, input.payload || {})
+        const snapshot = (result['snapshot'] || result['fleet']) as FleetSnapshot | undefined
+        if (snapshot) {
+            this.fleetProjection.apply(localThreadId, snapshot)
+            this.persistence.projectFleet(localThreadId, snapshot)
+        }
+        return { success: true as const, result }
     }
 
     async getAccountOverview() {
@@ -201,15 +298,40 @@ export class AssistantService {
         return selectAssistantThreadAction(this.actionDeps, sessionId, threadId)
     }
 
-    async hydrateSession(sessionId: string) {
+    async getThreadDetailBootstrap(threadId: string) {
         await this.ensureReady()
-        requireSession(this.state.snapshot, sessionId)
-        this.state.snapshot = await this.persistence.hydrateSelectedSession(this.state.snapshot, sessionId)
+        const localThreadId = requireThread(this.state.snapshot, threadId).id
         return {
             success: true as const,
-            sessionId,
-            snapshot: structuredClone(this.state.snapshot)
+            detail: await this.persistence.readThreadDetail(localThreadId)
         }
+    }
+
+    async getHistoryPage(input: AssistantGetHistoryPageInput) {
+        await this.ensureReady()
+        const localThreadId = requireThread(this.state.snapshot, input.threadId).id
+        return {
+            success: true as const,
+            page: await this.persistence.readHistoryPage({ ...input, threadId: localThreadId })
+        }
+    }
+
+    async getReviewIndex(threadId: string) {
+        await this.ensureReady()
+        const localThreadId = requireThread(this.state.snapshot, threadId).id
+        return { success: true as const, index: await this.persistence.readReviewIndex(localThreadId) }
+    }
+
+    async searchTurns(threadId: string, query: string, limit?: number) {
+        await this.ensureReady()
+        const localThreadId = requireThread(this.state.snapshot, threadId).id
+        return { success: true as const, result: await this.persistence.searchTurns(localThreadId, query, limit) }
+    }
+
+    async getTurnDetail(threadId: string, turnId: string) {
+        await this.ensureReady()
+        const localThreadId = requireThread(this.state.snapshot, threadId).id
+        return { success: true as const, detail: await this.persistence.readTurnDetail(localThreadId, turnId) }
     }
 
     async renameSession(sessionId: string, title: string) {
@@ -221,7 +343,15 @@ export class AssistantService {
     }
 
     async deleteSession(sessionId: string) {
-        return deleteAssistantSessionAction(this.actionDeps, sessionId)
+        await this.ensureReady()
+        const threadIds = this.state.snapshot.sessions.find((session) => session.id === sessionId)?.threads.map((thread) => thread.id) || []
+        const result = await deleteAssistantSessionAction(this.actionDeps, sessionId)
+        for (const threadId of threadIds) {
+            this.fleetProjection.remove(threadId)
+            delete this.state.snapshot.fleetByThreadId[threadId]
+            this.persistence.deleteFleet(threadId)
+        }
+        return result
     }
 
     async clearLogs(input?: AssistantClearLogsInput) {
@@ -229,6 +359,11 @@ export class AssistantService {
     }
 
     async deleteMessage(input: AssistantDeleteMessageInput) {
+        await this.ensureReady()
+        const sessionId = input.sessionId || this.state.snapshot.selectedSessionId
+        if (!sessionId) throw new Error('Assistant session not found.')
+        // Deletion planning must see persisted history even when the renderer has only a page loaded.
+        this.state.snapshot = await this.persistence.hydrateSelectedSession(this.state.snapshot, sessionId)
         return deleteAssistantMessageAction(this.actionDeps, input)
     }
 
@@ -272,6 +407,24 @@ export class AssistantService {
         return respondAssistantUserInputAction(this.actionDeps, input)
     }
 
+    async startRealtimeVoice(input: AssistantStartRealtimeVoiceInput) {
+        await this.ensureReady()
+        const session = getSelectedSession(this.state.snapshot)
+        const thread = getActiveThread(session)
+        const cwd = session && thread ? this.getSessionRuntimeCwd(session, thread) : process.cwd()
+        const result = await this.realtimeVoiceRuntime.start({
+            cwd,
+            sdp: input.sdp,
+            instructions: input.instructions
+        })
+        return { success: true as const, ...result }
+    }
+
+    async stopRealtimeVoice() {
+        await this.realtimeVoiceRuntime.stop()
+        return { success: true as const }
+    }
+
     async approvePendingPlaygroundLabRequest(input: AssistantApprovePendingPlaygroundLabRequestInput) {
         return approvePendingPlaygroundLabRequestAction(this.actionDeps, input)
     }
@@ -282,6 +435,8 @@ export class AssistantService {
 
     dispose() {
         this.assistantTextDeltaBuffer.dispose()
+        this.assistantActivityDeltaBuffer.dispose()
+        this.realtimeVoiceRuntime.dispose()
         this.runtime.dispose()
         void this.persistence.flush()
     }
@@ -292,8 +447,116 @@ export class AssistantService {
             snapshot: loaded.snapshot || createDefaultSnapshot(),
             events: loaded.events || []
         }
+        this.state.snapshot.fleetByThreadId ||= {}
+        await this.importCanonicalChats()
+        for (const session of this.state.snapshot.sessions) {
+            for (const thread of session.threads) {
+                const fleet = await this.persistence.readFleet(thread.id)
+                if (!fleet) continue
+                this.fleetProjection.apply(thread.id, fleet)
+                this.state.snapshot.fleetByThreadId[thread.id] = fleet
+            }
+        }
         void this.runtime.prewarm(false).catch((error) => {
             log.warn('[Assistant] Zyra runtime prewarm failed', error)
+        })
+    }
+
+    private async queueCanonicalChatImport(): Promise<void> {
+        await this.ensureReady()
+        if (this.canonicalImportPromise) return this.canonicalImportPromise
+        this.canonicalImportPromise = this.importCanonicalChats().finally(() => {
+            this.canonicalImportPromise = null
+        })
+        return this.canonicalImportPromise
+    }
+
+    private async importCanonicalChats(): Promise<void> {
+        let chats
+        try {
+            chats = await this.runtime.listCanonicalChats()
+        } catch (error) {
+            log.warn('[Assistant] Failed to read the canonical Zyra chat catalog', error)
+            return
+        }
+        for (const chat of chats) {
+            if (!chat.canonicalChatId) continue
+            const existing = this.state.snapshot.sessions
+                .flatMap((session) => session.threads.map((thread) => ({ session, thread })))
+                .find(({ thread }) => thread.providerThreadId === chat.canonicalChatId)
+            if (existing) {
+                if (!this.runtime.hasSession(chat.canonicalChatId) && Number(chat.messageCount) !== existing.thread.messageCount) {
+                    try {
+                        const history = await this.runtime.readCanonicalChatHistory(chat.canonicalChatId, chat.project)
+                        const existingKey = createHash('sha256').update(chat.canonicalChatId).digest('hex').slice(0, 24)
+                        const messages = projectCanonicalMessages(history?.entries || [], existingKey, existing.thread.createdAt)
+                        this.appendEvent('thread.updated', normalizeCatalogDate(chat.modifiedAt, existing.thread.updatedAt), {
+                            threadId: existing.thread.id,
+                            patch: { messages, messageCount: messages.length }
+                        }, existing.session.id, existing.thread.id)
+                    } catch (error) {
+                        log.warn('[Assistant] Failed to refresh canonical chat history', { canonicalChatId: chat.canonicalChatId, error })
+                    }
+                }
+                continue
+            }
+            const key = createHash('sha256').update(chat.canonicalChatId).digest('hex').slice(0, 24)
+            const sessionId = `assistant-session:shared:${key}`
+            const threadId = `assistant-thread:shared:${key}`
+            if (this.state.snapshot.sessions.some((session) => session.id === sessionId)) continue
+            const createdAt = normalizeCatalogDate(chat.createdAt)
+            const updatedAt = normalizeCatalogDate(chat.modifiedAt, createdAt)
+            const thread = createAssistantThread(createdAt, null, chat.cwd || chat.project)
+            thread.id = threadId
+            thread.providerThreadId = chat.canonicalChatId
+            thread.messageCount = Math.max(0, Number(chat.messageCount) || 0)
+            thread.updatedAt = updatedAt
+            const session = createAssistantSessionRecord({
+                sessionId,
+                title: chat.title || 'Shared Zyra chat',
+                projectPath: chat.project || chat.cwd || null,
+                createdAt,
+                thread
+            })
+            session.updatedAt = updatedAt
+            this.appendEvent('session.created', createdAt, { session }, sessionId, threadId)
+            try {
+                const history = await this.runtime.readCanonicalChatHistory(chat.canonicalChatId, chat.project)
+                const messages = projectCanonicalMessages(history?.entries || [], key, createdAt)
+                if (messages.length > 0) {
+                    this.appendEvent('thread.updated', updatedAt, {
+                        threadId,
+                        patch: { messages, messageCount: messages.length }
+                    }, sessionId, threadId)
+                }
+            } catch (error) {
+                log.warn('[Assistant] Failed to import canonical chat history', { canonicalChatId: chat.canonicalChatId, error })
+            }
+        }
+    }
+
+    private async recoverSelectedSessionTitle(): Promise<void> {
+        const session = getSelectedSession(this.state.snapshot)
+        const thread = getActiveThread(session)
+        if (!session || !thread) return
+
+        const firstUserMessage = await this.persistence.readFirstUserMessageText(session.id)
+        if (!shouldGenerateSessionTitleForPrompt(session, firstUserMessage)) return
+        const latestUserMessage = await this.persistence.readLatestUserMessageText(session.id)
+        if (!latestUserMessage) return
+
+        await queueGeneratedSessionTitle({
+            sessionId: session.id,
+            threadId: thread.id,
+            messageText: latestUserMessage,
+            seedTitle: session.title,
+            cwd: this.getSessionRuntimeCwd(session, thread),
+            preferredModel: thread.model || null,
+            generateText: (titlePrompt, titleOptions) => this.runtime.generateText(titlePrompt, titleOptions),
+            getSnapshot: () => this.state.snapshot,
+            appendEvent: (type, occurredAt, payload, sessionId, threadId) => {
+                this.appendEvent(type, occurredAt, payload, sessionId, threadId)
+            }
         })
     }
 
@@ -325,6 +588,14 @@ export class AssistantService {
 
     private queueBroadcastEvent(event: AssistantDomainEvent): void {
         this.pendingBroadcastEvents.push(event)
+        if (isAssistantToolLifecycleStartEvent(event)) {
+            if (this.pendingBroadcastTimer) {
+                clearTimeout(this.pendingBroadcastTimer)
+                this.pendingBroadcastTimer = null
+            }
+            this.flushBroadcastEvents()
+            return
+        }
         if (this.pendingBroadcastTimer) return
 
         this.pendingBroadcastTimer = setTimeout(() => {
@@ -341,6 +612,9 @@ export class AssistantService {
     }
 
     private handleRuntimeEvent(event: Parameters<typeof handleAssistantRuntimeEvent>[0]) {
+        if (event.type === 'turn.started') {
+            this.persistence.setStreamingActive(event.threadId, true)
+        }
         handleAssistantRuntimeEvent(event, {
             planBuffers: this.planBuffers,
             assistantTextBuffers: this.assistantTextBuffers,
@@ -350,13 +624,26 @@ export class AssistantService {
             findThreadRecord: (threadId) => findThreadRecord(this.state.snapshot, threadId),
             queueAssistantTextDelta: (entry) => this.assistantTextDeltaBuffer.queue(entry),
             flushAssistantTextDelta: (target) => this.assistantTextDeltaBuffer.flush(target),
+            queueAssistantActivityDelta: (entry) => this.assistantActivityDeltaBuffer.queue(entry),
+            flushAssistantActivityDelta: (target) => this.assistantActivityDeltaBuffer.flush(target),
             appendEvent: (type, occurredAt, payload, sessionId, threadId) => this.appendEvent(type, occurredAt, payload, sessionId, threadId),
+            projectFleet: (threadId, snapshot) => {
+                this.fleetProjection.apply(threadId, snapshot)
+                this.persistence.projectFleet(threadId, snapshot)
+            },
             updateLatestTurnAssistantMessage: (sessionId, threadId, assistantMessageId, occurredAt) => {
                 updateLatestTurnAssistantMessage(this.state.snapshot, sessionId, threadId, assistantMessageId, occurredAt, (type, eventOccurredAt, payload, eventSessionId, eventThreadId) => {
                     this.appendEvent(type, eventOccurredAt, payload, eventSessionId, eventThreadId)
                 })
             }
         })
+
+        if (
+            event.type === 'turn.completed'
+            || (event.type === 'session.state.changed' && !['starting', 'running', 'waiting'].includes(event.payload.state))
+        ) {
+            this.persistence.setStreamingActive(event.threadId, false)
+        }
 
         if (event.type !== 'turn.completed') return
 
@@ -375,4 +662,52 @@ export class AssistantService {
             }
         }, selectedSession.id, activeThread.id)
     }
+}
+
+function normalizeCatalogDate(value: unknown, fallback = nowIso()): string {
+    const date = new Date(typeof value === 'string' || typeof value === 'number' ? value : fallback)
+    return Number.isNaN(date.getTime()) ? fallback : date.toISOString()
+}
+
+function projectCanonicalMessages(entries: unknown[], key: string, fallbackCreatedAt: string): AssistantMessage[] {
+    const messages: AssistantMessage[] = []
+    let turnIndex = 0
+    let activeTurnId: string | null = null
+    for (const entryValue of entries) {
+        if (!entryValue || typeof entryValue !== 'object') continue
+        const entry = entryValue as Record<string, unknown>
+        if (entry['type'] !== 'message') continue
+        const message = entry['message'] as Record<string, unknown> | undefined
+        const role = message?.['role']
+        if (role !== 'user' && role !== 'assistant' && role !== 'system') continue
+        const text = canonicalMessageText(message?.['content'])
+        if (!text) continue
+        if (role === 'user' || (role === 'assistant' && !activeTurnId)) {
+            turnIndex += 1
+            activeTurnId = `shared-turn:${key}:${turnIndex}`
+        }
+        const occurredAt = normalizeCatalogDate(message?.['timestamp'] || entry['timestamp'], fallbackCreatedAt)
+        messages.push({
+            id: String(message?.['id'] || entry['id'] || `shared-message:${key}:${messages.length + 1}`),
+            role,
+            text,
+            turnId: role === 'system' ? null : activeTurnId,
+            streaming: false,
+            timelineSequence: messages.length + 1,
+            createdAt: occurredAt,
+            updatedAt: occurredAt
+        })
+    }
+    return messages
+}
+
+function canonicalMessageText(content: unknown): string {
+    if (typeof content === 'string') return content.trim()
+    if (!Array.isArray(content)) return ''
+    return content
+        .filter((part): part is Record<string, unknown> => Boolean(part && typeof part === 'object'))
+        .filter((part) => part['type'] === 'text')
+        .map((part) => String(part['text'] || ''))
+        .join('')
+        .trim()
 }

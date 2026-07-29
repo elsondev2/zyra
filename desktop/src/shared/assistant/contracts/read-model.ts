@@ -1,3 +1,5 @@
+import type { FileChangeKind } from './file-change'
+import type { FleetSnapshot } from './fleet'
 import type {
     AssistantApprovalDecision,
     AssistantApprovalRequestType,
@@ -131,8 +133,10 @@ export interface AssistantSessionTurnUsageEntry {
     updatedAt: string
 }
 
-export interface AssistantThread {
+export interface AssistantThreadShell {
+    /** Existing desktop persistence key; retained as a local compatibility alias. */
     id: string
+    /** Canonical cross-surface Pi thread ID (Pi calls this its session ID). */
     providerThreadId: string | null
     source: AssistantThreadSource
     parentThreadId: string | null
@@ -143,6 +147,8 @@ export interface AssistantThread {
     model: string
     cwd: string | null
     messageCount: number
+    activityCount: number
+    proposedPlanCount: number
     lastSeenCompletedTurnId: string | null
     runtimeMode: AssistantRuntimeMode
     interactionMode: AssistantInteractionMode
@@ -151,12 +157,124 @@ export interface AssistantThread {
     createdAt: string
     updatedAt: string
     latestTurn: AssistantLatestTurn | null
+    hasPendingApprovals: boolean
+    hasPendingUserInputs: boolean
+    hasActivePlan: boolean
+}
+
+/** Main-process runtime shape. IPC bootstrap uses AssistantThreadShell instead. */
+export interface AssistantThread extends AssistantThreadShell {
     activePlan: AssistantActivePlan | null
     messages: AssistantMessage[]
     proposedPlans: AssistantProposedPlan[]
     activities: AssistantActivity[]
     pendingApprovals: AssistantPendingApproval[]
     pendingUserInputs: AssistantPendingUserInput[]
+}
+
+export type AssistantHistoryCursor = string
+
+export interface AssistantGetHistoryPageInput {
+    threadId: string
+    before?: AssistantHistoryCursor | null
+    turnLimit?: number
+}
+
+export interface AssistantGetTurnDetailInput {
+    threadId: string
+    turnId: string
+}
+
+export interface AssistantGetReviewIndexInput {
+    threadId: string
+}
+
+export interface AssistantReviewMessagePreview {
+    id: string
+    text: string
+    truncated: boolean
+    createdAt: string
+    updatedAt: string
+}
+
+export interface AssistantReviewChangeIndexEntry {
+    activityId: string
+    turnId: string
+    filePath: string
+    previousPath?: string
+    changeKind?: FileChangeKind
+    isNew?: boolean
+    additions: number
+    deletions: number
+    status: 'running' | 'completed'
+    authoritative: boolean
+    truncated?: boolean
+    unavailableReason?: string
+    createdAt: string
+}
+
+export interface AssistantReviewTurnIndexEntry {
+    id: string
+    number: number
+    state: AssistantLatestTurn['state']
+    prompt: AssistantReviewMessagePreview | null
+    response: AssistantReviewMessagePreview | null
+    agentLabel: string
+    requestedAt: string
+    updatedAt: string
+    changes: AssistantReviewChangeIndexEntry[]
+}
+
+export interface AssistantReviewIndex {
+    threadId: string
+    totalTurns: number
+    turns: AssistantReviewTurnIndexEntry[]
+}
+
+export interface AssistantSearchTurnsInput {
+    threadId: string
+    query: string
+    limit?: number
+}
+
+export interface AssistantSearchTurnsResult {
+    threadId: string
+    turnIds: string[]
+}
+
+export interface AssistantTurnDetail {
+    threadId: string
+    turnId: string
+    messages: AssistantMessage[]
+    activities: AssistantActivity[]
+    proposedPlans: AssistantProposedPlan[]
+}
+
+export interface AssistantHistoryPage {
+    threadId: string
+    messages: AssistantMessage[]
+    activities: AssistantActivity[]
+    proposedPlans: AssistantProposedPlan[]
+    pageInfo: {
+        oldestCursor: AssistantHistoryCursor | null
+        hasOlder: boolean
+        turnCount: number
+    }
+}
+
+export interface AssistantThreadHistoryState extends AssistantHistoryPage {
+    initialLoading: boolean
+    loadingOlder: boolean
+    loadOlderError: string | null
+    fullyLoaded: boolean
+}
+
+export interface AssistantThreadDetail {
+    threadId: string
+    activePlan: AssistantActivePlan | null
+    pendingApprovals: AssistantPendingApproval[]
+    pendingUserInputs: AssistantPendingUserInput[]
+    history: AssistantThreadHistoryState
 }
 
 export interface AssistantSession {
@@ -172,6 +290,10 @@ export interface AssistantSession {
     activeThreadId: string | null
     threadIds: string[]
     threads: AssistantThread[]
+}
+
+export type AssistantSessionShell = Omit<AssistantSession, 'threads'> & {
+    threads: AssistantThreadShell[]
 }
 
 export interface AssistantModelInfo {
@@ -253,6 +375,15 @@ export interface AssistantSnapshot {
     playground: AssistantPlaygroundState
     sessions: AssistantSession[]
     knownModels: AssistantModelInfo[]
+    fleetByThreadId: Record<string, FleetSnapshot>
+}
+
+export type AssistantShellSnapshot = Omit<AssistantSnapshot, 'sessions'> & {
+    sessions: AssistantSessionShell[]
+}
+
+export interface AssistantThreadDetailBootstrap {
+    detail: AssistantThreadDetail
 }
 
 export type AssistantDomainEventType =
@@ -272,6 +403,7 @@ export type AssistantDomainEventType =
     | 'thread.approval.updated'
     | 'thread.user-input.updated'
     | 'thread.latest-turn.updated'
+    | 'fleet.snapshot.updated'
 
 export interface AssistantDomainEvent {
     sequence: number

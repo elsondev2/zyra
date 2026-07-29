@@ -86,7 +86,7 @@ export function GitCloneProgressToast() {
         >
             <div className="font-medium">{getToastTitle(event)}</div>
             {detail && (
-                <div className="mt-1 line-clamp-2 break-words text-xs opacity-75">{detail}</div>
+                <div className="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-xs opacity-75 [overflow-wrap:anywhere]">{detail}</div>
             )}
             {typeof progress === 'number' && (
                 <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/10">

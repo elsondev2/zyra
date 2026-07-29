@@ -12,6 +12,11 @@ import { promptSecret as promptSecretInput } from "./secret-input.mjs";
 import { normalizeAgentSurfaceTool } from "./agent-surface.mjs";
 import { normalizeToolFileChangeState } from "./file-change-lifecycle.mjs";
 import { UserMessageComponent, AssistantMessageComponent, CheckedCommandsComponent, StoppedCommandsComponent, ToolMessageComponent } from "./tui/components/message-components.mjs";
+import { SubagentMessageComponent } from "./tui/components/subagent-message.mjs";
+import { WorkflowMessageComponent } from "./tui/components/workflow-message.mjs";
+import { AgentDockComponent } from "./tui/components/agent-dock.mjs";
+import { createAgentManagerDialog } from "./tui/components/agent-manager.mjs";
+import { createWorkflowManagerDialog } from "./tui/components/workflow-manager.mjs";
 import {
   accountPanel,
   codexUsagePanel,
@@ -83,6 +88,19 @@ export function createZyraUi(options = {}) {
   const committedAssistantKeys = new Set();
   const recentlyEchoedUserMessages = [];
   const suppressedUserMessages = [];
+  const agentTimelineComponents = new Map();
+  const workflowTimelineComponents = new Map();
+  let fleetSnapshot = null;
+  const agentDock = new AgentDockComponent({
+    theme,
+    getSnapshot: () => fleetSnapshot,
+    onInspect: () => {
+      host.focusEditor();
+      const input = host.inputComponent;
+      input?.setText?.("/agents");
+      void input?.handleKeypress?.("", { name: "return" });
+    },
+  });
 
   const resetInteractiveState = () => {
     assistantLifecycle.reset();
@@ -109,6 +127,10 @@ export function createZyraUi(options = {}) {
     committedAssistantKeys.clear();
     recentlyEchoedUserMessages.length = 0;
     suppressedUserMessages.length = 0;
+    agentTimelineComponents.clear();
+    workflowTimelineComponents.clear();
+    fleetSnapshot = null;
+    host.removeAuxiliaryComponent("agent-dock");
   };
 
   const writeLines = (lines = []) => {
@@ -517,6 +539,43 @@ export function createZyraUi(options = {}) {
     },
     sessionInfo(info = {}) {
       appendPanel(sessionInfoPanel(info, theme));
+    },
+    fleet(event, snapshot) {
+      fleetSnapshot = snapshot;
+      host.setAuxiliaryComponent("agent-dock", agentDock);
+      agentDock.update();
+      const agentRunId = event?.agentRunId;
+      if (agentRunId) {
+        const run = snapshot?.agents?.[agentRunId];
+        if (run) {
+          let component = agentTimelineComponents.get(agentRunId);
+          if (!component && event.type === "agent.created") {
+            component = new SubagentMessageComponent(`agent-${agentRunId}`, run, theme);
+            agentTimelineComponents.set(agentRunId, component);
+            host.append(component);
+          } else component?.update(run);
+        }
+      }
+      const workflowRunId = event?.workflowRunId;
+      if (workflowRunId) {
+        const run = snapshot?.workflows?.[workflowRunId];
+        if (run) {
+          const agents = (run.agentRunIds ?? []).map((id) => snapshot.agents?.[id]).filter(Boolean);
+          let component = workflowTimelineComponents.get(workflowRunId);
+          if (!component && event.type === "workflow.created") {
+            component = new WorkflowMessageComponent(`workflow-${workflowRunId}`, run, agents, theme);
+            workflowTimelineComponents.set(workflowRunId, component);
+            host.append(component);
+          } else component?.update(run, agents);
+        }
+      }
+      host.invalidate();
+    },
+    async openAgents(controller) {
+      return runZyraInputDialog(host, createAgentManagerDialog(controller, { theme }));
+    },
+    async openWorkflows(workflows) {
+      return runZyraInputDialog(host, createWorkflowManagerDialog(workflows, { theme }));
     },
     event(event) {
       if (event.type === "turn_start") {

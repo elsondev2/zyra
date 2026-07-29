@@ -12,19 +12,34 @@ import type {
     AssistantDeletePlaygroundLabInput,
     AssistantDeleteMessageInput,
     AssistantEventStreamPayload,
+    AssistantFleetOperationResultPayload,
+    AssistantFleetSnapshotPayload,
+    AssistantGetHistoryPageInput,
+    AssistantGetReviewIndexInput,
     AssistantGetSessionTurnUsageInput,
+    AssistantGetTurnDetailInput,
     AssistantModelInfo,
     AssistantPlaygroundResultPayload,
     AssistantPersistClipboardImageInput,
+    AssistantRealtimeVoiceEvent,
+    AssistantReviewIndexResultPayload,
     AssistantRuntimeStatus,
+    AssistantSearchTurnsInput,
+    AssistantSearchTurnsResultPayload,
     AssistantSendPromptOptions,
     AssistantSelectThreadInput,
+    AssistantStartRealtimeVoiceInput,
     AssistantSetPlaygroundRootInput,
     AssistantSessionTurnUsageResultPayload,
+    AssistantShellSnapshot,
     AssistantSnapshot,
+    AssistantThreadDetailResultPayload,
+    AssistantHistoryPageResultPayload,
+    AssistantTurnDetailResultPayload,
     AssistantTranscribeAudioInput,
     AssistantTranscriptionModelState,
-    AssistantUserInputResponseInput
+    AssistantUserInputResponseInput,
+    FleetOperationInput
 } from '../assistant/contracts'
 import type {
     DevScopeGitBranchSummary,
@@ -61,6 +76,21 @@ import type {
     DevScopePythonPreviewEvent
 } from './devscope-project-contracts'
 import type { ZyraMemoryApi } from './memory-contracts'
+import type {
+    ControlCursorState,
+    ControlGrant,
+    ControlStateSnapshot,
+    ControlTarget,
+    ControlWorkspaceSnapshot,
+    ControlWindowCandidate
+} from '../agent-control/contracts'
+import type {
+    BrowserSurfaceClaim,
+    BrowserSurfaceOpenAcknowledgement,
+    BrowserSurfaceOpenCompletion,
+    BrowserSurfaceOpenRequest,
+    RendererControlGrantInput
+} from '../agent-control/protocol'
 
 export * from './devscope-git-contracts'
 export * from './devscope-project-contracts'
@@ -70,9 +100,24 @@ export type DevScopeOk<T = Record<string, unknown>> = { success: true } & T
 export type DevScopeErr = { success: false; error: string }
 export type DevScopeResult<T = Record<string, unknown>> = DevScopeOk<T> | DevScopeErr
 
+export type DevScopeBrowserPreviewConfig = {
+    partition: string
+    webPreferences: string
+    profileScope: 'global'
+    persistent: true
+}
+
+export type DevScopeBrowserLinkPreview = {
+    url: string
+    title: string | null
+    description: string | null
+    imageUrl: string | null
+    siteName: string | null
+}
+
 export type DevScopePreviewTerminalEvent = {
     sessionId: string
-    type: 'started' | 'output' | 'exit' | 'error' | 'title'
+    type: 'started' | 'output' | 'exit' | 'error' | 'title' | 'clear'
     data?: string
     message?: string
     shell?: string
@@ -186,11 +231,36 @@ export interface DevScopeAgentScopeApi {
     [method: string]: (...args: any[]) => any
 }
 
+export interface DevScopeAgentControlApi {
+    getState: () => Promise<DevScopeResult<{ state: ControlStateSnapshot }>>
+    bindBrowserTab: (input: { guestWebContentsId: number; tabId: string; threadId: string }) => Promise<DevScopeResult<{ target: ControlTarget }>>
+    acknowledgeBrowserSurfaceRequest: (input: BrowserSurfaceOpenAcknowledgement) => Promise<DevScopeResult<{ accepted: boolean }>>
+    completeBrowserSurfaceRequest: (input: BrowserSurfaceOpenCompletion) => Promise<DevScopeResult<{ completed: boolean }>>
+    claimBrowserSurfaceRequest: (input: BrowserSurfaceClaim) => Promise<DevScopeResult<{ claimed: boolean }>>
+    updateWorkspaceState: (input: ControlWorkspaceSnapshot | null) => Promise<DevScopeResult<{ workspace: ControlWorkspaceSnapshot | null }>>
+    approveGrant: (input: RendererControlGrantInput) => Promise<DevScopeResult<{ grant: ControlGrant }>>
+    rejectGrant: (requestId: string) => Promise<DevScopeResult<{ rejected: boolean }>>
+    revokeGrant: (grantId: string) => Promise<DevScopeResult<{ revoked: boolean }>>
+    emergencyStop: () => Promise<DevScopeResult<{ stopped: boolean }>>
+    clearAudit: () => Promise<DevScopeResult<{ cleared: boolean }>>
+    startChromePairing: () => Promise<DevScopeResult<{ pairing: ControlStateSnapshot['pairing'] }>>
+    stopChromePairing: () => Promise<DevScopeResult<{ pairing: ControlStateSnapshot['pairing'] }>>
+    listWindows: () => Promise<DevScopeResult<{ windows: ControlWindowCandidate[] }>>
+    selectWindow: (windowToken: string) => Promise<DevScopeResult<{ target: ControlTarget }>>
+    onBrowserSurfaceRequest: (callback: (request: BrowserSurfaceOpenRequest) => void) => () => void
+    onBrowserSurfaceCancel: (callback: (requestId: string) => void) => () => void
+    onStateChange: (callback: (state: ControlStateSnapshot) => void) => () => void
+    onCursorChange: (callback: (cursor: ControlCursorState) => void) => () => void
+}
+
 export interface DevScopeAssistantApi {
     subscribe: () => Promise<DevScopeResult>
     unsubscribe: () => Promise<DevScopeResult>
     bootstrap: () => Promise<AssistantBootstrapPayload>
-    getSnapshot: () => Promise<AssistantSnapshot>
+    getSnapshot: () => Promise<AssistantShellSnapshot>
+    getFleetSnapshot: (threadId: string) => Promise<DevScopeResult<AssistantFleetSnapshotPayload>>
+    agentAction: (input: FleetOperationInput) => Promise<DevScopeResult<AssistantFleetOperationResultPayload>>
+    workflowAction: (input: FleetOperationInput) => Promise<DevScopeResult<AssistantFleetOperationResultPayload>>
     getStatus: () => Promise<AssistantRuntimeStatus>
     getAccountOverview: () => Promise<DevScopeResult<AssistantAccountOverviewPayload>>
     getSessionTurnUsage: (input?: AssistantGetSessionTurnUsageInput) => Promise<DevScopeResult<AssistantSessionTurnUsageResultPayload>>
@@ -200,7 +270,11 @@ export interface DevScopeAssistantApi {
     createSession: (input?: AssistantCreateSessionInput) => Promise<DevScopeResult<{ sessionId: string }>>
     selectSession: (sessionId: string) => Promise<DevScopeResult<{ sessionId: string; snapshot?: AssistantSnapshot }>>
     selectThread: (input: AssistantSelectThreadInput) => Promise<DevScopeResult<{ sessionId: string; threadId: string; snapshot?: AssistantSnapshot }>>
-    hydrateSession: (sessionId: string) => Promise<DevScopeResult<{ sessionId: string; snapshot: AssistantSnapshot }>>
+    getThreadDetailBootstrap: (threadId: string) => Promise<DevScopeResult<AssistantThreadDetailResultPayload>>
+    getHistoryPage: (input: AssistantGetHistoryPageInput) => Promise<DevScopeResult<AssistantHistoryPageResultPayload>>
+    getReviewIndex: (input: AssistantGetReviewIndexInput) => Promise<DevScopeResult<AssistantReviewIndexResultPayload>>
+    getTurnDetail: (input: AssistantGetTurnDetailInput) => Promise<DevScopeResult<AssistantTurnDetailResultPayload>>
+    searchTurns: (input: AssistantSearchTurnsInput) => Promise<DevScopeResult<AssistantSearchTurnsResultPayload>>
     renameSession: (sessionId: string, title: string) => Promise<DevScopeResult>
     archiveSession: (sessionId: string, archived?: boolean) => Promise<DevScopeResult>
     deleteSession: (sessionId: string) => Promise<DevScopeResult>
@@ -222,6 +296,9 @@ export interface DevScopeAssistantApi {
     interruptTurn: (turnId?: string, sessionId?: string) => Promise<DevScopeResult>
     respondApproval: (input: AssistantApprovalResponseInput) => Promise<DevScopeResult>
     respondUserInput: (input: AssistantUserInputResponseInput) => Promise<DevScopeResult>
+    startRealtimeVoice: (input: AssistantStartRealtimeVoiceInput) => Promise<DevScopeResult<{ threadId: string; sdp: string }>>
+    stopRealtimeVoice: () => Promise<DevScopeResult>
+    onRealtimeVoiceEvent: (callback: (event: AssistantRealtimeVoiceEvent) => void) => () => void
     getTranscriptionModelState: () => Promise<DevScopeResult<{ state: AssistantTranscriptionModelState }>>
     downloadTranscriptionModel: () => Promise<DevScopeResult<{ state: AssistantTranscriptionModelState }>>
     transcribeAudioWithLocalModel: (input: AssistantTranscribeAudioInput) => Promise<DevScopeResult<{ text: string }>>
@@ -428,8 +505,13 @@ export interface DevScopeApi {
     writePreviewTerminal: (input: { sessionId: string; data: string }) => Promise<DevScopeResult>
     setPreviewTerminalTitle: (input: { sessionId: string; title: string }) => Promise<DevScopeResult<{ title: string }>>
     resizePreviewTerminal: (input: { sessionId: string; cols: number; rows: number }) => Promise<DevScopeResult>
+    clearPreviewTerminal: (sessionId: string) => Promise<DevScopeResult>
     closePreviewTerminal: (sessionId: string) => Promise<DevScopeResult<{ closed: boolean }>>
     onPreviewTerminalEvent: (callback: (event: DevScopePreviewTerminalEvent) => void) => () => void
+    getBrowserPreviewConfig: () => Promise<DevScopeResult<DevScopeBrowserPreviewConfig>>
+    clearBrowserPreviewData: () => Promise<DevScopeResult<{ cleared: boolean }>>
+    getBrowserLinkPreview: (input: { url: string }) => Promise<DevScopeResult<{ preview: DevScopeBrowserLinkPreview | null }>>
+    openBrowserPreviewExternal: (url: string) => Promise<DevScopeResult>
     openFile: (filePath: string) => Promise<DevScopeResult>
     openWith: (filePath: string) => Promise<DevScopeResult>
     createFileSystemItem: (
@@ -456,6 +538,7 @@ export interface DevScopeApi {
     memory: ZyraMemoryApi
     assistant: DevScopeAssistantApi
     agentscope: DevScopeAgentScopeApi
+    agentControl: DevScopeAgentControlApi
     updates: DevScopeUpdatesApi
     window: DevScopeWindowApi
 }

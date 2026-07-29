@@ -2,6 +2,7 @@ import { webContents } from 'electron'
 import type {
     AssistantDomainEvent,
     AssistantEventStreamPayload,
+    AssistantRealtimeVoiceEvent,
     AssistantSession,
     AssistantSnapshot
 } from '../../shared/assistant/contracts'
@@ -48,6 +49,20 @@ export function broadcastAssistantPayload(subscribers: Set<number>, payload: Ass
             continue
         }
         target.send(ASSISTANT_IPC.eventStream, payload)
+    }
+}
+
+export function broadcastAssistantRealtimeVoiceEvent(
+    subscribers: Set<number>,
+    event: AssistantRealtimeVoiceEvent
+): void {
+    for (const senderId of [...subscribers]) {
+        const target = webContents.fromId(senderId)
+        if (!target || target.isDestroyed()) {
+            subscribers.delete(senderId)
+            continue
+        }
+        target.send(ASSISTANT_IPC.realtimeVoiceEvent, event)
     }
 }
 

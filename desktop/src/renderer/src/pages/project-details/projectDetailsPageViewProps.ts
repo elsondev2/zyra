@@ -140,6 +140,7 @@ export function buildProjectDetailsContentProps(props: any) {
         setSortAsc: props.setSortAsc,
         visibleFileList: props.visibleFileList,
         openPreview: props.openPreview,
+        onShowToast: (message: string, tone: 'info' | 'error') => props.showToast(message, undefined, undefined, tone),
         onFileTreeOpen: props.handleFileTreeOpen,
         onToggleFolder: props.handleToggleFolder,
         onFileTreeOpenWith: props.handleFileTreeOpenWith,
@@ -266,6 +267,7 @@ export function buildProjectDetailsTransientUiProps(props: any) {
             ])
         },
         closePreview: props.closePreview,
+        onShowToast: (message: string, tone: 'info' | 'error') => props.showToast(message, undefined, undefined, tone),
         toast: props.toast,
         navigate: props.navigate,
         setToast: props.setToast

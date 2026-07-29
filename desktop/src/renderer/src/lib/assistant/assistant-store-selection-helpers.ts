@@ -232,6 +232,10 @@ export function areAssistantConversationSelectionsEqual(left: AssistantConversat
         && areAssistantCreateSessionInputsEqual(left.pendingCreateSessionInput, right.pendingCreateSessionInput)
         && left.commandError === right.commandError
         && left.selectionHydrating === right.selectionHydrating
+        && left.history?.pageInfo.oldestCursor === right.history?.pageInfo.oldestCursor
+        && left.history?.pageInfo.hasOlder === right.history?.pageInfo.hasOlder
+        && left.history?.loadingOlder === right.history?.loadingOlder
+        && left.history?.loadOlderError === right.history?.loadOlderError
         && left.phase.key === right.phase.key
         && left.phase.label === right.phase.label
         && areAssistantModelsEqual(left.knownModels, right.knownModels)

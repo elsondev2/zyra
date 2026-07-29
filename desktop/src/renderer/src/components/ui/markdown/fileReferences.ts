@@ -5,6 +5,15 @@ const WINDOWS_UNC_PATH_PATTERN = /^\\\\/
 const WINDOWS_ENCODED_UNC_PATH_PATTERN = /^%5[cC]%5[cC]/
 const EXTERNAL_LINK_PATTERN = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i
 const POSIX_FILESYSTEM_ROOTS = ['/Users/', '/home/', '/tmp/', '/var/', '/etc/', '/opt/', '/mnt/', '/Volumes/', '/private/', '/root/'] as const
+const SCOPED_PACKAGE_REFERENCE_PATTERN = /^(@[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*)(?:\/[A-Za-z0-9._~!$&'()+,;=:@%\/-]+)?$/
+const AUTO_PATH_ROOT_SEGMENTS = new Set([
+    '.github', 'app', 'apps', 'assets', 'bin', 'client', 'config', 'desktop', 'docs', 'examples', 'lib',
+    'node_modules', 'packages', 'public', 'resources', 'scripts', 'server', 'src', 'static', 'test', 'tests'
+])
+const STANDALONE_DOTFILES = new Set([
+    '.dockerignore', '.editorconfig', '.env', '.eslintignore', '.eslintrc', '.gitattributes', '.gitignore',
+    '.npmrc', '.nvmrc', '.prettierignore', '.prettierrc'
+])
 const FILE_REFERENCE_EXTENSIONS = new Set([
     'astro', 'bash', 'c', 'cjs', 'cpp', 'cs', 'css', 'csv', 'cts', 'env', 'gif', 'go', 'h', 'hpp',
     'htm', 'html', 'ico', 'java', 'jpeg', 'jpg', 'js', 'json', 'jsx', 'kt', 'kts', 'less', 'lock',
@@ -49,6 +58,32 @@ function hasKnownFileExtension(pathValue: string): boolean {
     return Boolean(ext && FILE_REFERENCE_EXTENSIONS.has(ext))
 }
 
+function isAmbiguousBareSlashPair(pathValue: string): boolean {
+    const segments = pathValue.split(/[\\/]+/).filter(Boolean)
+    if (segments.length !== 2) return false
+    if (AUTO_PATH_ROOT_SEGMENTS.has(segments[0]!.toLowerCase())) return false
+    return segments.every((segment) => /^[A-Za-z]+$/.test(segment))
+}
+
+export type MarkdownPackageReference = {
+    specifier: string
+    packageName: string
+    href: string
+}
+
+export function resolveMarkdownPackageReference(value: string): MarkdownPackageReference | null {
+    const specifier = String(value || '').trim()
+    if (!specifier || specifier.includes('\n') || /\s/.test(specifier)) return null
+    const match = specifier.match(SCOPED_PACKAGE_REFERENCE_PATTERN)
+    const packageName = match?.[1]
+    if (!packageName) return null
+    return {
+        specifier,
+        packageName,
+        href: `https://www.npmjs.com/package/${packageName}`
+    }
+}
+
 export function hasActiveTextSelection(): boolean {
     if (typeof window === 'undefined') return false
     const selection = window.getSelection()
@@ -58,7 +93,12 @@ export function hasActiveTextSelection(): boolean {
 export function looksLikeMarkdownFileReference(value: string): boolean {
     const trimmed = String(value || '').trim()
     if (!trimmed || trimmed.includes('\n') || /\s/.test(trimmed) || trimmed.startsWith('#')) return false
+    if (resolveMarkdownPackageReference(trimmed)) return false
     const decodedTrimmed = safeDecode(trimmed)
+    if (/^\.[^\\/]+$/.test(decodedTrimmed)) {
+        const normalizedDotfile = decodedTrimmed.toLowerCase()
+        return STANDALONE_DOTFILES.has(normalizedDotfile) || normalizedDotfile.startsWith('.env.')
+    }
     const isWindowsPath = WINDOWS_ABSOLUTE_PATH_PATTERN.test(decodedTrimmed)
         || WINDOWS_UNC_PATH_PATTERN.test(decodedTrimmed)
         || WINDOWS_ENCODED_ABSOLUTE_PATH_PATTERN.test(trimmed)
@@ -75,5 +115,6 @@ export function looksLikeMarkdownFileReference(value: string): boolean {
             || POSIX_FILESYSTEM_ROOTS.some((prefix) => candidate.startsWith(prefix))
             || hasKnownFileExtension(candidate)
     }
+    if (isAmbiguousBareSlashPair(candidate)) return false
     return /[\\/]/.test(candidate) || hasKnownFileExtension(candidate)
 }

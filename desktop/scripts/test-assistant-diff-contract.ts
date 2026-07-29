@@ -1,7 +1,189 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import type { AssistantActivity } from '../src/shared/assistant/contracts'
+import { existsSync, readFileSync } from 'node:fs'
+import type { AssistantActivity, AssistantMessage, AssistantReviewIndex, AssistantSessionTurnUsageEntry } from '../src/shared/assistant/contracts'
+import { buildAssistantDiffTurns } from '../src/renderer/src/pages/assistant/assistant-diff-turns'
+import { mergeAssistantReviewIndex } from '../src/renderer/src/pages/assistant/assistant-review-index'
 import { resolveAssistantDiffTarget, type AssistantDiffTarget } from '../src/renderer/src/pages/assistant/assistant-diff-types'
+import {
+    activateAssistantTerminalSession,
+    addAssistantTerminalSession,
+    ASSISTANT_TERMINALS_PER_GROUP_LIMIT,
+    createEmptyAssistantTerminalWorkspaceState,
+    reconcileAssistantTerminalWorkspaceState,
+    removeAssistantTerminalSession
+} from '../src/renderer/src/pages/assistant/assistant-terminal-workspace-state'
+import { buildAssistantResourceIndex } from '../src/renderer/src/pages/assistant/assistant-resource-index'
+import {
+    isPublicBrowserLinkPreviewAddress,
+    parseBrowserLinkPreviewHtml
+} from '../src/main/ipc/handlers/browser-link-preview'
+import {
+    activateAssistantBrowserTab,
+    addAssistantBrowserTab,
+    ASSISTANT_BROWSER_TAB_LIMIT,
+    closeAssistantBrowserTab,
+    createAssistantBrowserWorkspaceState,
+    normalizeAssistantBrowserFaviconUrl,
+    normalizeAssistantBrowserNavigation,
+    normalizeAssistantBrowserWorkspaceState,
+    setAssistantBrowserLayout
+} from '../src/renderer/src/pages/assistant/assistant-browser-workspace-state'
+
+let terminalWorkspaceState = addAssistantTerminalSession(
+    createEmptyAssistantTerminalWorkspaceState(),
+    [],
+    'terminal-1',
+    'new'
+)
+terminalWorkspaceState = addAssistantTerminalSession(terminalWorkspaceState, ['terminal-1'], 'terminal-2', 'split', 'horizontal')
+assert.deepEqual(terminalWorkspaceState.groups[0]?.terminalIds, ['terminal-1', 'terminal-2'], 'horizontal split joins the active terminal group')
+terminalWorkspaceState = addAssistantTerminalSession(terminalWorkspaceState, ['terminal-1', 'terminal-2'], 'terminal-3', 'new')
+assert.equal(terminalWorkspaceState.groups.length, 2, 'New Terminal creates a separate group')
+terminalWorkspaceState = activateAssistantTerminalSession(terminalWorkspaceState, 'terminal-1')
+terminalWorkspaceState = addAssistantTerminalSession(terminalWorkspaceState, ['terminal-1', 'terminal-2', 'terminal-3'], 'terminal-4', 'split', 'vertical')
+assert.equal(terminalWorkspaceState.groups[0]?.splitDirection, 'vertical', 'vertical split changes only the active group layout')
+assert.equal(terminalWorkspaceState.activeTerminalId, 'terminal-4', 'a new split receives keyboard focus intent')
+terminalWorkspaceState = removeAssistantTerminalSession(terminalWorkspaceState, 'terminal-4')
+assert.equal(terminalWorkspaceState.groups.flatMap((group) => group.terminalIds).includes('terminal-4'), false, 'closed terminals leave persisted groups')
+const reconciledTerminalWorkspace = reconcileAssistantTerminalWorkspaceState(terminalWorkspaceState, ['terminal-2', 'terminal-3'])
+assert.deepEqual(reconciledTerminalWorkspace.groups.flatMap((group) => group.terminalIds).sort(), ['terminal-2', 'terminal-3'], 'server session metadata removes stale persisted terminal IDs')
+let limitState = addAssistantTerminalSession(createEmptyAssistantTerminalWorkspaceState(), [], 'limit-1', 'new')
+for (let index = 2; index <= ASSISTANT_TERMINALS_PER_GROUP_LIMIT; index += 1) {
+    const existingIds = limitState.groups.flatMap((group) => group.terminalIds)
+    limitState = addAssistantTerminalSession(limitState, existingIds, `limit-${index}`, 'split')
+}
+const atLimitIds = limitState.groups.flatMap((group) => group.terminalIds)
+const rejectedSplitState = addAssistantTerminalSession(limitState, atLimitIds, 'limit-overflow', 'split')
+assert.equal(rejectedSplitState.groups[0]?.terminalIds.length, ASSISTANT_TERMINALS_PER_GROUP_LIMIT, 'split groups enforce the tested pane limit')
+
+assert.deepEqual(normalizeAssistantBrowserNavigation('localhost:5173/app'), { success: true, url: 'http://localhost:5173/app' }, 'schemeless localhost uses HTTP')
+assert.deepEqual(normalizeAssistantBrowserNavigation('example.com'), { success: true, url: 'https://example.com/' }, 'public hostnames default to HTTPS')
+assert.equal(normalizeAssistantBrowserNavigation('browser preview architecture').success, true, 'plain text becomes a browser search')
+assert.equal(normalizeAssistantBrowserNavigation('javascript:alert(1)').success, false, 'script URLs are rejected before reaching Chromium')
+assert.equal(normalizeAssistantBrowserNavigation('file:///C:/private.txt').success, false, 'browser tabs cannot escape into local file URLs')
+assert.equal(normalizeAssistantBrowserFaviconUrl('https://example.com/favicon.ico'), 'https://example.com/favicon.ico', 'page favicon URLs accept bounded HTTP(S) sources')
+assert.equal(normalizeAssistantBrowserFaviconUrl('javascript:alert(1)'), null, 'page favicon URLs reject active-content schemes')
+assert.equal(normalizeAssistantBrowserFaviconUrl('data:image/svg+xml,<svg/>'), null, 'page favicon data rejects script-capable SVG')
+assert.equal(normalizeAssistantBrowserFaviconUrl(`https://example.com/${'x'.repeat(9000)}`), null, 'page favicon metadata has a strict persistence bound')
+let browserWorkspaceState = createAssistantBrowserWorkspaceState('browser:0')
+for (let index = 1; index <= ASSISTANT_BROWSER_TAB_LIMIT; index += 1) {
+    browserWorkspaceState = addAssistantBrowserTab(browserWorkspaceState, `browser:${index}`)
+}
+assert.equal(browserWorkspaceState.tabs.length, ASSISTANT_BROWSER_TAB_LIMIT, 'browser workspaces enforce the tested tab limit')
+const activeBrowserTabId = browserWorkspaceState.activeTabId
+browserWorkspaceState = closeAssistantBrowserTab(browserWorkspaceState, activeBrowserTabId, 'browser:replacement')
+assert.equal(browserWorkspaceState.tabs.some((tab) => tab.id === activeBrowserTabId), false, 'closed browser tabs release their persisted metadata')
+assert.equal(browserWorkspaceState.tabs.some((tab) => tab.id === browserWorkspaceState.activeTabId), true, 'closing the active browser tab selects a real neighbor')
+let splitBrowserState = createAssistantBrowserWorkspaceState('browser:primary')
+splitBrowserState = addAssistantBrowserTab(splitBrowserState, 'browser:secondary')
+splitBrowserState = setAssistantBrowserLayout(splitBrowserState, 'browser:primary', 'browser:secondary')
+assert.deepEqual([splitBrowserState.activeTabId, splitBrowserState.splitTabId], ['browser:primary', 'browser:secondary'], 'Browser split layout retains explicit primary and secondary tabs')
+splitBrowserState = activateAssistantBrowserTab(splitBrowserState, 'browser:secondary')
+assert.deepEqual([splitBrowserState.activeTabId, splitBrowserState.splitTabId], ['browser:secondary', 'browser:primary'], 'selecting the secondary pane swaps focus without destroying the split')
+splitBrowserState = closeAssistantBrowserTab(splitBrowserState, 'browser:secondary', 'browser:replacement')
+assert.equal(splitBrowserState.activeTabId, 'browser:primary', 'closing the primary split pane promotes the retained secondary tab')
+assert.equal(splitBrowserState.splitTabId, null, 'closing either visible split pane safely collapses the layout')
+const sanitizedBrowserState = normalizeAssistantBrowserWorkspaceState({
+    activeTabId: 'unsafe',
+    tabs: [
+        { id: 'safe', url: 'http://localhost:3000/', title: 'Local', faviconUrl: 'http://localhost:3000/favicon.ico' },
+        { id: 'unsafe', url: 'javascript:alert(1)', title: 'Unsafe', faviconUrl: 'javascript:alert(2)' }
+    ],
+    splitTabId: 'unsafe'
+})
+assert.equal(sanitizedBrowserState.tabs.find((tab) => tab.id === 'unsafe')?.url, '', 'unsafe persisted URLs reopen as blank tabs')
+assert.equal(sanitizedBrowserState.tabs.every((tab) => tab.status === 'idle'), true, 'restored tabs wait for their live webviews to report status')
+assert.equal(sanitizedBrowserState.tabs.every((tab) => tab.audible === false), true, 'stale audio indicators never survive a webview remount')
+assert.equal(sanitizedBrowserState.tabs.find((tab) => tab.id === 'safe')?.faviconUrl, 'http://localhost:3000/favicon.ico', 'safe page favicons survive workspace restoration')
+assert.equal(sanitizedBrowserState.tabs.find((tab) => tab.id === 'unsafe')?.faviconUrl, null, 'unsafe persisted favicon sources are discarded')
+assert.equal(sanitizedBrowserState.splitTabId, null, 'a persisted split cannot point at the active or missing Browser tab')
+assert.equal(isPublicBrowserLinkPreviewAddress('127.0.0.1'), false, 'website metadata cannot reach IPv4 loopback services')
+assert.equal(isPublicBrowserLinkPreviewAddress('192.168.1.4'), false, 'website metadata cannot reach private LAN services')
+assert.equal(isPublicBrowserLinkPreviewAddress('::1'), false, 'website metadata cannot reach IPv6 loopback services')
+assert.equal(isPublicBrowserLinkPreviewAddress('93.184.216.34'), true, 'public website addresses remain eligible for metadata')
+const parsedLinkPreview = parseBrowserLinkPreviewHtml(`
+    <html><head>
+        <meta content="Example &amp; Preview" property="og:title">
+        <meta name="description" content="A useful site preview.">
+        <meta property="og:image" content="/social-card.png">
+        <meta property="og:site_name" content="Example Site">
+    </head></html>
+`, 'https://example.com/docs')
+assert.equal(parsedLinkPreview.title, 'Example & Preview', 'Open Graph titles decode safe HTML entities')
+assert.equal(parsedLinkPreview.description, 'A useful site preview.', 'description metadata becomes link-card copy')
+assert.equal(parsedLinkPreview.imageUrl, 'https://example.com/social-card.png', 'relative Open Graph images resolve against the final page URL')
+assert.equal(parsedLinkPreview.siteName, 'Example Site', 'site names remain available to visual cards')
+
+const resourceDiffTarget: AssistantDiffTarget = {
+    activityId: 'resource-change',
+    turnId: 'resource-turn',
+    filePath: 'assets/preview.png',
+    displayPath: '/assets/preview.png',
+    patch: '--- a/assets/preview.png\n+++ b/assets/preview.png',
+    isNew: true,
+    changeKind: 'add'
+}
+const resourceIndex = buildAssistantResourceIndex({
+    projectPath: 'C:\\project',
+    turns: [{
+        id: 'resource-turn',
+        number: 7,
+        prompt: 'Use `src/app.ts`, [the docs](docs/readme.md), ![Preview](assets/preview.png), `@scope/pkg/react`, and https://example.com/docs.',
+        promptAttachments: [
+            { id: 'docs', name: 'readme.md', displayName: 'readme.md', type: 'FILE', path: 'C:\\project\\docs\\readme.md', mime: 'text/markdown', size: '20', preview: null, note: null, origin: null, content: null, isClipboard: false },
+            { id: 'image', name: 'photo.jpg', displayName: 'photo.jpg', type: 'IMAGE', path: 'C:\\project\\assets\\photo.jpg', mime: 'image/jpeg', size: '120', preview: null, note: null, origin: null, content: null, isClipboard: false },
+            { id: 'paste', name: 'Pasted text', displayName: 'Pasted text', type: 'TEXT', path: 'clipboard://paste.txt', mime: 'text/plain', size: '12', preview: 'hello', note: null, origin: 'pasted from clipboard', content: 'hello', isClipboard: true },
+            { id: 'pasted-image', name: 'Pasted image', displayName: 'Pasted image', type: 'IMAGE', path: 'clipboard://image.png', mime: 'image/png', size: '32', preview: null, note: null, origin: 'pasted from clipboard', content: 'data:image/png;base64,AAAA', isClipboard: true }
+        ],
+        response: 'Created `assets/preview.png`. Read https://example.com/docs again. ![Remote](https://cdn.example.com/render?id=7). [Unsafe](javascript:alert(1)).',
+        historyUnavailable: false,
+        detailLoaded: true,
+        searchText: '',
+        createdAt: '2026-07-20T12:00:00.000Z',
+        updatedAt: '2026-07-20T12:01:00.000Z',
+        files: [{ target: resourceDiffTarget, additions: 4, deletions: 0 }],
+        changes: [{ target: resourceDiffTarget, additions: 4, deletions: 0 }],
+        additions: 4,
+        deletions: 0
+    }]
+})
+const generatedResource = resourceIndex.resources.find((resource) => resource.path?.replace(/\\/g, '/').endsWith('/assets/preview.png'))
+assert.equal(generatedResource?.kind, 'image', 'generated image files become visual Resources')
+assert.equal(generatedResource?.sources.includes('generated'), true, 'generated image provenance remains available on its card')
+assert.equal(generatedResource?.sources.includes('mentioned'), true, 'image mentions merge into their canonical generated-image Resource')
+assert.equal(generatedResource?.latestDiffTarget?.activityId, 'resource-change', 'changed images keep their exact Review target')
+assert.equal(resourceIndex.resources.some((resource) => resource.path?.replace(/\\/g, '/').endsWith('/src/app.ts')), false, 'code files stay out of Resources')
+assert.equal(resourceIndex.resources.some((resource) => resource.path?.replace(/\\/g, '/').endsWith('/docs/readme.md')), false, 'non-image documents stay out of Resources')
+const attachedImageResource = resourceIndex.resources.find((resource) => resource.path?.replace(/\\/g, '/').endsWith('/assets/photo.jpg'))
+assert.equal(attachedImageResource?.sources.includes('attached'), true, 'attached local images keep their attachment origin')
+assert.equal(resourceIndex.resources.filter((resource) => resource.url === 'https://example.com/docs').length, 1, 'repeated web links deduplicate by normalized URL')
+assert.equal(resourceIndex.resources.some((resource) => resource.url === 'https://www.npmjs.com/package/@scope/pkg'), true, 'package references become their safe link card')
+assert.equal(resourceIndex.resources.some((resource) => resource.url === 'https://cdn.example.com/render?id=7' && resource.kind === 'image'), true, 'Markdown image syntax creates an image card even without a file extension')
+assert.equal(resourceIndex.resources.some((resource) => resource.kind === 'image' && resource.attachment?.isClipboard), true, 'clipboard images remain visual Resources')
+assert.equal(resourceIndex.resources.some((resource) => resource.attachment?.type === 'TEXT'), false, 'pasted text stays out of the image-and-link shelf')
+assert.equal(resourceIndex.resources.some((resource) => resource.url?.startsWith('javascript:')), false, 'unsafe link schemes never enter Resources')
+const posixCaseResourceIndex = buildAssistantResourceIndex({
+    projectPath: '/project',
+    turns: [{
+        id: 'posix-case',
+        number: 1,
+        prompt: '',
+        promptAttachments: [],
+        response: '',
+        historyUnavailable: false,
+        searchText: '',
+        createdAt: '2026-07-20T12:00:00.000Z',
+        updatedAt: '2026-07-20T12:00:00.000Z',
+        files: [],
+        additions: 0,
+        deletions: 0,
+        changes: [
+            { target: { ...resourceDiffTarget, activityId: 'upper', filePath: '/project/Foo.png' }, additions: 1, deletions: 0 },
+            { target: { ...resourceDiffTarget, activityId: 'lower', filePath: '/project/foo.png' }, additions: 1, deletions: 0 }
+        ]
+    }]
+})
+assert.equal(posixCaseResourceIndex.resources.filter((resource) => resource.kind === 'image').length, 2, 'POSIX image identities remain case-sensitive')
 
 const previewPatch = '--- a/src/live.ts\n+++ b/src/live.ts\n@@ -1 +1 @@\n-old\n+preview\n'
 const resultPatch = '--- a/src/live.ts\n+++ b/src/live.ts\n@@ -1 +1 @@\n-old\n+final\n'
@@ -47,11 +229,195 @@ const completedActivity: AssistantActivity = {
         changes: [{ path: target.filePath, kind: 'update', diff: resultPatch }]
     }
 }
+const earlierSuccessfulActivity: AssistantActivity = {
+    ...completedActivity,
+    id: 'earlier-successful-file-edit',
+    createdAt: '2026-07-11T09:59:59.500Z',
+    payload: {
+        ...completedActivity.payload,
+        patch: previewPatch,
+        changes: [{ path: target.filePath, kind: 'update', diff: previewPatch }]
+    }
+}
+const failedActivity: AssistantActivity = {
+    ...runningActivity,
+    id: 'failed-file-edit',
+    tone: 'error',
+    createdAt: '2026-07-11T10:00:00.500Z',
+    payload: {
+        ...runningActivity.payload,
+        status: 'failed',
+        authoritative: false,
+        output: 'The requested old text was not unique.',
+        patch: resultPatch,
+        paths: ['src/failed.ts']
+    }
+}
+
 const refreshedTarget = resolveAssistantDiffTarget(target, completedActivity)
 assert.equal(refreshedTarget.activityId, target.activityId)
 assert.equal(refreshedTarget.filePath, target.filePath)
 assert.match(refreshedTarget.patch, /\+final/, 'an open diff selection must consume the latest activity patch')
 assert.equal(refreshedTarget.provisional, false, 'authoritative completion removes the live-preview state')
+
+const promptMessage: AssistantMessage = {
+    id: 'prompt-live',
+    role: 'user',
+    text: 'Tighten the assistant diff sidebar without showing every turn at once.\n\nAttached files (1):\n1. review-layout.png [IMAGE]\nref: clipboard://review-layout-image\nmime: image/png\nsize: 2048 bytes\norigin: pasted from clipboard; treat this as inline context only',
+    turnId: 'turn-live',
+    streaming: false,
+    createdAt: '2026-07-11T09:59:59.000Z',
+    updatedAt: '2026-07-11T09:59:59.000Z'
+}
+const responseMessage: AssistantMessage = {
+    id: 'response-live',
+    role: 'assistant',
+    text: '## Result\n\n- The sidebar now keeps one selected file diff mounted.',
+    turnId: 'turn-live',
+    streaming: false,
+    createdAt: '2026-07-11T10:00:01.000Z',
+    updatedAt: '2026-07-11T10:00:01.000Z'
+}
+const noChangePrompt: AssistantMessage = {
+    id: 'prompt-no-change',
+    role: 'user',
+    text: 'Explain the current review layout.',
+    turnId: 'turn-no-change',
+    streaming: false,
+    createdAt: '2026-07-11T10:01:00.000Z',
+    updatedAt: '2026-07-11T10:01:00.000Z'
+}
+const noChangeResponse: AssistantMessage = {
+    id: 'response-no-change',
+    role: 'assistant',
+    text: 'It has a searchable landing page and a dedicated turn view.',
+    turnId: 'turn-no-change',
+    streaming: false,
+    createdAt: '2026-07-11T10:01:01.000Z',
+    updatedAt: '2026-07-11T10:01:01.000Z'
+}
+const legacyPrompt: AssistantMessage = {
+    id: 'prompt-legacy',
+    role: 'user',
+    text: 'Review this legacy turn too.',
+    turnId: null,
+    streaming: false,
+    createdAt: '2026-07-11T10:02:00.000Z',
+    updatedAt: '2026-07-11T10:02:00.000Z'
+}
+const legacyResponse: AssistantMessage = {
+    id: 'response-legacy',
+    role: 'assistant',
+    text: 'The legacy prompt was matched through its following response.',
+    turnId: 'turn-legacy',
+    streaming: false,
+    createdAt: '2026-07-11T10:02:01.000Z',
+    updatedAt: '2026-07-11T10:02:01.000Z'
+}
+const persistedTurns: AssistantSessionTurnUsageEntry[] = [
+    {
+        id: 'turn-before-history',
+        sessionId: 'session-review',
+        threadId: 'thread-review',
+        model: 'test-model',
+        state: 'completed',
+        requestedAt: '2026-07-11T09:00:00.000Z',
+        startedAt: '2026-07-11T09:00:00.100Z',
+        completedAt: '2026-07-11T09:00:01.000Z',
+        assistantMessageId: null,
+        usage: null,
+        updatedAt: '2026-07-11T09:00:01.000Z'
+    },
+    ...[
+        ['turn-live', promptMessage.createdAt],
+        ['turn-no-change', noChangePrompt.createdAt],
+        ['turn-legacy', legacyPrompt.createdAt]
+    ].map(([id, requestedAt]): AssistantSessionTurnUsageEntry => ({
+        id,
+        sessionId: 'session-review',
+        threadId: 'thread-review',
+        model: 'test-model',
+        state: 'completed',
+        requestedAt,
+        startedAt: requestedAt,
+        completedAt: requestedAt,
+        assistantMessageId: null,
+        usage: null,
+        updatedAt: requestedAt
+    }))
+]
+const diffTurns = buildAssistantDiffTurns({
+    messages: [promptMessage, responseMessage, noChangePrompt, noChangeResponse, legacyPrompt, legacyResponse],
+    activities: [completedActivity, earlierSuccessfulActivity, failedActivity],
+    turns: persistedTurns,
+    projectRootPath: 'C:/project'
+})
+assert.equal(diffTurns.length, 4, 'the review index includes every persisted ledger turn, even when its message rows are unavailable')
+assert.equal(diffTurns.find((turn) => turn.id === 'turn-before-history')?.historyUnavailable, true, 'ledger-only turns remain visible with an honest unavailable-history state')
+assert.equal(diffTurns.find((turn) => turn.id === 'turn-before-history')?.number, 1, 'ledger-only turns retain their stable persisted ordinal')
+const changedTurn = diffTurns.find((turn) => turn.id === 'turn-live')
+assert.equal(changedTurn?.files.length, 1, 'the compact Changed files rail keeps one row per path')
+assert.equal(changedTurn?.changes.length, 2, 'every successful file-change activity remains available within its turn')
+assert.deepEqual(changedTurn?.changes.map((change) => change.target.activityId), [
+    earlierSuccessfulActivity.id,
+    completedActivity.id
+], 'recorded turn changes retain chronological activity identity')
+assert.equal(changedTurn?.files[0]?.target.activityId, completedActivity.id, 'normal file navigation still targets the latest edit for that path')
+assert.equal(changedTurn?.files[0]?.additions, 2, 'the compact file row totals additions across recorded edits')
+assert.equal(changedTurn?.files[0]?.deletions, 2, 'the compact file row totals deletions across recorded edits')
+assert.equal(changedTurn?.number, 2, 'Review uses the persisted thread turn ledger rather than visible message position')
+assert.equal(changedTurn?.files[0]?.target.filePath, 'src/live.ts')
+assert.match(changedTurn?.prompt || '', /Tighten the assistant diff sidebar/)
+assert.equal(changedTurn?.prompt.includes('Attached files'), false, 'Review strips serialized attachment metadata from visible prompt text')
+assert.equal(changedTurn?.promptAttachments.length, 1, 'Review retains parsed prompt attachments alongside the turn')
+assert.equal(changedTurn?.promptAttachments[0]?.displayName, 'Pasted image', 'clipboard image attachments keep their user-facing display label')
+assert.match(changedTurn?.response || '', /one selected file diff/)
+assert.match(changedTurn?.response || '', /^## Result\n\n- /, 'agent Markdown formatting remains intact for the turn context renderer')
+assert.match(changedTurn?.searchText || '', /turn 2/, 'the persisted turn number is indexed for Review search')
+assert.match(changedTurn?.searchText || '', /src\/live\.ts/, 'edited paths are included in the Review search index')
+assert.match(changedTurn?.searchText || '', /tighten the assistant/, 'user prompts are included in the Review search index')
+assert.equal(diffTurns.find((turn) => turn.id === 'turn-no-change')?.files.length, 0, 'unchanged turns remain filterable review rows')
+assert.equal(diffTurns.find((turn) => turn.id === 'turn-legacy')?.prompt, legacyPrompt.text, 'legacy null-turn prompts infer their turn from the following response')
+
+const inFlightPrompt: AssistantMessage = {
+    id: 'prompt-in-flight',
+    role: 'user',
+    text: 'Keep one Review row while this prompt starts.',
+    turnId: null,
+    streaming: false,
+    createdAt: '2026-07-11T10:03:00.000Z',
+    updatedAt: '2026-07-11T10:03:00.000Z'
+}
+const provisionalInFlightTurns = buildAssistantDiffTurns({ messages: [inFlightPrompt], activities: [] })
+assert.equal(provisionalInFlightTurns[0]?.id, `message:${inFlightPrompt.id}`, 'an immediate prompt uses a provisional Review identity until the runtime returns its turn id')
+const canonicalInFlightIndex: AssistantReviewIndex = {
+    threadId: 'thread-review',
+    totalTurns: 1,
+    turns: [{
+        id: 'turn-in-flight',
+        number: 5,
+        state: 'running',
+        prompt: {
+            id: inFlightPrompt.id,
+            text: inFlightPrompt.text,
+            truncated: false,
+            createdAt: inFlightPrompt.createdAt,
+            updatedAt: inFlightPrompt.updatedAt
+        },
+        response: null,
+        agentLabel: 'Agent',
+        requestedAt: inFlightPrompt.createdAt,
+        updatedAt: inFlightPrompt.updatedAt,
+        changes: []
+    }]
+}
+const reconciledInFlightTurns = mergeAssistantReviewIndex({
+    index: canonicalInFlightIndex,
+    detailedTurns: provisionalInFlightTurns
+})
+assert.equal(reconciledInFlightTurns.length, 1, 'a newly sent prompt cannot render both provisional and canonical Review rows')
+assert.equal(reconciledInFlightTurns[0]?.id, 'turn-in-flight', 'the reconciled Review row keeps the runtime turn id')
+assert.equal(reconciledInFlightTurns[0]?.prompt, inFlightPrompt.text, 'the canonical row retains the immediate live prompt detail')
 
 const legacyActivity: AssistantActivity = {
     ...completedActivity,
@@ -66,13 +432,451 @@ const legacyTarget = resolveAssistantDiffTarget({ ...target, activityId: legacyA
 assert.match(legacyTarget.patch, /^diff --git a\/src\/live\.ts b\/src\/live\.ts/, 'legacy patch/path-only activities remain selectable')
 
 const pageSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantPage.tsx', import.meta.url), 'utf8')
+const timelineToolCardSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimelineToolCallCard.tsx', import.meta.url), 'utf8')
+const diffTypesSource = readFileSync(new URL('../src/renderer/src/pages/assistant/assistant-diff-types.ts', import.meta.url), 'utf8')
+const diffTurnsSource = readFileSync(new URL('../src/renderer/src/pages/assistant/assistant-diff-turns.ts', import.meta.url), 'utf8')
 assert.equal(pageSource.includes('onViewDiff={handleViewDiff}'), true, 'mounted conversation pane must receive a real diff callback')
-assert.equal(pageSource.includes('<AssistantDiffPanel'), true, 'the existing diff panel must be mounted in AssistantPage')
-assert.equal(pageSource.includes('resolveAssistantDiffTarget(selectedDiffTarget, selectedDiffActivity)'), true, 'open selection must refresh from live store activity state')
+assert.equal(pageSource.includes('setDiffRevealRequest(turnId ? { id: diffRevealSequenceRef.current++, turnId } : null)'), true, 'chat timeline diff clicks create a one-shot exact-file reveal request')
+assert.equal(pageSource.includes('onSelectDiff={handleSelectInspectorDiff}'), true, 'Inspector file selection does not masquerade as a new chat deep link')
+assert.equal(pageSource.includes('<AssistantDiffPanel'), true, 'the changes inspector must be mounted in AssistantPage')
+assert.equal(pageSource.includes('mergeAssistantReviewIndex({'), true, 'Review rows come from the complete persisted index rather than the loaded chat page')
+assert.equal(pageSource.includes('assistant.getTurnDetail({ threadId, turnId })'), true, 'opening an index row fetches only that turn’s complete detail')
+assert.equal(pageSource.includes('useAssistantReviewIndex'), true, 'Review loads its dedicated lightweight persisted index')
+assert.equal(pageSource.includes('resolveAssistantDiffTarget(effectiveDiffTarget, effectiveDiffActivity)'), true, 'open selection must refresh from live store activity state')
+assert.equal(pageSource.includes('targetTurnId === selectedDiffTurn.id'), true, 'a chat deep link keeps its exact historical activity even when Review indexes a later edit to the same path')
+assert.equal(diffTypesSource.includes('getActivityPatch(activity) || selected.patch'), true, 'chat and Inspector refresh use the same canonical activity patch resolver')
+assert.equal(diffTurnsSource.includes("readActivityStatus(activity) !== 'failed'"), true, 'failed writes never enter applied Review changes')
+assert.equal(timelineToolCardSource.includes('Write failed'), true, 'expanded failed writes show their failure output in chat')
+assert.equal(timelineToolCardSource.includes("status !== 'failed' && patch"), true, 'failed attempted writes cannot open as applied sidebar diffs')
+assert.equal(pageSource.includes("setRightPanelMode('review')"), true, 'opening a timeline diff reveals the review workspace')
+assert.equal(pageSource.includes('assistantInspectorLayout'), false, 'timeline diff routing cannot fall back to a legacy layout preference')
+assert.equal(pageSource.includes('AssistantClassicDiffPanel'), false, 'AssistantPage no longer mounts the retired classic diff panel')
+assert.equal(
+    existsSync(new URL('../src/renderer/src/pages/assistant/AssistantClassicDiffPanel.tsx', import.meta.url)),
+    false,
+    'the retired classic diff panel source stays deleted'
+)
+assert.equal(pageSource.includes('paneLayout.autoCollapseLeftSidebar'), true, 'the left rail collapses when the panes would violate the minimum chat width')
+assert.equal(pageSource.includes('maxWidth={paneLayout.maxInspectorWidth}'), true, 'Inspector resizing reserves the minimum chat width during the drag')
+assert.equal(pageSource.includes('autoCollapsedLeftSidebarRef.current'), true, 'the left rail restores only when the pane layout collapsed it')
 assert.equal(pageSource.includes('onViewDiff={undefined}'), false)
 
 const panelSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantDiffPanel.tsx', import.meta.url), 'utf8')
-assert.equal(panelSource.includes('Live preview'), true)
-assert.equal(panelSource.includes('selectedDiff?.provisional'), true)
+const inspectorSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantInspectorSidebar.tsx', import.meta.url), 'utf8')
+const landingSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantReviewLanding.tsx', import.meta.url), 'utf8')
+const reviewIndexSource = readFileSync(new URL('../src/renderer/src/pages/assistant/assistant-review-index.ts', import.meta.url), 'utf8')
+const persistenceHistorySource = readFileSync(new URL('../src/main/assistant/persistence-history.ts', import.meta.url), 'utf8')
+const newTabSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantInspectorNewTab.tsx', import.meta.url), 'utf8')
+const explorerWorkspaceSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantExplorerWorkspace.tsx', import.meta.url), 'utf8')
+const terminalWorkspaceSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTerminalWorkspace.tsx', import.meta.url), 'utf8')
+const terminalViewportSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTerminalViewport.tsx', import.meta.url), 'utf8')
+const terminalRuntimeSource = readFileSync(new URL('../src/renderer/src/components/ui/file-preview/previewTerminalRuntime.ts', import.meta.url), 'utf8')
+const previewTerminalHandlerSource = readFileSync(new URL('../src/main/ipc/handlers/preview-terminal-handlers.ts', import.meta.url), 'utf8')
+const browserWorkspaceSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantBrowserWorkspace.tsx', import.meta.url), 'utf8')
+const browserPageIconSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantBrowserPageIcon.tsx', import.meta.url), 'utf8')
+const resourcesWorkspaceSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantResourcesWorkspace.tsx', import.meta.url), 'utf8')
+const resourceIndexSource = readFileSync(new URL('../src/renderer/src/pages/assistant/assistant-resource-index.ts', import.meta.url), 'utf8')
+const browserWebviewSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantBrowserWebview.tsx', import.meta.url), 'utf8')
+const browserPreviewHandlerSource = readFileSync(new URL('../src/main/ipc/handlers/browser-preview-handlers.ts', import.meta.url), 'utf8')
+const browserLinkPreviewSource = readFileSync(new URL('../src/main/ipc/handlers/browser-link-preview.ts', import.meta.url), 'utf8')
+const assistantLinkPreviewCacheSource = readFileSync(new URL('../src/renderer/src/pages/assistant/assistant-link-preview-cache.ts', import.meta.url), 'utf8')
+const desktopMainSource = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8')
+const ipcHandlersSource = readFileSync(new URL('../src/main/ipc/handlers.ts', import.meta.url), 'utf8')
+const projectsPreloadSource = readFileSync(new URL('../src/preload/adapters/projects-adapter.ts', import.meta.url), 'utf8')
+const devscopeApiSource = readFileSync(new URL('../src/shared/contracts/devscope-api.ts', import.meta.url), 'utf8')
+assert.equal(landingSource.includes('assistant.searchTurns({ threadId, query: normalizedQuery })'), true, 'Review search queries persisted unloaded turn text and path metadata')
+const turnReviewSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTurnReview.tsx', import.meta.url), 'utf8')
+const reviewPromptAttachmentsSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantReviewPromptAttachments.tsx', import.meta.url), 'utf8')
+const patchDiffViewerSource = readFileSync(new URL('../src/renderer/src/components/ui/diff-viewer/PatchDiffViewer.tsx', import.meta.url), 'utf8')
+const rawPatchFallbackSource = readFileSync(new URL('../src/renderer/src/components/ui/diff-viewer/RawPatchFallback.tsx', import.meta.url), 'utf8')
+const sidebarStateSource = readFileSync(new URL('../src/renderer/src/pages/assistant/useAssistantPageSidebarState.ts', import.meta.url), 'utf8')
+const composerSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantComposerView.tsx', import.meta.url), 'utf8')
+const rendererCssSource = readFileSync(new URL('../src/renderer/src/index.css', import.meta.url), 'utf8')
+assert.equal(rendererCssSource.includes("@import 'xterm/css/xterm.css'"), true, 'xterm receives its required viewport, selection, and helper-textarea styles')
+const timelineSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimeline.tsx', import.meta.url), 'utf8')
+const virtualTimelineSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantVirtualTimeline.tsx', import.meta.url), 'utf8')
+const persistenceWriteSource = readFileSync(new URL('../src/main/assistant/persistence-write.ts', import.meta.url), 'utf8')
+const serviceHistorySource = readFileSync(new URL('../src/main/assistant/service-history.ts', import.meta.url), 'utf8')
+const paneLayoutSource = readFileSync(new URL('../src/renderer/src/pages/assistant/assistant-pane-layout.ts', import.meta.url), 'utf8')
+assert.equal(inspectorSource.includes('Assistant inspector workspace'), true)
+assert.equal(inspectorSource.includes('shadow-[-14px_0_32px_rgba(0,0,0,0.16)]'), false, 'Inspector meets the chat pane at one clean border without a false shadow gap')
+assert.equal(timelineSource.includes('<AssistantVirtualTimeline'), true, 'chat history uses the virtual timeline owner')
+assert.equal(virtualTimelineSource.includes('Retry earlier messages'), true, 'paged history exposes an explicit retry control')
+assert.equal(virtualTimelineSource.includes('ListHeaderComponent={header}'), true, 'the earlier-history control remains in normal list flow')
+assert.equal(persistenceWriteSource.includes("upsertAssistantMessages(db, thread.thread)"), true, 'ordinary message patches merge surviving rows instead of replacing the complete persisted thread')
+assert.equal(persistenceWriteSource.includes("deleteAssistantThreadRowsById(db, 'assistant_messages'"), true, 'history deletion removes only explicitly identified message rows')
+assert.equal(persistenceWriteSource.includes("replaceAssistantMessages(db, thread.thread)"), false, 'ordinary thread updates cannot wholesale replace persisted messages from a partial in-memory snapshot')
+assert.equal(serviceHistorySource.includes('removedMessageIds: removedMessages.map'), true, 'intentional turn deletion carries exact message identities to persistence')
+assert.equal(inspectorSource.includes('Workspace tabs'), true)
+assert.equal(inspectorSource.includes('Resize inspector workspace'), true)
+assert.equal(inspectorSource.includes('transition-[width] duration-[360ms] ease-[cubic-bezier(0.16,1,0.3,1)]'), true, 'Inspector layout makes room with the same smooth entrance curve as the surrounding assistant surface')
+assert.equal(inspectorSource.includes('transform-gpu transition-[transform,opacity] duration-[320ms] ease-[cubic-bezier(0.16,1,0.3,1)]'), true, 'the fixed-width Inspector surface uses compositor-friendly slide and fade motion')
+assert.equal(inspectorSource.includes("open ? 'translate-x-0 opacity-100' : 'translate-x-4 opacity-0'"), true, 'Inspector content enters from the right without fading the width-owning flex shell')
+assert.equal(inspectorSource.includes('motion-reduce:transition-none'), true, 'Inspector entrance respects reduced-motion preferences')
+assert.equal(inspectorSource.includes("resizing ? 'relative w-full' : 'absolute inset-y-0 right-0'"), true, 'the heavy Inspector surface keeps its final width while the outer shell reveals it')
+assert.equal(inspectorSource.includes('style={resizing ? undefined : { width: `${resolvedWidth}px` }}'), true, 'opening the Inspector does not reflow its Review content on every width frame')
+assert.equal(inspectorSource.includes('duration-250'), false, 'the Inspector cannot rely on an undefined Tailwind duration utility')
+assert.equal(paneLayoutSource.includes('ASSISTANT_MAX_INSPECTOR_VIEWPORT_RATIO = 0.75'), true, 'the right workspace can grow to three quarters of the viewport')
+assert.equal(panelSource.includes('<AssistantInspectorSidebar'), true, 'review surfaces render inside the reusable inspector shell')
+assert.equal(turnReviewSource.includes('turn.changes.slice(0, boundedRecordedChangeCount)'), true, 'All changes renders only the current bounded Review batch')
+assert.equal(turnReviewSource.includes('This turn remains in the persisted ledger'), true, 'dedicated ledger-only turns explain why their prompt and response are unavailable')
+assert.equal(turnReviewSource.includes('exactSelectedChange'), true, 'the compact file rail substitutes the exact activity selected from chat')
+assert.equal(turnReviewSource.includes('targetsReferToSameFile(selectedDiff, target)'), true, 'chat-selected paths highlight after canonical path matching')
+assert.equal(turnReviewSource.includes('selectedFileIndex >= boundedVisibleFileCount'), true, 'a deep-linked file remains visible beyond every bounded rail batch')
+assert.equal(turnReviewSource.includes('attachments={turn.promptAttachments}'), true, 'turn context renders the original prompt attachments beneath You')
+assert.equal(reviewPromptAttachmentsSource.includes('resolveClipboardAttachment'), true, 'historical clipboard attachment references resolve through the existing local API')
+assert.equal(reviewPromptAttachmentsSource.includes('<AssistantAttachmentImageCard'), true, 'prompt images render as real lazy image cards')
+assert.equal(reviewPromptAttachmentsSource.includes('<AssistantPastedTextCard'), true, 'pasted text remains represented in Review prompts')
+assert.equal(reviewPromptAttachmentsSource.includes('<AssistantFileAttachmentCard'), true, 'non-image prompt files remain represented in Review prompts')
+assert.equal(turnReviewSource.includes('Edit {number} of {total}'), true, 'each repeated file diff engraves its edit position into the Pierre header')
+assert.equal(turnReviewSource.includes('formatRecordedEditTime(timestamp)'), false, 'the compact first-row controls do not add a detached timestamp strip')
+assert.equal(turnReviewSource.includes('activeFileDiffIndex={activeSelectedFileChangeIndex'), true, 'chat-selected edits still drive exact-section scrolling')
+assert.equal(turnReviewSource.includes('Previous recorded edit'), false, 'stacked histories do not duplicate navigation controls on every row')
+assert.equal(turnReviewSource.includes('>Selected</span>'), false, 'recorded diff headers do not show a redundant Selected badge')
+assert.match(turnReviewSource, /renderRecordedChangeMetadata[\s\S]*?renderCopyPathAction\(change\.target\)[\s\S]*?Edit \{number\} of \{total\}/, 'every recorded row places its own Copy button before Edit x of x')
+assert.equal(turnReviewSource.includes('assistant-turn-review__diff-summary'), true, 'All changes and its controls live in one slim persistent diff bar')
+assert.equal(turnReviewSource.includes('{renderDiffModeToggle()}'), true, 'the diff view toggle moves into the stable diff summary bar')
+assert.equal(turnReviewSource.includes('index === 0 ? renderDiffModeToggle() : null'), false, 'recorded file headers do not duplicate the stable diff view toggle')
+assert.equal(turnReviewSource.includes('parsedRecordedChangeEntries'), true, 'repeated paths are parsed as independent FileDiff entries instead of one ambiguous combined patch')
+assert.equal(turnReviewSource.includes('change.target.activityId'), true, 'each parsed diff keeps its recorded activity identity')
+assert.equal(patchDiffViewerSource.includes('renderFileHeaderMetadata'), true, 'the shared rich viewer supports metadata for each parsed file diff')
+assert.equal(patchDiffViewerSource.includes('data-file-diff-entry={index}'), true, 'parsed file entries expose bounded scroll targets')
+assert.equal(patchDiffViewerSource.includes('if (settledRenderToken !== renderToken) return'), true, 'exact-edit scrolling waits for rich diff rows to finish layout')
+assert.equal(patchDiffViewerSource.includes('absolute right-px top-px'), false, 'per-edit controls are not painted in an early detached overlay')
+assert.equal(patchDiffViewerSource.includes('renderHeaderMetadata={renderFileHeaderMetadata'), true, 'per-edit controls use Pierre’s real header slot and load with the row')
+assert.equal(panelSource.includes('<AssistantReviewLanding'), true, 'Review retains its landing page')
+assert.equal(panelSource.includes('<AssistantInspectorNewTab'), true, 'the Inspector opens on its workspace chooser')
+assert.equal(panelSource.includes("kind: 'new'"), true, 'new workspace tabs remain mounted in shell state')
+assert.equal(panelSource.includes("kind: 'explorer'"), true, 'Explorer participates in the shared closable workspace-tab model')
+assert.equal(panelSource.includes("import('./AssistantExplorerWorkspace')"), true, 'Explorer code loads only after its workspace is selected')
+assert.equal(panelSource.includes('<AssistantExplorerWorkspace'), true, 'the active Explorer tab mounts its project workspace')
+assert.equal(pageSource.includes('projectPath={diffSource.projectRootPath}'), true, 'Explorer receives the selected chat project as its filesystem source of truth')
+assert.equal(pageSource.includes('onOpenPreview={preview.openPreview}'), true, 'Explorer file clicks use the existing preview owner')
+assert.equal(pageSource.includes('onOpenPreviewInNewTab={preview.openPreviewInNewTab}'), true, 'Explorer context actions reuse existing preview tabs')
+assert.equal(explorerWorkspaceSource.includes('<PreviewNavigationSidebar'), true, 'Inspector Explorer reuses the optimized lazy virtual tree and file actions')
+assert.equal(explorerWorkspaceSource.includes('window.devscope.getFileTree'), false, 'Inspector Explorer does not create a duplicate filesystem data path')
+assert.equal(explorerWorkspaceSource.includes('No project attached'), true, 'projectless chats get an honest empty Explorer state')
+assert.equal(panelSource.includes("kind: 'terminal'"), true, 'Terminal participates in the shared closable workspace-tab model')
+assert.equal(panelSource.includes("import('./AssistantTerminalWorkspace')"), true, 'Terminal and xterm code load only after workspace selection')
+assert.equal(panelSource.includes("activeWorkspaceTab?.kind === 'terminal' ? 'flex min-h-0 flex-1' : 'hidden'"), true, 'Terminal stays mounted while other Inspector tabs are active')
+assert.equal(terminalWorkspaceSource.includes('listPreviewTerminalSessions'), true, 'main-process PTY metadata remains the terminal source of truth')
+assert.equal(terminalWorkspaceSource.includes("createTerminal('split', 'horizontal')"), true, 'Terminal exposes horizontal splits')
+assert.equal(terminalWorkspaceSource.includes("createTerminal('split', 'vertical')"), true, 'Terminal exposes vertical splits')
+assert.equal(terminalWorkspaceSource.includes('clearPreviewTerminal'), true, 'Clear removes retained output as well as visible xterm rows')
+assert.equal(terminalWorkspaceSource.includes('restartTerminal'), true, 'exited or broken sessions can restart in place')
+assert.equal(terminalWorkspaceSource.includes('persistAssistantTerminalWorkspaceState'), true, 'per-chat groups and active terminal survive workspace remounts')
+assert.equal(terminalWorkspaceSource.includes('data-terminal-session-group'), true, 'each split layout has a distinct visual group in the Sessions rail')
+assert.equal(terminalWorkspaceSource.includes('data-terminal-group-connector'), true, 'terminals shown together share the requested bracket connector')
+assert.equal(terminalWorkspaceSource.includes('data-terminal-group-branch'), true, 'each terminal entry visibly joins its group bracket')
+assert.equal(terminalWorkspaceSource.includes('rounded-r-[7px]'), false, 'the grouped terminal bracket uses sharp terminal-panel corners')
+assert.equal(terminalWorkspaceSource.includes("'pointer-events-none absolute bottom-3 right-0 top-3 w-px'"), true, 'the group uses one crisp vertical spine rather than overlapping borders')
+assert.equal(terminalWorkspaceSource.includes("'pointer-events-none absolute -right-3 top-1/2 h-px w-3'"), true, 'each entry meets the spine at one square ninety-degree join')
+assert.equal(terminalWorkspaceSource.includes('group/session relative mb-1 flex min-h-6 items-center gap-1 rounded-lg'), false, 'grouped terminal entries remain sharp-cornered')
+assert.equal(terminalWorkspaceSource.includes("group.splitDirection === 'vertical'"), true, 'the grouped rail identifies horizontal and vertical split orientation')
+assert.equal(terminalWorkspaceSource.includes('No project attached'), true, 'projectless chats get an honest empty Terminal state')
+assert.equal(terminalViewportSource.includes('loadPreviewTerminalRuntime'), true, 'Inspector and preview terminals share one lazy xterm runtime')
+assert.equal(terminalViewportSource.includes('ResizeObserver'), true, 'each visible terminal fits and resizes its PTY from real pane geometry')
+assert.equal(terminalViewportSource.includes("event.code === 'Backquote'"), true, 'focused terminal supports the New Terminal shortcut')
+assert.equal(terminalViewportSource.includes("event.code === 'Digit5'"), true, 'focused terminal supports split shortcuts')
+assert.equal(terminalRuntimeSource.includes("import('xterm')"), true, 'xterm remains outside the initial Inspector bundle')
+assert.equal(previewTerminalHandlerSource.includes("type: 'clear'"), true, 'main process broadcasts durable buffer clears to every mounted terminal surface')
+assert.equal(previewTerminalHandlerSource.includes('previewTerminalSessions.get(sessionKey) !== session'), true, 'late events from a restarted or closed PTY cannot affect its replacement')
+assert.equal(previewTerminalHandlerSource.includes('Math.max(10, Math.floor(Number(input?.cols)'), true, 'small split panes can report their real PTY column count')
+assert.equal(previewTerminalHandlerSource.includes('Math.max(4, Math.floor(Number(input?.rows)'), true, 'small vertical splits can report their real PTY row count')
+assert.equal(devscopeApiSource.includes('clearPreviewTerminal'), true, 'clear behavior is part of the typed preload contract')
+assert.equal(panelSource.includes("kind: 'browser'"), true, 'Browser participates in the shared closable workspace-tab model')
+assert.equal(panelSource.includes("import('./AssistantBrowserWorkspace')"), true, 'Browser and webview code load only after workspace selection')
+assert.equal(panelSource.includes("aria-hidden={activeWorkspaceTab?.kind !== 'browser'}"), true, 'inactive Browser workspaces remain mounted but hidden from accessibility')
+assert.equal(panelSource.includes("'pointer-events-none invisible absolute inset-x-0 bottom-0 top-[76px] flex'"), true, 'inactive Browser workspaces retain their webviews without accepting pointer input')
+assert.equal(panelSource.includes("browserAudible ? <Volume2 size={10} aria-label=\"A browser tab is playing audio\" /> : null"), true, 'the outer Browser workspace tab marks retained site audio')
+assert.equal(panelSource.includes('attention: pendingBrowserCount > 0'), true, 'the outer Browser workspace tab marks pending control approval')
+assert.equal(inspectorSource.includes('tab.statusIcon'), true, 'Inspector tabs render workspace status indicators beside their labels')
+assert.equal(browserWorkspaceSource.includes('workspaceState.tabs.map((tab)'), true, 'all browser tabs remain mounted while only one webview is visible')
+assert.equal(browserWorkspaceSource.includes('persistAssistantBrowserWorkspaceState'), true, 'browser tabs and current URLs persist per chat')
+assert.equal(browserWorkspaceSource.includes('getBrowserPreviewConfig()'), true, 'credential configuration no longer sends a chat or project workspace key')
+assert.equal(browserWorkspaceSource.includes('Local Zyra profile'), true, 'Browser identifies its shared local credential scope')
+assert.equal(browserWorkspaceSource.includes('clearBrowserPreviewData()'), true, 'users can explicitly clear the global local profile')
+assert.equal(browserWorkspaceSource.includes('Clear now'), true, 'clearing shared credentials requires a deliberate second click')
+assert.equal(browserWorkspaceSource.includes('getProjectProcesses(normalizedProjectPath)'), true, 'local server suggestions use the selected project process source')
+assert.equal(browserWorkspaceSource.includes('result.activePorts'), false, 'Browser does not present unrelated machine-wide ports as project servers')
+assert.equal(browserWorkspaceSource.includes('openBrowserPreviewExternal'), true, 'the active HTTP page can open through the guarded external-link owner')
+assert.equal(browserWorkspaceSource.includes('workspaceState.tabs.some((tab) => tab.audible)'), true, 'the Browser workspace projects audio from every retained site tab')
+assert.equal(browserWorkspaceSource.includes('tab.audible ? <Volume2'), true, 'the exact site tab shows a speaker while audible')
+assert.equal(browserWorkspaceSource.includes('onAudibleChange(hasAudibleTab)'), true, 'audible site state reaches the outer Inspector tab')
+assert.equal(browserWorkspaceSource.includes('No project attached'), true, 'projectless chats get an honest empty Browser state')
+assert.equal(browserWebviewSource.includes("createElement('webview'"), true, 'real Chromium webviews own compatible app navigation instead of an iframe shortcut')
+assert.equal(browserWebviewSource.includes("createElement('iframe'"), false, 'Browser does not inherit iframe frame-policy limitations')
+assert.equal(browserWebviewSource.includes("addEventListener('did-navigate'"), true, 'live Chromium navigation updates Browser metadata')
+assert.equal(browserWebviewSource.includes("addEventListener('did-start-navigation'"), true, 'top-level Chromium navigation owns Browser loading state')
+assert.equal(browserWebviewSource.includes('navigation.isMainFrame === false || navigation.isInPlace === true'), true, 'subframes and same-document activity cannot restart the page loading indicator')
+assert.equal(browserWebviewSource.includes("addEventListener('did-start-loading'"), false, 'generic webContents loading pulses cannot revive the refresh state after the main page settles')
+assert.equal(browserWebviewSource.includes("addEventListener('did-finish-load'"), true, 'main-frame completion settles the Browser loading state')
+assert.equal(browserWebviewSource.includes("addEventListener('page-favicon-updated'"), true, 'Chromium page favicons enter the retained tab model')
+assert.equal(browserWebviewSource.includes("addEventListener('did-fail-load'"), true, 'main-frame load failures have an explicit state')
+assert.equal(browserWorkspaceSource.includes('<AssistantBrowserPageIcon faviconUrl={tab.faviconUrl}'), true, 'site tabs render their reported favicon instead of a permanent globe')
+assert.equal(browserWorkspaceSource.includes('onActiveFaviconChange(activeTab?.faviconUrl || null)'), true, 'the active site favicon reaches the outer Inspector tab')
+assert.equal(panelSource.includes('<AssistantBrowserPageIcon faviconUrl={browserFaviconUrl}'), true, 'the Browser Inspector tab mirrors its active page favicon')
+assert.equal(browserPageIconSource.includes('referrerPolicy="no-referrer"'), true, 'favicon image requests do not disclose the Zyra renderer URL')
+assert.equal(browserPageIconSource.includes('onError={() => setFailed(true)}'), true, 'broken page favicons fall back without leaving a broken image')
+assert.equal(browserWebviewSource.includes("addEventListener('media-started-playing'"), true, 'Chromium media starts trigger an audio-state check')
+assert.equal(browserWebviewSource.includes("addEventListener('media-paused'"), true, 'Chromium media pauses clear or reconcile the audio mark')
+assert.equal(browserWebviewSource.includes('webview.isCurrentlyAudible()'), true, 'muted video does not create a false site-audio mark')
+assert.equal(browserWebviewSource.includes("visibility: visible ? 'visible' : 'hidden'"), true, 'inactive browser tabs retain their live webview history')
+assert.equal(browserWebviewSource.includes("placement === 'secondary' ? '50%' : 0"), true, 'retained Chromium guests can occupy the secondary Browser pane without remounting')
+assert.equal(browserWorkspaceSource.includes('setAssistantBrowserLayout'), true, 'Browser side-by-side layout is an explicit persisted state transition')
+assert.equal(browserWorkspaceSource.includes('Show two Browser tabs side by side'), true, 'users can enter the two-pane Browser layout directly')
+assert.equal(browserWorkspaceSource.includes('consumedNavigationRequestsRef'), true, 'resource links enter Browser through a bounded one-shot request')
+assert.equal(panelSource.includes("kind: 'resources'"), true, 'Resources participates in the shared closable workspace-tab model')
+assert.equal(panelSource.includes("import('./AssistantResourcesWorkspace')"), true, 'the Resources index and UI load only after workspace selection')
+assert.equal(panelSource.includes("activeWorkspaceTab?.kind === 'resources' ? 'flex min-h-0 flex-1' : 'hidden'"), true, 'Resources retains search, filter, and scroll state across Inspector tab switches')
+assert.equal(panelSource.includes('onOpenUrl={handleOpenResourceUrl}'), true, 'resource links route through the retained Browser owner')
+assert.equal(panelSource.includes('onOpenDiff={handleOpenResourceDiff}'), true, 'changed resources route to their exact Review target')
+assert.equal(resourcesWorkspaceSource.includes('buildAssistantResourceIndex({ turns, projectPath })'), true, 'Resources projects the persisted Review turn model instead of fetching duplicate chat state')
+assert.equal(resourcesWorkspaceSource.includes('window.devscope.getFileTree'), false, 'Resources does not create another filesystem source')
+assert.equal(resourcesWorkspaceSource.includes('usePreviewVirtualWindow'), true, 'large resource card grids mount only their visible fixed-height rows')
+assert.equal(resourcesWorkspaceSource.includes('grid grid-cols-2'), true, 'Resources presents images and links as two-column preview cards')
+assert.equal(resourcesWorkspaceSource.includes('<ResourceImagePreview resource={resource}'), true, 'image cards render real thumbnail previews')
+assert.equal(resourcesWorkspaceSource.includes('<ResourceLinkPreview resource={resource}'), true, 'link cards render safe destination previews')
+assert.equal(resourcesWorkspaceSource.includes('getAssistantLinkPreview(resource.url)'), true, 'visible link cards lazily request bounded website metadata')
+assert.equal(resourcesWorkspaceSource.includes('preview?.imageUrl'), true, 'Open Graph images become website-card thumbnails')
+assert.equal(resourcesWorkspaceSource.includes('preview?.description'), true, 'website descriptions enrich cards when no preview image exists')
+assert.equal(resourcesWorkspaceSource.includes('referrerPolicy="no-referrer"'), true, 'remote preview images do not disclose the chat page as their referrer')
+assert.equal(assistantLinkPreviewCacheSource.includes('LINK_PREVIEW_RENDERER_CACHE_LIMIT = 200'), true, 'website metadata requests share a bounded renderer cache')
+assert.equal(assistantLinkPreviewCacheSource.includes('pendingLinkPreviews'), true, 'concurrent cards deduplicate metadata requests')
+assert.equal(browserLinkPreviewSource.includes('MAX_LINK_PREVIEW_HTML_BYTES = 256 * 1024'), true, 'website metadata reads have a strict response-size cap')
+assert.equal(browserLinkPreviewSource.includes('LINK_PREVIEW_TIMEOUT_MS = 5_000'), true, 'website metadata reads have a short timeout')
+assert.equal(browserLinkPreviewSource.includes('{ base: 0x7f000000, prefix: 8 }'), true, 'website metadata blocks the IPv4 loopback range')
+assert.equal(browserLinkPreviewSource.includes('addresses.some((entry) => !isPublicBrowserLinkPreviewAddress'), true, 'every resolved DNS address must be public')
+assert.equal(browserLinkPreviewSource.includes('fetchBrowserLinkPreviewHtml(redirectUrl.toString()'), true, 'every metadata redirect repeats URL and DNS validation')
+assert.equal(browserPreviewHandlerSource.includes('LINK_PREVIEW_CACHE_LIMIT = 100'), true, 'main-process metadata has a bounded shared cache')
+assert.equal(browserPreviewHandlerSource.includes('LINK_PREVIEW_PENDING_LIMIT = 100'), true, 'website cards cannot create an unbounded main-process request queue')
+assert.equal(browserPreviewHandlerSource.includes('LINK_PREVIEW_CONCURRENCY_LIMIT = 4'), true, 'website metadata uses a small connection pool')
+assert.equal(browserPreviewHandlerSource.includes('pendingLinkPreviews'), true, 'main-process metadata requests are deduplicated')
+assert.equal(resourcesWorkspaceSource.includes('MarkdownSiteIcon host={host}'), true, 'link previews request favicons with hostnames only')
+assert.equal(resourcesWorkspaceSource.includes('openAssistantFileTarget'), true, 'local image cards reuse the existing preview owner and path contract')
+assert.equal(resourcesWorkspaceSource.includes('resolveClipboardAttachment'), true, 'clipboard image cards resolve through the existing private attachment owner')
+assert.equal(resourcesWorkspaceSource.includes('<AssistantAttachmentPreviewModal'), true, 'retained inline images reuse the existing attachment preview')
+assert.equal(resourcesWorkspaceSource.includes("type ResourceFilter = 'all' | 'images' | 'links'"), true, 'Resources exposes only image and link filters')
+assert.equal(resourceIndexSource.includes("export type AssistantResourceKind = 'image' | 'link'"), true, 'code files and generic attachments are absent from the Resources model')
+assert.equal(resourceIndexSource.includes('if (!isImageAttachment(attachment)) continue'), true, 'non-image attachments are rejected at the index boundary')
+assert.equal(resourceIndexSource.includes('IMAGE_EXTENSIONS.has'), true, 'local changed and mentioned files enter Resources only when they are images')
+assert.equal(resourceIndexSource.includes('ASSISTANT_RESOURCE_INDEX_LIMIT = 500'), true, 'the resource read model has a hard identity bound')
+assert.equal(resourceIndexSource.includes('ASSISTANT_RESOURCE_TURN_LIMIT = 2_000'), true, 'resource extraction scans a bounded newest-first turn window')
+assert.equal(resourceIndexSource.includes('ASSISTANT_RESOURCE_TEXT_BUDGET = 2_000_000'), true, 'resource extraction has a total persisted-text budget')
+assert.equal(resourceIndexSource.includes('resources.size >= ASSISTANT_RESOURCE_INDEX_LIMIT'), true, 'full resource indexes stop scanning text that cannot add a visible identity')
+assert.equal(resourceIndexSource.includes('ASSISTANT_RESOURCE_ORIGIN_LIMIT = 24'), true, 'deduplicated resources retain a bounded origin history')
+assert.equal(resourceIndexSource.includes('resolveMarkdownPackageReference'), true, 'package references are classified before filesystem paths')
+assert.equal(resourceIndexSource.includes('getAssistantLinkBaseFilePath'), true, 'relative resources resolve against the selected chat project')
+assert.equal(browserPreviewHandlerSource.includes("ZYRA_BROWSER_GLOBAL_PROFILE_KEY = 'zyra-global-browser-profile:v1'"), true, 'the main process owns one stable versioned Browser profile identity')
+assert.equal(browserPreviewHandlerSource.includes('partition === ZYRA_BROWSER_GLOBAL_PARTITION'), true, 'the webview gate accepts only the exact global Browser partition')
+assert.equal(browserPreviewHandlerSource.includes("createHash('sha256')"), true, 'the fixed local profile identity becomes an opaque bounded partition name')
+assert.equal(browserPreviewHandlerSource.includes('clearStorageData()'), true, 'explicit profile clearing removes cookies and website storage')
+assert.equal(browserPreviewHandlerSource.includes('clearCache()'), true, 'explicit profile clearing removes Chromium network cache')
+assert.equal(browserPreviewHandlerSource.includes('clearAuthCache()'), true, 'explicit profile clearing removes HTTP authentication state')
+assert.equal(browserPreviewHandlerSource.includes('cookies.flushStore()'), true, 'cleared cookie state is flushed to local storage')
+assert.equal(browserPreviewHandlerSource.includes('setPermissionRequestHandler'), true, 'browser guests deny site permissions by default')
+assert.equal(browserPreviewHandlerSource.includes("browserSession.on('will-download'"), true, 'untrusted guest downloads are denied in the first browser contract')
+assert.equal(browserPreviewHandlerSource.includes("parsed.protocol === 'http:' || parsed.protocol === 'https:'"), true, 'main process allows only HTTP and HTTPS external navigation')
+assert.equal(desktopMainSource.includes("window.webContents.on('will-attach-webview'"), true, 'every browser guest passes a main-process attachment gate')
+assert.equal(desktopMainSource.includes('webPreferences.sandbox = true'), true, 'attached guests are forced into Chromium sandboxing')
+assert.equal(desktopMainSource.includes('webPreferences.nodeIntegration = false'), true, 'attached web pages never receive Node integration')
+assert.equal(desktopMainSource.includes('webPreferences.contextIsolation = true'), true, 'guest page globals remain isolated')
+assert.equal(desktopMainSource.includes("guestContents.on('will-navigate'"), true, 'unsupported guest navigation is blocked after attachment too')
+assert.equal(projectsPreloadSource.includes("devscope:browserPreview:getConfig"), true, 'Browser configuration crosses the typed preload bridge')
+assert.equal(projectsPreloadSource.includes("devscope:browserPreview:clearData"), true, 'local profile clearing crosses the typed preload bridge')
+assert.equal(ipcHandlersSource.includes("ipcMain.handle('devscope:browserPreview:clearData'"), true, 'main process owns the destructive Browser-data action')
+assert.equal(projectsPreloadSource.includes("devscope:browserPreview:getLinkPreview"), true, 'website metadata crosses the typed preload bridge')
+assert.equal(devscopeApiSource.includes("profileScope: 'global'"), true, 'Browser configuration declares the global credential scope')
+assert.equal(devscopeApiSource.includes('clearBrowserPreviewData'), true, 'Browser data control is part of the shared desktop contract')
+assert.equal(devscopeApiSource.includes('DevScopeBrowserPreviewConfig'), true, 'Browser configuration is part of the shared desktop contract')
+assert.equal(devscopeApiSource.includes('DevScopeBrowserLinkPreview'), true, 'website preview metadata has a shared renderer contract')
+assert.equal(panelSource.includes('turn:${turnId}'), true, 'turn reviews can open as sidebar-local tabs')
+assert.equal(panelSource.includes('setFocusedDiffRequestId(revealRequest.id)'), true, 'the Review detail keeps the active chat deep-link request after consuming the page event')
+assert.equal(panelSource.includes('onRevealRequestHandled(revealRequest.id)'), true, 'chat deep-link requests are consumed once rather than replayed whenever Inspector opens')
+assert.match(panelSource, /const handleOpenTurnInTab[\s\S]*?setReviewTurnId\(null\)[\s\S]*?setWorkspaceTabs/, 'opening a turn tab returns the source Review tab to its landing page')
+assert.equal(panelSource.includes('setWorkspaceTabs'), true, 'all Inspector tabs share one closable workspace model')
+assert.equal(panelSource.includes('workspaceTabs.length <= 1'), true, 'closing the last workspace tab closes Inspector')
+assert.equal(panelSource.includes('withoutChooser'), true, 'selecting Review removes the temporary chooser tab')
+assert.equal(panelSource.includes('reviewExists'), true, 'selecting Review reuses an existing Review tab')
+assert.equal(inspectorSource.includes('onAddTab'), true, 'the tab rail exposes a plus action beside the final tab')
+assert.equal(inspectorSource.includes('<Plus'), true)
+assert.equal(inspectorSource.includes('justify-start'), true, 'workspace tab labels align left')
+assert.equal(newTabSource.includes('grid-cols-6'), true, 'the new-tab chooser uses six tracks so incomplete rows can be centered')
+assert.equal(newTabSource.includes("'group relative col-span-2"), true, 'complete chooser rows retain three equal cards')
+assert.equal(newTabSource.includes("index === WORKSPACE_CHOICES.length - 1 && 'col-start-3'"), true, 'a single final chooser card is centered')
+assert.equal(newTabSource.includes("label: 'Review'"), true)
+assert.equal(newTabSource.includes("id: 'browser', label: 'Browser', icon: Globe2, available: true"), true, 'Browser is selectable from the workspace chooser')
+assert.equal(newTabSource.includes('onSelectBrowser'), true, 'the Browser tile opens or reuses its workspace tab')
+assert.equal(newTabSource.includes("id: 'terminal', label: 'Terminal', icon: SquareTerminal, available: true"), true, 'Terminal is selectable from the workspace chooser')
+assert.equal(newTabSource.includes('onSelectTerminal'), true, 'the Terminal tile opens or reuses its workspace tab')
+assert.equal(newTabSource.includes("id: 'subagents', label: 'Agents', icon: Bot, available: true"), true, 'Agents is selectable from the workspace chooser')
+assert.equal(newTabSource.includes("id: 'resources', label: 'Resources', icon: Library, available: true"), true, 'Resources is selectable from the workspace chooser')
+assert.equal(newTabSource.includes('onSelectResources'), true, 'the Resources tile opens or reuses its workspace tab')
+assert.equal(newTabSource.includes("id: 'explorer', label: 'Explorer', icon: FolderTree, available: true"), true, 'Explorer is selectable from the workspace chooser')
+assert.equal(newTabSource.includes('onSelectExplorer'), true, 'the Explorer tile opens or reuses its workspace tab')
+assert.equal(newTabSource.includes('still in the workshop'), true, 'future workspace choices use the timed workshop notice')
+assert.equal(newTabSource.includes('1800'), true, 'the unavailable-workspace notice dismisses itself')
+assert.equal(newTabSource.includes('<ArrowUpRight'), true, 'an already-open Review uses the browser-style top-right arrow')
+assert.equal(newTabSource.includes('items-center justify-center'), true, 'new-tab tile contents are centered')
+assert.equal(newTabSource.includes('max-w-[306px]'), true, 'the compact chooser is centered instead of filling the page')
+assert.equal(newTabSource.includes('const NoticeIcon = noticeChoice?.icon'), true, 'the timed unavailable toast uses the selected workspace icon')
+assert.equal(landingSource.includes('Review this chat'), true)
+assert.equal(landingSource.includes("'with-changes'"), true)
+assert.equal(landingSource.includes("'without-changes'"), true)
+assert.equal(landingSource.includes('LATEST_TURN_LIMIT'), true)
+assert.equal(landingSource.includes('INITIAL_VISIBLE_TURNS'), true, 'review index rows mount in bounded batches')
+assert.equal(landingSource.includes('Show earlier turns · {hiddenTurnCount} remaining'), true, 'Review exposes the hidden full-index count after visible rows')
+assert.match(landingSource, /visibleTurns\.map[\s\S]*Show earlier turns · \{hiddenTurnCount\} remaining/, 'the earlier-turn control follows the visible index rows')
+assert.equal(landingSource.includes('turn.historyUnavailable'), true, 'rows honestly disclose missing persisted message history')
+assert.equal(landingSource.includes('turn.response'), true, 'each row previews the final agent response')
+assert.equal(landingSource.includes('role="table"'), true, 'Review renders the complete chat index as a table')
+assert.equal(landingSource.includes('role="columnheader"'), true, 'the turn, conversation, and files columns are explicit')
+assert.equal(landingSource.includes('Complete chat turn index'), true)
+assert.equal(landingSource.includes('<VscodeEntryIcon'), true, 'file links use the existing VS Code icon pack')
+assert.equal(landingSource.includes('onOpenFile(turn.id, file.target)'), true, 'each indexed file opens its exact recorded change')
+assert.equal(landingSource.includes('VISIBLE_FILE_LINK_LIMIT'), true, 'file links remain bounded per row')
+assert.equal(landingSource.includes('useDeferredValue(query)'), true, 'search input remains responsive while the full index filters')
+assert.equal(landingSource.includes('turn.searchText.includes'), true, 'Review search consumes the prebuilt lightweight index')
+assert.equal(landingSource.includes("turn.agentLabel || 'Agent'"), true, 'the final response retains its agent label')
+assert.equal(landingSource.includes("{ready ? turns.length : '—'} turns"), true, 'Review never presents a loaded-page count as the complete total')
+assert.equal(landingSource.includes('Building the complete turn index'), true, 'the table waits for its authoritative persisted index')
+assert.equal(landingSource.includes('<ArrowUpRight'), true, 'turns can still open in dedicated workspace tabs')
+assert.equal(landingSource.includes('event.stopPropagation()'), true, 'file and tab links stay separate from the row action')
+assert.equal(landingSource.includes('role="row"'), true, 'each visible turn is an accessible table row')
+assert.equal(reviewIndexSource.includes("patch: ''"), true, 'the landing index never transports full diff bodies')
+assert.equal(reviewIndexSource.includes('detailLoaded: false'), true, 'index-only rows request full data only when opened')
+assert.equal(persistenceHistorySource.includes('readAssistantReviewIndex'), true, 'SQLite owns the complete Review index')
+assert.equal(persistenceHistorySource.includes('ROW_NUMBER() OVER'), true, 'the index selects only the final agent response per turn')
+assert.equal(persistenceHistorySource.includes("kind = 'file-change'"), true, 'the index loads only file-change metadata rather than every activity')
+assert.equal((inspectorSource.match(/bg-\[#1b1829\]\/95/g) || []).length >= 2, true, 'Inspector title and tab rail blend with the desktop title bar shade')
+assert.equal(inspectorSource.includes('bg-[color-mix(in_srgb,var(--color-bg)_95%,black)] text-sparkle-text'), true, 'the active workspace tab uses the exact turn-review header surface')
+assert.equal(turnReviewSource.includes('border-b border-white/[0.06] bg-[color-mix(in_srgb,var(--color-bg)_95%,black)] px-2.5'), true, 'the wide turn header matches the active workspace tab instead of inheriting the lighter context rail')
+assert.equal(inspectorSource.includes('>Inspector</h2>'), true, 'the workspace title above the tab changer is Inspector')
+assert.equal(inspectorSource.includes('rounded-t-md border border-b-0'), true, 'workspace tabs use a browser-style open bottom edge')
+assert.equal(inspectorSource.includes('MAX_WORKSPACE_TAB_WIDTH = 112'), true, 'workspace tabs retain the full browser-tab width when space allows')
+assert.equal(inspectorSource.includes('MIN_WORKSPACE_TAB_WIDTH = 74'), true, 'all workspace tabs shrink together only to the readable floor')
+assert.equal(inspectorSource.includes('style={{ width: targetWorkspaceTabWidth }}'), true, 'new tabs mount directly at the final shared width')
+assert.equal(inspectorSource.includes('previousTabWidthsRef'), true, 'existing tabs retain their prior displayed width for animation')
+assert.equal(inspectorSource.includes('min-w-0 flex-1 truncate'), true, 'Review and other tab labels can shrink and ellipsize beside fixed metadata')
+assert.equal(inspectorSource.includes('shrink-0 font-mono'), true, 'tab counts remain stable while labels truncate')
+assert.equal(inspectorSource.includes('element.animate('), true, 'existing tab pills animate directly from displayed width to final width')
+assert.equal(inspectorSource.includes('duration: 240'), true, 'tab compression uses a short browser-like duration')
+assert.equal(inspectorSource.includes("easing: 'cubic-bezier(0.22, 1, 0.36, 1)'"), true, 'tab compression uses a smooth browser-style easing curve')
+assert.equal(rendererCssSource.includes('width 220ms cubic-bezier'), false, 'a competing CSS width transition cannot fight the direct layout animation')
+assert.equal(inspectorSource.includes('draggable'), true, 'workspace tabs can be dragged to reorder')
+assert.equal(inspectorSource.includes('requestTabClose'), true, 'tab removal waits for its close transition')
+assert.equal(inspectorSource.includes('inspector-tab-out_130ms'), true, 'closing tabs play the reverse of their entrance motion')
+assert.equal(panelSource.includes('handleReorderTab'), true, 'dragged tab order is persisted in workspace state')
+assert.equal(inspectorSource.includes('separatedFromPrevious'), true, 'consecutive inactive tabs receive a quiet separator')
+assert.equal(inspectorSource.includes('pl-0 pr-1'), true, 'the workspace tabs start at the left edge')
+assert.equal(inspectorSource.includes('requestAnimationFrame'), true, 'Inspector resizing is frame-throttled')
+assert.equal(inspectorSource.includes("setProperty('transition', 'none')"), true, 'width interpolation is disabled during direct manipulation')
+assert.equal(inspectorSource.includes('tab.preview'), true, 'workspace tabs expose delayed browser-style hover previews')
+assert.equal(inspectorSource.includes('}, 650)'), true, 'tab previews wait for deliberate hover intent')
+assert.equal(inspectorSource.includes('previewDismissTimerRef'), true, 'tab previews automatically expire')
+assert.equal(inspectorSource.includes('top-[82px]'), true, 'the compact tab-preview bubble sits below the tab rail')
+assert.equal(inspectorSource.includes('w-[184px] rounded-2xl'), true, 'tab previews use the smaller rounded bubble treatment')
+assert.equal(inspectorSource.includes('dismissTabPreview()'), true, 'tab selection and closure immediately dismiss hover previews')
+assert.equal(inspectorSource.includes('<LoaderCircle'), true, 'loading replaces the tab favicon with a browser-style spinner')
+assert.equal(inspectorSource.includes('inspector-tab-loading'), true, 'workspace loading state is visible in the matching tab')
+assert.equal(rendererCssSource.includes('transform: scaleX(0.88)'), true, 'the tab loading track advances and waits like browser progress')
+assert.equal(panelSource.includes('onLoadingChange={handleTurnLoadingChange}'), true, 'real turn-diff rendering drives the active tab loading state')
+assert.equal(patchDiffViewerSource.includes('settledRenderToken !== renderToken'), true, 'a new diff enters rendering state synchronously instead of one paint later')
+assert.equal(patchDiffViewerSource.includes('key={renderToken}'), true, 'Pierre diff elements remount per render token rather than retaining stale custom-element contents')
+assert.equal(patchDiffViewerSource.includes("background: 'color-mix(in srgb, var(--color-bg) 95%, black)'"), true, 'the opaque loading surface hides the previous diff and matches the Review page')
+assert.equal(turnReviewSource.includes('requestAnimationFrame'), true, 'heavy selected-diff preparation starts after the turn page can paint')
+assert.equal(turnReviewSource.includes('onLoadingChange?.(false)'), true, 'leaving a turn clears its tab loading animation')
+assert.equal(panelSource.includes('setContentLoadingTabId((current) => current === tabId ? null : current)'), true, 'closing a tab clears stale loading state')
+assert.equal(landingSource.includes('[content-visibility:auto]'), false, 'Review rows stay painted so hover does not trigger materialization jank')
+assert.equal(landingSource.includes('transition-[background-color,box-shadow] duration-75'), true, 'Review hover feedback uses a short low-latency transition')
+assert.equal(inspectorSource.includes('handleTabRailWheel'), true, 'wheel and trackpad input navigate an overflowing tab rail')
+assert.equal(inspectorSource.includes('no-scrollbar'), true, 'the overflowing tab rail does not expose a scrollbar')
+assert.equal(inspectorSource.includes('rail.scrollLeft += delta'), true, 'vertical or horizontal wheel deltas move through hidden tabs')
+assert.equal(composerSource.includes('event.stopPropagation()'), true, 'textarea wheel input does not leak into the conversation while it can scroll')
+assert.equal(composerSource.includes('element.scrollTop > 1'), true, 'upward overflow reaches the conversation only after the textarea is already at its top limit')
+assert.equal(composerSource.includes('maxScrollTop - element.scrollTop > 1'), true, 'downward overflow reaches the conversation only after the textarea is already at its bottom limit')
+assert.equal(turnReviewSource.includes('memo(function AssistantTurnReview'), true, 'tab loading updates do not reconcile the heavy turn page unnecessarily')
+assert.equal(landingSource.includes('memo(function AssistantReviewLanding'), true, 'workspace chrome updates do not reconcile the Review list unnecessarily')
+assert.equal(inspectorSource.includes('aria-label="Workspace tabs"'), true)
+assert.equal(inspectorSource.includes('overflow-x-auto border-b'), false, 'the workspace tab strip has no separating rule beneath it')
+assert.equal(turnReviewSource.includes('visibleFiles.map'), true, 'the dedicated view bounds its initial file list')
+assert.equal(turnReviewSource.includes('current + INITIAL_VISIBLE_FILES'), true, 'large Review file lists reveal one bounded batch per click')
+assert.equal(turnReviewSource.includes('Load {nextVisibleFileBatchSize} more files'), true, 'the Review file control states the next bounded batch instead of offering every remaining file')
+assert.equal(turnReviewSource.includes('setShowAllFiles'), false, 'the Review file rail cannot expand every remaining file in one update')
+assert.equal(turnReviewSource.includes('renderedChangesPatch'), true, 'the raw fallback is bounded to the currently revealed Review batch')
+assert.equal(turnReviewSource.includes('fileDiffs={parsedRecordedChangeEntries.map((entry) => entry.fileDiff)}'), true, 'all changes sends independently parsed files to the multi-file renderer instead of crashing PatchDiff with a multi-file patch')
+assert.equal(turnReviewSource.includes('allChangesPatch'), false, 'Review no longer builds an eager patch containing every recorded change')
+assert.equal(turnReviewSource.includes('current + RENDERED_CHANGE_BATCH_SIZE'), true, 'the full diff reveals recorded changes in bounded batches')
+assert.equal(turnReviewSource.includes('Render {nextRecordedChangeBatchSize} more changes'), true, 'the diff batch control states how many changes it will render next')
+assert.equal(patchDiffViewerSource.includes('fileDiffs.map'), true, 'the shared viewer renders multiple parsed FileDiff entries inside one scroll surface')
+assert.equal(turnReviewSource.includes('hideChangeIcon={false}'), false, 'recorded diff rows remove Pierre’s blue change dot')
+assert.equal(turnReviewSource.includes('renderRecordedChangeStatus'), true, 'recorded diff rows replace the blue dot with shared Git status pills')
+assert.equal(turnReviewSource.includes('assistant-turn-review__rail'), true, 'wide turn pages keep conversation and changed files in a dedicated context rail')
+assert.equal(turnReviewSource.includes("type NarrowReviewSurface = 'diff' | 'review'"), true, 'narrow turn pages combine context and files into one full-width review surface')
+assert.equal(turnReviewSource.includes("focusSelectedDiffRequestId === null ? 'review' : 'diff'"), true, 'thin chat deep links open directly on Diff while normal turns open on Context and files')
+assert.equal(turnReviewSource.includes("setNarrowSurface(focusSelectedDiff ? 'diff' : 'review')"), true, 'repeated chat deep links switch an already-mounted thin turn to Diff')
+assert.equal(turnReviewSource.includes('setShowAllChanges(!focusSelectedDiff && turn.changes.length > 0)'), true, 'chat deep links leave All changes and open the selected file revision directly')
+assert.equal(turnReviewSource.includes('INITIAL_RENDERED_CHANGES = 4'), true, 'All changes initially mounts only a small diff batch')
+assert.equal((turnReviewSource.match(/h-9 min-w-0 flex-1/g) || []).length >= 2, true, 'thin review tabs divide the available width evenly')
+assert.equal(turnReviewSource.includes('assistant-turn-review__narrow-diff-stats'), true, 'the thin Diff tab carries the complete turn impact bar')
+assert.equal(turnReviewSource.includes("title={!diffSupportsSplit || isNarrowLayout ? 'Split view needs a wider diff pane'"), true, 'the first-row view toggle remains visible and explains when split mode is unavailable')
+assert.equal(turnReviewSource.includes('Resize turn context sidebar'), true, 'wide turn pages expose a dedicated rail resize handle')
+assert.equal(turnReviewSource.includes('requestAnimationFrame(applyPendingRailWidth)'), true, 'rail resizing is frame-throttled')
+assert.equal(turnReviewSource.includes('TURN_REVIEW_RAIL_DEFAULT_WIDTH = 320'), true, 'the wide turn rail starts with more room')
+assert.equal(turnReviewSource.includes('TURN_REVIEW_WIDE_MIN_WIDTH = 760'), true, 'the persistent wide review layout activates at the lower requested threshold')
+assert.equal(turnReviewSource.includes('TURN_REVIEW_SPLIT_MIN_WIDTH = 680'), true, 'split rendering is based on actual remaining diff width')
+assert.equal(turnReviewSource.includes("effectiveRenderMode = isNarrowLayout || !diffSupportsSplit ? 'stacked' : renderMode"), true, 'cramped wide and thin review panes both fall back to unified rendering')
+assert.equal(turnReviewSource.includes('assistant-turn-review-rail-width:v2'), true, 'the chosen turn rail width is remembered')
+assert.equal(turnReviewSource.includes('formatAssistantDateTime(turn.updatedAt)'), true, 'turn rows show an exact date and time')
+assert.equal(turnReviewSource.includes('assistant-turn-review__turn-stats'), false, 'turn headers do not repeat diff totals')
+assert.equal((turnReviewSource.match(/flex h-10 shrink-0 items-center/g) || []).length >= 1, true, 'turn metadata stays in one compact header row')
+assert.equal(rendererCssSource.includes('assistant-turn-review__turn-time-compact'), true, 'a resized inner rail swaps to compact time instead of clipping the header')
+assert.equal(turnReviewSource.includes('formatAssistantRelativeTime'), false, 'turn rows do not use relative hours-ago labels')
+assert.equal(turnReviewSource.includes('[scrollbar-gutter:stable]'), true, 'turn context and file surfaces reserve scrollbar space before overflow')
+assert.equal(turnReviewSource.includes('preparedSelectedDiff = activeSelectionMatches'), true, 'a newly selected file invalidates the previously mounted rich diff before paint')
+assert.equal(turnReviewSource.includes('assistant-turn-review__file-stats inline-flex'), true, 'file rows use fixed compact stats without non-adaptive bars')
+assert.equal(rendererCssSource.includes('grid-template-rows: auto minmax(0, 1.25fr) minmax(150px, 1fr)'), true, 'the wide message area grows while preserving changed-file space')
+assert.equal(rendererCssSource.includes('grid-template-rows: 52% minmax(0, 48%)'), true, 'thin changed files begin at a stable split instead of following message height')
+assert.equal(turnReviewSource.includes('<MarkdownRenderer'), true, 'agent turn responses render as Markdown')
+assert.equal(turnReviewSource.includes('canExpand = !renderMarkdown'), true, 'rendered agent Markdown is not clipped behind the plain-text excerpt limit')
+assert.equal(rendererCssSource.includes('.assistant-turn-review__markdown :is(p, li'), true, 'context Markdown receives hard width and wrapping rules in both layouts')
+assert.match(rendererCssSource, /\.assistant-turn-review__conversation-pane,\s*\.assistant-turn-review__narrow-panel\s*\{[\s\S]*?min-width:\s*0;/, 'the context surface itself can shrink within its grid or flex column instead of being clipped')
+assert.equal(rendererCssSource.includes('contain: inline-size'), true, 'the wide context cell cannot expand from Markdown intrinsic width')
+assert.equal(rendererCssSource.includes('grid-template-columns: minmax(0, 1fr)'), true, 'the wide rail grid column cannot expand to Markdown max-content width')
+assert.equal(turnReviewSource.includes('assistant-turn-review__narrow-panel min-h-0 min-w-0 max-w-full'), true, 'the thin context flex item cannot retain a wider intrinsic Markdown width')
+assert.equal(rendererCssSource.includes('width: calc(100% - 1.5rem)'), true, 'Markdown lists include their outside marker margin inside the available width')
+assert.equal(turnReviewSource.includes('<ArrowUpRight'), true, 'turn new-tab actions use an up-right arrow')
+assert.equal(inspectorSource.includes('truncate text-left'), true, 'Inspector turn tab labels align to the left')
+assert.equal(turnReviewSource.includes('displayedSelectedDiff.provisional'), false, 'first-row actions contain only edit identity, copy, and view mode controls')
+assert.equal(turnReviewSource.includes('headerMetadata={renderDiffHeaderActions()}'), true, 'selected-file actions render inside the rich diff header')
+assert.equal(turnReviewSource.includes('headerPrefix={selectedFileStatus'), true, 'file status renders at the start of the rich diff header')
+assert.equal(patchDiffViewerSource.includes('renderHeaderMetadata={headerMetadata'), true, 'the shared viewer forwards embedded header actions through Pierre slots')
+assert.equal(patchDiffViewerSource.includes("border-radius: ${flush ? '0' : '16px'}"), true, 'flush mode removes the rich renderer corner radius without changing other diff surfaces')
+assert.equal(patchDiffViewerSource.includes('[data-diffs-header] [data-change-icon]'), true, 'flush review diffs hide Pierre’s redundant change icon')
+assert.equal(rawPatchFallbackSource.includes("flush ? 'rounded-none"), true, 'raw fallback diffs also remove embedded corner rounding')
+assert.equal(turnReviewSource.includes('renderFlushDiffHeader()'), true, 'loading and raw fallback states keep the same black embedded header')
+assert.equal(rendererCssSource.includes('@container turn-review-root (max-width: 759px)'), true, 'turn review switches between thin and wide surfaces at the reduced threshold')
+assert.equal(rendererCssSource.includes('@container turn-review-diff (max-width: 520px)'), true, 'recorded-edit metadata adapts to the actual diff pane width')
+assert.equal(patchDiffViewerSource.includes('[data-diffs-header] [data-metadata]'), true, 'Pierre metadata stays pinned while long paths truncate first')
+assert.equal(patchDiffViewerSource.includes("const headerSurface = '#07090d'"), true, 'the complete repeated-diff header uses one black surface')
+assert.equal(patchDiffViewerSource.includes('hideHeaderStats'), true, 'stacked history can reserve header space for edit identity and timestamps')
+assert.equal(sidebarStateSource.includes('assistant-right-sidebar-widths:v1'), true)
+assert.equal(sidebarStateSource.includes('[sessionId]'), true, 'right workspace width is remembered per chat')
+const headerSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantConversationHeader.tsx', import.meta.url), 'utf8')
+assert.equal(headerSource.includes('Open review workspace'), true, 'conversation header exposes the review workspace')
+assert.equal(headerSource.includes('PanelRightClose : PanelRightOpen'), true, 'right workspace trigger mirrors the left sidebar open and close icon pattern')
+assert.equal(headerSource.includes("rightPanelOpen && rightPanelMode === 'review' && 'bg-"), false, 'right sidebar trigger stays visually plain while open')
+assert.equal(headerSource.includes('resolvedPinnedBubbleHeaderInset'), true, 'the project and title group receives the pinned bubble offset')
+assert.equal(headerSource.includes('transition-[width] duration-[520ms]'), true, 'only the header group moves smoothly beside a pinned bubble')
+assert.equal(headerSource.includes('items={headerMenuItems}'), true, 'the conversation ellipsis opens its wired action list')
+assert.equal(headerSource.includes('presentation="portal"'), true, 'the conversation menu escapes the clipped title row')
+const chatRailSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantChatSessionsRail.tsx', import.meta.url), 'utf8')
+assert.equal(chatRailSource.includes("width: collapsed ? '0px'"), true, 'bubble pinning does not shift the chat timeline or composer rail')
+assert.equal(chatRailSource.includes('createSessionActionMenuItems'), true, 'sidebar chat dots reuse the complete chat action list')
+assert.equal(chatRailSource.includes('onContextMenu={(event) => onOpenContextMenu(event, session)}'), true, 'right-clicking a sidebar chat opens the same actions')
+assert.equal(chatRailSource.includes('items={getProjectMenuItems(group, expanded)}'), true, 'project ellipses open project actions instead of copying immediately')
+assert.equal(sidebarStateSource.includes('assistant:bubble-preview-pinned:v1'), true, 'bubble pin state is shared with the page-level header layout')
+const titleBarSource = readFileSync(new URL('../src/renderer/src/components/layout/TitleBar.tsx', import.meta.url), 'utf8')
+assert.equal(titleBarSource.includes("'bg-white/[0.055] text-[#d7d0e3]"), false, 'left sidebar trigger also stays visually plain while open')
 
 console.log('Assistant mounted diff contract: ok')

@@ -1,13 +1,27 @@
+import { lazy, Suspense } from 'react'
 import { cn } from '@/lib/utils'
 import PreviewBody from './PreviewBody'
 import PreviewErrorBoundary from './PreviewErrorBoundary'
 import PreviewModalHeader from './PreviewModalHeader'
 import { PreviewModalDialogs } from './PreviewModalDialogs'
-import { PreviewNavigationSidebar } from './PreviewNavigationSidebar'
 import { PreviewExpandedWorkspace } from './PreviewExpandedWorkspace'
-import { PreviewInspectorSidebar } from './PreviewInspectorSidebar'
 import { PreviewExpandedPreviewArea } from './PreviewExpandedPreviewArea'
 import type { PreviewModalLayoutProps } from './previewModalLayout.types'
+
+const PreviewNavigationSidebar = lazy(async () => ({
+    default: (await import('./PreviewNavigationSidebar')).PreviewNavigationSidebar
+}))
+const PreviewInspectorSidebar = lazy(async () => ({
+    default: (await import('./PreviewInspectorSidebar')).PreviewInspectorSidebar
+}))
+
+function PreviewSidebarFallback({ label }: { label: string }) {
+    return (
+        <div className="flex h-full min-h-0 items-center justify-center bg-sparkle-bg px-3 text-[10px] text-sparkle-text-muted/60">
+            <span className="animate-pulse">{label}</span>
+        </div>
+    )
+}
 
 export function PreviewModalLayout(props: PreviewModalLayoutProps) {
     const {
@@ -21,9 +35,15 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
         mediaItems,
         openMediaItem,
         onInternalLinkClick,
+        onLinkNotice,
         mode,
+        canNavigateBack,
+        canNavigateForward,
+        onNavigateBack,
+        onNavigateForward,
         isExpanded,
         allowExpanded = true,
+        windowedNavigatorEnabled = false,
         canEdit,
         isDirty,
         isSaving,
@@ -81,13 +101,12 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
         centerHtmlRenderedPreview,
         flushResponsiveHtmlPreview,
         hasBottomPanel,
-        outlineItems,
-        onOutlineSelect,
-        onMinimizeLeftPanel,
         onOpenLinkedPreview,
         onOpenLinkedPreviewInNewTab,
         folderTreeRefreshToken = 0,
         preserveSidebarContextRequest = null,
+        navigatorRevealRequestId = null,
+        onNavigatorRevealHandled,
         previewTabs,
         activePreviewTabId,
         onSelectPreviewTab,
@@ -113,6 +132,7 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
         overwriteConflict
     } = props
 
+    const isDirectory = file.type === 'directory'
     const isMediaFile = file.type === 'image' || file.type === 'video' || file.type === 'audio'
     const previewSurfaceBackgroundClass = file.type === 'md' && mode === 'preview'
         ? 'bg-sparkle-card'
@@ -121,7 +141,7 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
         || isCsv
         || isHtml
         || hasBottomPanel
-    const shouldStretchPreviewBody = lockPreviewBodyHeight || isMediaFile
+    const shouldStretchPreviewBody = lockPreviewBodyHeight || isMediaFile || isDirectory
 
     const isWindowShell = shellMode === 'window'
 
@@ -135,6 +155,7 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
                     meta={{ truncated, size, previewBytes }}
                     projectPath={projectPath}
                     onInternalLinkClick={onInternalLinkClick}
+                    onLinkNotice={onLinkNotice}
                     gitDiffText={gitDiffText}
                     viewport={viewport}
                     presetConfig={presetConfig}
@@ -167,11 +188,16 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
             showCloseButton={!isWindowShell}
             previewModeEnabled={previewModeEnabled}
             mode={mode}
+            canNavigateBack={canNavigateBack}
+            canNavigateForward={canNavigateForward}
+            onNavigateBack={onNavigateBack}
+            onNavigateForward={onNavigateForward}
             isEditable={canEdit}
             isDirty={isDirty}
             isSaving={isSaving}
             isExpanded={isExpanded}
             allowExpanded={allowExpanded}
+            windowedNavigatorEnabled={windowedNavigatorEnabled}
             leftPanelOpen={leftPanelOpen}
             rightPanelOpen={rightPanelOpen}
             loadingEditableContent={loadingEditableContent}
@@ -223,26 +249,43 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
         />
     )
 
-    const expandedRightInspector = (
-        <PreviewInspectorSidebar
-            filePath={file.path}
-            gitDiffSummary={gitDiffSummary}
-            mode={mode}
-            isDirty={isDirty}
-            setFindRequestToken={setFindRequestToken}
-            setReplaceRequestToken={setReplaceRequestToken}
-            isEditorToolsEnabled={isEditorToolsEnabled}
-            getEditorToolButtonClass={getEditorToolButtonClass}
-            editorWordWrap={editorWordWrap}
-            setEditorWordWrap={setEditorWordWrap}
-            editorMinimapEnabled={editorMinimapEnabled}
-            setEditorMinimapEnabled={setEditorMinimapEnabled}
-            editorFontSize={editorFontSize}
-            setEditorFontSize={setEditorFontSize}
-            trailingWhitespaceCount={trailingWhitespaceCount}
-            longLineCount={longLineCount}
-            jsonDiagnostic={jsonDiagnostic}
-        />
+    const expandedRightInspector = rightPanelOpen ? (
+        <Suspense fallback={<PreviewSidebarFallback label="Loading inspector…" />}>
+            <PreviewInspectorSidebar
+                filePath={file.path}
+                gitDiffSummary={gitDiffSummary}
+                mode={mode}
+                isDirty={isDirty}
+                setFindRequestToken={setFindRequestToken}
+                setReplaceRequestToken={setReplaceRequestToken}
+                isEditorToolsEnabled={isEditorToolsEnabled}
+                getEditorToolButtonClass={getEditorToolButtonClass}
+                editorWordWrap={editorWordWrap}
+                setEditorWordWrap={setEditorWordWrap}
+                editorMinimapEnabled={editorMinimapEnabled}
+                setEditorMinimapEnabled={setEditorMinimapEnabled}
+                editorFontSize={editorFontSize}
+                setEditorFontSize={setEditorFontSize}
+                trailingWhitespaceCount={trailingWhitespaceCount}
+                longLineCount={longLineCount}
+                jsonDiagnostic={jsonDiagnostic}
+            />
+        </Suspense>
+    ) : null
+
+    const navigationSidebar = (
+        <Suspense fallback={<PreviewSidebarFallback label="Loading navigator…" />}>
+            <PreviewNavigationSidebar
+                file={file}
+                projectPath={projectPath}
+                onOpenLinkedPreview={onOpenLinkedPreview}
+                onOpenLinkedPreviewInNewTab={onOpenLinkedPreviewInNewTab}
+                refreshToken={folderTreeRefreshToken}
+                preserveContextRequest={preserveSidebarContextRequest}
+                revealTargetRequestId={navigatorRevealRequestId}
+                onRevealTargetHandled={onNavigatorRevealHandled}
+            />
+        </Suspense>
     )
 
     const modalContent = (
@@ -288,55 +331,72 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
                         rightPanelOpen={rightPanelOpen}
                         rightPanelWidth={rightPanelWidth}
                         isResizingPanels={isResizingPanels}
-                        leftSidebar={
-                            <PreviewNavigationSidebar
-                                file={file}
-                                projectPath={projectPath}
-                                outlineItems={outlineItems}
-                                onOutlineSelect={onOutlineSelect}
-                                onMinimizePanel={onMinimizeLeftPanel}
-                                onOpenLinkedPreview={onOpenLinkedPreview}
-                                onOpenLinkedPreviewInNewTab={onOpenLinkedPreviewInNewTab}
-                                refreshToken={folderTreeRefreshToken}
-                                preserveContextRequest={preserveSidebarContextRequest}
-                            />
-                        }
+                        leftSidebar={leftPanelOpen ? navigationSidebar : null}
                         previewArea={expandedPreviewArea}
                         rightInspector={expandedRightInspector}
                     />
                 ) : (
-                    <div ref={previewSurfaceRef} className="group/preview relative flex-1 min-h-0">
-                        <div
-                            className={cn(
-                                'h-full w-full custom-scrollbar flex items-stretch justify-center',
-                                previewSurfaceBackgroundClass,
-                                isMediaFile
-                                    ? 'p-0'
-                                    : flushResponsiveHtmlPreview
-                                        ? 'p-0'
-                                        : (isCompactHtmlViewport ? 'p-2 sm:p-3' : 'p-4'),
-                                mode === 'edit' || isCsv || isHtml || hasBottomPanel || isMediaFile
-                                    ? 'overflow-hidden'
-                                    : 'overflow-auto'
-                            )}
-                            style={{ overscrollBehavior: 'contain' }}
-                    >
-                            <div
-                                className={cn('w-full flex flex-col', shouldStretchPreviewBody ? 'h-full min-h-0' : 'min-h-full')}
-                                style={{ paddingBottom: previewBottomOverlay && previewBottomOverlayPadding > 0 ? `${previewBottomOverlayPadding}px` : undefined }}
+                    <div className="flex min-h-0 min-w-0 flex-1">
+                        {windowedNavigatorEnabled ? (
+                            <aside
+                                className={cn(
+                                    'relative flex shrink-0 flex-col overflow-hidden border-r transition-[width,opacity,transform,border-color] ease-out',
+                                    isResizingPanels ? 'duration-0' : 'duration-200',
+                                    leftPanelOpen
+                                        ? 'translate-x-0 border-white/[0.06] bg-sparkle-card opacity-100'
+                                        : 'pointer-events-none -translate-x-2 border-transparent opacity-0'
+                                )}
+                                style={{ width: leftPanelOpen ? `${leftPanelWidth}px` : '0px' }}
                             >
-                                <div className={cn(shouldStretchPreviewBody && 'min-h-0', hasBottomPanel ? 'flex-1' : (shouldStretchPreviewBody ? 'h-full' : ''), hasBottomPanel && mode !== 'edit' ? 'overflow-auto custom-scrollbar' : '', centerHtmlRenderedPreview ? 'flex items-center justify-center' : '')}>
-                                    {renderPreviewBody(false)}
+                                {leftPanelOpen ? navigationSidebar : null}
+                                <div
+                                    data-preview-resize-side="left"
+                                    className={cn(
+                                        'group absolute -right-1 top-0 z-30 h-full w-3 cursor-col-resize bg-transparent transition-colors',
+                                        leftPanelOpen ? 'hover:bg-white/[0.03]' : 'pointer-events-none'
+                                    )}
+                                    title="Resize file navigator"
+                                >
+                                    <div
+                                        data-preview-resize-side="left"
+                                        className="pointer-events-none absolute left-1/2 top-1/2 h-16 w-[2px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/[0.14] opacity-70 transition-all duration-200 group-hover:h-24 group-hover:bg-white/[0.32] group-hover:opacity-100"
+                                    />
                                 </div>
-                            </div>
-                        </div>
-                        {previewBottomOverlay ? (
-                            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 m-0 flex items-end p-0">
-                                <div className="pointer-events-auto m-0 w-full p-0">
-                                    {previewBottomOverlay}
-                                </div>
-                            </div>
+                            </aside>
                         ) : null}
+                        <div ref={previewSurfaceRef} className="group/preview relative min-h-0 min-w-0 flex-1">
+                            <div
+                                className={cn(
+                                    'h-full w-full custom-scrollbar flex items-stretch justify-center',
+                                    previewSurfaceBackgroundClass,
+                                    isMediaFile || isDirectory || mode === 'edit'
+                                        ? 'p-0'
+                                        : flushResponsiveHtmlPreview
+                                            ? 'p-0'
+                                            : (isCompactHtmlViewport ? 'p-2 sm:p-3' : 'p-4'),
+                                    mode === 'edit' || isCsv || isHtml || hasBottomPanel || isMediaFile || isDirectory
+                                        ? 'overflow-hidden'
+                                        : 'overflow-auto'
+                                )}
+                                style={{ overscrollBehavior: 'contain' }}
+                            >
+                                <div
+                                    className={cn('w-full flex flex-col', shouldStretchPreviewBody ? 'h-full min-h-0' : 'min-h-full')}
+                                    style={{ paddingBottom: previewBottomOverlay && previewBottomOverlayPadding > 0 ? `${previewBottomOverlayPadding}px` : undefined }}
+                                >
+                                    <div className={cn(shouldStretchPreviewBody && 'min-h-0', hasBottomPanel ? 'flex-1' : (shouldStretchPreviewBody ? 'h-full' : ''), hasBottomPanel && mode !== 'edit' ? 'overflow-auto custom-scrollbar' : '', centerHtmlRenderedPreview ? 'flex items-center justify-center' : '')}>
+                                        {renderPreviewBody(false)}
+                                    </div>
+                                </div>
+                            </div>
+                            {previewBottomOverlay ? (
+                                <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 m-0 flex items-end p-0">
+                                    <div className="pointer-events-auto m-0 w-full p-0">
+                                        {previewBottomOverlay}
+                                    </div>
+                                </div>
+                            ) : null}
+                        </div>
                     </div>
                 )}
                 {pythonPanel}

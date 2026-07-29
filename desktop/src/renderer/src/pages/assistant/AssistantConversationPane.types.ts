@@ -4,9 +4,11 @@ import type { AssistantDiffTarget } from './assistant-diff-types'
 
 export type AssistantConversationPaneProps = {
     rightPanelOpen: boolean
-    rightPanelMode: 'none' | 'details' | 'plan' | 'diff'
+    rightPanelMode: 'none' | 'details' | 'plan' | 'review'
+    showRightSidebarToggle?: boolean
     deletingMessageId: string | null
     leftSidebarCollapsed: boolean
+    pinnedBubbleHeaderInset: number
     fallbackSessionMode: 'work' | 'playground'
     playgroundRootMissing: boolean
     playgroundTerminalAccess: boolean
@@ -25,7 +27,7 @@ export type AssistantConversationPaneProps = {
         ext: string,
         options?: PreviewOpenOptions
     ) => Promise<void> | void
-    onOpenAssistantLink?: (href: string) => Promise<void> | void
+    onOpenAssistantLink?: (href: string) => Promise<boolean | void> | boolean | void
     onOpenEditedFile?: (filePath: string) => Promise<void> | void
     onViewDiff?: (target: AssistantDiffTarget) => void
     onShowToast?: (message: string, tone?: 'success' | 'error' | 'info') => void

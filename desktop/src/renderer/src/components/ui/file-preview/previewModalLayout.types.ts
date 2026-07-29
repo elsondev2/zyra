@@ -1,6 +1,5 @@
 import type { CSSProperties, Dispatch, ReactNode, RefObject, SetStateAction } from 'react'
 import type { GitDiffSummary, GitLineMarker } from './gitDiff'
-import type { OutlineItem } from './modalShared'
 import type { PreviewFile, PreviewMediaItem, PreviewOpenOptions, PreviewTab } from './types'
 import { VIEWPORT_PRESETS, type ViewportPreset } from './viewport'
 
@@ -14,10 +13,16 @@ export type PreviewModalLayoutProps = {
     projectPath?: string
     mediaItems: PreviewMediaItem[]
     openMediaItem: (item: PreviewMediaItem) => Promise<void>
-    onInternalLinkClick: (href: string) => Promise<void>
+    onInternalLinkClick: (href: string) => Promise<boolean | void> | boolean | void
+    onLinkNotice?: (message: string, tone: 'info' | 'error') => void
     mode: 'preview' | 'edit'
+    canNavigateBack: boolean
+    canNavigateForward: boolean
+    onNavigateBack: () => void
+    onNavigateForward: () => void
     isExpanded: boolean
     allowExpanded?: boolean
+    windowedNavigatorEnabled?: boolean
     canEdit: boolean
     isDirty: boolean
     isSaving: boolean
@@ -80,13 +85,12 @@ export type PreviewModalLayoutProps = {
     centerHtmlRenderedPreview: boolean
     flushResponsiveHtmlPreview: boolean
     hasBottomPanel: boolean
-    outlineItems: OutlineItem[]
-    onOutlineSelect: (item: OutlineItem) => void
-    onMinimizeLeftPanel: () => void
     onOpenLinkedPreview?: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
     onOpenLinkedPreviewInNewTab?: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
     folderTreeRefreshToken?: number
     preserveSidebarContextRequest?: { path: string; nonce: number } | null
+    navigatorRevealRequestId?: string | null
+    onNavigatorRevealHandled?: (requestId: string) => void
     previewTabs: PreviewTab[]
     activePreviewTabId: string | null
     onSelectPreviewTab: (tabId: string) => void

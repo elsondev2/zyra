@@ -14,6 +14,7 @@ interface ProjectDetailsReadmeTabProps {
     }
     loadingProjectDetails?: boolean
     openPreview?: UseFilePreviewReturn['openPreview']
+    onShowToast?: (message: string, tone: 'info' | 'error') => void
     readmeContentRef: MutableRefObject<HTMLDivElement | null>
     readmeExpanded: boolean
     readmeNeedsExpand: boolean
@@ -25,6 +26,7 @@ function ProjectDetailsReadmeTabImpl(props: ProjectDetailsReadmeTabProps) {
         project,
         loadingProjectDetails = false,
         openPreview,
+        onShowToast,
         readmeContentRef,
         readmeExpanded,
         readmeNeedsExpand,
@@ -144,7 +146,7 @@ function ProjectDetailsReadmeTabImpl(props: ProjectDetailsReadmeTabProps) {
     }, [readmeExpanded, readmeNeedsExpand])
 
     const handleInternalMarkdownLink = useCallback(async (href: string) => {
-        await navigateMarkdownLink({
+        return navigateMarkdownLink({
             href,
             filePath: readmeFilePath,
             navigate,
@@ -172,7 +174,9 @@ function ProjectDetailsReadmeTabImpl(props: ProjectDetailsReadmeTabProps) {
                         <MarkdownRenderer
                             content={project.readme || ''}
                             filePath={readmeFilePath}
+                            linkSearchRoot={project.path}
                             onInternalLinkClick={handleInternalMarkdownLink}
+                            onLinkNotice={onShowToast}
                         />
                     </div>
                     {readmeNeedsExpand && !readmeExpanded && (

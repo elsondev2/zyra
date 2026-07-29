@@ -1,13 +1,24 @@
-import { useCallback, useMemo, type RefObject } from 'react'
+import { useCallback, useDeferredValue, useMemo } from 'react'
 import { cn } from '@/lib/utils'
-import {
-    buildLocalDiffPreview,
-    countLines,
-    extractOutlineItems,
-    type OutlineItem
-} from './modalShared'
+import { buildLocalDiffPreview } from './modalShared'
 import { isMediaPreviewType } from './utils'
 import type { PreviewFile } from './types'
+
+export function scanPreviewInspectorStats(content: string): {
+    totalFileLines: number
+    longLineCount: number
+    trailingWhitespaceCount: number
+} {
+    if (!content) return { totalFileLines: 0, longLineCount: 0, trailingWhitespaceCount: 0 }
+    const lines = content.split(/\r?\n/)
+    let longLineCount = 0
+    let trailingWhitespaceCount = 0
+    for (const line of lines) {
+        if (line.length > 120) longLineCount += 1
+        if (/[ \t]+$/.test(line)) trailingWhitespaceCount += 1
+    }
+    return { totalFileLines: lines.length, longLineCount, trailingWhitespaceCount }
+}
 
 export function useFilePreviewModalAnalysis(input: {
     file: PreviewFile
@@ -19,8 +30,6 @@ export function useFilePreviewModalAnalysis(input: {
     sourceContent: string
     draftContent: string
     isDirty: boolean
-    previewSurfaceRef: RefObject<HTMLDivElement | null>
-    setFocusLine: (line: number | null) => void
 }) {
     const {
         file,
@@ -31,16 +40,16 @@ export function useFilePreviewModalAnalysis(input: {
         presetWidth,
         sourceContent,
         draftContent,
-        isDirty,
-        previewSurfaceRef,
-        setFocusLine
+        isDirty
     } = input
 
     const activeContent = mode === 'edit' ? draftContent : sourceContent
+    const deferredDraftContent = useDeferredValue(draftContent)
+    const deferredActiveContent = useDeferredValue(activeContent)
+    const analysisContent = mode === 'edit' ? deferredActiveContent : activeContent
     const isHtml = file.type === 'html'
     const isCompactHtmlViewport = isHtml && viewport !== 'responsive' && presetWidth <= 768
     const isHtmlRenderedPreview = isHtml && mode === 'preview'
-    const shouldBuildOutline = isExpanded && (file.type === 'md' || file.type === 'text' || file.type === 'code' || file.type === 'html')
     const shouldBuildInspectorStats = isExpanded && rightPanelOpen
     const previewResetKey = isMediaPreviewType(file.type)
         ? `media:${viewport}:${mode}`
@@ -48,39 +57,26 @@ export function useFilePreviewModalAnalysis(input: {
 
     const localDiffPreview = useMemo(() => {
         if (mode !== 'edit' || !isDirty) return null
-        return buildLocalDiffPreview(sourceContent, draftContent)
-    }, [draftContent, isDirty, mode, sourceContent])
+        return buildLocalDiffPreview(sourceContent, deferredDraftContent)
+    }, [deferredDraftContent, isDirty, mode, sourceContent])
 
-    const totalFileLines = useMemo(
-        () => shouldBuildInspectorStats ? countLines(activeContent) : 0,
-        [activeContent, shouldBuildInspectorStats]
-    )
-    const outlineItems = useMemo(
-        () => shouldBuildOutline ? extractOutlineItems(activeContent, file.type) : [],
-        [activeContent, file.type, shouldBuildOutline]
-    )
-    const longLineCount = useMemo(
+    const inspectorStats = useMemo(
         () => shouldBuildInspectorStats
-            ? activeContent.split(/\r?\n/).filter((line) => line.length > 120).length
-            : 0,
-        [activeContent, shouldBuildInspectorStats]
+            ? scanPreviewInspectorStats(analysisContent)
+            : { totalFileLines: 0, longLineCount: 0, trailingWhitespaceCount: 0 },
+        [analysisContent, shouldBuildInspectorStats]
     )
-    const trailingWhitespaceCount = useMemo(
-        () => shouldBuildInspectorStats
-            ? activeContent.split(/\r?\n/).filter((line) => /[ \t]+$/.test(line)).length
-            : 0,
-        [activeContent, shouldBuildInspectorStats]
-    )
+    const { totalFileLines, longLineCount, trailingWhitespaceCount } = inspectorStats
     const jsonDiagnostic = useMemo(() => {
         if (!shouldBuildInspectorStats) return null
         if (file.type !== 'json') return null
         try {
-            JSON.parse(activeContent)
+            JSON.parse(analysisContent)
             return { ok: true, message: 'Valid JSON structure' }
         } catch (error: any) {
             return { ok: false, message: error?.message || 'Invalid JSON syntax' }
         }
-    }, [activeContent, file.type, shouldBuildInspectorStats])
+    }, [analysisContent, file.type, shouldBuildInspectorStats])
 
     const isEditorToolsEnabled = mode === 'edit'
     const getEditorToolButtonClass = useCallback((isActive = false) => cn(
@@ -92,28 +88,6 @@ export function useFilePreviewModalAnalysis(input: {
             : 'border-transparent bg-sparkle-bg/45 text-sparkle-text-muted/80 cursor-not-allowed opacity-70'
     ), [isEditorToolsEnabled])
 
-    const handleOutlineItemSelect = useCallback((item: OutlineItem) => {
-        if (mode === 'edit') {
-            setFocusLine(item.line)
-            return
-        }
-        if (file.type === 'md') {
-            const root = previewSurfaceRef.current
-            if (!root) return
-            const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9\s_-]/g, '').replace(/\s+/g, ' ').trim()
-            const targetLabel = normalize(item.label)
-            const headings = Array.from(root.querySelectorAll('h1,h2,h3,h4,h5,h6')) as HTMLElement[]
-            const directMatch = headings.find((heading) => normalize(heading.textContent || '') === targetLabel)
-                || headings.find((heading) => normalize(heading.textContent || '').includes(targetLabel))
-            if (directMatch) {
-                directMatch.scrollIntoView({ block: 'center', behavior: 'smooth' })
-                return
-            }
-        }
-
-        setFocusLine(item.line)
-    }, [file.type, mode, previewSurfaceRef, setFocusLine])
-
     return {
         activeContent,
         totalFileLines,
@@ -121,12 +95,10 @@ export function useFilePreviewModalAnalysis(input: {
         isHtmlRenderedPreview,
         previewResetKey,
         localDiffPreview,
-        outlineItems,
         longLineCount,
         trailingWhitespaceCount,
         jsonDiagnostic,
         isEditorToolsEnabled,
-        getEditorToolButtonClass,
-        handleOutlineItemSelect
+        getEditorToolButtonClass
     }
 }

@@ -134,7 +134,12 @@ export function AssistantComposerView({ controller }: { controller: AssistantCom
             observer?.disconnect()
             window.removeEventListener('resize', measure)
         }
-    }, [controller.contextFiles.length, controller.onAttachmentShelfBoundsChange])
+    }, [
+        controller.contextFiles.length,
+        controller.onAttachmentShelfBoundsChange,
+        controller.placement,
+        controller.queuedMessages.length
+    ])
 
     const syncTextareaScroll = useCallback((element: HTMLTextAreaElement | null) => {
         setTextareaScrollTop(element?.scrollTop ?? 0)
@@ -159,31 +164,36 @@ export function AssistantComposerView({ controller }: { controller: AssistantCom
         const element = event.currentTarget
         const normalizedDeltaY = getNormalizedWheelDelta(element, event.deltaY, event.deltaMode)
         const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight)
+        event.preventDefault()
+        event.stopPropagation()
 
         if (maxScrollTop <= 0) {
-            event.preventDefault()
             syncTextareaScroll(element)
             controller.onOverflowWheel(normalizedDeltaY)
             return
         }
 
         if (normalizedDeltaY < 0) {
-            const availableScroll = Math.max(0, element.scrollTop)
-            if (Math.abs(normalizedDeltaY) <= availableScroll) return
-            event.preventDefault()
+            if (element.scrollTop > 1) {
+                element.scrollTop = Math.max(0, element.scrollTop + normalizedDeltaY)
+                syncTextareaScroll(element)
+                return
+            }
             element.scrollTop = 0
             syncTextareaScroll(element)
-            controller.onOverflowWheel(normalizedDeltaY + availableScroll)
+            controller.onOverflowWheel(normalizedDeltaY)
             return
         }
 
         if (normalizedDeltaY > 0) {
-            const availableScroll = Math.max(0, maxScrollTop - element.scrollTop)
-            if (normalizedDeltaY <= availableScroll) return
-            event.preventDefault()
+            if (maxScrollTop - element.scrollTop > 1) {
+                element.scrollTop = Math.min(maxScrollTop, element.scrollTop + normalizedDeltaY)
+                syncTextareaScroll(element)
+                return
+            }
             element.scrollTop = maxScrollTop
             syncTextareaScroll(element)
-            controller.onOverflowWheel(normalizedDeltaY - availableScroll)
+            controller.onOverflowWheel(normalizedDeltaY)
         }
     }, [controller.onOverflowWheel, getNormalizedWheelDelta, syncTextareaScroll])
 

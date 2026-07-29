@@ -36,6 +36,7 @@ export function ProjectDetailsContent(props: ProjectDetailsContentProps) {
                                 project={project}
                                 loadingProjectDetails={projectDetailsLoading}
                                 openPreview={props.openPreview}
+                                onShowToast={props.onShowToast}
                                 readmeContentRef={props.readmeContentRef}
                                 readmeExpanded={props.readmeExpanded}
                                 readmeNeedsExpand={props.readmeNeedsExpand}

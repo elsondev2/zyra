@@ -9,7 +9,7 @@ export const PREVIEW_TERMINAL_EVENT_CHANNEL = 'devscope:previewTerminal:event'
 
 type PreviewTerminalEventPayload = {
     sessionId: string
-    type: 'started' | 'output' | 'exit' | 'error' | 'title'
+    type: 'started' | 'output' | 'exit' | 'error' | 'title' | 'clear'
     data?: string
     message?: string
     shell?: string
@@ -321,8 +321,8 @@ export async function handleCreatePreviewTerminal(
                 ? ['/k']
                 : ['-NoLogo', '-NoExit']
         }
-        const cols = Math.max(40, Math.floor(Number(input?.cols) || 100))
-        const rows = Math.max(10, Math.floor(Number(input?.rows) || 28))
+        const cols = Math.max(10, Math.floor(Number(input?.cols) || 100))
+        const rows = Math.max(4, Math.floor(Number(input?.rows) || 28))
 
         const terminalOptions: pty.IPtyForkOptions & {
             useConpty?: boolean
@@ -369,6 +369,7 @@ export async function handleCreatePreviewTerminal(
         previewTerminalSessions.set(sessionKey, session)
 
         terminalProc.onData((data: string) => {
+            if (previewTerminalSessions.get(sessionKey) !== session) return
             const chunk = String(data || '')
             session.lastActivityAt = Date.now()
             syncSessionProcessLabel(session)
@@ -402,6 +403,7 @@ export async function handleCreatePreviewTerminal(
         })
 
         terminalProc.onExit((result) => {
+            if (previewTerminalSessions.get(sessionKey) !== session) return
             session.proc = null
             session.status = result?.exitCode === 0 ? 'exited' : 'error'
             session.exitCode = Number(result?.exitCode ?? 0)
@@ -512,13 +514,44 @@ export async function handleResizePreviewTerminal(
         if (!session || !session.proc) {
             return { success: false, error: 'Preview terminal session not found.' }
         }
-        const cols = Math.max(40, Math.floor(Number(input?.cols) || 100))
-        const rows = Math.max(10, Math.floor(Number(input?.rows) || 28))
+        const cols = Math.max(10, Math.floor(Number(input?.cols) || 100))
+        const rows = Math.max(4, Math.floor(Number(input?.rows) || 28))
         session.proc.resize(cols, rows)
         return { success: true }
     } catch (err: any) {
         log.error('Failed to resize preview terminal:', err)
         return { success: false, error: err?.message || 'Failed to resize preview terminal.' }
+    }
+}
+
+export async function handleClearPreviewTerminal(
+    event: Electron.IpcMainInvokeEvent,
+    sessionIdInput: string
+) {
+    const sessionId = normalizeSessionId(sessionIdInput)
+    try {
+        if (!sessionId) {
+            return { success: false, error: 'Session ID is required.' }
+        }
+        const session = previewTerminalSessions.get(getSessionKey(event.sender.id, sessionId))
+        if (!session) {
+            return { success: false, error: 'Preview terminal session not found.' }
+        }
+        session.outputBuffer = ''
+        session.lastActivityAt = Date.now()
+        emitTerminalEvent(session, {
+            sessionId,
+            type: 'clear',
+            title: session.title,
+            cwd: session.cwd,
+            shell: session.shell,
+            groupKey: session.groupKey,
+            status: session.status
+        })
+        return { success: true }
+    } catch (err: any) {
+        log.error('Failed to clear preview terminal:', err)
+        return { success: false, error: err?.message || 'Failed to clear terminal output.' }
     }
 }
 
