@@ -10,9 +10,11 @@ export class ChildSessionHost {
     this.unsubscribe = null;
     this.usage = normalizeUsage();
     this.turns = 0;
+    this.turnsStarted = 0;
     this.maxTurns = Math.max(1, Number(options.maxTurns) || 12);
     this.lastAssistantText = "";
     this.abortingForLimit = false;
+    this.sendChain = Promise.resolve();
   }
 
   async open(options = {}) {
@@ -32,24 +34,49 @@ export class ChildSessionHost {
     const abortListener = () => void session.abort?.();
     options.signal?.addEventListener("abort", abortListener, { once: true });
     try {
+      this.reserveTurn();
       await session.prompt(String(prompt), { source: "print" });
       if (options.signal?.aborted) throw abortError(options.signal.reason);
-      return {
-        text: this.lastAssistantText || extractLatestAssistantText(session.messages),
-        usage: this.usage,
-        sessionId: this.sessionResult.sessionId,
-        sessionFile: this.sessionResult.sessionFile,
-        turns: this.turns,
-      };
+      return this.resultSnapshot();
     } finally {
       options.signal?.removeEventListener("abort", abortListener);
     }
   }
 
   async send(message) {
+    const deliver = this.sendChain.then(async () => {
+      const session = this.requireSession();
+      if (session.isStreaming) {
+        await session.steer(String(message));
+        return this.resultSnapshot("steer");
+      }
+      this.reserveTurn();
+      await session.prompt(String(message), { source: "interactive" });
+      return this.resultSnapshot("follow-up");
+    });
+    this.sendChain = deliver.catch(() => {});
+    return deliver;
+  }
+
+  reserveTurn() {
+    if (this.turnsStarted >= this.maxTurns) {
+      const error = new Error(`Child agent reached its ${this.maxTurns}-turn limit.`);
+      error.code = "CHILD_MAX_TURNS";
+      throw error;
+    }
+    this.turnsStarted += 1;
+  }
+
+  resultSnapshot(mode) {
     const session = this.requireSession();
-    if (session.isStreaming) await session.steer(String(message));
-    else await session.prompt(String(message), { source: "interactive" });
+    return {
+      ...(mode ? { mode } : {}),
+      text: this.lastAssistantText || extractLatestAssistantText(session.messages),
+      usage: normalizeUsage(this.usage),
+      sessionId: this.sessionResult.sessionId,
+      sessionFile: this.sessionResult.sessionFile,
+      turns: this.turns,
+    };
   }
 
   async abort(reason = "cancelled") {

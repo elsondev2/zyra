@@ -162,7 +162,7 @@ export class WorkflowRuntime {
   async stop(workflowRunId, reason = "stopped by root") {
     const active = this.active.get(workflowRunId);
     if (active) {
-      active.scheduler.stop();
+      await active.scheduler.stop(reason);
       active.abortController.abort(reason);
       await active.sandbox.stop(reason);
     }

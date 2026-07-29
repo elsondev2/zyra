@@ -1,3 +1,5 @@
+using System.IO.Pipes;
+using System.Text;
 using System.Text.Json;
 using Zyra.ComputerUse.Protocol;
 using Zyra.ComputerUse.Security;
@@ -43,6 +45,36 @@ await Check("protocol is bounded", () =>
     Equal(512 * 1024, NamedPipeRpcHost.MaxMessageBytes);
     return Task.CompletedTask;
 });
+await Check("coalesced pipe requests receive independent responses", async () =>
+{
+    var pipeName = $"zyra-computer-use-test-{Guid.NewGuid():N}";
+    var host = new NamedPipeRpcHost(pipeName, Secret, Path.Combine(Path.GetTempPath(), "zyra-computer-use-tests", Guid.NewGuid().ToString("N")));
+    using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+    var serving = host.RunAsync(cancellation.Token);
+    using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+    await client.ConnectAsync(cancellation.Token);
+    var reader = new StreamReader(client, new UTF8Encoding(false), false, 4096, leaveOpen: true);
+    var writer = new StreamWriter(client, new UTF8Encoding(false), 4096, leaveOpen: true) { AutoFlush = true };
+    var first = Request("health", Secret);
+    var second = Request("health", Secret);
+    await writer.WriteAsync($"{JsonSerializer.Serialize(first)}\n{JsonSerializer.Serialize(second)}\n");
+    var firstLine = await reader.ReadLineAsync(cancellation.Token) ?? throw new InvalidOperationException("First coalesced response is missing.");
+    var secondLine = await reader.ReadLineAsync(cancellation.Token) ?? throw new InvalidOperationException("Second coalesced response is missing.");
+    Equal(first.Id, JsonSerializer.Deserialize<RpcResponse>(firstLine)?.Id);
+    Equal(second.Id, JsonSerializer.Deserialize<RpcResponse>(secondLine)?.Id);
+    await writer.DisposeAsync();
+    reader.Dispose();
+    cancellation.Cancel();
+    try { await serving; } catch (OperationCanceledException) { }
+    client.Close();
+});
+await Check("exact semantic actions fail closed instead of typing into the focused control", () =>
+{
+    Equal(false, NamedPipeRpcHost.CanUseWindowInputFallback(new SidecarAction("type", "window-element:1:2", "text", true, null, null, 0, 0, null)));
+    Equal(false, NamedPipeRpcHost.CanUseWindowInputFallback(new SidecarAction("click", "window-element:1:2", null, false, null, null, 0, 0, null)));
+    Equal(true, NamedPipeRpcHost.CanUseWindowInputFallback(new SidecarAction("key", null, null, false, "ENTER", null, 0, 0, null)));
+    return Task.CompletedTask;
+});
 await Check("sensitive application policy blocks credential, security, and payment targets", () =>
 {
     Equal(true, ControlSecurityPolicy.IsSensitiveApplicationText("Windows Credential Manager"));
@@ -62,5 +94,5 @@ if (failures.Count > 0)
     foreach (var failure in failures) Console.Error.WriteLine($"FAIL: {failure}");
     return 1;
 }
-Console.WriteLine("Zyra computer-use deterministic tests passed (6 checks).");
+Console.WriteLine("Zyra computer-use deterministic tests passed (8 checks).");
 return 0;

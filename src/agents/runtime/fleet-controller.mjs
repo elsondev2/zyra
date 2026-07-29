@@ -122,8 +122,8 @@ export class AgentFleetController {
     if (request.contextFork && !request.sessionFile) {
       const manager = this.rootSession?.sessionManager;
       const leafId = manager?.getLeafId?.();
-      if (!leafId || typeof manager.createBranchedSession !== "function") throw new Error("The root chat cannot be forked from its current state.");
-      request = { ...request, sessionFile: manager.createBranchedSession(leafId) };
+      if (!leafId || typeof this.sessionFactory.createContextFork !== "function") throw new Error("The root chat cannot be forked from its current state.");
+      request = { ...request, sessionFile: await this.sessionFactory.createContextFork(manager, leafId) };
       if (!request.sessionFile) throw new Error("Context-forked subtasks require a persisted root chat.");
     }
     const depth = Number(request.depth ?? 1);
@@ -234,7 +234,7 @@ export class AgentFleetController {
     }
     const resultPromise = this.resultPromise(agentRunId);
     void this.drain();
-    if (request.background !== false && definition.background !== false) {
+    if (request.returnHandle === true || (request.background !== false && definition.background !== false)) {
       return { fleetId: this.fleetId, agentRunId, attemptId, status: "queued", model: route.selectedKey };
     }
     return resultPromise;
@@ -248,8 +248,25 @@ export class AgentFleetController {
     }
     const host = this.completedHosts.get(agentRunId);
     if (host) {
-      await host.send(message);
-      return { agentRunId, delivered: true, mode: "follow-up" };
+      const followUp = await host.send(message);
+      if (followUp?.mode === "follow-up") {
+        const run = this.status(agentRunId);
+        const transcriptRef = { type: "pi-jsonl", sessionId: followUp.sessionId, file: followUp.sessionFile };
+        const scanned = scanChildOutput(followUp.text, {
+          agentRunId,
+          attemptId: run.attemptId,
+          label: run.label,
+          transcriptRef,
+        });
+        await this.emit("agent.usage.updated", { usage: followUp.usage }, { agentRunId });
+        await this.emit("agent.result.completed", {
+          result: scanned,
+          transcriptRef,
+          artifacts: scanned.artifactRefs,
+          elapsedMs: run.elapsedMs,
+        }, { agentRunId, flush: true });
+      }
+      return { agentRunId, delivered: true, mode: followUp?.mode ?? "follow-up", turns: followUp?.turns };
     }
     throw new Error(`Agent is not available for steering: ${agentRunId}.`);
   }

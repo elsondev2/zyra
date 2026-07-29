@@ -41,7 +41,9 @@ async function execute(message) {
     const evaluated = context.evalCode(compiled.code, "workflow.mjs");
     const promiseHandle = context.unwrapResult(evaluated);
     try {
-      const resolved = await context.resolvePromise(promiseHandle);
+      const resolution = context.resolvePromise(promiseHandle);
+      runtime.executePendingJobs();
+      const resolved = await resolution;
       const valueHandle = context.unwrapResult(resolved);
       try {
         const jsonHandle = context.unwrapResult(context.evalCode("value => JSON.stringify(value)"));
@@ -128,6 +130,29 @@ function guestPrelude() {
         throw error;
       } finally { __phaseName = previous; }
     };
+    const __functionPrototype = Function.prototype;
+    const __asyncFunctionPrototype = Object.getPrototypeOf(async function () {});
+    Object.defineProperties(globalThis, {
+      Date: { value: undefined, writable: false, configurable: false },
+      eval: { value: undefined, writable: false, configurable: false },
+      Function: { value: undefined, writable: false, configurable: false },
+      AsyncFunction: { value: undefined, writable: false, configurable: false },
+      WebAssembly: { value: undefined, writable: false, configurable: false },
+      fetch: { value: undefined, writable: false, configurable: false },
+      XMLHttpRequest: { value: undefined, writable: false, configurable: false },
+      WebSocket: { value: undefined, writable: false, configurable: false },
+      EventSource: { value: undefined, writable: false, configurable: false },
+      process: { value: undefined, writable: false, configurable: false },
+      require: { value: undefined, writable: false, configurable: false },
+      module: { value: undefined, writable: false, configurable: false },
+      exports: { value: undefined, writable: false, configurable: false },
+      Deno: { value: undefined, writable: false, configurable: false },
+      Bun: { value: undefined, writable: false, configurable: false },
+    });
+    Object.defineProperty(__functionPrototype, 'constructor', { value: undefined, writable: false, configurable: false });
+    Object.defineProperty(__asyncFunctionPrototype, 'constructor', { value: undefined, writable: false, configurable: false });
+    Object.defineProperty(Math, 'random', { value: undefined, writable: false, configurable: false });
+    Object.freeze(Math);
     Object.freeze(agent); Object.freeze(parallel); Object.freeze(pipeline); Object.freeze(phase);
   `;
 }

@@ -19,6 +19,8 @@ export class WorkflowScheduler {
     this.paused = false;
     this.pauseWaiters = [];
     this.stopped = false;
+    this.stopReason = "workflow stopped";
+    this.activeAgentRunIds = new Set();
     this.cache = new WorkflowCache(options.cacheDirectory);
   }
 
@@ -114,31 +116,56 @@ export class WorkflowScheduler {
     if (this.tokenCount >= this.budget.maxTokens) throw budgetError("token", this.budget.maxTokens);
     if (this.costUsd >= this.budget.maxCostUsd) throw budgetError("cost", this.budget.maxCostUsd);
     this.requestCount += 1;
-    const run = await this.controller.spawn({
-      prompt,
-      goal: prompt,
-      agent: options.agent,
-      label: options.label,
-      model: route.selectedKey,
-      fallbackModels: options.fallbackModels,
-      effort: options.effort,
-      tools: options.tools,
-      permissionMode: options.permissionMode,
-      isolation: options.isolation,
-      writeScope: options.writeScope,
-      readScope: options.readScope,
-      successCriteria: options.schema ? ["Return JSON matching the supplied schema."] : options.successCriteria,
-      workflowRunId: this.workflowRunId,
-      phaseId: phase,
-      background: false,
-    });
-    this.tokenCount += Number(run.usage?.totalTokens) || 0;
-    this.costUsd += Number(run.usage?.cost) || 0;
-    await this.eventStore.append("workflow.agent.linked", { agentRunId: run.agentRunId }, { workflowRunId: this.workflowRunId, agentRunId: run.agentRunId, phaseId: phase });
-    await this.eventStore.append("workflow.usage.updated", {
-      usage: { totalTokens: this.tokenCount, requests: this.requestCount, cost: this.costUsd },
-    }, { workflowRunId: this.workflowRunId });
-    return run;
+    const requestedAgentRunId = randomUUID();
+    let agentRunId = requestedAgentRunId;
+    this.activeAgentRunIds.add(agentRunId);
+    try {
+      const spawned = await this.controller.spawn({
+        prompt,
+        goal: prompt,
+        agent: options.agent,
+        label: options.label,
+        model: route.selectedKey,
+        fallbackModels: options.fallbackModels,
+        effort: options.effort,
+        tools: options.tools,
+        permissionMode: options.permissionMode,
+        isolation: options.isolation,
+        writeScope: options.writeScope,
+        readScope: options.readScope,
+        successCriteria: options.schema ? ["Return JSON matching the supplied schema."] : options.successCriteria,
+        workflowRunId: this.workflowRunId,
+        phaseId: phase,
+        agentRunId,
+        background: true,
+        returnHandle: true,
+      });
+      if (spawned?.agentRunId && spawned.agentRunId !== agentRunId) {
+        this.activeAgentRunIds.delete(agentRunId);
+        agentRunId = spawned.agentRunId;
+        this.activeAgentRunIds.add(agentRunId);
+      }
+      await this.eventStore.append("workflow.agent.linked", { agentRunId }, { workflowRunId: this.workflowRunId, agentRunId, phaseId: phase });
+      if (this.stopped) {
+        await this.controller.stop?.(agentRunId, this.stopReason);
+        throw abortError();
+      }
+      const run = typeof this.controller.wait === "function" && ["queued", "starting", "running", "recovering"].includes(spawned?.status)
+        ? await this.controller.wait(agentRunId)
+        : spawned;
+      if (run?.status && run.status !== "completed") {
+        if (run.status === "cancelled") throw abortError();
+        throw new Error(run.error?.message || `Workflow child agent ended with status ${run.status}.`);
+      }
+      this.tokenCount += Number(run?.usage?.totalTokens) || 0;
+      this.costUsd += Number(run?.usage?.cost) || 0;
+      await this.eventStore.append("workflow.usage.updated", {
+        usage: { totalTokens: this.tokenCount, requests: this.requestCount, cost: this.costUsd },
+      }, { workflowRunId: this.workflowRunId });
+      return run;
+    } finally {
+      this.activeAgentRunIds.delete(agentRunId);
+    }
   }
 
   async acquireConcurrency() {
@@ -165,10 +192,14 @@ export class WorkflowScheduler {
     for (const resolve of this.pauseWaiters.splice(0)) resolve();
   }
 
-  stop() {
+  async stop(reason = "workflow stopped") {
     this.stopped = true;
+    this.stopReason = reason;
     this.resume();
     for (const resolve of this.concurrencyWaiters.splice(0)) resolve();
+    if (typeof this.controller.stop === "function") {
+      await Promise.allSettled([...this.activeAgentRunIds].map((agentRunId) => this.controller.stop(agentRunId, reason)));
+    }
   }
 
   async waitUntilRunnable() {

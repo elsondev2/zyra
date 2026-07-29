@@ -55,6 +55,10 @@ async function readGrants() {
 
 chrome.tabs.onRemoved.addListener((tabId) => void revokeTab(tabId))
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  // Any main-document URL change requires a fresh popup gesture and document token.
-  if (changeInfo.url) void revokeTab(tabId)
+  // Loading also covers same-URL reloads where Chrome reports no URL delta.
+  if (changeInfo.url || changeInfo.status === 'loading') void revokeTab(tabId)
+})
+chrome.webNavigation.onCommitted.addListener((details) => {
+  // A top-level document/loader commit always invalidates the popup-issued document token.
+  if (details.frameId === 0) void revokeTab(details.tabId)
 })

@@ -39,6 +39,9 @@ test('QuickJS sandbox is deterministic and only crosses the explicit phase/agent
   assert.deepEqual(result, ['item-1', 'item-2', 'item-3'])
   assert(seen.some(([operation, name]) => operation === 'phase' && name === 'fanout'))
   assert.equal(seen.filter(([operation]) => operation === 'agent').length, 3)
+  await assert.rejects(sandbox.execute({ source: 'export default Date["now"]()', args: {}, projectedCalls: 0 }), /Date|undefined|not a function/)
+  await assert.rejects(sandbox.execute({ source: 'export default Math["random"]()', args: {}, projectedCalls: 0 }), /random|undefined|not a function/)
+  await assert.rejects(sandbox.execute({ source: 'export default (() => {}).constructor("return 1")()', args: {}, projectedCalls: 0 }), /constructor|undefined|not a function/)
 })
 
 test('sandbox cancellation terminates owned execution without leaving a live worker', async () => {
@@ -118,6 +121,72 @@ test('scheduler enforces max concurrency, caches stable calls, and stops after t
   const costScheduler = new WorkflowScheduler({ controller, eventStore, workflowRunId: 'wf-cost', definition: { scriptHash: 'script-cost' }, args: {}, budget: { maxCalls: 10, maxRequests: 10, maxTokens: 100, maxCostUsd: 0.25, maxConcurrency: 1 }, cacheDirectory: path.join(directory, 'cost') })
   await costScheduler.handle('agent', { prompt: 'first', options: { key: 'first' } })
   await assert.rejects(costScheduler.handle('agent', { prompt: 'second', options: { key: 'second' } }), /cost budget exhausted/)
+  await rm(directory, { recursive: true, force: true })
+})
+
+test('stopping a workflow propagates through the fleet controller to active child runs', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'zyra-workflow-stop-'))
+  let controllerStopCalls = 0
+  let finishChild
+  const childFinished = new Promise((resolve) => { finishChild = resolve })
+  const controller = {
+    previewRoute: () => route,
+    listDefinitions: () => ({ active: [] }),
+    modelRouter: { escalate: () => route },
+    async spawn(request) { return { agentRunId: request.agentRunId, status: 'queued' } },
+    async wait() { return childFinished },
+    async stop(agentRunId) {
+      controllerStopCalls += 1
+      finishChild({ agentRunId, status: 'cancelled', error: { message: 'workflow stopped' } })
+    },
+  }
+  const eventStore = { append: async () => {} }
+  const scheduler = new WorkflowScheduler({
+    controller, eventStore, workflowRunId: 'wf-stop', definition: { scriptHash: 'stop-script' }, args: {},
+    budget: { maxCalls: 2, maxRequests: 2, maxTokens: 100, maxCostUsd: 1, maxConcurrency: 1 }, cacheDirectory: path.join(directory, 'cache'),
+  })
+  const execution = scheduler.handle('agent', { prompt: 'keep running', options: { key: 'running' } })
+  while (scheduler.activeAgentRunIds.size === 0) await new Promise((resolve) => setTimeout(resolve, 1))
+  await scheduler.stop('test workflow stop')
+  await assert.rejects(execution, /Workflow stopped/)
+  assert.equal(controllerStopCalls, 1)
+  await rm(directory, { recursive: true, force: true })
+})
+
+test('workflow stop retries cancellation after a delayed child registration', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'zyra-workflow-stop-race-'))
+  let releaseSpawn
+  let markSpawnStarted
+  let registered = false
+  let controllerStopCalls = 0
+  const spawnStarted = new Promise((resolve) => { markSpawnStarted = resolve })
+  const spawnGate = new Promise((resolve) => { releaseSpawn = resolve })
+  const controller = {
+    previewRoute: () => route,
+    listDefinitions: () => ({ active: [] }),
+    modelRouter: { escalate: () => route },
+    async spawn(request) {
+      markSpawnStarted()
+      await spawnGate
+      registered = true
+      return { agentRunId: request.agentRunId, status: 'queued' }
+    },
+    async wait() { throw new Error('stopped children must not be awaited after delayed registration') },
+    async stop() {
+      controllerStopCalls += 1
+      if (!registered) throw new Error('child is not registered yet')
+    },
+  }
+  const scheduler = new WorkflowScheduler({
+    controller, eventStore: { append: async () => {} }, workflowRunId: 'wf-stop-race', definition: { scriptHash: 'stop-race-script' }, args: {},
+    budget: { maxCalls: 2, maxRequests: 2, maxTokens: 100, maxCostUsd: 1, maxConcurrency: 1 }, cacheDirectory: path.join(directory, 'cache'),
+  })
+  const execution = scheduler.handle('agent', { prompt: 'register slowly', options: { key: 'slow' } })
+  await spawnStarted
+  await scheduler.stop('stop during registration')
+  releaseSpawn()
+  await assert.rejects(execution, /Workflow stopped/)
+  assert.equal(controllerStopCalls, 2)
   await rm(directory, { recursive: true, force: true })
 })
 

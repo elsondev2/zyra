@@ -47,21 +47,29 @@ public sealed class NamedPipeRpcHost
         ValidatePeer(pipe);
         using var reader = new StreamReader(pipe, new UTF8Encoding(false), false, 4096, leaveOpen: true);
         using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true) { AutoFlush = true };
-        while (!cancellationToken.IsCancellationRequested && pipe.IsConnected)
+        var boundedReader = new BoundedLineReader(reader);
+        try
         {
-            var line = await ReadBoundedLineAsync(reader, cancellationToken);
-            if (line is null) break;
-            RpcResponse response;
-            try
+            while (!cancellationToken.IsCancellationRequested && pipe.IsConnected)
             {
-                var request = JsonSerializer.Deserialize<RpcRequest>(line, _json) ?? throw new InvalidDataException("JSON-RPC request is missing.");
-                response = await HandleAsync(request, cancellationToken);
+                var line = await boundedReader.ReadLineAsync(cancellationToken);
+                if (line is null) break;
+                RpcResponse response;
+                try
+                {
+                    var request = JsonSerializer.Deserialize<RpcRequest>(line, _json) ?? throw new InvalidDataException("JSON-RPC request is missing.");
+                    response = await HandleAsync(request, cancellationToken);
+                }
+                catch (Exception error)
+                {
+                    response = new RpcResponse("unknown", false, Error: new RpcError(ErrorCode(error), Limit(error.Message, 512), error is IOException or TimeoutException));
+                }
+                await writer.WriteLineAsync(JsonSerializer.Serialize(response, _json));
             }
-            catch (Exception error)
-            {
-                response = new RpcResponse("unknown", false, Error: new RpcError(ErrorCode(error), Limit(error.Message, 512), error is IOException or TimeoutException));
-            }
-            await writer.WriteLineAsync(JsonSerializer.Serialize(response, _json));
+        }
+        catch (IOException)
+        {
+            // A client closing its end of the pipe is a normal transport shutdown.
         }
     }
 
@@ -126,11 +134,11 @@ public sealed class NamedPipeRpcHost
         var semantic = _uia.TryAct(action, revision);
         if (!semantic)
         {
+            if (!CanUseWindowInputFallback(action))
+                throw new InvalidOperationException("The exact semantic action could not be completed. Observe the target again before acting.");
             switch (action.Type)
             {
                 case "focus": _input.Focus(window); break;
-                case "click": _input.Click(window, RequireBounds(token, action.ElementRef)); break;
-                case "type": _input.TypeText(window, action.Text ?? string.Empty); break;
                 case "key": _input.Key(window, action.Key ?? string.Empty); break;
                 case "scroll": _input.Scroll(window, action.DeltaY); break;
                 case "wait": Thread.Sleep(100); break;
@@ -140,12 +148,8 @@ public sealed class NamedPipeRpcHost
         return new { changed = action.Type != "wait", semantic };
     }
 
-    private Bounds RequireBounds(string token, string? elementRef)
-    {
-        if (elementRef is null || !_observations.TryGetValue(token, out var observation)) throw new InvalidOperationException("Current element bounds are unavailable.");
-        return observation.Elements.FirstOrDefault(element => element.ElementRef == elementRef)?.Bounds
-            ?? throw new InvalidOperationException("Current element bounds are unavailable.");
-    }
+    public static bool CanUseWindowInputFallback(SidecarAction action) =>
+        action.ElementRef is null && action.Type is "focus" or "key" or "scroll" or "wait";
 
     private object Stop()
     {
@@ -163,22 +167,43 @@ public sealed class NamedPipeRpcHost
         if (process.SessionId != Process.GetCurrentProcess().SessionId) throw new UnauthorizedAccessException("Named-pipe peer belongs to another user session.");
     }
 
-    private static async Task<string?> ReadBoundedLineAsync(StreamReader reader, CancellationToken cancellationToken)
+    private sealed class BoundedLineReader(StreamReader reader)
     {
-        var builder = new StringBuilder();
-        var buffer = new char[4096];
-        while (builder.Length <= MaxMessageBytes)
+        private readonly char[] _buffer = new char[4096];
+        private readonly StringBuilder _pending = new();
+
+        public async Task<string?> ReadLineAsync(CancellationToken cancellationToken)
         {
-            var read = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken);
-            if (read == 0) return builder.Length == 0 ? null : builder.ToString();
-            for (var index = 0; index < read; index++)
+            while (true)
             {
-                if (buffer[index] == '\n') return builder.ToString().TrimEnd('\r');
-                builder.Append(buffer[index]);
-                if (Encoding.UTF8.GetByteCount(builder.ToString()) > MaxMessageBytes) throw new InvalidDataException("Sidecar message exceeds 512 KiB.");
+                var buffered = _pending.ToString();
+                var newline = buffered.IndexOf('\n');
+                if (newline >= 0)
+                {
+                    var line = buffered[..newline].TrimEnd('\r');
+                    _pending.Remove(0, newline + 1);
+                    EnsureBounded(line);
+                    return line;
+                }
+                EnsureBounded(buffered);
+                var read = await reader.ReadAsync(_buffer.AsMemory(0, _buffer.Length), cancellationToken);
+                if (read == 0)
+                {
+                    if (_pending.Length == 0) return null;
+                    var finalLine = _pending.ToString().TrimEnd('\r');
+                    _pending.Clear();
+                    EnsureBounded(finalLine);
+                    return finalLine;
+                }
+                _pending.Append(_buffer, 0, read);
             }
         }
-        throw new InvalidDataException("Sidecar message exceeds 512 KiB.");
+
+        private static void EnsureBounded(string value)
+        {
+            if (Encoding.UTF8.GetByteCount(value) > MaxMessageBytes)
+                throw new InvalidDataException("Sidecar message exceeds 512 KiB.");
+        }
     }
 
     private static bool FixedEquals(string left, string right)

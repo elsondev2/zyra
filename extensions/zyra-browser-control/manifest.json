@@ -3,7 +3,7 @@
   "name": "Zyra Browser Control",
   "version": "0.1.0",
   "description": "Pairs one explicitly selected Chrome tab with the local Zyra desktop control broker.",
-  "permissions": ["activeTab", "scripting", "storage"],
+  "permissions": ["activeTab", "scripting", "storage", "webNavigation"],
   "optional_host_permissions": ["http://127.0.0.1/*"],
   "action": {
     "default_title": "Pair this tab with Zyra",

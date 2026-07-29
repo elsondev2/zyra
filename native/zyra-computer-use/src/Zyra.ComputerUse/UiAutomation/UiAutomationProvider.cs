@@ -68,8 +68,8 @@ public sealed class UiAutomationProvider
 
     public bool TryAct(SidecarAction action, int revision)
     {
-        if (action.Type == "focus") return false;
-        if (action.ElementRef is null || !action.ElementRef.StartsWith($"window-element:{revision}:", StringComparison.Ordinal) || !_elementRefs.TryGetValue(action.ElementRef, out var element))
+        if (action.ElementRef is null) return false;
+        if (!action.ElementRef.StartsWith($"window-element:{revision}:", StringComparison.Ordinal) || !_elementRefs.TryGetValue(action.ElementRef, out var element))
             throw new InvalidOperationException("The UI Automation element reference is stale.");
         try
         {

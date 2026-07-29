@@ -8,7 +8,8 @@ import { discoverAgentDefinitions } from '../src/agents/definition-loader.mjs'
 import { FleetEventStore } from '../src/agents/event-store.mjs'
 import { ModelRouter, FleetModelRouteError } from '../src/agents/model-router.mjs'
 import { scanChildOutput } from '../src/agents/output-scanner.mjs'
-import { assertPathWithinScopes } from '../src/agents/runtime/child-session-factory.mjs'
+import { assertPathWithinScopes, ChildSessionFactory } from '../src/agents/runtime/child-session-factory.mjs'
+import { ChildSessionHost } from '../src/agents/runtime/child-session-host.mjs'
 import { AgentFleetController } from '../src/agents/runtime/fleet-controller.mjs'
 import { planFleetRecovery } from '../src/agents/runtime/recovery.mjs'
 import { ChildTranscriptStore } from '../src/agents/runtime/transcript-store.mjs'
@@ -177,13 +178,115 @@ test('fleet concurrency reserves the root slot, supports cancellation, and persi
   await rm(project, { recursive: true, force: true })
 })
 
-test('context-forked subtask uses the root branch API and transcript paging is bounded', async () => {
+test('completed child follow-ups persist their latest result and cumulative usage through the fleet store', async () => {
+  const project = await mkdtemp(path.join(os.tmpdir(), 'zyra-child-follow-up-'))
+  const host = {
+    dispose() {},
+    async send() {
+      return {
+        mode: 'follow-up', text: 'follow-up result', usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7, requests: 2, cost: 0.2 },
+        sessionId: 'follow-up-session', sessionFile: path.join(project, 'follow-up.jsonl'), turns: 2,
+      }
+    },
+  }
+  const controller = new AgentFleetController({
+    project, rootSessionId: 'follow-up-root', fleetId: 'follow-up-fleet', modelCatalog: [catalogEntry('gpt-5.6-terra')],
+    runner: { async run(run, options) {
+      const sessionFile = path.join(project, 'follow-up.jsonl')
+      await writeFile(sessionFile, '')
+      await options.onLinked({ host, sessionId: 'follow-up-session', sessionFile })
+      return { host, sessionId: 'follow-up-session', sessionFile, text: 'initial result', usage: { totalTokens: 2, requests: 1 } }
+    } },
+  })
+  await controller.initialize({ installRoot: path.resolve('.') })
+  const spawned = await controller.spawn({ prompt: 'initial', model: 'terra', background: true })
+  await controller.wait(spawned.agentRunId)
+  const delivery = await controller.send(spawned.agentRunId, 'continue')
+  const persisted = controller.status(spawned.agentRunId)
+  assert.equal(delivery.mode, 'follow-up')
+  assert.equal(delivery.turns, 2)
+  assert.match(persisted.result.text, /follow-up result/)
+  assert.equal(persisted.usage.totalTokens, 7)
+  assert.equal(persisted.usage.requests, 2)
+  await controller.dispose()
+  await rm(project, { recursive: true, force: true })
+})
+
+test('child turn limits cover initial and follow-up prompts while preserving cumulative result usage', async () => {
+  let listener = () => {}
+  let sequence = 0
+  const session = {
+    isStreaming: false,
+    messages: [],
+    subscribe(callback) { listener = callback; return () => { listener = () => {} } },
+    async prompt() {
+      sequence += 1
+      const message = {
+        role: 'assistant',
+        content: [{ type: 'text', text: `reply-${sequence}` }],
+        usage: { input: 1, output: 2, totalTokens: 3, cost: { total: 0.1 } },
+      }
+      this.messages.push(message)
+      listener({ type: 'message_end', message })
+      listener({ type: 'turn_end' })
+    },
+    async steer() {},
+    async abort() {},
+    dispose() {},
+  }
+  const host = new ChildSessionHost({
+    maxTurns: 2,
+    factory: { create: async () => ({ session, sessionId: 'child-session', sessionFile: 'child.jsonl' }) },
+  })
+  await host.open()
+  const initial = await host.run('first')
+  const followUp = await host.send('second')
+  assert.equal(initial.turns, 1)
+  assert.equal(followUp.mode, 'follow-up')
+  assert.equal(followUp.turns, 2)
+  assert.equal(followUp.text, 'reply-2')
+  assert.equal(followUp.usage.totalTokens, 6)
+  assert.equal(followUp.usage.requests, 2)
+  await assert.rejects(host.send('third'), /2-turn limit/)
+  host.dispose()
+})
+
+test('context forks clone the Pi session manager and never move the live root manager', async () => {
+  const { SessionManager } = await import('@earendil-works/pi-coding-agent')
+  const project = await mkdtemp(path.join(os.tmpdir(), 'zyra-isolated-context-fork-'))
+  const rootManager = SessionManager.create(project, project)
+  rootManager.appendMessage({ role: 'user', content: [{ type: 'text', text: 'root question' }], timestamp: Date.now() })
+  rootManager.appendMessage({
+    role: 'assistant', content: [{ type: 'text', text: 'root answer' }], provider: 'openai-codex', model: 'gpt-5.6-terra',
+    usage: { input: 1, output: 1, totalTokens: 2 }, stopReason: 'stop', timestamp: Date.now(),
+  })
+  const original = { file: rootManager.getSessionFile(), id: rootManager.getSessionId(), leaf: rootManager.getLeafId() }
+  const factory = new ChildSessionFactory({ project, transcriptDirectory: path.join(project, 'children') })
+  const branched = await factory.createContextFork(rootManager, original.leaf)
+  assert(branched)
+  assert.notEqual(branched, original.file)
+  assert.deepEqual({ file: rootManager.getSessionFile(), id: rootManager.getSessionId(), leaf: rootManager.getLeafId() }, original)
+  await rm(project, { recursive: true, force: true })
+})
+
+test('context-forked subtask uses the isolated branch factory and transcript paging is bounded', async () => {
   const project = await mkdtemp(path.join(os.tmpdir(), 'zyra-context-fork-'))
   const branched = path.join(project, 'branched.jsonl')
   await writeFile(branched, '')
-  const rootSession = { model: { provider: 'openai-codex', id: 'gpt-5.6-terra' }, sessionManager: { getLeafId: () => 'leaf-1', createBranchedSession: (leaf) => { assert.equal(leaf, 'leaf-1'); return branched } } }
+  const rootManager = {
+    getLeafId: () => 'leaf-1',
+    createBranchedSession: () => { throw new Error('live root manager must not be mutated') },
+  }
+  const rootSession = { model: { provider: 'openai-codex', id: 'gpt-5.6-terra' }, sessionManager: rootManager }
+  const sessionFactory = {
+    async createContextFork(manager, leaf) {
+      assert.equal(manager, rootManager)
+      assert.equal(leaf, 'leaf-1')
+      return branched
+    },
+  }
   let receivedSessionFile = null
-  const controller = new AgentFleetController({ project, rootSession, rootSessionId: 'fork-root', fleetId: 'fork-fleet', modelCatalog: [catalogEntry('gpt-5.6-terra')], runner: { async run(run, options) { receivedSessionFile = options.sessionFile; const host = { dispose() {} }; await options.onLinked({ host, sessionId: 'fork-child', sessionFile: branched }); return { host, sessionId: 'fork-child', sessionFile: branched, text: 'done', usage: {} } } } })
+  const controller = new AgentFleetController({ project, rootSession, sessionFactory, rootSessionId: 'fork-root', fleetId: 'fork-fleet', modelCatalog: [catalogEntry('gpt-5.6-terra')], runner: { async run(run, options) { receivedSessionFile = options.sessionFile; const host = { dispose() {} }; await options.onLinked({ host, sessionId: 'fork-child', sessionFile: branched }); return { host, sessionId: 'fork-child', sessionFile: branched, text: 'done', usage: {} } } } })
   await controller.initialize({ installRoot: path.resolve('.') })
   const spawned = await controller.spawn({ prompt: 'fork this', contextFork: true, model: 'inherit', background: true })
   await controller.wait(spawned.agentRunId)

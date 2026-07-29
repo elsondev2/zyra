@@ -20,6 +20,21 @@ export class ChildSessionFactory {
     this.settings = options.settings ?? { compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } };
   }
 
+  async createContextFork(rootSessionManager, leafId) {
+    const sourceFile = rootSessionManager?.getSessionFile?.();
+    if (!sourceFile) throw new Error("Context-forked subtasks require a persisted root chat.");
+    const { SessionManager } = await loadPi();
+    const isolatedManager = SessionManager.open(
+      sourceFile,
+      rootSessionManager.getSessionDir?.(),
+      rootSessionManager.getCwd?.(),
+    );
+    if (!isolatedManager.getEntry?.(leafId)) {
+      throw new Error("The selected root branch has not been persisted yet.");
+    }
+    return isolatedManager.createBranchedSession(leafId);
+  }
+
   async create(options = {}) {
     const {
       createAgentSession,
