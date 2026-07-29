@@ -9,8 +9,8 @@ Implement the complete Zyra subagents and workflows suite end to end.
 Read these files completely before editing:
 
 - `AGENTS.md`
-- `docs/zyra-subagents-workflows-implementation.md`
-- `docs/zyra-parallel-agent-build-runbook.md`
+- `docs/implementations/subagents-workflows.md`
+- `docs/runbooks/parallel-agent-build.md`
 - Every source and architecture file referenced by the implementation plan
 - Pi documentation and linked examples required by the plan
 

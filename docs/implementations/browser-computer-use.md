@@ -1278,7 +1278,7 @@ The assigned builder owns this complete plan. It must not stop after contracts, 
 
 The builder must:
 
-- Read this plan, `AGENTS.md`, `docs/assistant-browser-architecture.md`, and the parallel execution runbook completely.
+- Read this plan, `AGENTS.md`, `docs/architecture/assistant-browser.md`, and the parallel execution runbook completely.
 - Inspect real files before editing.
 - Implement every phase end to end.
 - Preserve the existing Browser profile and security constraints.

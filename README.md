@@ -156,7 +156,7 @@ Inside chat:
 - `/reload` restarts Zyra from disk and resumes the chat.
 - `/reload --soft` reloads commands, themes, prompt, and memory only.
 
-The complete agent/workflow guide, safety boundaries, definition formats, persistence layout, and desktop controls are in [docs/subagents-workflows.md](docs/subagents-workflows.md). Current provider compatibility and deferred model work are tracked in [docs/model-support.md](docs/model-support.md).
+The complete agent/workflow guide, safety boundaries, definition formats, persistence layout, and desktop controls are in [docs/guides/subagents-workflows.md](docs/guides/subagents-workflows.md). Current provider compatibility and deferred model work are tracked in [docs/guides/model-support.md](docs/guides/model-support.md).
 
 ## Project Shape
 

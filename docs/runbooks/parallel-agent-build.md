@@ -83,7 +83,7 @@ Each builder commits only inside its own branch. Builders never merge, rebase, c
 ### Builder A owns
 
 ```text
-docs/zyra-subagents-workflows-implementation.md
+docs/implementations/subagents-workflows.md
 src/agents/**
 src/workflows/**
 src/tui/components/*agent*
@@ -102,7 +102,7 @@ fleet tests and handoff
 ### Builder B owns
 
 ```text
-docs/zyra-browser-computer-use-implementation.md
+docs/implementations/browser-computer-use.md
 src/agent-control/**
 desktop/src/shared/agent-control/**
 desktop/src/main/agent-control/**
@@ -261,9 +261,9 @@ Integrator C also receives up to three attempts. Later integration attempts cont
 Integrator C reads:
 
 ```text
-docs/zyra-subagents-workflows-implementation.md
-docs/zyra-browser-computer-use-implementation.md
-docs/zyra-parallel-agent-build-runbook.md
+docs/implementations/subagents-workflows.md
+docs/implementations/browser-computer-use.md
+docs/runbooks/parallel-agent-build.md
 ```
 
 It then:

@@ -218,9 +218,9 @@ function runIntegrator(prompt, attempt) {
 
 function buildIntegrationPrompt(attempt, validation) {
   const brief = '@docs/agent-prompts/agent-platform-integrator.md'
-  const runbook = '@docs/zyra-parallel-agent-build-runbook.md'
-  const fleetPlan = '@docs/zyra-subagents-workflows-implementation.md'
-  const controlPlan = '@docs/zyra-browser-computer-use-implementation.md'
+  const runbook = '@docs/runbooks/parallel-agent-build.md'
+  const fleetPlan = '@docs/implementations/subagents-workflows.md'
+  const controlPlan = '@docs/implementations/browser-computer-use.md'
   const common = [
     `Read and attach ${brief}, ${runbook}, ${fleetPlan}, and ${controlPlan} completely.`,
     `Run ID: ${config.runId}.`,

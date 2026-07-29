@@ -73,7 +73,7 @@ This relay is test scaffolding, not a release transport. It starts only when exp
 - executable per-action confirmation for irreversible external side effects;
 - trusted user-interaction auto-pause and Take Over/Resume controls;
 - richer live action history and ownership labels;
-- Chrome background visual implementation from `docs/zyra-chrome-visual-browser-use-implementation.md`;
-- Windows isolated surfaces from `docs/zyra-windows-isolated-computer-use-implementation.md`.
+- Chrome background visual implementation from `docs/implementations/chrome-visual-browser-use.md`;
+- Windows isolated surfaces from `docs/implementations/windows-isolated-computer-use.md`.
 
 The broader integration branch still contains unrelated release blockers identified in the prior inspection. This handoff establishes the in-app visual Browser slice; it does not declare the entire agent platform ready for `master`.

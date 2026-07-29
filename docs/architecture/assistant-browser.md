@@ -136,4 +136,4 @@ Coordinate actions run against hidden retained guests and do not activate the Br
 - automatic server discovery from terminal output or filesystem watchers;
 - freeform viewport sizing and device emulation.
 
-Chrome background visual use is specified separately in `docs/zyra-chrome-visual-browser-use-implementation.md`. Windows isolation is specified in `docs/zyra-windows-isolated-computer-use-implementation.md`.
+Chrome background visual use is specified separately in `docs/implementations/chrome-visual-browser-use.md`. Windows isolation is specified in `docs/implementations/windows-isolated-computer-use.md`.

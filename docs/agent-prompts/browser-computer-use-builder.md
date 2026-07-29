@@ -9,9 +9,9 @@ Implement the complete Zyra Browser, paired Chrome, and Windows computer-use sui
 Read these files completely before editing:
 
 - `AGENTS.md`
-- `docs/zyra-browser-computer-use-implementation.md`
-- `docs/zyra-parallel-agent-build-runbook.md`
-- `docs/assistant-browser-architecture.md`
+- `docs/implementations/browser-computer-use.md`
+- `docs/runbooks/parallel-agent-build.md`
+- `docs/architecture/assistant-browser.md`
 - Every source and platform reference required by the implementation plan
 
 The implementation plan is your task specification. Complete every phase: shared contracts, `AgentControlBroker`, grants and observation revisions, in-app Browser driver, duplex bridge tools, Control Center, Chrome MV3 extension and pairing, Windows UI Automation/capture/input sidecar, audit, recovery, delegated-lease seam, packaging, tests, docs, and handoff.

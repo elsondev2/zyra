@@ -11,9 +11,9 @@ Merge the complete subagents/workflows suite and the complete Browser/Chrome/Win
 Read completely:
 
 - `AGENTS.md`
-- `docs/zyra-subagents-workflows-implementation.md`
-- `docs/zyra-browser-computer-use-implementation.md`
-- `docs/zyra-parallel-agent-build-runbook.md`
+- `docs/implementations/subagents-workflows.md`
+- `docs/implementations/browser-computer-use.md`
+- `docs/runbooks/parallel-agent-build.md`
 - Both builder handoffs directly from their branches
 
 ## Procedure

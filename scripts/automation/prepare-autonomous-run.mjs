@@ -48,9 +48,9 @@ for (const target of Object.values(worktrees)) {
 }
 
 for (const required of [
-  'docs/zyra-subagents-workflows-implementation.md',
-  'docs/zyra-browser-computer-use-implementation.md',
-  'docs/zyra-parallel-agent-build-runbook.md',
+  'docs/implementations/subagents-workflows.md',
+  'docs/implementations/browser-computer-use.md',
+  'docs/runbooks/parallel-agent-build.md',
   'docs/agent-prompts/subagents-workflows-builder.md',
   'docs/agent-prompts/browser-computer-use-builder.md',
   'docs/agent-prompts/agent-platform-integrator.md',
@@ -145,7 +145,7 @@ try {
         branch: fleetBranch,
         worktree: worktrees.fleet,
         promptFile: 'docs/agent-prompts/subagents-workflows-builder.md',
-        planFile: 'docs/zyra-subagents-workflows-implementation.md',
+        planFile: 'docs/implementations/subagents-workflows.md',
         handoffFile: 'docs/handoffs/subagents-workflows.md',
         successMarker: 'READY_FOR_MERGE',
       },
@@ -154,7 +154,7 @@ try {
         branch: controlBranch,
         worktree: worktrees.control,
         promptFile: 'docs/agent-prompts/browser-computer-use-builder.md',
-        planFile: 'docs/zyra-browser-computer-use-implementation.md',
+        planFile: 'docs/implementations/browser-computer-use.md',
         handoffFile: 'docs/handoffs/browser-computer-use.md',
         successMarker: 'READY_FOR_MERGE',
       },

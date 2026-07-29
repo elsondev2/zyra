@@ -118,7 +118,7 @@ async function runZyra(config, agent, prompt, attempt, signalContext) {
 function buildPrompt(config, agent, agentKey, attempt, validation) {
   const briefMention = `@${agent.promptFile}`
   const planMention = `@${agent.planFile}`
-  const runbookMention = '@docs/zyra-parallel-agent-build-runbook.md'
+  const runbookMention = '@docs/runbooks/parallel-agent-build.md'
   if (attempt === 1) {
     return [
       `Read and attach ${briefMention}, ${planMention}, and ${runbookMention} completely.`,
