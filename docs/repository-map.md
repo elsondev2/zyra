@@ -1,0 +1,49 @@
+# Zyra Repository Map
+
+**Status: Current — 2026-07-30.** This map covers only the Zyra repository. It distinguishes committed product source from generated, private, compatibility, and historical local material.
+
+## Committed product and support surfaces
+
+| Path | Purpose / owner | State and evidence | Action |
+|---|---|---|---|
+| `src/` | Terminal app, shared CLI runtime, memory, agent fleet, workflow runtime, and TUI. | Tracked; loaded by `bin/zyra.mjs` and root scripts. | Keep as product source. |
+| `desktop/` | Electron main/preload/renderer application and Desktop contract tests. | Tracked; root `ui:*` and agent-platform scripts invoke its package. | Keep as product source. Generated `out/`, `dist/`, `release/`, local logs, and Desktop state stay ignored. |
+| `extensions/` | Chrome exact-tab visual-control extension. | Tracked source; packaged by Desktop from `extensions/zyra-browser-control/dist/unpacked`. | Keep source; keep generated `dist/` ignored. |
+| `native/` | Windows computer-use sidecar and deterministic tests. | Tracked .NET source; root `test:agent-control` builds the test project. | Keep source; keep `bin/` and `obj/` ignored. |
+| `agents/` | Built-in child-agent definitions. | Tracked; discovered by the fleet definition loader. | Keep. |
+| `workflows/` | Built-in sandboxed workflow definitions. | Tracked; discovered by the workflow registry. | Keep. |
+| `prompts/` | Public Zyra system prompt, inspection prompt, and profile overlays. | Tracked; loaded by CLI startup/profile code and packaged by `package.json`. | Keep. |
+| `bin/` | Published/local CLI entry point. | Tracked; root `bin` metadata and scripts invoke `bin/zyra.mjs`. | Keep. |
+| `scripts/` | Regression checks, automation, release helper, and maintenance entry points. | Tracked; referenced by `package.json`. | Keep; generated outputs belong outside this directory. |
+| `docs/` | Current guides plus architecture, implementation, research, runbook, handoff, and internal-agent records. | Tracked; indexed by `docs/README.md`. | Keep organized by document role. |
+| Root launch/config files | `README.md`, `AGENTS.md`, `RELEASE.md`, manifests, lockfiles, installers, and shell launchers. | Tracked; required for development, installation, and package metadata. | Keep at repository root. |
+
+## Local, ignored, or generated surfaces
+
+| Path | Classification | Evidence | Action |
+|---|---|---|---|
+| `node_modules/`, `desktop/node_modules/` | Generated dependencies. | Ignored and installed from lockfiles. | Keep locally when needed; never commit. |
+| `.zyra/`, `desktop/.zyra/` | Private local sessions, memory, preferences, and handoffs. | Explicitly ignored; privacy checks reject local/private material. | Keep private and local. |
+| `.zyra-worktrees/` | Registered temporary Git worktrees. | Ignored; branch/worktree metadata proves their purpose. | Remove a worktree only after ancestry and cleanliness checks. |
+| `.coord/` | Autonomous-run coordination state. | Ignored; no production import/package reference. | Local-only historical run state; remove only after its run is accepted. |
+| `.playwright-cli/`, `desktop/.playwright-cli/` | Browser automation state and captures. | Ignored; referenced only by test/migration documentation. | Generated test state; safe to recreate. |
+| `dist/` | Root release archives and checksums. | Ignored; release tooling is the source. | Generated release output. Preserve intentionally retained archives; do not package as source. |
+| `desktop/out/`, `desktop/dist/`, `desktop/release/` | Electron compile/package output. | Ignored and recreated by Desktop scripts. | Generated; remove exact copies when cleaning. |
+| `output/` | Screenshots and report render output. | Ignored; no runtime consumer. | Generated review evidence; retain or remove by explicit review. |
+| `tmp/` | Database-recovery work, stress-test output, downloaded tools, and scratch files. | Ignored; no production import. Some recovery files may be unique evidence. | Local-only; review subdirectories individually rather than deleting broadly. |
+| `resources/` (repository root) | Private exports and derived local analysis. | Root `.gitignore` intentionally excludes it; no package/runtime source dependency. | Keep private; never commit or copy into public docs. This is separate from tracked `desktop/resources/`. |
+| `tools/import-*.mjs`, `tools/normalize-*.mjs` | Private export import/normalization helpers. | Narrow ignore rules; no production call path. | Keep local with the private data workflow or archive outside public source. |
+| `shims/zyra.cmd` | Local compatibility launcher forwarding to root `zyra.cmd`. | Ignored; no tracked code reference. | Keep only if a local PATH entry still uses it. |
+| `apps/` | Residual generated experiment output. | The inspected local child contains only ignored `node_modules/`, `dist/`, and `.playwright-cli/`; no source file, package manifest, nested Git history, or tracked Zyra reference was found. | It is not a movable project. Remove the exact local child only with destructive-cleanup approval. |
+| `NUL`, `nul`, `desktop/NUL`, `desktop/nul`, `document.readyState` | Accidental command/shell output files. | Ignored; no source or package reference. | Disposable exact-path clutter. |
+| `desktop/electron.vite.config.<timestamp>.mjs` | Timestamped temporary Electron config. | Ignored by a narrow pattern; canonical tracked config exists. | Disposable exact-path generated clutter. |
+
+## Side-project conclusion
+
+No self-contained side project with source or Git history was found inside Zyra. The ignored `apps/` child is generated residue rather than project source, so moving it to a playground would only relocate dependencies and build output. No project move is proposed.
+
+## Verification boundaries
+
+- Tracked references were searched across the repository while excluding dependency/generated directories.
+- The external consolidation backup bundle was hash-verified before root cleanup.
+- A clean Git status proves committed-source cleanliness; it does not claim that ignored private state or retained local recovery evidence has been deleted.
