@@ -112,6 +112,7 @@ Never paste an API key into the chat editor or pass it as a command argument. Us
 
 ```powershell
 zyra
+zyra --version
 zyra onboarding
 zyra inspect
 zyra ask "Explain this error simply"

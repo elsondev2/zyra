@@ -2,11 +2,18 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { formatZyraVersion, isZyraVersionRequest } from "../src/version.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "src", "zyra.mjs");
+const args = process.argv.slice(2);
 
-const result = spawnSync(process.execPath, [cli, ...process.argv.slice(2)], {
+if (isZyraVersionRequest(args)) {
+  process.stdout.write(`${formatZyraVersion()}\n`);
+  process.exit(0);
+}
+
+const result = spawnSync(process.execPath, [cli, ...args], {
   stdio: "inherit",
   cwd: root,
   env: {

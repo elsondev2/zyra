@@ -46,6 +46,7 @@ Within the `0.x.x` era, use a lightweight local meaning:
    ```bash
    npm run check
    npm run privacy-check
+   node bin/zyra.mjs --version
    ```
 
 4. Bump the version:
@@ -59,6 +60,7 @@ Within the `0.x.x` era, use a lightweight local meaning:
    ```bash
    npm run check
    npm run privacy-check
+   node bin/zyra.mjs --version
    ```
 
 6. Commit:
@@ -75,6 +77,8 @@ Within the `0.x.x` era, use a lightweight local meaning:
    ```bash
    git push origin master
    ```
+
+The version command must print the package-backed version and exit without creating a session, calling a model, or writing project state. The automated release gate covers `--version`, `-v`, and `version`.
 
 ## Release note style
 
