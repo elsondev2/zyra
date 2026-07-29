@@ -42,10 +42,10 @@ export function FileActionsMenu({
         direction: 'up' | 'down'
         top?: number
         bottom?: number
-        right: number
+        left: number
     } | null>(null)
 
-    const updatePosition = () => {
+    const updatePosition = (menuWidth = 180) => {
         const button = buttonRef.current
         if (!button) return
 
@@ -65,17 +65,18 @@ export function FileActionsMenu({
             return
         }
 
-        const right = Math.max(viewportPadding, window.innerWidth - rect.right)
+        const maxLeft = Math.max(viewportPadding, window.innerWidth - menuWidth - viewportPadding)
+        const left = Math.max(viewportPadding, Math.min(rect.right - menuWidth, maxLeft))
         setMenuPosition(direction === 'up'
             ? {
                 direction,
                 bottom: Math.max(viewportPadding, window.innerHeight - rect.top + gap),
-                right
+                left
             }
             : {
                 direction,
                 top: Math.max(viewportPadding, rect.bottom + gap),
-                right
+                left
             })
     }
 
@@ -83,9 +84,13 @@ export function FileActionsMenu({
         if (!open) return
 
         updatePosition()
-        const handleResize = () => updatePosition()
+        const handleResize = () => updatePosition(menuRef.current?.offsetWidth ?? 180)
+        const rafId = window.requestAnimationFrame(handleResize)
         window.addEventListener('resize', handleResize)
-        return () => window.removeEventListener('resize', handleResize)
+        return () => {
+            window.cancelAnimationFrame(rafId)
+            window.removeEventListener('resize', handleResize)
+        }
     }, [items.length, open, preferredDirection, presentation])
 
     useEffect(() => {
@@ -196,7 +201,7 @@ export function FileActionsMenu({
                     style={{
                         top: menuPosition.top == null ? undefined : `${menuPosition.top}px`,
                         bottom: menuPosition.bottom == null ? undefined : `${menuPosition.bottom}px`,
-                        right: `${menuPosition.right}px`
+                        left: `${menuPosition.left}px`
                     }}
                     onClick={(event) => event.stopPropagation()}
                 >
