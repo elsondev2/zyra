@@ -14,6 +14,7 @@ import { getTitleGenerationModelCandidates, queueGeneratedSessionTitle, shouldGe
 import { getAssistantCanonicalThreadId, matchesAssistantThreadId } from '../src/main/assistant/thread-identity'
 import { ZyraPiRuntime } from '../src/main/assistant/zyra-pi-runtime'
 import { buildEffortSliderTicks, EFFORT_LABELS } from '../src/renderer/src/pages/assistant/assistant-composer-controller-constants'
+import { getAssistantRecoveryIssue } from '../src/renderer/src/pages/assistant/assistant-runtime-recovery'
 import { piEditFixture, piWriteExistingFixture, piWriteFailureFixture } from './fixtures/file-change-lifecycle-fixtures'
 import {
     coerceAssistantReasoningEffortForModel,
@@ -939,5 +940,37 @@ assert.equal(
     'a provider request failure must keep a live bridge connected'
 )
 assert.equal(failedTurnContext.activeTurnId, null)
+
+const transportFailureRuntime = new ZyraPiRuntime()
+const transportFailureEvents: AssistantRuntimeEvent[] = []
+transportFailureRuntime.on('runtime', (event: AssistantRuntimeEvent) => transportFailureEvents.push(event))
+const transportFailureTurnId = 'turn-transport-error'
+const transportFailureContext = {
+    ...failedTurnContext,
+    localThreadId: 'thread-transport-error',
+    providerThreadId: 'provider-transport-error',
+    resumeProviderThreadId: 'provider-transport-error',
+    worker: {
+        request: async () => { throw new Error('fetch failed') },
+        isAlive: () => true
+    },
+    connected: true,
+    activeTurnId: transportFailureTurnId
+}
+const transportFailureRunner = transportFailureRuntime as unknown as {
+    runPromptTurn: (targetContext: typeof transportFailureContext, targetTurnId: string, prompt: string) => Promise<void>
+}
+await transportFailureRunner.runPromptTurn(transportFailureContext, transportFailureTurnId, 'hello')
+const transportFailureSessionState = transportFailureEvents.findLast((event) => event.type === 'session.state.changed')
+assert.equal(
+    transportFailureSessionState?.type === 'session.state.changed' ? transportFailureSessionState.payload.state : null,
+    'error',
+    'a failed provider fetch must invalidate the stale transport so the desktop reconnects'
+)
+assert.equal(transportFailureContext.connected, false)
+assert.equal(transportFailureContext.activeTurnId, null)
+const transportRecoveryIssue = getAssistantRecoveryIssue({ threadLastError: 'fetch failed' })
+assert.equal(transportRecoveryIssue?.key, 'connection-lost')
+assert.equal(transportRecoveryIssue?.recoverable, true)
 
 console.log('Pi assistant lifecycle capture: ok')

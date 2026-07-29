@@ -1,4 +1,5 @@
 import type { AssistantActivity } from '@shared/assistant/contracts'
+import { isAssistantTransportFailure } from '@shared/assistant/transport-failure'
 
 export const MAX_ASSISTANT_RECONNECT_ATTEMPTS = 10
 
@@ -87,7 +88,7 @@ function classifyAssistantRecoveryText(value: string): AssistantRecoveryClassifi
         }
     }
 
-    if (/timed out waiting for|session stopped before request completed|cannot write to codex app-server stdin|codex app-server exited|socket hang up|econnreset|econnrefused|pipe is being closed/i.test(normalized)) {
+    if (isAssistantTransportFailure(normalized) || /timed out waiting for|session stopped before request completed|cannot write to codex app-server stdin|codex app-server exited|pipe is being closed/i.test(normalized)) {
         return {
             key: 'connection-lost',
             title: 'Connection lost',

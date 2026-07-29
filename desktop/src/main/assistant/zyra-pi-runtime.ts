@@ -21,6 +21,7 @@ import type {
 import { parseAgentSurfaceDescriptor, sanitizeFileChangeRawPayload } from '../../shared/assistant/contracts'
 import { getAssistantModelReasoningEfforts, isAssistantReasoningEffort } from '../../shared/assistant/reasoning-efforts'
 import { analyzeAssistantReadResult } from '../../shared/assistant/read-activity'
+import { isAssistantTransportFailure } from '../../shared/assistant/transport-failure'
 import { resolveZyraRoot } from '../zyra/zyra-root'
 import type { PreparedAssistantPromptImage } from './prompt-images'
 import { getAssistantCanonicalThreadId } from './thread-identity'
@@ -1343,6 +1344,8 @@ export class ZyraPiRuntime extends EventEmitter {
         } catch (error) {
             if (context.activeTurnId !== turnId) return
             const message = error instanceof Error ? error.message : 'Zyra prompt failed.'
+            const transportFailed = isAssistantTransportFailure(error)
+            if (transportFailed) context.connected = false
             if (isExpectedBridgeDisposalError(error)) {
                 if (context.activeTurnId === turnId) context.activeTurnId = null
                 markTurnCompleted(context, turnId)
