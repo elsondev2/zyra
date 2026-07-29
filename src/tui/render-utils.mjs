@@ -57,7 +57,18 @@ export function truncateVisible(text, max) {
 }
 
 export function clampLineToWidth(line, width) {
-  return truncateVisible(line, Math.max(1, width));
+  return truncateVisible(sanitizeTerminalLine(line), Math.max(1, width));
+}
+
+export function sanitizeTerminalLine(value) {
+  return String(value ?? "")
+    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b[P^_][\s\S]*?\x1b\\/g, "")
+    .replace(/\x1b\[([0-?]*[ -/]*)([@-~])/g, (sequence, _parameters, finalByte) => finalByte === "m" ? sequence : "")
+    .replace(/\x1b(?!\[[0-?]*[ -/]*m)[@-_]?/g, "")
+    .replace(/\r?\n|\r/g, " ")
+    .replace(/\t/g, "  ")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f-\x9f]/g, "");
 }
 
 export function wrapPlain(text, width) {

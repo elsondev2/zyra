@@ -55,7 +55,7 @@ export async function runTerminalInputLoop(onInput, options = {}, controls = {})
   const onKeypress = async (str, key) => {
     if (isFocusSequence(str, key)) return;
     try {
-      await editor.handleKeypress(str, key);
+      await dispatchTerminalKeypress(host, editor, str, key);
     } catch (error) {
       controls.onError?.(error);
     }
@@ -105,6 +105,16 @@ export async function runTerminalInputLoop(onInput, options = {}, controls = {})
 
   host.invalidate({ force: true });
   await done;
+}
+
+export async function dispatchTerminalKeypress(host, fallbackInput, str, key) {
+  const activeInput = host?.inputComponent ?? fallbackInput;
+  if (typeof activeInput?.handleKeypress === "function") {
+    return activeInput.handleKeypress(str, key);
+  }
+  if (typeof activeInput?.handleInput === "function") {
+    return activeInput.handleInput(key?.sequence ?? str ?? "");
+  }
 }
 
 function outputOffResize(host, handler) {

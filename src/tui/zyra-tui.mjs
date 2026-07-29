@@ -2,6 +2,8 @@ export { StaticLinesComponent, ZyraComponentHost } from "./component-host.mjs";
 export {
   ActivityComponent,
   AssistantMessageComponent,
+  CheckedCommandsComponent,
+  StoppedCommandsComponent,
   ToolMessageComponent,
   UserMessageComponent,
   renderToolBlock,

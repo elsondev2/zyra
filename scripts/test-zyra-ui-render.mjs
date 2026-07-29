@@ -3,17 +3,20 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readImageDimensions } from "../src/clipboard-image.mjs";
 import { buildProfileChangePrompt, handleSlash } from "../src/slash-command-handlers.mjs";
+import { getSlashCommand } from "../src/slash-commands.mjs";
 import { getSlashSuggestions } from "../src/slash-suggestions.mjs";
 import { markOnboardingComplete, readOnboardingState, shouldRunOnboarding } from "../src/onboarding.mjs";
 import { AssistantMessageLifecycle, createZyraUi, mergeAssistantTextDelta } from "../src/zyra-ui.mjs";
-import { getZyraAvailableThinkingLevels, getZyraThinkingLevel, registerZyraRuntimeModels, resolveZyraStartupPreferences, setModel, setProfile, setThinking, setWebFetch, setWebSearch, setZyraTheme, syncZyraThinkingLevel } from "../src/zyra-sdk.mjs";
+import { getZyraAvailableThinkingLevels, getZyraModelThinkingLevels, getZyraThinkingLevel, registerZyraRuntimeModels, resolveZyraStartupPreferences, setModel, setProfile, setThinking, setWebFetch, setWebSearch, setZyraTheme, syncZyraThinkingLevel } from "../src/zyra-sdk.mjs";
 import { applyGpt56ThinkingEffort, GPT_56_THINKING_LEVELS } from "../src/thinking-levels.mjs";
+import { PI_SUPPORT_PENDING_STATUS } from "../src/model-compatibility.mjs";
 import { renderStatusLine } from "../src/status-line.mjs";
 import { buildTerminalTheme } from "../src/terminal-theme.mjs";
 import { renderAccountStatusBox, renderCodexUsageBox, renderStatusBox } from "../src/terminal-blocks.mjs";
-import { ZyraComponentHost, EditorComponent, StaticLinesComponent, renderToolBlock } from "../src/tui/zyra-tui.mjs";
-import { stripAnsi } from "../src/tui/render-utils.mjs";
+import { ZyraComponentHost, EditorComponent, StaticLinesComponent, UserMessageComponent, renderToolBlock } from "../src/tui/zyra-tui.mjs";
+import { renderLinesWithinWidth, stripAnsi } from "../src/tui/render-utils.mjs";
 
 function assistantMessage(text = "", id = "assistant-1") {
   return { id, role: "assistant", content: text ? [{ type: "text", text }] : [] };
@@ -282,11 +285,46 @@ function runToolOutputUsesFullBlockWidthRegression() {
     result: { content: [{ type: "text", text: longOutput }] },
     durationMs: 1200,
   }, undefined, 80).map(stripAnsi);
+  const outputRows = lines.filter((line) => line.includes("0123456789"));
 
-  assert.equal(lines.some((line) => line.trim() === longOutput.slice(0, 78)), true, "result rows should use full block width, not the command status width");
-  assert.equal(lines.some((line) => line.trim() === longOutput.slice(78)), true, "long result rows should wrap instead of truncating");
-  assert.equal(lines.some((line) => line.includes("...")), false, "single-line result output should not be pre-truncated");
+  assert.equal(outputRows.length, 1, "command output should stay on one bounded preview row instead of growing the card");
+  assert.equal(outputRows[0].trim().startsWith(longOutput.slice(0, 30)), true, "the preview should preserve the beginning of single-line output");
+  assert.equal(outputRows[0].includes("..."), true, "oversized single-line output should make truncation visible");
   assert.equal(lines.every((line) => line.length <= 80), true);
+}
+
+function runCommandCardStableHeightRegression() {
+  const startedAt = Date.now() - 5000;
+  const base = {
+    toolName: "bash",
+    args: { action: "run", command: "rg -n compact node_modules", timeout: 30 },
+    startedAt,
+  };
+  const snapshots = [
+    { ...base, state: "running" },
+    { ...base, state: "running", partialResult: { content: [{ type: "text", text: "one line" }] } },
+    { ...base, state: "running", partialResult: { content: [{ type: "text", text: "x".repeat(600) }] } },
+    { ...base, state: "done", result: { content: [{ type: "text", text: "one\ntwo\nthree\nfour\nfive" }] }, durationMs: 16000 },
+  ].map((state) => renderToolBlock(state, undefined, 80).map(stripAnsi));
+
+  assert.equal(new Set(snapshots.map((lines) => lines.length)).size, 1, "start, update, and completion must keep one command-card height");
+  assert.equal(snapshots.every((lines) => lines.every((line) => line.length <= 80)), true, "every command-card snapshot must fit its terminal width");
+  assert.equal(snapshots.some((lines) => lines.some((line) => /action: run/.test(line))), false, "command cards should omit internal managed-tool control arguments");
+  assert.match(snapshots.at(-1).join("\n"), /\.\.\. 3 earlier output lines/);
+  assert.match(snapshots.at(-1).join("\n"), /four\s*\n\s*five/);
+
+  const hostile = renderToolBlock({
+    ...base,
+    state: "running",
+    partialResult: { content: [{ type: "text", text: "\x1b[2J\x1b[Hdanger\rrewrite\tok\x1b]0;owned\x07" }] },
+  }, undefined, 80);
+  const hostilePlain = hostile.map(stripAnsi).join("\n");
+  assert.equal(hostile.length, snapshots[0].length, "terminal control bytes must not change the fixed card height");
+  assert.equal(hostile.join("\n").includes("\x1b[2J"), false, "command output must not clear Zyra's terminal");
+  assert.equal(hostile.join("\n").includes("\x1b]"), false, "command output must not emit terminal-title or OSC sequences");
+  assert.equal(/[\r\t]/.test(hostile.join("\n")), false, "command output must normalize carriage returns and tabs before rendering");
+  assert.match(hostilePlain, /danger/);
+  assert.match(hostilePlain, /rewrite  ok/);
 }
 
 function runToolOutputWordWrapRegression() {
@@ -429,6 +467,41 @@ function runInteractiveNoTurnEndDuplicateRegression() {
   assert.equal((after.match(/Final answer/g) ?? []).length, 1, "turn_end/agent_end must not append a delayed duplicate");
 }
 
+function runTurnEndKeepsRuntimeBusyRegression() {
+  const ui = createZyraUi();
+  ui._debugBeginInteractiveForTests();
+  ui.event({ type: "turn_start" });
+  ui.event({ type: "turn_end" });
+  assert.equal(ui._debugActivityLabelForTests(), "thinking", "an intermediate turn boundary must stay active while the agent can begin another tool round");
+  ui.event({ type: "agent_end" });
+  assert.equal(ui._debugActivityLabelForTests(), "", "agent_end should return the editor to idle");
+}
+
+function runCompactionLifecycleRegression() {
+  const ui = createZyraUi();
+  ui._debugBeginInteractiveForTests();
+  ui.event({ type: "compaction_start", reason: "threshold" });
+  const running = ui._debugRenderLinesForTests(80).map(stripAnsi).join("\n");
+  assert.match(running, /compact threshold/, "the TUI must render compaction_start immediately");
+
+  ui.event({
+    type: "compaction_end",
+    reason: "threshold",
+    result: { firstKeptEntryId: "kept", tokensBefore: 150000, estimatedTokensAfter: 32000 },
+    aborted: false,
+    willRetry: false,
+  });
+  const completed = ui._debugRenderLinesForTests(80).map(stripAnsi).join("\n");
+  assert.match(completed, /compacted threshold/, "the TUI must render the matching compaction_end outcome");
+
+  const failedUi = createZyraUi();
+  failedUi._debugBeginInteractiveForTests();
+  failedUi.event({ type: "compaction_start", reason: "overflow" });
+  failedUi.event({ type: "compaction_end", reason: "overflow", aborted: false, willRetry: false, errorMessage: "quota exceeded" });
+  const failed = failedUi._debugRenderLinesForTests(80).map(stripAnsi).join("\n");
+  assert.match(failed, /compact failed quota exceeded/, "failed compaction must not be presented as completed");
+}
+
 function runInteractiveToolComponentRegression() {
   const ui = createZyraUi();
   ui._debugBeginInteractiveForTests();
@@ -458,32 +531,260 @@ function runInteractiveToolComponentRegression() {
   assert.match(plain, /clean/);
 }
 
+function runManagedBashStatusReconciliationRegression() {
+  const ui = createZyraUi();
+  ui._debugBeginInteractiveForTests();
+  ui.event({
+    type: "tool_execution_start",
+    toolName: "bash",
+    toolCallId: "managed-original",
+    args: { command: "node scripts/slow-task.mjs", timeout: 30 },
+    startedAt: "2026-07-29T10:00:00.000Z",
+  });
+  ui.event({
+    type: "tool_execution_end",
+    toolName: "bash",
+    toolCallId: "managed-original",
+    result: {
+      content: [{ type: "text", text: "Command still running (cmd-1)." }],
+      details: { jobId: "cmd-1", status: "running" },
+    },
+  });
+  const running = ui._debugRenderLinesForTests(100).map(stripAnsi).join("\n");
+  assert.equal((running.match(/\$ node scripts\/slow-task\.mjs/g) ?? []).length, 1, "a managed command should keep its original card while backgrounded");
+  assert.match(running, /bash running/);
+  assert.doesNotMatch(running, /succeeded/);
+
+  ui.event({
+    type: "managed_bash_job_update",
+    jobId: "cmd-1",
+    toolCallId: "managed-original",
+    command: "node scripts/slow-task.mjs",
+    status: "completed",
+    output: "slow task done",
+    startedAt: "2026-07-29T10:00:00.000Z",
+    completedAt: "2026-07-29T10:00:03.000Z",
+    exitCode: 0,
+  });
+  const completed = ui._debugRenderLinesForTests(100).map(stripAnsi).join("\n");
+  assert.equal((completed.match(/\$ node scripts\/slow-task\.mjs/g) ?? []).length, 1, "background completion should mutate the original command card");
+  assert.match(completed, /slow task done/);
+  assert.match(completed, /3\.0s succeeded/);
+
+  const failedUi = createZyraUi();
+  failedUi._debugBeginInteractiveForTests();
+  failedUi.event({
+    type: "tool_execution_start",
+    toolName: "bash",
+    toolCallId: "managed-failing-original",
+    args: { command: "node scripts/failing-task.mjs" },
+  });
+  failedUi.event({
+    type: "tool_execution_end",
+    toolName: "bash",
+    toolCallId: "managed-failing-original",
+    result: {
+      content: [{ type: "text", text: "Command still running (cmd-2)." }],
+      details: { jobId: "cmd-2", status: "running" },
+    },
+  });
+  failedUi.event({
+    type: "tool_execution_start",
+    toolName: "bash",
+    toolCallId: "managed-status-poll",
+    args: { action: "status", jobId: "cmd-2", wait: 10 },
+  });
+  failedUi.event({
+    type: "tool_execution_end",
+    toolName: "bash",
+    toolCallId: "managed-status-poll",
+    result: { content: [{ type: "text", text: "task failed with exit code 1" }] },
+    isError: true,
+  });
+  const failed = failedUi._debugRenderLinesForTests(100).map(stripAnsi).join("\n");
+  assert.equal((failed.match(/\$ node scripts\/failing-task\.mjs/g) ?? []).length, 1, "a status poll failure should finish the original command card");
+  assert.match(failed, /task failed with exit code 1/);
+  assert.doesNotMatch(failed, /action: status|jobId: cmd-2|wait: 10/);
+
+  const checkUi = createZyraUi();
+  checkUi._debugBeginInteractiveForTests();
+  checkUi.event({ type: "tool_execution_start", toolName: "bash", toolCallId: "managed-check", args: { command: "npm run check" } });
+  checkUi.event({
+    type: "tool_execution_end",
+    toolName: "bash",
+    toolCallId: "managed-check",
+    result: { content: [{ type: "text", text: "still running" }], details: { jobId: "cmd-3", status: "running" } },
+  });
+  checkUi.event({
+    type: "managed_bash_job_update",
+    jobId: "cmd-3",
+    toolCallId: "managed-check",
+    command: "npm run check",
+    status: "completed",
+    output: "all checks passed",
+  });
+  const checked = checkUi._debugRenderLinesForTests(100).map(stripAnsi).join("\n");
+  assert.match(checked, /✓ Checked command — npm run check/);
+  assert.doesNotMatch(checked, /\$ npm run check|all checks passed/);
+
+  const failedCheckUi = createZyraUi();
+  failedCheckUi._debugBeginInteractiveForTests();
+  failedCheckUi.event({ type: "tool_execution_start", toolName: "bash", toolCallId: "managed-check-failed", args: { command: "npm run check" } });
+  failedCheckUi.event({
+    type: "tool_execution_end",
+    toolName: "bash",
+    toolCallId: "managed-check-failed",
+    result: { content: [{ type: "text", text: "still running" }], details: { jobId: "cmd-check-failed", status: "running" } },
+  });
+  failedCheckUi.event({
+    type: "managed_bash_job_update",
+    jobId: "cmd-check-failed",
+    toolCallId: "managed-check-failed",
+    command: "npm run check",
+    status: "failed",
+    output: "privacy-check failed",
+    exitCode: 1,
+  });
+  const failedCheck = failedCheckUi._debugRenderLinesForTests(100).map(stripAnsi).join("\n");
+  assert.equal((failedCheck.match(/\$ npm run check/g) ?? []).length, 1, "a failed managed check should render against its original command");
+  assert.match(failedCheck, /privacy-check failed/);
+  assert.doesNotMatch(failedCheck, /! bash failed|action: status|jobId:/);
+
+  const stoppedUi = createZyraUi();
+  stoppedUi._debugBeginInteractiveForTests();
+  stoppedUi.event({ type: "tool_execution_start", toolName: "bash", toolCallId: "managed-stop", args: { command: "npm run dev" } });
+  stoppedUi.event({
+    type: "tool_execution_end",
+    toolName: "bash",
+    toolCallId: "managed-stop",
+    result: { content: [{ type: "text", text: "still running" }], details: { jobId: "cmd-4", status: "running" } },
+  });
+  stoppedUi.event({
+    type: "managed_bash_job_update",
+    jobId: "cmd-4",
+    toolCallId: "managed-stop",
+    command: "npm run dev",
+    status: "stopped",
+    output: "server stopped",
+  });
+  const stopped = stoppedUi._debugRenderLinesForTests(100).map(stripAnsi).join("\n");
+  assert.equal((stopped.match(/\$ npm run dev/g) ?? []).length, 1, "a stopped managed command should retain its original card");
+  assert.match(stopped, /\$ npm run dev.*stopped/, "the retained command card should update to the stopped state");
+  assert.match(stopped, /server stopped/, "the retained stopped card should preserve its latest output");
+  assert.match(stopped, /■ Stopped command — npm run dev/, "the stopped-command transcript line should remain visible");
+}
+
 function runToolEventsWithoutIdsReuseActiveComponentRegression() {
   const ui = createZyraUi();
   ui._debugBeginInteractiveForTests();
   ui.event({
     type: "tool_execution_start",
     toolName: "bash",
-    args: { command: "node scripts/test-zyra-ui-render.mjs" },
+    args: { command: "node scripts/render-suite.mjs" },
   });
   ui.event({
     type: "tool_execution_update",
     toolName: "bash",
-    args: { command: "node scripts/test-zyra-ui-render.mjs" },
+    args: { command: "node scripts/render-suite.mjs" },
     partialResult: { content: [{ type: "text", text: "running suite" }] },
   });
   ui.event({
     type: "tool_execution_end",
     toolName: "bash",
-    args: { command: "node scripts/test-zyra-ui-render.mjs" },
+    args: { command: "node scripts/render-suite.mjs" },
     result: { content: [{ type: "text", text: "suite ok" }] },
   });
   const plain = ui._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
 
-  assert.equal((plain.match(/\$ node scripts\/test-zyra-ui-render\.mjs/g) ?? []).length, 1, "tool events without ids should update the running component instead of appending a second one");
+  assert.equal((plain.match(/\$ node scripts\/render-suite\.mjs/g) ?? []).length, 1, "tool events without ids should update the running component instead of appending a second one");
   assert.match(plain, /suite ok/);
   assert.doesNotMatch(plain, /running suite/);
   assert.doesNotMatch(plain, /bash running/);
+}
+
+function runSuccessfulCheckCommandSummaryRegression() {
+  const ui = createZyraUi();
+  ui._debugBeginInteractiveForTests();
+  ui.event({ type: "turn_start" });
+  ui.event({
+    type: "tool_execution_start",
+    toolName: "bash",
+    toolCallId: "check-1",
+    args: { command: "npm run check" },
+  });
+  const running = ui._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
+  assert.equal(ui._debugActivityLabelForTests(), "checking command", "a verification command should use one generic active label");
+  assert.doesNotMatch(running, /\$ npm run check/, "a running verification should not mount the full tool block");
+
+  ui.event({
+    type: "tool_execution_end",
+    toolName: "bash",
+    toolCallId: "check-1",
+    args: { command: "npm run check" },
+    result: { content: [{ type: "text", text: "verbose check output" }] },
+  });
+  const singular = ui._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
+  assert.match(singular, /✓ Checked command — npm run check/);
+  assert.doesNotMatch(singular, /verbose check output/);
+  assert.doesNotMatch(singular, /\$ npm run check/);
+
+  ui.event({
+    type: "tool_execution_start",
+    toolName: "bash",
+    toolCallId: "check-2",
+    args: { command: "npm run lint" },
+  });
+  ui.event({
+    type: "tool_execution_end",
+    toolName: "bash",
+    toolCallId: "check-2",
+    args: { command: "npm run lint" },
+    result: { content: [{ type: "text", text: "verbose lint output" }] },
+  });
+  const plural = ui._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
+  assert.equal((plural.match(/✓ Checked 2 commands/g) ?? []).length, 1);
+  assert.doesNotMatch(plural, /Checked command —/);
+  assert.doesNotMatch(plural, /verbose lint output/);
+
+  const failedUi = createZyraUi();
+  failedUi._debugBeginInteractiveForTests();
+  failedUi.event({
+    type: "tool_execution_start",
+    toolName: "bash",
+    toolCallId: "check-failed",
+    args: { command: "npm test" },
+  });
+  failedUi.event({
+    type: "tool_execution_end",
+    toolName: "bash",
+    toolCallId: "check-failed",
+    args: { command: "npm test" },
+    result: { content: [{ type: "text", text: "tests failed" }] },
+    isError: true,
+  });
+  const failed = failedUi._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
+  assert.match(failed, /\$ npm test/);
+  assert.match(failed, /tests failed/);
+  assert.doesNotMatch(failed, /✓ Checked/);
+
+  const progressUi = createZyraUi();
+  progressUi._debugBeginInteractiveForTests();
+  progressUi.event({ type: "turn_start" });
+  progressUi.beginProgress("Inspecting", { label: "orienting", detail: "mapping the project", percent: 10 });
+  for (const [toolCallId, command] of [["progress-check-1", "npm run check"], ["progress-check-2", "npm run lint"]]) {
+    progressUi.event({ type: "tool_execution_start", toolName: "bash", toolCallId, args: { command } });
+    progressUi.event({
+      type: "tool_execution_end",
+      toolName: "bash",
+      toolCallId,
+      args: { command },
+      result: { content: [{ type: "text", text: `${command} output` }] },
+    });
+  }
+  const progress = progressUi._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
+  assert.match(progress, /✓ Checked 2 commands/, "progress-mode checks should use the same compact aggregate");
+  assert.match(progress, /orienting/, "check commands should not replace the higher-level progress mission");
+  assert.doesNotMatch(progress, /checked bash|npm run check output|npm run lint output/);
 }
 
 function runRunningToolStartsImmediatelyRegression() {
@@ -503,12 +804,168 @@ function runRunningToolStartsImmediatelyRegression() {
   const plain = ui._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
   assert.match(plain, /edit running/, "tool start should render immediately as running");
   assert.match(plain, /path src\/example\.mjs/);
-  assert.match(plain, /edit replace/);
-  assert.match(plain, /--- before/);
+  assert.match(plain, /live preview/);
+  assert.match(plain, /\+2\/-1/);
+  assert.match(plain, /--- a\/src\/example\.mjs/);
   assert.match(plain, /- const value = 1;/);
-  assert.match(plain, /\+\+\+ after/);
+  assert.match(plain, /\+\+\+ b\/src\/example\.mjs/);
   assert.match(plain, /\+ const value = 2;/);
-  assert.match(plain, /status started/);
+}
+
+function runFileChangeAuthoritativeReconciliationRegression() {
+  const ui = createZyraUi();
+  ui._debugBeginInteractiveForTests();
+  const args = {
+    path: "src/live-edit.mjs",
+    oldString: "const value = 1;",
+    newString: "const value = 2;",
+  };
+  ui.event({
+    type: "tool_execution_start",
+    toolName: "edit",
+    toolCallId: "edit-authoritative",
+    args,
+  });
+  const preview = ui._debugRenderLinesForTests(54).map(stripAnsi).join("\n");
+  assert.match(preview, /> edit running/);
+  assert.match(preview, /live preview/);
+  assert.match(preview, /\+ const value = 2;/);
+  assert.equal(preview.split("\n").every((line) => line.length <= 54), true, "running edit preview must respect terminal width");
+
+  ui.event({
+    type: "tool_execution_end",
+    toolName: "edit",
+    toolCallId: "edit-authoritative",
+    result: {
+      content: [{ type: "text", text: "Successfully replaced 1 block." }],
+      details: {
+        diff: "  context line\n- const value = 1;\n+ const value = 3;",
+        patch: "--- a/src/live-edit.mjs\n+++ b/src/live-edit.mjs\n@@ -1 +1 @@\n-const value = 1;\n+const value = 3;\n",
+      },
+    },
+    isError: false,
+  });
+  const completed = ui._debugRenderLinesForTests(54).map(stripAnsi).join("\n");
+  assert.equal((completed.match(/> edit applied/g) ?? []).length, 1, "result details must replace preview inside one mutable card");
+  assert.match(completed, /applied · provider result/);
+  assert.match(completed, /\+\s+const value = 3;/);
+  assert.doesNotMatch(completed, /\+\s+const value = 2;/, "authoritative result diff must replace provisional content");
+  assert.equal(completed.split("\n").every((line) => line.length <= 54), true, "completed edit result must respect terminal width");
+}
+
+function runLateFileChangeEventsStayTerminalRegression() {
+  const ui = createZyraUi();
+  ui._debugBeginInteractiveForTests();
+  const args = {
+    path: "src/late-edit.mjs",
+    oldString: "const value = 1;",
+    newString: "const value = 2;",
+  };
+  ui.event({
+    type: "tool_execution_start",
+    toolName: "edit",
+    toolCallId: "edit-late-event",
+    args,
+  });
+  ui.event({
+    type: "tool_execution_end",
+    toolName: "edit",
+    toolCallId: "edit-late-event",
+    args,
+    result: {
+      content: [{ type: "text", text: "Successfully replaced 1 block." }],
+      details: {
+        patch: "--- a/src/late-edit.mjs\n+++ b/src/late-edit.mjs\n@@ -1 +1 @@\n-const value = 1;\n+const value = 2;\n",
+      },
+    },
+  });
+  ui.event({
+    type: "tool_execution_update",
+    toolName: "edit",
+    toolCallId: "edit-late-event",
+    args,
+    partialResult: { content: [{ type: "text", text: "late running update" }] },
+  });
+  ui.event({
+    type: "tool_execution_end",
+    toolName: "edit",
+    toolCallId: "edit-late-event",
+    args,
+    result: { content: [{ type: "text", text: "duplicate completion" }] },
+    isError: true,
+  });
+
+  const plain = ui._debugRenderLinesForTests(70).map(stripAnsi).join("\n");
+  assert.equal((plain.match(/> edit applied/g) ?? []).length, 1, "late events must keep one completed card");
+  assert.equal((plain.match(/> edit running/g) ?? []).length, 0, "late updates must not regress a completed operation");
+  assert.equal((plain.match(/! edit failed/g) ?? []).length, 0, "duplicate completions must not replace terminal state");
+  assert.doesNotMatch(plain, /late running update|duplicate completion/);
+}
+
+function runFailedFileChangePreviewRegression() {
+  const ui = createZyraUi();
+  ui._debugBeginInteractiveForTests();
+  const args = { path: "src/blocked.mjs", content: "uncommitted\n" };
+  ui.event({ type: "tool_execution_start", toolName: "write", toolCallId: "write-failed", args });
+  ui.event({
+    type: "tool_execution_end",
+    toolName: "write",
+    toolCallId: "write-failed",
+    result: { content: [{ type: "text", text: "Permission denied" }] },
+    isError: true,
+  });
+  const failed = ui._debugRenderLinesForTests(60).map(stripAnsi).join("\n");
+  assert.equal((failed.match(/! write failed/g) ?? []).length, 1);
+  assert.match(failed, /failed · preview not applied/);
+  assert.match(failed, /\+ uncommitted/);
+  assert.doesNotMatch(failed, /applied ·/);
+}
+
+function runSnapshotBackedWriteRenderingRegression() {
+  const ui = createZyraUi();
+  ui._debugBeginInteractiveForTests();
+  const args = { path: "src/existing.mjs", content: "after\n" };
+  ui.event({ type: "tool_execution_start", toolName: "write", toolCallId: "write-snapshot", args });
+  ui.event({
+    type: "tool_execution_end",
+    toolName: "write",
+    toolCallId: "write-snapshot",
+    result: {
+      content: [{ type: "text", text: "Successfully wrote file" }],
+      details: {
+        source: "synthetic-snapshot",
+        snapshotBacked: true,
+        path: args.path,
+        paths: [args.path],
+        patch: "--- a/src/existing.mjs\n+++ b/src/existing.mjs\n@@ -1 +1 @@\n-before\n+after\n",
+        diff: "- before\n+ after",
+      },
+    },
+  });
+  const plain = ui._debugRenderLinesForTests(64).map(stripAnsi).join("\n");
+  assert.equal((plain.match(/> write applied/g) ?? []).length, 1);
+  assert.match(plain, /applied · snapshot-backed/);
+  assert.match(plain, /\+\s+after/);
+  assert.doesNotMatch(plain, /live preview/);
+}
+
+function runFileChangeEventsWithoutIdsRegression() {
+  const ui = createZyraUi();
+  ui._debugBeginInteractiveForTests();
+  const args = { path: "src/no-id.mjs", oldText: "old", newText: "new" };
+  ui.event({ type: "tool_execution_start", toolName: "edit", args });
+  ui.event({
+    type: "tool_execution_end",
+    toolName: "edit",
+    result: {
+      content: [{ type: "text", text: "ok" }],
+      details: { diff: "- old\n+ final", patch: "--- a/src/no-id.mjs\n+++ b/src/no-id.mjs\n@@ -1 +1 @@\n-old\n+final\n" },
+    },
+  });
+  const plain = ui._debugRenderLinesForTests(70).map(stripAnsi).join("\n");
+  assert.equal((plain.match(/> edit applied/g) ?? []).length, 1, "no-ID file changes must reuse their one active component");
+  assert.match(plain, /\+\s+final/);
+  assert.doesNotMatch(plain, /\+\s+new/);
 }
 
 function runWriteToolRicherRepresentationRegression() {
@@ -552,7 +1009,7 @@ function runConsecutiveToolSpacingRegression() {
   const lines = ui._debugRenderLinesForTests(80).map(stripAnsi);
   const firstEnd = lines.findIndex((line) => line.includes("a-output"));
   const firstFooter = lines.findIndex((line, index) => index > firstEnd && line.includes("succeeded"));
-  const secondStart = lines.findIndex((line) => line.includes("write succeeded"));
+  const secondStart = lines.findIndex((line) => line.includes("write applied"));
   assert.ok(firstEnd >= 0, "first tool output should render");
   assert.ok(firstFooter > firstEnd, "first tool footer should render after output");
   assert.ok(secondStart > firstEnd, "second tool should render after first tool");
@@ -586,6 +1043,18 @@ function runAssistantAndToolInterleaveRegression() {
   const plain = ui._debugRenderLinesForTests(70).map(stripAnsi).join("\n");
   assert.equal((plain.match(/Reading files/g) ?? []).length, 1, "assistant stream should not become raw interleaved blocks");
   assert.equal((plain.match(/read/g) ?? []).length, 1, "tool output should stay in its keyed component");
+}
+
+function runTerminalLineControlSanitizationRegression() {
+  const rendered = renderLinesWithinWidth([
+    "\x1b[31mred\x1b[0m\x1b[2J\x1b[H\x1b]0;owned\x07\rnext\tvalue",
+  ], 80)[0];
+
+  assert.equal(rendered.includes("\x1b[31m"), true, "host output should preserve component color styling");
+  assert.equal(rendered.includes("\x1b[2J"), false, "host output must strip clear-screen controls");
+  assert.equal(rendered.includes("\x1b]"), false, "host output must strip OSC controls");
+  assert.equal(/[\r\t]/.test(rendered), false, "host output must normalize carriage returns and tabs");
+  assert.match(stripAnsi(rendered), /red next  value/);
 }
 
 function runWidthFitRegression() {
@@ -624,7 +1093,7 @@ function runStaticPanelsThroughHostRegression() {
   });
   ui.commands();
   const plain = ui._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
-  assert.match(plain, /Zyra session/);
+  assert.match(plain, /Zyra thread/);
   assert.match(plain, /Slash commands/);
   assert.match(plain, /\/memory\s+toggle memory logging for this chat/);
   assert.match(plain, /Web\s+:\s+all on/);
@@ -907,6 +1376,134 @@ function runEditorWordWrapRegression() {
   assert.equal(lines.every((line) => line.length <= 22), true);
 }
 
+function runEditorSoftWrapWhitespaceRegression() {
+  const editor = new EditorComponent({
+    suggestions: () => [],
+    theme: {},
+  });
+  editor.setText("alpha beta gamma xx   delta");
+
+  const lines = editor.render(22).map(stripAnsi);
+  assert.equal(lines[1], "> alpha beta gamma xx", "the first input row should keep the prompt marker");
+  assert.equal(lines[2], "  delta", "soft wrapping should use one clean hanging indent without carrying spaces onto the next row");
+}
+
+function runEditorWrappedCursorLayoutRegression() {
+  const editor = new EditorComponent({
+    suggestions: () => [],
+    theme: {},
+  });
+  editor.setText("12345 abcdef");
+  editor.cursorIndex = 9;
+
+  const lines = editor.render(12).map(stripAnsi);
+  assert.equal(lines[1], "> 12345");
+  assert.equal(lines[2], "  abcdef");
+  assert.deepEqual(editor.cursorPosition(12), { row: 2, col: 5 }, "hardware cursor placement must use the full wrapped layout");
+}
+
+async function runEditorWrappedArrowNavigationRegression() {
+  const editor = new EditorComponent({
+    suggestions: () => [],
+    theme: {},
+  });
+  editor.setHost({
+    width: () => 12,
+    canScroll: () => false,
+    invalidate() {},
+  });
+  editor.setText("12345 abcdef");
+  editor.cursorIndex = 9;
+  editor.render(12);
+
+  await editor.handleKeypress("", { name: "up" });
+  assert.equal(editor.cursorIndex, 3, "Up should preserve the visual column on the previous wrapped row");
+  await editor.handleKeypress("", { name: "down" });
+  assert.equal(editor.cursorIndex, 9, "Down should return to the matching visual column");
+  await editor.handleKeypress("", { name: "home" });
+  assert.equal(editor.cursorIndex, 6, "Home should move to the start of the current visual row");
+  await editor.handleKeypress("", { name: "end" });
+  assert.equal(editor.cursorIndex, 12, "End should move to the end of the current visual row");
+}
+
+async function runEditorStandardKeyBehaviorRegression() {
+  const editor = new EditorComponent({
+    suggestions: () => [{ value: "complete", label: "complete" }],
+    theme: {},
+  });
+  editor.setText("abcd");
+  editor.cursorIndex = 2;
+  await editor.handleKeypress("", { name: "right" });
+  assert.equal(editor.cursorIndex, 3, "Right should move the cursor when editing inside text instead of accepting a suggestion");
+  assert.equal(editor.buffer, "abcd");
+
+  editor.setText("a🙂b");
+  editor.cursorIndex = 3;
+  await editor.handleKeypress("", { name: "backspace" });
+  assert.equal(editor.buffer, "ab", "Backspace should remove one complete grapheme");
+  assert.equal(editor.cursorIndex, 1);
+
+  editor.setText("hello");
+  editor.cursorIndex = 2;
+  await editor.handleKeypress("", { name: "delete" });
+  assert.equal(editor.buffer, "helo", "Delete should remove the grapheme after the cursor");
+  assert.equal(editor.cursorIndex, 2);
+
+  editor.setText("alpha beta");
+  await editor.handleKeypress("", { name: "w", ctrl: true });
+  assert.equal(editor.buffer, "alpha ", "Ctrl+W should delete the word before the cursor");
+
+  editor.setText("alpha beta");
+  editor.cursorIndex = 5;
+  await editor.handleKeypress("", { name: "k", ctrl: true });
+  assert.equal(editor.buffer, "alpha", "Ctrl+K should delete from the cursor to the end");
+
+  editor.setText("ab");
+  await editor.handleKeypress("\r", { name: "return", shift: true });
+  assert.equal(editor.buffer, "ab\n", "Shift+Enter should insert a newline instead of submitting");
+  assert.equal(editor.pastedBlocks.length, 0, "a manual newline must not become a pasted-content block");
+}
+
+async function runEditorEscapeUsesRuntimeStateRegression() {
+  let abortCalls = 0;
+  const editor = new EditorComponent({
+    getBusy: () => false,
+    isRunActive: () => true,
+    onAbortQueued: async (text) => {
+      abortCalls += 1;
+      return text;
+    },
+    suggestions: () => [],
+    theme: {},
+  });
+  editor.setText("keep this draft");
+
+  await editor.handleKeypress("\u001b", { name: "escape" });
+
+  assert.equal(abortCalls, 1, "Escape should abort an active runtime even between visible TUI turn states");
+  assert.equal(editor.buffer, "keep this draft", "aborting should preserve current editor text");
+}
+
+function runRepairPromptVarietyRegression() {
+  const prompt = readFileSync(new URL("../prompts/zyra_system_prompt.md", import.meta.url), "utf8");
+  assert.doesNotMatch(prompt, /I did X\. The rule should be Y\. I am doing Y now\./, "the public prompt must not prescribe the repeated repair formula");
+  assert.match(prompt, /Vary the wording and structure/, "the public prompt should require flexible repair language");
+}
+
+function runUserMessageHangingIndentRegression() {
+  const lines = new UserMessageComponent(
+    "wrapped-user-message",
+    "alpha beta gamma delta epsilon zeta eta",
+  ).render(32).map(stripAnsi);
+  const content = lines.map((line) => line.trimEnd()).filter((line) => line.trim().length > 0);
+
+  assert.deepEqual(content, [
+    "> alpha beta gamma delta epsilon",
+    "  zeta eta",
+  ], "wrapped transcript lines should align beneath the user text after the prompt marker");
+  assert.equal(lines.every((line) => line.length <= 32), true, "wrapped user messages must stay within the terminal width");
+}
+
 function runEditorPlaceholderSpacingRegression() {
   const editor = new EditorComponent({
     suggestions: () => [],
@@ -1013,6 +1610,71 @@ async function runEditorBracketedPasteNewlineRegression() {
   assert.equal(submissions.length, 1, "the pasted blob should submit once when the user presses Enter after paste-end");
   assert.equal(submissions[0]?.text, "first line\rsecond line\tindent", "the submitted text should preserve pasted newlines and tabs");
   assert.equal(submissions[0]?.displayText, "[Pasted Content 29 chars]", "the submitted echo should keep the pasted-content label");
+}
+
+function runClipboardImageDimensionsRegression() {
+  const png = Buffer.alloc(24);
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png);
+  png.writeUInt32BE(1536, 16);
+  png.writeUInt32BE(427, 20);
+  assert.deepEqual(readImageDimensions(png, "image/png"), { width: 1536, height: 427 });
+}
+
+async function runEditorImagePastePipelineRegression() {
+  const submissions = [];
+  const echoes = [];
+  const dimensions = [[1536, 176], [1536, 535], [1536, 356]];
+  let captureIndex = 0;
+  const editor = new EditorComponent({
+    suggestions: () => [],
+    theme: {},
+    readClipboardImage: async () => {
+      const [width, height] = dimensions[captureIndex++];
+      return { width, height, source: "test", image: { type: "image", data: "AA==", mimeType: "image/png" } };
+    },
+    onUserMessage: (text, metadata) => echoes.push({ text, metadata }),
+    onSubmit: async (submission) => {
+      submissions.push(submission);
+      return false;
+    },
+  });
+  editor.setText("Review these screenshots");
+
+  await editor.handleKeypress("", { ctrl: true, name: "v" });
+  assert.match(editor.buffer, /\[Image 1 · loading\]/, "Ctrl+V image paste should reserve a responsive editor tag immediately");
+  editor.queueImagePaste();
+  editor.queueImagePaste();
+  await Promise.allSettled([...editor.imagePastePromises]);
+
+  assert.equal(editor.pastedImages.length, 3, "concurrent image pastes should retain every image instead of replacing duplicate ids");
+  assert.match(editor.buffer, /\[Image 1 · 1536×176\]/);
+  assert.match(editor.buffer, /\[Image 2 · 1536×535\]/);
+  assert.match(editor.buffer, /\[Image 3 · 1536×356\]/);
+  assert.doesNotMatch(editor.buffer, /Pasted Image/);
+
+  await editor.submit(editor.buffer);
+  assert.equal(submissions.length, 1);
+  assert.equal(submissions[0]?.text, "Review these screenshots", "editor-only image tags must not leak into the model prompt");
+  assert.equal(submissions[0]?.images.length, 3);
+  assert.match(submissions[0]?.displayText, /Image 3 · 1536×356/);
+  assert.equal(echoes[0]?.text, "Review these screenshots");
+  assert.equal(echoes[0]?.metadata.imageAttachments.length, 3);
+
+  const userMessage = new UserMessageComponent("images", echoes[0].text, {}, {
+    imageAttachments: echoes[0].metadata.imageAttachments,
+  });
+  const rendered = userMessage.render(90).map(stripAnsi).join("\n");
+  assert.match(rendered, /3 images attached/, "submitted images should collapse into one clean transcript summary");
+  assert.doesNotMatch(rendered, /Pasted Image|1536×|\[Image/, "raw image tags and dimensions should stay out of the transcript bubble");
+
+  const legacyMessage = new UserMessageComponent(
+    "legacy-images",
+    "Look here [Pasted Image 1536x176] [Pasted Image 1536x535] [Pasted Image 1536x356]",
+    {},
+  ).render(90).map(stripAnsi).join("\n");
+  assert.match(legacyMessage, /> Look here/);
+  assert.match(legacyMessage, /3 images attached/, "legacy pasted-image markers should receive the same clean rendering");
+  assert.doesNotMatch(legacyMessage, /Pasted Image|1536x/);
 }
 
 async function runEditorPlainPasteReturnRegression() {
@@ -1400,6 +2062,9 @@ function runStatusLineBranchLookupDoesNotBlockInputRegression() {
 
 function runSystemPanelWidthRegression() {
   const widthOf = (lines) => stripAnsi(lines.find((line) => stripAnsi(line).trim()) ?? "").length;
+  const canonicalThreadStatus = stripAnsi(renderStatusBox({ threadId: "thread-canonical", sessionId: "legacy-session" }, undefined, 100).join("\n"));
+  assert.match(canonicalThreadStatus, /Zyra thread/);
+  assert.match(canonicalThreadStatus, /Thread\s+: thread-canonical/);
   const account = {
     provider: "openai-codex",
     status: { configured: true, source: "test" },
@@ -1411,8 +2076,10 @@ function runSystemPanelWidthRegression() {
     source: "test",
     plan: "plus",
     account: "dev@example.com",
+    availableResetCount: 2,
     updatedAt: "2026-05-24T00:00:00.000Z",
   };
+  assert.match(stripAnsi(renderCodexUsageBox(usage, undefined, 100).join("\n")), /banked\s+2 resets/);
 
   for (const terminalColumns of [80, 120]) {
     const statusWidth = widthOf(renderStatusBox({}, undefined, terminalColumns));
@@ -1559,16 +2226,33 @@ function runRuntimeModelOverrideRegression() {
   }
   assert.equal(registry.find("openai-codex", "gpt-5.6-sol")?.api, "openai-codex-responses");
   assert.equal(registry.find("openai", "gpt-5.6-sol")?.api, "openai-responses");
+  assert.equal(registry.find("openai-codex", "gpt-5.6-luna")?.zyraCompatibility?.status, PI_SUPPORT_PENDING_STATUS);
+  assert.equal(registry.find("openai", "gpt-5.6-luna")?.zyraCompatibility, undefined);
 
   const idempotent = registerZyraRuntimeModels(registry);
   assert.deepEqual(idempotent.map((item) => item.status), ["exists", "exists", "exists", "exists", "exists", "exists"]);
+
+  const officialLuna = {
+    provider: "openai-codex",
+    id: "gpt-5.6-luna",
+    name: "GPT-5.6 Luna",
+    api: "openai-codex-responses",
+  };
+  const officialModels = [officialLuna];
+  const officialRegistry = {
+    getAll: () => officialModels,
+    find: (provider, id) => officialModels.find((model) => model.provider === provider && model.id === id),
+  };
+  const officialResult = registerZyraRuntimeModels(officialRegistry);
+  assert.equal(officialResult[0].status, "exists");
+  assert.equal(officialLuna.zyraCompatibility, undefined, "future Pi-owned Luna entries must not inherit Zyra's temporary compatibility block");
 }
 
 function runModelPickerReleaseOrderRegression() {
   const models = [
     { provider: "anthropic", id: "claude-custom", name: "Claude Custom" },
     { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
-    { provider: "openai-codex", id: "gpt-5.6-luna", name: "GPT-5.6 Luna" },
+    { provider: "openai-codex", id: "gpt-5.6-luna", name: "GPT-5.6 Luna", zyraCompatibility: { status: PI_SUPPORT_PENDING_STATUS } },
     { provider: "openai-codex", id: "gpt-5.4-mini", name: "GPT-5.4 Mini" },
     { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5" },
     { provider: "openai-codex", id: "gpt-5.6-terra", name: "GPT-5.6 Terra" },
@@ -1600,6 +2284,37 @@ function runModelPickerReleaseOrderRegression() {
     "model picker should sort GPT releases newest-first and keep the documented GPT-5.6 tier order",
   );
   assert.equal(suggestions[5].description, "active", "active state should be labeled without overriding release order");
+  assert.equal(suggestions[3].description, "Pi support pending", "the picker should keep Luna visible without implying the current Pi transport can run it");
+}
+
+async function runPendingLunaSelectionRegression() {
+  const model = {
+    provider: "openai-codex",
+    id: "gpt-5.6-luna",
+    name: "GPT-5.6 Luna",
+    zyraCompatibility: { status: PI_SUPPORT_PENDING_STATUS, capability: "codex-responses-lite" },
+  };
+  let setModelCalls = 0;
+  const runtime = {
+    project: process.cwd(),
+    session: {
+      model: null,
+      modelRegistry: { getAvailable: () => [model] },
+      async setModel() { setModelCalls += 1; },
+    },
+  };
+  await assert.rejects(
+    () => setModel(runtime, "openai-codex/gpt-5.6-luna"),
+    /wired into Zyra.*Pi runtime does not officially support/i,
+  );
+  assert.equal(setModelCalls, 0);
+
+  runtime.session.model = model;
+  await assert.rejects(
+    () => setModel(runtime, "gpt-5.6-luna"),
+    /wired into Zyra.*Pi runtime does not officially support/i,
+    "an already-active compatibility entry must not bypass the provider guard",
+  );
 }
 
 function runGpt56ThinkingLevelsRegression() {
@@ -1621,6 +2336,7 @@ function runGpt56ThinkingLevelsRegression() {
     const runtime = { project, session, thinkingState: { value: "medium" } };
 
     assert.deepEqual(getZyraAvailableThinkingLevels(runtime), GPT_56_THINKING_LEVELS);
+    assert.deepEqual(getZyraModelThinkingLevels("openai-codex/gpt-5.6-sol"), GPT_56_THINKING_LEVELS, "desktop bridge metadata must use the same full-id GPT-5.6 capability contract");
     const initialSuggestions = getSlashSuggestions(runtime, "/thinking ");
     assert.deepEqual(
       initialSuggestions.map((item) => item.value),
@@ -1642,15 +2358,16 @@ function runGpt56ThinkingLevelsRegression() {
     assert.deepEqual(payload.reasoning, { effort: "max", summary: "auto" });
     assert.equal(payload.service_tier, "priority", "thinking payload changes must preserve other provider controls");
 
-    assert.equal(setThinking(runtime), "none", "cycling after max should wrap to GPT-5.6 none");
-    assert.equal(session.thinkingLevel, "off", "GPT-5.6 none should map to Pi off internally");
+    assert.equal(setThinking(runtime), "low", "cycling after max should wrap to GPT-5.6 low");
+    assert.equal(session.thinkingLevel, "low", "GPT-5.6 has no selectable no-reasoning level");
 
     session.model = { provider: "openai-codex", id: "gpt-5.5", reasoning: true };
+    assert.deepEqual(getZyraAvailableThinkingLevels(runtime), ["low", "medium", "high", "xhigh"], "ChatGPT models should begin at low in the TUI");
     assert.equal(syncZyraThinkingLevel(runtime, "max"), "xhigh", "leaving GPT-5.6 should clamp max to the target model's highest level");
     assert.equal(getZyraThinkingLevel(runtime), "xhigh");
 
     session.model = { provider: "openai-codex", id: "gpt-5.6-terra", reasoning: true };
-    assert.equal(syncZyraThinkingLevel(runtime, "off"), "none", "legacy off should normalize to GPT-5.6 none");
+    assert.equal(syncZyraThinkingLevel(runtime, "off"), "low", "legacy off should normalize to GPT-5.6 low");
     assert.equal(resolveZyraStartupPreferences(project, { thinking: "max" }, {}).thinking, "max");
   } finally {
     rmSync(project, { recursive: true, force: true });
@@ -1685,7 +2402,9 @@ async function runRuntimePreferencePersistenceRegression() {
           return this.thinkingLevel;
         },
         model: null,
+        setModelCalls: 0,
         async setModel(nextModel) {
+          this.setModelCalls += 1;
           this.model = nextModel;
         },
         modelRegistry: {
@@ -1703,6 +2422,7 @@ async function runRuntimePreferencePersistenceRegression() {
     setProfile(runtime, "learner");
     setThinking(runtime, "high");
     await setModel(runtime, "gpt-test");
+    await setModel(runtime, "openai-codex/gpt-test");
     setWebSearch(runtime, false);
     setWebFetch(runtime, false);
 
@@ -1713,6 +2433,7 @@ async function runRuntimePreferencePersistenceRegression() {
     assert.equal(preferences.model, "openai-codex/gpt-test");
     assert.equal(preferences.webSearch, false);
     assert.equal(preferences.webFetch, false);
+    assert.equal(runtime.session.setModelCalls, 1, "selecting the active model should be a no-op");
     assert.equal(runtime.webSearch, false);
     assert.equal(runtime.webFetch, false);
     assert.equal(runtime.session.activeTools.includes("web_search"), false);
@@ -1773,7 +2494,10 @@ async function runCompactCommandNoProgressBoxRegression() {
 }
 
 function runSessionCommandRenameRegression() {
-  const values = getSlashSuggestions({ project: process.cwd(), session: {} }, "/").map((item) => item.value);
+  const runtime = { project: process.cwd(), session: {} };
+  const values = getSlashSuggestions(runtime, "/").map((item) => item.value);
+  const canonicalNames = values.map((value) => getSlashCommand(value)?.name ?? value);
+  assert.equal(new Set(canonicalNames).size, canonicalNames.length, "the root slash menu should show each command once");
   assert.equal(values.includes("/session"), true);
   assert.equal(values.includes("/chat"), true);
   assert.equal(values.includes("/status"), false);
@@ -1781,11 +2505,12 @@ function runSessionCommandRenameRegression() {
   assert.equal(values.includes("/web"), true);
   assert.equal(values.includes("/websearch"), true);
   assert.equal(values.includes("/webfetch"), true);
-  assert.equal(values.includes("/quit"), true);
-  assert.deepEqual(getSlashSuggestions({ project: process.cwd(), session: {} }, "/q").map((item) => item.value), ["/quit"]);
-  assert.deepEqual(getSlashSuggestions({ project: process.cwd(), session: {} }, "/web ").map((item) => item.value), ["all", "none", "websearch", "webfetch"]);
-  assert.deepEqual(getSlashSuggestions({ project: process.cwd(), session: {} }, "/websearch ").map((item) => item.value), ["on", "off"]);
-  assert.deepEqual(getSlashSuggestions({ project: process.cwd(), session: {} }, "/webfetch ").map((item) => item.value), ["on", "off"]);
+  assert.equal(values.includes("/quit"), false, "aliases should not duplicate canonical commands in the root menu");
+  assert.deepEqual(getSlashSuggestions(runtime, "/q").map((item) => item.value), ["/quit"], "typing an alias should still reveal it");
+  assert.deepEqual(getSlashSuggestions(runtime, "/he").map((item) => item.value), ["/help"], "aliases should remain searchable");
+  assert.deepEqual(getSlashSuggestions(runtime, "/web ").map((item) => item.value), ["all", "none", "websearch", "webfetch"]);
+  assert.deepEqual(getSlashSuggestions(runtime, "/websearch ").map((item) => item.value), ["on", "off"]);
+  assert.deepEqual(getSlashSuggestions(runtime, "/webfetch ").map((item) => item.value), ["on", "off"]);
   assert.equal(values.some((value) => value.startsWith("/memory ")), false);
   assert.equal(values.includes("/compact"), true);
   assert.equal(values.includes("/consolidate"), true);
@@ -1808,17 +2533,28 @@ runToolCommandInlineRunningTimeRegression();
 runToolCommandMultilineRegression();
 runToolLongCommandAndHugeOutputClampRegression();
 runToolOutputUsesFullBlockWidthRegression();
+runCommandCardStableHeightRegression();
 runToolOutputWordWrapRegression();
 runEditToolPiLikeRegression();
 runToolCallThemeStylingRegression();
 runInteractiveAssistantComponentRegression();
 runInteractiveNoTurnEndDuplicateRegression();
+runTurnEndKeepsRuntimeBusyRegression();
+runCompactionLifecycleRegression();
 runInteractiveToolComponentRegression();
+runManagedBashStatusReconciliationRegression();
 runToolEventsWithoutIdsReuseActiveComponentRegression();
+runSuccessfulCheckCommandSummaryRegression();
 runRunningToolStartsImmediatelyRegression();
+runFileChangeAuthoritativeReconciliationRegression();
+runLateFileChangeEventsStayTerminalRegression();
+runFailedFileChangePreviewRegression();
+runSnapshotBackedWriteRenderingRegression();
+runFileChangeEventsWithoutIdsRegression();
 runWriteToolRicherRepresentationRegression();
 runConsecutiveToolSpacingRegression();
 runAssistantAndToolInterleaveRegression();
+runTerminalLineControlSanitizationRegression();
 runWidthFitRegression();
 runStaticPanelsThroughHostRegression();
 runResizeFullRedrawRegression();
@@ -1832,12 +2568,21 @@ runRestartTransitionReplacesInputRailRegression();
 runEditorStatusGapRegression();
 runEditorBusySpacingRegression();
 runEditorWordWrapRegression();
+runEditorSoftWrapWhitespaceRegression();
+runEditorWrappedCursorLayoutRegression();
+await runEditorWrappedArrowNavigationRegression();
+await runEditorStandardKeyBehaviorRegression();
+await runEditorEscapeUsesRuntimeStateRegression();
+runRepairPromptVarietyRegression();
+runUserMessageHangingIndentRegression();
 runEditorPlaceholderSpacingRegression();
 runEditorFirstInstallPlaceholderRegression();
 runEditorMaturePlaceholderDiversityRegression();
 runEditorSpaceKeyPreservesTrailingSpaceRegression();
 await runEditorRestartSubmitPreservesRestartSignalRegression();
 await runEditorBracketedPasteNewlineRegression();
+runClipboardImageDimensionsRegression();
+await runEditorImagePastePipelineRegression();
 await runEditorPlainPasteReturnRegression();
 await runEditorDelayedPlainPasteReturnRegression();
 runEditorUsesHardwareCursorRegression();
@@ -1857,6 +2602,7 @@ runThemePreferencePersistenceRegression();
 runOnboardingStateRegression();
 runRuntimeModelOverrideRegression();
 runModelPickerReleaseOrderRegression();
+await runPendingLunaSelectionRegression();
 runGpt56ThinkingLevelsRegression();
 await runRuntimePreferencePersistenceRegression();
 await runCompactCommandNoProgressBoxRegression();

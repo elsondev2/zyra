@@ -1,3 +1,4 @@
+import { isAgentSurfaceDescriptor, normalizeAgentSurfaceTool } from "../../agent-surface.mjs";
 import { renderMarkdown } from "../../pi-markdown.mjs";
 import { buildTerminalTheme } from "../../terminal-theme.mjs";
 import {
@@ -15,12 +16,16 @@ import {
 const fallbackTheme = buildTerminalTheme();
 const assistantPadding = "  ";
 const maxToolOutputLineLength = 180;
+const commandOutputPreviewRows = 3;
 
 export class UserMessageComponent {
-  constructor(key, text, theme = fallbackTheme) {
+  constructor(key, text, theme = fallbackTheme, options = {}) {
     this.key = key;
-    this.text = String(text ?? "");
+    const legacy = extractLegacyImageMarkers(text);
+    this.text = legacy.text;
     this.theme = theme;
+    const structured = Array.isArray(options.imageAttachments) ? options.imageAttachments.filter(Boolean) : [];
+    this.imageAttachments = structured.length > 0 ? structured : legacy.imageAttachments;
   }
 
   setHost(host) {
@@ -29,10 +34,39 @@ export class UserMessageComponent {
 
   render(width) {
     const contentWidth = Math.max(1, width);
-    const rows = wrapPlain(`> ${this.text}`, contentWidth);
+    const rows = this.text ? renderUserMessageRows(this.text, contentWidth) : [];
+    if (this.imageAttachments.length > 0) {
+      const count = this.imageAttachments.length;
+      const label = count === 1 ? "▣ Image attached" : `▣ ${count} images attached`;
+      rows.push(...renderUserMessageRows(label, contentWidth, rows.length > 0 ? "  " : "> "));
+    }
+    if (rows.length === 0) return [];
     const bgLine = (content = "") => `${this.theme.userBg}${this.theme.userFg}${content.padEnd(contentWidth)}${reset}`;
     return ["", bgLine(), ...rows.map((row) => bgLine(row)), bgLine()];
   }
+}
+
+function renderUserMessageRows(value, width, firstPrefix = "> ") {
+  const continuationPrefix = "  ";
+  const prefixWidth = Math.max(visibleWidth(firstPrefix), visibleWidth(continuationPrefix));
+  const bodyWidth = Math.max(1, width - prefixWidth);
+  return wrapPlain(value, bodyWidth).map((row, index) => `${index === 0 ? firstPrefix : continuationPrefix}${row}`);
+}
+
+function extractLegacyImageMarkers(value) {
+  const imageAttachments = [];
+  const text = String(value ?? "").replace(
+    /\[(?:Pasted Image(?:\s+(\d+)[x×](\d+))?|Image\s+(\d+)(?:\s+·\s+(?:loading|(\d+)[x×](\d+)))?)\]/gi,
+    (_marker, pastedWidth, pastedHeight, imageIndex, imageWidth, imageHeight) => {
+      imageAttachments.push({
+        index: Number(imageIndex) || imageAttachments.length + 1,
+        width: Number(pastedWidth ?? imageWidth) || undefined,
+        height: Number(pastedHeight ?? imageHeight) || undefined,
+      });
+      return " ";
+    },
+  ).replace(/\s+/g, " ").trim();
+  return { text, imageAttachments };
 }
 
 export class AssistantMessageComponent {
@@ -84,6 +118,49 @@ export class ToolMessageComponent {
   }
 }
 
+class CommandSummaryComponent {
+  constructor(key, commands = [], theme = fallbackTheme, status = "checked") {
+    this.key = key;
+    this.commands = [...commands];
+    this.theme = theme;
+    this.status = status;
+    this.spacingKind = "tool";
+  }
+
+  setHost(host) {
+    this.host = host;
+  }
+
+  update(commands = []) {
+    this.commands = [...commands];
+    this.host?.invalidate();
+  }
+
+  render(width) {
+    if (this.commands.length === 0) return [];
+    const stopped = this.status === "stopped";
+    const verb = stopped ? "Stopped" : "Checked";
+    const label = this.commands.length === 1
+      ? `${verb} command — ${sanitizeToolDisplayText(this.commands[0]).replace(/\s+/g, " ").trim()}`
+      : `${verb} ${this.commands.length} commands`;
+    const text = truncatePlain(label, Math.max(12, Number(width || 100) - 6));
+    const marker = stopped ? `${this.theme.warning}■` : `${this.theme.success}✓`;
+    return ["", `  ${marker}${reset} ${this.theme.muted}${text}${reset}`];
+  }
+}
+
+export class CheckedCommandsComponent extends CommandSummaryComponent {
+  constructor(key, commands = [], theme = fallbackTheme) {
+    super(key, commands, theme, "checked");
+  }
+}
+
+export class StoppedCommandsComponent extends CommandSummaryComponent {
+  constructor(key, commands = [], theme = fallbackTheme) {
+    super(key, commands, theme, "stopped");
+  }
+}
+
 export class ActivityComponent {
   constructor(key, getState, theme = fallbackTheme) {
     this.key = key;
@@ -107,31 +184,47 @@ export class ActivityComponent {
 
 export function renderToolBlock(toolState, theme = fallbackTheme, width = 100) {
   const resolvedTheme = buildTerminalTheme(theme);
-  const isError = toolState.isError || toolState.state === "error";
-  const isDone = toolState.state === "done";
-  const stateLabel = isError ? "failed" : isDone ? "succeeded" : "running";
-  const state = isError ? "error" : isDone ? "done" : "running";
-  const title = toolState.toolName ?? "tool";
+  if (toolState.fileChange?.category === "file-change") {
+    return renderFileChangeToolBlock(toolState, resolvedTheme, width);
+  }
+  const agentSurface = isAgentSurfaceDescriptor(toolState.surface)
+    ? toolState.surface
+    : normalizeAgentSurfaceTool(toolState);
+  const isError = agentSurface.lifecycle === "failed";
+  const isStopped = agentSurface.lifecycle === "stopped";
+  const isDone = agentSurface.lifecycle === "completed";
+  const stateLabel = isError ? "failed" : isStopped ? "stopped" : isDone ? "succeeded" : "running";
+  const state = isError ? "error" : isStopped ? "stopped" : isDone ? "done" : "running";
+  const title = agentSurface.toolName ?? toolState.toolName ?? "tool";
   const rawArgs = toolState.args ?? toolState.arguments;
   const command = rawArgs && typeof rawArgs === "object" ? firstStringValue(rawArgs, ["command", "cmd"]) : undefined;
+  const terminalWidth = Math.max(24, Number(width) || 100);
   const rows = command
     ? [{ kind: "command", title, state, stateLabel, text: command, rightText: toolCommandStatusText(toolState, { title, state, stateLabel }) }]
     : [{ kind: "title", title, state, stateLabel }];
-  const args = summarizeToolArgs(rawArgs, { toolName: title, state, commandAsTitle: Boolean(command) });
-  if (args) rows.push(...normalizeToolSummaryRows(args, "args"));
-  const outputText = summarizeToolResult(toolState.result ?? toolState.partialResult);
-  if (outputText.length > 0) {
+  let outputText = [];
+  if (command) {
+    outputText = summarizeCommandToolResult(toolState.result ?? toolState.partialResult, commandOutputPreviewRows);
     rows.push({ kind: "spacer" });
-    rows.push(...outputText.flatMap((line) => splitDisplayLines(line)).map((line) => ({ kind: "output", text: line })));
+    for (let index = 0; index < commandOutputPreviewRows; index += 1) {
+      rows.push({ kind: "commandOutput", text: outputText[index] ?? "" });
+    }
+  } else {
+    const args = summarizeToolArgs(rawArgs, { toolName: title, state, commandAsTitle: false });
+    if (args) rows.push(...normalizeToolSummaryRows(args, "args"));
+    outputText = summarizeToolResult(toolState.result ?? toolState.partialResult);
+    if (outputText.length > 0) {
+      rows.push({ kind: "spacer" });
+      rows.push(...outputText.flatMap((line) => splitDisplayLines(line)).map((line) => ({ kind: "output", text: line })));
+    }
+    const footer = toolFooterText(toolState, { title, state, stateLabel, hasOutput: outputText.length > 0 });
+    if (footer) {
+      rows.push({ kind: "spacer" });
+      rows.push({ kind: state === "error" ? "footerError" : "hint", text: footer });
+    } else if (state === "running") {
+      rows.push({ kind: "hint", text: "status started" });
+    }
   }
-  const footer = command ? "" : toolFooterText(toolState, { title, state, stateLabel, hasOutput: outputText.length > 0 });
-  if (footer) {
-    rows.push({ kind: "spacer" });
-    rows.push({ kind: state === "error" ? "footerError" : "hint", text: footer });
-  } else if (state === "running" && !command) {
-    rows.push({ kind: "hint", text: "status started" });
-  }
-  const terminalWidth = Math.max(24, Number(width) || 100);
   const surface = toolSurfaceForState(state, resolvedTheme);
   const innerBlank = renderToolBlankRow(terminalWidth, surface);
   return [
@@ -139,6 +232,48 @@ export function renderToolBlock(toolState, theme = fallbackTheme, width = 100) {
     innerBlank,
     ...rows.flatMap((row) => renderToolRow(row, resolvedTheme, terminalWidth, surface)),
     innerBlank,
+    "",
+  ];
+}
+
+function renderFileChangeToolBlock(toolState, theme, width) {
+  const change = toolState.fileChange ?? {};
+  const state = change.status === "failed" ? "error" : change.status === "completed" ? "done" : "running";
+  const stateLabel = state === "error" ? "failed" : state === "done" ? "applied" : "running";
+  const paths = Array.isArray(change.paths) ? change.paths.filter(Boolean) : [];
+  const title = String(change.toolName ?? toolState.toolName ?? "edit");
+  const rows = [{ kind: "title", title, state, stateLabel }];
+  for (const path of paths.slice(0, 4)) rows.push({ kind: "args", text: `path ${path}` });
+  if (paths.length > 4) rows.push({ kind: "hint", text: `… ${paths.length - 4} more files` });
+  const sourceLabel = change.authoritative
+    ? change.snapshotBacked ? "applied · snapshot-backed" : "applied · provider result"
+    : state === "error"
+      ? "failed · preview not applied"
+      : change.source === "provider-live"
+        ? "live provider preview"
+        : "live preview";
+  rows.push({ kind: state === "error" ? "footerError" : "diffMeta", text: sourceLabel });
+  rows.push({ kind: "diffMeta", text: `+${Number(change.additions) || 0}/-${Number(change.deletions) || 0}${change.truncated ? " · truncated" : ""}` });
+
+  const displayDiff = String(change.displayDiff ?? change.patch ?? change.previewPatch ?? "");
+  const diffRows = renderPatchDiff(displayDiff, 12);
+  if (diffRows.length > 0) {
+    rows.push({ kind: "spacer" });
+    rows.push(...diffRows);
+    const totalLines = displayDiff.split(/\r?\n/).filter((line) => line.trim()).length;
+    if (totalLines > diffRows.length) rows.push({ kind: "hint", text: `… ${totalLines - diffRows.length} more diff lines` });
+  } else if (state === "running") {
+    rows.push({ kind: "hint", text: "waiting for complete file-change arguments" });
+  }
+
+  const terminalWidth = Math.max(24, Number(width) || 100);
+  const surface = toolSurfaceForState(state, theme);
+  const blank = renderToolBlankRow(terminalWidth, surface);
+  return [
+    "",
+    blank,
+    ...rows.flatMap((row) => renderToolRow(row, theme, terminalWidth, surface)),
+    blank,
     "",
   ];
 }
@@ -169,14 +304,26 @@ export function summarizeToolArgs(args, context = {}) {
 export function summarizeToolResult(result) {
   if (!result) return [];
   const content = Array.isArray(result.content) ? result.content : [];
-  const text = content.map((item) => item?.text).filter(Boolean).join("\n").trim();
+  const text = content.map((item) => sanitizeToolDisplayText(item?.text)).filter(Boolean).join("\n").trim();
   if (!text) return [];
-  const lines = text.split(/\r?\n/).filter(Boolean);
+  const lines = text.split("\n").filter(Boolean);
   const visible = lines.slice(0, 4).map((line) => truncatePlain(line, maxToolOutputLineLength));
   if (lines.length > visible.length) {
     visible.push(`... ${lines.length - visible.length} more output line${lines.length - visible.length === 1 ? "" : "s"}`);
   }
   return visible;
+}
+
+function summarizeCommandToolResult(result, maxRows = commandOutputPreviewRows) {
+  if (!result) return [];
+  const content = Array.isArray(result.content) ? result.content : [];
+  const text = content.map((item) => sanitizeToolDisplayText(item?.text)).filter(Boolean).join("\n").trim();
+  if (!text) return [];
+  const lines = text.split("\n").filter((line) => line.trim().length > 0);
+  if (lines.length <= maxRows) return lines;
+  const tailCount = Math.max(1, maxRows - 1);
+  const hidden = lines.length - tailCount;
+  return [`... ${hidden} earlier output line${hidden === 1 ? "" : "s"}`, ...lines.slice(-tailCount)];
 }
 
 function normalizeToolSummaryRows(items = [], fallbackKind = "args") {
@@ -435,7 +582,7 @@ function toolRowColor(kind, theme = fallbackTheme) {
   if (kind === "command") return theme.toolTitleFg ?? theme.toolFg ?? `${bold}\x1b[97m`;
   if (kind === "title") return theme.toolTitleFg ?? theme.toolFg ?? `${bold}\x1b[97m`;
   if (kind === "args") return theme.toolArgsFg ?? theme.toolDetailFg ?? theme.toolFg ?? "\x1b[97m";
-  if (kind === "output") return theme.toolOutputFg ?? theme.toolDetailFg ?? theme.toolFg ?? "\x1b[97m";
+  if (kind === "output" || kind === "commandOutput") return theme.toolOutputFg ?? theme.toolDetailFg ?? theme.toolFg ?? "\x1b[97m";
   if (kind === "diffAdd") return theme.toolDiffAddFg ?? theme.success ?? theme.toolFg ?? "\x1b[92m";
   if (kind === "diffRemove") return theme.toolDiffRemoveFg ?? theme.error ?? theme.toolFg ?? "\x1b[91m";
   if (kind === "diffMeta") return theme.toolDiffMetaFg ?? theme.toolDimFg ?? theme.toolHintFg ?? "\x1b[38;5;245m";
@@ -451,19 +598,20 @@ function renderToolBlankRow(width = 100, surface = "") {
 
 function renderToolRow(row, theme = fallbackTheme, width = 100, surface = theme.toolBg) {
   if (row.kind === "spacer") return renderToolBlankRow(width, surface);
+  const safeRowText = sanitizeToolDisplayText(row.text);
   const marker = toolRowMarker(row);
   const markerColor = toolMarkerColor(row, theme);
   const prefix = toolRowPrefix(row, marker, markerColor);
   const contentWidth = Math.max(1, width - visibleWidth(prefix));
   if (row.kind === "command") {
-    const rightText = String(row.rightText ?? "").trim();
+    const rightText = sanitizeToolDisplayText(row.rightText).replace(/\s+/g, " ").trim();
     const maxRightWidth = Math.max(8, Math.floor(contentWidth * 0.48));
     const visibleRight = rightText ? truncatePlain(rightText, maxRightWidth) : "";
     const right = visibleRight ? `${toolStatusColor(row.state, theme)}${visibleRight}` : "";
     const gap = right ? 2 : 0;
     const leftWidth = Math.max(1, contentWidth - visibleWidth(right) - gap);
     const color = toolRowColor(row.kind, theme);
-    const commandText = truncatePlain(compactToolCommand(row.text), leftWidth);
+    const commandText = truncatePlain(compactToolCommand(safeRowText), leftWidth);
     const firstLeft = `${prefix}${color}${commandText}`;
     const spaces = right ? " ".repeat(Math.max(1, width - visibleWidth(firstLeft) - visibleWidth(right))) : "";
     return [`${surface}${padToVisibleWidth(`${firstLeft}${spaces}${right}`, width)}${reset}`];
@@ -472,11 +620,16 @@ function renderToolRow(row, theme = fallbackTheme, width = 100, surface = theme.
     const rowContent = `${prefix}${renderToolTitle(row, theme, contentWidth)}`;
     return `${surface}${padToVisibleWidth(rowContent, width)}${reset}`;
   }
+  if (row.kind === "commandOutput") {
+    const color = toolRowColor(row.kind, theme);
+    const text = truncatePlain(safeRowText.replace(/\s*\n\s*/g, " "), Math.max(1, width - 2));
+    return `${surface}${padToVisibleWidth(`  ${color}${text}`, width)}${reset}`;
+  }
 
   const color = toolRowColor(row.kind, theme);
   const wrapped = shouldWordWrapToolRow(row.kind)
-    ? wrapPlain(row.text ?? "", contentWidth)
-    : wrapCodeRow(row.text ?? "", contentWidth);
+    ? wrapPlain(safeRowText, contentWidth)
+    : wrapCodeRow(safeRowText, contentWidth);
   const lines = [];
   for (const [index, line] of wrapped.entries()) {
     const linePrefix = index === 0 ? prefix : "  ";
@@ -503,7 +656,18 @@ function wrapCodeRow(text, width = 80) {
 }
 
 function compactToolCommand(value) {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
+  return sanitizeToolDisplayText(value).replace(/\s+/g, " ").trim();
+}
+
+function sanitizeToolDisplayText(value) {
+  return String(value ?? "")
+    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b[P^_][\s\S]*?\x1b\\/g, "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b[@-_]/g, "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\t/g, "  ")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "");
 }
 
 function shouldWordWrapToolRow(kind) {
@@ -546,8 +710,8 @@ function toolSurfaceForState(state, theme = fallbackTheme) {
 }
 
 function renderToolTitle(row, theme = fallbackTheme, width = 80) {
-  const title = String(row.title ?? "tool").replace(/\s+/g, " ").trim() || "tool";
-  const stateLabel = String(row.stateLabel ?? "running");
+  const title = sanitizeToolDisplayText(row.title ?? "tool").replace(/\s+/g, " ").trim() || "tool";
+  const stateLabel = sanitizeToolDisplayText(row.stateLabel ?? "running").replace(/\s+/g, " ").trim();
   const fullTitle = `${title} ${stateLabel}`;
   if (fullTitle.length > width) {
     return `${theme.toolTitleFg}${truncatePlain(fullTitle, width)}${normalIntensity}`;

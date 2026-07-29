@@ -5,6 +5,7 @@ import {
   getFilteredAvailableModels,
   refreshModelAvailability,
 } from "../src/model-availability.mjs";
+import { PI_SUPPORT_PENDING_STATUS } from "../src/model-compatibility.mjs";
 
 class FakeModelRegistry {
   constructor(models) {
@@ -67,6 +68,29 @@ async function testTransientFailuresStayVisible() {
   assert.deepEqual(getFilteredAvailableModels(registry).map((model) => `${model.provider}/${model.id}`), ["openai-codex/gpt-slow"]);
 }
 
+async function testPendingPiSupportStaysVisibleWithoutProbe() {
+  clearModelAvailabilityCache();
+  const registry = new FakeModelRegistry([
+    {
+      provider: "openai-codex",
+      id: "gpt-5.6-luna",
+      zyraCompatibility: { status: PI_SUPPORT_PENDING_STATUS, capability: "codex-responses-lite" },
+    },
+  ]);
+  let fetchCalls = 0;
+  const report = await refreshModelAvailability(registry, {
+    forceRefresh: true,
+    fetch: async () => {
+      fetchCalls += 1;
+      return response(500, "should not run");
+    },
+  });
+  assert.equal(fetchCalls, 0);
+  assert.deepEqual(report.blocked.map((item) => item.key), ["openai-codex/gpt-5.6-luna"]);
+  assert.deepEqual(report.removed, []);
+  assert.deepEqual(getFilteredAvailableModels(registry).map((model) => `${model.provider}/${model.id}`), ["openai-codex/gpt-5.6-luna"]);
+}
+
 async function testEmptyCodexStreamIsFiltered() {
   clearModelAvailabilityCache();
   const registry = new FakeModelRegistry([
@@ -118,6 +142,31 @@ async function testCodexTextDeltaIsAvailable() {
   assert.deepEqual(getFilteredAvailableModels(registry).map((model) => `${model.provider}/${model.id}`), ["openai-codex/gpt-live"]);
 }
 
+async function testCodexStreamingProbeHonorsBodyTimeout() {
+  clearModelAvailabilityCache();
+  const registry = new FakeModelRegistry([
+    { provider: "openai-codex", id: "gpt-stalled-stream", baseUrl: "https://chatgpt.com/backend-api" },
+  ]);
+  const stalledBody = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('event: response.created\ndata: {"type":"response.created"}\n\n'));
+    },
+  });
+  const startedAt = Date.now();
+  const result = await checkModelAvailability(registry, registry.getAvailable()[0], {
+    forceRefresh: true,
+    timeoutMs: 30,
+    fetch: async () => new Response(stalledBody, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    }),
+  });
+  const elapsedMs = Date.now() - startedAt;
+  assert.equal(result.availability, "unknown");
+  assert.equal(result.reason, "codex_ping_inconclusive");
+  assert.ok(elapsedMs < 500, `stalled Codex probe took ${elapsedMs}ms`);
+}
+
 async function testOpenAIModelsEndpoint() {
   clearModelAvailabilityCache();
   const registry = new FakeModelRegistry([
@@ -137,9 +186,11 @@ async function testOpenAIModelsEndpoint() {
 
 await testUnavailableOpenAIModelIsFiltered();
 await testTransientFailuresStayVisible();
+await testPendingPiSupportStaysVisibleWithoutProbe();
 await testEmptyCodexStreamIsFiltered();
 await testCodexNotSupportedResponseIsFiltered();
 await testCodexTextDeltaIsAvailable();
+await testCodexStreamingProbeHonorsBodyTimeout();
 await testOpenAIModelsEndpoint();
 
 console.log("zyra model availability tests passed");

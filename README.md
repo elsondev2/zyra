@@ -84,22 +84,29 @@ Zyra uses Pi auth under the hood, so ChatGPT/Codex credentials stay in the Pi au
 ~/.pi/agent/auth.json
 ```
 
-First-run onboarding can guide login. Manual login also works:
+First-run onboarding lets you choose either authentication method. Manual setup works too:
 
 ```powershell
-zyra login
+zyra login subscription
+zyra login api
 ```
 
-Useful account commands:
+`subscription` opens the ChatGPT/Codex browser login. `api` asks for the key in a masked terminal prompt, verifies it with OpenAI, and only then saves it through Pi auth storage. API usage has separate OpenAI API billing and does not consume the ChatGPT subscription allowance.
+
+`OPENAI_API_KEY` is also supported. Environment credentials remain active until the variable is removed from the environment, even after `zyra logout api` removes a stored key.
+
+Useful authentication commands:
 
 ```powershell
 zyra auth
-zyra account
+zyra logout subscription
+zyra logout api
 zyra codexusage
-zyra logout
 ```
 
-Do not copy another person's auth file between machines. Let each user log in so the tokens belong to their own account.
+Inside an active Zyra chat, `/auth` shows both connections and the active method. Use `/auth api` or `/auth subscription` to switch immediately. `/login api` rotates the stored API key, while `/auth api setup` does the same explicitly.
+
+Never paste an API key into the chat editor or pass it as a command argument. Use the secure prompt from `zyra login api`, `/login api`, or `/auth api setup`. Do not copy another person's auth file between machines.
 
 ## Common Commands
 
@@ -118,7 +125,8 @@ zyra --interrupt steer
 zyra --interrupt queue
 zyra --mode fast
 zyra --mode normal
-zyra sessions
+zyra threads
+zyra sessions # legacy alias
 zyra continue
 zyra resume
 zyra doctor
@@ -143,6 +151,8 @@ Inside chat:
 - `/themes`, `/thinking`, and `/models` adjust runtime behavior.
 - `/reload` restarts Zyra from disk and resumes the chat.
 - `/reload --soft` reloads commands, themes, prompt, and memory only.
+
+Current provider compatibility and deferred model work are tracked in [docs/model-support.md](docs/model-support.md).
 
 ## Project Shape
 

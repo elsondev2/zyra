@@ -154,6 +154,7 @@ function stateFromEvent(event = {}, activity = {}) {
   }
   if (event.type === "auto_retry_start") return "retrying";
   if (event.type === "compaction_start") return "compacting";
+  if (event.type === "compaction_end") return activity.turnActive ? "thinking" : "ready";
   if (event.type === "turn_end" || event.type === "agent_end") {
     activity.setTurnActive?.(false);
     activity.setRunningTools?.(0);

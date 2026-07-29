@@ -5,6 +5,8 @@ import { createZyraSession } from "../src/zyra-sdk.mjs";
 
 const state = createManagedBashState();
 const tool = createManagedBashTool({ cwd: process.cwd(), state });
+const stateUpdates = [];
+const unsubscribeState = state.subscribe((update) => stateUpdates.push(update));
 
 const short = await tool.execute("short", { command: "printf hello" }, new AbortController().signal);
 assert.match(short.content[0].text, /hello/);
@@ -12,15 +14,14 @@ assert.match(short.content[0].text, /hello/);
 const liveUpdates = [];
 const long = await tool.execute(
   "long",
-  { command: "node -e \"console.log(1); setInterval(()=>console.log(Date.now()), 200)\"", wait: 0.5 },
+  { command: "node -e \"console.log(1); setInterval(()=>console.log(Date.now()), 200)\"", wait: 3 },
   new AbortController().signal,
   (partial) => liveUpdates.push(partial),
 );
 assert.match(long.content[0].text, /Command still running/);
 assert.equal(long.details.status, "running");
 assert.ok(long.details.jobId);
-await waitFor(() => liveUpdates.some((update) => update.details?.status === "running" && update.details?.live === true), 2000);
-assert.ok(liveUpdates.some((update) => update.details?.status === "running" && update.details?.live === true), "managed bash should emit live output updates while the first command block is active");
+assert.ok(liveUpdates.some((update) => update.details?.status === "running" && update.details?.live === true), "managed bash should emit live output updates before the first command block returns");
 
 const status = await tool.execute("status", { action: "status", jobId: long.details.jobId, wait: 0.2 }, new AbortController().signal);
 assert.match(status.content[0].text, /Command still running|Command completed|Command exited|Command stopped/);
@@ -28,7 +29,34 @@ assert.match(status.content[0].text, /Command still running|Command completed|Co
 if (state.jobs.has(long.details.jobId)) {
   const stopped = await tool.execute("stop", { action: "stop", jobId: long.details.jobId }, new AbortController().signal);
   assert.match(stopped.content[0].text, /Command stopped|Command aborted/);
+  const stoppedUpdate = stateUpdates.findLast((update) => update.jobId === long.details.jobId && update.status === "stopped");
+  assert.ok(stoppedUpdate, "managed bash should publish a stopped terminal snapshot");
+  assert.equal(stoppedUpdate.errorMessage, undefined, "an intentional stop must not be reported as a command failure");
 }
+unsubscribeState();
+
+const observedState = createManagedBashState();
+const observedTool = createManagedBashTool({ cwd: process.cwd(), state: observedState });
+const observedUpdates = [];
+const unsubscribeObserved = observedState.subscribe((update) => observedUpdates.push(update));
+const observedRun = await observedTool.execute(
+  "observer-background",
+  { command: "node -e \"console.log('observer started'); setTimeout(()=>console.log('observer done'), 180)\"", wait: 0.01 },
+  new AbortController().signal,
+);
+assert.equal(observedRun.details.status, "running");
+await waitFor(() => observedUpdates.some((update) => update.status === "completed"), 3000);
+const observedTerminal = observedUpdates.findLast((update) => update.status === "completed");
+assert.equal(observedTerminal?.toolCallId, "observer-background");
+assert.equal(observedTerminal?.jobId, observedRun.details.jobId);
+assert.match(observedTerminal?.output || "", /observer done/);
+assert.equal(typeof observedTerminal?.completedAt, "string");
+await observedTool.execute(
+  "observer-cleanup",
+  { action: "status", jobId: observedRun.details.jobId, wait: 0 },
+  new AbortController().signal,
+);
+unsubscribeObserved();
 
 const runtime = await createZyraSession({
   noSession: true,
@@ -48,7 +76,44 @@ try {
     new AbortController().signal,
   );
   assert.equal(running.details.status, "running");
-  await runtime.session.agent.prepareNextTurn?.({});
+
+  const originalCheckCompaction = runtime.session._checkCompaction;
+  assert.equal(typeof originalCheckCompaction, "function", "the pinned Pi runtime must expose the compaction checkpoint used between turns");
+  const compactedMessages = [{
+    role: "user",
+    content: [{ type: "text", text: "compacted context" }],
+    timestamp: Date.now(),
+  }];
+  let checkedAssistant;
+  runtime.session._checkCompaction = async (assistantMessage) => {
+    checkedAssistant = assistantMessage;
+    runtime.session.agent.state.messages = compactedMessages;
+    return false;
+  };
+  const assistantMessage = {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "runtime-long", name: "bash", arguments: {} }],
+    provider: "test",
+    model: "test",
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "toolUse",
+    timestamp: Date.now(),
+  };
+  const nextTurnSnapshot = await runtime.session.agent.prepareNextTurnWithContext?.({
+    message: assistantMessage,
+    toolResults: [],
+    context: {
+      systemPrompt: runtime.session.agent.state.systemPrompt,
+      messages: [assistantMessage],
+      tools: runtime.session.agent.state.tools,
+    },
+    newMessages: [assistantMessage],
+  }, new AbortController().signal);
+  runtime.session._checkCompaction = originalCheckCompaction;
+
+  assert.equal(checkedAssistant, assistantMessage, "the between-turn checkpoint should evaluate the completed assistant turn for compaction");
+  assert.deepEqual(nextTurnSnapshot?.context?.messages, compactedMessages, "the next provider request should receive the rebuilt compacted context");
+
   const queued = runtime.session.agent.steeringQueue.drain();
   assert.equal(queued.length, 1);
   assert.equal(queued[0].role, "custom");

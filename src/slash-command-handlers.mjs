@@ -1,12 +1,13 @@
 import {
-  buildZyraAuthAccountStatus,
   buildSessionInfo,
+  configureZyraOpenAIApiKey,
   createZyraMemoryController,
   describeRuntime,
+  fetchCodexResetCredits,
   fetchCodexUsageStats,
+  isCodexResetCreditAvailable,
   loadCustomCommand,
   loginZyraAuth,
-  logoutZyraAuth,
   reloadZyraRuntime,
   runZyraPrompt,
   setModel,
@@ -23,11 +24,22 @@ import {
   getRuntimeContextUsage,
   getAutoProfile,
   formatZyraModelAvailabilitySummary,
+  formatZyraAuthMethodsStatus,
+  getZyraAuthOverview,
+  redeemCodexResetCredit,
   refreshZyraModelAvailability,
+  removeZyraAuth,
+  switchZyraAuthMethod,
 } from "./zyra-sdk.mjs";
+import { normalizeZyraAuthMethod, providerForZyraAuthMethod } from "./auth-methods.mjs";
 import { buildProjectStartPrompt } from "./project-start.mjs";
 import { getSlashCommand, parseSlashInput } from "./slash-commands.mjs";
 import { normalizeWebToolsMode } from "./web-tools-picker.mjs";
+import {
+  formatCodexResetCreditsSummary,
+  formatCodexResetRedemptionWarning,
+  formatCodexUsageSnapshot,
+} from "./codex-reset-format.mjs";
 
 export async function handleSlash(runtime, ui, input, controls = {}) {
   const text = String(input ?? "").trim();
@@ -64,13 +76,17 @@ export async function handleSlash(runtime, ui, input, controls = {}) {
     case "webfetch":
       return runWebFetch(runtime, ui, arg);
     case "auth":
-      return runAuth(ui, arg);
+      return runAuth(runtime, ui, arg, controls);
     case "codexusage":
       return runCodexUsage(ui);
+    case "codexresets":
+      return runCodexResets(ui);
+    case "codexresetlist":
+      return runCodexResetList(ui);
     case "login":
-      return runLogin(ui, arg, controls);
+      return runLogin(runtime, ui, arg, controls);
     case "logout":
-      return runLogout(ui, arg);
+      return runLogout(runtime, ui, arg);
     case "reload":
       return runReload(runtime, ui, arg, controls);
     case "new":
@@ -203,9 +219,26 @@ function runWebFetch(runtime, ui, arg) {
   return true;
 }
 
-async function runAuth(ui, arg) {
-  ui.info("Checking auth...");
-  ui.account(await buildZyraAuthAccountStatus(arg || "openai-codex"));
+async function runAuth(runtime, ui, arg, controls) {
+  const [rawMethod, rawAction] = String(arg ?? "").trim().toLowerCase().split(/\s+/, 2);
+  if (!rawMethod) {
+    await showAuthOverview(runtime, ui);
+    return true;
+  }
+
+  const method = normalizeZyraAuthMethod(rawMethod);
+  if (!method || (rawAction && !["setup", "rotate", "remove"].includes(rawAction))) {
+    ui.info("Usage: /auth, /auth subscription, /auth api, /auth api setup, /auth api remove");
+    return true;
+  }
+
+  if (rawAction === "remove") {
+    return runLogout(runtime, ui, method);
+  }
+
+  await connectAndSwitchAuth(runtime, ui, method, controls, {
+    forceSetup: method === "api" && ["setup", "rotate"].includes(rawAction),
+  });
   return true;
 }
 
@@ -215,26 +248,135 @@ async function runCodexUsage(ui) {
   return true;
 }
 
-async function runLogin(ui, arg, controls) {
-  const provider = arg || "openai-codex";
-  ui.beginProgress("ChatGPT login");
-  controls.setTerminalTitleState?.("working");
-  try {
-    await loginZyraAuth(provider, { onMessage: (message) => ui.info(message) });
-    ui.account(await buildZyraAuthAccountStatus(provider));
-  } finally {
-    ui.endProgress();
-    controls.setTerminalTitleState?.("ready");
-  }
+async function runCodexResetList(ui) {
+  ui.info("Loading banked Codex resets...");
+  ui.block(formatCodexResetCreditsSummary(await fetchCodexResetCredits()));
   return true;
 }
 
-async function runLogout(ui, arg) {
-  const provider = arg || "openai-codex";
-  ui.info(`Logging out of ${provider}...`);
-  await logoutZyraAuth(provider);
-  ui.account(await buildZyraAuthAccountStatus(provider));
+export async function runCodexResets(ui, dependencies = {}) {
+  const loadResetCredits = dependencies.fetchResetCredits ?? fetchCodexResetCredits;
+  const loadUsage = dependencies.fetchUsage ?? fetchCodexUsageStats;
+  const redeemReset = dependencies.redeemReset ?? redeemCodexResetCredit;
+  ui.info("Loading banked Codex resets...");
+  const [resetCredits, usage] = await Promise.all([
+    loadResetCredits(),
+    loadUsage(),
+  ]);
+
+  if (resetCredits.credits.length === 0) {
+    ui.info("No banked Codex resets were returned for this account.");
+    return true;
+  }
+
+  const selected = await ui.selectCodexResetCredit(resetCredits.credits);
+  if (!selected) return true;
+  if (!isCodexResetCreditAvailable(selected)) {
+    ui.info(`That reset is ${selected.status} and cannot be redeemed.`);
+    return true;
+  }
+
+  const confirmed = await ui.confirmCodexResetRedemption(
+    selected,
+    formatCodexResetRedemptionWarning(selected, usage),
+  );
+  if (confirmed !== true) {
+    ui.info("Reset cancelled. No credit was used.");
+    return true;
+  }
+
+  const freshCredits = await loadResetCredits();
+  const freshSelected = freshCredits.credits.find((credit) => credit.id === selected.id);
+  if (!freshSelected || !isCodexResetCreditAvailable(freshSelected)) {
+    ui.info("That reset is no longer available. Nothing was redeemed.");
+    return true;
+  }
+
+  ui.info("Redeeming Codex reset...");
+  const redemption = await redeemReset(freshSelected.id);
+  const [updatedUsage, updatedCredits] = await Promise.all([
+    loadUsage(),
+    loadResetCredits(),
+  ]);
+  const windows = redemption.windowsReset === undefined
+    ? "eligible windows"
+    : `${redemption.windowsReset} window${redemption.windowsReset === 1 ? "" : "s"}`;
+  ui.block([
+    `Codex reset redeemed: ${windows} reset.`,
+    formatCodexUsageSnapshot(updatedUsage),
+    `${updatedCredits.availableCount} banked reset${updatedCredits.availableCount === 1 ? "" : "s"} remaining.`,
+  ]);
   return true;
+}
+
+async function runLogin(runtime, ui, arg, controls) {
+  const method = normalizeZyraAuthMethod(arg || "subscription");
+  if (!method) {
+    ui.info("Usage: /login subscription | /login api");
+    return true;
+  }
+  await connectAndSwitchAuth(runtime, ui, method, controls, { forceSetup: method === "api" });
+  return true;
+}
+
+async function runLogout(runtime, ui, arg) {
+  const method = normalizeZyraAuthMethod(arg || "subscription");
+  if (!method) {
+    ui.info("Usage: /logout subscription | /logout api");
+    return true;
+  }
+  ui.info(`Disconnecting ${authMethodLabel(method)}...`);
+  const before = await getZyraAuthOverview(runtime);
+  await removeZyraAuth(method, { authStorage: runtime.session.modelRegistry.authStorage });
+  const fallback = method === "api" ? "subscription" : "api";
+  const after = await getZyraAuthOverview(runtime);
+  if (before.active === method && after[fallback]?.configured) {
+    const result = await switchZyraAuthMethod(runtime, fallback, {
+      authStorage: runtime.session.modelRegistry.authStorage,
+    });
+    ui.info(`Switched to ${authMethodLabel(fallback)} with ${result.model.provider}/${result.model.id}.`);
+  }
+  await showAuthOverview(runtime, ui);
+  return true;
+}
+
+async function connectAndSwitchAuth(runtime, ui, method, controls, options = {}) {
+  const authStorage = runtime.session.modelRegistry.authStorage;
+  const provider = providerForZyraAuthMethod(method);
+  let verification;
+
+  controls?.setTerminalTitleState?.("working");
+  try {
+    if (method === "api" && (options.forceSetup || !authStorage.hasAuth(provider))) {
+      const key = await ui.promptSecret("OpenAI API key");
+      ui.info("Verifying OpenAI API key...");
+      verification = await configureZyraOpenAIApiKey(key, { authStorage });
+      ui.info("OpenAI API key verified and saved securely.");
+    } else if (method === "subscription" && !authStorage.hasAuth(provider)) {
+      ui.beginProgress("ChatGPT login");
+      await loginZyraAuth(provider, {
+        authStorage,
+        onMessage: (message) => ui.info(message),
+      });
+    }
+
+    const result = await switchZyraAuthMethod(runtime, method, { authStorage, verification });
+    ui.info(`Using ${authMethodLabel(method)} with ${result.model.provider}/${result.model.id}.`);
+    await showAuthOverview(runtime, ui);
+  } finally {
+    ui.endProgress?.();
+    controls?.setTerminalTitleState?.("ready");
+  }
+}
+
+async function showAuthOverview(runtime, ui) {
+  ui.info("Checking authentication...");
+  const status = await getZyraAuthOverview(runtime);
+  ui.block(formatZyraAuthMethodsStatus(status).split("\n"));
+}
+
+function authMethodLabel(method) {
+  return method === "api" ? "OpenAI API" : "ChatGPT subscription";
 }
 
 async function runReload(runtime, ui, arg, controls) {

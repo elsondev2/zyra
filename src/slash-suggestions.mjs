@@ -1,6 +1,7 @@
 import { getZyraAvailableModels, getZyraAvailableThinkingLevels, getZyraThinkingLevel, listCustomCommands, listZyraProfiles, listZyraThemes } from "./zyra-sdk.mjs";
 import { applyFileMentionSuggestion, getFileMentionSuggestions } from "./file-mentions.mjs";
-import { CODEX_MODES, INTERRUPT_MODES, listSlashCommandSuggestions, NOTIFICATION_MODES, STATUS_LINE_MODES } from "./slash-commands.mjs";
+import { getModelCompatibilityLabel } from "./model-compatibility.mjs";
+import { CODEX_MODES, getSlashCommand, INTERRUPT_MODES, listSlashCommandSuggestions, NOTIFICATION_MODES, STATUS_LINE_MODES } from "./slash-commands.mjs";
 
 export function getSlashSuggestions(runtime, text) {
   const fileMentions = getFileMentionSuggestions(runtime, text);
@@ -9,6 +10,11 @@ export function getSlashSuggestions(runtime, text) {
   if (!text.startsWith("/")) return [];
 
   const query = text.toLowerCase();
+  if (query.startsWith("/auth ") || query.startsWith("/account ") || query.startsWith("/login ") || query.startsWith("/logout ")) {
+    const command = query.slice(0, query.indexOf(" ") + 1);
+    return buildSimpleArgumentSuggestions(["subscription", "api"], query.slice(command.length), "authentication method");
+  }
+
   if (query.startsWith("/thinking ")) {
     const prefix = query.slice("/thinking ".length);
     const active = getZyraThinkingLevel(runtime);
@@ -131,28 +137,34 @@ export function getSlashSuggestions(runtime, text) {
     };
     const models = getZyraAvailableModels(runtime.session.modelRegistry)
       .filter((model) => `${model.provider}/${model.id} ${model.name ?? ""}`.toLowerCase().includes(prefix))
-      .map((model) => ({
-        value: `${model.provider}/${model.id}`,
-        label: `${model.provider}/${model.id}`,
-        description:
-          model.provider === runtime.session.model?.provider && model.id === runtime.session.model?.id
-            ? "active"
-            : (model.name ?? model.id),
-        kind: "argument",
-        submitOnEnter: true,
-      }));
+      .map((model) => {
+        const compatibilityLabel = getModelCompatibilityLabel(model);
+        return {
+          value: `${model.provider}/${model.id}`,
+          label: `${model.provider}/${model.id}`,
+          description: compatibilityLabel
+            ?? (model.provider === runtime.session.model?.provider && model.id === runtime.session.model?.id
+              ? "active"
+              : (model.name ?? model.id)),
+          kind: "argument",
+          submitOnEnter: true,
+        };
+      });
     return prefix ? models : [...models, custom];
   }
 
   const prefix = query.slice(1);
-  const customCommands = listCustomCommands(runtime).map((command) => ({
-    value: `/${command.name}`,
-    label: `/${command.name}`,
-    description: command.description,
-    kind: "command",
-    submitOnEnter: false,
-  }));
-  return [...listSlashCommandSuggestions(), ...customCommands].filter((item) => item.label.slice(1).startsWith(prefix));
+  const customCommands = listCustomCommands(runtime)
+    .filter((command) => !getSlashCommand(command.name))
+    .map((command) => ({
+      value: `/${command.name}`,
+      label: `/${command.name}`,
+      description: command.description,
+      kind: "command",
+      submitOnEnter: false,
+    }));
+  return [...listSlashCommandSuggestions(prefix), ...customCommands]
+    .filter((item) => item.label.slice(1).startsWith(prefix));
 }
 
 export function applySlashSuggestion(text, item) {

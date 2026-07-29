@@ -1,7 +1,15 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { readClipboardImage } from "../../clipboard-image.mjs";
 import { buildTerminalTheme } from "../../terminal-theme.mjs";
+import {
+  buildEditorInputLayout,
+  cursorIndexAtVisualPosition,
+  nextGraphemeBoundary,
+  nextWordBoundary,
+  previousGraphemeBoundary,
+  previousWordBoundary,
+} from "../editor-input-layout.mjs";
 import {
   bold,
   fgReset,
@@ -31,6 +39,8 @@ export class EditorComponent {
     this.placeholderOptions = { project: options.project };
     this.buffer = "";
     this.cursorIndex = 0;
+    this.preferredCursorColumn = undefined;
+    this.lastRenderWidth = undefined;
     this.pastedBlocks = [];
     this.pastedImages = [];
     this.bracketedPasteText = null;
@@ -56,6 +66,7 @@ export class EditorComponent {
     this.starterRecommendationDismissed = false;
     this.insertedStarterPrompt = "";
     this.imagePastePromises = new Set();
+    this.imagePasteSequence = 0;
     this.onSubmit = options.onSubmit ?? (async () => false);
     this.onExit = options.onExit ?? (() => {});
   }
@@ -82,8 +93,10 @@ export class EditorComponent {
     this.clearPendingTextInput();
     this.buffer = String(text ?? "");
     this.cursorIndex = this.buffer.length;
+    this.preferredCursorColumn = undefined;
     this.pastedBlocks = [];
     this.pastedImages = [];
+    this.imagePasteSequence = 0;
     this.bracketedPasteText = null;
     this.completedText = "";
     this.suppressSuggestionsFor = "";
@@ -102,6 +115,7 @@ export class EditorComponent {
     this.clearPendingTextInput();
     this.buffer = "";
     this.cursorIndex = 0;
+    this.preferredCursorColumn = undefined;
     this.pastedBlocks = [];
     this.pastedImages = [];
     this.bracketedPasteText = null;
@@ -121,6 +135,7 @@ export class EditorComponent {
     this.starterRecommendationDismissed = false;
     this.insertedStarterPrompt = "";
     this.imagePastePromises.clear();
+    this.imagePasteSequence = 0;
     this.invalidateInput({ force: true });
   }
 
@@ -140,8 +155,9 @@ export class EditorComponent {
   }
 
   render(width) {
+    this.lastRenderWidth = Math.max(3, Number(width) || 80);
     const lines = [];
-    const turnActive = Boolean(this.options.getBusy?.() || this.waiting);
+    const turnActive = Boolean(this.options.isRunActive?.() || this.options.getBusy?.() || this.waiting);
     const isBusy = turnActive && !this.options.suppressWorking?.();
     const activityLabel = this.options.getActivityLabel?.() || (this.waiting ? "starting" : "working");
     const showStarterRecommendations = this.shouldShowStarterRecommendations();
@@ -204,6 +220,7 @@ export class EditorComponent {
   }
 
   async handleKeypress(str, key) {
+    const turnActive = Boolean(this.options.isRunActive?.() || this.options.getBusy?.() || this.waiting);
     if (this.inputLocked) {
       if (key?.ctrl && key.name === "c") {
         this.onExit(130);
@@ -226,6 +243,11 @@ export class EditorComponent {
     }
     const suggestions = this.suggestionsFor(this.buffer);
     if (this.handleScrollKey(key, suggestions)) return;
+    if ((key?.meta || key?.alt) && key?.name === "up") {
+      const restored = await this.options.onRestoreQueued?.(this.buffer);
+      if (typeof restored === "string") this.setText(restored);
+      return;
+    }
     const starterPromptIsInserted = this.insertedStarterPrompt && this.buffer.trim() === this.insertedStarterPrompt.trim();
     if (key?.name === "down" && (this.shouldShowStarterRecommendations() || starterPromptIsInserted)) return this.clearStarterRecommendation();
     if (key?.name === "up" && this.shouldShowStarterRecommendations()) return this.insertStarterRecommendation();
@@ -241,31 +263,78 @@ export class EditorComponent {
       this.invalidateInput();
       return;
     }
-    if (key?.name === "up" && this.recallInputHistory(-1)) return this.invalidateInput();
-    if (key?.name === "down" && this.recallInputHistory(1)) return this.invalidateInput();
-    if ((key?.name === "tab" || key?.name === "right") && suggestions.length > 0) {
+    if (key?.name === "up") {
+      if (this.moveCursorVertical(-1)) return;
+      if (this.recallInputHistory(-1)) this.invalidateInput();
+      return;
+    }
+    if (key?.name === "down") {
+      if (this.moveCursorVertical(1)) return;
+      if (this.recallInputHistory(1)) this.invalidateInput();
+      return;
+    }
+    const rightAcceptsSuggestion = key?.name === "right"
+      && !key?.ctrl && !key?.meta && !key?.alt
+      && this.cursorIndex === this.buffer.length;
+    if ((key?.name === "tab" || rightAcceptsSuggestion) && suggestions.length > 0) {
       this.completeSelection();
       return;
     }
-    if (key?.name === "left") {
-      this.moveCursor(-1);
-      return;
-    }
-    if (key?.name === "right") {
-      this.moveCursor(1);
-      return;
-    }
-    if (key?.name === "home") {
+    if (key?.ctrl && key?.name === "a") {
       this.moveCursorTo(0);
       return;
     }
-    if (key?.name === "end") {
+    if (key?.ctrl && key?.name === "e") {
       this.moveCursorTo(this.buffer.length);
       return;
     }
-    if ((key?.meta || key?.alt) && key?.name === "up") {
-      const restored = await this.options.onRestoreQueued?.(this.buffer);
-      if (typeof restored === "string") this.setText(restored);
+    if ((key?.alt || key?.meta) && key?.name === "b") {
+      this.moveCursorWord(-1);
+      return;
+    }
+    if ((key?.alt || key?.meta) && key?.name === "f") {
+      this.moveCursorWord(1);
+      return;
+    }
+    if (key?.name === "left" || (key?.ctrl && key?.name === "b")) {
+      if ((key?.ctrl || key?.meta || key?.alt) && key?.name === "left") this.moveCursorWord(-1);
+      else this.moveCursor(-1);
+      return;
+    }
+    if (key?.name === "right" || (key?.ctrl && key?.name === "f")) {
+      if ((key?.ctrl || key?.meta || key?.alt) && key?.name === "right") this.moveCursorWord(1);
+      else this.moveCursor(1);
+      return;
+    }
+    if (key?.name === "home") {
+      if (key?.ctrl || key?.meta) this.moveCursorTo(0);
+      else this.moveCursorToVisualBoundary("start");
+      return;
+    }
+    if (key?.name === "end") {
+      if (key?.ctrl || key?.meta) this.moveCursorTo(this.buffer.length);
+      else this.moveCursorToVisualBoundary("end");
+      return;
+    }
+    if ((key?.ctrl && key?.name === "w") || ((key?.alt || key?.meta) && key?.name === "backspace")) {
+      this.deleteInputRange(previousWordBoundary(this.buffer, this.cursorIndex), this.cursorIndex);
+      return;
+    }
+    if ((key?.alt || key?.meta) && ["d", "delete"].includes(key?.name)) {
+      this.deleteInputRange(this.cursorIndex, nextWordBoundary(this.buffer, this.cursorIndex));
+      return;
+    }
+    if (key?.ctrl && key?.name === "u") {
+      this.deleteInputRange(0, this.cursorIndex);
+      return;
+    }
+    if (key?.ctrl && key?.name === "k") {
+      this.deleteInputRange(this.cursorIndex, this.buffer.length);
+      return;
+    }
+    if ((key?.name === "return" && key?.shift) || (key?.ctrl && ["j", "return"].includes(key?.name))) {
+      this.flushPendingTextInput();
+      this.insertTextInput("\n", { trackPaste: false });
       return;
     }
     if (key?.name === "return") {
@@ -282,8 +351,8 @@ export class EditorComponent {
         }
         return;
       }
-      const text = this.buffer.trim();
-      if (!text && this.imagePastePromises.size === 0) {
+      const text = this.buffer;
+      if (!text.trim() && this.pastedImages.length === 0 && this.imagePastePromises.size === 0) {
         this.invalidateInput();
         return;
       }
@@ -291,10 +360,32 @@ export class EditorComponent {
       if (shouldExit) this.onExit(shouldExit === "restart" ? "restart" : 0);
       return;
     }
-    if (key?.name === "backspace") {
+    if (key?.name === "backspace" || (key?.ctrl && key?.name === "h")) {
       const removed = removeInputUnitBeforeCursor(this.buffer, this.cursorIndex, this.pastedBlocks, this.pastedImages);
       this.buffer = removed.buffer;
       this.cursorIndex = removed.cursorIndex;
+      this.preferredCursorColumn = undefined;
+      this.insertedStarterPrompt = "";
+      this.pastedBlocks = removed.blocks;
+      this.pastedImages = removed.images;
+      this.completedText = "";
+      this.suppressSuggestionsFor = "";
+      this.selectedIndex = 0;
+      this.selectionDirty = false;
+      this.inputHistoryIndex = null;
+      this.clearSuggestionCache();
+      this.invalidateInput();
+      return;
+    }
+    if (key?.name === "delete" || (key?.ctrl && key?.name === "d")) {
+      if (!this.buffer && key?.ctrl && key?.name === "d") {
+        this.onExit(0);
+        return;
+      }
+      const removed = removeInputUnitAfterCursor(this.buffer, this.cursorIndex, this.pastedBlocks, this.pastedImages);
+      this.buffer = removed.buffer;
+      this.cursorIndex = removed.cursorIndex;
+      this.preferredCursorColumn = undefined;
       this.insertedStarterPrompt = "";
       this.pastedBlocks = removed.blocks;
       this.pastedImages = removed.images;
@@ -315,6 +406,7 @@ export class EditorComponent {
       }
       this.buffer = "";
       this.cursorIndex = 0;
+      this.preferredCursorColumn = undefined;
       this.insertedStarterPrompt = "";
       this.pastedBlocks = [];
       this.pastedImages = [];
@@ -327,7 +419,7 @@ export class EditorComponent {
       this.invalidateInput();
       return;
     }
-    if ((key?.meta || key?.alt) && key?.name === "v") {
+    if ((key?.ctrl || key?.meta || key?.alt) && key?.name === "v") {
       this.queueImagePaste();
       return;
     }
@@ -344,18 +436,80 @@ export class EditorComponent {
     this.clampCursorIndex();
     if (direction < 0) {
       const previousBlock = this.pastedBlocks.find((block) => block.end === this.cursorIndex || (this.cursorIndex > block.start && this.cursorIndex < block.end));
-      this.cursorIndex = previousBlock ? previousBlock.start : Math.max(0, this.cursorIndex - 1);
+      this.cursorIndex = previousBlock ? previousBlock.start : previousGraphemeBoundary(this.buffer, this.cursorIndex);
     } else if (direction > 0) {
       const nextBlock = this.pastedBlocks.find((block) => block.start === this.cursorIndex || (this.cursorIndex > block.start && this.cursorIndex < block.end));
-      this.cursorIndex = nextBlock ? nextBlock.end : Math.min(this.buffer.length, this.cursorIndex + 1);
+      this.cursorIndex = nextBlock ? nextBlock.end : nextGraphemeBoundary(this.buffer, this.cursorIndex);
     }
+    this.preferredCursorColumn = undefined;
     this.clearSuggestionCache();
     this.invalidateInput();
   }
 
-  moveCursorTo(index) {
+  moveCursorWord(direction) {
+    this.clampCursorIndex();
+    let nextIndex = direction < 0
+      ? previousWordBoundary(this.buffer, this.cursorIndex)
+      : nextWordBoundary(this.buffer, this.cursorIndex);
+    const containingBlock = this.pastedBlocks.find((block) => nextIndex > block.start && nextIndex < block.end);
+    if (containingBlock) nextIndex = direction < 0 ? containingBlock.start : containingBlock.end;
+    this.moveCursorTo(nextIndex);
+  }
+
+  moveCursorVertical(direction) {
+    const navigation = this.editorNavigationContext();
+    const current = navigation.layout.positions[navigation.displayCursorIndex] ?? { row: 0, col: 0 };
+    const targetRow = current.row + direction;
+    if (targetRow < 0 || targetRow >= navigation.layout.rows.length) return false;
+    this.preferredCursorColumn ??= current.col;
+    const displayIndex = cursorIndexAtVisualPosition(navigation.layout, targetRow, this.preferredCursorColumn);
+    const rawIndex = rawCursorIndexForDisplay(this.buffer, this.pastedBlocks, displayIndex);
+    this.moveCursorTo(rawIndex, { preservePreferredColumn: true });
+    return true;
+  }
+
+  moveCursorToVisualBoundary(edge) {
+    const navigation = this.editorNavigationContext();
+    const current = navigation.layout.positions[navigation.displayCursorIndex] ?? { row: 0, col: 0 };
+    const targetCol = edge === "end" ? visibleWidth(navigation.layout.rows[current.row] ?? "") : 0;
+    const displayIndex = cursorIndexAtVisualPosition(navigation.layout, current.row, targetCol, { edge });
+    const rawIndex = rawCursorIndexForDisplay(this.buffer, this.pastedBlocks, displayIndex);
+    this.moveCursorTo(rawIndex);
+  }
+
+  editorNavigationContext() {
+    this.clampCursorIndex();
+    const width = Math.max(3, Number(this.lastRenderWidth ?? this.host?.width?.() ?? 80) || 80);
+    const promptWidth = 2;
+    const displayText = displayTextFor(this.buffer, this.pastedBlocks);
+    const displayCursorIndex = displayCursorIndexFor(this.buffer, this.pastedBlocks, this.cursorIndex);
+    return {
+      displayCursorIndex,
+      layout: buildEditorInputLayout(displayText, Math.max(1, width - promptWidth)),
+    };
+  }
+
+  moveCursorTo(index, options = {}) {
     this.cursorIndex = Math.max(0, Math.min(this.buffer.length, Number(index) || 0));
     this.clampCursorIndex();
+    if (!options.preservePreferredColumn) this.preferredCursorColumn = undefined;
+    this.clearSuggestionCache();
+    this.invalidateInput();
+  }
+
+  deleteInputRange(start, end) {
+    const removed = removeInputRange(this.buffer, start, end, this.pastedBlocks, this.pastedImages);
+    this.buffer = removed.buffer;
+    this.cursorIndex = removed.cursorIndex;
+    this.preferredCursorColumn = undefined;
+    this.insertedStarterPrompt = "";
+    this.pastedBlocks = removed.blocks;
+    this.pastedImages = removed.images;
+    this.completedText = "";
+    this.suppressSuggestionsFor = "";
+    this.selectedIndex = 0;
+    this.selectionDirty = false;
+    this.inputHistoryIndex = null;
     this.clearSuggestionCache();
     this.invalidateInput();
   }
@@ -376,38 +530,52 @@ export class EditorComponent {
   }
 
   async submit(text, submitOptions = {}) {
-    let submittedText = text;
+    let submittedText = String(text ?? "");
     if (this.imagePastePromises.size > 0) {
       this.waiting = true;
       this.invalidateInput();
-      await Promise.allSettled([...this.imagePastePromises]);
-      submittedText = this.buffer.trim();
+      while (this.imagePastePromises.size > 0) {
+        await Promise.allSettled([...this.imagePastePromises]);
+      }
+      submittedText = this.buffer;
     }
-    const displayText = displayTextFor(submittedText, this.pastedBlocks);
-    const hasImages = this.pastedImages.length > 0;
-    if (!submittedText && !hasImages) {
+    const displayText = displayTextFor(submittedText, this.pastedBlocks).trim();
+    const promptText = submissionTextFor(submittedText, this.pastedBlocks).trim();
+    const imageAttachments = this.pastedImages
+      .slice()
+      .sort((left, right) => left.index - right.index)
+      .map(({ index, width, height }) => ({ index, width, height }));
+    const hasImages = imageAttachments.length > 0;
+    if (!promptText && !hasImages) {
       this.waiting = false;
       this.invalidateInput();
       return false;
     }
-    const submission = hasImages || displayText !== submittedText
-      ? { text: submittedText, displayText, images: this.pastedImages.map((item) => item.image) }
-      : submittedText;
+    const submission = hasImages || displayText !== promptText
+      ? {
+          text: promptText,
+          displayText,
+          images: this.pastedImages.slice().sort((left, right) => left.index - right.index).map((item) => item.image),
+          imageAttachments,
+        }
+      : promptText;
     const shouldEcho = this.options.shouldEchoUserMessage?.(submission, submitOptions) !== false;
-    if (shouldEcho) this.options.onUserMessage?.(displayText);
-    this.rememberInputHistory(submittedText);
+    if (shouldEcho) this.options.onUserMessage?.(promptText, { displayText, imageAttachments });
+    this.rememberInputHistory(promptText);
     this.hasTranscript = true;
     this.buffer = "";
     this.cursorIndex = 0;
+    this.preferredCursorColumn = undefined;
     this.pastedBlocks = [];
     this.pastedImages = [];
+    this.imagePasteSequence = 0;
     this.placeholderText = pickPlaceholder(this.placeholderText, this.placeholderOptions);
     this.selectedIndex = 0;
     this.selectionDirty = false;
     this.suppressSuggestionsFor = "";
     this.clearSuggestionCache();
     this.inputHistoryIndex = null;
-    this.waiting = hasImages || shouldShowWaitingFor(submittedText);
+    this.waiting = hasImages || shouldShowWaitingFor(promptText);
     this.invalidateInput({ force: true });
     try {
       const result = await this.onSubmit(submitOptions.delivery ? { ...(typeof submission === "string" ? { text: submission } : submission), delivery: submitOptions.delivery } : submission);
@@ -430,6 +598,7 @@ export class EditorComponent {
     if (!next) return false;
     this.buffer = next;
     this.cursorIndex = this.buffer.length;
+    this.preferredCursorColumn = undefined;
     this.completedText = next.endsWith(" ") || (selected.kind === "file-mention" && selected.isDirectory) ? "" : next;
     this.suppressSuggestionsFor = selected.kind === "custom-model" ? next : "";
     this.clearSuggestionCache();
@@ -450,6 +619,7 @@ export class EditorComponent {
     if (!selected?.prompt) return false;
     this.buffer = selected.prompt;
     this.cursorIndex = this.buffer.length;
+    this.preferredCursorColumn = undefined;
     this.insertedStarterPrompt = selected.prompt;
     this.completedText = "";
     this.suppressSuggestionsFor = "";
@@ -530,15 +700,16 @@ export class EditorComponent {
     this.lastDeferredTextInputAt = 0;
   }
 
-  insertTextInput(str) {
+  insertTextInput(str, options = {}) {
     this.clampCursorIndex();
     const start = this.cursorIndex;
     const value = String(str ?? "");
     this.buffer = this.buffer.slice(0, start) + value + this.buffer.slice(start);
     this.cursorIndex = start + value.length;
+    this.preferredCursorColumn = undefined;
     this.pastedBlocks = shiftBlocksForInsert(this.pastedBlocks, start, value.length);
     this.insertedStarterPrompt = "";
-    if (isLikelyPaste(value)) {
+    if (options.trackPaste !== false && isLikelyPaste(value)) {
       this.pastedBlocks.push({
         id: `paste-${Date.now()}-${this.pastedBlocks.length + 1}`,
         type: "text",
@@ -557,32 +728,60 @@ export class EditorComponent {
   }
 
   queueImagePaste() {
-    const id = `image-${Date.now()}-${this.pastedImages.length + 1}`;
-    let blockIdInserted = false;
-    const insertPastedImageBlock = (pastedImage) => {
-      if (blockIdInserted || !pastedImage) return;
-      this.clampCursorIndex();
-      const prefix = this.buffer && this.cursorIndex > 0 && !/\s$/.test(this.buffer.slice(0, this.cursorIndex)) ? " " : "";
-      const dimensions = pastedImage.width && pastedImage.height ? ` ${pastedImage.width}x${pastedImage.height}` : "";
-      const start = this.cursorIndex;
-      const label = `${prefix}[Pasted Image${dimensions}]`;
-      this.buffer = this.buffer.slice(0, start) + label + this.buffer.slice(start);
-      this.cursorIndex = start + label.length;
-      this.pastedBlocks = shiftBlocksForInsert(this.pastedBlocks, start, label.length);
-      this.pastedBlocks.push({ id, type: "image", start, end: this.cursorIndex, label });
-      this.pastedImages = [...this.pastedImages.filter((item) => item.id !== id), { id, image: pastedImage.image }];
-      blockIdInserted = true;
-      this.completedText = "";
-      this.suppressSuggestionsFor = "";
-      this.clearSuggestionCache();
-      this.selectedIndex = 0;
-      this.selectionDirty = false;
-      this.inputHistoryIndex = null;
-      this.invalidateInput();
-    };
-    const pastePromise = readClipboardImage().then(insertPastedImageBlock);
+    this.imagePasteSequence += 1;
+    const index = this.imagePasteSequence;
+    const id = `image-${Date.now()}-${index}`;
+    this.clampCursorIndex();
+    const prefix = this.buffer && this.cursorIndex > 0 && !/\s$/.test(this.buffer.slice(0, this.cursorIndex)) ? " " : "";
+    const start = this.cursorIndex;
+    const label = `${prefix}${formatImagePasteLabel(index, undefined, undefined, { pending: true })}`;
+    this.buffer = this.buffer.slice(0, start) + label + this.buffer.slice(start);
+    this.cursorIndex = start + label.length;
+    this.pastedBlocks = shiftBlocksForInsert(this.pastedBlocks, start, label.length);
+    this.pastedBlocks.push({ id, type: "image", index, prefix, start, end: this.cursorIndex, label });
+    this.completedText = "";
+    this.suppressSuggestionsFor = "";
+    this.clearSuggestionCache();
+    this.selectedIndex = 0;
+    this.selectionDirty = false;
+    this.inputHistoryIndex = null;
+    this.invalidateInput();
+
+    const reader = this.options.readClipboardImage ?? readClipboardImage;
+    const pastePromise = Promise.resolve()
+      .then(() => reader())
+      .then((pastedImage) => {
+        const block = this.pastedBlocks.find((item) => item.id === id);
+        if (!block) return;
+        if (!pastedImage?.image) {
+          const removed = replacePastedBlock(this.buffer, this.cursorIndex, this.pastedBlocks, id, "");
+          this.buffer = removed.buffer;
+          this.cursorIndex = removed.cursorIndex;
+          this.pastedBlocks = removed.blocks;
+          return;
+        }
+        const resolvedLabel = `${block.prefix ?? ""}${formatImagePasteLabel(index, pastedImage.width, pastedImage.height)}`;
+        const replaced = replacePastedBlock(this.buffer, this.cursorIndex, this.pastedBlocks, id, resolvedLabel);
+        this.buffer = replaced.buffer;
+        this.cursorIndex = replaced.cursorIndex;
+        this.pastedBlocks = replaced.blocks;
+        this.pastedImages = [
+          ...this.pastedImages.filter((item) => item.id !== id),
+          { id, index, width: pastedImage.width, height: pastedImage.height, image: pastedImage.image },
+        ];
+      })
+      .catch(() => {
+        const removed = replacePastedBlock(this.buffer, this.cursorIndex, this.pastedBlocks, id, "");
+        this.buffer = removed.buffer;
+        this.cursorIndex = removed.cursorIndex;
+        this.pastedBlocks = removed.blocks;
+      })
+      .finally(() => {
+        this.imagePastePromises.delete(pastePromise);
+        this.clearSuggestionCache();
+        this.invalidateInput();
+      });
     this.imagePastePromises.add(pastePromise);
-    pastePromise.finally(() => this.imagePastePromises.delete(pastePromise)).catch(() => {});
   }
 
   rememberInputHistory(text) {
@@ -611,6 +810,7 @@ export class EditorComponent {
       this.buffer = this.inputHistory[this.inputHistoryIndex];
     }
     this.cursorIndex = this.buffer.length;
+    this.preferredCursorColumn = undefined;
     this.insertedStarterPrompt = "";
     this.completedText = "";
     this.suppressSuggestionsFor = "";
@@ -621,6 +821,7 @@ export class EditorComponent {
   }
 
   invalidateInput(options = {}) {
+    this.cursor = null;
     this.host?.invalidate({ fixedOnly: true, ...options });
   }
 
@@ -675,6 +876,19 @@ function displayTextFor(text, blocks = []) {
   return rendered;
 }
 
+function submissionTextFor(text, blocks = []) {
+  const imageBlocks = validPastedBlocks(text, blocks).filter((block) => block.type === "image");
+  if (imageBlocks.length === 0) return text;
+  let cursor = 0;
+  let submitted = "";
+  for (const block of imageBlocks) {
+    submitted += text.slice(cursor, block.start);
+    submitted += " ";
+    cursor = block.end;
+  }
+  return submitted + text.slice(cursor);
+}
+
 function displayCursorIndexFor(text, blocks = [], cursorIndex = 0) {
   const index = Math.max(0, Math.min(String(text ?? "").length, Number(cursorIndex) || 0));
   const validBlocks = validPastedBlocks(text, blocks);
@@ -691,6 +905,30 @@ function displayCursorIndexFor(text, blocks = [], cursorIndex = 0) {
   return displayCursor + (index - rawCursor);
 }
 
+function rawCursorIndexForDisplay(text, blocks = [], displayCursorIndex = 0) {
+  const value = String(text ?? "");
+  const validBlocks = validPastedBlocks(value, blocks);
+  const displayLength = String(displayTextFor(value, validBlocks)).length;
+  const index = Math.max(0, Math.min(displayLength, Number(displayCursorIndex) || 0));
+  let rawCursor = 0;
+  let displayCursor = 0;
+
+  for (const block of validBlocks) {
+    if (block.start < rawCursor) continue;
+    const plainLength = block.start - rawCursor;
+    if (index <= displayCursor + plainLength) return rawCursor + (index - displayCursor);
+    displayCursor += plainLength;
+    const labelLength = String(block.label ?? "").length;
+    if (index < displayCursor + labelLength) {
+      return index - displayCursor < labelLength / 2 ? block.start : block.end;
+    }
+    displayCursor += labelLength;
+    rawCursor = block.end;
+  }
+
+  return Math.max(0, Math.min(value.length, rawCursor + (index - displayCursor)));
+}
+
 function validPastedBlocks(text, blocks = []) {
   const length = String(text ?? "").length;
   return blocks
@@ -704,6 +942,67 @@ function shiftBlocksForInsert(blocks = [], insertIndex = 0, insertLength = 0) {
     if (block.start >= insertIndex) return { ...block, start: block.start + insertLength, end: block.end + insertLength };
     return block;
   });
+}
+
+function replacePastedBlock(buffer, cursorIndex, blocks = [], id, replacement) {
+  const target = blocks.find((block) => block.id === id);
+  if (!target) return { buffer, cursorIndex, blocks };
+  const next = String(replacement ?? "");
+  const removedLength = target.end - target.start;
+  const delta = next.length - removedLength;
+  const nextBuffer = buffer.slice(0, target.start) + next + buffer.slice(target.end);
+  const nextBlocks = blocks
+    .filter((block) => block.id !== id || next.length > 0)
+    .map((block) => {
+      if (block.id === id) return { ...block, end: block.start + next.length, label: next };
+      if (block.start >= target.end) return { ...block, start: block.start + delta, end: block.end + delta };
+      return block;
+    });
+  const nextCursorIndex = cursorIndex >= target.end
+    ? cursorIndex + delta
+    : cursorIndex > target.start
+      ? target.start + next.length
+      : cursorIndex;
+  return { buffer: nextBuffer, cursorIndex: nextCursorIndex, blocks: nextBlocks };
+}
+
+function formatImagePasteLabel(index, width, height, options = {}) {
+  if (options.pending) return `[Image ${index} · loading]`;
+  const dimensions = width && height ? ` · ${width}×${height}` : "";
+  return `[Image ${index}${dimensions}]`;
+}
+
+function removeInputRange(buffer, start, end, blocks = [], images = []) {
+  const value = String(buffer ?? "");
+  let deleteStart = Math.max(0, Math.min(value.length, Number(start) || 0));
+  let deleteEnd = Math.max(deleteStart, Math.min(value.length, Number(end) || 0));
+  if (deleteStart === deleteEnd) return { buffer: value, cursorIndex: deleteStart, blocks, images };
+
+  let expanded = true;
+  while (expanded) {
+    expanded = false;
+    for (const block of blocks) {
+      if (block.end <= deleteStart || block.start >= deleteEnd) continue;
+      const nextStart = Math.min(deleteStart, block.start);
+      const nextEnd = Math.max(deleteEnd, block.end);
+      if (nextStart !== deleteStart || nextEnd !== deleteEnd) expanded = true;
+      deleteStart = nextStart;
+      deleteEnd = nextEnd;
+    }
+  }
+
+  const removedBlockIds = new Set(blocks
+    .filter((block) => block.start >= deleteStart && block.end <= deleteEnd)
+    .map((block) => block.id));
+  const deleteLength = deleteEnd - deleteStart;
+  return {
+    buffer: value.slice(0, deleteStart) + value.slice(deleteEnd),
+    cursorIndex: deleteStart,
+    blocks: blocks
+      .filter((block) => !removedBlockIds.has(block.id))
+      .map((block) => block.start >= deleteEnd ? { ...block, start: block.start - deleteLength, end: block.end - deleteLength } : block),
+    images: images.filter((image) => !removedBlockIds.has(image.id)),
+  };
 }
 
 function removeInputUnitBeforeCursor(buffer, cursorIndex, blocks = [], images = []) {
@@ -726,11 +1025,42 @@ function removeInputUnitBeforeCursor(buffer, cursorIndex, blocks = [], images = 
     };
   }
 
-  const deleteStart = cursor - 1;
+  const deleteStart = previousGraphemeBoundary(buffer, cursor);
+  const deleteLength = cursor - deleteStart;
   return {
     buffer: buffer.slice(0, deleteStart) + buffer.slice(cursor),
     cursorIndex: deleteStart,
-    blocks: blocks.map((block) => block.start >= cursor ? { ...block, start: block.start - 1, end: block.end - 1 } : block),
+    blocks: blocks.map((block) => block.start >= cursor ? { ...block, start: block.start - deleteLength, end: block.end - deleteLength } : block),
+    images,
+  };
+}
+
+function removeInputUnitAfterCursor(buffer, cursorIndex, blocks = [], images = []) {
+  const cursor = Math.max(0, Math.min(String(buffer ?? "").length, Number(cursorIndex) || 0));
+  if (!buffer || cursor >= buffer.length) return { buffer, cursorIndex: cursor, blocks, images };
+  const blockAfterCursor = [...blocks]
+    .filter((block) => block.start === cursor || (cursor > block.start && cursor < block.end))
+    .sort((a, b) => a.start - b.start)[0];
+  if (blockAfterCursor) {
+    const deleteStart = blockAfterCursor.start;
+    const deleteEnd = blockAfterCursor.end;
+    const deleteLength = deleteEnd - deleteStart;
+    return {
+      buffer: buffer.slice(0, deleteStart) + buffer.slice(deleteEnd),
+      cursorIndex: deleteStart,
+      blocks: blocks
+        .filter((block) => block.id !== blockAfterCursor.id)
+        .map((block) => block.start >= deleteEnd ? { ...block, start: block.start - deleteLength, end: block.end - deleteLength } : block),
+      images: blockAfterCursor.type === "image" ? images.filter((item) => item.id !== blockAfterCursor.id) : images,
+    };
+  }
+
+  const deleteEnd = nextGraphemeBoundary(buffer, cursor);
+  const deleteLength = deleteEnd - cursor;
+  return {
+    buffer: buffer.slice(0, cursor) + buffer.slice(deleteEnd),
+    cursorIndex: cursor,
+    blocks: blocks.map((block) => block.start >= deleteEnd ? { ...block, start: block.start - deleteLength, end: block.end - deleteLength } : block),
     images,
   };
 }
@@ -796,21 +1126,12 @@ function renderEditorLines({ prompt, text = "", cursorIndex = undefined, placeho
     };
   }
   const value = String(text ?? "");
-  const rows = wrapEditorInput(value, rowWidth);
-  const cursor = editorCursorPositionForText(value, cursorIndex ?? value.length, rowWidth, promptWidth);
+  const layout = buildEditorInputLayout(value, rowWidth);
+  const index = Math.max(0, Math.min(value.length, Number(cursorIndex ?? value.length) || 0));
+  const position = layout.positions[index] ?? { row: 0, col: 0 };
   return {
-    lines: rows.map((row, index) => `${index === 0 ? prompt : " ".repeat(promptWidth)}${row}`),
-    cursor,
-  };
-}
-
-function editorCursorPositionForText(text, cursorIndex, rowWidth, promptWidth) {
-  const value = String(text ?? "");
-  const index = Math.max(0, Math.min(value.length, Number(cursorIndex) || 0));
-  const beforeCursorRows = wrapEditorInput(value.slice(0, index), rowWidth);
-  return {
-    row: Math.max(0, beforeCursorRows.length - 1),
-    col: promptWidth + visibleWidth(beforeCursorRows.at(-1) ?? ""),
+    lines: layout.rows.map((row, rowIndex) => `${rowIndex === 0 ? prompt : " ".repeat(promptWidth)}${row}`),
+    cursor: { row: position.row, col: promptWidth + position.col },
   };
 }
 
@@ -818,102 +1139,9 @@ function renderInputRail(width, theme = fallbackTheme) {
   return `${theme.editorBorder}${"─".repeat(Math.max(1, width))}${reset}`;
 }
 
-function wrapEditorInput(text, width) {
-  const max = Math.max(1, Number(width) || 1);
-  const rows = [];
-  for (const paragraph of String(text ?? "").split(/\r?\n/)) {
-    const tokens = paragraph.match(/\S+|\s+/g) ?? [""];
-    let row = "";
-    for (const token of tokens) {
-      if (/^\s+$/.test(token)) {
-        let spaces = token;
-        while (spaces) {
-          const available = max - visibleWidth(row);
-          if (available <= 0) {
-            rows.push(row);
-            row = "";
-            continue;
-          }
-          const chunk = spaces.slice(0, available);
-          row += chunk;
-          spaces = spaces.slice(chunk.length);
-        }
-        continue;
-      }
-
-      let word = token;
-      while (visibleWidth(word) > max) {
-        if (row) {
-          rows.push(row);
-          row = "";
-        }
-        rows.push(word.slice(0, max));
-        word = word.slice(max);
-      }
-
-      if (visibleWidth(row) + visibleWidth(word) > max && row) {
-        rows.push(row);
-        row = word;
-      } else {
-        row += word;
-      }
-    }
-    rows.push(row);
-  }
-  return rows;
-}
-
 function styleAttachmentLabels(text, theme = fallbackTheme, restore = fgReset) {
-  return String(text).replace(/\[(Pasted Image[^\]]*|Pasted Content[^\]]*)\]/g, (_match, inner) => {
+  return String(text).replace(/\[(Image \d+[^\]]*|Pasted Content[^\]]*)\]/g, (_match, inner) => {
     return `${theme.muted}[${theme.accent}${bold}${inner}${normalIntensity}${theme.muted}]${restore}`;
-  });
-}
-
-function readClipboardImage() {
-  if (process.platform !== "win32") return Promise.resolve(null);
-  const script = `
-$ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-if (-not [System.Windows.Forms.Clipboard]::ContainsImage()) { exit 3 }
-$img = [System.Windows.Forms.Clipboard]::GetImage()
-$stream = New-Object System.IO.MemoryStream
-$img.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
-$payload = [pscustomobject]@{
-  data = [Convert]::ToBase64String($stream.ToArray())
-  mimeType = 'image/png'
-  width = $img.Width
-  height = $img.Height
-}
-$payload | ConvertTo-Json -Compress
-`;
-  return new Promise((resolve) => {
-    const child = spawn("powershell.exe", ["-NoProfile", "-STA", "-Command", script], { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
-    let stdout = "";
-    let settled = false;
-    const done = (value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      resolve(value);
-    };
-    const timeout = setTimeout(() => {
-      child.kill();
-      done(null);
-    }, 5000);
-    child.stdout?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk) => { stdout += chunk; });
-    child.on("error", () => done(null));
-    child.on("close", (status) => {
-      if (status !== 0 || !stdout.trim()) return done(null);
-      try {
-        const payload = JSON.parse(stdout.trim());
-        if (!payload?.data || !payload?.mimeType) return done(null);
-        done({ width: payload.width, height: payload.height, image: { type: "image", data: payload.data, mimeType: payload.mimeType } });
-      } catch {
-        done(null);
-      }
-    });
   });
 }
 

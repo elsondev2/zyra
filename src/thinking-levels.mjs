@@ -1,11 +1,21 @@
-export const GPT_56_THINKING_LEVELS = Object.freeze(["none", "low", "medium", "high", "xhigh", "max"]);
+export const GPT_56_THINKING_LEVELS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
 
 const PI_THINKING_LEVELS = Object.freeze(["off", "minimal", "low", "medium", "high", "xhigh"]);
 const KNOWN_THINKING_LEVELS = new Set([...PI_THINKING_LEVELS, "none", "max"]);
-const GPT_56_MODEL_RE = /^gpt-5\.6(?:-|$)/i;
+const GPT_56_MODEL_RE = /(?:^|\/)gpt-5\.6(?:-|$)/i;
+const CHATGPT_MODEL_RE = /(?:^|\/)(?:gpt-|codex-)/i;
+
+function modelIdentity(model) {
+  if (typeof model === "string") return model;
+  return [model?.provider, model?.id].filter(Boolean).join("/");
+}
 
 export function isGpt56Model(model) {
-  return GPT_56_MODEL_RE.test(String(typeof model === "string" ? model : model?.id ?? ""));
+  return GPT_56_MODEL_RE.test(String(modelIdentity(model)));
+}
+
+export function isChatGptReasoningModel(model) {
+  return CHATGPT_MODEL_RE.test(String(modelIdentity(model)));
 }
 
 export function normalizeZyraThinkingLevel(value) {
@@ -16,6 +26,10 @@ export function normalizeZyraThinkingLevel(value) {
 export function getModelThinkingLevels(model, piLevels = PI_THINKING_LEVELS) {
   if (isGpt56Model(model)) return [...GPT_56_THINKING_LEVELS];
   const levels = Array.isArray(piLevels) ? piLevels.filter((level) => KNOWN_THINKING_LEVELS.has(level)) : [];
+  if (isChatGptReasoningModel(model)) {
+    const chatGptLevels = levels.filter((level) => !["off", "none", "minimal"].includes(level));
+    return chatGptLevels.length > 0 ? chatGptLevels : ["low"];
+  }
   return levels.length > 0 ? [...levels] : ["off"];
 }
 
@@ -24,12 +38,17 @@ export function coerceThinkingLevelForModel(value, model, piLevels = PI_THINKING
   const levels = getModelThinkingLevels(model, piLevels);
 
   if (isGpt56Model(model)) {
-    if (requested === "off") return "none";
-    if (requested === "minimal") return "low";
+    if (["off", "none", "minimal"].includes(requested)) return "low";
     return levels.includes(requested) ? requested : "medium";
   }
 
-  const compatible = requested === "none" ? "off" : requested === "max" ? "xhigh" : requested;
+  const compatible = isChatGptReasoningModel(model) && ["off", "none", "minimal"].includes(requested)
+    ? "low"
+    : requested === "none"
+      ? "off"
+      : requested === "max"
+        ? "xhigh"
+        : requested;
   if (levels.includes(compatible)) return compatible;
   return clampToAvailablePiLevel(compatible, levels);
 }

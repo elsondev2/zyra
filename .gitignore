@@ -3,6 +3,7 @@ dist/
 shims/
 .playwright-cli/
 .zyra/
+.zyra-worktrees/
 .coord/
 tmp/
 output/
@@ -30,10 +31,12 @@ desktop/.zyra/
 desktop/*.log
 desktop/.env
 desktop/.env.*
+desktop/electron.vite.config.*.mjs
+/desktop/[Nn][Uu][Ll]
+/[Nn][Uu][Ll]
 !desktop/.env.example
 
-# App surfaces intentionally kept out of the CLI push for now
-src/zyra-ui-bridge.mjs
+# The desktop Pi bridge is runtime source and must ship with Zyra.
 
 # Local import/normalization helpers for private exports
 tools/import-*.mjs

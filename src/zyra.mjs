@@ -6,16 +6,25 @@ import path from "node:path";
 import {
   buildInspectPrompt,
   checkSetup,
+  configureZyraOpenAIApiKey,
   createZyraSession,
   defaults,
   describeRuntime,
+  fetchCodexUsageStats,
+  formatZyraAuthMethodsStatus,
+  getZyraAuthOverview,
   listZyraSessions,
+  loginZyraAuth,
   queueZyraMidRunInput,
+  removeZyraAuth,
   runZyraPrompt,
   runZyraPrintPrompt,
   saveZyraExitSummary,
+  setZyraAuthMethodPreference,
   startZyraMemoryBackgroundStartup,
 } from "./zyra-sdk.mjs";
+import { chooseVerifiedApiModel, normalizeZyraAuthMethod } from "./auth-methods.mjs";
+import { promptSecret } from "./secret-input.mjs";
 import { createZyraUi } from "./zyra-ui.mjs";
 import { runOnboarding, shouldRunOnboarding } from "./onboarding.mjs";
 import { handleSlash } from "./slash-command-handlers.mjs";
@@ -117,7 +126,7 @@ function parse(argv) {
       skipOnboarding = true;
     } else if ((arg === "--continue" || arg === "-c")) {
       sessionMode = "continue";
-    } else if (arg === "--session" && args[i + 1]) {
+    } else if ((arg === "--thread" || arg === "--session") && args[i + 1]) {
       session = args[i + 1];
       i += 1;
     } else if ((arg === "--resume" || arg === "-r") && args[i + 1] && !args[i + 1].startsWith("-")) {
@@ -168,7 +177,7 @@ function parse(argv) {
   if (command === "ask" && !prompt) {
     throw new Error('Usage: zyra ask "your question" or zyra -p "your question"');
   }
-  if (!["chat", "ask", "inspect", "doctor", "sessions", "login", "logout", "auth", "account", "codexusage", "update", "onboarding", "help", "--help", "-h"].includes(command)) {
+  if (!["chat", "ask", "inspect", "doctor", "threads", "sessions", "login", "logout", "auth", "account", "codexusage", "update", "onboarding", "help", "--help", "-h"].includes(command)) {
     prompt = command + (prompt ? ` ${prompt}` : "");
     command = "ask";
   }
@@ -239,10 +248,20 @@ async function main() {
     terminalTitle.notify(runtime?.notifications ?? "unfocused");
   };
 
-  const subscribeRuntimeEvents = (runtime, handler = (event) => ui.event(event)) => runtime.session.subscribe((event) => {
-    handler(event);
-    terminalTitle.fromEvent(event, runtime);
-  });
+  const subscribeRuntimeEvents = (runtime, handler = (event) => ui.event(event)) => {
+    const forward = (event) => {
+      handler(event);
+      terminalTitle.fromEvent(event, runtime);
+    };
+    const unsubscribeSession = runtime.session.subscribe(forward);
+    const unsubscribeManagedBash = runtime.managedBash?.subscribe?.((update) => {
+      forward({ type: "managed_bash_job_update", ...update });
+    });
+    return () => {
+      unsubscribeSession?.();
+      unsubscribeManagedBash?.();
+    };
+  };
 
   if (parsed.command === "help" || parsed.command === "--help" || parsed.command === "-h") {
     ui.commands();
@@ -252,7 +271,7 @@ async function main() {
     printDoctor(ui);
     return;
   }
-  if (parsed.command === "sessions") {
+  if (parsed.command === "threads" || parsed.command === "sessions") {
     await printSessions(ui, parsed.project);
     return;
   }
@@ -273,6 +292,7 @@ async function main() {
     if (onboardingResult.terminalTheme) parsed.terminalTheme = onboardingResult.terminalTheme;
     if (onboardingResult.webSearch !== undefined) parsed.webSearch = onboardingResult.webSearch;
     if (onboardingResult.webFetch !== undefined) parsed.webFetch = onboardingResult.webFetch;
+    if (onboardingResult.model) parsed.model = onboardingResult.model;
     parsed.command = "chat";
     parsed.forceOnboarding = false;
     parsed.sessionMode = "new";
@@ -281,21 +301,42 @@ async function main() {
     ui = createZyraUi({ terminalTheme: parsed.terminalTheme });
   }
   if (parsed.command === "login") {
-    const provider = parsed.prompt || "openai-codex";
-    console.log(`Logging in to ${provider}...`);
-    await loginZyraAuth(provider);
-    ui.account(await buildZyraAuthAccountStatus(provider));
+    const method = normalizeZyraAuthMethod(parsed.prompt || "subscription");
+    if (!method) throw new Error("Usage: zyra login subscription | zyra login api");
+    if (method === "api") {
+      const key = await promptSecret("OpenAI API key");
+      console.log("Verifying OpenAI API key...");
+      const verification = await configureZyraOpenAIApiKey(key);
+      const model = chooseVerifiedApiModel(verification);
+      if (!model) throw new Error("The API key is valid, but this account does not expose a supported GPT-5.6 API model.");
+      setZyraAuthMethodPreference(parsed.project, method, model);
+      console.log(`OpenAI API connected. New chats will use ${model}.`);
+    } else {
+      console.log("Connecting ChatGPT subscription...");
+      await loginZyraAuth("openai-codex");
+      const model = setZyraAuthMethodPreference(parsed.project, method);
+      console.log(`ChatGPT subscription connected. New chats will use ${model}.`);
+    }
+    console.log(formatZyraAuthMethodsStatus(await getZyraAuthOverview(undefined, { project: parsed.project })));
     return;
   }
   if (parsed.command === "logout") {
-    const provider = parsed.prompt || "openai-codex";
-    console.log(`Logging out of ${provider}...`);
-    await logoutZyraAuth(provider);
-    ui.account(await buildZyraAuthAccountStatus(provider));
+    const method = normalizeZyraAuthMethod(parsed.prompt || "subscription");
+    if (!method) throw new Error("Usage: zyra logout subscription | zyra logout api");
+    const before = await getZyraAuthOverview(undefined, { project: parsed.project });
+    await removeZyraAuth(method);
+    const after = await getZyraAuthOverview(undefined, { project: parsed.project });
+    const fallback = method === "api" ? "subscription" : "api";
+    if (before.active === method && after[fallback]?.configured) {
+      const model = setZyraAuthMethodPreference(parsed.project, fallback);
+      console.log(`New chats will fall back to ${model}.`);
+    }
+    console.log(`${method === "api" ? "OpenAI API" : "ChatGPT subscription"} credentials removed. Environment credentials remain active when configured.`);
+    console.log(formatZyraAuthMethodsStatus(await getZyraAuthOverview(undefined, { project: parsed.project })));
     return;
   }
   if (parsed.command === "auth" || parsed.command === "account") {
-    ui.account(await buildZyraAuthAccountStatus(parsed.prompt || "openai-codex"));
+    console.log(formatZyraAuthMethodsStatus(await getZyraAuthOverview(undefined, { project: parsed.project })));
     return;
   }
   if (parsed.command === "codexusage") {
@@ -336,6 +377,7 @@ async function main() {
     if (onboardingResult?.terminalTheme) parsed.terminalTheme = onboardingResult.terminalTheme;
     if (onboardingResult?.webSearch !== undefined) parsed.webSearch = onboardingResult.webSearch;
     if (onboardingResult?.webFetch !== undefined) parsed.webFetch = onboardingResult.webFetch;
+    if (onboardingResult?.model) parsed.model = onboardingResult.model;
   }
 
   const runtimeOptions = {

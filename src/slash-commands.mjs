@@ -127,24 +127,42 @@ const slashCommands = [
   {
     name: "auth",
     aliases: ["account"],
-    description: "account, plan, and Codex limits",
-    panelLabel: "/auth, /account",
+    description: "show or switch API/subscription",
+    panelLabel: "/auth [subscription|api]",
+    inlineArgs: ["subscription", "api"],
     submitOnEnter: true,
   },
   {
     name: "codexusage",
     aliases: ["usage"],
-    description: "show Codex quota usage",
+    description: "show Codex quota, reset windows, and banked resets",
+    submitOnEnter: true,
+  },
+  {
+    name: "codexresets",
+    aliases: ["resets"],
+    description: "select and redeem a banked Codex reset",
+    submitOnEnter: true,
+    availableDuringTask: false,
+  },
+  {
+    name: "codexresetlist",
+    aliases: ["resetlist"],
+    description: "list banked Codex reset status and expiry",
     submitOnEnter: true,
   },
   {
     name: "login",
-    description: "login with ChatGPT/Codex",
+    description: "connect API or subscription",
+    panelLabel: "/login [subscription|api]",
+    inlineArgs: ["subscription", "api"],
     submitOnEnter: true,
   },
   {
     name: "logout",
-    description: "clear ChatGPT/Codex login",
+    description: "disconnect API or subscription",
+    panelLabel: "/logout [subscription|api]",
+    inlineArgs: ["subscription", "api"],
     submitOnEnter: true,
   },
   {
@@ -177,16 +195,23 @@ export function listSlashCommands(options = {}) {
   return slashCommands.filter((command) => includeHidden || !command.hidden);
 }
 
-export function listSlashCommandSuggestions() {
+export function listSlashCommandSuggestions(prefix = "") {
+  const normalizedPrefix = normalizeSlashCommand(prefix);
   return listSlashCommands()
     .filter((command) => command.suggest !== false)
-    .flatMap((command) => [command.name, ...(command.aliases ?? [])].map((name) => ({
-      value: `/${name}`,
-      label: `/${name}`,
-      description: command.description,
-      kind: "command",
-      submitOnEnter: command.submitOnEnter === true,
-    })));
+    .flatMap((command) => {
+      const matchingNames = [command.name, ...(command.aliases ?? [])]
+        .filter((name) => normalizeSlashCommand(name).startsWith(normalizedPrefix));
+      const name = matchingNames.includes(command.name) ? command.name : matchingNames[0];
+      if (!name) return [];
+      return [{
+        value: `/${name}`,
+        label: `/${name}`,
+        description: command.description,
+        kind: "command",
+        submitOnEnter: command.submitOnEnter === true,
+      }];
+    });
 }
 
 export function getSlashCommand(command) {

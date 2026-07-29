@@ -1,7 +1,10 @@
+import { isPiSupportPending } from "./model-compatibility.mjs";
+
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_PING_TIMEOUT_MS = 9000;
 const DEFAULT_CACHE_TTL_MS = 10 * 60 * 1000;
+const MAX_PROBE_BODY_CHARS = 128 * 1024;
 const OPENAI_PROVIDERS = new Set(["openai", "openai-codex"]);
 const TRANSIENT_HTTP_STATUSES = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
 const MODEL_UNAVAILABLE_RE = /\b(model|deployment|engine)\b.*\b(not found|does not exist|invalid|unknown|unavailable|unsupported|not supported|not available|decommissioned|retired|shutdown|sunset|access)/i;
@@ -55,6 +58,7 @@ export async function refreshModelAvailability(modelRegistry, options = {}) {
   return {
     checked,
     filtered,
+    blocked: checked.filter((item) => item.availability === "blocked"),
     removed: checked.filter((item) => item.availability === "unavailable"),
     unknown: checked.filter((item) => item.availability === "unknown"),
     available: checked.filter((item) => item.availability === "available"),
@@ -72,7 +76,9 @@ export async function checkModelAvailability(modelRegistry, model, options = {})
 
   let result;
   try {
-    if (!shouldPingModelAvailability(model)) {
+    if (isPiSupportPending(model)) {
+      result = buildResult(model, "blocked", "pi_support_pending");
+    } else if (!shouldPingModelAvailability(model)) {
       result = buildResult(model, "available", "provider_not_pinged");
     } else if (model.provider === "openai-codex") {
       result = await pingOpenAICodexModel(modelRegistry, model, options);
@@ -95,10 +101,14 @@ export async function checkModelAvailability(modelRegistry, model, options = {})
 export function formatModelAvailabilitySummary(report) {
   const checked = report?.checked?.length ?? 0;
   const removed = report?.removed ?? [];
+  const blocked = report?.blocked ?? [];
   const unknown = report?.unknown ?? [];
   if (checked === 0) return "No OpenAI models needed a live ping.";
   const parts = [`Models checked: ${checked}`];
   parts.push(`removed: ${removed.length ? removed.map((item) => item.key).join(", ") : "none"}`);
+  if (blocked.length > 0) {
+    parts.push(`Pi support pending: ${blocked.map((item) => item.key).join(", ")}`);
+  }
   if (unknown.length > 0) {
     parts.push(`kept without proof: ${unknown.map((item) => item.key).join(", ")}`);
   }
@@ -164,7 +174,10 @@ async function pingOpenAICodexModel(modelRegistry, model, options = {}) {
     }),
   }, options);
 
-  const text = await safeReadText(response);
+  const text = await safeReadText(response, {
+    timeoutMs: resolvePingTimeoutMs(options),
+    stopWhen: isConclusiveCodexProbeText,
+  });
   if (!response.ok) return classifyFailedResponse(model, response.status, text);
   return classifyCodexSuccess(model, response.status, text);
 }
@@ -177,9 +190,9 @@ async function getModelAuth(modelRegistry, model) {
 }
 
 async function fetchWithTimeout(fetchImpl, url, init, options = {}) {
-  const timeoutMs = Number(options.timeoutMs ?? process.env.ZYRA_MODEL_PING_TIMEOUT_MS ?? DEFAULT_PING_TIMEOUT_MS);
+  const timeoutMs = resolvePingTimeoutMs(options);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_PING_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetchImpl(url, {
       ...init,
@@ -189,6 +202,17 @@ async function fetchWithTimeout(fetchImpl, url, init, options = {}) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function resolvePingTimeoutMs(options = {}) {
+  const requested = Number(options.timeoutMs ?? process.env.ZYRA_MODEL_PING_TIMEOUT_MS ?? DEFAULT_PING_TIMEOUT_MS);
+  return Number.isFinite(requested) && requested > 0 ? requested : DEFAULT_PING_TIMEOUT_MS;
+}
+
+function isConclusiveCodexProbeText(text) {
+  if (CODEX_TEXT_DELTA_RE.test(text) || TOKEN_USAGE_RE.test(text)) return true;
+  if (looksLikeUnavailableModel(text) && /(?:response\.failed|"type"\s*:\s*"error"|"error"\s*:)/i.test(text)) return true;
+  return /data:\s*\[DONE\]|"type"\s*:\s*"response\.(?:completed|done)"/i.test(text);
 }
 
 function classifyFailedResponse(model, httpStatus, text) {
@@ -284,11 +308,56 @@ function compactHeaders(headers = {}) {
   return Object.fromEntries(Object.entries(headers).filter(([, value]) => value !== undefined && value !== null && value !== ""));
 }
 
-async function safeReadText(response) {
+async function safeReadText(response, options = {}) {
+  const body = response?.body;
+  if (!body || typeof body.getReader !== "function") {
+    try {
+      return await response.text();
+    } catch (error) {
+      return `read_error:${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const timeoutMs = resolvePingTimeoutMs(options);
+  const deadline = Date.now() + timeoutMs;
+  let text = "";
+
   try {
-    return await response.text();
+    while (text.length < MAX_PROBE_BODY_CHARS) {
+      const remainingMs = Math.max(1, deadline - Date.now());
+      let timeout;
+      const result = await Promise.race([
+        reader.read(),
+        new Promise((resolve) => {
+          timeout = setTimeout(() => resolve({ timedOut: true }), remainingMs);
+        }),
+      ]);
+      clearTimeout(timeout);
+
+      if (result?.timedOut) {
+        await reader.cancel("model availability probe timed out").catch(() => {});
+        return text ? `${text}\nread_timeout` : "read_timeout";
+      }
+      if (result.done) {
+        text += decoder.decode();
+        return text;
+      }
+
+      text += decoder.decode(result.value, { stream: true });
+      if (typeof options.stopWhen === "function" && options.stopWhen(text)) {
+        await reader.cancel("model availability probe complete").catch(() => {});
+        return text;
+      }
+    }
+
+    await reader.cancel("model availability probe body limit reached").catch(() => {});
+    return text;
   } catch (error) {
-    return `read_error:${error instanceof Error ? error.message : String(error)}`;
+    return text || `read_error:${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    reader.releaseLock();
   }
 }
 

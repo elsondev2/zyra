@@ -2,7 +2,12 @@ import readline from "node:readline";
 import { stdin as defaultInput, stdout as defaultOutput } from "node:process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { buildZyraAuthAccountStatus, loginZyraAuth } from "./zyra-sdk.mjs";
+import { configureZyraOpenAIApiKey, getZyraAuthOverview, loginZyraAuth, verifyZyraOpenAIApiAuth } from "./zyra-sdk.mjs";
+import {
+  chooseVerifiedApiModel,
+  ZYRA_SUBSCRIPTION_DEFAULT_MODEL,
+} from "./auth-methods.mjs";
+import { promptSecret } from "./secret-input.mjs";
 import { buildTerminalTheme, listTerminalThemes } from "./terminal-theme.mjs";
 import { zyraLogoRows } from "./zyra-logo.mjs";
 
@@ -87,9 +92,9 @@ export async function runOnboarding(options = {}) {
     await waitForEnter(input);
 
     await typeScene(output, state, [
-      "First, Zyra needs the ChatGPT account that powers your Codex usage.",
-      "If that sounds like gibberish: Zyra uses ChatGPT so it can help you code, learn, read files, and get unstuck.",
-      "On the next step, we will help you connect it.",
+      "First, choose how Zyra connects to OpenAI.",
+      "You can use your ChatGPT subscription or a separately billed OpenAI API key.",
+      "On the next step, we will help you connect either method.",
     ], { prompt: "press Enter when you are ready", statusLines: statusLines(state) });
     await waitForEnter(input);
 
@@ -106,9 +111,9 @@ export async function runOnboarding(options = {}) {
         const result = await onboardAuth({ input, output, state, allowBack: true });
         if (result === BACK) {
           await typeScene(output, state, [
-            "First, Zyra needs the ChatGPT account that powers your Codex usage.",
-            "If that sounds like gibberish: Zyra uses ChatGPT so it can help you code, learn, read files, and get unstuck.",
-            "On the next step, we will help you connect it.",
+            "First, choose how Zyra connects to OpenAI.",
+            "You can use your ChatGPT subscription or a separately billed OpenAI API key.",
+            "On the next step, we will help you connect either method.",
           ], { prompt: keyFooter([["Enter", "continue"]]), statusLines: statusLines(state) });
           await waitForEnter(input);
           continue;
@@ -162,6 +167,7 @@ export async function runOnboarding(options = {}) {
 
     markOnboardingComplete(options.root, {
       auth: auth.status,
+      authMethod: auth.method,
       terminalTheme: selectedTheme,
       webSearch: webTools.webSearch,
       webFetch: webTools.webFetch,
@@ -170,6 +176,8 @@ export async function runOnboarding(options = {}) {
     output.write(clearScreen);
     return {
       completed: true,
+      authMethod: auth.method,
+      model: auth.model,
       terminalTheme: selectedTheme,
       webSearch: webTools.webSearch,
       webFetch: webTools.webFetch,
@@ -181,76 +189,83 @@ export async function runOnboarding(options = {}) {
 }
 
 async function onboardAuth({ input, output, state, allowBack = false }) {
-  const account = await accountStatus().catch((error) => ({ error }));
-  if (account.status?.configured) {
-    await typeScene(output, state, [
-      "ohh nice. Unfortunately for this setup wizard, after a not-so-careful investigation 🕵️",
-      account.email ? `you are already signed in as ${account.email} and ready ✅` : "you are already signed in and ready ✅",
-      "Let's move you to setting up how things look.",
-    ], { prompt: keyFooter([["Enter", "continue"], ...(allowBack ? [["B", "previous"]] : [])]), statusLines: statusLines(state) });
-    if (await waitForEnter(input, { allowBack }) === BACK) return BACK;
-    return { status: "connected", email: account.email };
-  }
-
-  await typeScene(output, state, [
-    "Now we are going to sign you in with ChatGPT 🔐",
-    "Zyra will open the browser, you will finish the login there, and then we will come back here.",
-    "No need to understand every piece of it yet. This just gives Zyra the account it needs to work.",
-  ], { prompt: keyFooter([["Enter", "sign in"], ...(allowBack ? [["B", "previous"]] : [])]), statusLines: statusLines(state) });
-  if (await waitForEnter(input, { allowBack }) === BACK) return BACK;
-
+  const overview = await getZyraAuthOverview().catch(() => ({}));
   const choice = await selectScene({
     input,
     output,
     state,
-    title: "Connect ChatGPT",
-    subtitle: "Choose connect now if you are ready. You can skip and run `zyra login` later.",
+    title: "Connect OpenAI",
+    subtitle: "Subscription uses your ChatGPT plan. API usage is billed separately by OpenAI.",
     items: [
-      { value: "connect", label: "Connect now", description: "opens the browser login" },
-      { value: "skip", label: "Skip for now", description: "finish it later" },
+      {
+        value: "subscription",
+        label: "ChatGPT subscription",
+        description: overview.subscription?.configured ? "connected" : "browser sign-in",
+      },
+      {
+        value: "api",
+        label: "OpenAI API",
+        description: overview.api?.configured ? "connected" : "verified API key",
+      },
+      { value: "skip", label: "Skip for now", description: "run zyra login later" },
     ],
-    prompt: keyFooter([["↑↓", "move"], ["Enter", "choose"], ["Esc", "skip"], ...(allowBack ? [["B", "previous"]] : [])]),
+    prompt: keyFooter([["Up/Down", "move"], ["Enter", "choose"], ["Esc", "skip"], ...(allowBack ? [["B", "previous"]] : [])]),
     allowBack,
   });
 
   if (choice === BACK) return BACK;
-  if (choice !== "connect") return { status: "skipped" };
+  if (!["subscription", "api"].includes(choice)) return { status: "skipped" };
 
   try {
-    renderFrame(output, state, {
-      statusLines: statusLines(state),
-      bodyLines: [
-        "Opening the browser now...",
-        "Finish the ChatGPT login there, then come back here. I will keep this space warm ✨",
-      ],
-      prompt: "waiting for browser sign-in",
-    });
-    await loginZyraAuth("openai-codex", {
-      onMessage: (message) => renderFrame(output, state, {
+    let model;
+    if (choice === "subscription") {
+      if (!overview.subscription?.configured) {
+        renderFrame(output, state, {
+          statusLines: statusLines(state),
+          bodyLines: ["Opening the browser...", "Finish the ChatGPT sign-in, then return here."],
+          prompt: "waiting for browser sign-in",
+        });
+        await loginZyraAuth("openai-codex", {
+          onMessage: (message) => renderFrame(output, state, {
+            statusLines: statusLines(state),
+            bodyLines: ["ChatGPT sign-in is running", stripAnsi(String(message ?? ""))],
+            prompt: "finish the browser step, then return here",
+          }),
+        });
+      }
+      model = ZYRA_SUBSCRIPTION_DEFAULT_MODEL;
+    } else if (overview.api?.configured) {
+      const verification = await verifyZyraOpenAIApiAuth();
+      model = chooseVerifiedApiModel(verification);
+      if (!model) throw new Error("The API key is valid, but no supported GPT-5.6 API model is available to this account.");
+    } else {
+      renderFrame(output, state, {
         statusLines: statusLines(state),
-        bodyLines: [
-          "ChatGPT sign-in is running 🔐",
-          stripAnsi(String(message ?? "")),
-        ],
-        prompt: "finish the browser step, then return here",
-      }),
-    });
-    const refreshed = await accountStatus().catch(() => ({}));
+        bodyLines: ["Enter your OpenAI API key below.", "The key is masked and verified before it is saved."],
+        prompt: "secure API key input",
+      });
+      const key = await promptSecret("OpenAI API key", { input, output });
+      const verification = await configureZyraOpenAIApiKey(key);
+      model = chooseVerifiedApiModel(verification);
+      if (!model) throw new Error("The API key is valid, but no supported GPT-5.6 API model is available to this account.");
+    }
+
+    state.model = model;
     await typeScene(output, state, [
-      "Login complete ✅",
-      refreshed.email ? `Zyra is connected as ${refreshed.email}.` : "Zyra is connected.",
+      "Connection complete.",
+      `${choice === "api" ? "OpenAI API" : "ChatGPT subscription"} will use ${model}.`,
     ], { prompt: keyFooter([["Enter", "continue"], ...(allowBack ? [["B", "previous"]] : [])]), statusLines: statusLines(state) });
     if (await waitForEnter(input, { allowBack }) === BACK) return BACK;
-    return { status: "connected", email: refreshed.email };
+    return { status: "connected", method: choice, model };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await typeScene(output, state, [
-      "The login did not finish.",
+      "The connection did not finish.",
       message,
-      "That is okay. You can run `zyra login` later and keep setting up the rest now.",
+      "You can run `zyra login subscription` or `zyra login api` later.",
     ], { prompt: keyFooter([["Enter", "continue"], ...(allowBack ? [["B", "previous"]] : [])]), statusLines: statusLines(state) });
     if (await waitForEnter(input, { allowBack }) === BACK) return BACK;
-    return { status: "failed", error: message };
+    return { status: "failed", method: choice, error: message };
   }
 }
 
@@ -633,9 +648,6 @@ function webFeeling(value) {
   return "";
 }
 
-async function accountStatus() {
-  return buildZyraAuthAccountStatus("openai-codex");
-}
 
 function centerAnsi(value, width) {
   const length = visibleWidth(value);
