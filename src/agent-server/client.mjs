@@ -10,7 +10,8 @@ import {
   writeAgentServerMessage
 } from "./protocol.mjs";
 
-const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
+const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
+const DEFAULT_ATTACH_TIMEOUT_MS = 150_000;
 
 export class ZyraAgentServerClient extends EventEmitter {
   constructor(options = {}) {
@@ -139,7 +140,7 @@ export class ZyraAgentServerClient extends EventEmitter {
   }
 
   async attach(params) {
-    return this.request("session.attach", params, { timeoutMs: 35_000 });
+    return this.request("session.attach", params, { timeoutMs: DEFAULT_ATTACH_TIMEOUT_MS });
   }
 
   async detach(sessionKey) {

@@ -20,6 +20,7 @@ import {
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const HANDSHAKE_TIMEOUT_MS = 5_000;
+const BRIDGE_CONNECT_TIMEOUT_MS = 120_000;
 const ACTIVE_FLEET_STATUSES = new Set(["queued", "starting", "running", "waiting", "paused", "recovering"]);
 const BRIDGE_REQUEST_PATTERN = /^(?:prompt|abort|steer|follow_up|compact|clear_queue|reload|agents\.[a-zA-Z0-9._-]+|workflows\.[a-zA-Z0-9._-]+)$/;
 
@@ -490,7 +491,7 @@ class ServerOwnedSession {
   connect(payload) {
     if (this.connectedResult) return Promise.resolve(this.connectedResult);
     if (!this.connectPromise) {
-      this.connectPromise = this.worker.request("connect", payload, { timeoutMs: 30_000 })
+      this.connectPromise = this.worker.request("connect", payload, { timeoutMs: BRIDGE_CONNECT_TIMEOUT_MS })
         .then((result) => {
           this.connectedResult = result;
           return result;
