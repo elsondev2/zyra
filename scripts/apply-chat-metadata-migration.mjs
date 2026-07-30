@@ -114,9 +114,10 @@ for (const staged of stagedTranscripts) {
   if (sha256File(staged.destinationPath) !== staged.sha256) throw new Error(`Recovered transcript verification failed: ${staged.destinationPath}`);
 }
 
-const updates = (report.recommendations || []).filter((entry) =>
-  entry?.canonicalChatId
-  && (entry.title?.changed || (entry.project?.changed && ["high", "medium"].includes(entry.project?.confidence)))
+const reportMetadata = [...(report.recommendations || []), ...(report.orphanDesktopRows || [])]
+  .filter((entry) => entry?.canonicalChatId);
+const updates = reportMetadata.filter((entry) =>
+  entry.title?.changed || (entry.project?.changed && ["high", "medium"].includes(entry.project?.confidence))
 );
 const liveDb = new DatabaseSync(liveDbPath);
 try {
@@ -156,26 +157,35 @@ try {
 }
 
 const catalog = readCatalog(catalogPath);
-for (const update of manifest.metadataUpdates) {
-  catalog.metadata[update.canonicalChatId] = {
-    ...(catalog.metadata[update.canonicalChatId] || {}),
-    title: update.title,
-    project: update.project,
-    cwd: update.project,
+for (const entry of reportMetadata) {
+  const title = entry.title?.recommended || entry.title?.current || entry.currentTitle;
+  const project = entry.project?.changed && ["high", "medium"].includes(entry.project?.confidence)
+    ? entry.project.recommended
+    : entry.project?.current || entry.currentProject;
+  catalog.metadata[entry.canonicalChatId] = {
+    ...(catalog.metadata[entry.canonicalChatId] || {}),
+    ...(title ? { title } : {}),
+    ...(project ? { project, cwd: project } : {}),
     updatedAt: new Date().toISOString()
   };
 }
 for (const recovered of stagedTranscripts) {
+  const existingMetadata = catalog.metadata[recovered.canonicalChatId] || {};
   catalog.metadata[recovered.canonicalChatId] = {
-    ...(catalog.metadata[recovered.canonicalChatId] || {}),
-    title: recovered.title,
-    project: recovered.project,
-    cwd: recovered.project,
+    ...existingMetadata,
+    title: existingMetadata.title || recovered.title,
+    project: existingMetadata.project || recovered.project,
+    cwd: existingMetadata.cwd || existingMetadata.project || recovered.project,
     recoveredFromDesktopSnapshot: true,
     updatedAt: new Date().toISOString()
   };
 }
-catalog.projects = mergeProjects(catalog.projects, [os.homedir(), ...manifest.metadataUpdates.map((entry) => entry.project)]);
+catalog.projects = mergeProjects(catalog.projects, [
+  os.homedir(),
+  ...reportMetadata.map((entry) => entry.project?.changed && ["high", "medium"].includes(entry.project?.confidence)
+    ? entry.project.recommended
+    : entry.project?.current || entry.currentProject)
+]);
 catalog.updatedAt = new Date().toISOString();
 writeJsonAtomic(catalogPath, catalog);
 
@@ -185,7 +195,8 @@ manifest.verification = {
   liveDatabaseSha256: sha256File(liveDbPath),
   catalogSha256: sha256File(catalogPath),
   recoveredTranscriptCount: stagedTranscripts.length,
-  metadataUpdateCount: manifest.metadataUpdates.length
+  metadataUpdateCount: manifest.metadataUpdates.length,
+  canonicalMetadataUpdateCount: reportMetadata.length
 };
 writeFileSync(path.join(backupDirectory, "migration-apply-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
 process.stdout.write(`${JSON.stringify({ backupDirectory, verification: manifest.verification }, null, 2)}\n`);

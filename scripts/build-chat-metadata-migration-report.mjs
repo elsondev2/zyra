@@ -26,20 +26,21 @@ const desktopRows = readDesktopRows(snapshotPath);
 const desktopByCanonicalId = new Map(desktopRows.filter((row) => row.providerThreadId).map((row) => [row.providerThreadId, row]));
 const indexedIds = new Set(indexedChats.map((chat) => chat.canonicalChatId));
 const recommendations = indexedChats.map((chat) => recommendMetadata(chat, desktopByCanonicalId.get(chat.canonicalChatId) || null));
-if (args.aiTitleCache) applyAiTitleCache(recommendations, args.aiTitleCache);
-if (args.generateAiTitles) await improveWeakTitlesWithAi(indexedChats, recommendations);
 const orphanDesktopRows = desktopRows
   .filter((row) => row.providerThreadId && !indexedIds.has(row.providerThreadId))
-  .map((row) => ({
-    canonicalChatId: row.providerThreadId,
-    desktopSessionId: row.sessionId,
-    desktopThreadId: row.threadId,
-    currentTitle: row.title,
-    currentProject: row.projectPath,
-    desktopMessageCount: row.messageCount,
-    desktopActivityCount: row.activityCount,
-    recommendation: "recover-canonical-transcript-from-verified-Desktop-backup-before-unification"
-  }));
+  .map(recommendOrphanRecovery);
+const titleRecommendations = [...recommendations, ...orphanDesktopRows];
+const titleEvidenceChats = [
+  ...indexedChats,
+  ...orphanDesktopRows.map((row) => ({
+    canonicalChatId: row.canonicalChatId,
+    firstMessage: row.titleCandidates[0] || "",
+    titleCandidates: row.titleCandidates
+  }))
+];
+if (args.aiTitleCache) applyAiTitleCache(titleRecommendations, args.aiTitleCache);
+if (args.generateAiTitles) await improveWeakTitlesWithAi(titleEvidenceChats, titleRecommendations);
+const reportOrphanDesktopRows = orphanDesktopRows.map(({ titleCandidates: _privateTitleCandidates, ...row }) => row);
 
 const report = {
   version: 1,
@@ -66,12 +67,12 @@ const report = {
     desktopThreads: desktopRows.length,
     orphanDesktopThreads: orphanDesktopRows.length,
     projectChangesRecommended: recommendations.filter((entry) => entry.project.changed).length,
-    titleChangesRecommended: recommendations.filter((entry) => entry.title.changed).length,
+    titleChangesRecommended: titleRecommendations.filter((entry) => entry.title.changed).length,
     highConfidenceProjectChanges: recommendations.filter((entry) => entry.project.changed && entry.project.confidence === "high").length,
     homeAssignmentsRetained: recommendations.filter((entry) => pathKey(entry.project.recommended) === pathKey(HOME)).length
   },
   recommendations,
-  orphanDesktopRows
+  orphanDesktopRows: reportOrphanDesktopRows
 };
 const timestamp = report.generatedAt.replace(/[:.]/g, "-");
 const outputPath = path.resolve(args.output || path.join(backupDirectory, `chat-metadata-migration-dry-run-${timestamp}.json`));
@@ -153,6 +154,36 @@ function recommendMetadata(chat, desktop) {
   };
 }
 
+function recommendOrphanRecovery(row) {
+  const currentTitle = row.title || "New Session";
+  let suggestedTitle = chooseTitle(currentTitle, "", row.titleCandidates);
+  if (isWeakTitle(suggestedTitle) && row.messageCount === 0) suggestedTitle = "Recovered empty chat";
+  return {
+    canonicalChatId: row.providerThreadId,
+    desktopSessionId: row.sessionId,
+    desktopThreadId: row.threadId,
+    currentTitle,
+    currentProject: row.projectPath,
+    desktopMessageCount: row.messageCount,
+    desktopActivityCount: row.activityCount,
+    titleCandidates: row.titleCandidates,
+    project: {
+      current: row.projectPath || HOME,
+      recommended: row.projectPath || HOME,
+      changed: false,
+      confidence: "high"
+    },
+    title: {
+      current: currentTitle,
+      recommended: suggestedTitle,
+      changed: normalizeTitleKey(currentTitle) !== normalizeTitleKey(suggestedTitle),
+      confidence: suggestedTitle === "Recovered empty chat" ? "high" : "medium",
+      source: suggestedTitle === "Recovered empty chat" ? "deterministic empty-chat label" : "recovered Desktop message evidence"
+    },
+    recommendation: "recover-canonical-transcript-from-verified-Desktop-backup-before-unification"
+  };
+}
+
 function applyAiTitleCache(recommendations, cachePathValue) {
   const cachePath = path.resolve(cachePathValue);
   const cachedReport = JSON.parse(readFileSync(cachePath, "utf8"));
@@ -230,14 +261,22 @@ function sanitizeAiTitle(value) {
 function readDesktopRows(file) {
   const db = new DatabaseSync(file, { readOnly: true });
   try {
-    return db.prepare(`
+    const rows = db.prepare(`
       SELECT s.id AS session_id, s.title, s.project_path, t.id AS thread_id,
              t.provider_thread_id, t.cwd,
              (SELECT COUNT(*) FROM assistant_messages m WHERE m.thread_id = t.id) AS persisted_message_count,
              (SELECT COUNT(*) FROM assistant_activities a WHERE a.thread_id = t.id) AS persisted_activity_count
       FROM assistant_sessions s
       JOIN assistant_threads t ON t.session_id = s.id
-    `).all().map((row) => ({
+    `).all();
+    const readTitleCandidates = db.prepare(`
+      SELECT text
+      FROM assistant_messages
+      WHERE thread_id = ? AND role = 'user' AND trim(coalesce(text, '')) <> ''
+      ORDER BY created_at ASC
+      LIMIT 10
+    `);
+    return rows.map((row) => ({
       sessionId: String(row.session_id || ""),
       title: String(row.title || ""),
       projectPath: String(row.project_path || row.cwd || "") || null,
@@ -245,7 +284,10 @@ function readDesktopRows(file) {
       providerThreadId: String(row.provider_thread_id || "") || null,
       cwd: String(row.cwd || "") || null,
       messageCount: Number(row.persisted_message_count || 0),
-      activityCount: Number(row.persisted_activity_count || 0)
+      activityCount: Number(row.persisted_activity_count || 0),
+      titleCandidates: readTitleCandidates.all(row.thread_id)
+        .map((message) => String(message.text || "").replace(/\s+/g, " ").trim().slice(0, 2_000))
+        .filter(Boolean)
     }));
   } finally {
     db.close();
@@ -281,6 +323,7 @@ function hasProjectMarker(directory) {
 }
 
 function chooseTitle(current, canonical, titleCandidates) {
+  if (normalizeTitleKey(current) === "--version" || normalizeTitleKey(canonical) === "--version") return "Check local Zyra version";
   if (!isWeakTitle(current)) return cleanTitle(current);
   if (!isWeakTitle(canonical)) return cleanTitle(canonical);
   for (const candidate of titleCandidates) {
@@ -308,7 +351,8 @@ function deriveTitle(value) {
 function isWeakTitle(value) {
   const title = normalizeTitleKey(value);
   return !title
-    || /^(?:new chat|new session|untitled|hello|hi|hey|helo|yo|test|testing|anything)[.!? ]*$/.test(title)
+    || /^(?:new chat|new session|untitled|hello|hi|hey|helo|yo|test|testing|anything|initial greeting|hello response)[.!? ]*$/.test(title)
+    || /^--[a-z0-9][a-z0-9-]*$/.test(title)
     || title.length < 4;
 }
 

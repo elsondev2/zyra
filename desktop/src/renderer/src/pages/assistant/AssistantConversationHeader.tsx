@@ -87,6 +87,20 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
             onSelect: onRenameChat
         },
         {
+            id: 'copy-thread-id',
+            label: threadIdCopied ? 'Thread ID copied' : 'Copy thread ID',
+            icon: threadIdCopied ? <Check size={13} /> : <Copy size={13} />,
+            disabled: actionsDisabled || !canonicalThreadId,
+            onSelect: async () => {
+                if (!canonicalThreadId) return
+                try {
+                    await navigator.clipboard.writeText(canonicalThreadId)
+                    setThreadIdCopied(true)
+                    window.setTimeout(() => setThreadIdCopied(false), 1600)
+                } catch {}
+            }
+        },
+        {
             id: 'project',
             label: projectDirectoryLocked ? 'Project locked' : selectedProjectPath ? 'Change project' : 'Attach project',
             icon: <Folder size={13} />,
@@ -145,23 +159,6 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
                     <h2 className="min-w-0 truncate text-[13px] font-semibold leading-none text-sparkle-text/90">
                         {selectedSessionTitle}
                     </h2>
-                    {canonicalThreadId ? (
-                        <button
-                            type="button"
-                            onClick={async () => {
-                                try {
-                                    await navigator.clipboard.writeText(canonicalThreadId)
-                                    setThreadIdCopied(true)
-                                    window.setTimeout(() => setThreadIdCopied(false), 1600)
-                                } catch {}
-                            }}
-                            className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted transition-colors hover:bg-white/[0.045] hover:text-sparkle-text"
-                            title={threadIdCopied ? 'Thread ID copied' : `Copy thread ID: ${canonicalThreadId}`}
-                            aria-label={threadIdCopied ? 'Thread ID copied' : 'Copy thread ID'}
-                        >
-                            {threadIdCopied ? <Check size={12} /> : <Copy size={12} />}
-                        </button>
-                    ) : null}
                     <FileActionsMenu
                         items={headerMenuItems}
                         title="Chat actions"
