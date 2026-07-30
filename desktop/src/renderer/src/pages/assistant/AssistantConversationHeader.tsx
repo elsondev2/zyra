@@ -1,5 +1,5 @@
-import { memo } from 'react'
-import { Archive, Bot, Folder, MoreHorizontal, PanelRightClose, PanelRightOpen, Pencil, SquarePen, Trash2 } from 'lucide-react'
+import { memo, useState } from 'react'
+import { Archive, Bot, Check, Copy, Folder, MoreHorizontal, PanelRightClose, PanelRightOpen, Pencil, Radio, SquarePen, Trash2 } from 'lucide-react'
 import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
 
 export const AssistantConversationHeader = memo(function AssistantConversationHeader(props: {
@@ -13,6 +13,11 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
     pinnedBubbleHeaderInset?: number
     latestProjectLabel: string
     selectedSessionTitle: string
+    canonicalThreadId: string | null
+    canonicalPresence?: {
+        state: 'detached' | 'ready' | 'running' | 'background'
+        clients: Array<{ clientId: string; surface: string }>
+    } | null
     selectedSessionMode: 'work' | 'playground'
     zyraProfile: 'default' | 'builder'
     activeThreadIsSubagent: boolean
@@ -38,6 +43,8 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
     const {
         pinnedBubbleHeaderInset = 0,
         selectedSessionTitle,
+        canonicalThreadId,
+        canonicalPresence,
         latestProjectLabel,
         selectedProjectPath,
         selectedProjectTooltip,
@@ -55,8 +62,15 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
         onDeleteChat,
         onToggleRightSidebar
     } = props
+    const [threadIdCopied, setThreadIdCopied] = useState(false)
     const resolvedPinnedBubbleHeaderInset = Math.max(0, Math.round(pinnedBubbleHeaderInset))
     const RightSidebarIcon = rightPanelOpen && rightPanelMode === 'review' ? PanelRightClose : PanelRightOpen
+    const remoteSurfaces = [...new Set((canonicalPresence?.clients || [])
+        .map((client) => client.surface.trim().toLowerCase())
+        .filter((surface) => surface && surface !== 'desktop'))]
+    const remotePresenceLabel = remoteSurfaces.length > 0
+        ? `${canonicalPresence?.state === 'running' ? 'Running' : canonicalPresence?.state === 'background' ? 'Background work' : 'Open'} in ${remoteSurfaces.map((surface) => surface === 'tui' ? 'TUI' : surface).join(' + ')}`
+        : null
     const headerMenuItems: FileActionsMenuItem[] = [
         {
             id: 'new-thread',
@@ -108,7 +122,7 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
                     projectDirectoryLocked ? (
                         <span
                             className="inline-flex min-w-0 max-w-[220px] shrink items-center gap-1.5 rounded-md border border-white/[0.07] bg-white/[0.025] px-2 py-1 text-[10px] font-medium leading-none text-sparkle-text-muted"
-                            title={`${selectedProjectTooltip}\nProject directory locked after the chat started.`}
+                            title={`${selectedProjectTooltip}\nFinish or stop active chat work before changing the project.`}
                         >
                             <Folder size={10} className="shrink-0" />
                             <span className="truncate">{latestProjectLabel}</span>
@@ -131,6 +145,23 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
                     <h2 className="min-w-0 truncate text-[13px] font-semibold leading-none text-sparkle-text/90">
                         {selectedSessionTitle}
                     </h2>
+                    {canonicalThreadId ? (
+                        <button
+                            type="button"
+                            onClick={async () => {
+                                try {
+                                    await navigator.clipboard.writeText(canonicalThreadId)
+                                    setThreadIdCopied(true)
+                                    window.setTimeout(() => setThreadIdCopied(false), 1600)
+                                } catch {}
+                            }}
+                            className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted transition-colors hover:bg-white/[0.045] hover:text-sparkle-text"
+                            title={threadIdCopied ? 'Thread ID copied' : `Copy thread ID: ${canonicalThreadId}`}
+                            aria-label={threadIdCopied ? 'Thread ID copied' : 'Copy thread ID'}
+                        >
+                            {threadIdCopied ? <Check size={12} /> : <Copy size={12} />}
+                        </button>
+                    ) : null}
                     <FileActionsMenu
                         items={headerMenuItems}
                         title="Chat actions"
@@ -147,6 +178,15 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
                     >
                         <Bot size={10} />
                         <span className="truncate">{activeThreadLabel}</span>
+                    </span>
+                ) : null}
+                {remotePresenceLabel ? (
+                    <span
+                        className="inline-flex max-w-[180px] shrink-0 items-center gap-1 rounded-full border border-emerald-400/20 bg-emerald-500/[0.07] px-2 py-0.5 text-[10px] font-medium leading-none text-emerald-100"
+                        title={`${remotePresenceLabel}. This surface shares the same canonical worker and transcript.`}
+                    >
+                        <Radio size={10} />
+                        <span className="truncate">{remotePresenceLabel}</span>
                     </span>
                 ) : null}
             </div>

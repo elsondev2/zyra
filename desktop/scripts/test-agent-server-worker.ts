@@ -89,6 +89,17 @@ try {
         providerThreadId: 'chat:desktop-test'
     })
 
+    const internalClient = await (connection as any).getClient()
+    const originalRequest = internalClient.request.bind(internalClient)
+    let repeatedAttachRequests = 0
+    internalClient.request = (method: string, ...args: unknown[]) => {
+        if (method === 'session.attach') repeatedAttachRequests += 1
+        return originalRequest(method, ...args)
+    }
+    await worker.request('clear_queue', {})
+    await secondWorker.request('reload', {})
+    assert.equal(repeatedAttachRequests, 0, 'already-attached workers must not attach again for every request')
+
     const prompt = worker.request('prompt', { prompt: 'continue', turnId: 'turn:desktop-test' })
     await waitUntil(() => workers[0]?.activePrompt !== null)
     workers[0].emit('control', { type: 'control.request', requestId: 'control:desktop-owner', operation: { action: 'observe' } })

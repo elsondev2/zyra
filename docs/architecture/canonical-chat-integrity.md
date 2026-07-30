@@ -1,0 +1,82 @@
+# Canonical chat integrity
+
+Zyra Desktop and the TUI share one canonical Pi transcript per chat. A client may keep local read models for fast rendering, but those models do not replace the JSONL transcript.
+
+## Identity, storage, and metadata
+
+These concerns are separate:
+
+- **Canonical chat ID** — the Pi session ID. It is stable across Desktop and TUI.
+- **Transcript storage path** — the physical JSONL file. Project/title edits never move it.
+- **Project metadata** — the folder future turns use as their cwd.
+- **Title metadata** — the shared display title.
+- **Desktop local ID** — a compatibility key for Desktop SQLite and IPC.
+
+`src/agent-server/catalog.mjs` stores aliases, mutable project/title metadata, and known physical session roots. `src/agent-server/chat-index.mjs` indexes JSONL files by canonical ID and physical path.
+
+## Incremental transcript index
+
+`chat-index-v2.json` stores file size, mtime, scan offset, line offsets, counts, and bounded private inference evidence. Unchanged files are not parsed again. Appended bytes are parsed from the previous offset. History reads use indexed byte ranges and a backward cursor:
+
+- `startCursor` / `endCursor` identify the raw entry range.
+- `oldestCursor` requests the previous page.
+- `hasOlder` indicates whether another page exists.
+
+The public catalog excludes first-message text, title candidates, path evidence, and byte offsets.
+
+## Server-owned runtime and presence
+
+The agent server owns the live worker. Desktop and TUI attach as projections:
+
+- repeated client requests reuse an existing attachment;
+- switching chat/thread detaches the previous Desktop projection;
+- disconnecting a projection does not kill active server work;
+- the server reports attached surfaces, active turn ID, background-work state, and latest sequence;
+- Desktop shows a remote-surface badge and TUI `/session` shows state plus attached surfaces;
+- replay includes durable metadata, provider events, and turn completion.
+
+Project/title updates are broadcast as canonical metadata. Resume prefers stored canonical project/cwd/title over the launching terminal's folder.
+
+## Client projections
+
+### Desktop
+
+Desktop loads shell metadata eagerly. Canonical transcript detail is imported only when a thread is opened, 500 raw entries at a time. Asking for older history imports one earlier page.
+
+Projection preserves:
+
+- user, assistant, and system text;
+- tool calls and tool results as activities;
+- thinking/reasoning;
+- assistant and tool errors;
+- compaction markers;
+- stable source IDs, timestamps, and timeline order;
+- images. User images are materialized lazily under the local `assistant/canonical-media/` cache so Desktop can render them.
+
+The canonical JSONL remains authoritative when a Desktop activity payload must be compacted for SQLite size limits.
+
+### TUI
+
+Resume replays the latest canonical page before input starts. `/older` loads another page. Images appear as medium-appropriate `[Image N: mime/type]` tags. `/session` displays the stable thread ID and `/session copy` copies it with OSC 52.
+
+## File-index boundary
+
+Chat project metadata may legitimately remain the user home folder, but the source-file index does not recursively crawl home, app-data, or drive roots. It indexes explicit project roots only, refreshes only roots already registered, caps depth/entry count, skips generated directories, and quietly ignores inaccessible entries or malformed package metadata.
+
+## Recovery and migration
+
+`npm run chat:migration-report` is read-only. It reads the verified SQLite snapshot and canonical JSONLs, then writes a dry-run report beside the backup. `--generate-ai-titles` asks the utility runtime for titles only for weak/default-title chats.
+
+`npm run chat:migration-apply -- ...` is fail-closed:
+
+1. require an exact confirmation token;
+2. verify that the source snapshot SHA-256 still matches the dry-run report;
+3. refuse while the agent server is alive or Desktop persistence was recently active;
+4. create an online SQLite backup and run `PRAGMA quick_check`;
+5. reconstruct missing canonical transcripts additively from preserved Desktop messages/activities;
+6. update Desktop SQLite in one transaction;
+7. atomically update catalog metadata;
+8. verify database, catalog, and recovered transcript hashes;
+9. write a migration manifest beside the backup.
+
+The apply script does not terminate Desktop/Zyra and does not delete or move an existing transcript.

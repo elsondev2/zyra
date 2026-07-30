@@ -79,6 +79,7 @@ try {
   const listed = await tui.request("catalog.list", {});
   assert.equal(listed.chats.length, 1);
   assert.equal(listed.chats[0].canonicalChatId, "chat:test");
+  assert.equal(listed.chats[0].presence.state, "detached");
   const history = await desktop.request("catalog.history", { session: "chat:test", project });
   assert.equal(history.history.entries[0].message.content, "hello");
 
@@ -87,6 +88,12 @@ try {
   const tuiAttached = await tui.attach({ project, cwd: project, session: "assistant-thread:desktop", localThreadId: "tui:local" });
   assert.equal(tuiAttached.canonicalChatId, "chat:test");
   assert.equal(workers.length, 1, "desktop and TUI must share one server worker");
+  const attachedList = await desktop.request("catalog.list", {});
+  assert.equal(attachedList.chats[0].presence.clients.length, 2);
+  assert.deepEqual(new Set(attachedList.chats[0].presence.clients.map((entry) => entry.surface)), new Set(["desktop", "tui"]));
+  const updated = await desktop.request("catalog.update", { session: "chat:test", title: "Editable shared title", project });
+  assert.equal(updated.chat.title, "Editable shared title");
+  assert.equal(updated.chat.sessionPath, sessionPath, "metadata edits must not move canonical transcript storage");
 
   const tuiEvents = [];
   tui.on("session-event:chat:test", (event) => tuiEvents.push(event));
@@ -114,16 +121,19 @@ try {
   const reconnect = client("desktop:reconnect", "desktop", ["desktop-control"]);
   await reconnect.connect();
   const replay = await reconnect.attach({ project, cwd: project, session: "chat:test", localThreadId: "assistant-thread:reconnect", lastSequence: 0 });
-  assert.equal(replay.replay.length, 2, "reconnect must replay provider events and durable turn completion");
-  assert.equal(replay.replay[0].event.message.content, "still working");
-  assert.equal(replay.replay[0].requestContext.turnId, "turn:test");
-  assert.equal(replay.replay[1].event.type, "zyra_server_turn_completed");
+  assert.equal(replay.replay.length, 3, "reconnect must replay metadata, provider events, and durable turn completion");
+  assert.equal(replay.replay[0].event.type, "session_metadata");
+  assert.equal(replay.replay[1].event.message.content, "still working");
+  assert.equal(replay.replay[1].requestContext.turnId, "turn:test");
+  assert.equal(replay.replay[2].event.type, "zyra_server_turn_completed");
 
   const tuiRuntime = await createZyraTuiClientRuntime({
     project,
     session: "chat:test",
     agentServer: { stateDirectory, channel, autoStart: false }
   });
+  assert.equal(tuiRuntime.session.sessionManager.getSessionName(), "Editable shared title");
+  assert.equal(tuiRuntime.history.events()[0].message.content[0].text, "hello");
   const remoteEvents = [];
   tuiRuntime.session.subscribe((event) => remoteEvents.push(event));
   const remotePrompt = tuiRuntime.session.prompt("continue from TUI");

@@ -212,10 +212,35 @@ export class ZyraAgentServer extends EventEmitter {
       return { project: this.catalog.registerProject(params.project) };
     }
     if (method === "catalog.list") {
-      return { chats: await this.catalog.list(params) };
+      const chats = await this.catalog.list(params);
+      return { chats: chats.map((chat) => ({ ...chat, presence: this.sessionPresence(chat.canonicalChatId) })) };
     }
     if (method === "catalog.history") {
       return { history: await this.catalog.history(params.session, params) };
+    }
+    if (method === "catalog.update") {
+      const chat = await this.catalog.updateChat(params.session, {
+        ...(params.title !== undefined ? { title: params.title } : {}),
+        ...(params.project !== undefined ? { project: params.project } : {}),
+        ...(params.cwd !== undefined ? { cwd: params.cwd } : {})
+      });
+      const activeSession = this.sessions.get(chat.canonicalChatId);
+      if (activeSession) {
+        activeSession.connectedResult = {
+          ...(activeSession.connectedResult || {}),
+          sessionName: chat.title,
+          project: chat.project,
+          cwd: chat.cwd
+        };
+        activeSession.publish({
+          type: "session_metadata",
+          title: chat.title,
+          project: chat.project,
+          cwd: chat.cwd
+        });
+      }
+      this.broadcastCatalogChanged({ canonicalChatId: chat.canonicalChatId, metadata: true });
+      return { chat: { ...chat, presence: this.sessionPresence(chat.canonicalChatId) } };
     }
     if (method === "session.attach") return this.attachSession(client, params);
     const session = this.requireSession(params.sessionKey);
@@ -235,6 +260,19 @@ export class ZyraAgentServer extends EventEmitter {
     throw new AgentServerProtocolError(`Unsupported method: ${method}.`);
   }
 
+  sessionPresence(sessionKeyValue) {
+    const sessionKey = String(sessionKeyValue || "").trim();
+    const session = this.sessions.get(sessionKey);
+    if (!session) return { state: "detached", activeTurnId: null, clients: [], backgroundWorkActive: false };
+    return {
+      state: session.activeRequestContext ? "running" : session.hasBackgroundWork() ? "background" : "ready",
+      activeTurnId: session.activeRequestContext?.turnId || null,
+      clients: [...session.clients].map((client) => ({ clientId: client.clientId, surface: client.surface })),
+      backgroundWorkActive: session.hasBackgroundWork(),
+      latestSequence: session.sequence
+    };
+  }
+
   getUtilityWorker() {
     if (this.utilityWorker?.isAlive()) return this.utilityWorker;
     this.utilityWorker = this.createWorker({ root: this.root, cwd: this.root });
@@ -249,6 +287,7 @@ export class ZyraAgentServer extends EventEmitter {
     const requested = params.session ? await this.catalog.find(params.session, { project }) : null;
     const requestedCanonicalId = requested?.canonicalChatId || this.catalog.resolveAlias(params.session || params.localThreadId || "");
     const sessionProject = requested?.project || project;
+    const sessionCwd = requested?.cwd || requested?.project || params.cwd || project;
     const provisionalKey = requestedCanonicalId || `pending:${assertAgentServerIdentifier(params.localThreadId || randomUUID(), "local thread id")}`;
     let session = this.sessions.get(provisionalKey);
     if (!session) {
@@ -256,7 +295,7 @@ export class ZyraAgentServer extends EventEmitter {
         server: this,
         sessionKey: provisionalKey,
         root: this.root,
-        cwd: requested?.cwd || params.cwd || project,
+        cwd: sessionCwd,
         createWorker: this.createWorker,
         idleTimeoutMs: this.idleTimeoutMs,
         journalDirectory: this.paths.journalDirectory
@@ -266,11 +305,18 @@ export class ZyraAgentServer extends EventEmitter {
     try {
       const connected = await session.connect({
         ...params,
-        cwd: requested?.cwd || params.cwd || project,
+        cwd: sessionCwd,
+        project: sessionProject,
         threadId: requested?.sessionPath || params.session,
         providerThreadId: requested?.sessionPath || params.session
       });
       const canonicalChatId = String(connected.threadId || connected.providerThreadId || requestedCanonicalId || provisionalKey);
+      session.connectedResult = {
+        ...connected,
+        sessionName: connected.sessionName || requested?.title || undefined,
+        project: sessionProject,
+        cwd: sessionCwd
+      };
       session.setCanonicalKey(canonicalChatId);
       this.sessions.set(canonicalChatId, session);
       for (const [key, candidate] of this.sessions) {
@@ -297,7 +343,8 @@ export class ZyraAgentServer extends EventEmitter {
       connected: session.connectedResult,
       replay: session.replay(lastSequence),
       latestSequence: session.sequence,
-      activeRequestContext: session.activeRequestContext
+      activeRequestContext: session.activeRequestContext,
+      presence: this.sessionPresence(session.sessionKey)
     };
   }
 
@@ -484,6 +531,7 @@ class ServerOwnedSession {
     this.idleTimer = null;
     this.clients.add(client);
     client.attachedSessionIds.add(this.sessionKey);
+    this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, presence: true });
   }
 
   detach(client) {
@@ -499,6 +547,7 @@ class ServerOwnedSession {
         error: { code: "CONTROL_DRIVER_UNAVAILABLE", message: "Desktop control authority disconnected.", retryable: true }
       });
     }
+    this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, presence: true });
     this.scheduleIdleStop();
   }
 
@@ -515,7 +564,10 @@ class ServerOwnedSession {
     clearTimeout(this.idleTimer);
     this.idleTimer = null;
     this.activeRequests += 1;
-    if (type === "prompt") this.activeRequestContext = requestContext;
+    if (type === "prompt") {
+      this.activeRequestContext = requestContext;
+      this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, presence: true });
+    }
     try {
       const result = await this.worker.request(type, payload);
       if (type === "prompt") this.publish({ type: "zyra_server_turn_completed", outcome: "completed" });
@@ -541,6 +593,11 @@ class ServerOwnedSession {
 
   publish(event) {
     this.updateBackgroundWork(event);
+    if (event?.type === "session_title" && event.title) {
+      void this.server.catalog.updateChat(this.sessionKey, { title: event.title }).then(() => {
+        this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, title: true });
+      });
+    }
     const entry = {
       sequence: ++this.sequence,
       occurredAt: new Date().toISOString(),
@@ -585,7 +642,7 @@ class ServerOwnedSession {
   summary() {
     return {
       sessionKey: this.sessionKey,
-      clients: this.clients.size,
+      clients: [...this.clients].map((client) => ({ clientId: client.clientId, surface: client.surface })),
       activeRequests: this.activeRequests,
       activeRequestContext: this.activeRequestContext,
       backgroundWorkActive: this.hasBackgroundWork(),

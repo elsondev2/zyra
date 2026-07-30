@@ -48,6 +48,8 @@ const FILE_INDEX_SCHEMA_VERSION = 1
 const FILE_INDEX_FLUSH_DEBOUNCE_MS = 1200
 const FILE_INDEX_YIELD_INTERVAL = 240
 const FILE_INDEX_SEARCH_FALLBACK_MULTIPLIER = 6
+const FILE_INDEX_MAX_DEPTH = 32
+const FILE_INDEX_MAX_ENTRIES_PER_ROOT = 300_000
 const SKIP_RECURSIVE_DIRECTORY_NAMES = new Set([
     '.git',
     'node_modules',
@@ -64,6 +66,22 @@ const SKIP_RECURSIVE_DIRECTORY_NAMES = new Set([
     'coverage',
     'out'
 ])
+
+function isBroadUnsafeIndexRoot(pathValue: string): boolean {
+    const candidate = resolve(pathValue)
+    const normalized = normalizePathKey(candidate)
+    const home = normalizePathKey(app.getPath('home'))
+    const userData = normalizePathKey(app.getPath('userData'))
+    const parent = dirname(candidate)
+    return normalized === home
+        || normalized === userData
+        || normalizePathKey(parent) === normalized
+}
+
+function isExpectedTraversalError(error: unknown): boolean {
+    const code = String((error as { code?: unknown } | null)?.code || '').toUpperCase()
+    return ['EACCES', 'EPERM', 'ENOENT', 'EBUSY', 'EINVAL'].includes(code)
+}
 
 function normalizePathKey(pathValue: string): string {
     const normalized = resolve(String(pathValue || '')).replace(/\\/g, '/')
@@ -243,6 +261,10 @@ class FileIndexService {
 
         const errors: Array<{ folder: string; error: string }> = []
         for (const folder of normalizedFolders) {
+            if (isBroadUnsafeIndexRoot(folder)) {
+                errors.push({ folder, error: 'Choose a specific project folder instead of a home, app-data, or drive root.' })
+                continue
+            }
             try {
                 await access(folder)
             } catch (error: any) {
@@ -333,9 +355,10 @@ class FileIndexService {
     }
 
     private async ensureRootsIndexed(roots: string[]): Promise<void> {
+        const safeRoots = roots.filter((rootPath) => !isBroadUnsafeIndexRoot(rootPath))
         const missingRoots = await this.enqueue(async () => {
             const storedRoots = this.readIndexedRoots()
-            return roots.filter((rootPath) => !storedRoots.some((row) => row.normalizedRootPath === normalizePathKey(rootPath)))
+            return safeRoots.filter((rootPath) => !storedRoots.some((row) => row.normalizedRootPath === normalizePathKey(rootPath)))
         })
 
         if (missingRoots.length === 0) return
@@ -343,6 +366,7 @@ class FileIndexService {
     }
 
     private async ensureScopeIndexed(scopePath: string): Promise<void> {
+        if (isBroadUnsafeIndexRoot(scopePath)) return
         const indexedRoot = await this.enqueue(async () => this.findCoveringRoot(scopePath))
         if (indexedRoot) return
         await this.indexFolders([scopePath])
@@ -403,10 +427,7 @@ class FileIndexService {
     private async reindexSubtree(targetPath: string): Promise<void> {
         const db = this.requireDb()
         const existingRoot = this.findCoveringRoot(targetPath)
-        if (!existingRoot) {
-            await this.reindexRoot(targetPath)
-            return
-        }
+        if (!existingRoot) return
 
         const normalizedTargetPath = normalizePathKey(targetPath)
         db.run('BEGIN')
@@ -484,7 +505,7 @@ class FileIndexService {
         const stack: Array<{ path: string; parentPath: string | null; depth: number }> = [{ path: directoryPath, parentPath, depth }]
         let processedEntries = 0
 
-        while (stack.length > 0) {
+        while (stack.length > 0 && processedEntries < FILE_INDEX_MAX_ENTRIES_PER_ROOT) {
             const current = stack.pop()
             if (!current) continue
 
@@ -515,6 +536,7 @@ class FileIndexService {
                     const entryPath = join(current.path, entry.name)
                     if (entry.isDirectory()) {
                         if (SKIP_RECURSIVE_DIRECTORY_NAMES.has(entry.name.toLowerCase())) continue
+                        if (current.depth + 1 > FILE_INDEX_MAX_DEPTH) continue
                         stack.push({
                             path: entryPath,
                             parentPath: current.path,
@@ -528,14 +550,14 @@ class FileIndexService {
                         await this.insertFileEntry(rootPath, current.path, entryPath, fileStats, insertStatement, current.depth + 1)
                         processedEntries += 1
                     } catch (error) {
-                        log.warn(`[FileIndex] Failed to stat file ${entryPath}`, error)
+                        if (!isExpectedTraversalError(error)) log.debug(`[FileIndex] Skipped unreadable file ${entryPath}`, error)
                     }
                     if (processedEntries % FILE_INDEX_YIELD_INTERVAL === 0) {
                         await yieldToEventLoop()
                     }
                 }
             } catch (error) {
-                log.warn(`[FileIndex] Failed to index directory ${current.path}`, error)
+                if (!isExpectedTraversalError(error)) log.debug(`[FileIndex] Skipped unreadable directory ${current.path}`, error)
             }
 
             if (processedEntries % FILE_INDEX_YIELD_INTERVAL === 0) {
@@ -577,7 +599,7 @@ class FileIndexService {
                 packageJson = JSON.parse(packageJsonContent)
                 frameworks = detectFrameworksFromPackageJson(packageJson, entryNames).map((framework) => framework.id)
             } catch (error) {
-                log.warn(`[FileIndex] Failed to parse package.json in ${directoryPath}`, error)
+                log.debug(`[FileIndex] Ignored malformed package.json in ${directoryPath}`, error)
             }
         }
 

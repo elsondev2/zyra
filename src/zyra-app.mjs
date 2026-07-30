@@ -462,6 +462,7 @@ async function main() {
   setTerminalTitleState("ready", runtime);
   ui.setTheme(runtime.terminalTheme);
   ui.banner(describeRuntime(runtime));
+  ui.history?.(runtime.history?.events?.() || []);
   if (useEmbeddedRuntime) startZyraMemoryBackgroundStartup(runtime);
   let unsubscribe = subscribeRuntimeEvents(runtime);
   if (runtime.modelFallbackMessage) {
@@ -489,6 +490,7 @@ async function main() {
     runtime = nextRuntime;
     ui.setTheme(runtime.terminalTheme);
     ui.resetSession(describeRuntime(runtime));
+    ui.history?.(runtime.history?.events?.() || []);
     setTerminalTitleState("ready", runtime);
     if (useEmbeddedRuntime) startZyraMemoryBackgroundStartup(runtime);
     unsubscribe = subscribeRuntimeEvents(runtime);
@@ -525,11 +527,26 @@ async function main() {
     return true;
   };
 
+  const loadOlderHistory = async () => {
+    if (!runtime.history?.loadOlder) {
+      ui.info("Older transcript paging is unavailable for this runtime.");
+      return true;
+    }
+    const result = await runtime.history.loadOlder();
+    ui.resetSession(describeRuntime(runtime));
+    ui.history?.(result.events || []);
+    ui.info(result.added > 0
+      ? `Loaded ${result.added} earlier transcript events${result.hasOlder ? ". Run /older again for more." : "."}`
+      : "No older transcript entries remain.");
+    return true;
+  };
+
   const runPromptTurn = async (submission) => {
     const text = getSubmissionText(submission);
     const slashResult = await handleSlash(runtime, ui, text, {
       startFreshChat,
       openChatPicker,
+      loadOlderHistory,
       setTerminalTitleState: (state) => setTerminalTitleState(state, runtime),
       notifyTerminalIfUnfocused: () => notifyTerminalIfUnfocused(runtime),
     });

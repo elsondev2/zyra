@@ -153,6 +153,13 @@ export interface AssistantThreadShell {
     runtimeMode: AssistantRuntimeMode
     interactionMode: AssistantInteractionMode
     state: AssistantThreadState
+    canonicalPresence?: {
+        state: 'detached' | 'ready' | 'running' | 'background'
+        activeTurnId: string | null
+        clients: Array<{ clientId: string; surface: string }>
+        backgroundWorkActive: boolean
+        latestSequence?: number
+    }
     lastError: string | null
     createdAt: string
     updatedAt: string

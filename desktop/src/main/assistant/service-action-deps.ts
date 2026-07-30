@@ -39,6 +39,10 @@ export interface AssistantRuntimeBridge {
         prompt: string,
         options: { cwd: string; model?: string; effort?: 'low' }
     ): Promise<{ success: boolean; text?: string; model?: string; error?: string }>
+    updateCanonicalChat(
+        threadId: string,
+        patch: { title?: string; project?: string; cwd?: string }
+    ): Promise<void>
     sendPrompt(
         threadId: string,
         prompt: string,

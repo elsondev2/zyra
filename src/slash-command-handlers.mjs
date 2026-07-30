@@ -75,6 +75,17 @@ export async function handleSlash(runtime, ui, input, controls = {}) {
     case "start":
       return runStart(runtime, ui, arg, controls);
     case "session":
+      if (arg.trim().toLowerCase() === "copy") {
+        const threadId = runtime.session?.sessionManager?.getSessionId?.();
+        if (!threadId) {
+          ui.info("This runtime does not expose a thread ID.");
+          return true;
+        }
+        process.stdout.write(`\u001b]52;c;${Buffer.from(String(threadId), "utf8").toString("base64")}\u0007`);
+        ui.info(`Copied thread ID: ${threadId}`);
+        return true;
+      }
+      await runtime.agentServer?.refreshPresence?.();
       ui.status(describeRuntime(runtime));
       return true;
     case "profile":
@@ -109,8 +120,17 @@ export async function handleSlash(runtime, ui, input, controls = {}) {
     case "consolidate":
       return runMemoryConsolidate(runtime, ui, controls);
     case "chat":
+      if (arg.trim().toLowerCase() === "info") {
+        await runtime.agentServer?.refreshPresence?.();
+        ui.sessionInfo(buildSessionInfo(runtime));
+        return true;
+      }
       if (typeof controls.openChatPicker === "function") return controls.openChatPicker();
       ui.sessionInfo(buildSessionInfo(runtime));
+      return true;
+    case "older":
+      if (typeof controls.loadOlderHistory === "function") return controls.loadOlderHistory();
+      ui.info("Older transcript paging is unavailable in this runtime.");
       return true;
     case "thinking":
       return runThinking(runtime, ui, arg);

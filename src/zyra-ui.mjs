@@ -577,7 +577,15 @@ export function createZyraUi(options = {}) {
     async openWorkflows(workflows) {
       return runZyraInputDialog(host, createWorkflowManagerDialog(workflows, { theme }));
     },
+    history(events = []) {
+      for (const event of events) this.event(event);
+      if (events.length === 0) appendPanel(infoPanel("This chat has no stored transcript entries.", theme));
+    },
     event(event) {
+      if (event.type === "history_error") {
+        appendPanel(errorPanel(event.errorMessage || "Stored chat error", theme));
+        return;
+      }
       if (event.type === "turn_start") {
         resetCommandSummaries();
         isBusy = true;
@@ -1191,7 +1199,8 @@ function assistantMessageIdentity(message = {}) {
 }
 
 function userMessageText(message = {}) {
-  return normalizeUserMessageText(extractText(message.content ?? message.text ?? ""));
+  const content = message.content ?? message.text ?? "";
+  return normalizeUserMessageText(extractText(content));
 }
 
 function normalizeUserMessageText(value) {
@@ -1204,6 +1213,7 @@ export function extractAssistantContent(content) {
   const thinking = [];
   const text = [];
   let hasThinkingBlock = false;
+  let imageIndex = 0;
   for (const part of content) {
     if (part?.type === "thinking") {
       hasThinkingBlock = true;
@@ -1212,6 +1222,9 @@ export function extractAssistantContent(content) {
     } else if (part?.type === "text") {
       const value = part.text ?? "";
       if (value) text.push(value);
+    } else if (part?.type === "image") {
+      imageIndex += 1;
+      text.push(`[Image ${imageIndex}: ${part.mimeType || part.mime_type || "image"}]`);
     }
   }
   return { thinking: thinking.join("\n"), text: text.join("\n"), hasThinkingBlock };

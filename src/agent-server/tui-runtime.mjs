@@ -49,6 +49,25 @@ export async function createZyraTuiClientRuntime(options = {}) {
   const state = {
     messages: Array.isArray(connected.messages) ? connected.messages.filter(Boolean) : []
   };
+  let currentSessionName = asString(connected.sessionName);
+  let currentProject = asString(connected.cwd) || asString(connected.project) || project;
+  let historyEvents = [];
+  let historyCursor = null;
+  let historyHasOlder = false;
+  try {
+    const historyResult = await client.request("catalog.history", {
+      session: canonicalChatId,
+      project,
+      limit: 240
+    }, { timeoutMs: 35_000 });
+    const history = asRecord(historyResult.history);
+    historyEvents = projectHistoryEntries(Array.isArray(history?.entries) ? history.entries : []);
+    const pageInfo = asRecord(history?.pageInfo);
+    historyCursor = asString(pageInfo?.oldestCursor);
+    historyHasOlder = pageInfo?.hasOlder === true;
+  } catch {
+    historyEvents = projectConnectedMessages(state.messages);
+  }
   const eventListeners = new Set();
   const fleetListeners = new Set();
   const activeTools = new Set(["read", "bash", "edit", "write", ...(preferences.webSearch ? ["web_search"] : []), ...(preferences.webFetch ? ["web_fetch"] : [])]);
@@ -57,6 +76,8 @@ export async function createZyraTuiClientRuntime(options = {}) {
   let disposed = false;
   let latestSequence = 0;
   let activeTurnId = asString(asRecord(attached.activeRequestContext)?.turnId);
+  let currentPresence = asRecord(attached.presence);
+  let remotelyAttached = true;
   let systemPrompt = "";
   let thinkingLevel = preferences.thinking;
   let currentModel = model;
@@ -69,6 +90,13 @@ export async function createZyraTuiClientRuntime(options = {}) {
     if (event.type === "zyra_server_turn_completed") {
       if (!requestContext?.turnId || requestContext.turnId === activeTurnId) activeTurnId = null;
       return;
+    }
+    if (event.type === "session_title") {
+      currentSessionName = asString(event.title) || currentSessionName;
+    }
+    if (event.type === "session_metadata") {
+      currentSessionName = asString(event.title) || currentSessionName;
+      currentProject = asString(event.cwd) || asString(event.project) || currentProject;
     }
     updateMessages(state.messages, event);
     if (event.type === "fleet_snapshot" || String(event.type || "").startsWith("agent.") || String(event.type || "").startsWith("workflow.")) {
@@ -88,7 +116,9 @@ export async function createZyraTuiClientRuntime(options = {}) {
     if (message.sessionKey !== canonicalChatId) return;
     consumeServerEntry(message);
   };
+  const onDisconnect = () => { remotelyAttached = false; };
   client.on("session-event", onServerEvent);
+  client.on("disconnect", onDisconnect);
   client.off("session-event", captureEarlyServerEvent);
   const initialEntries = [
     ...(Array.isArray(attached.replay) ? attached.replay : []),
@@ -98,31 +128,56 @@ export async function createZyraTuiClientRuntime(options = {}) {
   latestSequence = Math.max(latestSequence, Number(attached.latestSequence) || 0);
 
   const ensureAttached = async () => {
+    if (remotelyAttached) return;
     const result = await client.attach({
-      project,
-      cwd: project,
+      project: currentProject,
+      cwd: currentProject,
       session: canonicalChatId,
       localThreadId,
       lastSequence: latestSequence
     });
+    remotelyAttached = true;
+    currentPresence = asRecord(result.presence) || currentPresence;
     for (const entry of Array.isArray(result.replay) ? result.replay : []) consumeServerEntry(entry);
   };
 
+  const refreshPresence = async () => {
+    try {
+      const result = await client.request("catalog.list", {
+        query: canonicalChatId,
+        allProjects: true,
+        limit: 4
+      });
+      const chats = Array.isArray(result.chats) ? result.chats : [];
+      const chat = chats.find((entry) => entry?.canonicalChatId === canonicalChatId);
+      currentPresence = asRecord(chat?.presence) || currentPresence;
+    } catch {}
+    return currentPresence;
+  };
+
   const request = async (type, payload = {}, requestContext) => {
-    await ensureAttached();
-    return client.request("session.request", {
+    const send = () => client.request("session.request", {
       sessionKey: canonicalChatId,
       type,
       payload,
       ...(requestContext ? { requestContext } : {})
     });
+    await ensureAttached();
+    try {
+      return await send();
+    } catch (error) {
+      if (!["AGENT_SERVER_SESSION_NOT_FOUND", "AGENT_SERVER_AUTH_FAILED"].includes(String(error?.code || ""))) throw error;
+      remotelyAttached = false;
+      await ensureAttached();
+      return send();
+    }
   };
 
   const sessionManager = {
     getSessionId: () => canonicalChatId,
     getSessionFile: () => sessionFile,
-    getSessionName: () => undefined,
-    getCwd: () => project,
+    getSessionName: () => currentSessionName,
+    getCwd: () => currentProject,
     getEntries: () => state.messages.map((message, index) => ({ type: "message", id: message.id || `remote-message:${index}`, message })),
     appendCustomEntry: () => undefined
   };
@@ -195,6 +250,7 @@ export async function createZyraTuiClientRuntime(options = {}) {
       if (disposed) return;
       disposed = true;
       client.off("session-event", onServerEvent);
+      client.off("disconnect", onDisconnect);
       eventListeners.clear();
       fleetListeners.clear();
       void client.detach(canonicalChatId).catch(() => undefined).finally(() => client.close());
@@ -213,8 +269,8 @@ export async function createZyraTuiClientRuntime(options = {}) {
   const runtime = {
     session,
     root: defaults.root,
-    project,
-    sessions: getProjectSessionsDir(project),
+    get project() { return currentProject; },
+    get sessions() { return getProjectSessionsDir(currentProject); },
     theme: "dark",
     terminalTheme,
     profile: preferences.profile || "default",
@@ -236,7 +292,33 @@ export async function createZyraTuiClientRuntime(options = {}) {
     fleet,
     workflows,
     localThreadId,
-    agentServer: { client, canonicalChatId, activeTurnId: () => activeTurnId }
+    history: {
+      events: () => [...historyEvents],
+      hasOlder: () => historyHasOlder,
+      async loadOlder() {
+        if (!historyHasOlder || !historyCursor) return { events: [...historyEvents], added: 0, hasOlder: false };
+        const result = await client.request("catalog.history", {
+          session: canonicalChatId,
+          project: currentProject,
+          before: historyCursor,
+          limit: 240
+        }, { timeoutMs: 35_000 });
+        const history = asRecord(result.history);
+        const olderEvents = projectHistoryEntries(Array.isArray(history?.entries) ? history.entries : []);
+        historyEvents = [...olderEvents, ...historyEvents];
+        const pageInfo = asRecord(history?.pageInfo);
+        historyCursor = asString(pageInfo?.oldestCursor);
+        historyHasOlder = pageInfo?.hasOlder === true;
+        return { events: [...historyEvents], added: olderEvents.length, hasOlder: historyHasOlder };
+      }
+    },
+    agentServer: {
+      client,
+      canonicalChatId,
+      activeTurnId: () => activeTurnId,
+      presence: () => currentPresence,
+      refreshPresence
+    }
   };
   return runtime;
 }
@@ -328,6 +410,99 @@ function updateMessages(messages, event) {
   const index = id ? messages.findIndex((message) => message?.id === id) : -1;
   if (index >= 0) messages[index] = { ...messages[index], ...incoming };
   else if (event.type !== "message_update" || incoming.role) messages.push(incoming);
+}
+
+function projectConnectedMessages(messages) {
+  return messages.flatMap((message) => {
+    if (message?.role === "user") return [{ type: "message_start", message }];
+    if (message?.role === "assistant") return [
+      { type: "message_start", message },
+      { type: "message_end", message }
+    ];
+    return [];
+  });
+}
+
+function projectHistoryEntries(entries) {
+  const events = [];
+  const tools = new Map();
+  for (const entryValue of entries) {
+    const entry = asRecord(entryValue);
+    if (!entry || entry.type !== "message") continue;
+    const message = asRecord(entry.message);
+    if (!message) continue;
+    const role = asString(message.role);
+    const content = normalizeHistoryContent(message.content);
+    const id = asString(message.id) || asString(entry.id) || `history:${events.length + 1}`;
+    const normalizedMessage = {
+      id,
+      role,
+      content,
+      stopReason: asString(message.stopReason),
+      errorMessage: asString(message.errorMessage)
+    };
+    if (role === "user") {
+      events.push({ type: "message_start", message: normalizedMessage, historical: true });
+      continue;
+    }
+    if (role === "assistant") {
+      const visibleContent = content.flatMap((part, index) => {
+        if (part?.type === "text" || part?.type === "thinking") return [part];
+        if (part?.type === "image") return [{ type: "text", text: `[Image ${index + 1}: ${part.mimeType || part.mime_type || "image"}]` }];
+        return [];
+      });
+      if (visibleContent.length > 0) {
+        const visibleMessage = { ...normalizedMessage, content: visibleContent };
+        events.push({ type: "message_start", message: visibleMessage, historical: true });
+        events.push({ type: "message_end", message: visibleMessage, historical: true });
+      }
+      for (const part of content.filter((candidate) => candidate?.type === "toolCall")) {
+        const toolCallId = asString(part.id) || `${id}:tool:${tools.size + 1}`;
+        const event = {
+          type: "tool_execution_start",
+          toolCallId,
+          toolName: asString(part.name) || "tool",
+          args: part.arguments,
+          historical: true
+        };
+        tools.set(toolCallId, event);
+        events.push(event);
+      }
+      if (normalizedMessage.errorMessage && visibleContent.length === 0) {
+        events.push({ type: "history_error", errorMessage: normalizedMessage.errorMessage, historical: true });
+      }
+      continue;
+    }
+    if (role === "toolResult") {
+      const toolCallId = asString(message.toolCallId) || asString(message.tool_call_id) || `${id}:tool-result`;
+      const started = tools.get(toolCallId) || {};
+      events.push({
+        ...started,
+        type: "tool_execution_end",
+        toolCallId,
+        toolName: asString(message.toolName) || started.toolName || "tool",
+        result: historyContentText(content),
+        output: historyContentText(content),
+        isError: message.isError === true,
+        historical: true
+      });
+    }
+  }
+  return events;
+}
+
+function normalizeHistoryContent(value) {
+  if (typeof value === "string") return [{ type: "text", text: value }];
+  if (!Array.isArray(value)) return [];
+  return value.filter((part) => part && typeof part === "object").map((part) => ({ ...part }));
+}
+
+function historyContentText(content) {
+  return content.flatMap((part, index) => {
+    if (part?.type === "text") return [String(part.text || "")];
+    if (part?.type === "image") return [`[Image ${index + 1}: ${part.mimeType || part.mime_type || "image"}]`];
+    return [];
+  }).join("\n");
 }
 
 function asRecord(value) {

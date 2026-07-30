@@ -102,6 +102,7 @@ export function sessionInfoPanel(info = {}, theme = fallbackTheme) {
     "",
     ` ${theme.warning}File:${reset} ${theme.muted}${info.file ?? "in-memory"}${reset}`,
     ` ${theme.warning}ID:${reset} ${theme.muted}${info.threadId ?? info.id ?? "none"}${reset}`,
+    ` ${theme.warning}Presence:${reset} ${theme.muted}${formatPresence(info.presence)}${reset}`,
     "",
     `${bold} Messages${reset}`,
     ` User: ${formatCount(messages.user)}`,
@@ -119,6 +120,16 @@ export function sessionInfoPanel(info = {}, theme = fallbackTheme) {
     `${bold} Cost${reset}`,
     ` Total: ${Number(cost.total || 0).toFixed(4)}`,
   ]);
+}
+
+function formatPresence(presence) {
+  if (!presence || typeof presence !== "object") return "local";
+  const surfaces = [...new Set((Array.isArray(presence.clients) ? presence.clients : [])
+    .map((client) => String(client?.surface || "").trim().toLowerCase())
+    .filter(Boolean))]
+    .map((surface) => surface === "desktop" ? "Desktop" : surface === "tui" ? "TUI" : surface);
+  const state = String(presence.state || "detached");
+  return surfaces.length ? `${state} · ${surfaces.join(" + ")}` : state;
 }
 
 function formatCount(value) {

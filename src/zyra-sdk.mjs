@@ -1815,6 +1815,7 @@ export function buildSessionInfo(runtime) {
     messages,
     tokens,
     cost: { total: totalCost },
+    presence: runtime.agentServer?.presence?.() ?? null,
   };
 }
 
@@ -1832,6 +1833,7 @@ export function describeRuntime(runtime) {
     sessionId: sessionManager.getSessionId(),
     sessionFile: sessionManager.getSessionFile(),
     sessionName: sessionManager.getSessionName?.(),
+    presence: runtime.agentServer?.presence?.() ?? null,
     usage,
     contextUsage,
     projectMemory: runtime.projectMemory ?? [],

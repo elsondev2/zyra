@@ -7,10 +7,12 @@ import {
     type AssistantReadMetadata
 } from '@shared/assistant/read-activity'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
+import { getFileUrl } from '@/components/ui/file-preview/utils'
 import type { AssistantToolOutputDefaultMode } from '@/lib/settings'
 import { cn } from '@/lib/utils'
 import { formatAssistantDateTime } from '@/lib/assistant/selectors'
 import { extractFilePatch, scanPatchFileSummaries } from '@/lib/diffRendering'
+import { AssistantAttachmentImageCard } from './AssistantAttachmentImageCard'
 import { AssistantInlineDiffPreview } from './AssistantInlineDiffPreview'
 import type { AssistantDiffTarget } from './assistant-diff-types'
 import {
@@ -43,6 +45,22 @@ import {
     TimelineFilePathRow,
     TimelinePathAwareTextBlock
 } from './assistant-timeline-path-ui'
+
+function getCanonicalActivityImagePaths(activity: AssistantActivity): string[] {
+    const values = Array.isArray(activity.payload?.imageAttachments)
+        ? activity.payload.imageAttachments
+        : []
+    return [...new Set(values.flatMap((value) => {
+        if (typeof value === 'string') {
+            const match = value.match(/^path:\s*(.+)$/im)
+            return match?.[1]?.trim() ? [match[1].trim()] : []
+        }
+        if (value && typeof value === 'object' && typeof (value as { path?: unknown }).path === 'string') {
+            return [String((value as { path: string }).path).trim()].filter(Boolean)
+        }
+        return []
+    }))]
+}
 
 function getStatusIconClassName(status: 'success' | 'running' | 'failed'): string {
     if (status === 'success') return 'border-emerald-400/25 bg-emerald-500/[0.10] text-emerald-300 shadow-[0_0_16px_rgba(16,185,129,0.12)]'
@@ -223,7 +241,7 @@ export const TimelineToolCallCard = memo(({
     onOpenFilePath?: (filePath: string) => Promise<void> | void
     onViewDiff?: (target: AssistantDiffTarget) => void
 }) => {
-    const [expanded, setExpanded] = useState(() => shouldAutoExpandTerminalTool(activity, toolOutputDefaultMode))
+    const [expanded, setExpanded] = useState(() => getCanonicalActivityImagePaths(activity).length > 0 || shouldAutoExpandTerminalTool(activity, toolOutputDefaultMode))
     const [nowIso, setNowIso] = useState(() => new Date().toISOString())
     const userChangedExpansionRef = useRef(false)
     const autoCollapseTimerRef = useRef<number | null>(null)
@@ -231,6 +249,7 @@ export const TimelineToolCallCard = memo(({
     const previousStatusRef = useRef<'success' | 'running' | 'failed'>(getActivityStatus(activity))
     const filePaths = useMemo(() => getActivityPaths(activity), [activity])
     const createdFilePaths = useMemo(() => getCreatedFilePaths(activity), [activity])
+    const canonicalImagePaths = useMemo(() => getCanonicalActivityImagePaths(activity), [activity])
     const createdFilePathSet = useMemo(() => new Set(createdFilePaths), [createdFilePaths])
     const displayFilePaths = useMemo(
         () => filePaths.map((pathValue) => getAssistantRelativeFilePath(pathValue, projectRootPath)),
@@ -627,7 +646,7 @@ export const TimelineToolCallCard = memo(({
                 </span>
             </button>
             <AnimatedHeight
-                isOpen={expanded && hasExpandableBody && (!isTerminalLikeTool || hasTerminalOutput)}
+                isOpen={expanded && hasExpandableBody && (!isTerminalLikeTool || hasTerminalOutput || canonicalImagePaths.length > 0)}
                 duration={activity.kind === 'file-change' ? 220 : 240}
                 crispContent={activity.kind === 'file-change'}
             >
@@ -763,6 +782,20 @@ export const TimelineToolCallCard = memo(({
                             onViewDiff={canViewDiff ? () => viewDiffForPath(fullPath, displayPath, undefined, isNew) : undefined}
                         />
                     )) : null}
+                    {canonicalImagePaths.length > 0 ? (
+                        <div className="mt-2 flex max-w-full gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                            {canonicalImagePaths.map((imagePath, index) => (
+                                <AssistantAttachmentImageCard
+                                    key={`${activity.id}-image-${index}`}
+                                    name={`Image ${index + 1}`}
+                                    src={getFileUrl(imagePath)}
+                                    widthClassName="w-[180px]"
+                                    heightClassName="h-[132px]"
+                                    onClick={onOpenFilePath ? () => { void onOpenFilePath(imagePath) } : undefined}
+                                />
+                            ))}
+                        </div>
+                    ) : null}
                     {!isRead && !isTerminalLikeTool && activity.kind !== 'file-change' && visibleResultOutput ? (
                         <div className="mt-2 rounded-md border border-white/5 bg-black/25 p-2">
                             <p className="text-[9px] font-medium uppercase tracking-[0.14em] text-white/18">Result</p>

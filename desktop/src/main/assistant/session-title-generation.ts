@@ -193,6 +193,7 @@ export function queueGeneratedSessionTitle(args: {
     generateText: AssistantTitleTextGenerator
     getSnapshot: () => { sessions: AssistantSession[] }
     appendEvent: AppendEvent
+    onApplied?: (title: string) => void | Promise<void>
 }): Promise<void> {
     if (pendingTitleGenerationSessionIds.has(args.sessionId)) return Promise.resolve()
     pendingTitleGenerationSessionIds.add(args.sessionId)
@@ -221,6 +222,7 @@ export function queueGeneratedSessionTitle(args: {
                 updatedAt: occurredAt
             }
         }, args.sessionId, args.threadId)
+        await args.onApplied?.(nextTitle)
     })()
     task.then(
         () => pendingTitleGenerationSessionIds.delete(args.sessionId),

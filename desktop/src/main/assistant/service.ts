@@ -14,6 +14,7 @@ import type {
     AssistantDomainEvent,
     AssistantGetHistoryPageInput,
     AssistantGetSessionTurnUsageInput,
+    AssistantActivity,
     AssistantMessage,
     AssistantRuntimeStatus,
     AssistantSendPromptOptions,
@@ -29,6 +30,7 @@ import { AssistantActivityDeltaBuffer } from './assistant-activity-delta-buffer'
 import { CodexRealtimeVoiceRuntime } from './codex-realtime-voice'
 import { ZyraPiRuntime } from './zyra-pi-runtime'
 import { nowIso } from './utils'
+import { materializeCanonicalImage } from './canonical-media-cache'
 import { createAssistantSessionRecord } from './service-records'
 import type { AssistantServiceActionDeps } from './service-action-deps'
 import { AssistantPersistence } from './persistence'
@@ -148,6 +150,14 @@ export class AssistantService {
     private pendingBroadcastEvents: AssistantDomainEvent[] = []
     private pendingBroadcastTimer: NodeJS.Timeout | null = null
     private canonicalImportPromise: Promise<void> | null = null
+    private readonly canonicalHistoryState = new Map<string, {
+        before: string | null
+        hasOlder: boolean
+        project: string
+        key: string
+        sessionId: string
+        threadId: string
+    }>()
 
     constructor() {
         this.readyPromise = this.initialize()
@@ -300,19 +310,26 @@ export class AssistantService {
 
     async getThreadDetailBootstrap(threadId: string) {
         await this.ensureReady()
-        const localThreadId = requireThread(this.state.snapshot, threadId).id
+        const record = findThreadRecord(this.state.snapshot, threadId)
+        if (!record) throw new Error(`Assistant thread not found: ${threadId}`)
+        await this.ensureCanonicalHistoryLoaded(record.session, record.thread)
         return {
             success: true as const,
-            detail: await this.persistence.readThreadDetail(localThreadId)
+            detail: await this.persistence.readThreadDetail(record.thread.id)
         }
     }
 
     async getHistoryPage(input: AssistantGetHistoryPageInput) {
         await this.ensureReady()
-        const localThreadId = requireThread(this.state.snapshot, input.threadId).id
+        const record = findThreadRecord(this.state.snapshot, input.threadId)
+        if (!record) throw new Error(`Assistant thread not found: ${input.threadId}`)
+        await this.ensureCanonicalHistoryLoaded(record.session, record.thread)
+        if (input.before && record.thread.providerThreadId) {
+            await this.loadOlderCanonicalHistory(record.thread.providerThreadId)
+        }
         return {
             success: true as const,
-            page: await this.persistence.readHistoryPage({ ...input, threadId: localThreadId })
+            page: await this.persistence.readHistoryPage({ ...input, threadId: record.thread.id })
         }
     }
 
@@ -484,19 +501,52 @@ export class AssistantService {
             const existing = this.state.snapshot.sessions
                 .flatMap((session) => session.threads.map((thread) => ({ session, thread })))
                 .find(({ thread }) => thread.providerThreadId === chat.canonicalChatId)
+            const createdAt = normalizeCatalogDate(chat.createdAt)
+            const updatedAt = normalizeCatalogDate(chat.modifiedAt, createdAt)
+            const messageCount = Math.max(0, Number(chat.displayMessageCount ?? chat.messageCount) || 0)
+            const activityCount = Math.max(0, Number(chat.toolCallCount || 0) + Number(chat.errorCount || 0))
             if (existing) {
-                if (!this.runtime.hasSession(chat.canonicalChatId) && Number(chat.messageCount) !== existing.thread.messageCount) {
-                    try {
-                        const history = await this.runtime.readCanonicalChatHistory(chat.canonicalChatId, chat.project)
-                        const existingKey = createHash('sha256').update(chat.canonicalChatId).digest('hex').slice(0, 24)
-                        const messages = projectCanonicalMessages(history?.entries || [], existingKey, existing.thread.createdAt)
-                        this.appendEvent('thread.updated', normalizeCatalogDate(chat.modifiedAt, existing.thread.updatedAt), {
-                            threadId: existing.thread.id,
-                            patch: { messages, messageCount: messages.length }
-                        }, existing.session.id, existing.thread.id)
-                    } catch (error) {
-                        log.warn('[Assistant] Failed to refresh canonical chat history', { canonicalChatId: chat.canonicalChatId, error })
-                    }
+                const sessionPatch: Record<string, unknown> = {}
+                if (chat.title && chat.title !== existing.session.title) sessionPatch['title'] = chat.title
+                if (chat.project && chat.project !== existing.session.projectPath) sessionPatch['projectPath'] = chat.project
+                if (Object.keys(sessionPatch).length > 0) {
+                    sessionPatch['updatedAt'] = updatedAt
+                    this.appendEvent('session.updated', updatedAt, {
+                        sessionId: existing.session.id,
+                        patch: sessionPatch
+                    }, existing.session.id, existing.thread.id)
+                }
+                const nextCwd = chat.cwd || chat.project
+                const nextMessageCount = Math.max(existing.thread.messageCount, messageCount)
+                const nextActivityCount = Math.max(existing.thread.activityCount, activityCount)
+                const presenceChanged = JSON.stringify(existing.thread.canonicalPresence || null) !== JSON.stringify(chat.presence || null)
+                if (
+                    existing.thread.providerThreadId !== chat.canonicalChatId
+                    || (nextCwd && existing.thread.cwd !== nextCwd)
+                    || existing.thread.messageCount !== nextMessageCount
+                    || existing.thread.activityCount !== nextActivityCount
+                    || presenceChanged
+                ) {
+                    this.appendEvent('thread.updated', updatedAt, {
+                        threadId: existing.thread.id,
+                        patch: {
+                            providerThreadId: chat.canonicalChatId,
+                            cwd: nextCwd,
+                            messageCount: nextMessageCount,
+                            activityCount: nextActivityCount,
+                            canonicalPresence: chat.presence,
+                            ...(!this.runtime.hasSession(chat.canonicalChatId)
+                                ? chat.presence?.state === 'running'
+                                    ? { state: 'running' as const }
+                                    : chat.presence?.state === 'background'
+                                        ? { state: 'waiting' as const }
+                                        : existing.thread.canonicalPresence?.state === 'running' || existing.thread.canonicalPresence?.state === 'background'
+                                            ? { state: 'ready' as const }
+                                            : {}
+                                : {}),
+                            updatedAt
+                        }
+                    }, existing.session.id, existing.thread.id)
                 }
                 continue
             }
@@ -504,12 +554,13 @@ export class AssistantService {
             const sessionId = `assistant-session:shared:${key}`
             const threadId = `assistant-thread:shared:${key}`
             if (this.state.snapshot.sessions.some((session) => session.id === sessionId)) continue
-            const createdAt = normalizeCatalogDate(chat.createdAt)
-            const updatedAt = normalizeCatalogDate(chat.modifiedAt, createdAt)
             const thread = createAssistantThread(createdAt, null, chat.cwd || chat.project)
             thread.id = threadId
             thread.providerThreadId = chat.canonicalChatId
-            thread.messageCount = Math.max(0, Number(chat.messageCount) || 0)
+            thread.messageCount = messageCount
+            thread.activityCount = activityCount
+            thread.canonicalPresence = chat.presence
+            if (chat.presence?.state === 'running') thread.state = 'running'
             thread.updatedAt = updatedAt
             const session = createAssistantSessionRecord({
                 sessionId,
@@ -520,18 +571,84 @@ export class AssistantService {
             })
             session.updatedAt = updatedAt
             this.appendEvent('session.created', createdAt, { session }, sessionId, threadId)
-            try {
-                const history = await this.runtime.readCanonicalChatHistory(chat.canonicalChatId, chat.project)
-                const messages = projectCanonicalMessages(history?.entries || [], key, createdAt)
-                if (messages.length > 0) {
-                    this.appendEvent('thread.updated', updatedAt, {
-                        threadId,
-                        patch: { messages, messageCount: messages.length }
-                    }, sessionId, threadId)
-                }
-            } catch (error) {
-                log.warn('[Assistant] Failed to import canonical chat history', { canonicalChatId: chat.canonicalChatId, error })
+        }
+    }
+
+    private async ensureCanonicalHistoryLoaded(session: AssistantSession, thread: AssistantThread): Promise<void> {
+        const canonicalChatId = thread.providerThreadId
+        if (!canonicalChatId || this.canonicalHistoryState.has(canonicalChatId)) return
+        const key = createHash('sha256').update(canonicalChatId).digest('hex').slice(0, 24)
+        await this.loadCanonicalHistoryPage({
+            canonicalChatId,
+            project: session.projectPath || thread.cwd || process.cwd(),
+            key,
+            sessionId: session.id,
+            threadId: thread.id,
+            before: null,
+            fallbackCreatedAt: thread.createdAt
+        })
+    }
+
+    private async loadOlderCanonicalHistory(canonicalChatId: string): Promise<void> {
+        const state = this.canonicalHistoryState.get(canonicalChatId)
+        if (!state?.hasOlder || !state.before) return
+        const record = findThreadRecord(this.state.snapshot, state.threadId)
+        if (!record) return
+        await this.loadCanonicalHistoryPage({
+            canonicalChatId,
+            project: state.project,
+            key: state.key,
+            sessionId: state.sessionId,
+            threadId: state.threadId,
+            before: state.before,
+            fallbackCreatedAt: record.thread.createdAt
+        })
+    }
+
+    private async loadCanonicalHistoryPage(input: {
+        canonicalChatId: string
+        project: string
+        key: string
+        sessionId: string
+        threadId: string
+        before: string | null
+        fallbackCreatedAt: string
+    }): Promise<void> {
+        try {
+            const history = await this.runtime.readCanonicalChatHistory(input.canonicalChatId, input.project, {
+                before: input.before,
+                limit: 500
+            })
+            if (!history) return
+            const projection = projectCanonicalTimeline(
+                history.entries || [],
+                input.canonicalChatId,
+                input.key,
+                input.fallbackCreatedAt,
+                Number(history.pageInfo?.startCursor || 0)
+            )
+            const record = findThreadRecord(this.state.snapshot, input.threadId)
+            if (record && (projection.messages.length > 0 || projection.activities.length > 0)) {
+                this.appendEvent('thread.updated', normalizeCatalogDate(history.chat.modifiedAt, record.thread.updatedAt), {
+                    threadId: input.threadId,
+                    patch: {
+                        messages: projection.messages,
+                        activities: projection.activities,
+                        messageCount: Math.max(record.thread.messageCount, Number(history.chat.displayMessageCount || 0), projection.messages.length),
+                        activityCount: Math.max(record.thread.activityCount, Number(history.chat.toolCallCount || 0) + Number(history.chat.errorCount || 0), projection.activities.length)
+                    }
+                }, input.sessionId, input.threadId)
             }
+            this.canonicalHistoryState.set(input.canonicalChatId, {
+                before: history.pageInfo?.oldestCursor || null,
+                hasOlder: history.pageInfo?.hasOlder === true,
+                project: input.project,
+                key: input.key,
+                sessionId: input.sessionId,
+                threadId: input.threadId
+            })
+        } catch (error) {
+            log.warn('[Assistant] Failed to import canonical chat history page', { canonicalChatId: input.canonicalChatId, error })
         }
     }
 
@@ -556,7 +673,11 @@ export class AssistantService {
             getSnapshot: () => this.state.snapshot,
             appendEvent: (type, occurredAt, payload, sessionId, threadId) => {
                 this.appendEvent(type, occurredAt, payload, sessionId, threadId)
-            }
+            },
+            onApplied: (nextTitle) => this.runtime.updateCanonicalChat(
+                thread.providerThreadId || thread.id,
+                { title: nextTitle }
+            )
         })
     }
 
@@ -669,45 +790,237 @@ function normalizeCatalogDate(value: unknown, fallback = nowIso()): string {
     return Number.isNaN(date.getTime()) ? fallback : date.toISOString()
 }
 
-function projectCanonicalMessages(entries: unknown[], key: string, fallbackCreatedAt: string): AssistantMessage[] {
+function projectCanonicalTimeline(
+    entries: unknown[],
+    canonicalChatId: string,
+    key: string,
+    fallbackCreatedAt: string,
+    baseEntryIndex: number
+): { messages: AssistantMessage[]; activities: AssistantActivity[] } {
     const messages: AssistantMessage[] = []
-    let turnIndex = 0
+    const activities = new Map<string, AssistantActivity>()
     let activeTurnId: string | null = null
-    for (const entryValue of entries) {
+    for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
+        const entryValue = entries[entryIndex]
         if (!entryValue || typeof entryValue !== 'object') continue
         const entry = entryValue as Record<string, unknown>
-        if (entry['type'] !== 'message') continue
-        const message = entry['message'] as Record<string, unknown> | undefined
-        const role = message?.['role']
-        if (role !== 'user' && role !== 'assistant' && role !== 'system') continue
-        const text = canonicalMessageText(message?.['content'])
-        if (!text) continue
-        if (role === 'user' || (role === 'assistant' && !activeTurnId)) {
-            turnIndex += 1
-            activeTurnId = `shared-turn:${key}:${turnIndex}`
+        const timelineSequence = baseEntryIndex + entryIndex + 1
+        const entryId = String(entry['id'] || `entry:${key}:${timelineSequence}`)
+        const occurredAt = normalizeCatalogDate(entry['timestamp'], fallbackCreatedAt)
+        if (entry['type'] !== 'message') {
+            if (entry['type'] === 'compaction' || entry['type'] === 'branch_summary') {
+                activities.set(`shared-activity:${entryId}`, {
+                    id: `shared-activity:${entryId}`,
+                    kind: 'context-compaction',
+                    tone: 'info',
+                    summary: entry['type'] === 'compaction' ? 'Context compacted' : 'Branch summary stored',
+                    detail: String(entry['summary'] || '').trim() || undefined,
+                    turnId: activeTurnId,
+                    timelineSequence,
+                    createdAt: occurredAt,
+                    payload: { canonicalEntry: entry }
+                })
+            }
+            continue
         }
-        const occurredAt = normalizeCatalogDate(message?.['timestamp'] || entry['timestamp'], fallbackCreatedAt)
-        messages.push({
-            id: String(message?.['id'] || entry['id'] || `shared-message:${key}:${messages.length + 1}`),
-            role,
-            text,
-            turnId: role === 'system' ? null : activeTurnId,
-            streaming: false,
-            timelineSequence: messages.length + 1,
-            createdAt: occurredAt,
-            updatedAt: occurredAt
-        })
+        const message = asCanonicalRecord(entry['message'])
+        if (!message) continue
+        const role = String(message['role'] || '')
+        const messageId = String(message['id'] || entryId)
+        const messageOccurredAt = normalizeCatalogDate(message['timestamp'] || entry['timestamp'], occurredAt)
+        const content = canonicalContentParts(message['content'])
+        if (role === 'user') {
+            activeTurnId = `shared-turn:${key}:${messageId}`
+        } else if (role === 'assistant' && !activeTurnId) {
+            activeTurnId = `shared-turn:${key}:${messageId}`
+        }
+
+        if (role === 'user' || role === 'assistant' || role === 'system') {
+            const imageAttachments = content
+                .map((part, partIndex) => part['type'] === 'image'
+                    ? canonicalImageAttachment(canonicalChatId, messageId, partIndex, part)
+                    : null)
+                .filter((value): value is string => Boolean(value))
+            const text = canonicalMessageText(content)
+            const projectedText = role === 'user' && imageAttachments.length > 0
+                ? serializeCanonicalAttachments(text, imageAttachments)
+                : text
+            if (projectedText) {
+                messages.push({
+                    id: messageId,
+                    role,
+                    text: projectedText,
+                    turnId: role === 'system' ? null : activeTurnId,
+                    streaming: false,
+                    timelineSequence,
+                    createdAt: messageOccurredAt,
+                    updatedAt: messageOccurredAt
+                })
+            }
+            if (role === 'assistant' && imageAttachments.length > 0) {
+                activities.set(`shared-media:${messageId}`, {
+                    id: `shared-media:${messageId}`,
+                    kind: 'media',
+                    tone: 'info',
+                    summary: `${imageAttachments.length} image${imageAttachments.length === 1 ? '' : 's'}`,
+                    turnId: activeTurnId,
+                    timelineSequence,
+                    createdAt: messageOccurredAt,
+                    payload: { imageAttachments, canonicalMessageId: messageId }
+                })
+            }
+        }
+
+        const thinking = content
+            .filter((part) => part['type'] === 'thinking')
+            .map((part) => String(part['thinking'] || part['text'] || ''))
+            .join('\n')
+            .trim()
+        if (thinking) {
+            activities.set(`shared-thinking:${messageId}`, {
+                id: `shared-thinking:${messageId}`,
+                kind: 'reasoning',
+                tone: 'info',
+                summary: 'Reasoning',
+                detail: thinking,
+                turnId: activeTurnId,
+                timelineSequence,
+                createdAt: messageOccurredAt,
+                payload: { canonicalMessageId: messageId }
+            })
+        }
+
+        for (const part of content.filter((candidate) => candidate['type'] === 'toolCall')) {
+            const toolCallId = String(part['id'] || `${messageId}:tool:${activities.size + 1}`)
+            const toolName = String(part['name'] || 'tool')
+            const activityId = `zyra-tool-${toolCallId}`
+            activities.set(activityId, {
+                id: activityId,
+                kind: 'tool',
+                tone: 'tool',
+                summary: toolName,
+                detail: canonicalToolDetail(part['arguments']),
+                turnId: activeTurnId,
+                timelineSequence,
+                createdAt: messageOccurredAt,
+                payload: {
+                    status: 'running',
+                    toolName,
+                    args: part['arguments'],
+                    toolCallId,
+                    canonicalMessageId: messageId
+                }
+            })
+        }
+
+        if (role === 'toolResult') {
+            const toolCallId = String(message['toolCallId'] || message['tool_call_id'] || messageId)
+            const activityId = `zyra-tool-${toolCallId}`
+            const existing = activities.get(activityId)
+            const toolName = String(message['toolName'] || existing?.payload?.['toolName'] || 'tool')
+            const imagePaths = content
+                .map((part, partIndex) => part['type'] === 'image'
+                    ? canonicalImageAttachment(canonicalChatId, messageId, partIndex, part)
+                    : null)
+                .filter((value): value is string => Boolean(value))
+            const output = canonicalMessageText(content)
+            const isError = message['isError'] === true
+            activities.set(activityId, {
+                id: activityId,
+                kind: existing?.kind || 'tool',
+                tone: isError ? 'error' : 'tool',
+                summary: isError ? `${toolName} failed` : toolName,
+                detail: existing?.detail,
+                turnId: existing?.turnId || activeTurnId,
+                timelineSequence: existing?.timelineSequence || timelineSequence,
+                createdAt: existing?.createdAt || messageOccurredAt,
+                payload: {
+                    ...(existing?.payload || {}),
+                    status: isError ? 'failed' : 'completed',
+                    toolName,
+                    toolCallId,
+                    output,
+                    result: content,
+                    imageAttachments: imagePaths,
+                    completedAt: messageOccurredAt,
+                    canonicalMessageId: messageId
+                }
+            })
+        }
+
+        const errorMessage = String(message['errorMessage'] || '').trim()
+        if (errorMessage || message['stopReason'] === 'error') {
+            activities.set(`shared-error:${messageId}`, {
+                id: `shared-error:${messageId}`,
+                kind: 'error',
+                tone: 'error',
+                summary: 'Assistant error',
+                detail: errorMessage || 'The assistant turn ended with an error.',
+                turnId: activeTurnId,
+                timelineSequence,
+                createdAt: messageOccurredAt,
+                payload: {
+                    stopReason: message['stopReason'],
+                    canonicalMessageId: messageId
+                }
+            })
+        }
     }
-    return messages
+    return { messages, activities: [...activities.values()] }
+}
+
+function canonicalContentParts(content: unknown): Record<string, unknown>[] {
+    if (typeof content === 'string') return [{ type: 'text', text: content }]
+    if (!Array.isArray(content)) return []
+    return content.filter((part): part is Record<string, unknown> => Boolean(part && typeof part === 'object'))
 }
 
 function canonicalMessageText(content: unknown): string {
-    if (typeof content === 'string') return content.trim()
-    if (!Array.isArray(content)) return ''
-    return content
-        .filter((part): part is Record<string, unknown> => Boolean(part && typeof part === 'object'))
+    return canonicalContentParts(content)
         .filter((part) => part['type'] === 'text')
         .map((part) => String(part['text'] || ''))
         .join('')
         .trim()
+}
+
+function canonicalImageAttachment(
+    canonicalChatId: string,
+    messageId: string,
+    partIndex: number,
+    part: Record<string, unknown>
+): string | null {
+    try {
+        const image = materializeCanonicalImage(canonicalChatId, messageId, partIndex, part)
+        if (!image) return null
+        return [
+            `${partIndex + 1}. Image ${partIndex + 1} [IMAGE]`,
+            `path: ${image.path}`,
+            `mime: ${image.mime}`,
+            `size: ${image.size}`,
+            'origin: Canonical Zyra transcript'
+        ].join('\n')
+    } catch (error) {
+        log.warn('[Assistant] Failed to cache a canonical transcript image', { canonicalChatId, messageId, error })
+        return null
+    }
+}
+
+function serializeCanonicalAttachments(body: string, attachments: string[]): string {
+    return `${body.trimEnd()}\n\nAttached files (${attachments.length}):\n${attachments.join('\n\n')}`.trimStart()
+}
+
+function canonicalToolDetail(value: unknown): string | undefined {
+    if (value == null) return undefined
+    try {
+        const serialized = JSON.stringify(value)
+        return serialized.length > 2_000 ? `${serialized.slice(0, 2_000)}…` : serialized
+    } catch {
+        return String(value)
+    }
+}
+
+function asCanonicalRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : null
 }

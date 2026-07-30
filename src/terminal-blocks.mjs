@@ -47,6 +47,7 @@ export function renderStatusBox(status = {}, theme = fallbackTheme, terminalColu
     alignedField("Interrupt", formatInterruptMode(status.interruptMode), theme, valueWidth),
     alignedField("Theme", status.terminalTheme ?? "default", theme, valueWidth),
     alignedField("Thread", status.threadId ?? status.sessionId, theme, valueWidth),
+    alignedField("Presence", formatPresence(status.presence), theme, valueWidth),
     alignedField("Thread file", formatHomePath(status.sessionFile), theme, valueWidth),
     alignedField("Threads dir", formatHomePath(status.sessions), theme, valueWidth),
     "",
@@ -203,6 +204,16 @@ function formatWebStatus(status = {}) {
   if (!status.webSearch && !status.webFetch) return "off";
   if (status.webSearch) return "search";
   return "fetch";
+}
+
+function formatPresence(presence) {
+  if (!presence || typeof presence !== "object") return "local";
+  const surfaces = [...new Set((Array.isArray(presence.clients) ? presence.clients : [])
+    .map((client) => String(client?.surface || "").trim().toLowerCase())
+    .filter(Boolean))]
+    .map((surface) => surface === "desktop" ? "Desktop" : surface === "tui" ? "TUI" : surface);
+  const state = String(presence.state || "detached");
+  return surfaces.length ? `${state} · ${surfaces.join(" + ")}` : state;
 }
 
 function formatInterruptMode(mode) {

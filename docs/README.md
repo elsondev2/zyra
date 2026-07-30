@@ -20,6 +20,7 @@ Status words used below:
 ## Architecture
 
 - [Agent server](architecture/agent-server.md) — **Current.** Shared server authority, persistence, and client flow.
+- [Canonical chat integrity](architecture/canonical-chat-integrity.md) — **Current.** Cross-client identity, indexed history, metadata, recovery, and migration safety.
 - [Agent surfaces](architecture/agent-surface.md) — **Current.** Desktop/TUI semantic projection boundaries.
 - [Assistant browser](architecture/assistant-browser.md) — **Current.** Browser ownership and visual-control architecture.
 - [Assistant resources](architecture/assistant-resources.md) — **Current.** Resource indexing and presentation ownership.

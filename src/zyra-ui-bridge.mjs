@@ -137,6 +137,8 @@ async function handleConnect(payload) {
     agentDefinitions: cloneJsonValue(runtime.fleet?.listDefinitions?.()),
     workflowDefinitions: cloneJsonValue(runtime.workflows?.listDefinitions?.()),
     sessionFile: runtime.session.sessionManager?.getSessionFile?.() || undefined,
+    sessionName: runtime.session.sessionManager?.getSessionName?.() || undefined,
+    cwd: runtime.session.sessionManager?.getCwd?.() || payload.cwd,
     messages: Array.isArray(runtime.session.state?.messages)
       ? runtime.session.state.messages.slice(-500).map(normalizeMessage).filter(Boolean)
       : [],
@@ -175,6 +177,10 @@ function normalizeEvent(event) {
       isError: Boolean(event.isError),
     };
     return { ...normalized, surface: normalizeAgentSurfaceTool(normalized) };
+  }
+
+  if (type === "session_title") {
+    return { type, title: stringValue(event.title) };
   }
 
   if (type === "auto_retry_start") {
@@ -264,7 +270,22 @@ function normalizeContent(content) {
     if (part.type === "thinking") {
       return [{ type: "thinking", thinking: stringValue(part.thinking) || stringValue(part.text) || "" }];
     }
-    return [];
+    if (part.type === "image") {
+      return [{
+        type: "image",
+        data: stringValue(part.data),
+        mimeType: stringValue(part.mimeType) || stringValue(part.mime_type) || "image/png"
+      }];
+    }
+    if (part.type === "toolCall") {
+      return [{
+        type: "toolCall",
+        id: stringValue(part.id),
+        name: stringValue(part.name),
+        arguments: cloneJsonValue(part.arguments)
+      }];
+    }
+    return [cloneJsonValue(part)];
   });
 }
 
@@ -323,6 +344,7 @@ async function handlePrompt(payload) {
     throw new Error("Zyra bridge is not connected.");
   }
   const sdk = await loadSdk();
+  const shouldGenerateTitle = !runtime.session.sessionManager?.getSessionName?.();
   if (payload.model) {
     await sdk.setModel(runtime, payload.model);
   }
@@ -340,7 +362,41 @@ async function handlePrompt(payload) {
   }
   const images = normalizePromptImages(payload.images);
   await sdk.runZyraPrompt(runtime, payload.prompt, { images });
+  if (shouldGenerateTitle) {
+    void generateAndPersistSessionTitle(String(payload.prompt || ""), payload.cwd || runtime.project).catch((error) => {
+      process.stderr.write(`[session-title] ${error instanceof Error ? error.message : String(error)}\n`);
+    });
+  }
   return {};
+}
+
+async function generateAndPersistSessionTitle(prompt, cwd) {
+  if (!runtime?.session?.sessionManager?.appendSessionInfo) return;
+  if (runtime.session.sessionManager.getSessionName?.()) return;
+  const seed = String(prompt || "").replace(/\s+/g, " ").trim().slice(0, 720);
+  if (!seed) return;
+  const result = await handleGenerateText({
+    cwd: cwd || runtime.project,
+    model: "openai-codex/gpt-5.4-mini",
+    thinking: "low",
+    prompt: [
+      "Write a concise title for this coding-assistant chat.",
+      "Return title text only, without quotes or markdown. Maximum 60 characters.",
+      "Prefer the concrete task or topic over greetings.",
+      "",
+      seed
+    ].join("\n")
+  });
+  const title = String(result.text || "")
+    .replace(/^title\s*:\s*/i, "")
+    .replace(/^[\"'`]+|[\"'`]+$/g, "")
+    .split(/\r?\n/)[0]
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
+  if (!title) return;
+  runtime.session.sessionManager.appendSessionInfo(title);
+  send({ type: "event", event: { type: "session_title", title } });
 }
 
 async function handleGenerateText(payload) {

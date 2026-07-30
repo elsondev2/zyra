@@ -928,8 +928,21 @@ export class ZyraPiRuntime extends EventEmitter {
         return this.getAgentServerConnection(resolveZyraRoot()).listCanonicalChats()
     }
 
-    async readCanonicalChatHistory(session: string, project?: string): Promise<CanonicalAgentChatHistory | null> {
-        return this.getAgentServerConnection(resolveZyraRoot()).readCanonicalChatHistory(session, project)
+    async readCanonicalChatHistory(
+        session: string,
+        project?: string,
+        options: { before?: string | null; limit?: number } = {}
+    ): Promise<CanonicalAgentChatHistory | null> {
+        return this.getAgentServerConnection(resolveZyraRoot()).readCanonicalChatHistory(session, project, options)
+    }
+
+    async updateCanonicalChat(
+        threadId: string,
+        patch: { title?: string; project?: string; cwd?: string }
+    ): Promise<void> {
+        const normalizedThreadId = String(threadId || '').trim()
+        if (!normalizedThreadId) return
+        await this.getAgentServerConnection(resolveZyraRoot()).updateCanonicalChat(normalizedThreadId, patch)
     }
 
     async listModels(forceRefresh = false): Promise<AssistantModelInfo[]> {

@@ -710,6 +710,8 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         pinnedBubbleHeaderInset={props.pinnedBubbleHeaderInset}
                         latestProjectLabel={latestProjectLabel}
                         selectedSessionTitle={selectedSessionTitle}
+                        canonicalThreadId={controller.activeThread?.providerThreadId || controller.activeThread?.id || null}
+                        canonicalPresence={controller.activeThread?.canonicalPresence}
                         selectedSessionMode={selectedSessionMode}
                         zyraProfile={activeZyraProfile}
                         activeThreadIsSubagent={activeThreadIsSubagent}

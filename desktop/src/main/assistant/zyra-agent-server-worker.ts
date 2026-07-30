@@ -37,20 +37,42 @@ type ReplayEntry = {
     requestContext?: { turnId?: string; localThreadId?: string } | null
 }
 
+export type CanonicalAgentChatPresence = {
+    state: 'detached' | 'ready' | 'running' | 'background'
+    activeTurnId: string | null
+    clients: Array<{ clientId: string; surface: string }>
+    backgroundWorkActive: boolean
+    latestSequence?: number
+}
+
 export type CanonicalAgentChat = {
     canonicalChatId: string
     sessionPath: string
+    storageProject?: string
     project: string
     cwd: string
     title: string
     createdAt: string
     modifiedAt: string
     messageCount: number
+    displayMessageCount?: number
+    toolCallCount?: number
+    errorCount?: number
+    imageCount?: number
+    entryCount?: number
+    presence?: CanonicalAgentChatPresence
 }
 
 export type CanonicalAgentChatHistory = {
     chat: CanonicalAgentChat
     entries: unknown[]
+    pageInfo?: {
+        startCursor?: string
+        endCursor?: string
+        oldestCursor: string | null
+        hasOlder: boolean
+        totalEntries: number
+    }
 }
 
 type DesktopAgentServerConnectionOptions = {
@@ -99,10 +121,28 @@ export class DesktopAgentServerConnection {
         return Array.isArray(result['chats']) ? result['chats'] as CanonicalAgentChat[] : []
     }
 
-    async readCanonicalChatHistory(session: string, project?: string): Promise<CanonicalAgentChatHistory | null> {
+    async readCanonicalChatHistory(
+        session: string,
+        project?: string,
+        options: { before?: string | null; limit?: number } = {}
+    ): Promise<CanonicalAgentChatHistory | null> {
         const client = await this.getClient()
-        const result = await client.request('catalog.history', { session, project, limit: 1000 })
+        const result = await client.request('catalog.history', {
+            session,
+            project,
+            before: options.before,
+            limit: options.limit || 1000
+        }, { timeoutMs: 35_000 })
         return asRecord(result['history']) as CanonicalAgentChatHistory | null
+    }
+
+    async updateCanonicalChat(
+        session: string,
+        patch: { title?: string; project?: string; cwd?: string }
+    ): Promise<CanonicalAgentChat | null> {
+        const client = await this.getClient()
+        const result = await client.request('catalog.update', { session, ...patch }, { timeoutMs: 5_000 })
+        return asRecord(result['chat']) as CanonicalAgentChat | null
     }
 
     async attach(worker: ZyraAgentServerWorker, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -142,7 +182,7 @@ export class DesktopAgentServerConnection {
     async request(worker: ZyraAgentServerWorker, type: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
         await this.ensureAttached(worker)
         const client = await this.getClient()
-        return client.request('session.request', {
+        const request = () => client.request('session.request', {
             sessionKey: worker.sessionKey,
             type,
             payload,
@@ -153,6 +193,14 @@ export class DesktopAgentServerConnection {
                 }
             } : {})
         })
+        try {
+            return await request()
+        } catch (error: any) {
+            if (error?.code !== 'AGENT_SERVER_SESSION_NOT_FOUND' && error?.code !== 'AGENT_SERVER_AUTH_FAILED') throw error
+            this.markWorkerRemoteDetached(worker)
+            await this.ensureAttached(worker)
+            return request()
+        }
     }
 
     detach(worker: ZyraAgentServerWorker): void {
@@ -186,8 +234,22 @@ export class DesktopAgentServerConnection {
         if (!worker.connectPayload) throw new Error('Zyra agent-server worker is not connected.')
         const client = await this.getClient()
         await client.connect()
+        if (worker.sessionKey && this.workers.get(worker.sessionKey)?.has(worker)) return
         await this.attach(worker, worker.connectPayload)
         worker.flushReplay()
+    }
+
+    private markWorkerRemoteDetached(worker: ZyraAgentServerWorker): void {
+        if (worker.sessionKey) this.workers.get(worker.sessionKey)?.delete(worker)
+        worker.markRemoteDetached()
+    }
+
+    private handleClientDisconnect(): void {
+        for (const workers of this.workers.values()) {
+            for (const worker of workers) worker.markRemoteDetached()
+        }
+        this.workers.clear()
+        this.controlWorkers.clear()
     }
 
     private async getClient(): Promise<AgentServerClient> {
@@ -228,6 +290,7 @@ export class DesktopAgentServerConnection {
             this.controlWorkers.get(String(message['requestId'] || ''))?.cancelControlRequest(String(message['requestId'] || ''))
         })
         client.on('session-event', (message: Record<string, unknown>) => this.handleSessionEvent(message))
+        client.on('disconnect', () => this.handleClientDisconnect())
         client.on('catalog-changed', () => {
             for (const listener of this.catalogChangedListeners) listener()
         })
@@ -297,6 +360,11 @@ export class ZyraAgentServerWorker implements ZyraWorkerLike {
         this.sessionKey = sessionKey
         this.localThreadId = String(payload['localThreadId'] || this.localThreadId || '') || null
         this.connectPayload = { ...payload, threadId: sessionKey, providerThreadId: sessionKey }
+    }
+
+    markRemoteDetached(): void {
+        this.sessionKey = null
+        this.latestSequence = 0
     }
 
     queueReplay(entries: ReplayEntry[]): void {

@@ -53,11 +53,11 @@ const session: AssistantSession = {
 assert.equal(isAssistantSessionProjectLocked(session), false, 'an untouched chat may still choose a different project')
 
 thread.messageCount = 1
-assert.equal(isAssistantSessionProjectLocked(session), true, 'the first chat message locks the project')
+assert.equal(isAssistantSessionProjectLocked(session), false, 'persisted chat messages do not permanently lock project metadata')
 
 thread.messageCount = 0
 thread.activityCount = 1
-assert.equal(isAssistantSessionProjectLocked(session), true, 'tool or runtime activity also locks the project')
+assert.equal(isAssistantSessionProjectLocked(session), false, 'completed tool or runtime history does not lock project metadata')
 
 thread.activityCount = 0
 thread.latestTurn = {
@@ -73,6 +73,9 @@ assert.equal(isAssistantSessionProjectLocked(session), true, 'a started turn loc
 
 thread.latestTurn = null
 thread.hasPendingApprovals = true
-assert.equal(isAssistantSessionProjectLocked(session), true, 'pending work keeps the project locked')
+assert.equal(isAssistantSessionProjectLocked(session), true, 'pending work temporarily pauses project changes')
 
-console.log('Assistant project lock checks passed.')
+thread.hasPendingApprovals = false
+assert.equal(isAssistantSessionProjectLocked(session), false, 'project metadata becomes editable again when work settles')
+
+console.log('Assistant mutable project checks passed.')

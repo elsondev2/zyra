@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { getProjectSessionsDir } from "../zyra-sdk.mjs";
+import { CanonicalChatIndex } from "./chat-index.mjs";
 import { getAgentServerPaths } from "./paths.mjs";
 
 const CATALOG_VERSION = 1;
@@ -10,7 +11,8 @@ const MAX_ALIASES = 4096;
 export class CanonicalChatCatalog {
   constructor(options = {}) {
     this.paths = getAgentServerPaths(options);
-    this.loadSessionManager = options.loadSessionManager || defaultLoadSessionManager;
+    this.loadSessionManager = options.loadSessionManager || null;
+    this.index = options.index || new CanonicalChatIndex(options);
     this.record = readCatalog(this.paths.catalogFile);
   }
 
@@ -56,17 +58,12 @@ export class CanonicalChatCatalog {
     const projects = requestedProject && options.allProjects !== true
       ? [requestedProject]
       : [...new Set([...(requestedProject ? [requestedProject] : []), ...knownProjects])];
-    const SessionManager = await this.loadSessionManager();
-    const groups = await Promise.all(projects.map(async (project) => {
-      try {
-        const sessions = await SessionManager.list(project, getProjectSessionsDir(project));
-        return sessions.map((session) => projectSession(project, session, this.record));
-      } catch {
-        return [];
-      }
-    }));
+    const indexed = this.loadSessionManager
+      ? await this.listInjectedSessions(projects)
+      : await this.index.listProjects(projects);
     const byId = new Map();
-    for (const chat of groups.flat()) {
+    for (const indexedChat of indexed) {
+      const chat = applyMetadata(indexedChat, this.record.metadata[indexedChat.canonicalChatId], this.record);
       const current = byId.get(chat.canonicalChatId);
       if (!current || Date.parse(chat.modifiedAt) > Date.parse(current.modifiedAt)) byId.set(chat.canonicalChatId, chat);
     }
@@ -82,26 +79,74 @@ export class CanonicalChatCatalog {
   async history(selector, options = {}) {
     const chat = await this.find(selector, { project: options.project, allProjects: true });
     if (!chat) return null;
+    if (this.loadSessionManager) {
+      const SessionManager = await this.loadSessionManager();
+      const manager = SessionManager.open(chat.sessionPath, getProjectSessionsDir(chat.storageProject || chat.project));
+      const entries = typeof manager.getEntries === "function" ? manager.getEntries() : [];
+      const limit = Math.max(1, Math.min(2000, Number(options.limit) || 500));
+      const end = options.before == null ? entries.length : Math.max(0, Math.min(entries.length, Number(options.before) || 0));
+      const start = Math.max(0, end - limit);
+      return {
+        chat,
+        entries: cloneJson(entries.slice(start, end)),
+        pageInfo: {
+          startCursor: String(start),
+          endCursor: String(end),
+          oldestCursor: start > 0 ? String(start) : null,
+          hasOlder: start > 0,
+          totalEntries: entries.length
+        }
+      };
+    }
+    const history = this.index.history(chat.canonicalChatId, options);
+    return history ? { ...history, chat: applyMetadata(history.chat, this.record.metadata[chat.canonicalChatId], this.record) } : null;
+  }
+
+  async listInjectedSessions(projects) {
     const SessionManager = await this.loadSessionManager();
-    const manager = SessionManager.open(chat.sessionPath, getProjectSessionsDir(chat.project));
-    const entries = typeof manager.getEntries === "function" ? manager.getEntries() : [];
-    const limit = Math.max(1, Math.min(2000, Number(options.limit) || 500));
-    return {
-      chat,
-      entries: cloneJson(entries.slice(-limit))
-    };
+    const groups = await Promise.all(projects.map(async (project) => {
+      try {
+        const sessions = await SessionManager.list(project, getProjectSessionsDir(project));
+        return sessions.map((session) => projectInjectedSession(project, session));
+      } catch {
+        return [];
+      }
+    }));
+    return groups.flat();
   }
 
   async find(selector, options = {}) {
     const normalized = this.resolveAlias(selector);
+    const direct = this.loadSessionManager
+      ? null
+      : this.index.get(normalized) || (path.isAbsolute(normalized) ? this.index.findByPath(normalized) : null);
+    if (direct) return applyMetadata(direct, this.record.metadata[direct.canonicalChatId], this.record);
     const chats = await this.list({
       ...options,
       allProjects: options.allProjects === true || path.isAbsolute(normalized),
       limit: 2000
     });
-    return chats.find((chat) => chat.canonicalChatId === normalized || chat.sessionPath === normalized)
+    return chats.find((chat) => chat.canonicalChatId === normalized || pathKey(chat.sessionPath) === pathKey(normalized))
       || chats.find((chat) => chat.canonicalChatId.startsWith(normalized))
       || null;
+  }
+
+  async updateChat(selector, patch = {}) {
+    const canonicalChatId = this.resolveAlias(selector);
+    const chat = await this.find(canonicalChatId, { allProjects: true });
+    if (patch.project !== undefined) this.registerProject(patch.project);
+    const existing = this.record.metadata[canonicalChatId] || {};
+    const next = {
+      ...existing,
+      ...(patch.title !== undefined ? { title: normalizeTitle(patch.title) } : {}),
+      ...(patch.project !== undefined ? { project: normalizeProject(patch.project) } : {}),
+      ...(patch.cwd !== undefined ? { cwd: normalizeProject(patch.cwd) } : {}),
+      updatedAt: new Date().toISOString()
+    };
+    this.record.metadata[canonicalChatId] = next;
+    this.index.update(canonicalChatId, next);
+    this.persist();
+    return applyMetadata(chat || this.index.get(canonicalChatId) || { canonicalChatId }, next, this.record);
   }
 
   snapshot() {
@@ -119,28 +164,42 @@ function cloneJson(value) {
   catch { return []; }
 }
 
-function projectSession(project, session, record) {
+function projectInjectedSession(project, session) {
   const canonicalChatId = String(session.id || "");
-  const title = String(session.name || session.firstMessage || "New chat").replace(/\s+/g, " ").trim().slice(0, 240) || "New chat";
   return {
     version: 1,
     canonicalChatId,
     sessionPath: path.resolve(session.path),
-    project,
-    cwd: path.resolve(session.cwd || project),
-    title,
+    storageProject: normalizeProject(project),
+    project: normalizeProject(project),
+    cwd: normalizeProject(session.cwd || project),
+    title: normalizeTitle(session.name || session.firstMessage),
     createdAt: toIso(session.created),
     modifiedAt: toIso(session.modified),
     messageCount: Math.max(0, Number(session.messageCount) || 0),
-    parentSessionPath: session.parentSessionPath ? path.resolve(session.parentSessionPath) : null,
-    aliases: Object.entries(record.aliases).filter(([, id]) => id === canonicalChatId).map(([alias]) => alias).slice(0, 32),
-    surfaces: [...new Set(record.surfaces[canonicalChatId] || [])]
+    displayMessageCount: Math.max(0, Number(session.messageCount) || 0),
+    toolCallCount: 0,
+    errorCount: 0,
+    imageCount: 0,
+    entryCount: Math.max(0, Number(session.messageCount) || 0),
+    parentSessionPath: session.parentSessionPath ? path.resolve(session.parentSessionPath) : null
   };
 }
 
-async function defaultLoadSessionManager() {
-  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
-  return SessionManager;
+function applyMetadata(chat, metadata = {}, record = {}) {
+  const canonicalChatId = String(chat.canonicalChatId || "");
+  return {
+    ...chat,
+    title: metadata.title || chat.title || "New chat",
+    project: metadata.project || chat.project || chat.storageProject || chat.cwd,
+    cwd: metadata.cwd || metadata.project || chat.cwd || chat.project,
+    aliases: Object.entries(record.aliases || {}).filter(([, id]) => id === canonicalChatId).map(([alias]) => alias).slice(0, 32),
+    surfaces: [...new Set(record.surfaces?.[canonicalChatId] || [])]
+  };
+}
+
+function normalizeTitle(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, 240) || "New chat";
 }
 
 function normalizeProject(value) {
@@ -160,7 +219,7 @@ function toIso(value) {
 }
 
 function emptyCatalog() {
-  return { version: CATALOG_VERSION, projects: [], aliases: {}, surfaces: {}, updatedAt: new Date().toISOString() };
+  return { version: CATALOG_VERSION, projects: [], aliases: {}, surfaces: {}, metadata: {}, updatedAt: new Date().toISOString() };
 }
 
 function readCatalog(file) {
@@ -172,6 +231,7 @@ function readCatalog(file) {
       projects: Array.isArray(parsed.projects) ? parsed.projects.filter((entry) => entry?.path).slice(-MAX_KNOWN_PROJECTS) : [],
       aliases: parsed.aliases && typeof parsed.aliases === "object" ? parsed.aliases : {},
       surfaces: parsed.surfaces && typeof parsed.surfaces === "object" ? parsed.surfaces : {},
+      metadata: parsed.metadata && typeof parsed.metadata === "object" ? parsed.metadata : {},
       updatedAt: String(parsed.updatedAt || new Date().toISOString())
     };
   } catch {
@@ -184,6 +244,7 @@ function trimRecord(record) {
   const aliases = Object.entries(record.aliases).slice(-MAX_ALIASES);
   record.aliases = Object.fromEntries(aliases);
   record.surfaces = Object.fromEntries(Object.entries(record.surfaces).slice(-MAX_ALIASES));
+  record.metadata = Object.fromEntries(Object.entries(record.metadata || {}).slice(-MAX_ALIASES));
   record.updatedAt = new Date().toISOString();
 }
 

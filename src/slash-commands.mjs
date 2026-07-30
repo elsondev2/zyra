@@ -88,13 +88,21 @@ const slashCommands = [
   },
   {
     name: "session",
-    description: "project, model, context, usage",
+    description: "project, model, usage, and thread ID",
+    panelLabel: "/session [copy]",
     submitOnEnter: true,
   },
   {
     name: "chat",
-    description: "current chat file and totals",
+    description: "browse or inspect canonical chats",
     submitOnEnter: true,
+  },
+  {
+    name: "older",
+    aliases: ["history"],
+    description: "load the previous transcript page",
+    submitOnEnter: true,
+    availableDuringTask: false,
   },
   {
     name: "profile",

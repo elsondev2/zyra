@@ -74,6 +74,8 @@ export async function disconnectAssistantSession(deps: AssistantServiceActionDep
 
 export async function createAssistantSessionAction(deps: AssistantServiceActionDeps, input?: AssistantCreateSessionInput) {
     await deps.ensureReady()
+    const previousThread = getActiveThread(getSelectedSession(deps.getSnapshot()))
+    if (previousThread) deps.runtime.disconnect(getAssistantCanonicalThreadId(previousThread))
     const createdAt = nowIso()
     const sessionId = createAssistantId('assistant-session')
     const route = resolveAssistantSessionRoute({
@@ -100,7 +102,13 @@ export async function createAssistantSessionAction(deps: AssistantServiceActionD
 
 export async function selectAssistantSessionAction(deps: AssistantServiceActionDeps, sessionId: string) {
     await deps.ensureReady()
-    requireSession(deps.getSnapshot(), sessionId)
+    const snapshot = deps.getSnapshot()
+    requireSession(snapshot, sessionId)
+    const previousSession = getSelectedSession(snapshot)
+    const previousThread = getActiveThread(previousSession)
+    if (previousSession?.id !== sessionId && previousThread) {
+        deps.runtime.disconnect(getAssistantCanonicalThreadId(previousThread))
+    }
     const occurredAt = nowIso()
     deps.appendEvent('session.selected', occurredAt, { sessionId }, sessionId)
     const session = requireSession(deps.getSnapshot(), sessionId)
@@ -110,13 +118,18 @@ export async function selectAssistantSessionAction(deps: AssistantServiceActionD
 
 export async function selectAssistantThreadAction(deps: AssistantServiceActionDeps, sessionId: string, threadId: string) {
     await deps.ensureReady()
-    const session = requireSession(deps.getSnapshot(), sessionId)
+    const snapshot = deps.getSnapshot()
+    const previousThread = getActiveThread(getSelectedSession(snapshot))
+    const session = requireSession(snapshot, sessionId)
     const selectedThread = session.threads.find((thread) => matchesAssistantThreadId(thread, threadId)) || null
     if (!selectedThread) {
         throw new Error(`Assistant thread ${threadId} does not belong to session ${sessionId}.`)
     }
 
     const localThreadId = selectedThread.id
+    if (previousThread && previousThread.id !== localThreadId) {
+        deps.runtime.disconnect(getAssistantCanonicalThreadId(previousThread))
+    }
     const occurredAt = nowIso()
     deps.appendEvent('session.updated', occurredAt, {
         sessionId,
@@ -135,13 +148,19 @@ export async function selectAssistantThreadAction(deps: AssistantServiceActionDe
 export async function renameAssistantSessionAction(deps: AssistantServiceActionDeps, sessionId: string, title: string) {
     await deps.ensureReady()
     const session = requireSession(deps.getSnapshot(), sessionId)
-    deps.appendEvent('session.updated', nowIso(), {
+    const nextTitle = title.trim() || session.title
+    const occurredAt = nowIso()
+    deps.appendEvent('session.updated', occurredAt, {
         sessionId,
         patch: {
-            title: title.trim() || session.title,
-            updatedAt: nowIso()
+            title: nextTitle,
+            updatedAt: occurredAt
         }
     }, sessionId)
+    await Promise.allSettled(session.threads
+        .map((thread) => thread.providerThreadId)
+        .filter((threadId): threadId is string => Boolean(threadId))
+        .map((threadId) => deps.runtime.updateCanonicalChat(threadId, { title: nextTitle })))
     return { success: true as const }
 }
 
@@ -161,8 +180,7 @@ export async function archiveAssistantSessionAction(deps: AssistantServiceAction
 export async function deleteAssistantSessionAction(deps: AssistantServiceActionDeps, sessionId: string) {
     await deps.ensureReady()
     const session = requireSession(deps.getSnapshot(), sessionId)
-    const thread = getActiveThread(session)
-    if (thread) {
+    for (const thread of session.threads) {
         deps.runtime.disconnect(getAssistantCanonicalThreadId(thread))
     }
     const occurredAt = nowIso()
@@ -296,18 +314,38 @@ export async function setAssistantSessionProjectPathAction(
         return { success: true as const }
     }
     if (isAssistantSessionProjectLocked(session)) {
-        throw new Error('Project directory is locked after the chat starts.')
+        throw new Error('Finish or stop the active chat work before changing its project.')
     }
-    deps.appendEvent('session.updated', nowIso(), {
+    const occurredAt = nowIso()
+    for (const thread of session.threads) {
+        deps.runtime.disconnect(getAssistantCanonicalThreadId(thread))
+        deps.appendEvent('thread.updated', occurredAt, {
+            threadId: thread.id,
+            patch: {
+                cwd: route.projectPath,
+                updatedAt: occurredAt
+            }
+        }, sessionId, thread.id)
+    }
+    deps.appendEvent('session.updated', occurredAt, {
         sessionId,
         patch: {
             mode: route.mode,
             projectPath: route.projectPath,
             playgroundLabId: route.playgroundLabId,
             pendingLabRequest: null,
-            updatedAt: nowIso()
+            updatedAt: occurredAt
         }
     }, sessionId)
+    if (route.projectPath) {
+        await Promise.allSettled(session.threads
+            .map((thread) => thread.providerThreadId)
+            .filter((threadId): threadId is string => Boolean(threadId))
+            .map((threadId) => deps.runtime.updateCanonicalChat(threadId, {
+                project: route.projectPath!,
+                cwd: route.projectPath!
+            })))
+    }
     return { success: true as const }
 }
 
@@ -504,7 +542,11 @@ export async function sendAssistantPromptAction(
                 preferredModel: options?.model || thread.model || null,
                 generateText: (titlePrompt, titleOptions) => deps.runtime.generateText(titlePrompt, titleOptions),
                 getSnapshot: deps.getSnapshot,
-                appendEvent: deps.appendEvent
+                appendEvent: deps.appendEvent,
+                onApplied: (nextTitle) => deps.runtime.updateCanonicalChat(
+                    result.providerThreadId || thread.providerThreadId || runtimeThreadId,
+                    { title: nextTitle }
+                )
             })
         }
         return { success: true as const, sessionId: session.id, threadId: thread.id, turnId: result.turnId }
