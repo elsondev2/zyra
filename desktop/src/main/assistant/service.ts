@@ -509,6 +509,7 @@ export class AssistantService {
                 const sessionPatch: Record<string, unknown> = {}
                 if (chat.title && chat.title !== existing.session.title) sessionPatch['title'] = chat.title
                 if (chat.project && chat.project !== existing.session.projectPath) sessionPatch['projectPath'] = chat.project
+                if (chat.archived !== existing.session.archived) sessionPatch['archived'] = chat.archived
                 if (Object.keys(sessionPatch).length > 0) {
                     sessionPatch['updatedAt'] = updatedAt
                     this.appendEvent('session.updated', updatedAt, {
@@ -569,6 +570,7 @@ export class AssistantService {
                 createdAt,
                 thread
             })
+            session.archived = chat.archived === true
             session.updatedAt = updatedAt
             this.appendEvent('session.created', createdAt, { session }, sessionId, threadId)
         }

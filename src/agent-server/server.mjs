@@ -223,7 +223,8 @@ export class ZyraAgentServer extends EventEmitter {
       const chat = await this.catalog.updateChat(params.session, {
         ...(params.title !== undefined ? { title: params.title } : {}),
         ...(params.project !== undefined ? { project: params.project } : {}),
-        ...(params.cwd !== undefined ? { cwd: params.cwd } : {})
+        ...(params.cwd !== undefined ? { cwd: params.cwd } : {}),
+        ...(params.archived !== undefined ? { archived: params.archived === true } : {})
       });
       const activeSession = this.sessions.get(chat.canonicalChatId);
       if (activeSession) {
@@ -231,13 +232,15 @@ export class ZyraAgentServer extends EventEmitter {
           ...(activeSession.connectedResult || {}),
           sessionName: chat.title,
           project: chat.project,
-          cwd: chat.cwd
+          cwd: chat.cwd,
+          archived: chat.archived
         };
         activeSession.publish({
           type: "session_metadata",
           title: chat.title,
           project: chat.project,
-          cwd: chat.cwd
+          cwd: chat.cwd,
+          archived: chat.archived
         });
       }
       this.broadcastCatalogChanged({ canonicalChatId: chat.canonicalChatId, metadata: true });

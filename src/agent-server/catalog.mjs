@@ -68,6 +68,7 @@ export class CanonicalChatCatalog {
       if (!current || Date.parse(chat.modifiedAt) > Date.parse(current.modifiedAt)) byId.set(chat.canonicalChatId, chat);
     }
     let chats = [...byId.values()].sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt));
+    if (options.includeArchived !== true) chats = chats.filter((chat) => !chat.archived);
     const query = String(options.query || "").trim().toLowerCase();
     if (query) {
       chats = chats.filter((chat) => `${chat.title} ${chat.project} ${chat.cwd} ${chat.canonicalChatId}`.toLowerCase().includes(query));
@@ -124,6 +125,7 @@ export class CanonicalChatCatalog {
     const chats = await this.list({
       ...options,
       allProjects: options.allProjects === true || path.isAbsolute(normalized),
+      includeArchived: true,
       limit: 2000
     });
     return chats.find((chat) => chat.canonicalChatId === normalized || pathKey(chat.sessionPath) === pathKey(normalized))
@@ -141,6 +143,10 @@ export class CanonicalChatCatalog {
       ...(patch.title !== undefined ? { title: normalizeTitle(patch.title) } : {}),
       ...(patch.project !== undefined ? { project: normalizeProject(patch.project) } : {}),
       ...(patch.cwd !== undefined ? { cwd: normalizeProject(patch.cwd) } : {}),
+      ...(patch.archived !== undefined ? {
+        archived: patch.archived === true,
+        archivedAt: patch.archived === true ? new Date().toISOString() : null
+      } : {}),
       updatedAt: new Date().toISOString()
     };
     this.record.metadata[canonicalChatId] = next;
@@ -193,6 +199,8 @@ function applyMetadata(chat, metadata = {}, record = {}) {
     title: metadata.title || chat.title || "New chat",
     project: metadata.project || chat.project || chat.storageProject || chat.cwd,
     cwd: metadata.cwd || metadata.project || chat.cwd || chat.project,
+    archived: metadata.archived === true,
+    archivedAt: metadata.archivedAt || null,
     aliases: Object.entries(record.aliases || {}).filter(([, id]) => id === canonicalChatId).map(([alias]) => alias).slice(0, 32),
     surfaces: [...new Set(record.surfaces?.[canonicalChatId] || [])]
   };

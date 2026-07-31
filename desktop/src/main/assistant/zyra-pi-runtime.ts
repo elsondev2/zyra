@@ -938,7 +938,7 @@ export class ZyraPiRuntime extends EventEmitter {
 
     async updateCanonicalChat(
         threadId: string,
-        patch: { title?: string; project?: string; cwd?: string }
+        patch: { title?: string; project?: string; cwd?: string; archived?: boolean }
     ): Promise<void> {
         const normalizedThreadId = String(threadId || '').trim()
         if (!normalizedThreadId) return

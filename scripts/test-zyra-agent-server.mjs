@@ -82,6 +82,14 @@ try {
   assert.equal(listed.chats[0].presence.state, "detached");
   const history = await desktop.request("catalog.history", { session: "chat:test", project });
   assert.equal(history.history.entries[0].message.content, "hello");
+  const archived = await desktop.request("catalog.update", { session: "chat:test", archived: true });
+  assert.equal(archived.chat.archived, true);
+  assert.equal((await tui.request("catalog.list", {})).chats.length, 0, "archived chats must be hidden by default");
+  const archivedList = await tui.request("catalog.list", { includeArchived: true });
+  assert.equal(archivedList.chats.length, 1);
+  assert.equal(archivedList.chats[0].archived, true);
+  const restored = await desktop.request("catalog.update", { session: "chat:test", archived: false });
+  assert.equal(restored.chat.archived, false);
 
   const desktopAttached = await desktop.attach({ project, cwd: project, session: "chat:test", localThreadId: "assistant-thread:desktop" });
   assert.equal(desktopAttached.canonicalChatId, "chat:test");

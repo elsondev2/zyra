@@ -166,12 +166,17 @@ export async function renameAssistantSessionAction(deps: AssistantServiceActionD
 
 export async function archiveAssistantSessionAction(deps: AssistantServiceActionDeps, sessionId: string, archived = true) {
     await deps.ensureReady()
-    requireSession(deps.getSnapshot(), sessionId)
-    deps.appendEvent('session.updated', nowIso(), {
+    const session = requireSession(deps.getSnapshot(), sessionId)
+    const canonicalThreadIds = [...new Set(session.threads
+        .map((thread) => thread.providerThreadId)
+        .filter((threadId): threadId is string => Boolean(threadId)))]
+    await Promise.all(canonicalThreadIds.map((threadId) => deps.runtime.updateCanonicalChat(threadId, { archived })))
+    const occurredAt = nowIso()
+    deps.appendEvent('session.updated', occurredAt, {
         sessionId,
         patch: {
             archived,
-            updatedAt: nowIso()
+            updatedAt: occurredAt
         }
     }, sessionId)
     return { success: true as const }

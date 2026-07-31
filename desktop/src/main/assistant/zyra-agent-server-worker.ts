@@ -52,6 +52,8 @@ export type CanonicalAgentChat = {
     project: string
     cwd: string
     title: string
+    archived: boolean
+    archivedAt?: string | null
     createdAt: string
     modifiedAt: string
     messageCount: number
@@ -117,7 +119,7 @@ export class DesktopAgentServerConnection {
 
     async listCanonicalChats(project?: string): Promise<CanonicalAgentChat[]> {
         const client = await this.getClient()
-        const result = await client.request('catalog.list', { project, allProjects: true, limit: 2000 })
+        const result = await client.request('catalog.list', { project, allProjects: true, includeArchived: true, limit: 2000 })
         return Array.isArray(result['chats']) ? result['chats'] as CanonicalAgentChat[] : []
     }
 
@@ -138,7 +140,7 @@ export class DesktopAgentServerConnection {
 
     async updateCanonicalChat(
         session: string,
-        patch: { title?: string; project?: string; cwd?: string }
+        patch: { title?: string; project?: string; cwd?: string; archived?: boolean }
     ): Promise<CanonicalAgentChat | null> {
         const client = await this.getClient()
         const result = await client.request('catalog.update', { session, ...patch }, { timeoutMs: 5_000 })
