@@ -14,13 +14,19 @@ class FakeWorker extends EventEmitter {
     super();
     this.activePrompt = null;
     this.controlResponses = [];
+    this.requests = [];
     this.disposed = false;
   }
   isAlive() { return !this.disposed; }
-  request(type) {
+  request(type, payload = {}) {
+    this.requests.push({ type, payload });
     if (type === "connect") return Promise.resolve({ threadId: "chat:test", providerThreadId: sessionPath, events: [] });
     if (type === "prompt") return new Promise((resolve) => { this.activePrompt = resolve; });
     if (type === "abort") return Promise.resolve({ aborted: true });
+    if (type === "approval.respond") {
+      this.emit("event", { type: "approval_resolved", requestId: payload.requestId, decision: payload.decision });
+      return Promise.resolve({ ok: true });
+    }
     return Promise.resolve({ ok: true });
   }
   finishPrompt(result) {
@@ -112,6 +118,18 @@ try {
   await waitUntil(() => workers[0].activePrompt !== null);
   workers[0].emit("event", { type: "message_update", message: { role: "assistant", content: "still working" } });
   await waitUntil(() => tuiEvents.length === 1);
+  workers[0].emit("event", { type: "approval_requested", requestId: "approval:test", requestType: "command", command: "npm test" });
+  await waitUntil(() => tuiEvents.some((entry) => entry.event?.type === "approval_requested"));
+  await tui.request("session.request", {
+    sessionKey: "chat:test",
+    type: "approval.respond",
+    payload: { requestId: "approval:test", decision: "acceptOnce" }
+  });
+  assert.deepEqual(workers[0].requests.at(-1), {
+    type: "approval.respond",
+    payload: { requestId: "approval:test", decision: "acceptOnce" }
+  }, "an attached surface should resolve a canonical approval while the prompt remains active");
+  await waitUntil(() => tuiEvents.some((entry) => entry.event?.type === "approval_resolved"));
   desktop.close();
   assert.equal(server.state().sessions[0].activeRequests, 1, "closing Desktop must not stop active work");
   workers[0].finishPrompt({ completed: true });
@@ -129,11 +147,13 @@ try {
   const reconnect = client("desktop:reconnect", "desktop", ["desktop-control"]);
   await reconnect.connect();
   const replay = await reconnect.attach({ project, cwd: project, session: "chat:test", localThreadId: "assistant-thread:reconnect", lastSequence: 0 });
-  assert.equal(replay.replay.length, 3, "reconnect must replay metadata, provider events, and durable turn completion");
+  assert.equal(replay.replay.length, 5, "reconnect must replay metadata, provider events, approvals, and durable turn completion");
   assert.equal(replay.replay[0].event.type, "session_metadata");
   assert.equal(replay.replay[1].event.message.content, "still working");
   assert.equal(replay.replay[1].requestContext.turnId, "turn:test");
-  assert.equal(replay.replay[2].event.type, "zyra_server_turn_completed");
+  assert.equal(replay.replay[2].event.type, "approval_requested");
+  assert.equal(replay.replay[3].event.type, "approval_resolved");
+  assert.equal(replay.replay[4].event.type, "zyra_server_turn_completed");
 
   const tuiRuntime = await createZyraTuiClientRuntime({
     project,

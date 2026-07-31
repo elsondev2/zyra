@@ -320,6 +320,7 @@ export interface DevScopeApi {
     // Projects + Git
     selectFolder: () => Promise<DevScopeResult<{ folderPath?: string; cancelled?: boolean }>>
     selectMarkdownFile: () => Promise<DevScopeResult<{ filePath?: string; cancelled?: boolean }>>
+    selectProjectIconFile: () => Promise<DevScopeResult<{ filePath?: string; cancelled?: boolean }>>
     getUserHomePath: () => Promise<DevScopeResult<{ path: string }>>
     scanProjects: (folderPath: string, options?: { forceRefresh?: boolean }) => Promise<DevScopeResult<{ projects: DevScopeProject[]; folders: DevScopeFolderItem[]; files: DevScopeFileItem[]; cached?: boolean; cachedAt?: number }>>
     openInExplorer: (path: string) => Promise<DevScopeResult>

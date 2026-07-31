@@ -70,6 +70,9 @@ export async function createZyraTuiClientRuntime(options = {}) {
   }
   const eventListeners = new Set();
   const fleetListeners = new Set();
+  const respondedApprovalRequestIds = new Set();
+  const resolvedApprovalRequestIds = new Set();
+  let approvalHandler = null;
   const activeTools = new Set(["read", "bash", "edit", "write", ...(preferences.webSearch ? ["web_search"] : []), ...(preferences.webFetch ? ["web_fetch"] : [])]);
   const steering = [];
   const followUp = [];
@@ -97,6 +100,25 @@ export async function createZyraTuiClientRuntime(options = {}) {
     if (event.type === "session_metadata") {
       currentSessionName = asString(event.title) || currentSessionName;
       currentProject = asString(event.cwd) || asString(event.project) || currentProject;
+    }
+    if (event.type === "approval_resolved") {
+      const requestId = asString(event.requestId);
+      if (requestId) resolvedApprovalRequestIds.add(requestId);
+    }
+    if (event.type === "approval_requested") {
+      const requestId = asString(event.requestId);
+      if (requestId && !respondedApprovalRequestIds.has(requestId)) {
+        respondedApprovalRequestIds.add(requestId);
+        void Promise.resolve().then(async () => {
+          if (resolvedApprovalRequestIds.has(requestId)) return;
+          let decision = "decline";
+          try {
+            decision = await approvalHandler?.(event) || "decline";
+          } catch {}
+          if (!['acceptOnce', 'acceptForSession', 'decline'].includes(decision)) decision = "decline";
+          await request("approval.respond", { requestId, decision }).catch(() => undefined);
+        });
+      }
     }
     updateMessages(state.messages, event);
     if (event.type === "fleet_snapshot" || String(event.type || "").startsWith("agent.") || String(event.type || "").startsWith("workflow.")) {
@@ -208,6 +230,7 @@ export async function createZyraTuiClientRuntime(options = {}) {
           model: `${currentModel.provider}/${currentModel.id}`,
           thinking: thinkingLevel,
           profile: runtime.profile,
+          runtimeMode: runtime.permissionMode,
           webSearch: runtime.webSearch,
           webFetch: runtime.webFetch,
           turnId
@@ -274,6 +297,7 @@ export async function createZyraTuiClientRuntime(options = {}) {
     theme: "dark",
     terminalTheme,
     profile: preferences.profile || "default",
+    permissionMode: options.permissionMode === "full-access" || preferences.profile === "yolo-fast" ? "full-access" : "approval-required",
     surface: "tui-client",
     projectMemory: [],
     memoryStartup: null,
@@ -317,7 +341,13 @@ export async function createZyraTuiClientRuntime(options = {}) {
       canonicalChatId,
       activeTurnId: () => activeTurnId,
       presence: () => currentPresence,
-      refreshPresence
+      refreshPresence,
+      setApprovalHandler(handler) {
+        approvalHandler = typeof handler === "function" ? handler : null;
+      },
+      respondApproval(requestId, decision) {
+        return request("approval.respond", { requestId, decision });
+      }
     }
   };
   return runtime;

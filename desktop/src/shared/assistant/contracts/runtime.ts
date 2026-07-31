@@ -30,7 +30,7 @@ export interface AssistantTurnUsage {
 }
 
 export type AssistantApprovalRequestType = 'command' | 'file-read' | 'file-change'
-export type AssistantApprovalDecision = 'acceptForSession' | 'decline'
+export type AssistantApprovalDecision = 'acceptOnce' | 'acceptForSession' | 'decline'
 
 export type AssistantPlanStepStatus = 'pending' | 'inProgress' | 'completed'
 

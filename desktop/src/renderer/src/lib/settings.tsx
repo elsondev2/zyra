@@ -142,6 +142,12 @@ export interface Settings {
     assistantDefaultFastMode: boolean
     assistantBusyMessageMode: AssistantBusyMessageMode
     assistantPlaygroundTerminalAccessDefault: boolean
+    assistantAutoReconnect: boolean
+    assistantHistoryPrefetch: boolean
+    assistantShowStatusDetails: boolean
+    assistantShowDiagnostics: boolean
+    accessibilityReduceMotion: boolean
+    projectIconOverrides: Record<string, string>
     assistantTranscriptionEnabled: boolean
     assistantTranscriptionEngine: AssistantTranscriptionEngine
 }
@@ -205,12 +211,27 @@ const DEFAULT_SETTINGS: Settings = {
     assistantDefaultFastMode: false,
     assistantBusyMessageMode: 'queue',
     assistantPlaygroundTerminalAccessDefault: false,
+    assistantAutoReconnect: true,
+    assistantHistoryPrefetch: true,
+    assistantShowStatusDetails: true,
+    assistantShowDiagnostics: false,
+    accessibilityReduceMotion: false,
+    projectIconOverrides: {},
     assistantTranscriptionEnabled: false,
     assistantTranscriptionEngine: 'browser'
 }
 
 const STORAGE_KEY = 'devscope-settings'
 const LEGACY_ASSISTANT_COMPOSER_PREFERENCES_STORAGE_KEY = 'devscope:assistant-composer-preferences'
+
+function sanitizeStringRecord(value: unknown): Record<string, string> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+    return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+            .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[0].trim().length > 0 && entry[1].trim().length > 0)
+            .map(([key, entryValue]) => [key, entryValue.trim()])
+    )
+}
 
 function sanitizePullRequestGuideConfig(value: unknown): PullRequestGuideConfig {
     const candidate = typeof value === 'object' && value !== null ? value as Partial<PullRequestGuideConfig> : {}
@@ -360,6 +381,12 @@ function loadSettings(): Settings {
                 assistantDefaultFastMode: !!candidate.assistantDefaultFastMode,
                 assistantBusyMessageMode: candidate.assistantBusyMessageMode === 'force' ? 'force' : 'queue',
                 assistantPlaygroundTerminalAccessDefault: candidate.assistantPlaygroundTerminalAccessDefault === true,
+                assistantAutoReconnect: candidate.assistantAutoReconnect !== false,
+                assistantHistoryPrefetch: candidate.assistantHistoryPrefetch !== false,
+                assistantShowStatusDetails: candidate.assistantShowStatusDetails !== false,
+                assistantShowDiagnostics: candidate.assistantShowDiagnostics === true,
+                accessibilityReduceMotion: candidate.accessibilityReduceMotion === true,
+                projectIconOverrides: sanitizeStringRecord(candidate.projectIconOverrides),
                 assistantTranscriptionEnabled: candidate.assistantTranscriptionEnabled === true,
                 assistantTranscriptionEngine: candidate.assistantTranscriptionEngine === 'vosk' ? 'vosk' : 'browser'
             }
@@ -408,6 +435,11 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
             document.body.classList.remove('compact-mode')
         }
     }, [settings.compactMode])
+
+    useEffect(() => {
+        document.body.classList.toggle('zyra-reduce-motion', settings.accessibilityReduceMotion)
+        return () => document.body.classList.remove('zyra-reduce-motion')
+    }, [settings.accessibilityReduceMotion])
 
     useEffect(() => {
         saveSettings(settings)

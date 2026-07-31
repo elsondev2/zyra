@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AssistantSession } from '@shared/assistant/contracts'
+import { useSettings } from '@/lib/settings'
 import type { AssistantToastInput } from './AssistantPageHelpers'
 import {
     ExpandedSessionsRailContent,
@@ -105,6 +106,7 @@ export function AssistantSessionsRail({
     onDeletePlaygroundLab,
     onShowToast
 }: AssistantSessionsRailViewProps) {
+    const { settings } = useSettings()
     const [renameTarget, setRenameTarget] = useState<AssistantSession | null>(null)
     const [renameDraft, setRenameDraft] = useState('')
     const [sessionToDelete, setSessionToDelete] = useState<AssistantSession | null>(null)
@@ -141,9 +143,9 @@ export function AssistantSessionsRail({
         [activeSessionId, activeSessions, railFilterMode]
     )
     const groupedSessions = useMemo(() => {
-        const groups = groupSessionsByProject(filteredActiveSessions)
+        const groups = groupSessionsByProject(filteredActiveSessions, settings.projectIconOverrides)
         return mergePlaygroundLabGroups(groups, playground.labs)
-    }, [filteredActiveSessions, playground.labs])
+    }, [filteredActiveSessions, playground.labs, settings.projectIconOverrides])
     const orderedProjectGroups = useMemo(
         () => orderAssistantSessionsGroups(groupedSessions, railOrder, railSortMode),
         [groupedSessions, railOrder, railSortMode]

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { AssistantProposedPlan, AssistantSession, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
+import type { AssistantApprovalDecision, AssistantProposedPlan, AssistantSession, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
 import { isAssistantSessionProjectLocked } from '@shared/assistant/session-project'
 import { useSettings } from '@/lib/settings'
 import { useAssistantConversationStore, useAssistantStoreActions, useAssistantStoreSelector } from '@/lib/assistant/store'
@@ -98,6 +98,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const showScrollToBottomRef = useRef(false)
     const scrollButtonRafRef = useRef<number | null>(null)
     const newChatHandoffUntilRef = useRef(0)
+    const prefetchedHistoryThreadIdsRef = useRef(new Set<string>())
 
     const isThreadWorking = isAssistantThreadActivelyWorking(controller.activeThread)
     const selectedSessionId = controller.selectedSession?.id || null
@@ -167,6 +168,20 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         }
         return next
     }, [sessionTurnUsage])
+
+    useEffect(() => {
+        const threadId = controller.activeThread?.id || null
+        if (
+            !settings.assistantHistoryPrefetch
+            || !threadId
+            || !controller.history?.pageInfo.hasOlder
+            || controller.history.loadingOlder
+            || prefetchedHistoryThreadIdsRef.current.has(threadId)
+        ) return
+
+        prefetchedHistoryThreadIdsRef.current.add(threadId)
+        void actions.loadOlderHistory(threadId)
+    }, [actions, controller.activeThread?.id, controller.history?.loadingOlder, controller.history?.pageInfo.hasOlder, settings.assistantHistoryPrefetch])
     const shouldShowWorkingIndicator = isThreadWorking
         && !controller.timelineMessages.some((message) => message.role === 'assistant' && message.streaming)
     const lastTimelineMessage = controller.timelineMessages[controller.timelineMessages.length - 1] || null
@@ -226,6 +241,9 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const showChatOnboardingOverlay = showPlaygroundRootOnboarding || showWorkProjectOnboarding || showPlaygroundDetachedOnboarding
     const gitRefreshToken = `${controller.selectedSession?.id || 'no-session'}:${controller.activeThread?.id || 'no-thread'}:${controller.activeThread?.latestTurn?.completedAt || controller.activeThread?.lastSeenCompletedTurnId || 'idle'}`
     const connectionBelongsToSelectedChat = Boolean(activeComposerSessionId) && isThreadConnecting && !selectedSessionUsesNewChatSurface
+    const effectivePendingApprovals = newChatHandoffActive
+        ? []
+        : controller.activeThread?.pendingApprovals.filter((approval) => approval.status === 'pending') || []
     const effectivePendingUserInputs = newChatHandoffActive ? [] : controller.pendingUserInputs
     const hasConversationContent = !newChatHandoffActive && Boolean(
         selectedThreadHasHistoricalContent
@@ -235,11 +253,13 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         || (!selectedSessionUsesNewChatSurface && isThreadWorking)
         || connectionBelongsToSelectedChat
         || isLoadingSelectedChat
+        || effectivePendingApprovals.length > 0
     )
     const centerComposer = Boolean(
         !showChatOnboardingOverlay
         && !hasConversationContent
         && !controller.selectedSession?.pendingLabRequest
+        && effectivePendingApprovals.length === 0
         && effectivePendingUserInputs.length === 0
     )
     const composerIsCentered = newChatHandoffActive || centerComposer
@@ -471,6 +491,10 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
 
     const handleRefreshModels = useCallback(() => {
         actions.refreshModels()
+    }, [actions])
+
+    const handleRespondApproval = useCallback(async (requestId: string, decision: AssistantApprovalDecision) => {
+        await actions.respondApproval(requestId, decision)
     }, [actions])
 
     const handleRespondUserInput = useCallback(async (requestId: string, answers: Record<string, string | string[]>) => {
@@ -711,7 +735,9 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         latestProjectLabel={latestProjectLabel}
                         selectedSessionTitle={selectedSessionTitle}
                         canonicalThreadId={controller.activeThread?.providerThreadId || controller.activeThread?.id || null}
-                        canonicalPresence={controller.activeThread?.canonicalPresence}
+                        canonicalPresence={settings.assistantShowStatusDetails || settings.assistantShowDiagnostics ? controller.activeThread?.canonicalPresence : null}
+                        showPresenceBadge={settings.assistantShowStatusDetails}
+                        showDiagnostics={settings.assistantShowDiagnostics}
                         selectedSessionMode={selectedSessionMode}
                         zyraProfile={activeZyraProfile}
                         activeThreadIsSubagent={activeThreadIsSubagent}
@@ -798,6 +824,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         placement={composerIsCentered ? 'center' : 'bottom'}
                         newChatPrompt={composerIsCentered ? emptyComposerPrompt : null}
                         pendingPlaygroundLabRequest={null}
+                        pendingApprovals={effectivePendingApprovals}
                         pendingUserInputs={effectivePendingUserInputs}
                         commandPending={!newChatHandoffActive && controller.commandPending}
                         composerDisabled={newChatHandoffActive}
@@ -834,6 +861,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         onAttachmentShelfBoundsChange={handleAttachmentShelfBoundsChange}
                         sendPrompt={newChatHandoffActive ? async () => false : handleSendPrompt}
                         refreshModels={handleRefreshModels}
+                        respondApproval={handleRespondApproval}
                         respondUserInput={handleRespondUserInput}
                         setPlaygroundTerminalAccess={props.onPlaygroundTerminalAccessChange}
                         setPlaygroundTerminalAccessRequestMuted={props.onPlaygroundTerminalAccessRequestMutedChange}

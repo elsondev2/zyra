@@ -232,9 +232,14 @@ export function readAssistantHistoryPage(db: SqlDatabase, input: AssistantGetHis
 
     if (boundaryRows.length === 0) return readLegacyFallbackPage(db, threadId, upper, turnLimit)
 
-    let selectedBoundary = boundaryRows[0]!
-    let selectedTurnCount = 1
-    for (let index = 0; index < boundaryRows.length; index += 1) {
+    // Range size grows monotonically as the boundary moves toward older turns.
+    // Binary search keeps initial hydration bounded to O(log turnLimit) aggregate
+    // checks instead of issuing three COUNT/SUM queries for every candidate turn.
+    let selectedBoundaryIndex = 0
+    let low = 0
+    let high = boundaryRows.length - 1
+    while (low <= high) {
+        const index = Math.floor((low + high) / 2)
         const candidateBoundary = boundaryRows[index]!
         const candidateLower: AssistantTimelineOrderKey = {
             id: String(candidateBoundary[0] || ''),
@@ -243,12 +248,19 @@ export function readAssistantHistoryPage(db: SqlDatabase, input: AssistantGetHis
             kindRank: ASSISTANT_TIMELINE_KIND_RANK.message
         }
         const size = readHistoryRangeSize(db, threadId, candidateLower, upper)
-        const withinBudget = size.records <= ASSISTANT_HISTORY_PAGE_MAX_RECORDS
+        const withinBudget = index === 0 || (
+            size.records <= ASSISTANT_HISTORY_PAGE_MAX_RECORDS
             && size.characters <= ASSISTANT_HISTORY_PAGE_MAX_CHARACTERS
-        if (index > 0 && !withinBudget) break
-        selectedBoundary = candidateBoundary
-        selectedTurnCount = index + 1
+        )
+        if (withinBudget) {
+            selectedBoundaryIndex = index
+            low = index + 1
+        } else {
+            high = index - 1
+        }
     }
+    const selectedBoundary = boundaryRows[selectedBoundaryIndex]!
+    const selectedTurnCount = selectedBoundaryIndex + 1
 
     const lower: AssistantTimelineOrderKey = {
         id: String(selectedBoundary[0] || ''),

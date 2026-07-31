@@ -15,6 +15,8 @@ let unsubscribe;
 let unsubscribeManagedBash;
 let unsubscribeFleet;
 let temporaryBrowserRelay;
+let activePermissionMode = "approval-required";
+const pendingPermissionRequests = new Map();
 const controlBridgeClient = new AgentControlBridgeClient({ send: (message) => send(message) });
 
 function stringifyProtocol(value) {
@@ -27,6 +29,47 @@ function send(message) {
 
 function sendResponse(id, ok, payload = {}) {
   send({ type: "response", id, ok, ...payload });
+}
+
+function requestToolPermission(request = {}) {
+  if (activePermissionMode === "full-access") return Promise.resolve("acceptOnce");
+  const requestId = randomUUID();
+  send({
+    type: "event",
+    event: {
+      type: "approval_requested",
+      requestId,
+      requestType: request.requestType || "command",
+      title: request.title,
+      detail: request.detail,
+      command: request.command,
+      paths: request.paths,
+      toolName: request.toolName,
+      grantLabel: request.grantLabel,
+    },
+  });
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolvePermissionRequest(requestId, "decline", "Approval timed out."), 10 * 60 * 1000);
+    timer.unref?.();
+    pendingPermissionRequests.set(requestId, { resolve, timer });
+  });
+}
+
+function resolvePermissionRequest(requestId, decision, reason) {
+  const pending = pendingPermissionRequests.get(String(requestId || ""));
+  if (!pending) return false;
+  pendingPermissionRequests.delete(String(requestId));
+  clearTimeout(pending.timer);
+  const normalizedDecision = ["acceptOnce", "acceptForSession", "decline"].includes(decision) ? decision : "decline";
+  send({ type: "event", event: { type: "approval_resolved", requestId: String(requestId), decision: normalizedDecision, reason } });
+  pending.resolve(normalizedDecision);
+  return true;
+}
+
+function declinePendingPermissions(reason = "Zyra bridge disconnected.") {
+  for (const requestId of [...pendingPermissionRequests.keys()]) {
+    resolvePermissionRequest(requestId, "decline", reason);
+  }
 }
 
 function stopTemporaryBrowserRelay() {
@@ -51,6 +94,7 @@ async function loadSdk() {
 }
 
 function disposeRuntime() {
+  declinePendingPermissions();
   stopTemporaryBrowserRelay();
   if (typeof unsubscribe === "function") {
     unsubscribe();
@@ -90,6 +134,8 @@ async function handleConnect(payload) {
     skipModelAvailability: true,
     rootThreadId: payload.localThreadId || undefined,
     controlBridgeClient,
+    permissionRequest: requestToolPermission,
+    getPermissionMode: () => activePermissionMode,
     ...overrides,
   });
   try {
@@ -344,6 +390,7 @@ async function handlePrompt(payload) {
     throw new Error("Zyra bridge is not connected.");
   }
   const sdk = await loadSdk();
+  activePermissionMode = payload.runtimeMode === "full-access" ? "full-access" : "approval-required";
   const shouldGenerateTitle = !runtime.session.sessionManager?.getSessionName?.();
   if (payload.model) {
     await sdk.setModel(runtime, payload.model);
@@ -602,6 +649,14 @@ async function handleMessage(message) {
     }
     if (message?.type === "abort") {
       sendResponse(id, true, { result: await handleAbort() });
+      return;
+    }
+    if (message?.type === "approval.respond") {
+      const requestId = String(message.payload?.requestId || "");
+      if (!resolvePermissionRequest(requestId, message.payload?.decision)) {
+        throw new Error(`Unknown approval request: ${requestId || "missing"}`);
+      }
+      sendResponse(id, true, { result: {} });
       return;
     }
     if (["steer", "follow_up", "compact", "clear_queue", "reload"].includes(message?.type)) {

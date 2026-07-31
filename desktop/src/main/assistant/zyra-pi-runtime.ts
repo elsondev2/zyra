@@ -1206,8 +1206,10 @@ export class ZyraPiRuntime extends EventEmitter {
         return
     }
 
-    async respondApproval(_threadId: string, _requestId: string, _decision: AssistantApprovalDecision): Promise<void> {
-        return
+    async respondApproval(threadId: string, requestId: string, decision: AssistantApprovalDecision): Promise<void> {
+        const context = this.requireSession(threadId)
+        await this.ensureConnected(context)
+        await context.worker.request('approval.respond', { requestId, decision })
     }
 
     async respondUserInput(_threadId: string, _requestId: string, _answers: Record<string, string | string[]>): Promise<void> {
@@ -1334,6 +1336,7 @@ export class ZyraPiRuntime extends EventEmitter {
                 model: context.model,
                 thinking: context.thinking,
                 profile: context.profile,
+                runtimeMode: context.runtimeMode,
                 images: options?.images
             })
             if (context.activeTurnId !== turnId) return
@@ -1424,7 +1427,8 @@ export class ZyraPiRuntime extends EventEmitter {
                 noSession: false,
                 model: context.model,
                 thinking: context.thinking,
-                profile: context.profile
+                profile: context.profile,
+                runtimeMode: context.runtimeMode
             })
             const previousProviderThreadId = context.providerThreadId
             const providerThreadId = String(result['threadId'] || result['providerThreadId'] || context.resumeProviderThreadId || context.providerThreadId || randomUUID())
@@ -1561,6 +1565,51 @@ export class ZyraPiRuntime extends EventEmitter {
 
         if (type === 'managed_bash_job_update') {
             this.emitManagedBashJobUpdate(context, event, turnId)
+            return
+        }
+
+        if (type === 'approval_requested') {
+            const requestId = asString(event['requestId'])
+            if (!requestId) return
+            const requestTypeValue = asString(event['requestType'])
+            const requestType = requestTypeValue === 'file-read' || requestTypeValue === 'file-change' ? requestTypeValue : 'command'
+            const paths = Array.isArray(event['paths'])
+                ? event['paths'].map((entry) => asString(entry)).filter((entry): entry is string => Boolean(entry))
+                : undefined
+            this.emitRuntime({
+                eventId: randomUUID(),
+                type: 'approval.requested',
+                createdAt: nowIso(),
+                threadId: context.localThreadId,
+                providerThreadId: context.providerThreadId,
+                turnId: turnId || undefined,
+                requestId,
+                payload: {
+                    requestType,
+                    title: asString(event['title']) || undefined,
+                    detail: asString(event['detail']) || undefined,
+                    command: asString(event['command']) || undefined,
+                    paths
+                }
+            })
+            return
+        }
+
+        if (type === 'approval_resolved') {
+            const requestId = asString(event['requestId'])
+            if (!requestId) return
+            const rawDecision = asString(event['decision'])
+            const decision: AssistantApprovalDecision = rawDecision === 'acceptOnce' || rawDecision === 'acceptForSession' ? rawDecision : 'decline'
+            this.emitRuntime({
+                eventId: randomUUID(),
+                type: 'approval.resolved',
+                createdAt: nowIso(),
+                threadId: context.localThreadId,
+                providerThreadId: context.providerThreadId,
+                turnId: turnId || undefined,
+                requestId,
+                payload: { decision }
+            })
             return
         }
 

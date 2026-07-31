@@ -263,6 +263,7 @@ async function main() {
   };
 
   const subscribeRuntimeEvents = (runtime, handler = (event) => ui.event(event)) => {
+    runtime.agentServer?.setApprovalHandler?.((request) => ui.requestApproval?.(request) || "decline");
     const forward = (event) => {
       handler(event);
       terminalTitle.fromEvent(event, runtime);
@@ -422,6 +423,7 @@ async function main() {
     ui = createZyraUi({ openingTheme: runtime.theme, terminalTheme: runtime.terminalTheme });
 
     if (parsed.printMode) {
+      runtime.agentServer?.setApprovalHandler?.((request) => ui.requestApproval?.(request) || "decline");
       if (runtime.modelFallbackMessage) {
         console.error(runtime.modelFallbackMessage);
       }

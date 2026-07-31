@@ -53,6 +53,31 @@ export async function handleSelectMarkdownFile(event: Electron.IpcMainInvokeEven
     }
 }
 
+export async function handleSelectProjectIconFile(event: Electron.IpcMainInvokeEvent) {
+    log.info('IPC: selectProjectIconFile')
+
+    try {
+        const win = BrowserWindow.fromWebContents(event.sender)
+        const result = await dialog.showOpenDialog(win!, {
+            title: 'Select Project Icon',
+            properties: ['openFile'],
+            filters: [
+                { name: 'Project icons', extensions: ['png', 'jpg', 'jpeg', 'webp', 'svg', 'ico'] },
+                { name: 'All Files', extensions: ['*'] }
+            ]
+        })
+
+        if (result.canceled || result.filePaths.length === 0) {
+            return { success: false, cancelled: true }
+        }
+
+        return { success: true, filePath: result.filePaths[0] }
+    } catch (err: any) {
+        log.error('Failed to select project icon:', err)
+        return { success: false, error: err.message }
+    }
+}
+
 export async function handleGetUserHomePath() {
     log.info('IPC: getUserHomePath')
 

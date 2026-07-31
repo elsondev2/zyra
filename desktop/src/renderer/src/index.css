@@ -32,6 +32,15 @@
   }
 }
 
+body.zyra-reduce-motion *,
+body.zyra-reduce-motion *::before,
+body.zyra-reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 0.01ms !important;
+}
+
 /* ============================================================================
    Custom Scrollbar
    ============================================================================ */

@@ -863,6 +863,7 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
         generateCommitMessage: () => unavailable('Commit message generation requires the Zyra desktop bridge.'),
         selectFolder: () => ok({ cancelled: true }),
         selectMarkdownFile: () => ok({ cancelled: true }),
+        selectProjectIconFile: () => ok({ cancelled: true }),
         getUserHomePath: () => ok({ path: '' }),
         scanProjects: () => ok({ projects: [], folders: [], files: [], cached: false }),
         indexAllFolders: () => ok({ indexed: 0 }),

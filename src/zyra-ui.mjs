@@ -4,6 +4,7 @@ import os from "node:os";
 import { ZyraComponentHost } from "./tui/component-host.mjs";
 import { selectInterruptMode as selectInterruptModePicker } from "./interrupt-mode-picker.mjs";
 import {
+  createChoiceDialog,
   createCodexResetConfirmationDialog,
   createCodexResetSelectionDialog,
 } from "./codex-reset-picker.mjs";
@@ -712,6 +713,24 @@ export function createZyraUi(options = {}) {
         host.markContentDirty();
         host.invalidate({ force: true });
       }
+    },
+    async requestApproval(request = {}) {
+      if (!inputActive) return "decline";
+      const command = String(request.command || request.detail || "").replace(/\s+/g, " ").trim();
+      const subject = command ? command.slice(0, 180) : String(request.title || "A tool needs approval.");
+      const dialog = createChoiceDialog({
+        title: String(request.title || "Tool approval"),
+        subtitle: subject,
+        subtitleTone: "warning",
+        items: [
+          { value: "decline", label: "Deny", description: "Block this tool call" },
+          { value: "acceptOnce", label: "Allow once", description: "Run only this tool call" },
+          { value: "acceptForSession", label: "Allow for chat", description: String(request.grantLabel || "Grant this bounded tool scope until the chat closes") },
+        ],
+        initialIndex: 0,
+        help: "↑↓ navigate • enter choose • esc deny",
+      }, { theme });
+      return (await runZyraInputDialog(host, dialog)) || "decline";
     },
     async selectCodexResetCredit(credits) {
       if (!inputActive) return null;

@@ -10,6 +10,14 @@ import LinkHoverStatus from './components/ui/LinkHoverStatus'
 const Assistant = lazy(() => import('./pages/Assistant'))
 const InstructorVoiceLab = lazy(() => import('./pages/assistant/InstructorVoiceLab'))
 const Settings = lazy(() => import('./pages/Settings'))
+const AssistantExperienceSettings = lazy(() => import('./pages/settings/AssistantExperienceSettings'))
+const AssistantAccountSettings = lazy(() => import('./pages/settings/AssistantAccountSettings'))
+const AppearanceSettings = lazy(() => import('./pages/settings/AppearanceSettings'))
+const ProjectsSettings = lazy(() => import('./pages/settings/ProjectsSettings'))
+const BehaviorSettings = lazy(() => import('./pages/settings/BehaviorSettings'))
+const ArchivedChatsSettings = lazy(() => import('./pages/settings/ArchivedChatsSettings'))
+const LogsSettings = lazy(() => import('./pages/settings/LogsSettings'))
+const AboutSettings = lazy(() => import('./pages/settings/AboutSettings'))
 
 interface TerminalContextType {
     isOpen: boolean
@@ -55,6 +63,14 @@ function MainContent() {
                     <Route path="/assistant/instructor" element={<InstructorVoiceLab />} />
                     <Route path="/assistant/*" element={<Assistant />} />
                     <Route path="/settings" element={<Settings />} />
+                    <Route path="/settings/chat" element={<AssistantExperienceSettings />} />
+                    <Route path="/settings/assistant" element={<AssistantAccountSettings />} />
+                    <Route path="/settings/appearance" element={<AppearanceSettings />} />
+                    <Route path="/settings/projects" element={<ProjectsSettings />} />
+                    <Route path="/settings/behavior" element={<BehaviorSettings />} />
+                    <Route path="/settings/archived" element={<ArchivedChatsSettings />} />
+                    <Route path="/settings/logs" element={<LogsSettings />} />
+                    <Route path="/settings/about" element={<AboutSettings />} />
                     <Route path="/settings/*" element={<Settings />} />
 
                     <Route path="/home" element={<Navigate to="/assistant" replace />} />

@@ -5,11 +5,13 @@ import {
     CheckCircle,
     Folder,
     FolderOpen,
+    Image,
     LoaderCircle,
     Plus,
     RefreshCw,
     X
 } from 'lucide-react'
+import ProjectIcon from '@/components/ui/ProjectIcon'
 import { useSettings } from '@/lib/settings'
 import { cn } from '@/lib/utils'
 
@@ -69,6 +71,29 @@ export default function ProjectsSettings() {
             additionalFolders: (settings.additionalFolders || []).filter((folder) => folder !== folderPath)
         })
         setIndexResult(null)
+    }
+
+    const handleAddProjectIconOverride = async () => {
+        try {
+            const folderResult = await window.devscope.selectFolder()
+            if (!folderResult.success || !folderResult.folderPath) return
+            const iconResult = await window.devscope.selectProjectIconFile()
+            if (!iconResult.success || !iconResult.filePath) return
+            updateSettings({
+                projectIconOverrides: {
+                    ...settings.projectIconOverrides,
+                    [folderResult.folderPath]: iconResult.filePath
+                }
+            })
+        } catch (err) {
+            console.error('Failed to choose project icon:', err)
+        }
+    }
+
+    const handleRemoveProjectIconOverride = (projectPath: string) => {
+        const next = { ...settings.projectIconOverrides }
+        delete next[projectPath]
+        updateSettings({ projectIconOverrides: next })
     }
 
     const handleRebuildIndex = async () => {
@@ -240,6 +265,45 @@ export default function ProjectsSettings() {
                             )}
                         </div>
                     ) : null}
+                </section>
+
+                <section className="rounded-xl border border-white/10 bg-sparkle-card p-6 xl:col-span-2">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                            <h2 className="font-semibold text-sparkle-text">Project icon overrides</h2>
+                            <p className="mt-1 max-w-2xl text-sm text-sparkle-text-secondary">
+                                Automatic detection checks declared app icons, manifests, favicons, and bounded workspace roots. Add an override when the detected asset is not the one you want.
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => { void handleAddProjectIconOverride() }}
+                            className="inline-flex items-center gap-2 rounded-xl border border-[var(--accent-primary)]/25 bg-[var(--accent-primary)]/10 px-4 py-2.5 text-sm font-medium text-[var(--accent-primary)] transition-colors hover:bg-[var(--accent-primary)]/15"
+                        >
+                            <Image size={15} /> Choose project and icon
+                        </button>
+                    </div>
+
+                    {Object.entries(settings.projectIconOverrides).length > 0 ? (
+                        <div className="mt-5 grid gap-3 lg:grid-cols-2">
+                            {Object.entries(settings.projectIconOverrides).map(([projectPath, iconPath]) => (
+                                <div key={projectPath} className="flex items-center gap-3 rounded-xl border border-white/[0.08] bg-white/[0.025] p-3">
+                                    <ProjectIcon customIconPath={iconPath} projectType="unknown" size={34} className="shrink-0 overflow-hidden rounded-lg" />
+                                    <div className="min-w-0 flex-1">
+                                        <p className="truncate text-sm font-medium text-sparkle-text" title={projectPath}>{projectPath}</p>
+                                        <p className="mt-0.5 truncate font-mono text-[10px] text-sparkle-text-muted" title={iconPath}>{iconPath}</p>
+                                    </div>
+                                    <button type="button" onClick={() => handleRemoveProjectIconOverride(projectPath)} className="rounded-lg border border-white/10 bg-black/10 p-2 text-sparkle-text-muted transition-colors hover:border-red-400/20 hover:bg-red-500/10 hover:text-red-200" title="Remove icon override">
+                                        <X size={14} />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="mt-5 rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-5 text-center text-sm text-sparkle-text-muted">
+                            No manual overrides. Detected project icons remain active.
+                        </div>
+                    )}
                 </section>
             </div>
         </div>

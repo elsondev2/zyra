@@ -22,7 +22,7 @@ const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const HANDSHAKE_TIMEOUT_MS = 5_000;
 const BRIDGE_CONNECT_TIMEOUT_MS = 120_000;
 const ACTIVE_FLEET_STATUSES = new Set(["queued", "starting", "running", "waiting", "paused", "recovering"]);
-const BRIDGE_REQUEST_PATTERN = /^(?:prompt|abort|steer|follow_up|compact|clear_queue|reload|agents\.[a-zA-Z0-9._-]+|workflows\.[a-zA-Z0-9._-]+)$/;
+const BRIDGE_REQUEST_PATTERN = /^(?:prompt|abort|steer|follow_up|compact|clear_queue|reload|approval\.respond|agents\.[a-zA-Z0-9._-]+|workflows\.[a-zA-Z0-9._-]+)$/;
 
 function hashAuthorityProof(value) {
   return createHash("sha256").update(String(value || "")).digest("base64url");

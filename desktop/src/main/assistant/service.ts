@@ -71,6 +71,7 @@ import {
     buildStreamingToolActivity,
     handleAssistantRuntimeEvent
 } from './service-runtime-events'
+import { resolveCanonicalPresenceThreadState } from './service-canonical-presence'
 import {
     type AssistantStateRecord,
     createAssistantThread,
@@ -416,7 +417,7 @@ export class AssistantService {
         return interruptAssistantTurnAction(this.actionDeps, turnId, sessionId)
     }
 
-    async respondApproval(input: { requestId: string; decision: 'acceptForSession' | 'decline' }) {
+    async respondApproval(input: { requestId: string; decision: 'acceptOnce' | 'acceptForSession' | 'decline' }) {
         return respondAssistantApprovalAction(this.actionDeps, input)
     }
 
@@ -521,11 +522,17 @@ export class AssistantService {
                 const nextMessageCount = Math.max(existing.thread.messageCount, messageCount)
                 const nextActivityCount = Math.max(existing.thread.activityCount, activityCount)
                 const presenceChanged = JSON.stringify(existing.thread.canonicalPresence || null) !== JSON.stringify(chat.presence || null)
+                const nextThreadState = resolveCanonicalPresenceThreadState({
+                    currentState: existing.thread.state,
+                    previousPresence: existing.thread.canonicalPresence,
+                    presence: chat.presence
+                })
                 if (
                     existing.thread.providerThreadId !== chat.canonicalChatId
                     || (nextCwd && existing.thread.cwd !== nextCwd)
                     || existing.thread.messageCount !== nextMessageCount
                     || existing.thread.activityCount !== nextActivityCount
+                    || existing.thread.state !== nextThreadState
                     || presenceChanged
                 ) {
                     this.appendEvent('thread.updated', updatedAt, {
@@ -536,15 +543,7 @@ export class AssistantService {
                             messageCount: nextMessageCount,
                             activityCount: nextActivityCount,
                             canonicalPresence: chat.presence,
-                            ...(!this.runtime.hasSession(chat.canonicalChatId)
-                                ? chat.presence?.state === 'running'
-                                    ? { state: 'running' as const }
-                                    : chat.presence?.state === 'background'
-                                        ? { state: 'waiting' as const }
-                                        : existing.thread.canonicalPresence?.state === 'running' || existing.thread.canonicalPresence?.state === 'background'
-                                            ? { state: 'ready' as const }
-                                            : {}
-                                : {}),
+                            state: nextThreadState,
                             updatedAt
                         }
                     }, existing.session.id, existing.thread.id)

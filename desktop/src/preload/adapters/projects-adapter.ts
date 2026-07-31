@@ -14,6 +14,7 @@ export function createProjectsAdapter() {
     return {
         selectFolder: () => ipcRenderer.invoke('devscope:selectFolder'),
         selectMarkdownFile: () => ipcRenderer.invoke('devscope:selectMarkdownFile'),
+        selectProjectIconFile: () => ipcRenderer.invoke('devscope:selectProjectIconFile'),
         getUserHomePath: () => ipcRenderer.invoke('devscope:getUserHomePath'),
         listInstalledPackageRuntimes: () => ipcRenderer.invoke('devscope:listInstalledPackageRuntimes'),
         scanProjects: (folderPath: string, options?: { forceRefresh?: boolean }) =>

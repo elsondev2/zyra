@@ -599,7 +599,7 @@ export async function interruptAssistantTurnAction(
 
 export async function respondAssistantApprovalAction(
     deps: AssistantServiceActionDeps,
-    input: { requestId: string; decision: 'acceptForSession' | 'decline' }
+    input: { requestId: string; decision: 'acceptOnce' | 'acceptForSession' | 'decline' }
 ) {
     await deps.ensureReady()
     const target = findThreadForApproval(deps.getSnapshot(), input.requestId)

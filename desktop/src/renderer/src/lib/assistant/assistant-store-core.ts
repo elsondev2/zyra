@@ -25,6 +25,7 @@ import { collapseAssistantDeltaEvents, isAssistantStreamingPresentationEvent } f
 import { assistantStreamPresentation } from './assistant-stream-presentation'
 import { applyCachedSessionSelection, cacheHydratedThreads, hasCachedSessionSelection, type CachedHydratedThreadState } from './session-hydration-cache'
 import { deriveAssistantRuntimeStatus, INITIAL_ASSISTANT_RUNTIME_STATUS, type AssistantStoreState } from './assistant-store-runtime'
+import { shouldAutoReconnectAssistantOnStartup } from './assistant-runtime-preferences'
 import { runAssistantStoreAction } from './assistant-store-action-runner'
 import { selectAssistantStoreSession } from './assistant-store-session-selection'
 import {
@@ -154,6 +155,7 @@ class AssistantStore {
                     && selectedSession?.activeThreadId
                     && bootstrap.status.available
                     && !bootstrap.status.connected
+                    && shouldAutoReconnectAssistantOnStartup()
                 )
 
                 if (shouldRestoreConnection && selectedSessionId) {

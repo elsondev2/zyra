@@ -5,7 +5,10 @@ import type {
     AssistantThread
 } from '../src/shared/assistant/contracts'
 import { deriveAssistantRuntimeStatus } from '../src/renderer/src/lib/assistant/assistant-store-runtime'
+import { shouldAutoReconnectAssistantOnStartup } from '../src/renderer/src/lib/assistant/assistant-runtime-preferences'
+import { getAssistantThreadPhase } from '../src/renderer/src/lib/assistant/selectors'
 import { shouldAutoReconnectAssistantThread } from '../src/renderer/src/pages/assistant/assistant-connection-recovery-policy'
+import { resolveCanonicalPresenceThreadState } from '../src/main/assistant/service-canonical-presence'
 
 const now = '2026-07-10T08:00:00.000Z'
 const sessionId = 'startup-session'
@@ -133,10 +136,53 @@ assert.equal(
     true,
     'a dropped live runtime should reconnect when its persisted thread is ready'
 )
+assert.equal(shouldAutoReconnectAssistantOnStartup(), true, 'startup reconnect should remain enabled by default')
+;(globalThis as any).window.localStorage = {
+    getItem: () => JSON.stringify({ assistantAutoReconnect: false })
+}
+assert.equal(shouldAutoReconnectAssistantOnStartup(), false, 'the persisted connection setting should disable startup reconnect')
+
 assert.equal(
     shouldAutoReconnectAssistantThread({ threadState: 'stopped', hasRecoverableIssue: false }),
     false,
     'an intentional in-session disconnect should remain stopped'
+)
+
+const readyPresence = {
+    state: 'ready' as const,
+    activeTurnId: null,
+    clients: [{ clientId: 'desktop:test', surface: 'desktop' }],
+    backgroundWorkActive: false
+}
+assert.equal(
+    resolveCanonicalPresenceThreadState({ currentState: 'starting', presence: readyPresence }),
+    'ready',
+    'canonical ready presence should clear a stale Desktop starting state even when the runtime object still exists'
+)
+assert.equal(
+    getAssistantThreadPhase({ ...thread, state: 'starting', canonicalPresence: readyPresence }).key,
+    'ready',
+    'the renderer should trust canonical ready presence instead of showing Connecting forever'
+)
+assert.equal(
+    getAssistantThreadPhase({
+        ...thread,
+        state: 'running',
+        latestTurn: {
+            id: 'stale-turn',
+            state: 'running',
+            requestedAt: now,
+            startedAt: now,
+            completedAt: null,
+            model: thread.model,
+            interactionMode: 'default',
+            usage: null,
+            updatedAt: now
+        },
+        canonicalPresence: { ...readyPresence, state: 'detached', clients: [] }
+    }).key,
+    'stale',
+    'a detached canonical worker must not be presented as live work'
 )
 
 console.log('Assistant startup connection: ok')

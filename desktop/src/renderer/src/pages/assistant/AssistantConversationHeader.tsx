@@ -17,7 +17,10 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
     canonicalPresence?: {
         state: 'detached' | 'ready' | 'running' | 'background'
         clients: Array<{ clientId: string; surface: string }>
+        latestSequence?: number
     } | null
+    showPresenceBadge?: boolean
+    showDiagnostics?: boolean
     selectedSessionMode: 'work' | 'playground'
     zyraProfile: 'default' | 'builder'
     activeThreadIsSubagent: boolean
@@ -45,6 +48,8 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
         selectedSessionTitle,
         canonicalThreadId,
         canonicalPresence,
+        showPresenceBadge = true,
+        showDiagnostics = false,
         latestProjectLabel,
         selectedProjectPath,
         selectedProjectTooltip,
@@ -68,8 +73,13 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
     const remoteSurfaces = [...new Set((canonicalPresence?.clients || [])
         .map((client) => client.surface.trim().toLowerCase())
         .filter((surface) => surface && surface !== 'desktop'))]
-    const remotePresenceLabel = remoteSurfaces.length > 0
+    const remotePresenceLabel = showPresenceBadge && remoteSurfaces.length > 0
         ? `${canonicalPresence?.state === 'running' ? 'Running' : canonicalPresence?.state === 'background' ? 'Background work' : 'Open'} in ${remoteSurfaces.map((surface) => surface === 'tui' ? 'TUI' : surface).join(' + ')}`
+        : null
+    const diagnosticsLabel = showDiagnostics
+        ? canonicalPresence
+            ? `${canonicalPresence.state}${typeof canonicalPresence.latestSequence === 'number' ? ` · seq ${canonicalPresence.latestSequence}` : ''}`
+            : 'presence unavailable'
         : null
     const headerMenuItems: FileActionsMenuItem[] = [
         {
@@ -184,6 +194,15 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
                     >
                         <Radio size={10} />
                         <span className="truncate">{remotePresenceLabel}</span>
+                    </span>
+                ) : null}
+                {diagnosticsLabel ? (
+                    <span
+                        className="inline-flex max-w-[180px] shrink-0 items-center gap-1 rounded-full border border-white/[0.08] bg-white/[0.025] px-2 py-0.5 font-mono text-[9px] leading-none text-sparkle-text-muted"
+                        title="Canonical worker presence and replay sequence"
+                    >
+                        <Radio size={9} />
+                        <span className="truncate">{diagnosticsLabel}</span>
                     </span>
                 ) : null}
             </div>

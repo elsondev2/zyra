@@ -1,8 +1,9 @@
 import { memo, useCallback, type RefObject, type WheelEvent as ReactWheelEvent } from 'react'
-import type { AssistantPendingUserInput, AssistantPlaygroundPendingLabRequest, AssistantTurnUsage } from '@shared/assistant/contracts'
+import type { AssistantApprovalDecision, AssistantPendingApproval, AssistantPendingUserInput, AssistantPlaygroundPendingLabRequest, AssistantTurnUsage } from '@shared/assistant/contracts'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import { cn } from '@/lib/utils'
 import { AssistantComposer } from './AssistantComposer'
+import { AssistantPendingApprovalPanel } from './AssistantPendingApprovalPanel'
 import { AssistantPendingPlaygroundLabPanel } from './AssistantPendingPlaygroundLabPanel'
 import { AssistantPendingTerminalAccessModal, getPendingTerminalAccessRequest } from './AssistantPendingTerminalAccessModal'
 import { AssistantPendingUserInputPanel } from './AssistantPendingUserInputPanel'
@@ -15,6 +16,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
     paneRef?: RefObject<HTMLDivElement | null>
     newChatPrompt?: string | null
     pendingPlaygroundLabRequest: AssistantPlaygroundPendingLabRequest | null
+    pendingApprovals: AssistantPendingApproval[]
     pendingUserInputs: AssistantPendingUserInput[]
     commandPending: boolean
     composerDisabled?: boolean
@@ -59,6 +61,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
         options: AssistantComposerSendOptions
     ) => Promise<boolean>
     refreshModels: () => void
+    respondApproval: (requestId: string, decision: AssistantApprovalDecision) => Promise<void>
     respondUserInput: (requestId: string, answers: Record<string, string | string[]>) => Promise<void>
     setPlaygroundTerminalAccess: (enabled: boolean) => void
     setPlaygroundTerminalAccessRequestMuted: (muted: boolean) => void
@@ -67,6 +70,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
 }) {
     const placement = props.placement || 'bottom'
     const hasPendingPlaygroundLabRequest = Boolean(props.pendingPlaygroundLabRequest)
+    const isWaitingForApproval = props.pendingApprovals.length > 0
     const pendingTerminalAccessRequest = getPendingTerminalAccessRequest(props.pendingUserInputs)
     const visiblePendingUserInputs = pendingTerminalAccessRequest
         ? props.pendingUserInputs.filter((request) => request.requestId !== pendingTerminalAccessRequest.requestId)
@@ -80,7 +84,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
         projectPath: props.selectedProjectPath
     })
     const handlePaneWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
-        if (!props.onOverflowWheel || event.deltaY === 0 || isWaitingForUserInput || hasPendingPlaygroundLabRequest) return
+        if (!props.onOverflowWheel || event.deltaY === 0 || isWaitingForApproval || isWaitingForUserInput || hasPendingPlaygroundLabRequest) return
         if (event.target instanceof Element && event.target.closest('[data-assistant-composer-hitbox="true"]')) return
 
         const lineHeight = Number.parseFloat(window.getComputedStyle(event.currentTarget).lineHeight || '0') || 20
@@ -88,7 +92,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
         const deltaFactor = event.deltaMode === 1 ? lineHeight : event.deltaMode === 2 ? pageHeight : 1
         event.preventDefault()
         props.onOverflowWheel(event.deltaY * deltaFactor)
-    }, [hasPendingPlaygroundLabRequest, isWaitingForUserInput, props.onOverflowWheel])
+    }, [hasPendingPlaygroundLabRequest, isWaitingForApproval, isWaitingForUserInput, props.onOverflowWheel])
 
     return (
         <div
@@ -102,7 +106,14 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
             style={placement === 'bottom' ? { paddingTop: ASSISTANT_COMPOSER_OVERLAY_TOP_PADDING_PX } : undefined}
             onWheel={handlePaneWheel}
         >
-            {isWaitingForUserInput ? (
+            {isWaitingForApproval ? (
+                <AssistantPendingApprovalPanel
+                    pendingApprovals={props.pendingApprovals}
+                    responding={props.commandPending}
+                    onRespond={props.respondApproval}
+                />
+            ) : null}
+            {!isWaitingForApproval && isWaitingForUserInput ? (
                 <AssistantPendingUserInputPanel
                     pendingUserInputs={visiblePendingUserInputs}
                     responding={props.commandPending}
@@ -121,7 +132,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
                     isConnecting={isConnecting}
                 />
             ) : null}
-            {pendingTerminalAccessRequest ? (
+            {!isWaitingForApproval && pendingTerminalAccessRequest ? (
                 <AssistantPendingTerminalAccessModal
                     request={pendingTerminalAccessRequest}
                     responding={props.commandPending}
@@ -130,7 +141,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
                     onSetRequestMuted={props.setPlaygroundTerminalAccessRequestMuted}
                 />
             ) : null}
-            {!isWaitingForUserInput && hasPendingPlaygroundLabRequest && props.pendingPlaygroundLabRequest ? (
+            {!isWaitingForApproval && !isWaitingForUserInput && hasPendingPlaygroundLabRequest && props.pendingPlaygroundLabRequest ? (
                 <AssistantPendingPlaygroundLabPanel
                     request={props.pendingPlaygroundLabRequest}
                     responding={props.commandPending}
@@ -138,7 +149,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
                     onDecline={props.declinePendingPlaygroundLabRequest}
                 />
             ) : null}
-            {!hasPendingPlaygroundLabRequest && !isWaitingForUserInput && !pendingTerminalAccessRequest ? (
+            {!isWaitingForApproval && !hasPendingPlaygroundLabRequest && !isWaitingForUserInput && !pendingTerminalAccessRequest ? (
                 <div
                     className={cn(
                         'mx-auto w-full transition-[max-width] duration-300 ease-out',

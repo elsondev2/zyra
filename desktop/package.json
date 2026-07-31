@@ -22,7 +22,7 @@
         "smoke:browser-visual": "node scripts/maint/run-zyra-browser-visual-smoke.mjs",
         "test:assistant-diff": "bun scripts/test-assistant-diff-contract.ts",
         "test:assistant-history": "bun scripts/test-assistant-history-persistence.ts && bun scripts/test-assistant-paged-history.ts",
-        "test:assistant-project": "bun scripts/test-assistant-project-lock.ts",
+        "test:assistant-project": "bun scripts/test-assistant-project-lock.ts && bun scripts/test-project-icon-resolver.ts",
         "test:assistant-images": "bun scripts/test-assistant-image-pipeline.ts",
         "test:assistant-markdown": "bun scripts/test-assistant-markdown-cache.tsx",
         "test:assistant-realtime-voice": "bun scripts/test-assistant-realtime-voice.ts",

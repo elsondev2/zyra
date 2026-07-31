@@ -64,11 +64,11 @@ export default function AboutSettings() {
                             <ZyraLogoASCII />
                         </div>
                         <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] text-sm font-medium">
-                            {updateState?.currentDisplayVersion || 'v1.5.0 beta'}
+                            {updateState?.currentDisplayVersion || 'v0.5.0'}
                         </div>
 
                         <p className="text-xs text-sparkle-text-muted mt-3">
-                            {updateState?.currentVersion || '1.5.0-beta.1'}
+                            {updateState?.currentVersion || '0.5.0'}
                             {updateState?.channel ? ` \u2022 ${updateState.channel} channel` : ''}
                         </p>
                         <a

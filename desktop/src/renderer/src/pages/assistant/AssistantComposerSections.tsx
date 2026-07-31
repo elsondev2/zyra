@@ -523,28 +523,14 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
         ? 'absolute left-[234px] top-[106px] w-[216px] max-[780px]:left-0 max-[780px]:top-[calc(100%+6px)] max-[780px]:w-[min(216px,calc(100vw-32px))]'
         : 'absolute bottom-0 left-[234px] w-[216px] max-[780px]:bottom-[calc(100%+6px)] max-[780px]:left-0 max-[780px]:w-[min(216px,calc(100vw-32px))]'
     const submenuMotionClass = 'transition-[opacity,transform] duration-[120ms] ease-out'
-    const connectionPillState = isConnected
+    const connectionPillState = isConnected || reconnectPending || isConnecting
         ? null
-        : reconnectPending
-            ? {
-                label: 'Reconnecting',
-                title: 'Reconnecting chat',
-                className: 'border-sky-400/25 bg-sky-500/[0.10] text-sky-100',
-                spinning: true
-            }
-            : isConnecting
-                ? {
-                    label: 'Connecting',
-                    title: 'Connecting chat',
-                    className: 'border-sky-400/25 bg-sky-500/[0.10] text-sky-100',
-                    spinning: true
-                }
-                : {
-                    label: 'Disconnected',
-                    title: 'Reconnect chat',
-                    className: 'border-amber-400/25 bg-amber-500/[0.10] text-amber-100 hover:bg-amber-500/[0.14]',
-                    spinning: false
-                }
+        : {
+            label: 'Disconnected',
+            title: 'Reconnect chat',
+            className: 'border-amber-400/25 bg-amber-500/[0.10] text-amber-100 hover:bg-amber-500/[0.14]',
+            spinning: false
+        }
 
     const cancelSubmenuClose = () => {
         if (submenuCloseTimerRef.current !== null) {

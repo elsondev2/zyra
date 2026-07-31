@@ -24,6 +24,7 @@ import {
   runZyraMemoryStartup,
 } from "./zyra-memory.mjs";
 import { expandFileMentions } from "./file-mentions.mjs";
+import { createZyraPermissionGateExtension } from "./zyra-permission-gate.mjs";
 import { AgentFleetController } from "./agents/runtime/fleet-controller.mjs";
 import { createFleetTools } from "./agents/tools.mjs";
 import { WorkflowRuntime } from "./workflows/runtime.mjs";
@@ -290,6 +291,13 @@ function createZyraBuiltinExtensions(options = {}) {
   if (options.thinkingState) {
     extensions.push(createGpt56ThinkingExtension(options.thinkingState));
   }
+  if (options.permissionRequest) {
+    extensions.push(createZyraPermissionGateExtension({
+      project: options.project,
+      requestPermission: options.permissionRequest,
+      getPermissionMode: options.getPermissionMode,
+    }));
+  }
   return extensions;
 }
 
@@ -383,8 +391,11 @@ async function createZyraResourceLoader(project, options = {}) {
     };
   }
   const resourceLoader = createFastResourceLoader(project, {
+    project,
     codexServiceTierState: options.codexServiceTierState,
     thinkingState: options.thinkingState,
+    permissionRequest: options.permissionRequest,
+    getPermissionMode: options.getPermissionMode,
     extensionRuntime: createExtensionRuntime(),
   });
   return { agentDir, settingsManager, resourceLoader };
@@ -635,6 +646,9 @@ export async function createZyraSession(options = {}) {
     enablePiExtensions: options.enablePiExtensions || process.env.ZYRA_ENABLE_PI_EXTENSIONS === "1",
     codexServiceTierState,
     thinkingState,
+    permissionRequest: options.permissionRequest,
+    getPermissionMode: options.getPermissionMode,
+    project,
   });
   const cwd = sessionManager.getCwd?.() ?? project;
   const managedBash = createManagedBashState();

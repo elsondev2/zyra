@@ -82,7 +82,8 @@ import {
     handleScanProjects,
     handleSearchIndexedPaths,
     handleSelectFolder,
-    handleSelectMarkdownFile
+    handleSelectMarkdownFile,
+    handleSelectProjectIconFile
 } from './handlers/project-discovery-handlers'
 import {
     handleGetProjectDetails,
@@ -278,6 +279,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
     ipcMain.handle('devscope:selectFolder', handleSelectFolder)
     ipcMain.handle('devscope:selectMarkdownFile', handleSelectMarkdownFile)
+    ipcMain.handle('devscope:selectProjectIconFile', handleSelectProjectIconFile)
     ipcMain.handle('devscope:getUserHomePath', handleGetUserHomePath)
     ipcMain.handle('devscope:scanProjects', handleScanProjects)
     ipcMain.handle('devscope:indexAllFolders', handleIndexAllFolders)
