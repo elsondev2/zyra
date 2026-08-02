@@ -2,6 +2,8 @@
 
 Zyra keeps the terminal and desktop chat experiences intentionally different while sharing one semantic middle layer.
 
+The proposed [voice-agent architecture](voice-agent/README.md) follows this rule for task lifecycle, narration, pending decisions/approvals, continuity health, and split usage. Provider-neutral semantics belong in shared contracts; speech timing, transcript motion, and task-detail presentation remain surface responsibilities.
+
 ## Flow
 
 ```text

@@ -6,6 +6,8 @@ Zyra has one durable local agent service and multiple interchangeable clients. D
 
 Closing, reloading, or reconnecting a client must not terminate an active root turn, managed command, subagent, or workflow. An explicit Stop action still cancels work.
 
+The proposed [voice-agent architecture](voice-agent/README.md) extends this ownership model with a deterministic task controller, realtime-session coordinator, selective narration, and continuity view. That package is a draft specification; these modules are not claimed as current runtime behavior here.
+
 ## Sources Of Truth
 
 Zyra uses one authority per concern:

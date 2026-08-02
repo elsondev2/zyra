@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zyra.dev/schemas/voice-agent/capability-lease.schema.json",
+  "title": "Zyra scoped capability lease",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "lease_id",
+    "revision",
+    "previous_revision",
+    "approval_request_id",
+    "conversation_id",
+    "task_id",
+    "attempt_id",
+    "capability",
+    "action_hash",
+    "scope",
+    "preconditions",
+    "issued_context_version",
+    "permission_epoch",
+    "grant_mode",
+    "status",
+    "max_actions",
+    "actions_used",
+    "issued_at",
+    "expires_at",
+    "terminal_at",
+    "terminal_reason"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "lease_id": { "$ref": "common.schema.json#/$defs/id" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "previous_revision": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1 },
+        { "type": "null" }
+      ]
+    },
+    "approval_request_id": { "$ref": "common.schema.json#/$defs/id" },
+    "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
+    "task_id": { "$ref": "common.schema.json#/$defs/id" },
+    "attempt_id": { "$ref": "common.schema.json#/$defs/id" },
+    "capability": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "action_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "scope": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 32,
+      "additionalProperties": true
+    },
+    "preconditions": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 32,
+      "additionalProperties": true
+    },
+    "issued_context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
+    "permission_epoch": { "type": "integer", "minimum": 0 },
+    "grant_mode": { "type": "string", "enum": ["once", "session"] },
+    "status": { "type": "string", "enum": ["active", "consumed", "expired", "revoked"] },
+    "max_actions": { "type": "integer", "minimum": 1, "maximum": 10000 },
+    "actions_used": { "type": "integer", "minimum": 0, "maximum": 10000 },
+    "issued_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "expires_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "terminal_at": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/timestamp" },
+        { "type": "null" }
+      ]
+    },
+    "terminal_reason": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 1000 },
+        { "type": "null" }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "revision": { "const": 1 } },
+        "required": ["revision"]
+      },
+      "then": { "properties": { "previous_revision": { "type": "null" } } },
+      "else": { "properties": { "previous_revision": { "type": "integer", "minimum": 1 } } }
+    },
+    {
+      "if": {
+        "properties": { "grant_mode": { "const": "once" } },
+        "required": ["grant_mode"]
+      },
+      "then": {
+        "properties": { "max_actions": { "const": 1 } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "consumed" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": { "actions_used": { "type": "integer", "minimum": 1 } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "active" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "terminal_at": { "type": "null" },
+          "terminal_reason": { "type": "null" }
+        }
+      },
+      "else": {
+        "properties": {
+          "terminal_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+          "terminal_reason": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

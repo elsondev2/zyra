@@ -1,0 +1,267 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zyra.dev/schemas/voice-agent/task.schema.json",
+  "title": "Zyra durable task",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "task_id",
+    "conversation_id",
+    "revision",
+    "state",
+    "title",
+    "verbatim_request",
+    "required_context_version",
+    "context_acknowledgements",
+    "acceptance_criteria",
+    "constraint_ids",
+    "decision_request_ids",
+    "approval_request_ids",
+    "attempt_ids",
+    "current_attempt_id",
+    "primary_agent_run_id",
+    "activity",
+    "artifacts",
+    "created_at",
+    "updated_at",
+    "terminal_at",
+    "failure"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "task_id": { "$ref": "common.schema.json#/$defs/id" },
+    "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "parent_task_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "supersedes_task_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "state": {
+      "type": "string",
+      "enum": ["proposed", "queued", "running", "waiting_for_user", "waiting_for_approval", "paused", "verifying", "completed", "failed", "cancelled"]
+    },
+    "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "verbatim_request": { "type": "string", "minLength": 1, "maxLength": 100000 },
+    "required_context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
+    "context_acknowledgements": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "required": ["owner_kind", "owner_id", "context_version", "relevant_change_ids", "acknowledged_at"],
+        "properties": {
+          "owner_kind": { "type": "string", "enum": ["primary", "subagent"] },
+          "owner_id": { "$ref": "common.schema.json#/$defs/id" },
+          "context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
+          "relevant_change_ids": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "$ref": "common.schema.json#/$defs/id" }
+          },
+          "acknowledged_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "required": ["criterion_id", "description", "status", "evidence_refs"],
+        "properties": {
+          "criterion_id": { "$ref": "common.schema.json#/$defs/id" },
+          "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "status": { "type": "string", "enum": ["pending", "passed", "failed", "waived"] },
+          "evidence_refs": {
+            "type": "array",
+            "maxItems": 64,
+            "items": { "$ref": "common.schema.json#/$defs/sourceRef" }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "status": { "enum": ["passed", "waived"] } },
+              "required": ["status"]
+            },
+            "then": {
+              "properties": { "evidence_refs": { "type": "array", "minItems": 1 } }
+            }
+          }
+        ],
+        "additionalProperties": false
+      }
+    },
+    "constraint_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "common.schema.json#/$defs/id" }
+    },
+    "decision_request_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "common.schema.json#/$defs/id" }
+    },
+    "approval_request_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "common.schema.json#/$defs/id" }
+    },
+    "attempt_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "common.schema.json#/$defs/id" }
+    },
+    "current_attempt_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "primary_agent_run_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "activity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "summary", "updated_at"],
+          "properties": {
+            "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+            "updated_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+          },
+          "additionalProperties": false
+        },
+        { "type": "null" }
+      ]
+    },
+    "artifacts": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "common.schema.json#/$defs/artifactRef" }
+    },
+    "created_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "updated_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "terminal_at": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/timestamp" },
+        { "type": "null" }
+      ]
+    },
+    "failure": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/error" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "state": { "const": "proposed" } },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "attempt_ids": { "type": "array", "maxItems": 0 },
+          "current_attempt_id": { "type": "null" },
+          "primary_agent_run_id": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "state": { "enum": ["proposed", "queued", "running", "waiting_for_user", "waiting_for_approval", "paused", "verifying"] } },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "terminal_at": { "type": "null" },
+          "failure": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "state": { "enum": ["waiting_for_user", "waiting_for_approval", "paused", "verifying", "completed", "failed", "cancelled"] } },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": { "current_attempt_id": { "type": "null" } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "state": { "const": "running" } },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "current_attempt_id": { "$ref": "common.schema.json#/$defs/id" },
+          "primary_agent_run_id": { "$ref": "common.schema.json#/$defs/id" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "state": { "const": "completed" } },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "terminal_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+          "failure": { "type": "null" },
+          "acceptance_criteria": {
+            "type": "array",
+            "not": {
+              "contains": {
+                "type": "object",
+                "properties": { "status": { "enum": ["pending", "failed"] } },
+                "required": ["status"]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "state": { "const": "failed" } },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "terminal_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+          "failure": { "$ref": "common.schema.json#/$defs/error" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "state": { "const": "cancelled" } },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "terminal_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+          "failure": { "type": "null" }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

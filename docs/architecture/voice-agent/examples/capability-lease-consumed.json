@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "lease_id": "lease_push_branch",
+  "revision": 2,
+  "previous_revision": 1,
+  "approval_request_id": "approval_push_branch",
+  "conversation_id": "chat_approval_demo",
+  "task_id": "task_approval_demo",
+  "attempt_id": "attempt_approval_02",
+  "capability": "git.push",
+  "action_hash": "0cd475076399f5fdaccf64d5caf0c30476b0af601d910e6b295753e5efc21246",
+  "scope": {
+    "remote": "origin",
+    "branch": "docs/voice-agent-architecture",
+    "force": false
+  },
+  "preconditions": {
+    "local_commit": "commit_demo_voice_docs",
+    "remote_branch_state": "absent"
+  },
+  "issued_context_version": 8,
+  "permission_epoch": 2,
+  "grant_mode": "once",
+  "status": "consumed",
+  "max_actions": 1,
+  "actions_used": 1,
+  "issued_at": "2026-08-02T12:07:00Z",
+  "expires_at": "2026-08-02T13:07:00Z",
+  "terminal_at": "2026-08-02T12:08:03Z",
+  "terminal_reason": "The one authorized action completed and consumed the lease."
+}

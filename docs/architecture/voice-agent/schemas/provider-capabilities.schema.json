@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zyra.dev/schemas/voice-agent/provider-capabilities.schema.json",
+  "title": "Zyra provider capability report",
+  "$defs": {
+    "capability": {
+      "type": "object",
+      "required": ["support", "stability", "method", "evidence", "verified_at", "notes"],
+      "properties": {
+        "support": { "type": "string", "enum": ["supported", "unsupported", "unknown"] },
+        "stability": { "type": "string", "enum": ["stable", "beta", "experimental", "undocumented", "unknown"] },
+        "method": {
+          "oneOf": [
+            { "type": "string", "minLength": 1, "maxLength": 256 },
+            { "type": "null" }
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["public_docs", "generated_schema", "interoperability_test", "adapter_assertion"] }
+        },
+        "verified_at": {
+          "oneOf": [
+            { "$ref": "common.schema.json#/$defs/timestamp" },
+            { "type": "null" }
+          ]
+        },
+        "notes": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "type": "string", "maxLength": 1000 }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "support": { "enum": ["supported", "unsupported"] } },
+            "required": ["support"]
+          },
+          "then": {
+            "properties": {
+              "evidence": { "minItems": 1 },
+              "verified_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": [
+    "schema_version",
+    "adapter_id",
+    "adapter_version",
+    "provider_version",
+    "auth_mode",
+    "observed_at",
+    "expires_at",
+    "realtime",
+    "primary_agent",
+    "experimental_adapter",
+    "notes"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "adapter_id": { "$ref": "common.schema.json#/$defs/id" },
+    "adapter_version": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "provider_version": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "auth_mode": { "type": "string", "enum": ["api_key", "subscription_oauth", "provider_account", "local", "other", "unknown"] },
+    "observed_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "expires_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "realtime": {
+      "type": "object",
+      "required": [
+        "session",
+        "transports",
+        "input_modalities",
+        "output_modalities",
+        "audio_input",
+        "audio_output",
+        "transcript_events",
+        "session_context_seed",
+        "silent_context_append",
+        "explicit_speech",
+        "direct_image_input",
+        "arbitrary_client_tools",
+        "sideband_control",
+        "voice_list",
+        "interruption",
+        "response_cancel",
+        "usage_events",
+        "session_expiry_signal",
+        "max_session_seconds",
+        "known_limits"
+      ],
+      "properties": {
+        "session": { "$ref": "#/$defs/capability" },
+        "transports": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["webrtc", "websocket", "sip", "other"] }
+        },
+        "input_modalities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["audio", "text", "image"] }
+        },
+        "output_modalities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["audio", "text"] }
+        },
+        "audio_input": { "$ref": "#/$defs/capability" },
+        "audio_output": { "$ref": "#/$defs/capability" },
+        "transcript_events": { "$ref": "#/$defs/capability" },
+        "session_context_seed": { "$ref": "#/$defs/capability" },
+        "silent_context_append": { "$ref": "#/$defs/capability" },
+        "explicit_speech": { "$ref": "#/$defs/capability" },
+        "direct_image_input": { "$ref": "#/$defs/capability" },
+        "arbitrary_client_tools": { "$ref": "#/$defs/capability" },
+        "sideband_control": { "$ref": "#/$defs/capability" },
+        "voice_list": { "$ref": "#/$defs/capability" },
+        "interruption": { "$ref": "#/$defs/capability" },
+        "response_cancel": { "$ref": "#/$defs/capability" },
+        "usage_events": { "$ref": "#/$defs/capability" },
+        "session_expiry_signal": { "$ref": "#/$defs/capability" },
+        "max_session_seconds": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "null" }
+          ]
+        },
+        "known_limits": {
+          "type": "array",
+          "items": { "type": "string", "maxLength": 1000 }
+        }
+      },
+      "additionalProperties": false
+    },
+    "primary_agent": {
+      "type": "object",
+      "required": [
+        "private_task_sessions",
+        "text_input",
+        "image_input",
+        "tools",
+        "steering",
+        "interrupt",
+        "usage_events",
+        "checkpoint_resume",
+        "private_output_stream"
+      ],
+      "properties": {
+        "private_task_sessions": { "$ref": "#/$defs/capability" },
+        "text_input": { "$ref": "#/$defs/capability" },
+        "image_input": { "$ref": "#/$defs/capability" },
+        "tools": { "$ref": "#/$defs/capability" },
+        "steering": { "$ref": "#/$defs/capability" },
+        "interrupt": { "$ref": "#/$defs/capability" },
+        "usage_events": { "$ref": "#/$defs/capability" },
+        "checkpoint_resume": { "$ref": "#/$defs/capability" },
+        "private_output_stream": { "$ref": "#/$defs/capability" }
+      },
+      "additionalProperties": false
+    },
+    "experimental_adapter": { "type": "boolean" },
+    "notes": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "type": "string", "maxLength": 1000 }
+    }
+  },
+  "additionalProperties": false
+}

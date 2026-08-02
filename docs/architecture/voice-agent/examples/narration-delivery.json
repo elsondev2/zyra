@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "delivery_id": "delivery_demo_complete",
+  "revision": 4,
+  "previous_revision": 3,
+  "narration_id": "narration_demo_complete",
+  "conversation_id": "chat_demo",
+  "source_event_id": "event_task_completed",
+  "canonical_message_id": "message_narration_demo_complete",
+  "status": "completed",
+  "canonical_message_status": "committed",
+  "canonical_commit_receipt_id": "message_commit_receipt_narration_demo_complete",
+  "speech_status": "completed",
+  "session_generation": 3,
+  "speech_request_id": "speech_request_demo_complete",
+  "provider_item_id": "provider_item_demo_complete",
+  "playback_ms": 4100,
+  "final_text_sha256": "54f7c48905e5bf0d21303127f1b2dfc699eddb86e1312501a4f6f37e8ebc9201",
+  "watermark_sequence": 13,
+  "created_at": "2026-08-02T12:30:00Z",
+  "updated_at": "2026-08-02T12:30:05Z",
+  "terminal_at": "2026-08-02T12:30:05Z"
+}

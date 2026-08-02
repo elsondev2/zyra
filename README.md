@@ -158,6 +158,12 @@ Inside chat:
 
 The complete agent/workflow guide, safety boundaries, definition formats, persistence layout, and desktop controls are in [docs/guides/subagents-workflows.md](docs/guides/subagents-workflows.md). Current provider compatibility and deferred model work are tracked in [docs/guides/model-support.md](docs/guides/model-support.md).
 
+## Open Voice-Agent Architecture
+
+Zyra’s proposed production Voice architecture is documented as an open, provider-aware reference design. It combines a capable realtime foreground agent, deterministic task control, one on-demand strong coding agent, exceptional subagents, selective central narration, canonical multimodal context, and silent resume across physical realtime sessions.
+
+Start with the [Voice-Agent Architecture](docs/architecture/voice-agent/README.md). The package includes Mermaid diagrams, ADRs, machine-readable JSON Schemas, synthetic examples, security and usage boundaries, prior-art research, an evaluation plan, and a phased implementation roadmap. Its status is **draft specification; implementation pending**.
+
 ## Project Shape
 
 - `src/` is the terminal app: input, status line, slash commands, file mentions, session handling, and Pi SDK wiring.
@@ -171,3 +177,10 @@ The complete agent/workflow guide, safety boundaries, definition formats, persis
 
 Commands should earn their place. The tool should grow from real use, not from pretending every workflow is known in advance.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development, privacy, documentation, and pull-request expectations. Voice-architecture proposals also have a [focused contribution guide](docs/architecture/voice-agent/CONTRIBUTING.md).
+
+## License
+
+Zyra is open source under the [Apache License 2.0](LICENSE). Contributions submitted to this repository are licensed under the same terms unless explicitly stated otherwise.

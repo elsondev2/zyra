@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zyra.dev/schemas/voice-agent/attempt-event.schema.json",
+  "title": "Zyra execution-attempt event",
+  "$defs": {
+    "state": {
+      "type": "string",
+      "enum": ["created", "queued", "starting", "running", "parking", "parked", "completed", "failed", "cancelled", "interrupted"]
+    }
+  },
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_id",
+    "transaction_id",
+    "sequence",
+    "conversation_id",
+    "task_id",
+    "primary_agent_run_id",
+    "attempt_id",
+    "event_type",
+    "previous_state",
+    "resulting_state",
+    "context_version",
+    "actor",
+    "idempotency_key",
+    "occurred_at",
+    "reason",
+    "attempt"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "event_id": { "$ref": "common.schema.json#/$defs/id" },
+    "transaction_id": { "$ref": "common.schema.json#/$defs/id" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
+    "task_id": { "$ref": "common.schema.json#/$defs/id" },
+    "primary_agent_run_id": { "$ref": "common.schema.json#/$defs/id" },
+    "attempt_id": { "$ref": "common.schema.json#/$defs/id" },
+    "event_type": {
+      "type": "string",
+      "enum": ["attempt.created", "attempt.queued", "attempt.starting", "attempt.running", "attempt.parking", "attempt.parked", "attempt.completed", "attempt.failed", "attempt.cancelled", "attempt.interrupted", "attempt.authority_updated", "attempt.checkpointed"]
+    },
+    "previous_state": {
+      "oneOf": [
+        { "$ref": "#/$defs/state" },
+        { "type": "null" }
+      ]
+    },
+    "resulting_state": { "$ref": "#/$defs/state" },
+    "context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
+    "actor": { "$ref": "common.schema.json#/$defs/actor" },
+    "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "occurred_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "reason": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 2000 },
+        { "type": "null" }
+      ]
+    },
+    "attempt": { "$ref": "execution-attempt.schema.json" }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "event_type": { "const": "attempt.created" },
+        "previous_state": { "type": "null" },
+        "resulting_state": { "const": "created" },
+        "attempt": { "type": "object", "properties": { "state": { "const": "created" } } }
+      }
+    },
+    {
+      "properties": { "event_type": { "const": "attempt.queued" }, "previous_state": { "const": "created" }, "resulting_state": { "const": "queued" }, "attempt": { "type": "object", "properties": { "state": { "const": "queued" } } } }
+    },
+    {
+      "properties": { "event_type": { "const": "attempt.starting" }, "previous_state": { "const": "queued" }, "resulting_state": { "const": "starting" }, "attempt": { "type": "object", "properties": { "state": { "const": "starting" } } } }
+    },
+    {
+      "properties": { "event_type": { "const": "attempt.running" }, "previous_state": { "enum": ["starting", "parking"] }, "resulting_state": { "const": "running" }, "attempt": { "type": "object", "properties": { "state": { "const": "running" } } } }
+    },
+    {
+      "properties": { "event_type": { "const": "attempt.parking" }, "previous_state": { "const": "running" }, "resulting_state": { "const": "parking" }, "attempt": { "type": "object", "properties": { "state": { "const": "parking" } } } }
+    },
+    {
+      "properties": { "event_type": { "const": "attempt.parked" }, "previous_state": { "const": "parking" }, "resulting_state": { "const": "parked" }, "attempt": { "type": "object", "properties": { "state": { "const": "parked" } } } }
+    },
+    {
+      "properties": { "event_type": { "const": "attempt.completed" }, "previous_state": { "const": "running" }, "resulting_state": { "const": "completed" }, "attempt": { "type": "object", "properties": { "state": { "const": "completed" } } } }
+    },
+    {
+      "properties": { "event_type": { "const": "attempt.failed" }, "previous_state": { "enum": ["starting", "running", "parking"] }, "resulting_state": { "const": "failed" }, "attempt": { "type": "object", "properties": { "state": { "const": "failed" } } } }
+    },
+    {
+      "properties": { "event_type": { "const": "attempt.cancelled" }, "previous_state": { "enum": ["created", "queued", "starting", "running", "parking"] }, "resulting_state": { "const": "cancelled" }, "attempt": { "type": "object", "properties": { "state": { "const": "cancelled" } } } }
+    },
+    {
+      "properties": { "event_type": { "const": "attempt.interrupted" }, "previous_state": { "const": "running" }, "resulting_state": { "const": "interrupted" }, "attempt": { "type": "object", "properties": { "state": { "const": "interrupted" } } } }
+    },
+    {
+      "properties": { "event_type": { "enum": ["attempt.authority_updated", "attempt.checkpointed"] } }
+    }
+  ],
+  "additionalProperties": false
+}

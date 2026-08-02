@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zyra.dev/schemas/voice-agent/approval-request.schema.json",
+  "title": "Zyra permission approval request",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "approval_request_id",
+    "revision",
+    "previous_revision",
+    "conversation_id",
+    "task_id",
+    "requesting_attempt_id",
+    "context_version",
+    "status",
+    "action",
+    "action_hash",
+    "capability",
+    "scope",
+    "preconditions",
+    "risk_summary",
+    "allowed_decisions",
+    "requested_lease_duration_seconds",
+    "requested_session_max_actions",
+    "decline_behavior",
+    "requested_by",
+    "resolution",
+    "created_at",
+    "expires_at",
+    "terminal_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "approval_request_id": { "$ref": "common.schema.json#/$defs/id" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "previous_revision": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1 },
+        { "type": "null" }
+      ]
+    },
+    "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
+    "task_id": { "$ref": "common.schema.json#/$defs/id" },
+    "requesting_attempt_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
+    "status": { "type": "string", "enum": ["pending", "resolved", "expired", "cancelled"] },
+    "action": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "action_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "capability": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "scope": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 32,
+      "additionalProperties": true
+    },
+    "preconditions": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 32,
+      "additionalProperties": true
+    },
+    "risk_summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "allowed_decisions": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": { "type": "string", "enum": ["accept_once", "accept_for_session", "decline"] }
+    },
+    "requested_lease_duration_seconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
+    "requested_session_max_actions": { "type": "integer", "minimum": 1, "maximum": 10000 },
+    "decline_behavior": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "requested_by": { "$ref": "common.schema.json#/$defs/actor" },
+    "resolution": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["decision", "resolved_request_revision", "authorization_channel", "challenge_receipt_id", "resolved_by", "resolved_at", "resolved_context_version", "capability_lease_id"],
+          "properties": {
+            "decision": { "type": "string", "enum": ["accept_once", "accept_for_session", "decline"] },
+            "resolved_request_revision": { "type": "integer", "minimum": 1 },
+            "authorization_channel": { "const": "trusted_control" },
+            "challenge_receipt_id": { "$ref": "common.schema.json#/$defs/id" },
+            "resolved_by": { "$ref": "common.schema.json#/$defs/actor" },
+            "resolved_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+            "resolved_context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
+            "capability_lease_id": {
+              "oneOf": [
+                { "$ref": "common.schema.json#/$defs/id" },
+                { "type": "null" }
+              ]
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": { "decision": { "enum": ["accept_once", "accept_for_session"] } },
+                "required": ["decision"]
+              },
+              "then": {
+                "properties": { "capability_lease_id": { "$ref": "common.schema.json#/$defs/id" } }
+              },
+              "else": {
+                "properties": { "capability_lease_id": { "type": "null" } }
+              }
+            }
+          ],
+          "additionalProperties": false
+        },
+        { "type": "null" }
+      ]
+    },
+    "created_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "expires_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "terminal_at": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/timestamp" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "revision": { "const": 1 } },
+        "required": ["revision"]
+      },
+      "then": { "properties": { "previous_revision": { "type": "null" } } },
+      "else": { "properties": { "previous_revision": { "type": "integer", "minimum": 1 } } }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "resolved" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "resolution": {
+            "type": "object",
+            "required": ["decision", "resolved_request_revision", "authorization_channel", "challenge_receipt_id", "resolved_by", "resolved_at", "resolved_context_version", "capability_lease_id"]
+          },
+          "terminal_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+        }
+      },
+      "else": {
+        "properties": { "resolution": { "type": "null" } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "pending" } },
+        "required": ["status"]
+      },
+      "then": { "properties": { "terminal_at": { "type": "null" } } }
+    },
+    {
+      "if": {
+        "properties": { "status": { "enum": ["expired", "cancelled"] } },
+        "required": ["status"]
+      },
+      "then": { "properties": { "terminal_at": { "$ref": "common.schema.json#/$defs/timestamp" } } }
+    }
+  ],
+  "additionalProperties": false
+}

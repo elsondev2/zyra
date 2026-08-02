@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "approval_request_id": "approval_push_branch",
+  "revision": 2,
+  "previous_revision": 1,
+  "conversation_id": "chat_approval_demo",
+  "task_id": "task_approval_demo",
+  "requesting_attempt_id": "attempt_approval_01",
+  "context_version": 7,
+  "status": "resolved",
+  "action": "Push the documentation commit to a new remote branch.",
+  "action_hash": "0cd475076399f5fdaccf64d5caf0c30476b0af601d910e6b295753e5efc21246",
+  "capability": "git.push",
+  "scope": {
+    "remote": "origin",
+    "branch": "docs/voice-agent-architecture",
+    "force": false
+  },
+  "preconditions": {
+    "local_commit": "commit_demo_voice_docs",
+    "remote_branch_state": "absent"
+  },
+  "risk_summary": "This publishes the commit to the configured remote without changing existing branches.",
+  "allowed_decisions": [
+    "accept_once",
+    "decline"
+  ],
+  "requested_by": {
+    "role": "primary",
+    "id": "agent_run_approval_01"
+  },
+  "resolution": {
+    "decision": "accept_once",
+    "authorization_channel": "trusted_control",
+    "challenge_receipt_id": "approval_challenge_receipt_push_branch",
+    "resolved_by": {
+      "role": "user",
+      "id": "user_local"
+    },
+    "resolved_at": "2026-08-02T12:07:00Z",
+    "resolved_context_version": 8,
+    "capability_lease_id": "lease_push_branch",
+    "resolved_request_revision": 1
+  },
+  "created_at": "2026-08-02T12:06:00Z",
+  "expires_at": "2026-08-02T13:06:00Z",
+  "terminal_at": "2026-08-02T12:07:00Z",
+  "requested_lease_duration_seconds": 3600,
+  "requested_session_max_actions": 10,
+  "decline_behavior": "Keep the branch local and leave publication incomplete."
+}

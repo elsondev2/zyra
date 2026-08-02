@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "operation_id": "operation_push_branch",
+  "revision": 3,
+  "previous_revision": 2,
+  "conversation_id": "chat_approval_demo",
+  "task_id": "task_approval_demo",
+  "attempt_id": "attempt_approval_02",
+  "idempotency_key": "task_approval_demo:attempt_approval_02:git.push:docs_branch",
+  "operation_class": "network_publish",
+  "consequence": "consequential",
+  "action_hash": "0cd475076399f5fdaccf64d5caf0c30476b0af601d910e6b295753e5efc21246",
+  "capability_lease_id": "lease_push_branch",
+  "adapter_id": "git_adapter",
+  "protected_payload_ref": "encrypted_operation_payload_push_branch",
+  "payload_sha256": "0cd475076399f5fdaccf64d5caf0c30476b0af601d910e6b295753e5efc21246",
+  "redacted_summary": "Push one documentation commit to a new non-default remote branch without force.",
+  "status": "succeeded",
+  "intent_at": "2026-08-02T12:08:00Z",
+  "dispatched_at": "2026-08-02T12:08:01Z",
+  "terminal_at": "2026-08-02T12:08:03Z",
+  "receipt": {
+    "receipt_id": "receipt_push_branch",
+    "outcome": "succeeded",
+    "external_receipt_id": "remote_commit_demo_voice_docs",
+    "observed_at": "2026-08-02T12:08:03Z",
+    "result_ref": {
+      "kind": "artifact",
+      "id": "remote_branch_docs_voice_agent_architecture"
+    }
+  },
+  "unknown_reason": null
+}

@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zyra.dev/schemas/voice-agent/resume-delta.schema.json",
+  "title": "Zyra realtime resume delta",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "delta_id",
+    "conversation_id",
+    "base_packet_id",
+    "from_context_version",
+    "to_context_version",
+    "from_watermarks",
+    "to_watermarks",
+    "changes",
+    "safety_state",
+    "critical_records_complete",
+    "canonical_sha256",
+    "generated_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "delta_id": { "$ref": "common.schema.json#/$defs/id" },
+    "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
+    "base_packet_id": { "$ref": "common.schema.json#/$defs/id" },
+    "from_context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
+    "to_context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
+    "from_watermarks": { "$ref": "resume-packet.schema.json#/properties/source_watermarks" },
+    "to_watermarks": { "$ref": "resume-packet.schema.json#/properties/source_watermarks" },
+    "changes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["change_type", "record"],
+            "properties": {
+              "change_type": { "const": "context_revision" },
+              "record": { "$ref": "context-revision.schema.json" }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["change_type", "record"],
+            "properties": {
+              "change_type": { "const": "attempt_event" },
+              "record": { "$ref": "attempt-event.schema.json" }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["change_type", "record"],
+            "properties": {
+              "change_type": { "const": "task_event" },
+              "record": { "$ref": "task-event.schema.json" }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["change_type", "record"],
+            "properties": {
+              "change_type": { "const": "decision_request" },
+              "record": { "$ref": "decision-request.schema.json" }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["change_type", "record"],
+            "properties": {
+              "change_type": { "const": "approval_request" },
+              "record": { "$ref": "approval-request.schema.json" }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["change_type", "record"],
+            "properties": {
+              "change_type": { "const": "capability_lease" },
+              "record": { "$ref": "capability-lease.schema.json" }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["change_type", "record"],
+            "properties": {
+              "change_type": { "const": "operation_intent" },
+              "record": { "$ref": "operation-intent.schema.json" }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["change_type", "record"],
+            "properties": {
+              "change_type": { "const": "narration_delivery" },
+              "record": { "$ref": "narration-delivery.schema.json" }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["change_type", "record"],
+            "properties": {
+              "change_type": { "const": "conversation_message" },
+              "record": {
+                "type": "object",
+                "required": ["message_id", "role", "content", "created_at"],
+                "properties": {
+                  "message_id": { "$ref": "common.schema.json#/$defs/id" },
+                  "role": { "type": "string", "enum": ["user", "assistant"] },
+                  "content": { "type": "string", "maxLength": 20000 },
+                  "created_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "safety_state": { "$ref": "resume-packet.schema.json#/properties/safety_state" },
+    "critical_records_complete": { "const": true },
+    "canonical_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "generated_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+  },
+  "additionalProperties": false
+}

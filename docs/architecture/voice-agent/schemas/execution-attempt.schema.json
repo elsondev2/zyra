@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zyra.dev/schemas/voice-agent/execution-attempt.schema.json",
+  "title": "Zyra primary execution attempt",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "conversation_id",
+    "task_id",
+    "primary_agent_run_id",
+    "attempt_id",
+    "ordinal",
+    "resumes_attempt_id",
+    "provider_session_id",
+    "state",
+    "context_version",
+    "slot_lease",
+    "writer_lock_ids",
+    "capability_lease_ids",
+    "checkpoint_ref",
+    "failure",
+    "created_at",
+    "updated_at",
+    "terminal_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
+    "task_id": { "$ref": "common.schema.json#/$defs/id" },
+    "primary_agent_run_id": { "$ref": "common.schema.json#/$defs/id" },
+    "attempt_id": { "$ref": "common.schema.json#/$defs/id" },
+    "ordinal": { "type": "integer", "minimum": 1 },
+    "resumes_attempt_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "provider_session_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "state": {
+      "type": "string",
+      "enum": ["created", "queued", "starting", "running", "parking", "parked", "completed", "failed", "cancelled", "interrupted"]
+    },
+    "context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
+    "slot_lease": {
+      "type": "object",
+      "required": ["status", "lease_id", "acquired_at", "released_at", "release_reason", "release_receipt_id"],
+      "properties": {
+        "status": { "type": "string", "enum": ["none", "acquired", "released"] },
+        "lease_id": {
+          "oneOf": [
+            { "$ref": "common.schema.json#/$defs/id" },
+            { "type": "null" }
+          ]
+        },
+        "acquired_at": {
+          "oneOf": [
+            { "$ref": "common.schema.json#/$defs/timestamp" },
+            { "type": "null" }
+          ]
+        },
+        "released_at": {
+          "oneOf": [
+            { "$ref": "common.schema.json#/$defs/timestamp" },
+            { "type": "null" }
+          ]
+        },
+        "release_reason": {
+          "oneOf": [
+            { "type": "string", "minLength": 1, "maxLength": 1000 },
+            { "type": "null" }
+          ]
+        },
+        "release_receipt_id": {
+          "oneOf": [
+            { "$ref": "common.schema.json#/$defs/id" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "const": "none" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "lease_id": { "type": "null" },
+              "acquired_at": { "type": "null" },
+              "released_at": { "type": "null" },
+              "release_reason": { "type": "null" },
+              "release_receipt_id": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "status": { "const": "acquired" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "lease_id": { "$ref": "common.schema.json#/$defs/id" },
+              "acquired_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+              "released_at": { "type": "null" },
+              "release_reason": { "type": "null" },
+              "release_receipt_id": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "status": { "const": "released" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "lease_id": { "$ref": "common.schema.json#/$defs/id" },
+              "acquired_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+              "released_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+              "release_reason": { "type": "string", "minLength": 1 },
+              "release_receipt_id": { "$ref": "common.schema.json#/$defs/id" }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "writer_lock_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "common.schema.json#/$defs/id" }
+    },
+    "capability_lease_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "common.schema.json#/$defs/id" }
+    },
+    "checkpoint_ref": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/sourceRef" },
+        { "type": "null" }
+      ]
+    },
+    "failure": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/error" },
+        { "type": "null" }
+      ]
+    },
+    "created_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "updated_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "terminal_at": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/timestamp" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "state": { "enum": ["created", "queued"] } },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "slot_lease": { "type": "object", "properties": { "status": { "const": "none" } } },
+          "writer_lock_ids": { "type": "array", "maxItems": 0 },
+          "capability_lease_ids": { "type": "array", "maxItems": 0 },
+          "terminal_at": { "type": "null" },
+          "failure": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "state": { "enum": ["starting", "running", "parking"] } },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "slot_lease": { "type": "object", "properties": { "status": { "const": "acquired" } } },
+          "terminal_at": { "type": "null" },
+          "failure": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "state": { "enum": ["parked", "completed", "failed", "cancelled", "interrupted"] } },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "slot_lease": { "type": "object", "properties": { "status": { "enum": ["none", "released"] } } },
+          "writer_lock_ids": { "type": "array", "maxItems": 0 },
+          "capability_lease_ids": { "type": "array", "maxItems": 0 },
+          "terminal_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "state": { "enum": ["parked", "completed", "failed", "interrupted"] } },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "slot_lease": { "type": "object", "properties": { "status": { "const": "released" } } }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "state": { "enum": ["parked", "completed"] } },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "checkpoint_ref": { "$ref": "common.schema.json#/$defs/sourceRef" },
+          "failure": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "state": { "enum": ["failed", "interrupted"] } },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": { "failure": { "$ref": "common.schema.json#/$defs/error" } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "state": { "const": "cancelled" } },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": { "failure": { "type": "null" } }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

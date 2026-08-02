@@ -1,0 +1,75 @@
+name: Voice architecture proposal
+description: Propose a change to Zyra's public voice-agent architecture or provider adapters
+title: "[Voice architecture]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read `docs/architecture/voice-agent/README.md`, its glossary, ADRs, and contribution guide before proposing a change. Do not include credentials, private histories, account identifiers, raw provider captures, or proprietary code.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What observable failure, limitation, or missing capability does this address?
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and affected invariants
+      description: Which conversation, task, provider, permission, continuity, narration, or usage paths change?
+    validations:
+      required: true
+  - type: textarea
+    id: contract
+    attributes:
+      label: Proposed contract change
+      description: Describe schema, state transition, interface, or ownership changes. Keep provider-specific fields behind adapters.
+    validations:
+      required: true
+  - type: dropdown
+    id: evidence_status
+    attributes:
+      label: Evidence status
+      options:
+        - Proposed design
+        - Documented provider behavior
+        - Experimentally verified with a redacted reproduction
+        - Unsupported capability
+        - Unknown capability requiring research
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and sources
+      description: Link primary sources with access dates or describe a clean-room, redacted reproduction and exact provider version.
+    validations:
+      required: true
+  - type: textarea
+    id: authority
+    attributes:
+      label: Authority, privacy, and usage impact
+      description: Does this widen tools, permissions, data retention, speech eligibility, network exposure, context, or provider usage?
+    validations:
+      required: true
+  - type: textarea
+    id: evaluation
+    attributes:
+      label: Evaluation and recovery
+      description: List deterministic tests, live provider proof when needed, failure recovery, compatibility, and rollback.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I preserved one canonical conversation and one user-facing narrator.
+          required: true
+        - label: I kept user-involvement preferences separate from permission approvals.
+          required: true
+        - label: I kept Voice and coding-agent usage separate.
+          required: true
+        - label: I included no private, credential, or proprietary material.
+          required: true

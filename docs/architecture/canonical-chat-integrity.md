@@ -2,6 +2,8 @@
 
 Zyra Desktop and the TUI share one canonical Pi transcript per chat. A client may keep local read models for fast rendering, but those models do not replace the JSONL transcript.
 
+The draft [voice-agent architecture](voice-agent/README.md) applies the same rule to finalized speech, typed text, and image-backed messages. Physical realtime session IDs and provisional transcript deltas remain non-canonical transport/presentation identities.
+
 ## Identity, storage, and metadata
 
 These concerns are separate:

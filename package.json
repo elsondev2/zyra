@@ -17,6 +17,7 @@
     "test:browser-tool-projection": "node scripts/test-zyra-browser-tool-projection.mjs",
     "test:agent-platform-integration": "bun desktop/scripts/test-agent-platform-integration.ts",
     "test:agent-server": "node scripts/test-zyra-chat-index.mjs && node scripts/test-zyra-agent-server.mjs && node scripts/test-zyra-agent-server-bridge.mjs && bun run --cwd desktop test:agent-server && bun run --cwd desktop test:assistant-project",
+    "test:voice-agent-contracts": "node scripts/validate-voice-agent-contracts.mjs",
     "chat:migration-report": "node scripts/build-chat-metadata-migration-report.mjs",
     "chat:migration-apply": "node scripts/apply-chat-metadata-migration.mjs",
     "browser:live": "node scripts/automation/live-browser-control.mjs",
@@ -49,7 +50,7 @@
     "zyra.cmd",
     "zyra.ps1"
   ],
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=22.19.0"
   },
@@ -58,5 +59,9 @@
     "@earendil-works/pi-tui": "^0.80.6",
     "quickjs-emscripten": "^0.32.0",
     "typebox": "^1.1.24"
+  },
+  "devDependencies": {
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1"
   }
 }

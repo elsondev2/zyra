@@ -24,6 +24,12 @@ Status words used below:
 - [Agent surfaces](architecture/agent-surface.md) — **Current.** Desktop/TUI semantic projection boundaries.
 - [Assistant browser](architecture/assistant-browser.md) — **Current.** Browser ownership and visual-control architecture.
 - [Assistant resources](architecture/assistant-resources.md) — **Current.** Resource indexing and presentation ownership.
+- [Voice-agent architecture](architecture/voice-agent/README.md) — **Draft specification.** Open reference design for a realtime foreground agent, deterministic task controller, on-demand strong coding agent, selective narration, and resumable continuity.
+
+## Architecture decisions
+
+- [Decision record index](adr/README.md) — **Current record format.** Accepted design decisions and their implementation status.
+- [Voice-agent ADRs](adr/README.md#voice-agent-decisions) — **Accepted design; implementation pending.** Canonical Voice identity, two model roles, deterministic ledgers, central narration, continuity, and permission separation.
 
 ## Implementation records
 

@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "packet_id": "packet_delegation_demo_01",
+  "conversation_id": "chat_demo",
+  "task_id": "task_demo_voice_docs",
+  "task_revision": 2,
+  "task_state": "queued",
+  "attempt_id": "attempt_demo_01",
+  "created_at": "2026-08-02T12:01:00Z",
+  "required_context_version": 7,
+  "verbatim_request": "Document the complete architecture with diagrams and publishable contracts.",
+  "relevant_turns": [
+    {
+      "message_id": "message_user_06",
+      "role": "user",
+      "content": "Do you think this would contribute something if I open source the idea?",
+      "verbatim": true
+    },
+    {
+      "message_id": "message_user_07",
+      "role": "user",
+      "content": "Make it open for everyone and document the whole architecture.",
+      "verbatim": true
+    }
+  ],
+  "acceptance_criteria": [
+    {
+      "criterion_id": "criterion_architecture",
+      "description": "Cover model roles, controller, ledgers, routing, narration, continuity, permissions, recovery, usage, and evaluation."
+    },
+    {
+      "criterion_id": "criterion_validation",
+      "description": "Validate schemas, Mermaid diagrams, links, and privacy before publication."
+    }
+  ],
+  "constraints": [
+    {
+      "constraint_id": "constraint_public_only",
+      "scope": "task_subtree",
+      "text": "Use only public, synthetic, or clean-room evidence in published documentation."
+    },
+    {
+      "constraint_id": "constraint_no_runtime_changes",
+      "scope": "task",
+      "text": "Do not change runtime behavior as part of the documentation task."
+    }
+  ],
+  "decisions": [
+    {
+      "decision_id": "decision_model_roles",
+      "selection": "Use a realtime foreground role and one on-demand strong primary role.",
+      "rationale": "This preserves low-latency conversation while keeping mutation behind the established coding-agent path."
+    }
+  ],
+  "attachments": [],
+  "inspection_findings": [
+    {
+      "finding_id": "finding_existing_foundation",
+      "summary": "Zyra already has canonical chat, a server-owned runtime, event-sourced fleet records, and permission boundaries.",
+      "source_refs": [
+        {
+          "kind": "artifact",
+          "id": "docs_agent_server",
+          "uri": "docs/architecture/agent-server.md"
+        },
+        {
+          "kind": "artifact",
+          "id": "docs_subagents",
+          "uri": "docs/guides/subagents-workflows.md"
+        }
+      ]
+    }
+  ],
+  "project": {
+    "cwd": "/workspace/zyra",
+    "source_state": "git:example-base-commit",
+    "allowed_roots": ["/workspace/zyra/docs", "/workspace/zyra/README.md"]
+  },
+  "capability_policy": {
+    "permission_mode": "documentation-writer",
+    "tools": ["read", "search", "write", "git-status", "git-diff"],
+    "approval_required_for": ["git.push", "license.change"]
+  },
+  "capability_lease_ids": [],
+  "requested_role": "strong_primary",
+  "requested_model": null,
+  "reasoning_effort": "high",
+  "budgets": {
+    "max_turns": 40,
+    "max_subagents": 2,
+    "max_elapsed_seconds": 7200,
+    "max_tokens": 500000
+  },
+  "return_contract": {
+    "event_schema": "../schemas/task-event.schema.json",
+    "completion_requires_verification": true
+  }
+}

@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zyra.dev/schemas/voice-agent/task-event.schema.json",
+  "title": "Zyra task event",
+  "$defs": {
+    "envelope": {
+      "type": "object",
+      "required": ["schema_version", "event_id", "transaction_id", "sequence", "task_revision", "conversation_id", "task_id", "context_version", "event_type", "actor", "occurred_at", "payload"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "event_id": { "$ref": "common.schema.json#/$defs/id" },
+        "transaction_id": { "$ref": "common.schema.json#/$defs/id" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "task_revision": { "type": "integer", "minimum": 1 },
+        "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
+        "task_id": { "$ref": "common.schema.json#/$defs/id" },
+        "context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
+        "event_type": {
+          "type": "string",
+          "enum": [
+            "task.proposed", "task.routed", "task.queued", "task.started", "task.promoted", "task.progressed", "task.context_updated", "task.artifact_attached", "task.decision_required", "task.decision_resolved", "task.approval_required", "task.approval_resolved", "task.blocked", "task.paused", "task.resumed", "task.verification_started", "task.completed", "task.failed", "task.cancellation_requested", "task.cancelled"
+          ]
+        },
+        "actor": { "$ref": "common.schema.json#/$defs/actor" },
+        "attempt_id": { "$ref": "common.schema.json#/$defs/id" },
+        "agent_run_id": { "$ref": "common.schema.json#/$defs/id" },
+        "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "occurred_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "payload": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "emptyOrReason": {
+      "type": "object",
+      "properties": { "reason": { "type": "string", "maxLength": 2000 } },
+      "additionalProperties": false
+    },
+    "route": {
+      "type": "object",
+      "required": ["executor", "reason"],
+      "properties": {
+        "executor": { "type": "string", "enum": ["foreground", "primary", "controller"] },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      },
+      "additionalProperties": false
+    },
+    "promoted": {
+      "type": "object",
+      "required": ["inspection_trace_id", "from_executor", "to_executor", "reason", "evidence_refs"],
+      "properties": {
+        "inspection_trace_id": { "$ref": "common.schema.json#/$defs/id" },
+        "from_executor": { "const": "foreground" },
+        "to_executor": { "const": "primary" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "evidence_refs": { "type": "array", "maxItems": 64, "items": { "$ref": "common.schema.json#/$defs/sourceRef" } }
+      },
+      "additionalProperties": false
+    },
+    "started": {
+      "type": "object",
+      "required": ["attempt_id", "agent_run_id"],
+      "properties": {
+        "attempt_id": { "$ref": "common.schema.json#/$defs/id" },
+        "agent_run_id": { "$ref": "common.schema.json#/$defs/id" },
+        "selected_model": { "type": "string", "maxLength": 128 }
+      },
+      "additionalProperties": false
+    },
+    "progress": {
+      "type": "object",
+      "required": ["kind", "summary"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["inspection", "planning", "editing", "command", "testing", "integration", "recovery", "other"] },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "percent": { "type": "number", "minimum": 0, "maximum": 100 },
+        "checkpoint_ref": { "$ref": "common.schema.json#/$defs/sourceRef" },
+        "speakable": { "type": "boolean", "default": false }
+      },
+      "additionalProperties": false
+    },
+    "contextUpdated": {
+      "type": "object",
+      "required": ["required_context_version", "change_ids", "acknowledgements"],
+      "properties": {
+        "required_context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
+        "change_ids": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "common.schema.json#/$defs/id" } },
+        "acknowledgements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["owner_kind", "owner_id", "context_version", "relevant_change_ids", "acknowledged_at"],
+            "properties": {
+              "owner_kind": { "type": "string", "enum": ["primary", "subagent"] },
+              "owner_id": { "$ref": "common.schema.json#/$defs/id" },
+              "context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
+              "relevant_change_ids": { "type": "array", "uniqueItems": true, "items": { "$ref": "common.schema.json#/$defs/id" } },
+              "acknowledged_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["artifact"],
+      "properties": { "artifact": { "$ref": "common.schema.json#/$defs/artifactRef" } },
+      "additionalProperties": false
+    },
+    "requestRef": {
+      "type": "object",
+      "required": ["request_id"],
+      "properties": {
+        "request_id": { "$ref": "common.schema.json#/$defs/id" },
+        "summary": { "type": "string", "maxLength": 2000 }
+      },
+      "additionalProperties": false
+    },
+    "blocked": {
+      "type": "object",
+      "required": ["code", "summary", "retryable"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "retryable": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "verification": {
+      "type": "object",
+      "required": ["completion_candidate_id", "completion_candidate_ref", "criterion_ids", "evidence_refs"],
+      "properties": {
+        "completion_candidate_id": { "$ref": "common.schema.json#/$defs/id" },
+        "completion_candidate_ref": { "$ref": "common.schema.json#/$defs/sourceRef" },
+        "criterion_ids": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "common.schema.json#/$defs/id" } },
+        "evidence_refs": { "type": "array", "minItems": 1, "items": { "$ref": "common.schema.json#/$defs/sourceRef" } }
+      },
+      "additionalProperties": false
+    },
+    "completed": {
+      "type": "object",
+      "required": ["summary", "criterion_ids", "evidence_refs", "remaining_gaps"],
+      "properties": {
+        "summary": { "type": "string", "minLength": 1, "maxLength": 10000 },
+        "criterion_ids": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "common.schema.json#/$defs/id" } },
+        "evidence_refs": { "type": "array", "minItems": 1, "items": { "$ref": "common.schema.json#/$defs/sourceRef" } },
+        "remaining_gaps": { "type": "array", "items": { "type": "string", "maxLength": 2000 } }
+      },
+      "additionalProperties": false
+    },
+    "failed": {
+      "type": "object",
+      "required": ["error"],
+      "properties": { "error": { "$ref": "common.schema.json#/$defs/error" } },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [{ "$ref": "#/$defs/envelope" }],
+  "oneOf": [
+    { "properties": { "event_type": { "const": "task.proposed" }, "payload": { "type": "object", "required": ["task"], "properties": { "task": { "$ref": "task.schema.json" } }, "additionalProperties": false } } },
+    { "properties": { "event_type": { "const": "task.routed" }, "payload": { "$ref": "#/$defs/route" } } },
+    { "properties": { "event_type": { "enum": ["task.queued", "task.paused", "task.resumed", "task.cancellation_requested", "task.cancelled"] }, "payload": { "$ref": "#/$defs/emptyOrReason" } } },
+    { "properties": { "event_type": { "const": "task.started" }, "payload": { "$ref": "#/$defs/started" } } },
+    { "properties": { "event_type": { "const": "task.promoted" }, "payload": { "$ref": "#/$defs/promoted" } } },
+    { "properties": { "event_type": { "const": "task.progressed" }, "payload": { "$ref": "#/$defs/progress" } } },
+    { "properties": { "event_type": { "const": "task.context_updated" }, "payload": { "$ref": "#/$defs/contextUpdated" } } },
+    { "properties": { "event_type": { "const": "task.artifact_attached" }, "payload": { "$ref": "#/$defs/artifact" } } },
+    { "properties": { "event_type": { "enum": ["task.decision_required", "task.decision_resolved", "task.approval_required", "task.approval_resolved"] }, "payload": { "$ref": "#/$defs/requestRef" } } },
+    { "properties": { "event_type": { "const": "task.blocked" }, "payload": { "$ref": "#/$defs/blocked" } } },
+    { "properties": { "event_type": { "const": "task.verification_started" }, "payload": { "$ref": "#/$defs/verification" } } },
+    { "properties": { "event_type": { "const": "task.completed" }, "payload": { "$ref": "#/$defs/completed" } } },
+    { "properties": { "event_type": { "const": "task.failed" }, "payload": { "$ref": "#/$defs/failed" } } }
+  ]
+}

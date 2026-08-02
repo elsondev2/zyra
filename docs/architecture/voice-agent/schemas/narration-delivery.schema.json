@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zyra.dev/schemas/voice-agent/narration-delivery.schema.json",
+  "title": "Zyra narration delivery state",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "delivery_id",
+    "revision",
+    "previous_revision",
+    "narration_id",
+    "conversation_id",
+    "source_event_id",
+    "canonical_message_id",
+    "status",
+    "canonical_message_status",
+    "canonical_commit_receipt_id",
+    "speech_status",
+    "session_generation",
+    "speech_request_id",
+    "provider_item_id",
+    "playback_ms",
+    "final_text_sha256",
+    "watermark_sequence",
+    "created_at",
+    "updated_at",
+    "terminal_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "delivery_id": { "$ref": "common.schema.json#/$defs/id" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "previous_revision": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1 },
+        { "type": "null" }
+      ]
+    },
+    "narration_id": { "$ref": "common.schema.json#/$defs/id" },
+    "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
+    "source_event_id": { "$ref": "common.schema.json#/$defs/id" },
+    "canonical_message_id": { "$ref": "common.schema.json#/$defs/id" },
+    "status": {
+      "type": "string",
+      "enum": ["prepared", "speech_requested", "speaking", "completed", "interrupted", "failed", "suppressed", "outcome_unknown"]
+    },
+    "canonical_message_status": {
+      "type": "string",
+      "enum": ["pending", "committed", "not_applicable"]
+    },
+    "canonical_commit_receipt_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "speech_status": {
+      "type": "string",
+      "enum": ["not_requested", "requested", "playing", "completed", "interrupted", "failed", "outcome_unknown"]
+    },
+    "session_generation": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1 },
+        { "type": "null" }
+      ]
+    },
+    "speech_request_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "provider_item_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "playback_ms": { "type": "integer", "minimum": 0 },
+    "final_text_sha256": {
+      "oneOf": [
+        { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        { "type": "null" }
+      ]
+    },
+    "watermark_sequence": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1 },
+        { "type": "null" }
+      ]
+    },
+    "created_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "updated_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "terminal_at": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/timestamp" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "revision": { "const": 1 } },
+        "required": ["revision"]
+      },
+      "then": { "properties": { "previous_revision": { "type": "null" } } },
+      "else": { "properties": { "previous_revision": { "type": "integer", "minimum": 1 } } }
+    },
+    {
+      "if": {
+        "properties": { "canonical_message_status": { "const": "committed" } },
+        "required": ["canonical_message_status"]
+      },
+      "then": {
+        "properties": { "canonical_commit_receipt_id": { "$ref": "common.schema.json#/$defs/id" } }
+      },
+      "else": {
+        "properties": { "canonical_commit_receipt_id": { "type": "null" } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "enum": ["completed", "interrupted"] } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "canonical_message_status": { "const": "committed" },
+          "canonical_commit_receipt_id": { "$ref": "common.schema.json#/$defs/id" },
+          "session_generation": { "type": "integer", "minimum": 1 },
+          "speech_request_id": { "$ref": "common.schema.json#/$defs/id" },
+          "provider_item_id": { "$ref": "common.schema.json#/$defs/id" },
+          "final_text_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "watermark_sequence": { "type": "integer", "minimum": 1 },
+          "terminal_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "completed" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": { "speech_status": { "const": "completed" } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "interrupted" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": { "speech_status": { "const": "interrupted" } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "prepared" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "canonical_message_status": { "const": "pending" },
+          "canonical_commit_receipt_id": { "type": "null" },
+          "speech_status": { "const": "not_requested" },
+          "session_generation": { "type": "null" },
+          "speech_request_id": { "type": "null" },
+          "provider_item_id": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "speech_requested" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "speech_status": { "const": "requested" },
+          "session_generation": { "type": "integer", "minimum": 1 },
+          "speech_request_id": { "$ref": "common.schema.json#/$defs/id" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "speaking" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "speech_status": { "const": "playing" },
+          "session_generation": { "type": "integer", "minimum": 1 },
+          "speech_request_id": { "$ref": "common.schema.json#/$defs/id" },
+          "provider_item_id": { "$ref": "common.schema.json#/$defs/id" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "suppressed" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "canonical_message_status": { "enum": ["committed", "not_applicable"] },
+          "speech_status": { "const": "not_requested" },
+          "watermark_sequence": { "type": "integer", "minimum": 1 },
+          "terminal_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "failed" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "canonical_message_status": { "const": "committed" },
+          "canonical_commit_receipt_id": { "$ref": "common.schema.json#/$defs/id" },
+          "speech_status": { "const": "failed" },
+          "final_text_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "watermark_sequence": { "type": "integer", "minimum": 1 },
+          "terminal_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "outcome_unknown" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "canonical_message_status": { "enum": ["committed", "not_applicable"] },
+          "speech_status": { "const": "outcome_unknown" },
+          "session_generation": { "type": "integer", "minimum": 1 },
+          "speech_request_id": { "$ref": "common.schema.json#/$defs/id" },
+          "watermark_sequence": { "type": "integer", "minimum": 1 },
+          "terminal_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "enum": ["prepared", "speech_requested", "speaking"] } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "watermark_sequence": { "type": "null" },
+          "terminal_at": { "type": "null" }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}
