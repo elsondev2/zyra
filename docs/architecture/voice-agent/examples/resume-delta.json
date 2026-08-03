@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "delta_id": "delta_resume_demo_01",
   "conversation_id": "chat_resume_demo",
   "base_packet_id": "packet_resume_demo_01",
@@ -8,26 +8,26 @@
   "from_watermarks": {
     "conversation_sequence": 18,
     "foreground_route_epoch": 2,
-    "task_sequence": 44,
+    "task_sequence": 10,
     "attempt_sequence": 11,
     "context_sequence": 7,
     "decision_sequence": 3,
     "approval_sequence": 0,
     "capability_lease_sequence": 0,
-    "operation_sequence": 0,
+    "operation_sequence": 1,
     "agent_checkpoint_sequence": 9,
     "narration_delivery_sequence": 12
   },
   "to_watermarks": {
     "conversation_sequence": 19,
     "foreground_route_epoch": 2,
-    "task_sequence": 44,
+    "task_sequence": 10,
     "attempt_sequence": 11,
     "context_sequence": 8,
     "decision_sequence": 3,
     "approval_sequence": 0,
     "capability_lease_sequence": 0,
-    "operation_sequence": 0,
+    "operation_sequence": 1,
     "agent_checkpoint_sequence": 9,
     "narration_delivery_sequence": 12
   },
@@ -36,6 +36,7 @@
       "change_type": "conversation_message",
       "record": {
         "message_id": "message_resume_user_08",
+        "conversation_sequence": 19,
         "role": "user",
         "modality": "text",
         "foreground_route_id": "foreground_route_voice_02",
@@ -90,10 +91,13 @@
     "writer_lock": {
       "task_id": "task_resume_voice_docs",
       "attempt_id": "attempt_resume_01",
+      "writer_lock_ids": [
+        "writer_lock_resume_docs"
+      ],
       "scope": "documentation worktree"
     }
   },
   "critical_records_complete": true,
-  "canonical_sha256": "104f2c4fdb5aa4cd3ec96cd7107eb2e4eba9019d111efb8c527ba953a877c611",
+  "canonical_sha256": "bfa05885e8e7147ee54d844e159c2eb1399dd3793bc536323945f0c589dffb40",
   "generated_at": "2026-08-02T12:06:02Z"
 }

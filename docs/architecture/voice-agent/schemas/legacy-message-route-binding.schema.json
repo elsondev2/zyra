@@ -42,7 +42,7 @@
       "minLength": 1,
       "maxLength": 2048
     },
-    "source_sequence": { "type": "integer", "minimum": 1 },
+    "source_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
     "source_record_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "migration_manifest_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "message_created_at": { "$ref": "common.schema.json#/$defs/timestamp" },

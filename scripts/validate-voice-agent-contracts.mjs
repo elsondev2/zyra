@@ -174,6 +174,40 @@ const attemptTransitionErrors = (event) => {
   if (event.resulting_state !== event.attempt.state) errors.push('resulting state differs from attempt snapshot');
   return errors;
 };
+const reduceTaskState = (currentState, eventType) => {
+  const terminal = new Set(['completed', 'failed', 'cancelled']);
+  if (eventType === 'task.proposed') return currentState === null ? { state: 'proposed', error: null } : { state: currentState, error: 'task.proposed does not create a new task' };
+  if (terminal.has(currentState)) return { state: currentState, error: `${eventType} follows terminal task state` };
+  const transition = {
+    'task.queued': { from: ['proposed', 'waiting_for_user', 'waiting_for_approval', 'paused', 'verifying'], to: 'queued' },
+    'task.resumed': { from: ['waiting_for_user', 'waiting_for_approval', 'paused', 'verifying'], to: 'queued' },
+    'task.decision_resolved': { from: ['waiting_for_user'], to: 'queued' },
+    'task.approval_resolved': { from: ['waiting_for_approval'], to: 'queued' },
+    'task.started': { from: ['queued'], to: 'running' },
+    'task.decision_required': { from: ['running', 'verifying'], to: 'waiting_for_user' },
+    'task.approval_required': { from: ['running', 'verifying'], to: 'waiting_for_approval' },
+    'task.paused': { from: ['queued', 'running', 'waiting_for_user', 'waiting_for_approval', 'verifying'], to: 'paused' },
+    'task.verification_started': { from: ['running'], to: 'verifying' },
+    'task.completed': { from: ['verifying'], to: 'completed' },
+    'task.failed': { from: ['proposed', 'queued', 'running', 'waiting_for_user', 'waiting_for_approval', 'paused', 'verifying'], to: 'failed' },
+    'task.cancelled': { from: ['proposed', 'queued', 'running', 'waiting_for_user', 'waiting_for_approval', 'paused', 'verifying'], to: 'cancelled' },
+  }[eventType];
+  if (!transition) return { state: currentState, error: null };
+  if (!transition.from.includes(currentState)) return { state: currentState, error: `${eventType} cannot follow ${currentState}` };
+  return { state: transition.to, error: null };
+};
+const taskMatchesAcquiredAttempt = (taskRecord, attempt) => {
+  if (!taskRecord || !attempt) return false;
+  if (
+    taskRecord.task_id !== attempt.task_id ||
+    taskRecord.current_attempt_id !== attempt.attempt_id ||
+    taskRecord.primary_agent_run_id !== attempt.primary_agent_run_id ||
+    attempt.slot_lease.status !== 'acquired'
+  ) return false;
+  if (attempt.state === 'starting') return ['queued', 'running'].includes(taskRecord.state);
+  if (['running', 'parking'].includes(attempt.state)) return taskRecord.state === 'running';
+  return false;
+};
 const leaseAccountingErrors = (value) => {
   const errors = [];
   if (value.actions_used > value.max_actions) errors.push('actions_used exceeds max_actions');
@@ -253,6 +287,18 @@ const foregroundRouteSetErrors = (routes) => {
     }
   }
   return errors;
+};
+const timestampWithinForegroundRoute = (route, timestamp) =>
+  Date.parse(timestamp) >= Date.parse(route.created_at) &&
+  (route.terminal_at === null || Date.parse(timestamp) < Date.parse(route.terminal_at));
+const latestForegroundRouteHeads = (routes) => {
+  const heads = new Map();
+  for (const route of routes) {
+    const key = `${route.foreground_route_id}:${route.route_epoch}`;
+    const current = heads.get(key);
+    if (!current || route.revision > current.revision) heads.set(key, route);
+  }
+  return heads;
 };
 
 assertSemantic(foregroundRouteSetErrors(foregroundRoutes).length === 0, 'foreground-route fixture violates exclusivity, revision, or handoff semantics');
@@ -529,6 +575,9 @@ resolvedWithoutResolution.terminal_at = '2026-08-02T12:07:00Z';
 expectRejected('approval-request.schema.json', resolvedWithoutResolution, 'negative: resolved approval without resolution');
 
 const resolvedApproval = await readJson(path.join(exampleRoot, 'approval-request-resolved.json'));
+const unsafeResolvedApprovalRevision = clone(resolvedApproval);
+unsafeResolvedApprovalRevision.resolution.resolved_request_revision = Number.MAX_SAFE_INTEGER + 1;
+expectRejected('approval-request.schema.json', unsafeResolvedApprovalRevision, 'negative: approval resolution accepts unsafe resolved-request revision');
 const approvalContextRevision = await readJson(path.join(exampleRoot, 'approval-context-revision.json'));
 const lease = await readJson(path.join(exampleRoot, 'capability-lease.json'));
 const consumedLease = await readJson(path.join(exampleRoot, 'capability-lease-consumed.json'));
@@ -590,6 +639,9 @@ const operation = await readJson(path.join(exampleRoot, 'operation-intent.json')
 const legacyOperation = clone(operation);
 legacyOperation.schema_version = 1;
 expectRejected('operation-intent.schema.json', legacyOperation, 'negative: v1 operation validated as v2 without migration');
+const unsafeRevisionOperation = clone(operation);
+unsafeRevisionOperation.revision = Number.MAX_SAFE_INTEGER + 1;
+expectRejected('operation-intent.schema.json', unsafeRevisionOperation, 'negative: operation accepts unsafe revision integer');
 if (
   operation.action_hash !== lease.action_hash ||
   operation.capability_lease_id !== lease.lease_id ||
@@ -600,14 +652,29 @@ if (
   failures.push('operation fixture is not bound to its capability lease');
 }
 const canonicalMessageOperation = await readJson(path.join(exampleRoot, 'canonical-message-operation-intent.json'));
-const canonicalMessageBindingErrors = (value) => {
+const operationImmutableIdentityHash = (record) => {
+  const immutable = clone(record);
+  for (const field of ['revision', 'previous_revision', 'status', 'dispatched_at', 'terminal_at', 'receipt', 'unknown_reason']) delete immutable[field];
+  return createHash('sha256').update(canonicalizeFixture(immutable)).digest('hex');
+};
+const canonicalMessageBindingErrors = (value, route = supersededChatRoute) => {
   const errors = [];
-  if (value.conversation_id !== initialChatRoute.conversation_id) errors.push('canonical message operation conversation differs from route');
-  if (value.foreground_route_id !== initialChatRoute.foreground_route_id) errors.push('canonical message operation route differs');
-  if (value.foreground_route_epoch !== initialChatRoute.route_epoch) errors.push('canonical message operation epoch differs');
-  if (value.foreground_owner_claim_id !== initialChatRoute.owner_claim_id) errors.push('canonical message operation owner claim differs');
-  if (Date.parse(value.terminal_at) > Date.parse(supersededChatRoute.terminal_at)) errors.push('canonical message operation completed after route handoff');
-  if (value.receipt?.result_ref?.kind !== 'message' || value.receipt?.result_ref?.id !== value.canonical_message_id) errors.push('canonical message receipt differs from message identity');
+  if (!route) return ['canonical message operation has no matching foreground route'];
+  if (value.conversation_id !== route.conversation_id) errors.push('canonical message operation conversation differs from route');
+  if (value.foreground_route_id !== route.foreground_route_id) errors.push('canonical message operation route differs');
+  if (value.foreground_route_epoch !== route.route_epoch) errors.push('canonical message operation epoch differs');
+  if (value.foreground_owner_claim_id !== route.owner_claim_id) errors.push('canonical message operation owner claim differs');
+  for (const [label, timestamp] of [
+    ['intent', value.intent_at],
+    ['dispatch', value.dispatched_at],
+    ['terminal result', value.terminal_at],
+    ['receipt observation', value.receipt?.observed_at],
+  ]) {
+    if (timestamp !== null && timestamp !== undefined && !timestampWithinForegroundRoute(route, timestamp)) {
+      errors.push(`canonical message operation ${label} falls outside the half-open route lifetime`);
+    }
+  }
+  if (value.receipt && (value.receipt.result_ref?.kind !== 'message' || value.receipt.result_ref?.id !== value.canonical_message_id)) errors.push('canonical message receipt differs from message identity');
   return errors;
 };
 assertSemantic(canonicalMessageBindingErrors(canonicalMessageOperation).length === 0, 'canonical Chat message operation is not bound to its foreground route');
@@ -617,6 +684,15 @@ expectRejected('operation-intent.schema.json', canonicalOperationWithoutRouteCla
 const staleCanonicalMessageOperation = clone(canonicalMessageOperation);
 staleCanonicalMessageOperation.foreground_route_epoch = activeForegroundRoute.route_epoch;
 expectSemanticRejected(canonicalMessageBindingErrors(staleCanonicalMessageOperation), 'negative: canonical message operation uses stale/mismatched route epoch');
+const canonicalOperationAtHandoff = clone(canonicalMessageOperation);
+canonicalOperationAtHandoff.terminal_at = supersededChatRoute.terminal_at;
+expectSemanticRejected(canonicalMessageBindingErrors(canonicalOperationAtHandoff), 'negative: old-route canonical operation terminates at half-open handoff boundary');
+const canonicalReceiptAtHandoff = clone(canonicalMessageOperation);
+canonicalReceiptAtHandoff.receipt.observed_at = supersededChatRoute.terminal_at;
+expectSemanticRejected(canonicalMessageBindingErrors(canonicalReceiptAtHandoff), 'negative: old-route canonical receipt is observed at half-open handoff boundary');
+const reorderedOldRouteHead = latestForegroundRouteHeads([clone(supersededChatRoute), clone(initialChatRoute)]).get(`${initialChatRoute.foreground_route_id}:${initialChatRoute.route_epoch}`);
+assertSemantic(reorderedOldRouteHead?.revision === supersededChatRoute.revision && reorderedOldRouteHead?.status === 'superseded', 'route head selection depends on input revision order');
+expectSemanticRejected(canonicalMessageBindingErrors(canonicalOperationAtHandoff, reorderedOldRouteHead), 'negative: reordered route revisions hide old-route handoff boundary');
 
 const unknownOperationWithReceipt = clone(operation);
 unknownOperationWithReceipt.status = 'outcome_unknown';
@@ -732,9 +808,25 @@ completedWithoutMessage.canonical_message_status = 'pending';
 expectRejected('narration-delivery.schema.json', completedWithoutMessage, 'negative: completed delivery without canonical commit');
 
 const resumePacket = await readJson(path.join(exampleRoot, 'resume-packet.json'));
-const legacyResumePacket = clone(resumePacket);
-legacyResumePacket.schema_version = 1;
-expectRejected('resume-packet.schema.json', legacyResumePacket, 'negative: v1 resume packet validated as v2 without regeneration');
+const previousResumePacket = clone(resumePacket);
+previousResumePacket.schema_version = 2;
+delete previousResumePacket.safety_state.writer_lock.writer_lock_ids;
+expectRejected('resume-packet.schema.json', previousResumePacket, 'negative: v2 resume packet validated as v3 without regeneration');
+const writerIdentityFreePacket = clone(resumePacket);
+delete writerIdentityFreePacket.safety_state.writer_lock.writer_lock_ids;
+expectRejected('resume-packet.schema.json', writerIdentityFreePacket, 'negative: resume writer-lock projection omits exact lock IDs');
+const attemptHeadFreePacket = clone(resumePacket);
+delete attemptHeadFreePacket.active_tasks[0].current_attempt_event_sequence;
+expectRejected('resume-packet.schema.json', attemptHeadFreePacket, 'negative: resume active task omits current attempt event-sequence head');
+const taskHeadFreePacket = clone(resumePacket);
+delete taskHeadFreePacket.active_tasks[0].task_revision;
+expectRejected('resume-packet.schema.json', taskHeadFreePacket, 'negative: resume active task omits canonical task-revision head');
+const unsafeIntegerPacket = clone(resumePacket);
+unsafeIntegerPacket.source_watermarks.conversation_sequence = Number.MAX_SAFE_INTEGER + 1;
+expectRejected('resume-packet.schema.json', unsafeIntegerPacket, 'negative: resume packet accepts unsafe integer watermark');
+const terminalOperationHeadWithoutReceipt = clone(resumePacket);
+terminalOperationHeadWithoutReceipt.operation_revision_index[0].assigned_receipt_id = null;
+expectRejected('resume-packet.schema.json', terminalOperationHeadWithoutReceipt, 'negative: terminal operation tombstone omits assigned receipt identity');
 assertSemantic(
   canonicalizeFixture(resumePacket.foreground_route) === canonicalizeFixture(activeForegroundRoute) &&
     resumePacket.source_watermarks.foreground_route_epoch === activeForegroundRoute.route_epoch &&
@@ -750,18 +842,119 @@ delete packetForHash.packet_integrity.canonical_sha256;
 const computedPacketHash = createHash('sha256').update(canonicalizeFixture(packetForHash)).digest('hex');
 if (expectedPacketHash !== computedPacketHash) failures.push('resume-packet fixture integrity hash is stale');
 const resumeDelta = await readJson(path.join(exampleRoot, 'resume-delta.json'));
-const legacyResumeDelta = clone(resumeDelta);
-legacyResumeDelta.schema_version = 1;
-expectRejected('resume-delta.schema.json', legacyResumeDelta, 'negative: v1 resume delta validated as v2 without regeneration');
+const previousResumeDelta = clone(resumeDelta);
+previousResumeDelta.schema_version = 2;
+delete previousResumeDelta.safety_state.writer_lock.writer_lock_ids;
+expectRejected('resume-delta.schema.json', previousResumeDelta, 'negative: v2 resume delta validated as v3 without regeneration');
+const unsafeIntegerDelta = clone(resumeDelta);
+unsafeIntegerDelta.to_watermarks.conversation_sequence = Number.MAX_SAFE_INTEGER + 1;
+expectRejected('resume-delta.schema.json', unsafeIntegerDelta, 'negative: resume delta accepts unsafe integer watermark');
+const unsafeMessageSequenceDelta = clone(resumeDelta);
+unsafeMessageSequenceDelta.changes.find((change) => change.change_type === 'conversation_message').record.conversation_sequence = Number.MAX_SAFE_INTEGER + 1;
+expectRejected('resume-delta.schema.json', unsafeMessageSequenceDelta, 'negative: resume delta accepts unsafe conversation-message sequence');
+const computeResumePacketHash = (packet) => {
+  const packetForIntegrity = clone(packet);
+  delete packetForIntegrity.packet_integrity.canonical_sha256;
+  return createHash('sha256').update(canonicalizeFixture(packetForIntegrity)).digest('hex');
+};
+const computeResumeDeltaHash = (delta) => {
+  const deltaForIntegrity = clone(delta);
+  delete deltaForIntegrity.canonical_sha256;
+  return createHash('sha256').update(canonicalizeFixture(deltaForIntegrity)).digest('hex');
+};
+const rehashResumePacket = (packet) => {
+  packet.packet_integrity.canonical_sha256 = computeResumePacketHash(packet);
+  return packet;
+};
+const rehashResumeDelta = (delta) => {
+  delta.canonical_sha256 = computeResumeDeltaHash(delta);
+  return delta;
+};
 const resumeAuthorityErrors = (packet, delta) => {
   const errors = [];
-  const taskIds = packet.active_tasks.map((taskRecord) => taskRecord.task_id);
-  const knownTaskIds = new Set(taskIds);
-  for (const change of delta.changes.filter((candidate) => candidate.change_type === 'task_event')) {
-    if (change.record.conversation_id !== packet.conversation_id) errors.push(`task event ${change.record.event_id} belongs to another conversation`);
-    knownTaskIds.add(change.record.task_id);
+  if (delta.base_packet_id !== packet.packet_id) errors.push('delta base packet ID differs from packet');
+  if (delta.from_context_version !== packet.context_version) errors.push('delta starting context differs from packet');
+  if (canonicalizeFixture(delta.from_watermarks) !== canonicalizeFixture(packet.source_watermarks)) errors.push('delta starting watermarks differ from packet');
+  for (const [watermark, before] of Object.entries(delta.from_watermarks)) {
+    if (delta.to_watermarks[watermark] < before) errors.push(`delta watermark ${watermark} moves backwards`);
   }
+  for (const change of delta.changes) {
+    if ('conversation_id' in change.record && change.record.conversation_id !== packet.conversation_id) errors.push(`${change.change_type} record belongs to another conversation`);
+  }
+  const taskIds = packet.active_tasks.map((taskRecord) => taskRecord.task_id);
   if (new Set(taskIds).size !== taskIds.length) errors.push('resume packet repeats an active task ID');
+  const packetTaskHeads = new Map(packet.active_tasks.map((taskRecord) => [taskRecord.task_id, clone(taskRecord)]));
+  for (const taskRecord of packet.active_tasks) {
+    if (taskRecord.task_event_sequence > packet.source_watermarks.task_sequence) errors.push(`active task ${taskRecord.task_id} event head exceeds packet task watermark`);
+  }
+  const finalTaskHeads = new Map([...packetTaskHeads].map(([taskId, taskRecord]) => [taskId, clone(taskRecord)]));
+  const taskEvents = delta.changes.filter((change) => change.change_type === 'task_event').map((change) => change.record);
+  const fromTaskSequence = delta.from_watermarks.task_sequence;
+  const toTaskSequence = delta.to_watermarks.task_sequence;
+  const seenTaskEventIds = new Set();
+  for (const [index, event] of taskEvents.entries()) {
+    if (event.conversation_id !== packet.conversation_id) errors.push(`task event ${event.event_id} belongs to another conversation`);
+    if (seenTaskEventIds.has(event.event_id)) errors.push(`task event ${event.event_id} is duplicated`);
+    seenTaskEventIds.add(event.event_id);
+    if (event.sequence <= fromTaskSequence || event.sequence > toTaskSequence) errors.push(`task event ${event.event_id} falls outside delta task-sequence watermarks`);
+    if (index > 0 && event.sequence <= taskEvents[index - 1].sequence) errors.push('task events in resume delta are not in increasing canonical sequence order');
+    const priorTask = finalTaskHeads.get(event.task_id) ?? null;
+    if (priorTask) {
+      if (event.task_revision !== priorTask.task_revision + 1) errors.push(`task event ${event.event_id} does not continue task revision`);
+      if (event.sequence <= priorTask.task_event_sequence) errors.push(`task event ${event.event_id} does not follow the packet/delta task head`);
+    } else {
+      const proposedTask = event.payload?.task;
+      if (event.event_type !== 'task.proposed' || event.task_revision !== 1 || !proposedTask || proposedTask.task_id !== event.task_id || proposedTask.conversation_id !== event.conversation_id || proposedTask.state !== 'proposed') {
+        errors.push(`task event ${event.event_id} has no packet head and does not create a valid proposed task`);
+      }
+    }
+    const reduced = reduceTaskState(priorTask?.state ?? null, event.event_type);
+    if (reduced.error) errors.push(`task event ${event.event_id}: ${reduced.error}`);
+    const nextTask = priorTask ? clone(priorTask) : {
+      task_id: event.task_id,
+      title: event.payload?.task?.title ?? event.task_id,
+      state: 'proposed',
+      task_revision: 0,
+      task_event_sequence: 0,
+      latest_verified_activity: '',
+      required_context_version: event.context_version,
+      current_attempt_id: null,
+      current_attempt_state: null,
+      current_attempt_event_sequence: null,
+      primary_agent_run_id: null,
+    };
+    nextTask.state = reduced.state;
+    nextTask.task_revision = event.task_revision;
+    nextTask.task_event_sequence = event.sequence;
+    if (event.event_type === 'task.started') {
+      nextTask.current_attempt_id = event.payload.attempt_id;
+      nextTask.current_attempt_state = 'starting';
+      nextTask.current_attempt_event_sequence = null;
+      nextTask.primary_agent_run_id = event.payload.agent_run_id;
+    }
+    if (['waiting_for_user', 'waiting_for_approval', 'paused', 'verifying', 'completed', 'failed', 'cancelled'].includes(nextTask.state)) {
+      nextTask.current_attempt_id = null;
+      nextTask.current_attempt_state = null;
+      nextTask.current_attempt_event_sequence = null;
+    }
+    finalTaskHeads.set(event.task_id, nextTask);
+  }
+  if (taskEvents.length === 0 && toTaskSequence !== fromTaskSequence) errors.push('task watermark advanced without task events');
+  if (taskEvents.length > 0 && taskEvents.at(-1).sequence !== toTaskSequence) errors.push('delta task watermark does not equal the final included task-event sequence');
+  const knownTaskIds = new Set(finalTaskHeads.keys());
+  for (const change of delta.changes.filter((candidate) => ['decision_request', 'approval_request', 'operation_intent'].includes(candidate.change_type))) {
+    if (change.record.task_id !== null && !knownTaskIds.has(change.record.task_id)) errors.push(`${change.change_type} record targets an unknown task`);
+  }
+  const packetTaskByAttempt = new Map();
+  for (const taskRecord of packet.active_tasks) {
+    const hasAttempt = taskRecord.current_attempt_id !== null;
+    if (hasAttempt !== (taskRecord.current_attempt_state !== null) || hasAttempt !== (taskRecord.current_attempt_event_sequence !== null)) errors.push(`active task ${taskRecord.task_id} has an incomplete current-attempt head`);
+    if (hasAttempt) {
+      if (packetTaskByAttempt.has(taskRecord.current_attempt_id)) errors.push(`active tasks repeat current attempt ${taskRecord.current_attempt_id}`);
+      packetTaskByAttempt.set(taskRecord.current_attempt_id, taskRecord);
+      if (taskRecord.current_attempt_event_sequence > packet.source_watermarks.attempt_sequence) errors.push(`active task ${taskRecord.task_id} attempt head exceeds packet watermark`);
+    }
+  }
   const runningTasks = packet.active_tasks.filter((taskRecord) => taskRecord.state === 'running');
   if (runningTasks.length > 1) errors.push('resume packet has more than one running strong-primary task');
   const slotAttemptId = packet.safety_state.primary_slot_attempt_id;
@@ -779,9 +972,318 @@ const resumeAuthorityErrors = (packet, delta) => {
   const attemptEvents = delta.changes.filter((change) => change.change_type === 'attempt_event').map((change) => change.record);
   const leaseChanges = delta.changes.filter((change) => change.change_type === 'capability_lease').map((change) => change.record);
   const contextChanges = delta.changes.filter((change) => change.change_type === 'context_revision').map((change) => change.record);
-  for (const event of attemptEvents) {
+  const revisionedIdentityFieldByType = {
+    decision_request: 'decision_request_id',
+    approval_request: 'approval_request_id',
+    capability_lease: 'lease_id',
+    operation_intent: 'operation_id',
+    narration_delivery: 'delivery_id',
+  };
+  const seenRevisionedRecordKeys = new Set();
+  const operationIdByIdempotencyKey = new Map();
+  const operationIdByCanonicalMessageId = new Map();
+  const operationIdByReceiptId = new Map();
+  const operationHeadById = new Map();
+  const operationNaturalIdentityById = new Map();
+  if (packet.operation_revision_index.length !== packet.source_watermarks.operation_sequence) errors.push('packet operation revision index does not losslessly cover its watermark');
+  if (delta.to_watermarks.operation_sequence > 256) errors.push('resulting operation revision index exceeds the critical v3 capacity');
+  for (const [index, head] of packet.operation_revision_index.entries()) {
+    const receiptRequired = ['succeeded', 'failed', 'cancelled'].includes(head.status);
+    if (receiptRequired !== (head.assigned_receipt_id !== null)) errors.push(`packet operation ${head.operation_id} has receipt identity inconsistent with status ${head.status}`);
+    if (head.source_sequence !== index + 1) errors.push('packet operation revision index has a gap or reorder');
+    const priorHead = operationHeadById.get(head.operation_id);
+    if (priorHead) {
+      if (['succeeded', 'failed', 'cancelled', 'outcome_unknown'].includes(priorHead.status)) errors.push(`packet operation ${head.operation_id} revises a terminal tombstone`);
+      const legalNextStatuses = {
+        intended: ['dispatched', 'failed', 'cancelled'],
+        dispatched: ['succeeded', 'failed', 'cancelled', 'outcome_unknown'],
+      }[priorHead.status] ?? [];
+      if (!legalNextStatuses.includes(head.status)) errors.push(`packet operation ${head.operation_id} has illegal status transition`);
+      if (head.revision !== priorHead.revision + 1) errors.push(`packet operation ${head.operation_id} has a revision gap`);
+      if (head.immutable_identity_sha256 !== priorHead.immutable_identity_sha256) errors.push(`packet operation ${head.operation_id} changes immutable identity`);
+      if (
+        head.idempotency_key !== priorHead.idempotency_key ||
+        head.canonical_message_id !== priorHead.canonical_message_id ||
+        (priorHead.assigned_receipt_id !== null && head.assigned_receipt_id !== priorHead.assigned_receipt_id)
+      ) errors.push(`packet operation ${head.operation_id} changes natural identity`);
+    } else if (head.revision !== 1) {
+      errors.push(`packet operation ${head.operation_id} begins after revision 1`);
+    }
+    operationHeadById.set(head.operation_id, clone(head));
+    operationNaturalIdentityById.set(head.operation_id, {
+      idempotency_key: head.idempotency_key,
+      canonical_message_id: head.canonical_message_id,
+      receipt_id: head.assigned_receipt_id,
+    });
+    for (const [naturalKey, registry, label] of [
+      [head.idempotency_key, operationIdByIdempotencyKey, 'idempotency key'],
+      [head.canonical_message_id, operationIdByCanonicalMessageId, 'canonical message ID'],
+      [head.assigned_receipt_id, operationIdByReceiptId, 'receipt ID'],
+    ]) {
+      if (naturalKey === null) continue;
+      const existingOperationId = registry.get(naturalKey);
+      if (existingOperationId && existingOperationId !== head.operation_id) errors.push(`operation revision ${head.operation_id} aliases ${label} owned by ${existingOperationId}`);
+      else registry.set(naturalKey, head.operation_id);
+    }
+  }
+  for (const change of delta.changes) {
+    const identityField = revisionedIdentityFieldByType[change.change_type];
+    if (!identityField) continue;
+    const key = `${change.change_type}:${change.record[identityField]}:${change.record.revision}`;
+    if (seenRevisionedRecordKeys.has(key)) errors.push(`${change.change_type} repeats canonical record identity/revision ${key}`);
+    seenRevisionedRecordKeys.add(key);
+    if (change.change_type === 'operation_intent') {
+      const operation = change.record;
+      const priorOperationHead = operationHeadById.get(operation.operation_id);
+      const immutableIdentitySha256 = operationImmutableIdentityHash(operation);
+      if (priorOperationHead) {
+        if (['succeeded', 'failed', 'cancelled', 'outcome_unknown'].includes(priorOperationHead.status)) errors.push(`operation ${operation.operation_id} revises terminal operation head`);
+        const legalNextStatuses = {
+          intended: ['dispatched', 'failed', 'cancelled'],
+          dispatched: ['succeeded', 'failed', 'cancelled', 'outcome_unknown'],
+        }[priorOperationHead.status] ?? [];
+        if (!legalNextStatuses.includes(operation.status)) errors.push(`operation ${operation.operation_id} has illegal status transition ${priorOperationHead.status} -> ${operation.status}`);
+        if (operation.previous_revision !== priorOperationHead.revision || operation.revision !== priorOperationHead.revision + 1) errors.push(`operation ${operation.operation_id} does not continue packet/delta revision head`);
+        if (operation.revision > Number.MAX_SAFE_INTEGER || operation.previous_revision > Number.MAX_SAFE_INTEGER) errors.push(`operation ${operation.operation_id} uses unsafe revision integer`);
+        if (priorOperationHead.immutable_identity_sha256 !== immutableIdentitySha256) errors.push(`operation ${operation.operation_id} changes immutable identity across revisions`);
+      } else if (operation.previous_revision !== null || operation.revision !== 1) {
+        errors.push(`operation ${operation.operation_id} begins after revision 1 without an active packet head`);
+      }
+      const existingNaturalIdentity = operationNaturalIdentityById.get(operation.operation_id);
+      const nextReceiptId = operation.receipt?.receipt_id ?? null;
+      if (existingNaturalIdentity) {
+        if (
+          existingNaturalIdentity.idempotency_key !== operation.idempotency_key ||
+          existingNaturalIdentity.canonical_message_id !== operation.canonical_message_id ||
+          (existingNaturalIdentity.receipt_id !== null && existingNaturalIdentity.receipt_id !== nextReceiptId)
+        ) errors.push(`operation ${operation.operation_id} changes immutable natural identity across revisions`);
+        if (existingNaturalIdentity.receipt_id === null && nextReceiptId !== null) existingNaturalIdentity.receipt_id = nextReceiptId;
+      } else {
+        operationNaturalIdentityById.set(operation.operation_id, {
+          idempotency_key: operation.idempotency_key,
+          canonical_message_id: operation.canonical_message_id,
+          receipt_id: nextReceiptId,
+        });
+      }
+      operationHeadById.set(operation.operation_id, {
+        source_sequence: change.source_sequence,
+        revision: operation.revision,
+        status: operation.status,
+        immutable_identity_sha256: immutableIdentitySha256,
+        idempotency_key: operation.idempotency_key,
+        canonical_message_id: operation.canonical_message_id,
+        assigned_receipt_id: nextReceiptId,
+      });
+      for (const [naturalKey, registry, label] of [
+        [operation.idempotency_key, operationIdByIdempotencyKey, 'idempotency key'],
+        [operation.canonical_message_id, operationIdByCanonicalMessageId, 'canonical message ID'],
+        [operation.receipt?.receipt_id ?? null, operationIdByReceiptId, 'receipt ID'],
+      ]) {
+        if (naturalKey === null) continue;
+        const existingOperationId = registry.get(naturalKey);
+        if (existingOperationId && existingOperationId !== operation.operation_id) errors.push(`operation ${operation.operation_id} aliases ${label} owned by ${existingOperationId}`);
+        else registry.set(naturalKey, operation.operation_id);
+      }
+    }
+  }
+  const streamChangeCounts = {
+    conversation_sequence: delta.changes.filter((change) => change.change_type === 'conversation_message').length,
+    context_sequence: contextChanges.length,
+    decision_sequence: delta.changes.filter((change) => change.change_type === 'decision_request').length,
+    approval_sequence: delta.changes.filter((change) => change.change_type === 'approval_request').length,
+    capability_lease_sequence: leaseChanges.length,
+    operation_sequence: delta.changes.filter((change) => change.change_type === 'operation_intent').length,
+    narration_delivery_sequence: delta.changes.filter((change) => change.change_type === 'narration_delivery').length,
+  };
+  for (const [watermark, recordCount] of Object.entries(streamChangeCounts)) {
+    const advance = delta.to_watermarks[watermark] - delta.from_watermarks[watermark];
+    if (advance !== recordCount) errors.push(`${watermark} advance does not equal included record count`);
+  }
+  const sequencedRevisionStreams = {
+    decision_request: 'decision_sequence',
+    approval_request: 'approval_sequence',
+    capability_lease: 'capability_lease_sequence',
+    operation_intent: 'operation_sequence',
+    narration_delivery: 'narration_delivery_sequence',
+  };
+  for (const [changeType, watermark] of Object.entries(sequencedRevisionStreams)) {
+    const changes = delta.changes.filter((change) => change.change_type === changeType);
+    for (const [index, change] of changes.entries()) {
+      if (change.source_sequence !== delta.from_watermarks[watermark] + index + 1) errors.push(`${changeType} source sequence does not losslessly continue ${watermark}`);
+    }
+  }
+  if (delta.to_watermarks.agent_checkpoint_sequence !== delta.from_watermarks.agent_checkpoint_sequence) errors.push('agent checkpoint watermark advanced without a supported checkpoint delta record');
+  if (delta.to_context_version - delta.from_context_version !== contextChanges.length) errors.push('context version advance does not equal included context revision count');
+  if (delta.to_context_version !== delta.to_watermarks.context_sequence) errors.push('delta context version differs from context watermark');
+  for (const [index, revision] of contextChanges.entries()) {
+    const expectedVersion = delta.from_context_version + index + 1;
+    if (revision.version !== expectedVersion || revision.parent_version !== expectedVersion - 1) errors.push(`context revision ${revision.revision_id} does not form a contiguous delta chain`);
+  }
+  const fromAttemptSequence = delta.from_watermarks.attempt_sequence;
+  const toAttemptSequence = delta.to_watermarks.attempt_sequence;
+  const seenAttemptEventIds = new Set();
+  const seenAttemptIdempotencyKeys = new Set();
+  const priorAttemptEventByAttempt = new Map();
+  for (const [index, event] of attemptEvents.entries()) {
     if (event.conversation_id !== packet.conversation_id || event.attempt.conversation_id !== packet.conversation_id) errors.push(`attempt event ${event.event_id} belongs to another conversation`);
     if (!knownTaskIds.has(event.task_id) || event.task_id !== event.attempt.task_id || event.attempt_id !== event.attempt.attempt_id) errors.push(`attempt event ${event.event_id} has unrelated task/attempt identity`);
+    for (const transitionError of attemptTransitionErrors(event)) errors.push(`attempt event ${event.event_id}: ${transitionError}`);
+    if (seenAttemptEventIds.has(event.event_id)) errors.push(`attempt event ${event.event_id} is duplicated`);
+    seenAttemptEventIds.add(event.event_id);
+    if (seenAttemptIdempotencyKeys.has(event.idempotency_key)) errors.push(`attempt event ${event.event_id} repeats an idempotency key`);
+    seenAttemptIdempotencyKeys.add(event.idempotency_key);
+    if (event.sequence <= fromAttemptSequence || event.sequence > toAttemptSequence) errors.push(`attempt event ${event.event_id} falls outside delta attempt-sequence watermarks`);
+    if (index > 0 && event.sequence <= attemptEvents[index - 1].sequence) errors.push('attempt events in resume delta are not in increasing canonical sequence order');
+    const priorEvent = priorAttemptEventByAttempt.get(event.attempt_id);
+    if (priorEvent) {
+      if (event.previous_state !== priorEvent.resulting_state) errors.push(`attempt event ${event.event_id} does not continue the prior resulting state`);
+      if (Date.parse(event.occurred_at) < Date.parse(priorEvent.occurred_at)) errors.push(`attempt event ${event.event_id} moves event time backwards`);
+      if (!immutableFieldsMatch(priorEvent.attempt, event.attempt, [
+        'state', 'context_version', 'slot_lease', 'writer_lock_ids', 'capability_lease_ids', 'checkpoint_ref', 'failure', 'updated_at', 'terminal_at',
+      ])) errors.push(`attempt event ${event.event_id} changes immutable attempt lineage`);
+    } else {
+      const packetTaskHead = packetTaskByAttempt.get(event.attempt_id);
+      if (packetTaskHead) {
+        if (event.task_id !== packetTaskHead.task_id || event.primary_agent_run_id !== packetTaskHead.primary_agent_run_id) errors.push(`attempt event ${event.event_id} reassigns the packet attempt lineage`);
+        if (event.sequence <= packetTaskHead.current_attempt_event_sequence) errors.push(`attempt event ${event.event_id} does not follow the packet attempt head`);
+        if (event.previous_state !== packetTaskHead.current_attempt_state) errors.push(`attempt event ${event.event_id} does not continue the packet attempt state`);
+      } else if (event.event_type !== 'attempt.created' || event.previous_state !== null) {
+        errors.push(`attempt event ${event.event_id} has no packet head and does not begin a new attempt`);
+      }
+    }
+    priorAttemptEventByAttempt.set(event.attempt_id, event);
+  }
+  const fromControllerSequence = Math.max(packet.source_watermarks.task_sequence, packet.source_watermarks.attempt_sequence);
+  const toControllerSequence = Math.max(delta.to_watermarks.task_sequence, delta.to_watermarks.attempt_sequence);
+  const controllerEventChanges = delta.changes.filter((change) => ['task_event', 'attempt_event'].includes(change.change_type));
+  const controllerEventSequences = controllerEventChanges.map((change) => change.record.sequence);
+  const controllerEventIds = controllerEventChanges.map((change) => change.record.event_id);
+  if (new Set(controllerEventIds).size !== controllerEventIds.length) errors.push('task/attempt records reuse a global controller event ID');
+  const controllerSequenceAdvance = toControllerSequence - fromControllerSequence;
+  let controllerCoverageValid = controllerSequenceAdvance >= 0 && controllerSequenceAdvance === controllerEventSequences.length;
+  for (let index = 0; controllerCoverageValid && index < controllerEventSequences.length; index += 1) {
+    if (controllerEventSequences[index] !== fromControllerSequence + index + 1) controllerCoverageValid = false;
+  }
+  if (!controllerCoverageValid) errors.push('task/attempt controller events do not losslessly cover the packet-to-delta sequence interval');
+  for (const [attemptId, finalEvent] of priorAttemptEventByAttempt) {
+    const taskHead = finalTaskHeads.get(finalEvent.task_id);
+    if (!taskHead || taskHead.current_attempt_id !== attemptId) continue;
+    if (['parked', 'completed', 'failed', 'cancelled', 'interrupted'].includes(finalEvent.attempt.state)) {
+      taskHead.current_attempt_id = null;
+      taskHead.current_attempt_state = null;
+      taskHead.current_attempt_event_sequence = null;
+    } else {
+      taskHead.current_attempt_state = finalEvent.attempt.state;
+      taskHead.current_attempt_event_sequence = finalEvent.sequence;
+      taskHead.primary_agent_run_id = finalEvent.primary_agent_run_id;
+    }
+  }
+  const transactionGroups = [];
+  const closedTransactionIds = new Set();
+  let openTransaction = null;
+  for (const change of delta.changes.filter((candidate) => ['task_event', 'attempt_event'].includes(candidate.change_type))) {
+    const transactionId = change.record.transaction_id;
+    if (!openTransaction || openTransaction.transaction_id !== transactionId) {
+      if (openTransaction) closedTransactionIds.add(openTransaction.transaction_id);
+      if (closedTransactionIds.has(transactionId)) errors.push(`transaction ${transactionId} is split across noncontiguous event groups`);
+      openTransaction = { transaction_id: transactionId, changes: [] };
+      transactionGroups.push(openTransaction);
+    }
+    openTransaction.changes.push(change);
+  }
+  const transactionTaskHeads = new Map([...packetTaskHeads].map(([taskId, taskRecord]) => [taskId, clone(taskRecord)]));
+  const transactionAttemptHeads = new Map();
+  for (const taskRecord of packet.active_tasks.filter((candidate) => candidate.current_attempt_id !== null)) {
+    const ownsSlot = taskRecord.current_attempt_id === slotAttemptId;
+    transactionAttemptHeads.set(taskRecord.current_attempt_id, {
+      attempt_id: taskRecord.current_attempt_id,
+      task_id: taskRecord.task_id,
+      primary_agent_run_id: taskRecord.primary_agent_run_id,
+      state: taskRecord.current_attempt_state,
+      slot_lease: { status: ownsSlot ? 'acquired' : 'none' },
+      writer_lock_ids: ownsSlot ? clone(packet.safety_state.writer_lock?.writer_lock_ids ?? []) : [],
+      capability_lease_ids: ownsSlot ? clone(packet.safety_state.active_capability_lease_ids) : [],
+    });
+  }
+  for (const group of transactionGroups) {
+    for (const change of group.changes.filter((candidate) => candidate.change_type === 'task_event')) {
+      const event = change.record;
+      const priorTask = transactionTaskHeads.get(event.task_id) ?? null;
+      const reduced = reduceTaskState(priorTask?.state ?? null, event.event_type);
+      const nextTask = priorTask ? clone(priorTask) : {
+        task_id: event.task_id,
+        state: 'proposed',
+        task_revision: 0,
+        task_event_sequence: 0,
+        current_attempt_id: null,
+        current_attempt_state: null,
+        current_attempt_event_sequence: null,
+        primary_agent_run_id: null,
+      };
+      nextTask.state = reduced.state;
+      nextTask.task_revision = event.task_revision;
+      nextTask.task_event_sequence = event.sequence;
+      if (event.event_type === 'task.started') {
+        nextTask.current_attempt_id = event.payload.attempt_id;
+        nextTask.current_attempt_state = 'starting';
+        nextTask.current_attempt_event_sequence = null;
+        nextTask.primary_agent_run_id = event.payload.agent_run_id;
+      }
+      if (['waiting_for_user', 'waiting_for_approval', 'paused', 'verifying', 'completed', 'failed', 'cancelled'].includes(nextTask.state)) {
+        nextTask.current_attempt_id = null;
+        nextTask.current_attempt_state = null;
+        nextTask.current_attempt_event_sequence = null;
+      }
+      transactionTaskHeads.set(event.task_id, nextTask);
+    }
+    for (const change of group.changes.filter((candidate) => candidate.change_type === 'attempt_event')) transactionAttemptHeads.set(change.record.attempt_id, clone(change.record.attempt));
+    for (const change of group.changes.filter((candidate) => candidate.change_type === 'attempt_event')) {
+      const event = change.record;
+      const taskHead = transactionTaskHeads.get(event.task_id);
+      if (!taskHead || taskHead.current_attempt_id !== event.attempt_id) continue;
+      if (['parked', 'completed', 'failed', 'cancelled', 'interrupted'].includes(event.attempt.state)) {
+        taskHead.current_attempt_id = null;
+        taskHead.current_attempt_state = null;
+        taskHead.current_attempt_event_sequence = null;
+      } else {
+        taskHead.current_attempt_state = event.attempt.state;
+        taskHead.current_attempt_event_sequence = event.sequence;
+        taskHead.primary_agent_run_id = event.primary_agent_run_id;
+      }
+    }
+    const acquiredHeads = [...transactionAttemptHeads.values()].filter((attempt) => attempt.slot_lease.status === 'acquired');
+    const runningHeads = [...transactionTaskHeads.values()].filter((taskRecord) => taskRecord.state === 'running');
+    if (acquiredHeads.length > 1) errors.push(`transaction ${group.transaction_id} leaves overlapping acquired attempts`);
+    if (runningHeads.length > 1) errors.push(`transaction ${group.transaction_id} leaves multiple running tasks`);
+    const acquiredHead = acquiredHeads.length === 1 ? acquiredHeads[0] : null;
+    const authorityTaskHead = acquiredHead ? transactionTaskHeads.get(acquiredHead.task_id) : null;
+    if (acquiredHead) {
+      if (!taskMatchesAcquiredAttempt(authorityTaskHead, acquiredHead)) errors.push(`transaction ${group.transaction_id} exposes task/attempt authority mismatch`);
+      for (const runningHead of runningHeads) {
+        if (runningHead.current_attempt_id !== acquiredHead.attempt_id) errors.push(`transaction ${group.transaction_id} leaves a running task outside the acquired slot`);
+      }
+    } else if (runningHeads.length > 0) {
+      errors.push(`transaction ${group.transaction_id} leaves a running task without acquired attempt authority`);
+    }
+    for (const attempt of transactionAttemptHeads.values()) {
+      if (attempt.attempt_id !== acquiredHead?.attempt_id && (attempt.writer_lock_ids.length > 0 || attempt.capability_lease_ids.length > 0)) errors.push(`transaction ${group.transaction_id} leaves authority on non-slot attempt ${attempt.attempt_id}`);
+    }
+  }
+  let simulatedSlotAttemptId = slotAttemptId;
+  for (const change of delta.changes) {
+    if (change.change_type === 'attempt_event') {
+      const attempt = change.record.attempt;
+      if (attempt.slot_lease.status === 'acquired') {
+        if (simulatedSlotAttemptId !== null && simulatedSlotAttemptId !== attempt.attempt_id) errors.push(`attempt ${attempt.attempt_id} transiently overlaps acquired slot owner ${simulatedSlotAttemptId}`);
+        else simulatedSlotAttemptId = attempt.attempt_id;
+      } else if (simulatedSlotAttemptId === attempt.attempt_id && ['none', 'released'].includes(attempt.slot_lease.status)) {
+        simulatedSlotAttemptId = null;
+      }
+      if (attempt.attempt_id !== simulatedSlotAttemptId && (attempt.writer_lock_ids.length > 0 || attempt.capability_lease_ids.length > 0)) errors.push(`attempt ${attempt.attempt_id} transiently holds authority without the simulated slot`);
+    }
+    if (change.change_type === 'capability_lease' && change.record.status === 'active' && change.record.attempt_id !== simulatedSlotAttemptId) {
+      errors.push(`active lease ${change.record.lease_id} is issued to a transient non-slot attempt`);
+    }
   }
   for (const leaseRecord of leaseChanges) {
     if (leaseRecord.conversation_id !== packet.conversation_id || !knownTaskIds.has(leaseRecord.task_id)) errors.push(`capability lease ${leaseRecord.lease_id} belongs to another conversation/task`);
@@ -790,10 +1292,8 @@ const resumeAuthorityErrors = (packet, delta) => {
   for (const revision of contextChanges) {
     if (revision.conversation_id !== packet.conversation_id) errors.push(`context revision ${revision.revision_id} belongs to another conversation`);
   }
-  const attemptWatermarkDelta = delta.to_watermarks.attempt_sequence - delta.from_watermarks.attempt_sequence;
-  const leaseWatermarkDelta = delta.to_watermarks.capability_lease_sequence - delta.from_watermarks.capability_lease_sequence;
-  if (attemptWatermarkDelta !== attemptEvents.length) errors.push('attempt watermark delta does not equal complete attempt-event count');
-  if (leaseWatermarkDelta !== leaseChanges.length) errors.push('capability-lease watermark delta does not equal complete lease-revision count');
+  if (attemptEvents.length === 0 && toAttemptSequence !== fromAttemptSequence) errors.push('attempt watermark advanced without attempt events');
+  if (attemptEvents.length > 0 && attemptEvents.at(-1).sequence !== toAttemptSequence) errors.push('delta attempt watermark does not equal the final included attempt-event sequence');
   const oldSlotAttemptId = packet.safety_state.primary_slot_attempt_id;
   const newSlotAttemptId = delta.safety_state.primary_slot_attempt_id;
   const slotChanged = oldSlotAttemptId !== newSlotAttemptId;
@@ -823,20 +1323,57 @@ const resumeAuthorityErrors = (packet, delta) => {
     }
     if (releaseIndex >= 0 && acquireIndex >= 0 && releaseIndex >= acquireIndex) errors.push('new primary slot was acquired before old authority released');
   }
-  if (slotChanged || writerChanged) {
-    const targetAttemptId = newSlotAttemptId ?? oldSlotAttemptId;
-    const relevantAttemptEvents = attemptEvents.filter((event) => event.attempt_id === targetAttemptId);
-    if (relevantAttemptEvents.length === 0) {
-      errors.push('slot/writer authority change has no event for the affected attempt');
-    } else {
-      const latestAttempt = relevantAttemptEvents.at(-1).attempt;
-      const expectedSlot = latestAttempt.slot_lease.status === 'acquired' ? latestAttempt.attempt_id : null;
-      if (newSlotAttemptId !== expectedSlot) errors.push('delta safety slot differs from resulting attempt authority');
-      const expectsWriter = latestAttempt.writer_lock_ids.length > 0;
-      if (Boolean(delta.safety_state.writer_lock) !== expectsWriter) errors.push('delta writer-lock presence differs from resulting attempt snapshot');
-      if (delta.safety_state.writer_lock) {
-        if (delta.safety_state.writer_lock.attempt_id !== expectedSlot || delta.safety_state.writer_lock.task_id !== latestAttempt.task_id) errors.push('delta writer lock differs from resulting attempt authority');
-      }
+  const finalAttemptAuthority = new Map();
+  for (const taskRecord of packet.active_tasks.filter((candidate) => candidate.current_attempt_id !== null)) {
+    const ownsPacketSlot = taskRecord.current_attempt_id === oldSlotAttemptId;
+    finalAttemptAuthority.set(taskRecord.current_attempt_id, {
+      attempt_id: taskRecord.current_attempt_id,
+      task_id: taskRecord.task_id,
+      primary_agent_run_id: taskRecord.primary_agent_run_id,
+      state: taskRecord.current_attempt_state,
+      slot_lease: { status: ownsPacketSlot ? 'acquired' : 'none' },
+      writer_lock_ids: ownsPacketSlot ? clone(packet.safety_state.writer_lock?.writer_lock_ids ?? []) : [],
+      capability_lease_ids: ownsPacketSlot ? clone(packet.safety_state.active_capability_lease_ids) : [],
+    });
+  }
+  for (const event of attemptEvents) finalAttemptAuthority.set(event.attempt_id, event.attempt);
+  const acquiredAttemptIds = [...finalAttemptAuthority.values()]
+    .filter((attempt) => attempt.slot_lease.status === 'acquired')
+    .map((attempt) => attempt.attempt_id)
+    .sort();
+  const projectedAcquiredAttemptIds = newSlotAttemptId === null ? [] : [newSlotAttemptId];
+  if (canonicalizeFixture(acquiredAttemptIds) !== canonicalizeFixture(projectedAcquiredAttemptIds)) errors.push('final attempt heads contain hidden or missing acquired primary-slot authority');
+  const finalSlotAttempt = newSlotAttemptId === null ? null : finalAttemptAuthority.get(newSlotAttemptId);
+  const finalCapabilityLeaseIds = [...(finalSlotAttempt?.capability_lease_ids ?? [])].sort();
+  const projectedCapabilityLeaseIds = [...delta.safety_state.active_capability_lease_ids].sort();
+  if (canonicalizeFixture(finalCapabilityLeaseIds) !== canonicalizeFixture(projectedCapabilityLeaseIds)) errors.push('final slot attempt capability leases differ from resulting safety projection');
+  for (const attempt of finalAttemptAuthority.values()) {
+    if (attempt.attempt_id !== newSlotAttemptId && (attempt.writer_lock_ids.length > 0 || attempt.capability_lease_ids.length > 0)) errors.push(`non-slot attempt ${attempt.attempt_id} retains hidden lock or lease authority`);
+  }
+  const finalRunningTasks = [...finalTaskHeads.values()].filter((taskRecord) => taskRecord.state === 'running');
+  if (finalRunningTasks.length > 1) errors.push('resulting task heads contain more than one running strong-primary task');
+  if (newSlotAttemptId !== null) {
+    const finalSlotHead = finalAttemptAuthority.get(newSlotAttemptId);
+    const finalSlotTask = finalSlotHead ? finalTaskHeads.get(finalSlotHead.task_id) : null;
+    if (!taskMatchesAcquiredAttempt(finalSlotTask, finalSlotHead)) errors.push('resulting primary slot does not match the reduced task/current-attempt lineage');
+  } else if (finalRunningTasks.length > 0) {
+    errors.push('resulting running task has no projected primary slot owner');
+  }
+  for (const taskRecord of finalRunningTasks) {
+    if (taskRecord.current_attempt_id !== newSlotAttemptId) errors.push(`running task ${taskRecord.task_id} differs from resulting primary slot owner`);
+  }
+  const targetAttemptId = newSlotAttemptId ?? (slotChanged ? oldSlotAttemptId : null);
+  const relevantAttemptEvents = targetAttemptId === null ? [] : attemptEvents.filter((event) => event.attempt_id === targetAttemptId);
+  if ((slotChanged || writerChanged) && relevantAttemptEvents.length === 0) errors.push('slot/writer authority change has no event for the affected attempt');
+  if (relevantAttemptEvents.length > 0) {
+    const latestAttempt = relevantAttemptEvents.at(-1).attempt;
+    const expectedSlot = latestAttempt.slot_lease.status === 'acquired' ? latestAttempt.attempt_id : null;
+    if (newSlotAttemptId !== expectedSlot) errors.push('delta safety slot differs from resulting attempt authority');
+    const expectedWriterLockIds = [...latestAttempt.writer_lock_ids].sort();
+    const projectedWriterLockIds = [...(delta.safety_state.writer_lock?.writer_lock_ids ?? [])].sort();
+    if (canonicalizeFixture(projectedWriterLockIds) !== canonicalizeFixture(expectedWriterLockIds)) errors.push('delta writer-lock IDs differ from resulting attempt snapshot');
+    if (delta.safety_state.writer_lock) {
+      if (delta.safety_state.writer_lock.attempt_id !== expectedSlot || delta.safety_state.writer_lock.task_id !== latestAttempt.task_id) errors.push('delta writer lock differs from resulting attempt authority');
     }
   }
   const canonicalLeaseHeads = new Map([[lease.lease_id, lease]]);
@@ -887,6 +1424,8 @@ const resumeAuthorityErrors = (packet, delta) => {
 };
 const resumeProjectionErrors = (packet, delta) => {
   const errors = [...resumeAuthorityErrors(packet, delta)];
+  if (packet.packet_integrity.canonical_sha256 !== computeResumePacketHash(packet)) errors.push('resume packet integrity hash mismatch');
+  if (delta.canonical_sha256 !== computeResumeDeltaHash(delta)) errors.push('resume delta integrity hash mismatch');
   if (packet.foreground_route.conversation_id !== packet.conversation_id) errors.push('packet foreground route belongs to another conversation');
   if (packet.source_watermarks.foreground_route_epoch !== packet.foreground_route.route_epoch) errors.push('packet foreground route watermark differs from active epoch');
   if (delta.conversation_id !== packet.conversation_id) errors.push('delta conversation differs from packet');
@@ -894,9 +1433,7 @@ const resumeProjectionErrors = (packet, delta) => {
   const combinedRouteHistory = [...clone(foregroundRoutes), clone(legacyMigrationRoute), ...clone(routeChanges)];
   const combinedRouteErrors = foregroundRouteSetErrors(combinedRouteHistory);
   for (const error of combinedRouteErrors) errors.push(`delta route history: ${error}`);
-  const knownRoutes = new Map(
-    combinedRouteHistory.map((route) => [`${route.foreground_route_id}:${route.route_epoch}`, route]),
-  );
+  const knownRoutes = latestForegroundRouteHeads(combinedRouteHistory);
   for (const route of routeChanges) {
     if (route.conversation_id !== delta.conversation_id) errors.push(`delta foreground route ${route.foreground_route_id} belongs to another conversation`);
   }
@@ -935,14 +1472,23 @@ const resumeProjectionErrors = (packet, delta) => {
     });
   }
   for (const change of delta.changes) {
-    if (change.change_type === 'operation_intent' && change.record.operation_class === 'canonical_message_commit' && change.record.receipt) {
-      commitReceipts.set(change.record.receipt.receipt_id, {
-        message_id: change.record.canonical_message_id,
-        route_id: change.record.foreground_route_id,
-        route_epoch: change.record.foreground_route_epoch,
-        owner_claim_id: change.record.foreground_owner_claim_id,
-        committed_at: change.record.receipt.observed_at,
-      });
+    if (change.change_type === 'operation_intent' && change.record.operation_class === 'canonical_message_commit') {
+      const operationRoute = knownRoutes.get(`${change.record.foreground_route_id}:${change.record.foreground_route_epoch}`);
+      for (const error of canonicalMessageBindingErrors(change.record, operationRoute)) errors.push(`delta canonical message operation ${change.record.operation_id}: ${error}`);
+      if (change.record.receipt) {
+        commitReceipts.set(change.record.receipt.receipt_id, {
+          message_id: change.record.canonical_message_id,
+          route_id: change.record.foreground_route_id,
+          route_epoch: change.record.foreground_route_epoch,
+          owner_claim_id: change.record.foreground_owner_claim_id,
+          committed_at: change.record.receipt.observed_at,
+        });
+      }
+    }
+    if (change.change_type === 'narration_delivery') {
+      const narrationRoute = knownRoutes.get(`${change.record.foreground_route_id}:${change.record.foreground_route_epoch}`);
+      if (!narrationRoute) errors.push(`delta narration delivery ${change.record.delivery_id} has no matching foreground route`);
+      else for (const error of narrationDeliveryBindingErrors(change.record, narrationRoute)) errors.push(`delta narration delivery ${change.record.delivery_id}: ${error}`);
     }
     if (change.change_type === 'narration_delivery' && change.record.canonical_commit_receipt_id) {
       commitReceipts.set(change.record.canonical_commit_receipt_id, {
@@ -954,6 +1500,22 @@ const resumeProjectionErrors = (packet, delta) => {
       });
     }
   }
+  const packetMessageIds = packet.recent_verbatim_turns.map((message) => message.message_id);
+  const packetMessageSequences = packet.recent_verbatim_turns.map((message) => message.conversation_sequence);
+  if (new Set(packetMessageIds).size !== packetMessageIds.length) errors.push('packet recent messages repeat a message ID');
+  for (let index = 1; index < packetMessageSequences.length; index += 1) {
+    if (packetMessageSequences[index] <= packetMessageSequences[index - 1]) errors.push('packet recent messages are not in increasing conversation sequence order');
+  }
+  if (packetMessageSequences.length > 0 && packetMessageSequences.at(-1) !== packet.source_watermarks.conversation_sequence) errors.push('packet recent messages do not end at the conversation watermark');
+  const deltaMessages = delta.changes.filter((candidate) => candidate.change_type === 'conversation_message').map((change) => change.record);
+  const deltaConversationAdvance = delta.to_watermarks.conversation_sequence - delta.from_watermarks.conversation_sequence;
+  let conversationCoverageValid = deltaConversationAdvance >= 0 && deltaConversationAdvance === deltaMessages.length;
+  for (let index = 0; conversationCoverageValid && index < deltaMessages.length; index += 1) {
+    if (deltaMessages[index].conversation_sequence !== delta.from_watermarks.conversation_sequence + index + 1) conversationCoverageValid = false;
+  }
+  if (!conversationCoverageValid) errors.push('delta messages do not losslessly cover the conversation watermark interval');
+  const allMessageIds = [...packetMessageIds, ...deltaMessages.map((message) => message.message_id)];
+  if (new Set(allMessageIds).size !== allMessageIds.length) errors.push('packet/delta messages reuse a canonical message ID');
   const validateMessage = (message, conversationId, label) => {
     const route = knownRoutes.get(`${message.foreground_route_id}:${message.route_epoch}`);
     if (!route || route.conversation_id !== conversationId) {
@@ -982,9 +1544,7 @@ const resumeProjectionErrors = (packet, delta) => {
     if (Date.parse(message.created_at) > Date.parse(receipt.committed_at)) errors.push(`${label} ${message.message_id} timestamp follows its commit receipt`);
   };
   for (const turn of packet.recent_verbatim_turns) validateMessage(turn, packet.conversation_id, 'packet message');
-  for (const change of delta.changes.filter((candidate) => candidate.change_type === 'conversation_message')) {
-    validateMessage(change.record, delta.conversation_id, 'delta message');
-  }
+  for (const message of deltaMessages) validateMessage(message, delta.conversation_id, 'delta message');
   return errors;
 };
 const legacyPacketProjection = {
@@ -1015,6 +1575,7 @@ const legacyPacketProjection = {
     const source = JSON.parse(legacySourceLines[binding.source_sequence - 1]);
     return {
       message_id: binding.message_id,
+      conversation_sequence: binding.source_sequence,
       role: binding.role,
       modality: binding.modality,
       foreground_route_id: binding.foreground_route_id,
@@ -1033,6 +1594,7 @@ const legacyPacketProjection = {
     primary_slot_attempt_id: null,
     writer_lock: null,
   },
+  operation_revision_index: [],
   narration_watermark: { terminal_sequence: 0, pending_delivery_ids: [], unknown_outcome_delivery_ids: [] },
   usage_summary: null,
   generated_at: '2026-08-02T13:00:00Z',
@@ -1058,6 +1620,7 @@ const legacyDeltaProjection = {
     change_type: 'conversation_message',
     record: {
       message_id: 'message_legacy_user_03',
+      conversation_sequence: 3,
       role: 'user',
       modality: 'text',
       foreground_route_id: legacyMigrationRoute.foreground_route_id,
@@ -1075,8 +1638,241 @@ delete legacyDeltaForHash.canonical_sha256;
 legacyDeltaProjection.canonical_sha256 = createHash('sha256').update(canonicalizeFixture(legacyDeltaForHash)).digest('hex');
 validate('resume-packet.schema.json', legacyPacketProjection, 'synthetic legacy resume packet');
 validate('resume-delta.schema.json', legacyDeltaProjection, 'synthetic legacy resume delta');
-assertSemantic(resumeProjectionErrors(legacyPacketProjection, legacyDeltaProjection).length === 0, 'verified legacy message bindings do not satisfy resume v2 route/receipt validation');
+assertSemantic(resumeProjectionErrors(legacyPacketProjection, legacyDeltaProjection).length === 0, 'verified legacy message bindings do not satisfy resume v3 route/receipt validation');
 assertSemantic(resumeProjectionErrors(resumePacket, resumeDelta).length === 0, 'resume packet/delta foreground ownership is incoherent');
+const stalePacketIntegrity = clone(resumePacket);
+stalePacketIntegrity.packet_integrity.canonical_sha256 = '0'.repeat(64);
+expectSemanticRejected(resumeProjectionErrors(stalePacketIntegrity, resumeDelta), 'negative: resume packet integrity hash mismatch is accepted');
+const staleDeltaIntegrity = clone(resumeDelta);
+staleDeltaIntegrity.canonical_sha256 = '0'.repeat(64);
+expectSemanticRejected(resumeProjectionErrors(resumePacket, staleDeltaIntegrity), 'negative: resume delta integrity hash mismatch is accepted');
+const omittedContextRecordDelta = clone(resumeDelta);
+omittedContextRecordDelta.changes = omittedContextRecordDelta.changes.filter((change) => change.change_type !== 'context_revision');
+expectSemanticRejected(resumeProjectionErrors(resumePacket, omittedContextRecordDelta), 'negative: context watermark advances while context revision is omitted');
+const jumpedContextWatermarkDelta = clone(resumeDelta);
+jumpedContextWatermarkDelta.to_context_version = 9;
+jumpedContextWatermarkDelta.to_watermarks.context_sequence = 9;
+expectSemanticRejected(resumeProjectionErrors(resumePacket, jumpedContextWatermarkDelta), 'negative: context watermark jumps past the sole included revision');
+const backwardsConversationWatermarkDelta = clone(resumeDelta);
+backwardsConversationWatermarkDelta.to_watermarks.conversation_sequence = 17;
+expectSemanticRejected(resumeProjectionErrors(resumePacket, backwardsConversationWatermarkDelta), 'negative: conversation watermark moves backwards');
+const omittedOperationRecordDelta = clone(resumeDelta);
+omittedOperationRecordDelta.to_watermarks.operation_sequence = 2;
+expectSemanticRejected(resumeProjectionErrors(resumePacket, omittedOperationRecordDelta), 'negative: operation watermark advances without an operation record');
+const operationIndexOverflowDelta = clone(resumeDelta);
+operationIndexOverflowDelta.from_context_version = resumePacket.context_version;
+operationIndexOverflowDelta.to_context_version = resumePacket.context_version;
+operationIndexOverflowDelta.from_watermarks = clone(resumePacket.source_watermarks);
+operationIndexOverflowDelta.to_watermarks = { ...clone(resumePacket.source_watermarks), operation_sequence: 257 };
+operationIndexOverflowDelta.changes = [];
+for (let sourceSequence = 2; sourceSequence <= 257; sourceSequence += 1) {
+  const overflowOperation = clone(operation);
+  overflowOperation.operation_id = `operation_capacity_${sourceSequence}`;
+  overflowOperation.conversation_id = 'chat_resume_demo';
+  overflowOperation.task_id = 'task_resume_voice_docs';
+  overflowOperation.attempt_id = 'attempt_resume_01';
+  overflowOperation.idempotency_key = `task_resume_voice_docs:attempt_resume_01:capacity_${sourceSequence}`;
+  overflowOperation.protected_payload_ref = `capacity_payload_${sourceSequence}`;
+  overflowOperation.receipt.receipt_id = `receipt_capacity_${sourceSequence}`;
+  operationIndexOverflowDelta.changes.push({ change_type: 'operation_intent', source_sequence: sourceSequence, record: overflowOperation });
+}
+rehashResumeDelta(operationIndexOverflowDelta);
+validate('resume-delta.schema.json', operationIndexOverflowDelta, 'synthetic operation-index-overflow delta');
+expectSemanticRejected(resumeProjectionErrors(resumePacket, operationIndexOverflowDelta), 'negative: resulting critical operation revision index exceeds 256 entries');
+const reopenedTerminalOperationDelta = clone(resumeDelta);
+const reopenedTerminalOperation = clone(canonicalMessageOperation);
+reopenedTerminalOperation.status = 'intended';
+reopenedTerminalOperation.dispatched_at = null;
+reopenedTerminalOperation.terminal_at = null;
+reopenedTerminalOperation.receipt = null;
+reopenedTerminalOperationDelta.to_watermarks.operation_sequence = 2;
+reopenedTerminalOperationDelta.changes.push({ change_type: 'operation_intent', source_sequence: 2, record: reopenedTerminalOperation });
+validate('resume-delta.schema.json', reopenedTerminalOperationDelta, 'synthetic reopened terminal-operation delta');
+expectSemanticRejected(resumeProjectionErrors(resumePacket, reopenedTerminalOperationDelta), 'negative: terminal operation tombstone is reused as revision-1 intended work');
+const unsupportedCheckpointAdvanceDelta = clone(resumeDelta);
+unsupportedCheckpointAdvanceDelta.to_watermarks.agent_checkpoint_sequence += 1;
+expectSemanticRejected(resumeProjectionErrors(resumePacket, unsupportedCheckpointAdvanceDelta), 'negative: checkpoint watermark advances without a checkpoint delta record type');
+const hugeControllerWatermarkDelta = clone(resumeDelta);
+hugeControllerWatermarkDelta.to_watermarks.task_sequence = hugeControllerWatermarkDelta.from_watermarks.task_sequence + (2 ** 32);
+expectSemanticRejected(resumeProjectionErrors(resumePacket, hugeControllerWatermarkDelta), 'negative: unbounded controller watermark gap must reject without allocation');
+const hugeConversationWatermarkDelta = clone(resumeDelta);
+hugeConversationWatermarkDelta.to_watermarks.conversation_sequence = hugeConversationWatermarkDelta.from_watermarks.conversation_sequence + (2 ** 32);
+expectSemanticRejected(resumeProjectionErrors(resumePacket, hugeConversationWatermarkDelta), 'negative: unbounded conversation watermark gap must reject without allocation');
+const foreignDecisionDelta = clone(resumeDelta);
+const foreignDecisionRecord = await readJson(path.join(exampleRoot, 'decision-request.json'));
+foreignDecisionRecord.conversation_id = 'chat_other';
+foreignDecisionDelta.to_watermarks.decision_sequence += 1;
+foreignDecisionDelta.changes.push({ change_type: 'decision_request', source_sequence: 4, record: foreignDecisionRecord });
+validate('resume-delta.schema.json', foreignDecisionDelta, 'synthetic foreign-decision resume delta');
+expectSemanticRejected(resumeProjectionErrors(resumePacket, foreignDecisionDelta), 'negative: foreign-conversation decision advances resume watermark');
+const duplicateConversationMessageDelta = clone(resumeDelta);
+const duplicatedPacketMessage = clone(resumePacket.recent_verbatim_turns.at(-1));
+duplicatedPacketMessage.conversation_sequence = 19;
+duplicateConversationMessageDelta.changes.find((change) => change.change_type === 'conversation_message').record = duplicatedPacketMessage;
+validate('resume-delta.schema.json', duplicateConversationMessageDelta, 'synthetic duplicate-message resume delta');
+expectSemanticRejected(resumeProjectionErrors(resumePacket, duplicateConversationMessageDelta), 'negative: duplicate canonical message replaces omitted conversation sequence');
+const duplicateOperationRecordsDelta = clone(resumeDelta);
+duplicateOperationRecordsDelta.to_watermarks.operation_sequence = 3;
+duplicateOperationRecordsDelta.changes.push(
+  { change_type: 'operation_intent', source_sequence: 2, record: clone(canonicalMessageOperation) },
+  { change_type: 'operation_intent', source_sequence: 3, record: clone(canonicalMessageOperation) },
+);
+validate('resume-delta.schema.json', duplicateOperationRecordsDelta, 'synthetic duplicate-operation resume delta');
+expectSemanticRejected(resumeProjectionErrors(resumePacket, duplicateOperationRecordsDelta), 'negative: duplicate operation revision replaces omitted operation record');
+const aliasedOperationRecordsDelta = clone(duplicateOperationRecordsDelta);
+aliasedOperationRecordsDelta.changes.at(-1).record.operation_id = 'operation_chat_message_commit_alias';
+expectSemanticRejected(resumeProjectionErrors(resumePacket, aliasedOperationRecordsDelta), 'negative: aliased operation ID reuses canonical idempotency/message/receipt identity');
+const mutatedOperationLineageDelta = clone(resumeDelta);
+const mutatedOperationRevision = clone(canonicalMessageOperation);
+mutatedOperationRevision.revision = 2;
+mutatedOperationRevision.previous_revision = 1;
+mutatedOperationRevision.idempotency_key = 'chat_resume_demo:foreground_route_chat_01:message_resume_assistant_mutated';
+mutatedOperationRevision.canonical_message_id = 'message_resume_assistant_mutated';
+mutatedOperationRevision.receipt.receipt_id = 'receipt_chat_message_commit_mutated';
+mutatedOperationRevision.receipt.result_ref.id = mutatedOperationRevision.canonical_message_id;
+mutatedOperationLineageDelta.to_watermarks.operation_sequence = 2;
+mutatedOperationLineageDelta.changes.push({ change_type: 'operation_intent', source_sequence: 2, record: mutatedOperationRevision });
+validate('resume-delta.schema.json', mutatedOperationLineageDelta, 'synthetic mutated-operation-lineage resume delta');
+expectSemanticRejected(resumeProjectionErrors(resumePacket, mutatedOperationLineageDelta), 'negative: later operation revision replaces immutable natural identities');
+const activeOperationPacket = clone(resumePacket);
+activeOperationPacket.source_watermarks.operation_sequence = 2;
+activeOperationPacket.operation_revision_index.push({
+  operation_id: 'operation_resume_active_01',
+  source_sequence: 2,
+  revision: 1,
+  status: 'dispatched',
+  idempotency_key: 'task_resume_voice_docs:attempt_resume_01:active_operation',
+  canonical_message_id: null,
+  assigned_receipt_id: null,
+});
+const continuedActiveOperationDelta = clone(resumeDelta);
+continuedActiveOperationDelta.from_watermarks.operation_sequence = 2;
+continuedActiveOperationDelta.to_watermarks.operation_sequence = 3;
+const continuedActiveOperation = clone(operation);
+continuedActiveOperation.operation_id = 'operation_resume_active_01';
+continuedActiveOperation.revision = 2;
+continuedActiveOperation.previous_revision = 1;
+continuedActiveOperation.conversation_id = 'chat_resume_demo';
+continuedActiveOperation.task_id = 'task_resume_voice_docs';
+continuedActiveOperation.attempt_id = 'attempt_resume_01';
+continuedActiveOperation.idempotency_key = 'task_resume_voice_docs:attempt_resume_01:active_operation';
+continuedActiveOperation.canonical_message_id = null;
+activeOperationPacket.operation_revision_index.at(-1).immutable_identity_sha256 = operationImmutableIdentityHash(continuedActiveOperation);
+continuedActiveOperationDelta.changes.push({ change_type: 'operation_intent', source_sequence: 3, record: continuedActiveOperation });
+rehashResumePacket(activeOperationPacket);
+rehashResumeDelta(continuedActiveOperationDelta);
+validate('resume-packet.schema.json', activeOperationPacket, 'synthetic packet with active operation head');
+validate('resume-delta.schema.json', continuedActiveOperationDelta, 'synthetic continued active-operation delta');
+assertSemantic(resumeProjectionErrors(activeOperationPacket, continuedActiveOperationDelta).length === 0, 'valid operation revision does not continue active packet head');
+const omittedTerminalTombstonePacket = clone(activeOperationPacket);
+omittedTerminalTombstonePacket.operation_revision_index.shift();
+expectSemanticRejected(resumeProjectionErrors(omittedTerminalTombstonePacket, continuedActiveOperationDelta), 'negative: packet omits lower terminal operation tombstone while retaining later head');
+const regressedOperationStatusDelta = clone(continuedActiveOperationDelta);
+const regressedOperation = regressedOperationStatusDelta.changes.at(-1).record;
+regressedOperation.status = 'intended';
+regressedOperation.dispatched_at = null;
+regressedOperation.terminal_at = null;
+regressedOperation.receipt = null;
+validate('resume-delta.schema.json', regressedOperationStatusDelta, 'synthetic regressed-operation-status delta');
+expectSemanticRejected(resumeProjectionErrors(activeOperationPacket, regressedOperationStatusDelta), 'negative: dispatched operation regresses to intended and becomes replayable');
+const mutatedCrossPacketOperationDelta = clone(continuedActiveOperationDelta);
+mutatedCrossPacketOperationDelta.changes.at(-1).record.idempotency_key = 'task_resume_voice_docs:attempt_resume_01:mutated_cross_packet';
+expectSemanticRejected(resumeProjectionErrors(activeOperationPacket, mutatedCrossPacketOperationDelta), 'negative: cross-packet operation revision changes active-head natural identity');
+const mutatedImmutableOperationDelta = clone(continuedActiveOperationDelta);
+mutatedImmutableOperationDelta.changes.at(-1).record.adapter_id = 'mutated_adapter';
+expectSemanticRejected(resumeProjectionErrors(activeOperationPacket, mutatedImmutableOperationDelta), 'negative: cross-packet operation revision changes immutable route/action identity hash');
+const gappedOperationSourceDelta = clone(resumeDelta);
+const gappedSourceOperation = clone(operation);
+gappedSourceOperation.conversation_id = 'chat_resume_demo';
+gappedSourceOperation.task_id = 'task_resume_voice_docs';
+gappedSourceOperation.attempt_id = 'attempt_resume_01';
+gappedOperationSourceDelta.to_watermarks.operation_sequence = 2;
+gappedOperationSourceDelta.changes.push({ change_type: 'operation_intent', source_sequence: 3, record: gappedSourceOperation });
+validate('resume-delta.schema.json', gappedOperationSourceDelta, 'synthetic gapped-operation-source resume delta');
+expectSemanticRejected(resumeProjectionErrors(resumePacket, gappedOperationSourceDelta), 'negative: operation source sequence skips its watermark successor');
+const duplicateApprovalRecordsDelta = clone(resumeDelta);
+const duplicateResumeApproval = clone(approval);
+duplicateResumeApproval.conversation_id = 'chat_resume_demo';
+duplicateResumeApproval.task_id = 'task_resume_voice_docs';
+duplicateResumeApproval.requesting_attempt_id = 'attempt_resume_01';
+duplicateApprovalRecordsDelta.to_watermarks.approval_sequence = 2;
+duplicateApprovalRecordsDelta.changes.push(
+  { change_type: 'approval_request', source_sequence: 1, record: clone(duplicateResumeApproval) },
+  { change_type: 'approval_request', source_sequence: 2, record: clone(duplicateResumeApproval) },
+);
+validate('resume-delta.schema.json', duplicateApprovalRecordsDelta, 'synthetic duplicate-approval resume delta');
+expectSemanticRejected(resumeProjectionErrors(resumePacket, duplicateApprovalRecordsDelta), 'negative: duplicate approval revision replaces omitted approval record');
+const validTaskProgressDelta = clone(resumeDelta);
+const resumeTaskProgressEvent = clone(progressEvent);
+resumeTaskProgressEvent.event_id = 'event_resume_task_progress_12';
+resumeTaskProgressEvent.transaction_id = 'tx_resume_task_progress_12';
+resumeTaskProgressEvent.sequence = 12;
+resumeTaskProgressEvent.task_revision = 10;
+resumeTaskProgressEvent.conversation_id = 'chat_resume_demo';
+resumeTaskProgressEvent.task_id = 'task_resume_voice_docs';
+resumeTaskProgressEvent.context_version = 7;
+validTaskProgressDelta.to_watermarks.task_sequence = 12;
+validTaskProgressDelta.changes.push({ change_type: 'task_event', record: resumeTaskProgressEvent });
+validate('resume-delta.schema.json', validTaskProgressDelta, 'synthetic valid task-progress resume delta');
+assertSemantic(resumeAuthorityErrors(resumePacket, validTaskProgressDelta).length === 0, 'valid task progress does not continue packet task head');
+const gappedTaskWatermarkDelta = clone(validTaskProgressDelta);
+gappedTaskWatermarkDelta.changes.at(-1).record.sequence = 13;
+gappedTaskWatermarkDelta.to_watermarks.task_sequence = 13;
+expectSemanticRejected(resumeAuthorityErrors(resumePacket, gappedTaskWatermarkDelta), 'negative: task watermark skips an omitted controller event');
+const taskCompletedWithLiveAuthorityDelta = clone(resumeDelta);
+const prematureTaskCompletedEvent = clone(finalTaskEvent);
+prematureTaskCompletedEvent.event_id = 'event_resume_task_completed_12';
+prematureTaskCompletedEvent.transaction_id = 'tx_resume_task_completed_12';
+prematureTaskCompletedEvent.sequence = 12;
+prematureTaskCompletedEvent.task_revision = 10;
+prematureTaskCompletedEvent.conversation_id = 'chat_resume_demo';
+prematureTaskCompletedEvent.task_id = 'task_resume_voice_docs';
+prematureTaskCompletedEvent.context_version = 7;
+taskCompletedWithLiveAuthorityDelta.to_watermarks.task_sequence = 12;
+taskCompletedWithLiveAuthorityDelta.changes.push({ change_type: 'task_event', record: prematureTaskCompletedEvent });
+validate('resume-delta.schema.json', taskCompletedWithLiveAuthorityDelta, 'synthetic premature task-completed resume delta');
+expectSemanticRejected(resumeAuthorityErrors(resumePacket, taskCompletedWithLiveAuthorityDelta), 'negative: task completes while its attempt retains slot and writer authority');
+const atomicVerificationDelta = clone(resumeDelta);
+const resumeAttemptCompletedEvent = clone(terminalAttemptEvent);
+resumeAttemptCompletedEvent.event_id = 'attempt_event_resume_completed_12';
+resumeAttemptCompletedEvent.sequence = 12;
+resumeAttemptCompletedEvent.conversation_id = 'chat_resume_demo';
+resumeAttemptCompletedEvent.task_id = 'task_resume_voice_docs';
+resumeAttemptCompletedEvent.primary_agent_run_id = 'agent_run_resume_01';
+resumeAttemptCompletedEvent.attempt_id = 'attempt_resume_01';
+resumeAttemptCompletedEvent.context_version = 7;
+resumeAttemptCompletedEvent.idempotency_key = 'task_resume_voice_docs:attempt_resume_01:completed_12';
+resumeAttemptCompletedEvent.attempt.conversation_id = 'chat_resume_demo';
+resumeAttemptCompletedEvent.attempt.task_id = 'task_resume_voice_docs';
+resumeAttemptCompletedEvent.attempt.primary_agent_run_id = 'agent_run_resume_01';
+resumeAttemptCompletedEvent.attempt.attempt_id = 'attempt_resume_01';
+resumeAttemptCompletedEvent.attempt.context_version = 7;
+resumeAttemptCompletedEvent.attempt.slot_lease.lease_id = 'primary_slot_chat_resume_demo';
+const resumeVerificationStartedEvent = clone(verificationEvent);
+resumeVerificationStartedEvent.event_id = 'event_resume_verification_started_13';
+resumeVerificationStartedEvent.sequence = 13;
+resumeVerificationStartedEvent.task_revision = 10;
+resumeVerificationStartedEvent.conversation_id = 'chat_resume_demo';
+resumeVerificationStartedEvent.task_id = 'task_resume_voice_docs';
+resumeVerificationStartedEvent.context_version = 7;
+resumeVerificationStartedEvent.transaction_id = 'tx_resume_verification_atomic';
+resumeAttemptCompletedEvent.transaction_id = resumeVerificationStartedEvent.transaction_id;
+atomicVerificationDelta.to_watermarks.task_sequence = 13;
+atomicVerificationDelta.to_watermarks.attempt_sequence = 12;
+atomicVerificationDelta.changes.push(
+  { change_type: 'attempt_event', record: resumeAttemptCompletedEvent },
+  { change_type: 'task_event', record: resumeVerificationStartedEvent },
+);
+atomicVerificationDelta.safety_state.primary_slot_attempt_id = null;
+atomicVerificationDelta.safety_state.writer_lock = null;
+validate('resume-delta.schema.json', atomicVerificationDelta, 'synthetic atomic verification resume delta');
+assertSemantic(resumeAuthorityErrors(resumePacket, atomicVerificationDelta).length === 0, 'atomic attempt completion and task verification transition is rejected');
+const collidingControllerEventIdDelta = clone(atomicVerificationDelta);
+collidingControllerEventIdDelta.changes.find((change) => change.change_type === 'task_event').record.event_id = collidingControllerEventIdDelta.changes.find((change) => change.change_type === 'attempt_event').record.event_id;
+expectSemanticRejected(resumeAuthorityErrors(resumePacket, collidingControllerEventIdDelta), 'negative: task and attempt records reuse one global controller event ID');
+const splitVerificationDelta = clone(atomicVerificationDelta);
+splitVerificationDelta.changes.find((change) => change.change_type === 'attempt_event').record.transaction_id = 'tx_resume_attempt_release_split';
+expectSemanticRejected(resumeAuthorityErrors(resumePacket, splitVerificationDelta), 'negative: attempt authority releases before task verification in another transaction');
 const foreignRoutePacket = clone(resumePacket);
 foreignRoutePacket.foreground_route.conversation_id = 'chat_other';
 expectSemanticRejected(resumeProjectionErrors(foreignRoutePacket, resumeDelta), 'negative: resume packet with foreign foreground route');
@@ -1100,8 +1896,191 @@ const unrelatedAttemptAuthorityDelta = clone(resumeDelta);
 unrelatedAttemptAuthorityDelta.to_watermarks.attempt_sequence += 1;
 unrelatedAttemptAuthorityDelta.changes.push({ change_type: 'attempt_event', record: clone(runningAttemptEvent) });
 unrelatedAttemptAuthorityDelta.safety_state.primary_slot_attempt_id = runningAttemptEvent.attempt_id;
-unrelatedAttemptAuthorityDelta.safety_state.writer_lock = { task_id: runningAttemptEvent.task_id, attempt_id: runningAttemptEvent.attempt_id, scope: 'unrelated scope' };
+unrelatedAttemptAuthorityDelta.safety_state.writer_lock = { task_id: runningAttemptEvent.task_id, attempt_id: runningAttemptEvent.attempt_id, writer_lock_ids: clone(runningAttemptEvent.attempt.writer_lock_ids), scope: 'unrelated scope' };
 expectSemanticRejected(resumeAuthorityErrors(resumePacket, unrelatedAttemptAuthorityDelta), 'negative: unrelated attempt event changes resume authority');
+const mismatchedWriterIdentityDelta = clone(resumeDelta);
+const writerIdentityAttemptEvent = clone(runningAttemptEvent);
+writerIdentityAttemptEvent.event_id = 'attempt_event_resume_writer_identity';
+writerIdentityAttemptEvent.transaction_id = 'tx_resume_writer_identity';
+writerIdentityAttemptEvent.sequence = 12;
+writerIdentityAttemptEvent.event_type = 'attempt.authority_updated';
+writerIdentityAttemptEvent.previous_state = 'running';
+writerIdentityAttemptEvent.resulting_state = 'running';
+writerIdentityAttemptEvent.idempotency_key = 'task_resume_voice_docs:attempt_resume_01:writer_identity_12';
+writerIdentityAttemptEvent.conversation_id = 'chat_resume_demo';
+writerIdentityAttemptEvent.task_id = 'task_resume_voice_docs';
+writerIdentityAttemptEvent.primary_agent_run_id = 'agent_run_resume_01';
+writerIdentityAttemptEvent.attempt_id = 'attempt_resume_01';
+writerIdentityAttemptEvent.actor.id = 'agent_run_resume_01';
+writerIdentityAttemptEvent.attempt.conversation_id = 'chat_resume_demo';
+writerIdentityAttemptEvent.attempt.task_id = 'task_resume_voice_docs';
+writerIdentityAttemptEvent.attempt.primary_agent_run_id = 'agent_run_resume_01';
+writerIdentityAttemptEvent.attempt.attempt_id = 'attempt_resume_01';
+writerIdentityAttemptEvent.attempt.slot_lease.lease_id = 'primary_slot_chat_resume_demo';
+const staleWriterProjectionDelta = clone(resumeDelta);
+const changedWriterSnapshotEvent = clone(writerIdentityAttemptEvent);
+changedWriterSnapshotEvent.event_id = 'attempt_event_resume_writer_snapshot_changed';
+changedWriterSnapshotEvent.transaction_id = 'tx_resume_writer_snapshot_changed';
+changedWriterSnapshotEvent.attempt.writer_lock_ids = ['writer_lock_changed_without_projection'];
+staleWriterProjectionDelta.to_watermarks.attempt_sequence += 1;
+staleWriterProjectionDelta.changes.push({ change_type: 'attempt_event', record: changedWriterSnapshotEvent });
+expectSemanticRejected(resumeAuthorityErrors(resumePacket, staleWriterProjectionDelta), 'negative: attempt snapshot changes writer-lock IDs while resume projection remains stale');
+const reorderedWriterEventsDelta = clone(resumeDelta);
+const earlierAppliedWriterEvent = clone(changedWriterSnapshotEvent);
+earlierAppliedWriterEvent.event_id = 'attempt_event_resume_writer_sequence_21';
+earlierAppliedWriterEvent.sequence = 21;
+earlierAppliedWriterEvent.event_type = 'attempt.authority_updated';
+earlierAppliedWriterEvent.previous_state = 'running';
+earlierAppliedWriterEvent.resulting_state = 'running';
+const laterAppliedWriterEvent = clone(writerIdentityAttemptEvent);
+laterAppliedWriterEvent.event_id = 'attempt_event_resume_writer_sequence_20';
+laterAppliedWriterEvent.sequence = 20;
+laterAppliedWriterEvent.event_type = 'attempt.authority_updated';
+laterAppliedWriterEvent.previous_state = 'running';
+laterAppliedWriterEvent.resulting_state = 'running';
+laterAppliedWriterEvent.attempt.writer_lock_ids = clone(resumePacket.safety_state.writer_lock.writer_lock_ids);
+reorderedWriterEventsDelta.to_watermarks.attempt_sequence += 2;
+reorderedWriterEventsDelta.changes.push(
+  { change_type: 'attempt_event', record: earlierAppliedWriterEvent },
+  { change_type: 'attempt_event', record: laterAppliedWriterEvent },
+);
+expectSemanticRejected(resumeAuthorityErrors(resumePacket, reorderedWriterEventsDelta), 'negative: resume attempt events are out of canonical sequence order');
+const validIntermediateWriterEventsDelta = clone(resumeDelta);
+const writerChangedAtSequence12 = clone(changedWriterSnapshotEvent);
+writerChangedAtSequence12.event_id = 'attempt_event_resume_writer_changed_12';
+writerChangedAtSequence12.sequence = 12;
+writerChangedAtSequence12.idempotency_key = 'task_resume_voice_docs:attempt_resume_01:writer_changed_12';
+writerChangedAtSequence12.occurred_at = '2026-08-02T12:06:00Z';
+writerChangedAtSequence12.attempt.updated_at = '2026-08-02T12:06:00Z';
+const writerRestoredAtSequence13 = clone(writerIdentityAttemptEvent);
+writerRestoredAtSequence13.event_id = 'attempt_event_resume_writer_restored_13';
+writerRestoredAtSequence13.sequence = 13;
+writerRestoredAtSequence13.idempotency_key = 'task_resume_voice_docs:attempt_resume_01:writer_restored_13';
+writerRestoredAtSequence13.occurred_at = '2026-08-02T12:06:01Z';
+writerRestoredAtSequence13.attempt.updated_at = '2026-08-02T12:06:01Z';
+writerRestoredAtSequence13.attempt.writer_lock_ids = clone(resumePacket.safety_state.writer_lock.writer_lock_ids);
+validIntermediateWriterEventsDelta.to_watermarks.attempt_sequence = 13;
+validIntermediateWriterEventsDelta.changes.push(
+  { change_type: 'attempt_event', record: writerChangedAtSequence12 },
+  { change_type: 'attempt_event', record: writerRestoredAtSequence13 },
+);
+assertSemantic(resumeAuthorityErrors(resumePacket, validIntermediateWriterEventsDelta).length === 0, 'ordered intermediate writer-lock snapshots do not reduce to the matching final projection');
+const duplicateIdempotencyDelta = clone(validIntermediateWriterEventsDelta);
+duplicateIdempotencyDelta.changes.at(-1).record.idempotency_key = duplicateIdempotencyDelta.changes.at(-2).record.idempotency_key;
+expectSemanticRejected(resumeAuthorityErrors(resumePacket, duplicateIdempotencyDelta), 'negative: resume attempt events repeat an idempotency key');
+const hiddenAuthorityDelta = clone(resumeDelta);
+const hiddenAttemptEvents = clone(attemptEventStream.slice(0, 4));
+for (const [index, event] of hiddenAttemptEvents.entries()) {
+  event.event_id = `attempt_event_hidden_02_${index + 1}`;
+  event.transaction_id = `tx_hidden_attempt_02_${index + 1}`;
+  event.sequence = 12 + index;
+  event.conversation_id = 'chat_resume_demo';
+  event.task_id = 'task_resume_voice_docs';
+  event.primary_agent_run_id = 'agent_run_resume_hidden_02';
+  event.attempt_id = 'attempt_resume_hidden_02';
+  event.idempotency_key = `task_resume_voice_docs:attempt_resume_hidden_02:${event.event_type}`;
+  event.attempt.conversation_id = 'chat_resume_demo';
+  event.attempt.task_id = 'task_resume_voice_docs';
+  event.attempt.primary_agent_run_id = 'agent_run_resume_hidden_02';
+  event.attempt.attempt_id = 'attempt_resume_hidden_02';
+  event.attempt.ordinal = 2;
+  event.attempt.resumes_attempt_id = 'attempt_resume_01';
+  event.attempt.provider_session_id = 'provider_task_session_resume_hidden_02';
+  if (event.attempt.slot_lease.lease_id !== null) event.attempt.slot_lease.lease_id = 'primary_slot_chat_resume_hidden_02';
+  event.attempt.writer_lock_ids = event.event_type === 'attempt.running' ? ['writer_lock_resume_hidden_02'] : [];
+}
+hiddenAuthorityDelta.to_watermarks.attempt_sequence = 15;
+hiddenAuthorityDelta.changes.push(...hiddenAttemptEvents.map((record) => ({ change_type: 'attempt_event', record })));
+expectSemanticRejected(resumeAuthorityErrors(resumePacket, hiddenAuthorityDelta), 'negative: second attempt retains hidden acquired slot and writer authority outside safety projection');
+const reassignedAttemptPacket = clone(resumePacket);
+reassignedAttemptPacket.active_tasks.push({
+  ...clone(resumePacket.active_tasks[0]),
+  task_id: 'task_resume_other',
+  state: 'queued',
+  current_attempt_id: null,
+  current_attempt_state: null,
+  current_attempt_event_sequence: null,
+  primary_agent_run_id: null,
+});
+reassignedAttemptPacket.safety_state.writer_lock = null;
+const reassignedAttemptDelta = clone(resumeDelta);
+reassignedAttemptDelta.safety_state.writer_lock = null;
+reassignedAttemptDelta.to_watermarks.attempt_sequence = 12;
+const reassignedAttemptEvent = clone(writerIdentityAttemptEvent);
+reassignedAttemptEvent.event_id = 'attempt_event_resume_reassigned_lineage';
+reassignedAttemptEvent.task_id = 'task_resume_other';
+reassignedAttemptEvent.primary_agent_run_id = 'agent_run_resume_other';
+reassignedAttemptEvent.idempotency_key = 'task_resume_other:attempt_resume_01:reassigned_lineage';
+reassignedAttemptEvent.attempt.task_id = 'task_resume_other';
+reassignedAttemptEvent.attempt.primary_agent_run_id = 'agent_run_resume_other';
+reassignedAttemptEvent.attempt.writer_lock_ids = [];
+reassignedAttemptDelta.changes.push({ change_type: 'attempt_event', record: reassignedAttemptEvent });
+expectSemanticRejected(resumeAuthorityErrors(reassignedAttemptPacket, reassignedAttemptDelta), 'negative: existing attempt ID is reassigned to another packet task and primary lineage');
+mismatchedWriterIdentityDelta.to_watermarks.attempt_sequence += 1;
+mismatchedWriterIdentityDelta.changes.push({ change_type: 'attempt_event', record: writerIdentityAttemptEvent });
+mismatchedWriterIdentityDelta.safety_state.writer_lock.writer_lock_ids = ['writer_lock_invented'];
+expectSemanticRejected(resumeAuthorityErrors(resumePacket, mismatchedWriterIdentityDelta), 'negative: resume writer-lock IDs differ from resulting attempt snapshot');
+const matchingWriterIdentityDelta = clone(mismatchedWriterIdentityDelta);
+matchingWriterIdentityDelta.safety_state.writer_lock.writer_lock_ids = clone(writerIdentityAttemptEvent.attempt.writer_lock_ids);
+assertSemantic(resumeAuthorityErrors(resumePacket, matchingWriterIdentityDelta).length === 0, 'matching resume writer-lock IDs do not reproduce the resulting attempt snapshot');
+const startingAttemptPacket = clone(resumePacket);
+startingAttemptPacket.active_tasks[0].state = 'queued';
+startingAttemptPacket.active_tasks[0].current_attempt_state = 'queued';
+startingAttemptPacket.safety_state.primary_slot_attempt_id = null;
+startingAttemptPacket.safety_state.writer_lock = null;
+const startingAttemptDelta = clone(resumeDelta);
+startingAttemptDelta.safety_state.primary_slot_attempt_id = 'attempt_resume_01';
+startingAttemptDelta.safety_state.writer_lock = null;
+startingAttemptDelta.to_watermarks.attempt_sequence = 12;
+const resumeAttemptStartingEvent = clone(attemptEventStream.find((event) => event.event_type === 'attempt.starting'));
+resumeAttemptStartingEvent.event_id = 'attempt_event_resume_starting_12';
+resumeAttemptStartingEvent.transaction_id = 'tx_resume_starting_12';
+resumeAttemptStartingEvent.sequence = 12;
+resumeAttemptStartingEvent.conversation_id = 'chat_resume_demo';
+resumeAttemptStartingEvent.task_id = 'task_resume_voice_docs';
+resumeAttemptStartingEvent.primary_agent_run_id = 'agent_run_resume_01';
+resumeAttemptStartingEvent.attempt_id = 'attempt_resume_01';
+resumeAttemptStartingEvent.context_version = 7;
+resumeAttemptStartingEvent.idempotency_key = 'task_resume_voice_docs:attempt_resume_01:starting_12';
+resumeAttemptStartingEvent.attempt.conversation_id = 'chat_resume_demo';
+resumeAttemptStartingEvent.attempt.task_id = 'task_resume_voice_docs';
+resumeAttemptStartingEvent.attempt.primary_agent_run_id = 'agent_run_resume_01';
+resumeAttemptStartingEvent.attempt.attempt_id = 'attempt_resume_01';
+resumeAttemptStartingEvent.attempt.context_version = 7;
+resumeAttemptStartingEvent.attempt.slot_lease.lease_id = 'primary_slot_chat_resume_demo';
+startingAttemptDelta.changes.push({ change_type: 'attempt_event', record: resumeAttemptStartingEvent });
+assertSemantic(resumeAuthorityErrors(startingAttemptPacket, startingAttemptDelta).length === 0, 'queued task cannot atomically enter acquired starting-attempt state');
+const staleAttemptSequenceDelta = clone(matchingWriterIdentityDelta);
+staleAttemptSequenceDelta.changes.at(-1).record.sequence = 6;
+expectSemanticRejected(resumeAuthorityErrors(resumePacket, staleAttemptSequenceDelta), 'negative: stale attempt event sequence precedes the packet watermark');
+const gappedAttemptWatermarkDelta = clone(matchingWriterIdentityDelta);
+gappedAttemptWatermarkDelta.changes.at(-1).record.sequence = 13;
+gappedAttemptWatermarkDelta.to_watermarks.attempt_sequence = 13;
+expectSemanticRejected(resumeAuthorityErrors(resumePacket, gappedAttemptWatermarkDelta), 'negative: attempt watermark skips an omitted controller event');
+const discontinuousPacketHeadDelta = clone(matchingWriterIdentityDelta);
+discontinuousPacketHeadDelta.changes.at(-1).record.event_type = 'attempt.running';
+discontinuousPacketHeadDelta.changes.at(-1).record.previous_state = 'starting';
+expectSemanticRejected(resumeAuthorityErrors(resumePacket, discontinuousPacketHeadDelta), 'negative: first resume attempt event does not continue packet attempt state');
+const mismatchedFromWatermarkDelta = clone(resumeDelta);
+mismatchedFromWatermarkDelta.from_watermarks.attempt_sequence -= 1;
+expectSemanticRejected(resumeAuthorityErrors(resumePacket, mismatchedFromWatermarkDelta), 'negative: resume delta starts from a watermark other than its packet');
+const hiddenAttemptLeaseDelta = clone(matchingWriterIdentityDelta);
+hiddenAttemptLeaseDelta.changes.at(-1).record.attempt.capability_lease_ids = ['lease_hidden_attempt_authority'];
+expectSemanticRejected(resumeAuthorityErrors(resumePacket, hiddenAttemptLeaseDelta), 'negative: active-slot attempt snapshot retains a hidden capability lease');
+const missingWriterProjectionDelta = clone(matchingWriterIdentityDelta);
+missingWriterProjectionDelta.safety_state.writer_lock = null;
+expectSemanticRejected(resumeAuthorityErrors(resumePacket, missingWriterProjectionDelta), 'negative: resume writer-lock projection is null while resulting attempt retains locks');
+const inventedWriterProjectionDelta = clone(matchingWriterIdentityDelta);
+inventedWriterProjectionDelta.changes.at(-1).record.attempt.writer_lock_ids = [];
+inventedWriterProjectionDelta.safety_state.writer_lock.writer_lock_ids = ['writer_lock_invented'];
+expectSemanticRejected(resumeAuthorityErrors(resumePacket, inventedWriterProjectionDelta), 'negative: resume writer-lock projection invents a lock absent from resulting attempt');
+const multipleWriterIdentityDelta = clone(matchingWriterIdentityDelta);
+multipleWriterIdentityDelta.changes.at(-1).record.attempt.writer_lock_ids = ['writer_lock_docs', 'writer_lock_docs_secondary'];
+multipleWriterIdentityDelta.safety_state.writer_lock.writer_lock_ids = ['writer_lock_docs_secondary', 'writer_lock_docs'];
+assertSemantic(resumeAuthorityErrors(resumePacket, multipleWriterIdentityDelta).length === 0, 'matching multiple writer-lock IDs are not compared as one exact set');
+const partialWriterIdentityDelta = clone(multipleWriterIdentityDelta);
+partialWriterIdentityDelta.safety_state.writer_lock.writer_lock_ids = ['writer_lock_docs'];
+expectSemanticRejected(resumeAuthorityErrors(resumePacket, partialWriterIdentityDelta), 'negative: resume writer-lock projection omits one resulting lock ID');
 const incompleteSlotHandoffDelta = clone(resumeDelta);
 const acquiredReplacementAttempt = clone(runningAttemptEvent);
 acquiredReplacementAttempt.event_id = 'attempt_event_resume_replacement_running';
@@ -1119,13 +2098,32 @@ acquiredReplacementAttempt.attempt.slot_lease.lease_id = 'primary_slot_chat_resu
 incompleteSlotHandoffDelta.to_watermarks.attempt_sequence += 1;
 incompleteSlotHandoffDelta.changes.push({ change_type: 'attempt_event', record: acquiredReplacementAttempt });
 incompleteSlotHandoffDelta.safety_state.primary_slot_attempt_id = 'attempt_resume_02';
-incompleteSlotHandoffDelta.safety_state.writer_lock = { task_id: 'task_resume_voice_docs', attempt_id: 'attempt_resume_02', scope: 'documentation worktree' };
+incompleteSlotHandoffDelta.safety_state.writer_lock = { task_id: 'task_resume_voice_docs', attempt_id: 'attempt_resume_02', writer_lock_ids: clone(acquiredReplacementAttempt.attempt.writer_lock_ids), scope: 'documentation worktree' };
 expectSemanticRejected(resumeAuthorityErrors(resumePacket, incompleteSlotHandoffDelta), 'negative: new slot acquired without releasing old attempt authority');
 const unrelatedLeaseAuthorityDelta = clone(resumeDelta);
 unrelatedLeaseAuthorityDelta.to_watermarks.capability_lease_sequence += 1;
-unrelatedLeaseAuthorityDelta.changes.push({ change_type: 'capability_lease', record: clone(lease) });
+unrelatedLeaseAuthorityDelta.changes.push({ change_type: 'capability_lease', source_sequence: 1, record: clone(lease) });
 unrelatedLeaseAuthorityDelta.safety_state.active_capability_lease_ids = [lease.lease_id];
 expectSemanticRejected(resumeAuthorityErrors(resumePacket, unrelatedLeaseAuthorityDelta), 'negative: unrelated lease record changes resume authority');
+const transientHiddenLeaseDelta = clone(resumeDelta);
+const hiddenActiveLease = clone(lease);
+hiddenActiveLease.lease_id = 'lease_hidden_transient';
+hiddenActiveLease.approval_request_id = 'approval_hidden_transient';
+hiddenActiveLease.conversation_id = 'chat_resume_demo';
+hiddenActiveLease.task_id = 'task_resume_voice_docs';
+hiddenActiveLease.attempt_id = 'attempt_resume_hidden_lease';
+const hiddenConsumedLease = clone(consumedLease);
+hiddenConsumedLease.lease_id = hiddenActiveLease.lease_id;
+hiddenConsumedLease.approval_request_id = hiddenActiveLease.approval_request_id;
+hiddenConsumedLease.conversation_id = hiddenActiveLease.conversation_id;
+hiddenConsumedLease.task_id = hiddenActiveLease.task_id;
+hiddenConsumedLease.attempt_id = hiddenActiveLease.attempt_id;
+transientHiddenLeaseDelta.to_watermarks.capability_lease_sequence = 2;
+transientHiddenLeaseDelta.changes.push(
+  { change_type: 'capability_lease', source_sequence: 1, record: hiddenActiveLease },
+  { change_type: 'capability_lease', source_sequence: 2, record: hiddenConsumedLease },
+);
+expectSemanticRejected(resumeAuthorityErrors(resumePacket, transientHiddenLeaseDelta), 'negative: non-slot attempt acquires and consumes a transient hidden capability lease');
 const leasePacket = clone(resumePacket);
 leasePacket.conversation_id = 'chat_approval_demo';
 leasePacket.active_tasks = [{
@@ -1135,20 +2133,70 @@ leasePacket.active_tasks = [{
   primary_agent_run_id: 'agent_run_approval_02',
 }];
 leasePacket.safety_state.primary_slot_attempt_id = 'attempt_approval_02';
-leasePacket.safety_state.writer_lock = { task_id: 'task_approval_demo', attempt_id: 'attempt_approval_02', scope: 'documentation push' };
+leasePacket.safety_state.writer_lock = { task_id: 'task_approval_demo', attempt_id: 'attempt_approval_02', writer_lock_ids: ['writer_lock_approval_push'], scope: 'documentation push' };
 leasePacket.safety_state.active_capability_lease_ids = [lease.lease_id];
 leasePacket.safety_state.permission_epoch = lease.permission_epoch;
 const leaseTerminalDelta = clone(resumeDelta);
 leaseTerminalDelta.conversation_id = 'chat_approval_demo';
+leaseTerminalDelta.from_context_version = leasePacket.context_version;
+leaseTerminalDelta.to_context_version = leasePacket.context_version;
 leaseTerminalDelta.from_watermarks = clone(leasePacket.source_watermarks);
 leaseTerminalDelta.to_watermarks = { ...clone(leasePacket.source_watermarks), capability_lease_sequence: leasePacket.source_watermarks.capability_lease_sequence + 1 };
-leaseTerminalDelta.changes = [{ change_type: 'capability_lease', record: clone(consumedLease) }];
+const leaseReleaseAttemptEvent = clone(writerIdentityAttemptEvent);
+leaseReleaseAttemptEvent.event_id = 'attempt_event_approval_lease_released';
+leaseReleaseAttemptEvent.transaction_id = 'tx_approval_lease_released';
+leaseReleaseAttemptEvent.conversation_id = 'chat_approval_demo';
+leaseReleaseAttemptEvent.task_id = 'task_approval_demo';
+leaseReleaseAttemptEvent.primary_agent_run_id = 'agent_run_approval_02';
+leaseReleaseAttemptEvent.attempt_id = 'attempt_approval_02';
+leaseReleaseAttemptEvent.idempotency_key = 'task_approval_demo:attempt_approval_02:lease_released';
+leaseReleaseAttemptEvent.attempt.conversation_id = 'chat_approval_demo';
+leaseReleaseAttemptEvent.attempt.task_id = 'task_approval_demo';
+leaseReleaseAttemptEvent.attempt.primary_agent_run_id = 'agent_run_approval_02';
+leaseReleaseAttemptEvent.attempt.attempt_id = 'attempt_approval_02';
+leaseReleaseAttemptEvent.attempt.slot_lease.lease_id = 'primary_slot_chat_approval_demo';
+leaseReleaseAttemptEvent.attempt.writer_lock_ids = ['writer_lock_approval_push'];
+leaseReleaseAttemptEvent.attempt.capability_lease_ids = [];
+leaseTerminalDelta.to_watermarks.attempt_sequence += 1;
+leaseTerminalDelta.changes = [
+  { change_type: 'attempt_event', record: leaseReleaseAttemptEvent },
+  { change_type: 'capability_lease', source_sequence: 1, record: clone(consumedLease) },
+];
 leaseTerminalDelta.safety_state = clone(leasePacket.safety_state);
 leaseTerminalDelta.safety_state.active_capability_lease_ids = [];
 assertSemantic(resumeAuthorityErrors(leasePacket, leaseTerminalDelta).length === 0, 'valid terminal lease revision cannot release resume authority');
 const mismatchedLeaseTerminalDelta = clone(leaseTerminalDelta);
-mismatchedLeaseTerminalDelta.changes[0].record.task_id = 'task_other';
+mismatchedLeaseTerminalDelta.changes.find((change) => change.change_type === 'capability_lease').record.task_id = 'task_other';
 expectSemanticRejected(resumeAuthorityErrors(leasePacket, mismatchedLeaseTerminalDelta), 'negative: terminal lease revision changes prior task/attempt identity');
+const oldRouteOperationDelta = clone(resumeDelta);
+const boundaryOperation = clone(canonicalMessageOperation);
+boundaryOperation.operation_id = 'operation_chat_message_commit_boundary';
+boundaryOperation.canonical_message_id = 'message_resume_assistant_boundary';
+boundaryOperation.idempotency_key = 'chat_resume_demo:foreground_route_chat_01:message_resume_assistant_boundary';
+boundaryOperation.protected_payload_ref = 'message_payload_resume_assistant_boundary';
+boundaryOperation.receipt.receipt_id = 'receipt_chat_message_commit_boundary';
+boundaryOperation.receipt.result_ref.id = 'message_resume_assistant_boundary';
+boundaryOperation.intent_at = supersededChatRoute.terminal_at;
+boundaryOperation.dispatched_at = supersededChatRoute.terminal_at;
+boundaryOperation.terminal_at = supersededChatRoute.terminal_at;
+boundaryOperation.receipt.observed_at = supersededChatRoute.terminal_at;
+oldRouteOperationDelta.to_watermarks.operation_sequence += 1;
+oldRouteOperationDelta.changes.push({ change_type: 'operation_intent', source_sequence: 2, record: boundaryOperation });
+validate('resume-delta.schema.json', oldRouteOperationDelta, 'synthetic old-route boundary operation delta');
+expectSemanticRejected(resumeProjectionErrors(resumePacket, oldRouteOperationDelta), 'negative: resume delta accepts old-route canonical operation at handoff boundary');
+const pendingOldRouteOperationDelta = clone(resumeDelta);
+const pendingBoundaryOperation = clone(boundaryOperation);
+pendingBoundaryOperation.operation_id = 'operation_chat_message_dispatch_boundary';
+pendingBoundaryOperation.canonical_message_id = 'message_resume_assistant_dispatch_boundary';
+pendingBoundaryOperation.idempotency_key = 'chat_resume_demo:foreground_route_chat_01:message_resume_assistant_dispatch_boundary';
+pendingBoundaryOperation.protected_payload_ref = 'message_payload_resume_assistant_dispatch_boundary';
+pendingBoundaryOperation.status = 'dispatched';
+pendingBoundaryOperation.terminal_at = null;
+pendingBoundaryOperation.receipt = null;
+pendingOldRouteOperationDelta.to_watermarks.operation_sequence += 1;
+pendingOldRouteOperationDelta.changes.push({ change_type: 'operation_intent', source_sequence: 2, record: pendingBoundaryOperation });
+validate('resume-delta.schema.json', pendingOldRouteOperationDelta, 'synthetic pending old-route boundary operation delta');
+expectSemanticRejected(resumeProjectionErrors(resumePacket, pendingOldRouteOperationDelta), 'negative: resume delta accepts pending old-route canonical dispatch at handoff boundary');
 const foreignRouteDelta = clone(resumeDelta);
 foreignRouteDelta.changes.push({ change_type: 'foreground_route', record: { ...clone(activeForegroundRoute), conversation_id: 'chat_other' } });
 expectSemanticRejected(resumeProjectionErrors(resumePacket, foreignRouteDelta), 'negative: resume delta with foreign foreground route');

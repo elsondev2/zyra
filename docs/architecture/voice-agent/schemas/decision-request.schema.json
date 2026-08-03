@@ -27,10 +27,10 @@
   "properties": {
     "schema_version": { "const": 1 },
     "decision_request_id": { "$ref": "common.schema.json#/$defs/id" },
-    "revision": { "type": "integer", "minimum": 1 },
+    "revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
     "previous_revision": {
       "oneOf": [
-        { "type": "integer", "minimum": 1 },
+        { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         { "type": "null" }
       ]
     },
@@ -123,7 +123,7 @@
         "required": ["revision"]
       },
       "then": { "properties": { "previous_revision": { "type": "null" } } },
-      "else": { "properties": { "previous_revision": { "type": "integer", "minimum": 1 } } }
+      "else": { "properties": { "previous_revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 } } }
     },
     {
       "if": {

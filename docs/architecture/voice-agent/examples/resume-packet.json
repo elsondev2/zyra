@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "packet_id": "packet_resume_demo_01",
   "conversation_id": "chat_resume_demo",
   "generated_at": "2026-08-02T12:05:00Z",
@@ -7,13 +7,13 @@
   "source_watermarks": {
     "conversation_sequence": 18,
     "foreground_route_epoch": 2,
-    "task_sequence": 44,
+    "task_sequence": 10,
     "attempt_sequence": 11,
     "context_sequence": 7,
     "decision_sequence": 3,
     "approval_sequence": 0,
     "capability_lease_sequence": 0,
-    "operation_sequence": 0,
+    "operation_sequence": 1,
     "agent_checkpoint_sequence": 9,
     "narration_delivery_sequence": 12
   },
@@ -82,11 +82,15 @@
       "task_id": "task_resume_voice_docs",
       "title": "Document the voice-agent architecture",
       "state": "running",
+      "task_revision": 9,
+      "task_event_sequence": 10,
       "latest_verified_activity": "The provider-neutral contracts and ADRs have been drafted.",
       "next_expected_event": "Validate diagrams, schemas, links, and privacy.",
       "blocker": null,
       "required_context_version": 7,
       "current_attempt_id": "attempt_resume_01",
+      "current_attempt_state": "running",
+      "current_attempt_event_sequence": 11,
       "primary_agent_run_id": "agent_run_resume_01",
       "artifact_refs": []
     }
@@ -116,6 +120,7 @@
   "recent_verbatim_turns": [
     {
       "message_id": "message_resume_user_07",
+      "conversation_sequence": 17,
       "role": "user",
       "modality": "text",
       "foreground_route_id": "foreground_route_chat_01",
@@ -126,6 +131,7 @@
     },
     {
       "message_id": "message_resume_assistant_07",
+      "conversation_sequence": 18,
       "role": "assistant",
       "modality": "text",
       "foreground_route_id": "foreground_route_chat_01",
@@ -155,9 +161,24 @@
     "writer_lock": {
       "task_id": "task_resume_voice_docs",
       "attempt_id": "attempt_resume_01",
+      "writer_lock_ids": [
+        "writer_lock_resume_docs"
+      ],
       "scope": "documentation worktree"
     }
   },
+  "operation_revision_index": [
+    {
+      "operation_id": "operation_chat_message_commit_01",
+      "source_sequence": 1,
+      "revision": 1,
+      "status": "succeeded",
+      "immutable_identity_sha256": "8b2b26c438e6f454fa797f2a0ec82c8a25e0f2cf9ba3dc5357edbb1792d47ffa",
+      "idempotency_key": "chat_resume_demo:foreground_route_chat_01:message_resume_assistant_07",
+      "canonical_message_id": "message_resume_assistant_07",
+      "assigned_receipt_id": "receipt_chat_message_commit_01"
+    }
+  ],
   "narration_watermark": {
     "terminal_sequence": 12,
     "pending_delivery_ids": [],
@@ -165,7 +186,7 @@
   },
   "packet_integrity": {
     "critical_records_complete": true,
-    "canonical_sha256": "810167c66dfdc489a179180455812ee7cf8b984a56825324ced3f033182ae602",
+    "canonical_sha256": "58c97cd2781f9c3a584f9c52d1af39a343100ec738a2eb4acba0ddf464fc4173",
     "stale_after": "2026-08-02T12:10:00Z"
   },
   "usage_summary": {

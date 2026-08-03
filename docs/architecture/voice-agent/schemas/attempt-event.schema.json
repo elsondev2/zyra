@@ -32,7 +32,7 @@
     "schema_version": { "const": 1 },
     "event_id": { "$ref": "common.schema.json#/$defs/id" },
     "transaction_id": { "$ref": "common.schema.json#/$defs/id" },
-    "sequence": { "type": "integer", "minimum": 1 },
+    "sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
     "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
     "task_id": { "$ref": "common.schema.json#/$defs/id" },
     "primary_agent_run_id": { "$ref": "common.schema.json#/$defs/id" },

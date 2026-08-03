@@ -23,8 +23,8 @@ All examples use synthetic identifiers, paths, content, and usage values.
 | [`capability-lease.json`](capability-lease.json) | [`capability-lease.schema.json`](../schemas/capability-lease.schema.json) |
 | [`capability-lease-consumed.json`](capability-lease-consumed.json) | [`capability-lease.schema.json`](../schemas/capability-lease.schema.json) |
 | [`delegation-packet.json`](delegation-packet.json) | [`delegation-packet.schema.json`](../schemas/delegation-packet.schema.json) |
-| [`resume-packet.json`](resume-packet.json) | [`resume-packet.schema.json`](../schemas/resume-packet.schema.json) |
-| [`resume-delta.json`](resume-delta.json) | [`resume-delta.schema.json`](../schemas/resume-delta.schema.json) |
+| [`resume-packet.json`](resume-packet.json) | [`resume-packet.schema.json`](../schemas/resume-packet.schema.json) v3 with exact conversation-message sequences, a complete operation revision index with terminal tombstones, task/current-attempt heads, and active writer-lock IDs |
+| [`resume-delta.json`](resume-delta.json) | [`resume-delta.schema.json`](../schemas/resume-delta.schema.json) v3 with resulting authority projection |
 | [`narration-item.json`](narration-item.json) | [`narration-item.schema.json`](../schemas/narration-item.schema.json) |
 | [`narration-foreground-routes.json`](narration-foreground-routes.json) | Each array entry validates against [`foreground-route.schema.json`](../schemas/foreground-route.schema.json) — complete Chat-to-Voice history bound to narration delivery |
 | [`narration-delivery.json`](narration-delivery.json) | [`narration-delivery.schema.json`](../schemas/narration-delivery.schema.json) |

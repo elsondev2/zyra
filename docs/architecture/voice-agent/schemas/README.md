@@ -41,13 +41,15 @@ These files are JSON Schema Draft 2020-12 contracts for the proposed Zyra voice-
 | Legacy message-route binding | 1 | New migration-only contract; preserve canonical JSONL bytes and bind each verified existing record to the migration route/manifest |
 | Operation intent | 2 | Add null foreground fields to non-message operations; reconstruct canonical-message route binding only from proven ledger identity, otherwise retain v1 read-only and block replay |
 | Narration delivery | 2 | Bind pending delivery to a proven Voice route or mark it nonreplayable/`outcome_unknown`; terminal v1 history remains archival |
-| Resume packet and delta | 2 | Replace cached v1 materializations from canonical sources; never mutate a stale cache in place |
+| Resume packet and delta | 3 | Regenerate v2 caches from canonical sources; copy canonical conversation-message sequences, revisioned-stream source sequences, the complete operation revision index, retaining every terminal identity tombstone, each active task’s revision/event-sequence head, and each current attempt’s exact state/event-sequence head and `writer_lock_ids`; never infer authority from owner/scope text or mutate a stale cache in place |
 | Provider capability report | 2 | Discard v1 combined/expired reports and probe each realtime or strong adapter independently |
 
-Other schemas remain version 1. A reader MUST dispatch by the record’s `schema_version`; it cannot validate a v1 record against a v2 schema and silently fill authority fields. Migration follows the backup, validation, atomic activation, and downgrade rules in [Security and privacy](../security-and-privacy.md).
+Other schemas remain version 1. A reader MUST dispatch by the record’s `schema_version`; it cannot validate an older record against a newer schema and silently fill authority fields. Migration follows the backup, validation, atomic activation, and downgrade rules in [Security and privacy](../security-and-privacy.md).
 
 ## Validation
 
 Examples under [`../examples/`](../examples/) validate against these schemas. Run `npm run test:voice-agent-contracts` from the repository root to compile every schema, validate every fixture/event, run rejection mutations, and check the cross-record semantic graph for load-bearing invariants. A production implementation should compile schemas during startup/CI and reject invalid persistence writes before append.
+
+JSON identity and coverage counters are capped at `Number.MAX_SAFE_INTEGER` (`9,007,199,254,740,991`). A future implementation needing larger values must introduce a string/big-integer schema version; readers must not round them as JSON numbers.
 
 Byte limits described in the architecture are application-level encoded-byte checks. JSON Schema character counts do not replace those checks.

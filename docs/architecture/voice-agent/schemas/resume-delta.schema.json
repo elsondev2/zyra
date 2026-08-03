@@ -19,7 +19,7 @@
     "generated_at"
   ],
   "properties": {
-    "schema_version": { "const": 2 },
+    "schema_version": { "const": 3 },
     "delta_id": { "$ref": "common.schema.json#/$defs/id" },
     "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
     "base_packet_id": { "$ref": "common.schema.json#/$defs/id" },
@@ -71,45 +71,50 @@
           },
           {
             "type": "object",
-            "required": ["change_type", "record"],
+            "required": ["change_type", "source_sequence", "record"],
             "properties": {
               "change_type": { "const": "decision_request" },
+              "source_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
               "record": { "$ref": "decision-request.schema.json" }
             },
             "additionalProperties": false
           },
           {
             "type": "object",
-            "required": ["change_type", "record"],
+            "required": ["change_type", "source_sequence", "record"],
             "properties": {
               "change_type": { "const": "approval_request" },
+              "source_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
               "record": { "$ref": "approval-request.schema.json" }
             },
             "additionalProperties": false
           },
           {
             "type": "object",
-            "required": ["change_type", "record"],
+            "required": ["change_type", "source_sequence", "record"],
             "properties": {
               "change_type": { "const": "capability_lease" },
+              "source_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
               "record": { "$ref": "capability-lease.schema.json" }
             },
             "additionalProperties": false
           },
           {
             "type": "object",
-            "required": ["change_type", "record"],
+            "required": ["change_type", "source_sequence", "record"],
             "properties": {
               "change_type": { "const": "operation_intent" },
+              "source_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
               "record": { "$ref": "operation-intent.schema.json" }
             },
             "additionalProperties": false
           },
           {
             "type": "object",
-            "required": ["change_type", "record"],
+            "required": ["change_type", "source_sequence", "record"],
             "properties": {
               "change_type": { "const": "narration_delivery" },
+              "source_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
               "record": { "$ref": "narration-delivery.schema.json" }
             },
             "additionalProperties": false
@@ -121,13 +126,14 @@
               "change_type": { "const": "conversation_message" },
               "record": {
                 "type": "object",
-                "required": ["message_id", "role", "modality", "foreground_route_id", "route_epoch", "canonical_commit_receipt_id", "content", "created_at"],
+                "required": ["message_id", "conversation_sequence", "role", "modality", "foreground_route_id", "route_epoch", "canonical_commit_receipt_id", "content", "created_at"],
                 "properties": {
                   "message_id": { "$ref": "common.schema.json#/$defs/id" },
+                  "conversation_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
                   "role": { "type": "string", "enum": ["user", "assistant"] },
                   "modality": { "type": "string", "enum": ["text", "speech", "image", "multimodal"] },
                   "foreground_route_id": { "$ref": "common.schema.json#/$defs/id" },
-                  "route_epoch": { "type": "integer", "minimum": 1 },
+                  "route_epoch": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
                   "canonical_commit_receipt_id": {
                     "oneOf": [
                       { "$ref": "common.schema.json#/$defs/id" },

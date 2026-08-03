@@ -128,7 +128,7 @@
         "session_expiry_signal": { "$ref": "#/$defs/capability" },
         "max_session_seconds": {
           "oneOf": [
-            { "type": "integer", "minimum": 1 },
+            { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
             { "type": "null" }
           ]
         },

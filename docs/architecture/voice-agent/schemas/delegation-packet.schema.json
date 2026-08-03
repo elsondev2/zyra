@@ -34,7 +34,7 @@
     "packet_id": { "$ref": "common.schema.json#/$defs/id" },
     "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
     "task_id": { "$ref": "common.schema.json#/$defs/id" },
-    "task_revision": { "type": "integer", "minimum": 1 },
+    "task_revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
     "task_state": { "type": "string", "enum": ["proposed", "queued", "running", "waiting_for_user", "waiting_for_approval", "paused", "verifying"] },
     "attempt_id": { "$ref": "common.schema.json#/$defs/id" },
     "created_at": { "$ref": "common.schema.json#/$defs/timestamp" },
@@ -163,8 +163,8 @@
       "properties": {
         "max_turns": { "type": "integer", "minimum": 1, "maximum": 100 },
         "max_subagents": { "type": "integer", "minimum": 0, "maximum": 16 },
-        "max_elapsed_seconds": { "type": "integer", "minimum": 1 },
-        "max_tokens": { "type": "integer", "minimum": 1 }
+        "max_elapsed_seconds": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "max_tokens": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
       },
       "additionalProperties": false
     },

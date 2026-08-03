@@ -34,10 +34,10 @@
   "properties": {
     "schema_version": { "const": 2 },
     "operation_id": { "$ref": "common.schema.json#/$defs/id" },
-    "revision": { "type": "integer", "minimum": 1 },
+    "revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
     "previous_revision": {
       "oneOf": [
-        { "type": "integer", "minimum": 1 },
+        { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         { "type": "null" }
       ]
     },
@@ -62,7 +62,7 @@
     },
     "foreground_route_epoch": {
       "oneOf": [
-        { "type": "integer", "minimum": 1 },
+        { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         { "type": "null" }
       ]
     },
@@ -155,7 +155,7 @@
         "required": ["revision"]
       },
       "then": { "properties": { "previous_revision": { "type": "null" } } },
-      "else": { "properties": { "previous_revision": { "type": "integer", "minimum": 1 } } }
+      "else": { "properties": { "previous_revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 } } }
     },
     {
       "if": {
@@ -165,7 +165,7 @@
       "then": {
         "properties": {
           "foreground_route_id": { "$ref": "common.schema.json#/$defs/id" },
-          "foreground_route_epoch": { "type": "integer", "minimum": 1 },
+          "foreground_route_epoch": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
           "foreground_owner_claim_id": { "$ref": "common.schema.json#/$defs/id" },
           "canonical_message_id": { "$ref": "common.schema.json#/$defs/id" }
         }

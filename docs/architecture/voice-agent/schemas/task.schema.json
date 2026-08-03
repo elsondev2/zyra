@@ -31,7 +31,7 @@
     "schema_version": { "const": 1 },
     "task_id": { "$ref": "common.schema.json#/$defs/id" },
     "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
-    "revision": { "type": "integer", "minimum": 1 },
+    "revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
     "parent_task_id": {
       "oneOf": [
         { "$ref": "common.schema.json#/$defs/id" },

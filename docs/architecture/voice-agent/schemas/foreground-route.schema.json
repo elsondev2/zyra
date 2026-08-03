@@ -28,15 +28,15 @@
   "properties": {
     "schema_version": { "const": 1 },
     "foreground_route_id": { "$ref": "common.schema.json#/$defs/id" },
-    "revision": { "type": "integer", "minimum": 1 },
+    "revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
     "previous_revision": {
       "oneOf": [
-        { "type": "integer", "minimum": 1 },
+        { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         { "type": "null" }
       ]
     },
     "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
-    "route_epoch": { "type": "integer", "minimum": 1 },
+    "route_epoch": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
     "surface_mode": { "type": "string", "enum": ["chat", "voice"] },
     "response_owner": { "type": "string", "enum": ["strong_primary", "realtime_foreground"] },
     "status": { "type": "string", "enum": ["active", "superseded", "released", "failed"] },
@@ -54,7 +54,7 @@
     },
     "realtime_session_generation": {
       "oneOf": [
-        { "type": "integer", "minimum": 1 },
+        { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         { "type": "null" }
       ]
     },
@@ -92,7 +92,7 @@
       "then": { "properties": { "previous_revision": { "type": "null" }, "status": { "const": "active" } } },
       "else": {
         "properties": {
-          "previous_revision": { "type": "integer", "minimum": 1 },
+          "previous_revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
           "status": { "enum": ["superseded", "released", "failed"] }
         }
       }
@@ -112,7 +112,7 @@
           "response_owner": { "const": "realtime_foreground" },
           "activation_reason": { "enum": ["start_voice", "replace_voice_session"] },
           "realtime_session_id": { "$ref": "common.schema.json#/$defs/id" },
-          "realtime_session_generation": { "type": "integer", "minimum": 1 }
+          "realtime_session_generation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
         }
       }
     },

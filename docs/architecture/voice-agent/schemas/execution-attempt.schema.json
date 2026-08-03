@@ -29,7 +29,7 @@
     "task_id": { "$ref": "common.schema.json#/$defs/id" },
     "primary_agent_run_id": { "$ref": "common.schema.json#/$defs/id" },
     "attempt_id": { "$ref": "common.schema.json#/$defs/id" },
-    "ordinal": { "type": "integer", "minimum": 1 },
+    "ordinal": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
     "resumes_attempt_id": {
       "oneOf": [
         { "$ref": "common.schema.json#/$defs/id" },

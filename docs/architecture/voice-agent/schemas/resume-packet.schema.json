@@ -19,12 +19,13 @@
     "recent_verbatim_turns",
     "retrieval_refs",
     "safety_state",
+    "operation_revision_index",
     "narration_watermark",
     "packet_integrity",
     "truncation"
   ],
   "properties": {
-    "schema_version": { "const": 2 },
+    "schema_version": { "const": 3 },
     "packet_id": { "$ref": "common.schema.json#/$defs/id" },
     "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
     "generated_at": { "$ref": "common.schema.json#/$defs/timestamp" },
@@ -33,17 +34,17 @@
       "type": "object",
       "required": ["conversation_sequence", "foreground_route_epoch", "task_sequence", "attempt_sequence", "context_sequence", "decision_sequence", "approval_sequence", "capability_lease_sequence", "operation_sequence", "agent_checkpoint_sequence", "narration_delivery_sequence"],
       "properties": {
-        "conversation_sequence": { "type": "integer", "minimum": 0 },
-        "foreground_route_epoch": { "type": "integer", "minimum": 0 },
-        "task_sequence": { "type": "integer", "minimum": 0 },
-        "attempt_sequence": { "type": "integer", "minimum": 0 },
-        "context_sequence": { "type": "integer", "minimum": 0 },
-        "decision_sequence": { "type": "integer", "minimum": 0 },
-        "approval_sequence": { "type": "integer", "minimum": 0 },
-        "capability_lease_sequence": { "type": "integer", "minimum": 0 },
-        "operation_sequence": { "type": "integer", "minimum": 0 },
-        "agent_checkpoint_sequence": { "type": "integer", "minimum": 0 },
-        "narration_delivery_sequence": { "type": "integer", "minimum": 0 }
+        "conversation_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "foreground_route_epoch": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "task_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "Latest global controller sequence occupied by a task event." },
+        "attempt_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "Latest global controller sequence occupied by an attempt event." },
+        "context_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "decision_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "approval_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "capability_lease_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "operation_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "agent_checkpoint_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "narration_delivery_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
       },
       "additionalProperties": false
     },
@@ -70,7 +71,7 @@
             "properties": {
               "kind": { "const": "decision" },
               "request_id": { "$ref": "common.schema.json#/$defs/id" },
-              "record_revision": { "type": "integer", "minimum": 1 },
+              "record_revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
               "task_id": { "$ref": "common.schema.json#/$defs/id" },
               "context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
               "question": { "type": "string", "minLength": 1, "maxLength": 2000 },
@@ -113,7 +114,7 @@
             "properties": {
               "kind": { "const": "approval" },
               "request_id": { "$ref": "common.schema.json#/$defs/id" },
-              "record_revision": { "type": "integer", "minimum": 1 },
+              "record_revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
               "task_id": { "$ref": "common.schema.json#/$defs/id" },
               "requesting_attempt_id": {
                 "oneOf": [
@@ -162,7 +163,7 @@
       "maxItems": 32,
       "items": {
         "type": "object",
-        "required": ["task_id", "title", "state", "latest_verified_activity", "required_context_version", "current_attempt_id", "primary_agent_run_id"],
+        "required": ["task_id", "title", "state", "task_revision", "task_event_sequence", "latest_verified_activity", "required_context_version", "current_attempt_id", "current_attempt_state", "current_attempt_event_sequence", "primary_agent_run_id"],
         "properties": {
           "task_id": { "$ref": "common.schema.json#/$defs/id" },
           "title": { "type": "string", "minLength": 1, "maxLength": 200 },
@@ -170,6 +171,8 @@
             "type": "string",
             "enum": ["proposed", "queued", "running", "waiting_for_user", "waiting_for_approval", "paused", "verifying", "failed"]
           },
+          "task_revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+          "task_event_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
           "latest_verified_activity": { "type": "string", "maxLength": 2000 },
           "next_expected_event": { "type": "string", "maxLength": 500 },
           "blocker": {
@@ -182,6 +185,18 @@
           "current_attempt_id": {
             "oneOf": [
               { "$ref": "common.schema.json#/$defs/id" },
+              { "type": "null" }
+            ]
+          },
+          "current_attempt_state": {
+            "oneOf": [
+              { "type": "string", "enum": ["created", "queued", "starting", "running", "parking", "parked", "completed", "failed", "cancelled", "interrupted"] },
+              { "type": "null" }
+            ]
+          },
+          "current_attempt_event_sequence": {
+            "oneOf": [
+              { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
               { "type": "null" }
             ]
           },
@@ -206,6 +221,8 @@
             "then": {
               "properties": {
                 "current_attempt_id": { "$ref": "common.schema.json#/$defs/id" },
+                "current_attempt_state": { "type": "string", "enum": ["starting", "running", "parking"] },
+                "current_attempt_event_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
                 "primary_agent_run_id": { "$ref": "common.schema.json#/$defs/id" }
               }
             }
@@ -215,7 +232,13 @@
               "properties": { "state": { "enum": ["waiting_for_user", "waiting_for_approval", "paused", "verifying", "failed"] } },
               "required": ["state"]
             },
-            "then": { "properties": { "current_attempt_id": { "type": "null" } } }
+            "then": {
+              "properties": {
+                "current_attempt_id": { "type": "null" },
+                "current_attempt_state": { "type": "null" },
+                "current_attempt_event_sequence": { "type": "null" }
+              }
+            }
           }
         ],
         "additionalProperties": false
@@ -273,13 +296,14 @@
       "maxItems": 24,
       "items": {
         "type": "object",
-        "required": ["message_id", "role", "modality", "foreground_route_id", "route_epoch", "canonical_commit_receipt_id", "content", "created_at"],
+        "required": ["message_id", "conversation_sequence", "role", "modality", "foreground_route_id", "route_epoch", "canonical_commit_receipt_id", "content", "created_at"],
         "properties": {
           "message_id": { "$ref": "common.schema.json#/$defs/id" },
+          "conversation_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
           "role": { "type": "string", "enum": ["user", "assistant"] },
           "modality": { "type": "string", "enum": ["text", "speech", "image", "multimodal"] },
           "foreground_route_id": { "$ref": "common.schema.json#/$defs/id" },
-          "route_epoch": { "type": "integer", "minimum": 1 },
+          "route_epoch": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
           "canonical_commit_receipt_id": {
             "oneOf": [
               { "$ref": "common.schema.json#/$defs/id" },
@@ -308,14 +332,14 @@
       "type": "object",
       "required": ["permission_epoch", "emergency_stop_active", "active_capability_lease_ids", "revocation_watermark", "primary_slot_attempt_id", "writer_lock"],
       "properties": {
-        "permission_epoch": { "type": "integer", "minimum": 0 },
+        "permission_epoch": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "emergency_stop_active": { "type": "boolean" },
         "active_capability_lease_ids": {
           "type": "array",
           "uniqueItems": true,
           "items": { "$ref": "common.schema.json#/$defs/id" }
         },
-        "revocation_watermark": { "type": "integer", "minimum": 0 },
+        "revocation_watermark": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "primary_slot_attempt_id": {
           "oneOf": [
             { "$ref": "common.schema.json#/$defs/id" },
@@ -326,10 +350,18 @@
           "oneOf": [
             {
               "type": "object",
-              "required": ["task_id", "attempt_id", "scope"],
+              "description": "Exact active writer-lock ID set and its owning task/attempt; scope is a bounded display summary, not lock identity.",
+              "required": ["task_id", "attempt_id", "writer_lock_ids", "scope"],
               "properties": {
                 "task_id": { "$ref": "common.schema.json#/$defs/id" },
                 "attempt_id": { "$ref": "common.schema.json#/$defs/id" },
+                "writer_lock_ids": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 64,
+                  "uniqueItems": true,
+                  "items": { "$ref": "common.schema.json#/$defs/id" }
+                },
                 "scope": { "type": "string", "minLength": 1, "maxLength": 1000 }
               },
               "additionalProperties": false
@@ -340,11 +372,50 @@
       },
       "additionalProperties": false
     },
+    "operation_revision_index": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "required": ["operation_id", "source_sequence", "revision", "status", "immutable_identity_sha256", "idempotency_key", "canonical_message_id", "assigned_receipt_id"],
+        "properties": {
+          "operation_id": { "$ref": "common.schema.json#/$defs/id" },
+          "source_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+          "revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+          "status": { "type": "string", "enum": ["intended", "dispatched", "succeeded", "failed", "cancelled", "outcome_unknown"] },
+          "immutable_identity_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "canonical_message_id": {
+            "oneOf": [
+              { "$ref": "common.schema.json#/$defs/id" },
+              { "type": "null" }
+            ]
+          },
+          "assigned_receipt_id": {
+            "oneOf": [
+              { "$ref": "common.schema.json#/$defs/id" },
+              { "type": "null" }
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "status": { "enum": ["succeeded", "failed", "cancelled"] } },
+              "required": ["status"]
+            },
+            "then": { "properties": { "assigned_receipt_id": { "$ref": "common.schema.json#/$defs/id" } } },
+            "else": { "properties": { "assigned_receipt_id": { "type": "null" } } }
+          }
+        ],
+        "additionalProperties": false
+      }
+    },
     "narration_watermark": {
       "type": "object",
       "required": ["terminal_sequence", "pending_delivery_ids", "unknown_outcome_delivery_ids"],
       "properties": {
-        "terminal_sequence": { "type": "integer", "minimum": 0 },
+        "terminal_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "pending_delivery_ids": {
           "type": "array",
           "uniqueItems": true,
@@ -379,7 +450,7 @@
       "required": ["truncated", "omitted_record_count", "critical_records_omitted", "omitted_sections", "byte_budget"],
       "properties": {
         "truncated": { "type": "boolean" },
-        "omitted_record_count": { "type": "integer", "minimum": 0 },
+        "omitted_record_count": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "critical_records_omitted": { "const": 0 },
         "omitted_sections": {
           "type": "array",

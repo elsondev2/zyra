@@ -74,6 +74,7 @@ Generate route revisions and assert:
 - superseding Chat and activating Voice commit atomically at the next route epoch;
 - two active owners for one conversation are rejected;
 - stale strong/realtime provider events cannot commit canonical output;
+- old-route canonical-message intent, dispatch, terminal result, or receipt observation at or after the half-open handoff boundary is rejected;
 - an in-flight strong response commits an exact completed/interrupted prefix before handoff;
 - starting Voice preserves the active task attempt, slot, writer locks, leases, operations, and context acknowledgements;
 - Voice preparation failure atomically rekeys Chat to a new route epoch/owner claim without changing task execution;
@@ -105,7 +106,7 @@ Property-based tests SHOULD generate valid and invalid transition paths.
 - every legacy message binding matches conversation, stable message ID, source sequence, role/modality, timestamp, source hash, and one manifest hash;
 - assistant messages receive deterministic migration receipt IDs while user messages do not;
 - missing, duplicate, hash-mismatched, reordered, or temporally impossible records fail closed and keep the conversation read-only;
-- resume v2 cannot materialize until every included legacy message has a verified binding.
+- resume v3 cannot materialize until every included legacy message has a verified binding.
 
 ### Context reducer
 
@@ -237,10 +238,22 @@ Required cases:
 - multibyte Unicode truncation;
 - source watermark gap;
 - task completion, revocation, and new pending decision arrive during connection and cross the hydration barrier as lossless deltas;
-- duplicate delta, hash mismatch, unsupported record, and before/after watermark gap;
+- duplicate delta, independently recomputed packet/delta hash mismatch, unsupported record, and before/after watermark gap;
 - active foreground route/epoch survives packet replacement, cannot be truncated, and never grants execution authority to the model;
-- at most one active task is `running`, and its attempt matches the primary slot and any writer lock;
-- a delta cannot change slot/lock/lease authority without matching attempt records and watermark advancement;
+- at most one active task is `running`, and its attempt matches the primary slot and exact writer-lock ID set;
+- a delta cannot change slot/lock/lease authority without matching attempt records, exact resulting writer-lock IDs, and watermark advancement;
+- the union of task/attempt events covers every global controller sequence between packet and delta high-watermarks; skipped or duplicate sequence numbers and task/attempt event-ID collisions fail closed;
+- conversation, context, decision, approval, lease, operation, and narration watermark advances equal included records; every record belongs to the packet conversation, and conversation messages cover exact sequences with globally unique message IDs across packet and delta;
+- decision, approval, lease, operation, and narration source sequences exactly continue their stream watermarks, and duplicate identity/revision keys cannot satisfy coverage;
+- the packet operation revision index covers every source sequence from 1 through its watermark, and a delta producing more than 256 entries fails closed; omitting any lower terminal entry fails, revision chains and immutable identities remain stable, status cannot regress, terminal tombstones preserve status-consistent receipt identity and cannot reopen or be reused as revision 1, and aliases cannot reuse natural identities;
+- context parent/version chains are contiguous, backwards movement and unsupported checkpoint advancement fail closed, multi-billion sequence gaps reject without proportional allocation or an exception, and counters above `Number.MAX_SAFE_INTEGER` fail schema validation before comparison;
+- task events continue the packet’s task revision/state/event-sequence head, end at their advancing to watermark, follow legal transitions, and cannot complete/fail/cancel while the resulting attempt retains authority;
+- attempt events are rejected when stale relative to the packet/from watermark, beyond the to watermark, duplicated by event ID or idempotency key, out of canonical sequence, discontinuous from the packet attempt head, or when an existing attempt ID changes task/primary lineage;
+- attempt release and its task waiting/verifying/terminal transition must share one contiguous transaction group; invariants are checked after every group, so split transactions expose and reject intermediate mismatch;
+- sequential reduction rejects a second attempt’s transient slot acquisition and any transient active lease issued to a non-slot attempt, even when both are released before the final projection;
+- reducing all packet and delta task/attempt heads leaves at most one running task; a queued task may match an acquired `starting` attempt, while acquired `running`/`parking` attempts match the running task, and exactly that projected attempt remains acquired; every non-slot attempt has empty writer-lock and capability-lease sets, and the slot owner’s final writer-lock and capability-lease ID sets match the resulting safety projection;
+- route-head selection remains on the highest valid revision when revision records arrive out of order;
+- route-bound canonical-message operations embedded in a delta are rejected when intent, dispatch, terminal result, or receipt observation falls outside the route’s half-open lifetime;
 - stale cache after canonical deletion;
 - restart while a packet build is in progress;
 - history-dependent first question before hydration;
