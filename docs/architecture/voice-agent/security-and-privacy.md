@@ -6,7 +6,7 @@
 
 ## Security objective
 
-A natural voice interface must not widen agent authority. Models propose; trusted code authorizes, records, and executes. The foreground role receives less authority than the ordinary primary coding agent.
+Adding Voice to normal coding chat must not widen agent authority. Models propose; trusted code authorizes, records, and executes. Realtime receives less authority than the strong primary. Foreground route ownership grants response production only and never execution capability.
 
 ## Trust zones
 
@@ -55,7 +55,7 @@ Every arrow crossing into trusted code requires schema validation, identity chec
 | Role | Default capabilities | Explicitly absent |
 |---|---|---|
 | Realtime foreground | Bounded read, search, inspection, retrieval, task status, usage status, task proposal | Generic shell, writes, tests, Git mutation, deploy, publish, browser/computer action, credential access |
-| Strong primary | Ordinary scoped coding tools under current sandbox and approval policy | Authority outside granted roots/policy |
+| Strong primary | Direct Chat response while holding the active route claim; ordinary scoped coding tools under task, sandbox, and approval policy | Authority outside granted roots/policy; canonical output while Voice owns the route |
 | Subagent | Attenuated subset of primary capabilities with explicit scope | User-facing speech, approval claims, recursive delegation initially, broad control |
 | Renderer | Typed IPC and presentation | Credentials, task authority, capability minting |
 | Task controller | State transitions and routing | Direct platform side effects without a tool/permission seam |
@@ -78,10 +78,11 @@ Capability checks occur at execution time. Prompt instructions are defense in de
 | Context poisoning across tasks | Scope every revision; propagate only through explicit task ancestry; no lateral child propagation. |
 | Subagent addresses the user or injects narration | Children have no narration channel; output is untrusted evidence; scheduler accepts controller events only. |
 | Secret read aloud | Redaction and speech eligibility gate precede explicit-speech calls; sensitive detail remains visual/private. |
-| Raw logs leak into conversation | Logs stay in private task records; user-facing projection receives bounded summaries. |
+| Raw logs leak into conversation | Logs stay in private task records; Chat receives only redacted structured activity and bounded summaries. Activity rows never become assistant prose, model context, or TTS. |
 | Renderer forges task/approval events | Main/server authenticates clients and validates actor authority; the general renderer cannot append controller events or invoke lease issuance, and only the broker-owned challenge callback creates a receipt. |
+| Competing Chat and Voice owners | Foreground route activation is server-controlled, transactionally unique, and epoch-bound; UI state alone cannot grant response ownership. |
 | Event stream replay or gap | Unique event IDs, monotonic sequence, watermarks, gap detection, and fresh snapshot recovery. |
-| Realtime provider event from old session | Session generation and provider item identity reject stale callbacks. |
+| Realtime or strong-provider event from an old foreground route | Route ID, monotonic route epoch, owner claim, session generation, and provider item identity reject stale callbacks and canonical commits. |
 | Voice session drains allowance while idle | Visible connected state, optional idle timeout, separate usage meter, and seamless close/resume. |
 | Audio spoofing or replay | Do not use voice identity as authentication; protected actions still require normal approval controls. |
 | Malicious attachment | MIME/size validation, safe storage, no renderer path authority, and provider/tool sandboxing. |
@@ -143,7 +144,7 @@ Acceptance creates a separate durable capability lease. Lease material remains i
 
 ## Desktop and browser control
 
-Production Voice reuses the existing `AgentControlBroker` path:
+Chat and production Voice reuse the existing `AgentControlBroker` path:
 
 - control remains in Electron main;
 - the foreground has no direct control capability;
@@ -171,7 +172,7 @@ Voice convenience does not create an ambient remote-desktop channel.
 The reference implementation uses clear ownership rather than treating every SQLite file as a cache:
 
 - existing canonical conversation JSONL remains the source of user/assistant message truth;
-- a per-user `controller.sqlite` is canonical for append-only controller events, context revisions, tasks, execution attempts, operation intents, completion candidates, decisions, approval requests, capability leases, narration items/deliveries, idempotency receipts, and side-effect outbox entries;
+- a per-user `controller.sqlite` is canonical for foreground-route revisions, append-only controller events, context revisions, tasks, execution attempts, operation intents, completion candidates, decisions, approval requests, capability leases, narration items/deliveries, idempotency receipts, and side-effect outbox entries;
 - private provider/worker records remain under existing ignored task-run storage and are referenced by stable IDs;
 - Desktop search/timeline SQLite remains a disposable projection and never mints authority;
 - resume packets are replaceable encrypted cache blobs derived from the canonical stores.
@@ -197,6 +198,8 @@ Full-disk encryption remains recommended but is not treated as a substitute for 
 ### Schema migration and recovery
 
 `controller.sqlite` records storage schema version and minimum compatible reader version. Migrations follow `backup → integrity check → transactional expand/copy → schema and row validation → atomic activation`. The previous database is retained until the new store passes replay, foreign-key, and checksum checks. A reader that encounters an unsupported version or unknown event preserves bytes, stops projection before that record, and opens the affected conversation/task read-only.
+
+Canonical-message route migration does not rewrite historical JSONL. It creates one initial `migration` Chat route plus per-message hash/sequence bindings and deterministic assistant migration receipts under one manifest hash. Any missing, duplicate, hash-mismatched, or temporally impossible source record leaves the conversation read-only and Voice disabled until repaired; migration never fabricates provider provenance.
 
 Downgrade never writes through a newer schema. Crash recovery replays from the last committed sequence, validates outbox receipts and active lease/slot invariants, revokes orphaned authority, and regenerates projections/resume caches. Migration tests include interruption at every durable step and restoration from the backup.
 
@@ -262,7 +265,7 @@ Minimum adversarial coverage appears in [Evaluation plan](evaluation.md) and inc
 - prompt injection through speech, files, web results, and child output;
 - approval forgery and stale-grant replay;
 - context-version race during mutation/completion;
-- session-generation replay;
+- foreground-route and session-generation replay;
 - side-effect timeout with unknown outcome;
 - secret and private-log narration attempts;
 - child direct-speech attempts;

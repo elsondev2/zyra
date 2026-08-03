@@ -3,6 +3,7 @@
 - **Status:** Accepted design; implementation pending
 - **Date:** 2026-08-02
 - **Specification:** [System architecture](../architecture/voice-agent/system-architecture.md)
+- **Foreground ownership refined by:** [ADR-0007](0007-canonical-chat-and-explicit-voice-foreground-routing.md)
 
 ## Context
 
@@ -10,12 +11,14 @@ A passive speech shell would route every meaningful utterance through a slower s
 
 ## Decision
 
+> **Refinement:** ADR-0007 assigns ordinary Chat responses directly to the strong role. The realtime ownership and bounded-tool rules below apply while Voice is active.
+
 Zyra uses two logical model roles:
 
-1. A capable **realtime foreground agent** owns conversation, clarification, direct answers, and bounded read/search/inspection/status tools.
-2. One **strong primary agent** activates on demand for writes, commands, tests, Git, consequential actions, deep investigation, and durable work. The initial production policy allows one active strong-primary attempt per canonical conversation.
+1. A capable **realtime foreground agent** owns Voice conversation, clarification, direct answers, and bounded read/search/inspection/status tools.
+2. One **strong primary agent** owns ordinary Chat responses and all writes, commands, tests, Git, consequential actions, deep investigation, and durable work. The initial production policy allows one active strong-primary attempt per canonical conversation.
 
-The foreground has no generic shell, writes, tests, Git mutation, deployment, or desktop-control authority. A deterministic controller promotes requests and enforces the capability boundary.
+The realtime foreground has no generic shell, writes, tests, Git mutation, deployment, or desktop-control authority. A deterministic controller promotes requests and enforces the capability boundary.
 
 The physical provider/model can change behind an adapter while these roles remain stable.
 
@@ -23,7 +26,7 @@ The physical provider/model can change behind an adapter while these roles remai
 
 ### Benefits
 
-- Low-latency conversation remains useful without waking the strong model for every turn.
+- Low-latency Voice remains useful without waking the strong model for every spoken turn, while Chat retains the familiar direct strong-agent experience.
 - Mutation and consequential authority stay behind established sandbox/approval paths.
 - Costs and usage can be attributed to voice and strong work separately.
 - Provider replacement does not change domain roles.
@@ -31,14 +34,14 @@ The physical provider/model can change behind an adapter while these roles remai
 ### Costs
 
 - Promotion and steering require an explicit client-managed contract.
-- Foreground and primary context must be synchronized through versioned records.
+- Chat/Voice foreground ownership and strong-task context must be synchronized through versioned records.
 - Provider capability gaps need fallback routes.
 
 ## Alternatives considered
 
-### Strong model for every utterance
+### Strong model for every utterance in Voice
 
-Rejected because it increases latency and agent-work usage and reduces foreground capability.
+Rejected because it increases spoken-turn latency and agent-work usage. ADR-0007 deliberately routes ordinary Chat turns to the strong role while keeping Voice on Realtime.
 
 ### Unrestricted realtime model
 
@@ -51,6 +54,6 @@ Rejected for continuity and ordinary routing. Deterministic services build resum
 ## Verification
 
 - Foreground attempts to mutate state fail at the tool seam.
-- Direct explanations and bounded inspections complete without a primary run.
+- Voice explanations and bounded inspections complete without a primary run; ordinary Chat goes directly to the strong role.
 - Write/test/deep requests promote with exact intent preserved.
 - Resume does not invoke a third model.

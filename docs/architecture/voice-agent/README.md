@@ -4,7 +4,7 @@
 **Audience:** maintainers, agent-framework builders, voice-interface researchers, and contributors.
 **Last reviewed:** 2026-08-02.
 
-This package specifies a persistent, voice-first coding assistant that can answer immediately, inspect safely, delegate durable work, narrate useful outcomes, and resume across physical realtime sessions. Voice is a mode of a canonical Zyra chat. Speech, text, images, tasks, approvals, and background results retain the same conversation identity.
+This package specifies a persistent multimodal coding assistant with an ordinary strong-agent Chat surface and optional low-latency Voice. A typed Chat turn goes directly to the strong agent; starting Voice attaches a realtime foreground to the same canonical conversation and any active task. Speech, text, images, tools, tasks, approvals, and background results retain one conversation identity.
 
 The architecture is provider-aware and provider-neutral at its core. The first experimental adapter targets subscription-backed Codex realtime through the open-source Codex App Server. Other realtime and coding-agent providers can implement the same seams.
 
@@ -12,36 +12,40 @@ The architecture is provider-aware and provider-neutral at its core. The first e
 
 ## Outcome
 
-A user can speak naturally with one persistent Zyra identity while deeper work continues through a strong coding agent:
+A user can work in a normal coding chat and enter Voice on any later turn without losing context or interrupting durable work:
 
-1. The **realtime foreground agent** handles conversation and bounded read/search/inspection/status work.
-2. The **task controller** turns durable intent into versioned tasks, routes work, enforces policy, and records typed events.
-3. One **strong primary agent** normally owns execution, integration, and verification.
-4. **Subagents** are exceptional, narrowly scoped workers. They never address the user directly.
-5. The **narration scheduler** decides which verified events deserve speech. The foreground agent remains the sole voice.
-6. The **continuity service** prepares a bounded materialized view so a new physical voice session can resume silently without another summarization model.
+1. The **strong primary agent** owns direct user-facing responses in Chat and shows structured tool, command, diff, and test activity.
+2. The **realtime foreground agent** owns conversation and bounded read/search/inspection/status work while Voice is active.
+3. One active **foreground route** determines which role may produce canonical assistant responses; old-route provider events are rejected.
+4. The **task controller** turns durable intent into versioned tasks, routes work, enforces policy, and records typed events.
+5. One **strong primary agent** normally owns execution, integration, and verification even when Realtime becomes the narrator.
+6. **Subagents** are exceptional, narrowly scoped workers. They never address the user directly.
+7. The **narration scheduler** decides which verified events deserve speech. Realtime remains the sole spoken narrator in Voice.
+8. The **continuity service** prepares a bounded materialized view so Voice can attach or resume silently without another summarization model.
 
 ## System at a glance
 
 ```mermaid
 flowchart LR
-    U[User] <--> C[Zyra client\nvoice · text · images]
+    U[User] <--> C[Canonical chat client\ntext · images · Start Voice]
     C <--> AS[Zyra agent server\ncanonical runtime owner]
+    AS <--> FR[Foreground route\none active owner]
 
-    AS <--> RT[Realtime foreground adapter]
-    RT <--> FG[Foreground model\nconversation + bounded inspection]
+    FR -->|Chat| PA[Strong primary agent]
+    FR -->|Voice| RT[Realtime foreground adapter]
+    RT <--> FG[Realtime model\nconversation + bounded inspection]
 
     AS --> TC[Deterministic task controller]
     TC --> IT[Read/search/inspection gateway]
-    TC --> PA[Strong primary agent]
+    TC <--> PA
     PA -. exceptional delegation .-> SA[Scoped subagents]
 
     TC --> NS[Narration scheduler]
-    NS --> RT
+    NS --> FR
 
     AS <--> CL[(Canonical conversation ledger)]
-    TC <--> TL[(Task and orchestration ledger)]
-    PA <--> PR[(Private agent records\nand artifacts)]
+    FR <--> TL[(Controller ledger\nroutes · tasks · authority)]
+    PA <--> PR[(Private execution records\nand artifacts)]
 
     CL --> CV[Continuity materialized view]
     TL --> CV
@@ -61,14 +65,14 @@ flowchart LR
 
 The key words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** are normative.
 
-1. **One conversation identity.** Voice, text, and images MUST append to the same canonical chat and task context.
-2. **One user-facing identity.** Background agents MUST NOT speak or write user-facing messages directly. Primary work runs in a private task session; only the foreground/conversation gateway can commit canonical assistant messages.
-3. **Deterministic authority.** Task state, permissions, approvals, context versions, cancellation, and completion MUST be enforced outside model memory.
-4. **Bounded foreground tools.** The realtime role MAY read, search, inspect, and check status through dedicated tools. It MUST NOT receive unrestricted shell, file writes, tests, Git mutation, deployment, or consequential application control.
+1. **One conversation identity.** Voice, text, images, and direct strong-agent Chat turns MUST append to the same canonical chat and task context.
+2. **One active foreground route.** Every non-deleted conversation MUST have exactly one response owner before accepting input or output: the strong primary in Chat or Realtime in Voice. Background agents MUST NOT address the user. Every canonical assistant commit passes through the conversation gateway and binds to the current route epoch.
+3. **Deterministic authority.** Foreground ownership, task state, permissions, approvals, context versions, cancellation, and completion MUST be enforced outside model memory.
+4. **Bounded realtime tools.** The realtime role MAY read, search, inspect, and check status through dedicated tools. It MUST NOT receive unrestricted shell, file writes, tests, Git mutation, deployment, or consequential application control. The strong role uses ordinary scoped coding tools only under task, sandbox, and approval policy.
 5. **Preserved intent.** Every delegation packet MUST retain the user’s verbatim request. Summaries and findings supplement it; they never replace it.
 6. **Primary ownership.** One strong primary agent SHOULD own a task end to end. The initial policy allows one active strong-primary attempt per canonical conversation; another can start only after a durable park/terminal slot-release receipt. Only the primary can submit overall verification evidence.
 7. **Exceptional subagents.** A subagent MUST have an explicit objective, inherited constraints, attenuated capabilities, and a machine-checkable return contract.
-8. **Silent, idempotent narration.** Raw tool calls, code, logs, tests, internal reasoning, and worker discussions MUST NOT enter text-to-speech. Spoken delivery and canonical text commits MUST have durable dedupe/recovery state.
+8. **Inspectable execution, selective speech.** Structured tool and command lifecycle events MAY render inline in Chat. Raw arguments, code, logs, test output, internal reasoning, and worker discussion MUST NOT become assistant prose or text-to-speech. Spoken delivery and canonical text commits MUST have durable dedupe/recovery state.
 9. **Separate decisions and permissions.** A collaboration preference or spoken/model text MUST NOT grant authority. Trusted approval resolution issues a separate bounded capability lease.
 10. **Versioned steering.** Corrections, constraints, decisions, and approval changes MUST target the correct task and active descendants through context revisions.
 11. **Prepared continuity.** Resume context MUST be a bounded projection of canonical ledgers. Critical pending choices, safety state, constraints, and narration outcomes cannot be silently truncated; the projection MUST NOT become a competing source of truth.
@@ -80,10 +84,11 @@ The key words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** ar
 
 | Class | Owner | Examples | Durable task? |
 |---|---|---|---|
-| Conversation | Foreground agent | Explanation, clarification, brainstorming | Usually no |
-| Quick inspection | Foreground agent through bounded gateway | Read one file, search symbols, check task status | Promote if the budget or capability boundary is crossed |
-| Durable work | Strong primary agent through task controller | Edit, run commands, test, investigate multiple systems | Yes |
-| Consequential action | Primary agent plus permission gate | Deploy, publish, destructive Git, external side effect | Yes; explicit approval when policy requires |
+| Direct Chat conversation | Strong primary as foreground owner | Explanation, clarification, brainstorming | Usually no |
+| Voice conversation | Realtime foreground | Natural dialogue, clarification, status | Usually no |
+| Quick Voice inspection | Realtime through bounded gateway | Read one file, search symbols, check task status | Promote if the budget or capability boundary is crossed |
+| Durable work from either surface | Strong primary through task controller | Edit, run commands, test, investigate multiple systems | Yes |
+| Consequential action | Strong primary plus permission gate | Deploy, publish, destructive Git, external side effect | Yes; explicit approval when policy requires |
 | Exceptional specialist work | Scoped subagent owned by primary | Independent audit, massive separable research, high-value verification | Child run of a durable task |
 
 The routing contract is detailed in [Lifecycle and routing](lifecycle-and-routing.md).
@@ -107,6 +112,8 @@ This design extends current Zyra architecture instead of introducing a second ag
 | Event-sourced fleet, workflows, capability attenuation | **Implemented foundation** | Existing public Zyra architecture |
 | Isolated Codex realtime Voice Lab | **Experimental prototype** | Useful media/protocol evidence; not production conversation architecture |
 | Task controller, canonical controller store, and first-class task ledger | **Specified here** | Implementation pending |
+| Exclusive Chat/Voice foreground routing | **Specified here** | Implementation pending |
+| Direct strong-agent Chat output and structured activity projection | **Specified here** | Implementation pending |
 | Foreground inspection gateway | **Specified here** | Implementation pending |
 | Central narration scheduler | **Specified here** | Implementation pending |
 | Continuity materialized view | **Specified here** | Implementation pending |
@@ -143,6 +150,7 @@ The architecture’s load-bearing choices are recorded under [`docs/adr/`](../..
 - [ADR-0004: Keep one central narrator and exceptional subagents](../../adr/0004-central-narration-and-exceptional-subagents.md)
 - [ADR-0005: Build continuity as a materialized view](../../adr/0005-continuity-as-a-materialized-view.md)
 - [ADR-0006: Separate involvement preferences from permissions](../../adr/0006-separate-involvement-from-permissions.md)
+- [ADR-0007: Keep canonical Chat primary and make Voice an explicit foreground route](../../adr/0007-canonical-chat-and-explicit-voice-foreground-routing.md)
 
 ## Scope and non-goals
 

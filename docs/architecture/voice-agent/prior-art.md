@@ -10,10 +10,11 @@ The individual patterns in this architecture are established: realtime voice age
 
 This review did not find a public source documenting the complete Zyra combination as one open reference architecture:
 
-- one capable realtime foreground identity;
+- normal direct strong-agent Chat with explicit transition into realtime Voice;
+- one exclusive foreground route and persistent Zyra identity;
 - a deterministic controller outside model memory;
-- bounded direct inspection;
-- one on-demand strong coding agent;
+- bounded realtime inspection;
+- one strong coding/execution agent;
 - exceptional background subagents;
 - selective central narration;
 - canonical multimodal chat/task ledgers;
@@ -45,7 +46,7 @@ OpenAI’s orchestration guide distinguishes:
 - **handoffs**, where a specialist takes ownership of the next user response;
 - **agents as tools**, where a manager retains responsibility for the final answer.
 
-It recommends adding specialists only when capability, policy, prompt clarity, or trace legibility materially improve. Zyra chooses manager-style ownership for background coding work so the realtime foreground remains the user-facing identity.
+It recommends adding specialists only when capability, policy, prompt clarity, or trace legibility materially improve. Zyra uses manager-style ownership inside Voice so Realtime remains narrator, while ordinary Chat assigns the strong role direct foreground ownership.
 
 Source: OpenAI, [Orchestration and handoffs](https://developers.openai.com/api/docs/guides/agents/orchestration), accessed 2026-08-02.
 
@@ -170,7 +171,7 @@ The public core can support multiple providers while the experimental Codex adap
 
 ## Suggested project description
 
-> Zyra Voice is an open reference architecture for a persistent voice-first coding assistant: a capable realtime foreground agent, a deterministic task controller, one on-demand strong coding agent, selective central narration, and resumable canonical context across sessions.
+> Zyra Voice is an open reference architecture for a persistent coding assistant with normal direct strong-agent Chat and optional realtime Voice: one canonical conversation, explicit foreground ownership, a deterministic task controller, selective spoken narration, and resumable task context across sessions.
 
 ## Research limits
 

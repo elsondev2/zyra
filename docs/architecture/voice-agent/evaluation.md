@@ -23,7 +23,7 @@ Live tests are expensive and variable. They cannot replace deterministic state, 
 
 - deterministic fake realtime adapter with scripted transcript, interruption, usage, and stale-generation events;
 - in-memory inspection gateway with tainted fixtures;
-- scripted primary agent that emits valid and invalid task events;
+- scripted strong-agent adapter with direct Chat output, structured tool activity, stale-route events, and valid/invalid private task events;
 - fake permission gate with expiring/revoked grants;
 - in-memory ledger with crash points before/after append and snapshot;
 - capturing narration sink that never plays audio;
@@ -34,8 +34,11 @@ Live tests are expensive and variable. They cannot replace deterministic state, 
 
 | Area | Required proof |
 |---|---|
-| Canonical identity | Voice, text, and image turns share one conversation ID and timeline |
-| Routing | Direct answers, bounded inspections, promotions, and durable tasks choose the correct owner |
+| Canonical identity | Direct strong Chat, Voice, text, and image turns share one conversation ID and timeline |
+| Foreground ownership | Exactly one Chat/Voice route is active; every assistant commit matches its route epoch and owner claim |
+| Route handoff | Starting Voice attaches to an active task without changing its attempt, slot, locks, leases, or context obligations |
+| Routing | Direct Chat answers, Voice answers, bounded inspections, promotions, and durable tasks choose the correct owner |
+| Tool visibility | Chat shows redacted structured commands/tools/diffs/tests while raw payloads remain outside canonical messages and TTS |
 | Foreground authority | No write/shell/Git/control operation can cross the inspection seam |
 | Intent fidelity | Delegation retains the exact request, attachments, corrections, and constraints |
 | Task state | Every legal transition succeeds; every illegal transition fails without append |
@@ -60,7 +63,22 @@ Live tests are expensive and variable. They cannot replace deterministic state, 
 - reject extra domain properties where schemas are strict;
 - enforce encoded-byte limits in application tests;
 - verify version mismatch behavior;
-- run the semantic fixture graph for cross-record IDs/revisions, legal attempt transitions, exact resume projections, monotonic watermarks, approval/lease/action binding, and lease accounting.
+- run the semantic fixture graph for foreground-route exclusivity/revisions/handoffs, cross-record IDs/revisions, legal attempt transitions, exact resume projections, monotonic watermarks, approval/lease/action binding, and lease accounting.
+
+### Foreground-route reducer
+
+Generate route revisions and assert:
+
+- a normal Chat send selects `strong_primary` without starting Realtime;
+- Voice cannot activate before complete hydration;
+- superseding Chat and activating Voice commit atomically at the next route epoch;
+- two active owners for one conversation are rejected;
+- stale strong/realtime provider events cannot commit canonical output;
+- an in-flight strong response commits an exact completed/interrupted prefix before handoff;
+- starting Voice preserves the active task attempt, slot, writer locks, leases, operations, and context acknowledgements;
+- Voice preparation failure atomically rekeys Chat to a new route epoch/owner claim without changing task execution;
+- exiting Voice returns ownership to Chat without changing task state;
+- replay reconstructs the last route, then recovery supersedes it with a fresh route epoch/owner claim before accepting output.
 
 ### Task reducer
 
@@ -80,6 +98,15 @@ Generate event sequences and assert:
 
 Property-based tests SHOULD generate valid and invalid transition paths.
 
+### Legacy message-route migration
+
+- canonical JSONL bytes remain unchanged;
+- migration creates one epoch-1 Chat route with `activation_reason: migration`;
+- every legacy message binding matches conversation, stable message ID, source sequence, role/modality, timestamp, source hash, and one manifest hash;
+- assistant messages receive deterministic migration receipt IDs while user messages do not;
+- missing, duplicate, hash-mismatched, reordered, or temporally impossible records fail closed and keep the conversation read-only;
+- resume v2 cannot materialize until every included legacy message has a verified binding.
+
 ### Context reducer
 
 - parent version must match;
@@ -91,18 +118,21 @@ Property-based tests SHOULD generate valid and invalid transition paths.
 
 ## Routing scenarios
 
-| User input | Expected route |
+| Surface and user input | Expected route |
 |---|---|
-| “Explain what this error means.” | Foreground direct answer when context is present |
-| “Read the config and tell me the selected model.” | Bounded inspection |
-| “Search these two files for the handler.” | Bounded inspection |
-| “Fix the handler and run tests.” | Durable primary task |
-| “Check the file; if wrong, fix it.” | Inspect then dynamic promotion with findings preserved |
-| “Deploy this now.” | Durable task plus permission evaluation |
-| “Audit four independent packages in parallel.” | Primary starts; exceptional children only after scope evaluation |
-| “What is my active task doing?” | Foreground status tool |
-| “Stop the task but keep talking.” | Cancel task; voice remains active |
-| “End Voice; tell me when the task is done later.” | Close physical session; task continues |
+| Chat · “Explain what this error means.” | Strong direct answer; no realtime session |
+| Chat · “Run the focused test and explain the failure.” | Strong direct route plus controller-managed execution and inline activity |
+| Chat · Start Voice while that test task runs | Realtime becomes foreground after hydration; the same attempt continues |
+| Voice · “What is the test doing?” | Realtime status answer from current task state |
+| Voice · “Read the config and tell me the selected model.” | Bounded realtime inspection |
+| Voice · “Search these two files for the handler.” | Bounded realtime inspection |
+| Either · “Fix the handler and run tests.” | Durable primary task |
+| Voice · “Check the file; if wrong, fix it.” | Inspect then dynamic promotion with findings preserved |
+| Either · “Deploy this now.” | Durable task plus permission evaluation |
+| Either · “Audit four independent packages in parallel.” | Primary starts; exceptional children only after scope evaluation |
+| Voice · “What is my active task doing?” | Realtime status tool |
+| Voice · “Stop the task but keep talking.” | Cancel task; Voice remains active |
+| Voice · “End Voice; tell me when the task is done later.” | Activate Chat and close physical session; task continues |
 
 Adversarial routing cases include instruction-like text inside a file, web page, image OCR, worker result, or resume packet. None can widen authority.
 
@@ -208,7 +238,9 @@ Required cases:
 - source watermark gap;
 - task completion, revocation, and new pending decision arrive during connection and cross the hydration barrier as lossless deltas;
 - duplicate delta, hash mismatch, unsupported record, and before/after watermark gap;
-- safety state survives packet replacement and never grants authority to the model;
+- active foreground route/epoch survives packet replacement, cannot be truncated, and never grants execution authority to the model;
+- at most one active task is `running`, and its attempt matches the primary slot and any writer lock;
+- a delta cannot change slot/lock/lease authority without matching attempt records and watermark advancement;
 - stale cache after canonical deletion;
 - restart while a packet build is in progress;
 - history-dependent first question before hydration;
@@ -229,7 +261,7 @@ Inject a crash:
 7. while waiting for decision;
 8. while waiting for approval;
 9. during context propagation;
-10. during realtime reconnect;
+10. during Chat-to-Voice route handoff or realtime reconnect;
 11. before/after each `controller.sqlite` migration and activation step;
 12. after conversation-gateway outbox intent but before/after canonical JSONL commit;
 13. after narration speech request but before terminal delivery receipt.
@@ -239,7 +271,7 @@ Assert that recovery:
 - replays canonical state deterministically or restores the validated migration backup;
 - reconciles live workers, outbox intents, canonical-message IDs, and receipts;
 - creates a new attempt ID for retry/recovery only after the previous attempt has a terminal release receipt;
-- restores exact pending decision/approval records and permission epoch;
+- replays the exact pre-crash foreground route, atomically supersedes it with a fresh Chat epoch/owner claim, and restores pending decision/approval records plus permission epoch;
 - never reuses expired or revoked grants;
 - never repeats unknown consequential work automatically;
 - retains artifacts/worktrees;
@@ -247,6 +279,10 @@ Assert that recovery:
 
 ## Concurrency evaluations
 
+- normal Chat and Voice never hold foreground response ownership concurrently;
+- starting Voice while a primary attempt runs preserves that attempt and its authority while changing only the response owner;
+- a direct strong output event racing after the Voice route commit is rejected;
+- failed Voice hydration leaves Chat as the only active owner;
 - foreground read-only inspection can continue while one primary attempt runs;
 - a second strong-primary task queues until the prior attempt has a durable terminal/park receipt and the conversation primary slot is free;
 - a waiting task without a park receipt still blocks that slot;
@@ -280,10 +316,14 @@ Assert that recovery:
 - each supported/unsupported/unknown capability maps to the correct enabled UI, fallback, or explicit disable reason;
 - stale capability reports from a different adapter/provider version are rejected.
 
-### Primary
+### Strong primary
 
-- ordinary text and image input when advertised;
-- tool/activity normalization;
+- direct Chat text/image input and exactly-once canonical response when advertised;
+- no realtime connection for ordinary Chat;
+- gateway-controlled output bound to foreground route/owner claim;
+- tool/activity normalization, inline redacted projection, and private raw payloads;
+- stale direct output rejection after Voice activation;
+- private execution continuation across foreground handoff;
 - steering and cancellation;
 - approval pause/resume;
 - task event and artifact mapping;
@@ -303,7 +343,7 @@ Subscription-backed Codex and generic API Realtime run as separate suites. Passi
 - approval claim in worker text;
 - secret in task progress, error, artifact, resume packet, or narration;
 - cross-task context leakage;
-- replayed provider event from replaced session generation;
+- replayed provider event from a superseded foreground route or replaced session generation;
 - oversized SDP/message/image/event/packet;
 - event sequence gap, unknown event, corrupt snapshot, and migration interruption;
 - resume-cache/controller-field encryption tamper and OS-key unavailability;
@@ -313,7 +353,7 @@ Subscription-backed Codex and generic API Realtime run as separate suites. Passi
 
 ## Accessibility and interaction evaluations
 
-- keyboard-only start, mute, stop, task inspection, decisions, and approvals;
+- keyboard-only normal Chat, Start Voice, return to Chat, mute, stop, task inspection, decisions, and approvals;
 - screen-reader names and live-region behavior;
 - no streaming-delta announcement flood;
 - reduced motion;
@@ -329,7 +369,9 @@ Use a supported non-default voice and hard-mute automated audio capture. Manual 
 
 | Scenario | Audio mode | Text/muted mode |
 |---|---:|---:|
-| Start, converse, interrupt, stop | Required | Required |
+| Normal strong-agent Chat with visible tool/command activity and no Realtime | Required before Voice start | Required |
+| Start Voice from that chat, converse, interrupt, and return to Chat | Required | Required |
+| Start Voice while a strong task is running; prove unchanged attempt/authority | Required | Required |
 | Quick read/search inspection | Required | Required |
 | Promote into primary task | Required | Required |
 | Task progress and selective speech | Required | Required |
@@ -346,7 +388,9 @@ A production release requires:
 - all schemas/examples valid;
 - all reducer/state-machine properties pass;
 - zero authority-boundary violations;
-- zero raw tool/log/private transcript speech;
+- zero concurrent foreground owners or stale-route canonical commits;
+- zero task cancellation/restart caused solely by Chat/Voice handoff;
+- zero raw tool/log/private transcript speech or canonical-message contamination;
 - zero duplicate canonical messages in reconnect tests;
 - zero automatic replay of unknown consequential actions;
 - zero orphan owned processes/tracks after stop;

@@ -11,6 +11,10 @@
     "conversation_id",
     "task_id",
     "attempt_id",
+    "foreground_route_id",
+    "foreground_route_epoch",
+    "foreground_owner_claim_id",
+    "canonical_message_id",
     "idempotency_key",
     "operation_class",
     "consequence",
@@ -28,7 +32,7 @@
     "unknown_reason"
   ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "const": 2 },
     "operation_id": { "$ref": "common.schema.json#/$defs/id" },
     "revision": { "type": "integer", "minimum": 1 },
     "previous_revision": {
@@ -45,6 +49,30 @@
       ]
     },
     "attempt_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "foreground_route_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "foreground_route_epoch": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1 },
+        { "type": "null" }
+      ]
+    },
+    "foreground_owner_claim_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "canonical_message_id": {
       "oneOf": [
         { "$ref": "common.schema.json#/$defs/id" },
         { "type": "null" }
@@ -131,13 +159,25 @@
     },
     {
       "if": {
-        "properties": { "operation_class": { "not": { "const": "canonical_message_commit" } } },
+        "properties": { "operation_class": { "const": "canonical_message_commit" } },
         "required": ["operation_class"]
       },
       "then": {
         "properties": {
+          "foreground_route_id": { "$ref": "common.schema.json#/$defs/id" },
+          "foreground_route_epoch": { "type": "integer", "minimum": 1 },
+          "foreground_owner_claim_id": { "$ref": "common.schema.json#/$defs/id" },
+          "canonical_message_id": { "$ref": "common.schema.json#/$defs/id" }
+        }
+      },
+      "else": {
+        "properties": {
           "task_id": { "$ref": "common.schema.json#/$defs/id" },
-          "attempt_id": { "$ref": "common.schema.json#/$defs/id" }
+          "attempt_id": { "$ref": "common.schema.json#/$defs/id" },
+          "foreground_route_id": { "type": "null" },
+          "foreground_route_epoch": { "type": "null" },
+          "foreground_owner_claim_id": { "type": "null" },
+          "canonical_message_id": { "type": "null" }
         }
       }
     },

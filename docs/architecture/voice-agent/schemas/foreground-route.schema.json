@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zyra.dev/schemas/voice-agent/foreground-route.schema.json",
+  "title": "Zyra foreground route",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "foreground_route_id",
+    "revision",
+    "previous_revision",
+    "conversation_id",
+    "route_epoch",
+    "surface_mode",
+    "response_owner",
+    "status",
+    "activation_reason",
+    "context_version",
+    "owner_claim_id",
+    "realtime_session_id",
+    "realtime_session_generation",
+    "supersedes_route_id",
+    "superseded_by_route_id",
+    "attached_task_ids",
+    "created_at",
+    "updated_at",
+    "terminal_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "foreground_route_id": { "$ref": "common.schema.json#/$defs/id" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "previous_revision": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1 },
+        { "type": "null" }
+      ]
+    },
+    "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
+    "route_epoch": { "type": "integer", "minimum": 1 },
+    "surface_mode": { "type": "string", "enum": ["chat", "voice"] },
+    "response_owner": { "type": "string", "enum": ["strong_primary", "realtime_foreground"] },
+    "status": { "type": "string", "enum": ["active", "superseded", "released", "failed"] },
+    "activation_reason": {
+      "type": "string",
+      "enum": ["conversation_open", "migration", "start_voice", "replace_voice_session", "exit_voice", "recovery", "voice_preparation_failed"]
+    },
+    "context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
+    "owner_claim_id": { "$ref": "common.schema.json#/$defs/id" },
+    "realtime_session_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "realtime_session_generation": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1 },
+        { "type": "null" }
+      ]
+    },
+    "supersedes_route_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "superseded_by_route_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "attached_task_ids": {
+      "description": "Immutable snapshot of relevant active task IDs when this route was activated; it grants no task authority.",
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": { "$ref": "common.schema.json#/$defs/id" }
+    },
+    "created_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "updated_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "terminal_at": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/timestamp" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "revision": { "const": 1 } }, "required": ["revision"] },
+      "then": { "properties": { "previous_revision": { "type": "null" }, "status": { "const": "active" } } },
+      "else": {
+        "properties": {
+          "previous_revision": { "type": "integer", "minimum": 1 },
+          "status": { "enum": ["superseded", "released", "failed"] }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "surface_mode": { "const": "chat" } }, "required": ["surface_mode"] },
+      "then": {
+        "properties": {
+          "response_owner": { "const": "strong_primary" },
+          "activation_reason": { "enum": ["conversation_open", "migration", "exit_voice", "recovery", "voice_preparation_failed"] },
+          "realtime_session_id": { "type": "null" },
+          "realtime_session_generation": { "type": "null" }
+        }
+      },
+      "else": {
+        "properties": {
+          "response_owner": { "const": "realtime_foreground" },
+          "activation_reason": { "enum": ["start_voice", "replace_voice_session"] },
+          "realtime_session_id": { "$ref": "common.schema.json#/$defs/id" },
+          "realtime_session_generation": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "active" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "terminal_at": { "type": "null" },
+          "superseded_by_route_id": { "type": "null" }
+        }
+      },
+      "else": {
+        "properties": { "terminal_at": { "$ref": "common.schema.json#/$defs/timestamp" } }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "superseded" } }, "required": ["status"] },
+      "then": { "properties": { "superseded_by_route_id": { "$ref": "common.schema.json#/$defs/id" } } },
+      "else": { "properties": { "superseded_by_route_id": { "type": "null" } } }
+    }
+  ],
+  "additionalProperties": false
+}

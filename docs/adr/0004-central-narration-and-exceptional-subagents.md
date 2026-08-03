@@ -3,6 +3,7 @@
 - **Status:** Accepted design; implementation pending
 - **Date:** 2026-08-02
 - **Specification:** [Narration and interaction](../architecture/voice-agent/narration-and-interaction.md)
+- **Foreground ownership refined by:** [ADR-0007](0007-canonical-chat-and-explicit-voice-foreground-routing.md)
 
 ## Context
 
@@ -12,7 +13,9 @@ Eager subagent spawning also raises context, usage, integration, permission, and
 
 ## Decision
 
-The realtime foreground agent is the sole user-facing narrator.
+> **Refinement:** ADR-0007 makes the strong role the direct text respondent in Chat. Realtime remains the sole spoken narrator in Voice, and the background-worker rules below remain unchanged.
+
+The realtime foreground agent is the sole spoken narrator while Voice is active.
 
 - Primary and child agents emit structured events and private evidence.
 - A deterministic narration scheduler selects, redacts, deduplicates, and times user-visible updates.

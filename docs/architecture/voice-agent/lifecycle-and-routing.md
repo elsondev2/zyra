@@ -3,6 +3,58 @@
 **Status: Draft specification.**
 **Parent:** [Zyra Voice-Agent Architecture](README.md).
 
+## Foreground route lifecycle
+
+A [`ForegroundRoute`](schemas/foreground-route.schema.json) decides who may produce user-facing responses for a canonical conversation. It is independent from task and execution-attempt state.
+
+```mermaid
+stateDiagram-v2
+    [*] --> ChatActive: open canonical conversation
+    ChatActive --> VoicePreparing: user starts Voice
+    VoicePreparing --> ChatActive: initial transport or hydration fails
+    VoicePreparing --> VoiceActive: atomic owner handoff
+    VoiceActive --> ChatActive: user exits Voice or replacement fails safely
+    VoiceActive --> VoicePreparing: prepare replacement physical session
+```
+
+`VoicePreparing` is transport/preparation state, not an active route record. The current Chat or Voice route remains canonical while a candidate physical session applies a complete packet and all startup deltas through the hydration barrier. During first activation that owner is Chat. A successful replacement supersedes the prior route and activates a new Voice route epoch atomically with `activation_reason: replace_voice_session`. Failed preparation or replacement activates a fresh Chat route epoch/owner claim with `activation_reason: voice_preparation_failed` before direct response resumes, invalidating callbacks from the quiesced or failed route. On ordinary exit, another transaction releases Voice and activates Chat. Every predecessor `terminal_at` equals its successor `created_at`; half-open ownership intervals make the handoff instant belong only to the successor.
+
+Rules:
+
+1. Every non-deleted canonical conversation has exactly one `status: active` foreground route before it can accept input or output, enforced transactionally.
+2. Chat assigns `response_owner: strong_primary`; Voice assigns `response_owner: realtime_foreground`.
+3. The owner claim permits canonical response production only and grants no execution capability.
+4. Canonical user and assistant messages bind to the accepting `foreground_route_id` and `route_epoch`.
+5. A stale owner/provider event cannot append text, request speech, or advance delivery state.
+6. Starting Voice while a task runs attaches that task to Voice context; it does not cancel, pause, park, restart, or release the execution attempt.
+7. If strong response text is in flight, the gateway quiesces that output lane and commits a completed or explicitly interrupted canonical prefix before materializing Voice context. Voice must hydrate through that commit and every startup delta before the route swap. Commands or other task operations continue under their existing attempt.
+8. A route begins active and can terminate once as `superseded`, `released`, or `failed`; its route ID, epoch, and owner claim never reactivate.
+9. Exiting Voice closes/detaches media and returns the next ordinary send to a new strong Chat route epoch.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant G as Conversation gateway
+    participant R as Route controller
+    participant S as Strong primary
+    participant C as Continuity service
+    participant V as Realtime foreground
+
+    U->>G: Typed Chat turn at route epoch 8
+    G->>S: Direct strong response claim
+    S-->>G: Text plus structured execution activity
+    U->>R: Start Voice while attempt A is running
+    R->>G: Quiesce strong output and commit complete/interrupted prefix
+    G-->>R: Canonical boundary receipt at conversation watermark W
+    R->>C: Materialize through W plus current active task state
+    C-->>V: Silent packet plus startup deltas
+    V-->>R: Hydration acknowledged through connection high-watermark
+    R->>R: Supersede Chat and activate Voice epoch 9
+    Note over S: Attempt A continues unchanged
+    U->>V: Next spoken turn
+```
+
 ## Task versus execution attempt
 
 A **task** represents durable user intent. A **primary agent run** is a stable private worker/session lineage for that task. An **execution attempt** is one period in which that lineage owns the canonical conversation’s single strong-primary execution slot. Their state machines remain separate.
@@ -112,42 +164,50 @@ Attempt terminal/park state, slot-release receipt, lock/lease revocations, task 
 
 ## Routing algorithm
 
-The controller follows this order:
+The controller first honors the explicit active foreground route, then classifies work inside that route:
 
 ```mermaid
 flowchart TD
-    A[New user input] --> B{Existing task targeted?}
-    B -- yes --> C[Apply steering/context revision]
-    C --> D{Task can accept steering now?}
-    D -- yes --> E[Forward delta to owner]
-    D -- no --> F[Persist for next safe boundary]
+    A[New canonical user input] --> B{Active foreground route}
+    B -- Chat --> C[Strong primary owns direct response]
+    B -- Voice --> D[Realtime foreground owns response]
 
-    B -- no --> G{Conversational answer only?}
-    G -- yes --> H[Foreground answers directly]
-    G -- no --> I{Fits bounded inspection contract?}
-    I -- yes --> J[Foreground invokes inspection gateway]
-    J --> K{Resolved within budget?}
-    K -- yes --> L[Foreground answers with provenance]
-    K -- no --> M[Promote findings into durable task]
+    C --> E{Existing task targeted or durable work needed?}
+    E -- no --> F[Strong answers directly]
+    E -- yes --> G[Apply steering or create/promote task]
 
-    I -- no --> N[Create durable task]
-    N --> O{Permission required before start?}
+    D --> H{Existing task targeted?}
+    H -- yes --> I[Apply steering/context revision]
+    H -- no --> J{Conversation or bounded inspection?}
+    J -- conversation --> K[Realtime answers directly]
+    J -- inspection --> L[Realtime uses inspection gateway]
+    L --> M{Resolved within budget?}
+    M -- yes --> N[Realtime answers with provenance]
+    M -- no --> G
+    J -- durable work --> G
+
+    G --> O{Permission required before start?}
     O -- yes --> P[Request exact approval]
-    O -- no --> Q[Start one strong primary agent]
+    O -- no --> Q[Start or steer one strong primary]
     P --> PA{Trusted approval accepted?}
     PA -- yes --> Q
     PA -- no --> PX[Safe alternative, pause, or cancel]
-    M --> Q
 
     Q --> R{Exceptional child justified?}
     R -- no --> S[Primary executes and verifies]
     R -- yes --> T[Spawn scoped child and retain primary ownership]
     T --> S
+
+    S --> U{Current foreground route}
+    U -- Chat --> V[Strong commits validated response through gateway]
+    U -- Voice --> W[Realtime narrates validated facts]
 ```
 
-### Foreground direct-answer contract
+### Direct-answer contracts
 
-The foreground MAY answer without a durable task when no external state or durable execution is needed. Examples include explanations, planning discussion, clarification, and responses grounded in already-present context.
+In Chat, the strong primary MAY answer without a durable task when no external state or durable execution is needed. Its response streams directly through the conversation gateway under the active Chat owner claim.
+
+In Voice, the realtime foreground MAY answer without a durable task for explanations, planning discussion, clarification, status, and responses grounded in current context or bounded inspection. Realtime remains subject to the narrower tool boundary.
 
 ### Bounded inspection contract
 
@@ -162,7 +222,7 @@ The initial conservative budget is a proposal to validate through evals:
 | Mutation capability | None |
 | Recursive delegation | None |
 
-The controller MUST promote work when any of these is true:
+The controller MUST create or promote a durable task from either surface when any of these is true:
 
 - a write, command, test, Git mutation, deployment, or application action is required;
 - the answer depends on a multi-step investigation beyond the budget;
@@ -171,7 +231,7 @@ The controller MUST promote work when any of these is true:
 - the user asks to continue work asynchronously;
 - foreground confidence is insufficient and deeper reasoning has material value.
 
-A quick inspection is a bounded `InspectionTrace`, not a durable `Task`. Promotion is a creation transaction:
+A quick Voice inspection is a bounded `InspectionTrace`, not a durable `Task`. A direct Chat turn can reach the same promotion transaction as soon as it needs durable execution. Promotion is a creation transaction:
 
 1. the canonical user message already exists with its stable message ID;
 2. the controller freezes the bounded inspection trace and provenance;
@@ -180,11 +240,11 @@ A quick inspection is a bounded `InspectionTrace`, not a durable `Task`. Promoti
 5. `task.routed` selects the primary;
 6. `task.queued` makes the task schedulable.
 
-A durable task never uses `running → queued` for foreground promotion. Promotion preserves the exact request, inspection results with provenance, attachments, recent relevant turns, and the current context version.
+A durable task never uses `running → queued` for foreground promotion. Promotion preserves the exact request, foreground route/epoch, inspection results with provenance, attachments, recent relevant turns, and the current context version.
 
 ### Durable-task route
 
-The task controller creates one primary run by default. Model selection is a policy choice based on task complexity, live availability, capability, and usage. The role is stable even if a provider fallback changes the concrete model.
+The task controller creates one primary run by default. In Chat, that strong role can retain the direct foreground response lane while the user remains on the Chat route. In Voice, the same execution becomes private and Realtime narrates validated facts. Switching routes changes no task ID, primary lineage, attempt ID, slot, lock, lease, or model policy. Model selection remains a policy choice based on task complexity, live availability, capability, and usage.
 
 ### Exceptional subagent route
 
@@ -208,6 +268,8 @@ Conservative defaults:
 - no child-to-child delegation in the first production release.
 
 ## Typed lifecycle events
+
+Foreground ownership changes use append-only `ForegroundRoute` revisions with a monotonic per-conversation route epoch. Preparing a provider session does not change canonical ownership. Superseding the old route, activating the new route, advancing the active foreground-route epoch watermark, and installing the gateway owner claim commit atomically. Route changes are not task-state transitions.
 
 Execution-attempt state/authority changes use append-only [`AttemptEvent`](schemas/attempt-event.schema.json) records with a resulting snapshot. When one action changes both attempt and task state, the attempt event, task event, slot/lock/lease updates, and outbox intent commit atomically in one controller transaction with a contiguous ordered sequence range.
 
@@ -324,7 +386,7 @@ Approval text MUST avoid secrets while preserving enough detail for informed con
 
 ## Concurrency and writer ownership
 
-Tasks MAY remain active concurrently when their read/write scopes and required authority do not conflict. The initial production policy allows at most one active strong-primary attempt per canonical conversation. Another queued task can take that slot only after the prior attempt is durably `parked` or terminal and its slot, writer locks, in-flight operations, and capability leases are released. A task-state label such as `waiting_for_user` does not itself prove release. Foreground read-only inspection and safely isolated existing work can continue around it. The controller enforces:
+Tasks MAY remain active concurrently when their read/write scopes and required authority do not conflict. Foreground route ownership is orthogonal: switching between Chat and Voice neither consumes nor releases the strong-primary execution slot. The initial production policy allows at most one active strong-primary attempt per canonical conversation. Another queued task can take that slot only after the prior attempt is durably `parked` or terminal and its slot, writer locks, in-flight operations, and capability leases are released. A task-state label such as `waiting_for_user` does not itself prove release. Foreground read-only inspection and safely isolated existing work can continue around it. The controller enforces:
 
 - one active strong-primary attempt per canonical conversation in the initial release, enforced by a transactional uniqueness constraint on acquired slot leases;
 - one integration owner per root task;
@@ -335,7 +397,7 @@ Tasks MAY remain active concurrently when their read/write scopes and required a
 - independent continuation of unaffected branches;
 - bounded concurrency based on provider and user policy.
 
-A waiting task does not freeze the conversation or unrelated tasks.
+A waiting task does not freeze the conversation or unrelated tasks. An active task also does not prevent a Chat-to-Voice handoff; Voice attaches to its current materialized state while execution continues.
 
 ## Idempotency
 
@@ -399,4 +461,4 @@ flowchart TD
     K -- no --> M[Pause/block task and surface next action]
 ```
 
-Recovery MUST preserve exact pending decision options, exact approval action/hash/scope, permission epoch, revocations, writer ownership, and narration delivery watermarks. Expired approvals and leases are not revived. Orphaned slot/lock/lease authority is revoked before scheduling. Automatic attempt replacement requires the old attempt to be terminal or durably parked and is permitted only for operations proven absent or safely idempotent. Unknown consequential operations and unknown-outcome speech are never replayed automatically.
+Recovery MUST replay and preserve the exact pre-crash foreground route for audit, then atomically supersede it with a fresh Chat route epoch and owner claim before accepting input or output. A later explicit Voice activation creates another fresh route after hydration. This rekey makes every delayed pre-crash provider callback stale. Recovery also preserves pending decision options, exact approval action/hash/scope, permission epoch, revocations, writer ownership, and narration delivery watermarks. Expired approvals and leases are not revived. Orphaned slot/lock/lease authority is revoked before scheduling. Automatic attempt replacement requires the old attempt to be terminal or durably parked and is permitted only for operations proven absent or safely idempotent. Unknown consequential operations and unknown-outcome speech are never replayed automatically.

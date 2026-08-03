@@ -5,19 +5,27 @@
 
 ## One conversational identity
 
-The user speaks with Zyra. Worker names, provider names, tool calls, and internal routing do not become competing speakers. The foreground model is the sole conversational narrator across voice and text output.
+The user interacts with one Zyra identity. Worker names, provider names, and internal routing do not become competing speakers. The active foreground route chooses one response owner: the strong primary in Chat or the realtime foreground in Voice. Realtime remains the sole spoken narrator.
 
-Background agents produce structured events and private evidence. The narration scheduler decides when verified facts should enter the conversation. The foreground turns approved facts into natural language.
+Background agents produce structured events and private evidence. In Chat, the strong role can answer directly and expose bounded execution activity while it owns the route. In Voice, the narration scheduler decides when verified task facts should enter conversation or speech, and Realtime phrases approved facts naturally.
 
 ```mermaid
 flowchart LR
+    U[User] --> R{Active foreground route}
+    R -->|Chat| S[Strong direct response]
+    R -->|Voice| F[Realtime response]
+
     W[Primary/subagent events] --> C[Task controller validation]
     C --> P[Narration policy]
-    P -->|silent| D[Task details only]
-    P -->|visual| V[Timeline/status UI]
-    P -->|speakable| Q[Narration queue]
-    Q --> F[Foreground model]
-    F --> U[One Zyra voice]
+    P -->|silent| D[Private records]
+    P -->|visual| V[Structured timeline activity]
+    P -->|speakable in Voice| Q[Narration queue]
+    Q --> F
+
+    S --> G[Conversation gateway]
+    F --> G
+    G --> O[One Zyra timeline]
+    F --> A[One Zyra voice]
 ```
 
 ## Speech eligibility
@@ -31,9 +39,9 @@ flowchart LR
 | Permission approval | Yes | Yes when safe and sufficiently specific | Yes |
 | Blocker or failure | Yes | Yes | Yes |
 | Verified completion and remaining gaps | Yes | Yes | Yes |
-| Raw tool call/arguments | No | No | Yes, redacted |
-| Command output and logs | No | No | Yes, bounded/redacted |
-| Source code or diff body | No | No | Yes |
+| Tool/command lifecycle | Structured row in Chat | No | Yes, redacted |
+| Raw tool arguments, command output, and logs | No | No | Yes, bounded/redacted |
+| Source code or diff body | Diff/artifact viewer only | No | Yes |
 | Tests executing normally | Usually no | No | Yes |
 | Internal worker discussion/reasoning | No | No | Private record only |
 | Unverified child claim | No | No | Yes, marked unverified |
@@ -61,7 +69,7 @@ flowchart TD
     T --> F[Foreground phrases approved facts]
 ```
 
-The scheduler is deterministic. The foreground model may improve phrasing but cannot decide that a private event deserves speech.
+The scheduler is deterministic. The active foreground model may improve phrasing but cannot decide that a private event deserves user-facing narration. Only the realtime owner can produce speech.
 
 ## Priorities and timing
 
@@ -88,7 +96,7 @@ Conservative debounce defaults to evaluate:
 
 ## Delivery and canonical-message contract
 
-A [`NarrationDelivery`](schemas/narration-delivery.schema.json) binds one narration item to one deterministic canonical assistant message ID, one physical session generation, and provider speech/item identities.
+A [`NarrationDelivery`](schemas/narration-delivery.schema.json) is an append-only state chain whose `previous_status` must match the preceding revision; terminal delivery states never reopen. It binds one narration item to one deterministic canonical assistant message ID, the Voice route/epoch/owner claim active during delivery, one physical session generation, and provider speech/item identities.
 
 ```mermaid
 stateDiagram-v2
@@ -112,18 +120,18 @@ stateDiagram-v2
 
 Rules:
 
-1. The scheduler derives `canonical_message_id` deterministically from `narration_id` and persists `prepared` before provider submission.
+1. The scheduler derives `canonical_message_id` deterministically from `narration_id`, binds the current Voice route/epoch/owner claim (retained as historical provenance after handoff), and persists `prepared` before provider submission.
 2. Streaming text remains provisional presentation state.
-3. Final or interrupted foreground transcript commits idempotently through the conversation gateway using that message ID; the primary never performs the commit.
+3. Final or interrupted realtime transcript commits idempotently through the conversation gateway using that message ID. A direct strong Chat response uses the same gateway and owner-claim checks but does not masquerade as a narration delivery.
 4. Provider item ID, speech request ID, physical session generation, and measured playback duration attach to the delivery record.
 5. The narration watermark advances only after a terminal delivery has either a canonical message commit receipt or an explicit `suppressed/not_applicable` result.
 6. If the process loses certainty after speech was requested, recovery records `outcome_unknown`, does not replay speech automatically, and surfaces delivery uncertainty visually.
 7. A newer deduplicating narration can supersede only a delivery that has not requested speech.
-8. Ordinary foreground conversational responses use the same provider-item-to-canonical-message idempotency rule, even when no task narration item exists.
+8. Ordinary strong Chat and realtime Voice responses use the same provider-item-to-canonical-message idempotency rule, bind to the current route epoch, and reject stale-owner events even when no task narration item exists.
 
 ## Explicit speech contract
 
-Only a validated [`NarrationItem`](schemas/narration-item.schema.json) with `contains_sensitive_detail: false` and at least one approved `speakable_fact` can request app-injected speech. The adapter uses its provider’s explicit-speech route when available. The adapter uses its provider’s explicit-speech route when available. If unavailable:
+Only a validated [`NarrationItem`](schemas/narration-item.schema.json) with `contains_sensitive_detail: false` and at least one approved `speakable_fact` can request app-injected speech. The adapter uses its provider’s explicit-speech route when available. If unavailable:
 
 1. commit the redacted `visual_summary` once through the conversation gateway using the deterministic narration message ID;
 2. mark audio delivery as unavailable/failed;
@@ -183,18 +191,31 @@ sequenceDiagram
 
 A transcript must reflect what was spoken or interrupted, rather than silently replacing an interrupted answer with its unplayed tail.
 
+## Chat home and Voice entry
+
+The ordinary canonical timeline and composer are the home surface. They present two real actions at the point of intent:
+
+- **Send** commits the typed/image user message under the active Chat route and invokes the strong agent directly.
+- **Start Voice** prepares a realtime session, hydrates it from the same conversation and active tasks, then atomically activates the Voice route. Starting Voice is a control action, not a synthetic user message, and produces no greeting.
+
+While Voice is active, speech and any typed/image input submitted from the Voice surface belong to the realtime foreground. **Return to Chat** ends/detaches media and activates a strong Chat route; the next ordinary send goes directly to the strong agent. The initial release has no hidden automatic foreground router and no per-message model selector.
+
+If a task is running, Start Voice attaches to its current state without cancelling or restarting it. Compact structured activity can continue updating in the same timeline while Realtime handles conversation and selective narration.
+
 ## Multimodal message semantics
 
 Speech, typed text, and images share one message pipeline:
 
-- each user message gets a stable client message ID;
+- each user message gets a stable client message ID and the accepting foreground route/epoch;
+- an ordinary Chat send routes to the strong primary; starting Voice routes subsequent Voice-surface input to Realtime after hydration;
 - attachments are stored once and referenced from the canonical message;
 - the same permission and task-routing policy applies regardless of modality;
 - image interpretation uses a provider route that actually supports image input;
 - provider fallback does not create a second conversation;
-- private primary results become validated task events and narration items; only the foreground/conversation gateway commits the resulting user-facing assistant message to the canonical timeline.
+- primary results are direct response candidates only under an active Chat claim; under Voice they become validated task events and narration items;
+- only the conversation gateway commits the resulting user-facing assistant message to the canonical timeline.
 
-A realtime adapter that cannot accept images MAY route the image-bearing turn through the primary/ordinary multimodal agent and then return a safe result to the foreground. The UI MUST disclose the active route in task details without presenting a second assistant identity.
+A Chat image turn MAY go directly through the strong multimodal route. A realtime adapter that cannot accept images MAY route a Voice image-bearing turn through the primary/ordinary multimodal agent and then return a safe result to Realtime. The UI MUST disclose the fallback in activity details without presenting a second assistant identity.
 
 ## Transcript contract
 
@@ -209,7 +230,7 @@ These are presentation requirements derived from the current Voice Lab findings;
 
 ## Conversation and task presentation
 
-The main timeline contains user-visible turns. Task mechanics remain inspectable without flooding that timeline:
+The main timeline remains a normal coding-chat surface. In Chat it MAY interleave compact, collapsible execution rows for tool calls, commands, file changes, diffs, tests, and artifacts. These rows are projections over task/private records rather than canonical assistant messages. Raw arguments and output stay behind deliberate expansion and redaction. Voice can show the same activity visually without reading it aloud:
 
 ```mermaid
 flowchart LR
@@ -220,25 +241,27 @@ flowchart LR
     M --> M1[User messages]
     M --> M2[Zyra conclusions]
     M --> M3[Questions and approvals]
+    M --> M4[Structured execution activity]
 
-    T --> T1[Tools and logs]
+    T --> T1[Full redacted tools and logs]
     T --> T2[Artifacts and tests]
     T --> T3[Worker provenance]
 ```
 
-A user can open task details for exact commands, diffs, logs, artifacts, child runs, and usage. Closing task details does not alter task state.
+A user can inspect exact permitted commands, diffs, bounded logs, artifacts, child runs, and usage inline or in task details. Closing or collapsing activity does not alter task state or model context.
 
-## Output modes
+## Interaction and output modes
 
-- **Audio:** approved foreground responses and narration play as speech and render as text.
-- **Text:** the same responses render without local audio playback. A provider MAY still require an audio-capable transport; the adapter reports that implementation detail.
-- **Muted:** the session can remain connected while local playback is suppressed. The UI MUST distinguish muted output from provider text-only capability.
+- **Chat:** the normal conversation surface. Typed/image sends go directly to the strong owner; no realtime session is required. Structured execution activity is visible and the strong answer commits as canonical text.
+- **Voice · audio:** Realtime owns responses; approved narration plays as speech and renders as text.
+- **Voice · text:** Realtime remains the owner while responses render without local audio playback. A provider MAY still require an audio-capable transport; the adapter reports that implementation detail.
+- **Voice · muted:** the session can remain connected while local playback is suppressed. The UI MUST distinguish muted output from provider text-only capability.
 
 Changing voice after a provider has emitted audio may require a new physical session. Logical conversation identity remains unchanged.
 
 ## Silent activation
 
-A newly connected or resumed session starts without a greeting. Resume context is reference data. Zyra waits for the user unless a pending approval, decision, blocker, or urgent safety event already qualifies for narration.
+A newly connected or resumed Voice session starts without a greeting. Resume context is reference data. Chat remains authoritative during initial Voice preparation; ownership changes only after hydration. Zyra then waits for the user unless a pending approval, decision, blocker, or urgent safety event already qualifies for narration.
 
 “Catching up” is used only when:
 
@@ -270,6 +293,9 @@ Headphones and physical environment are outside software control, so “speakabl
 
 Users MUST be able to:
 
+- use normal Chat without starting Realtime or granting microphone access;
+- start Voice from the current chat and attach it to active work;
+- return to Chat without cancelling tasks;
 - end the physical voice session without cancelling tasks;
 - mute output and microphone independently;
 - stop a task explicitly;

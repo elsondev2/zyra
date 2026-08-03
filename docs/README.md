@@ -24,7 +24,7 @@ Status words used below:
 - [Agent surfaces](architecture/agent-surface.md) — **Current.** Desktop/TUI semantic projection boundaries.
 - [Assistant browser](architecture/assistant-browser.md) — **Current.** Browser ownership and visual-control architecture.
 - [Assistant resources](architecture/assistant-resources.md) — **Current.** Resource indexing and presentation ownership.
-- [Voice-agent architecture](architecture/voice-agent/README.md) — **Draft specification.** Open reference design for a realtime foreground agent, deterministic task controller, on-demand strong coding agent, selective narration, and resumable continuity.
+- [Voice-agent architecture](architecture/voice-agent/README.md) — **Draft specification.** Open reference design for direct strong-agent Chat, optional realtime Voice, exclusive foreground routing, deterministic task control, selective speech, and resumable continuity.
 
 ## Architecture decisions
 

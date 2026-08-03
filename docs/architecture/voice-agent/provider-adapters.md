@@ -6,12 +6,16 @@
 
 ## Adapter rule
 
-The core architecture depends on capabilities, not provider names. Every adapter emits a [`ProviderCapabilityReport`](schemas/provider-capabilities.schema.json) at startup. Required capabilities fail closed; optional capabilities select an explicit fallback.
+The core architecture depends on capabilities, not provider names. Every concrete adapter emits its own [`ProviderCapabilityReport`](schemas/provider-capabilities.schema.json) at startup with exactly one `adapter_role`: `realtime_foreground` or `strong_agent`. Reports never merge separate providers, authentication modes, versions, evidence, or expiry windows. Required capabilities fail closed; optional capabilities select an explicit fallback.
 
 ```mermaid
 flowchart LR
-    CORE[Zyra domain contracts] --> RF[RealtimeForegroundAdapter]
+    CORE[Zyra domain contracts] --> FR[ForegroundRoute controller]
+    CORE --> RF[RealtimeForegroundAdapter]
     CORE --> PA[PrimaryAgentAdapter]
+
+    FR -->|Voice| RF
+    FR -->|Chat| PA
 
     RF --> CRTX[Codex thread realtime\nsubscription · experimental]
     RF --> OAPI[OpenAI Realtime API\nAPI billing]
@@ -20,11 +24,11 @@ flowchart LR
     PA --> ZP[Zyra Pi/Codex runtime]
     PA --> SDK[Other coding-agent runtime]
 
-    CRTX --> CAP[Capability report]
-    OAPI --> CAP
-    OTHER --> CAP
-    ZP --> CAP
-    SDK --> CAP
+    CRTX --> RCAP[Realtime capability report]
+    OAPI --> RCAP
+    OTHER --> RCAP
+    ZP --> SCAP[Strong-agent capability report]
+    SDK --> SCAP
 ```
 
 ## Capability matrix
@@ -44,8 +48,10 @@ This matrix distinguishes public documentation from local interoperability obser
 | Voice-list discovery | Provider dependent | `thread/realtime/listVoices` documented | Required before exposing a provider voice selector |
 | Sideband/control path | Documented for supported server control patterns | App Server control connection is adapter-specific | Required when client-managed routing depends on it |
 | Session expiry signal/limit | Documented session limits | Version-specific | Required as explicit supported/unsupported/unknown capability; timer fallback allowed |
-| Private coding task turn | Separate agent/API path | `turn/start` documented | Required primary-agent route; never a canonical narrator turn |
-| Private task-output stream | Provider/runtime dependent | Ordinary turn stream | Required and must remain outside the canonical message gateway |
+| Direct strong Chat turn | Ordinary model/agent response path | `turn/start` documented | Required for Chat; output must be interceptable by the conversation gateway |
+| Structured tool/activity stream | Provider/runtime dependent | Turn/item events | Required for normal coding-chat activity projection |
+| Private coding task turn | Separate agent/API path | `thread/start` + `turn/start` documented | Required when Realtime owns Voice |
+| Private task-output stream | Provider/runtime dependent | Ordinary turn stream | Required; remains noncanonical whenever Realtime owns the foreground route |
 | Steering active coding turn | Provider dependent | `turn/steer` documented | Recommended |
 | Cancel realtime response | Provider dependent | Version-specific; local playback stop is distinct | Optional only with immediate local stop and stale item/generation quarantine |
 | Interrupt coding turn | Provider dependent | `turn/interrupt` documented | Required |
@@ -53,7 +59,7 @@ This matrix distinguishes public documentation from local interoperability obser
 | Task usage/rate limits | Provider dependent | App Server account/rate-limit APIs and turn usage | Required for operational display |
 | Checkpoint/session resume | Provider dependent | Thread resume exists; exact task checkpoint semantics are adapter-owned | Optional; deterministic controller checkpoint remains authoritative |
 
-Each report records `support`, stability, exact method, evidence class, verification time, and notes for every branch used by routing or UI. `unknown` never behaves as supported. Audio mode is disabled unless session, audio input/output, transcript identity, startup context strategy, interruption, and required transport capabilities validate. Unsupported realtime response cancellation requires immediate local playback stop plus stale provider item/generation quarantine; the UI must not imply server-side cancellation. Image attachment controls are disabled unless direct realtime image input or private-primary image input validates. An expired report or one from a different adapter/provider version is discarded and regenerated. The UI shows the normalized fallback or reason rather than guessing from provider name.
+Each report records `support`, stability, exact method, evidence class, verification time, and notes for every branch used by routing or UI. The strong-agent report separately proves direct Chat turns, gateway-controlled output, structured tool events, and private task sessions. `unknown` never behaves as supported. Audio mode is disabled unless session, audio input/output, transcript identity, startup context strategy, interruption, and required transport capabilities validate. Unsupported realtime response cancellation requires immediate local playback stop plus stale provider item/generation quarantine; the UI must not imply server-side cancellation. Image attachment controls are disabled unless direct realtime image input or private-primary image input validates. A report is valid only when `observed_at < expires_at`, every capability evidence time is no later than `observed_at`, and the current clock remains before expiry. An expired, future-evidence, or different adapter/provider-version report is discarded and regenerated. The UI shows the normalized fallback or reason rather than guessing from provider name.
 
 ## Codex subscription-backed adapter
 
@@ -94,7 +100,7 @@ The Codex adapter SHOULD:
 
 1. initialize App Server with truthful Zyra client metadata;
 2. opt into experimental methods only when the installed schema exposes them;
-3. create or resume a provider realtime thread mapped to the canonical Zyra conversation while keeping its provider ID non-canonical and separate from private primary execution threads;
+3. create or resume a provider realtime thread mapped to the canonical Zyra conversation only after the user starts Voice, while keeping its provider ID non-canonical and separate from direct Chat and private primary execution threads;
 4. use V3 only after capability validation;
 5. seed a bounded prepared resume packet through supported startup context;
 6. set client-managed handoffs when Zyra’s controller owns routing and narration;
@@ -112,13 +118,13 @@ Microphone/VAD response generation, ordinary Codex `turn/start`, context append,
 
 ### Images
 
-The documented Codex thread realtime surface has no `appendImage` method. Production routing therefore uses a multimodal turn inside the private primary task session when supported. Its stream remains private task evidence. After controller validation, a narration item returns safe facts to the foreground; only the conversation gateway commits the foreground’s final user-facing message.
+The documented Codex thread realtime surface has no `appendImage` method. A normal Chat image turn therefore uses the strong multimodal route directly when supported. A Voice image turn uses a multimodal turn inside the private primary task session when native realtime image input is unavailable. Its stream remains private task evidence; after controller validation, a narration item returns safe facts to Realtime. Only the conversation gateway commits the active owner’s final user-facing message.
 
 If a future installed schema exposes native image input, capability discovery can enable it without changing the domain contract.
 
 ### Client-managed routing
 
-Subscription-backed V3 does not expose the same arbitrary named client-tool surface as generic API Realtime. Zyra therefore manages routing outside the foreground provider session:
+Subscription-backed V3 does not expose the same arbitrary named client-tool surface as generic API Realtime. Zyra therefore manages task promotion outside the realtime provider session. Foreground Chat/Voice ownership is already fixed by the user’s explicit surface action:
 
 ```mermaid
 sequenceDiagram
@@ -140,7 +146,7 @@ The exact promotion signal requires an isolated compatibility proof before produ
 
 ### Session generation and cleanup
 
-Every start creates a generation token. SDP, media, data-channel, transcript, and close callbacks carry or capture that generation. Replaced generations cannot mutate current state. Stop is idempotent and owns:
+Every start creates a generation token. A session that becomes foreground also binds a new Voice route epoch. SDP, media, data-channel, transcript, and close callbacks carry or capture both identities. Replaced generations or superseded routes cannot mutate current state. Stop is idempotent and owns:
 
 - realtime provider stop request;
 - peer connection and data-channel closure;
@@ -163,18 +169,24 @@ This adapter is useful for provider-neutral validation and deployments using API
 
 The generic API can implement foreground inspection tools directly through function calling. Zyra still applies the same controller capability policy; model-callable availability is not authorization.
 
-## Primary-agent adapter
+## Strong primary-agent adapter
 
-The first primary adapter reuses Zyra’s existing Pi/Codex execution and fleet machinery behind a private server-owned task session. It must not use the canonical root turn path because that path currently persists assistant output directly to the conversation. It maps:
+The first strong adapter reuses Zyra’s existing Pi/Codex execution and fleet machinery through two explicit lanes:
 
+- **Direct Chat:** an ordinary strong turn accepts canonical text/image input while `strong_primary` owns the foreground route. The adapter exposes text and structured tool/item events to the conversation gateway, which validates the route claim and commits canonical assistant text once.
+- **Private execution:** a server-owned task session receives a delegation packet while Realtime owns Voice or when work continues asynchronously. Provider output becomes private records and typed task events rather than direct assistant messages.
+
+It maps:
+
+- active Chat route + canonical user message → gateway-controlled direct strong turn;
+- normalized tool/item events → bounded redacted timeline activity;
 - delegation packet → private primary task session linked to canonical conversation/task IDs;
 - context revision → steer or queued follow-up;
-- provider turn/item/tool events → private records and typed task events;
 - approval request → Zyra permission gate;
 - usage → task-attributed usage summary;
 - completion candidate → controller verification.
 
-The adapter MUST keep provider thread/turn IDs as provenance and preserve canonical Zyra conversation/task IDs.
+The adapter MUST quarantine output from stale route epochs, keep provider thread/turn IDs as provenance, and preserve canonical Zyra conversation/task IDs. Starting Voice changes the output lane without cancelling the active primary attempt.
 
 ## Capability negotiation
 
@@ -196,6 +208,7 @@ sequenceDiagram
 Required checks include:
 
 - authentication mode and account eligibility;
+- direct strong Chat turns, gateway-controlled output, and structured tool events;
 - transport availability;
 - supported realtime version;
 - input/output modalities;
@@ -243,6 +256,10 @@ Every realtime adapter must pass:
 
 Every primary adapter must pass:
 
+- direct Chat response streaming and exactly-once gateway commit;
+- structured tool activity projection with raw payload redaction;
+- stale Chat route output rejection after Voice activation;
+- active task continuation across Chat-to-Voice handoff;
 - verbatim request preservation;
 - image/text route where advertised;
 - steering context acknowledgement;

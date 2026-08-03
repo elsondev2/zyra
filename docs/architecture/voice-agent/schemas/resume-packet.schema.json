@@ -10,6 +10,7 @@
     "generated_at",
     "context_version",
     "source_watermarks",
+    "foreground_route",
     "current_focus",
     "pending_user_items",
     "active_tasks",
@@ -23,16 +24,17 @@
     "truncation"
   ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "const": 2 },
     "packet_id": { "$ref": "common.schema.json#/$defs/id" },
     "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
     "generated_at": { "$ref": "common.schema.json#/$defs/timestamp" },
     "context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
     "source_watermarks": {
       "type": "object",
-      "required": ["conversation_sequence", "task_sequence", "attempt_sequence", "context_sequence", "decision_sequence", "approval_sequence", "capability_lease_sequence", "operation_sequence", "agent_checkpoint_sequence", "narration_delivery_sequence"],
+      "required": ["conversation_sequence", "foreground_route_epoch", "task_sequence", "attempt_sequence", "context_sequence", "decision_sequence", "approval_sequence", "capability_lease_sequence", "operation_sequence", "agent_checkpoint_sequence", "narration_delivery_sequence"],
       "properties": {
         "conversation_sequence": { "type": "integer", "minimum": 0 },
+        "foreground_route_epoch": { "type": "integer", "minimum": 0 },
         "task_sequence": { "type": "integer", "minimum": 0 },
         "attempt_sequence": { "type": "integer", "minimum": 0 },
         "context_sequence": { "type": "integer", "minimum": 0 },
@@ -44,6 +46,12 @@
         "narration_delivery_sequence": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false
+    },
+    "foreground_route": {
+      "allOf": [
+        { "$ref": "foreground-route.schema.json" },
+        { "properties": { "status": { "const": "active" } }, "required": ["status"] }
+      ]
     },
     "current_focus": {
       "oneOf": [
@@ -211,7 +219,14 @@
           }
         ],
         "additionalProperties": false
-      }
+      },
+      "contains": {
+        "type": "object",
+        "properties": { "state": { "const": "running" } },
+        "required": ["state"]
+      },
+      "minContains": 0,
+      "maxContains": 1
     },
     "constraints": {
       "type": "array",
@@ -258,13 +273,29 @@
       "maxItems": 24,
       "items": {
         "type": "object",
-        "required": ["message_id", "role", "content", "created_at"],
+        "required": ["message_id", "role", "modality", "foreground_route_id", "route_epoch", "canonical_commit_receipt_id", "content", "created_at"],
         "properties": {
           "message_id": { "$ref": "common.schema.json#/$defs/id" },
           "role": { "type": "string", "enum": ["user", "assistant"] },
+          "modality": { "type": "string", "enum": ["text", "speech", "image", "multimodal"] },
+          "foreground_route_id": { "$ref": "common.schema.json#/$defs/id" },
+          "route_epoch": { "type": "integer", "minimum": 1 },
+          "canonical_commit_receipt_id": {
+            "oneOf": [
+              { "$ref": "common.schema.json#/$defs/id" },
+              { "type": "null" }
+            ]
+          },
           "content": { "type": "string", "maxLength": 20000 },
           "created_at": { "$ref": "common.schema.json#/$defs/timestamp" }
         },
+        "allOf": [
+          {
+            "if": { "properties": { "role": { "const": "assistant" } }, "required": ["role"] },
+            "then": { "properties": { "canonical_commit_receipt_id": { "$ref": "common.schema.json#/$defs/id" } } },
+            "else": { "properties": { "canonical_commit_receipt_id": { "type": "null" } } }
+          }
+        ],
         "additionalProperties": false
       }
     },

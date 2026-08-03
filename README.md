@@ -160,7 +160,7 @@ The complete agent/workflow guide, safety boundaries, definition formats, persis
 
 ## Open Voice-Agent Architecture
 
-Zyra’s proposed production Voice architecture is documented as an open, provider-aware reference design. It combines a capable realtime foreground agent, deterministic task control, one on-demand strong coding agent, exceptional subagents, selective central narration, canonical multimodal context, and silent resume across physical realtime sessions.
+Zyra’s proposed conversation architecture is documented as an open, provider-aware reference design. Normal Chat routes directly to the strong coding agent; an explicit Start Voice action attaches a capable realtime foreground to the same conversation and active work. Deterministic task control, exceptional subagents, selective speech, canonical multimodal context, and silent resume remain shared across both surfaces.
 
 Start with the [Voice-Agent Architecture](docs/architecture/voice-agent/README.md). The package includes Mermaid diagrams, ADRs, machine-readable JSON Schemas, synthetic examples, security and usage boundaries, prior-art research, an evaluation plan, and a phased implementation roadmap. Its status is **draft specification; implementation pending**.
 

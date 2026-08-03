@@ -20,7 +20,7 @@ flowchart TB
 ```
 
 1. **Provider wire contract** — versioned and adapter-specific.
-2. **Domain contract** — tasks, context, approvals, narration, and usage.
+2. **Domain contract** — foreground routes, tasks, context, approvals, narration, and usage.
 3. **Persistence contract** — immutable events plus reduced snapshots.
 4. **Presentation contract** — surface-specific projection with stable semantic IDs.
 
@@ -32,6 +32,8 @@ A provider payload MUST NOT be persisted as domain truth without normalization. 
 |---|---|---|
 | `conversation_id` | Canonical chat | Stable across Desktop, TUI, text, image, and voice sessions |
 | `message_id` | Canonical user/assistant message | Idempotent across retries and replay |
+| `foreground_route_id` | One committed Chat or Voice ownership epoch | Exactly one active route per conversation; response authority only |
+| `owner_claim_id` | One route-bound response claim | Required for canonical assistant commit; grants no execution capability |
 | `realtime_provider_thread_id` | Provider thread carrying one or more physical foreground sessions | Mapped to a canonical conversation; remains non-canonical |
 | `realtime_session_id` | One physical provider session | Disposable; never used as conversation identity |
 | `task_id` | Durable user intent | Stable across execution retries |
@@ -49,9 +51,38 @@ A provider payload MUST NOT be persisted as domain truth without normalization. 
 | `context_version` | Conversation/task steering revision | Monotonic within a conversation |
 | `packet_id` | One delegation/resume materialization | Includes source watermarks |
 
-The canonical conversation can therefore map to one current foreground provider thread and a sequence of disposable realtime sessions, while each durable task maps to a private primary lineage and one or more attempts. Provider threads never substitute for `conversation_id`. Primary output enters private/task records; only an idempotent foreground/conversation-gateway commit creates a canonical assistant message.
+The canonical conversation maps to one active foreground route and a history of Chat/Voice route epochs. Each Voice route binds exactly one physical realtime session generation; a provider thread MAY span a sequence of fresh Voice route epochs, while each durable task maps to a primary lineage and one or more attempts. Provider threads never substitute for `conversation_id`. Strong output is canonical only while bound to an active Chat owner claim; under Voice it remains private/task evidence. Realtime output is canonical only while bound to the active Voice claim. Every assistant message still commits idempotently through the conversation gateway.
 
 For every append-only revisioned record, the controller enforces same-record identity, `revision = previous_revision + 1` where that field is present (task snapshots use event `task_revision`), compare-and-swap against the current revision, nondecreasing timestamps, and immutable prior bytes. A concurrent losing proposal is rejected/rebased; it never creates a fork under the same ID.
+
+## Foreground route
+
+[`foreground-route.schema.json`](schemas/foreground-route.schema.json) defines append-only revisions for exclusive response ownership. A committed route records conversation, monotonic route epoch, `chat` or `voice` surface, response owner, non-authorizing owner claim, context version, an immutable activation-time task snapshot, predecessor/successor, timestamps, and physical realtime identity when Voice owns the route.
+
+The controller enforces:
+
+- exactly one active route for every non-deleted conversation before input or output is accepted;
+- monotonically increasing route epochs for new route IDs;
+- revision 1 begins `active`; at most one revision 2 terminates it as `superseded`, `released`, or `failed`;
+- terminal route IDs and owner claims can never reactivate or receive further revisions;
+- runtime recovery supersedes the replayed pre-crash route with a fresh Chat route using `activation_reason: recovery` before accepting input or output;
+- route epoch 1 is Chat with `conversation_open` or `migration` and no predecessor;
+- `start_voice` permits Chat → Voice, `replace_voice_session` permits Voice → Voice, and `exit_voice` permits Voice → Chat;
+- `voice_preparation_failed` and `recovery` permit only a fresh Chat route; `recovery` can never activate Voice;
+- every epoch after 1 names the immediately preceding route, whose terminal revision names it back in the same transaction;
+- the predecessor’s `terminal_at` equals the successor’s `created_at`; ownership intervals are half-open `[created_at, terminal_at)`, so no commit belongs to both routes at the handoff instant;
+- contiguous revisions and immutable route identity fields;
+- Chat implies `strong_primary` with no realtime session;
+- Voice implies `realtime_foreground` with exact physical session generation;
+- superseding the old route and activating the new route in one transaction;
+- gateway rejection when route ID, epoch, owner claim, provider item, or physical generation is stale;
+- no mutation of task attempt, slot, locks, leases, or cancellation merely because the route changes.
+
+A route claim is not a capability lease. It permits response production and canonical commit only.
+
+### Legacy canonical-message binding
+
+[`legacy-message-route-binding.schema.json`](schemas/legacy-message-route-binding.schema.json) migrates messages created before foreground routing without rewriting canonical JSONL. A migration transaction creates an initial epoch-1 Chat route with `activation_reason: migration`, verifies each original record by stable message ID, source sequence, timestamp, and SHA-256, and stores one binding under a shared manifest hash. Assistant bindings include a deterministic migration receipt proving pre-existence in canonical storage; the receipt grants no claim about a historical provider route. Missing or unverifiable records fail closed and cannot enter resume v2.
 
 ## Task snapshot
 
@@ -76,7 +107,7 @@ After in-flight operations are quiescent, one controller transaction commits the
 
 ## Operation intent and receipt
 
-[`operation-intent.schema.json`](schemas/operation-intent.schema.json) defines append-only revisions of one idempotent side-effect operation from durable intent through dispatch and terminal receipt. Task execution requires task/attempt IDs; conversation-level canonical message commit may leave them null and binds instead to conversation plus deterministic message identity. Speech transport uses the dedicated narration-delivery state machine. Protected operations reference the exact capability lease/action hash. `outcome_unknown` requires proof that dispatch began, a terminal uncertainty reason, and no fabricated receipt; consequential or irreversible unknown outcomes cannot be replayed automatically.
+[`operation-intent.schema.json`](schemas/operation-intent.schema.json) defines append-only revisions of one idempotent side-effect operation from durable intent through dispatch and terminal receipt. Task execution requires task/attempt IDs and leaves foreground fields null. A conversation-level canonical message commit may leave task/attempt null and instead MUST bind conversation, deterministic message ID, active foreground route/epoch, and owner claim. Speech transport uses the dedicated narration-delivery state machine. Protected operations reference the exact capability lease/action hash. `outcome_unknown` requires proof that dispatch began, a terminal uncertainty reason, and no fabricated receipt; consequential or irreversible unknown outcomes cannot be replayed automatically.
 
 The controller transaction reserves any lease action count and writes the intent plus encrypted protected outbox payload/digest before dispatch. Only the trusted adapter resolves `protected_payload_ref`; models, renderers, narration, and logs receive the redacted summary. A receipt records observed outcome and a bounded result reference, never raw credentials or unrestricted command output.
 
@@ -169,9 +200,9 @@ The primary MUST acknowledge the packet’s context version before mutating stat
 
 [`resume-packet.schema.json`](schemas/resume-packet.schema.json) is a replaceable materialized view. Its identity includes all source watermarks, safety state, integrity metadata, and byte budget. Pending choices preserve exact decision options or exact approval action/hash/scope rather than free-form summaries. Critical records cannot be truncated. It is safe to regenerate and unsafe to treat as canonical history.
 
-The packet excludes completed tasks unless they remain part of current focus or a recent unresolved reference. Typed retrieval references preserve access to noncritical omitted history.
+The packet includes the exact active foreground route and its watermark as nontruncatable state. At most one active task can be `running`; that task’s attempt, the primary-slot owner, and any writer lock must agree. Every recent message retains modality and route identity; each assistant message also names the canonical commit receipt proving route-valid delivery. It excludes completed tasks unless they remain part of current focus or a recent unresolved reference. Typed retrieval references preserve access to noncritical omitted history.
 
-[`resume-delta.schema.json`](schemas/resume-delta.schema.json) carries complete typed records between packet and current watermarks. It is transactional, hash-checked, ordered, and never truncated; gaps and unsupported records force a fresh packet.
+[`resume-delta.schema.json`](schemas/resume-delta.schema.json) carries complete typed records between packet and current watermarks. It is transactional, hash-checked, ordered, and never truncated; gaps and unsupported records force a fresh packet. A changed primary slot, writer lock, or lease set is rejected unless same-conversation task/attempt/lease identities, resulting statuses, and watermarks match in the same delta; an unrelated valid record grants no hydration authority. A slot handoff delta includes the old attempt’s complete slot/lock/lease release before the new attempt’s acquisition; watermark increments equal the included authority-record counts. Terminal lease revisions must continue the exact prior lease identity before their IDs leave the active set.
 
 ## Narration item
 
@@ -179,7 +210,7 @@ The packet excludes completed tasks unless they remain part of current focus or 
 
 A suggested utterance is a hint. The foreground can phrase it naturally but cannot add unsupported facts. `contains_sensitive_detail` is required and fixed to `false`; every non-silent item requires at least one approved safe fact. A redaction failure blocks speech.
 
-[`narration-delivery.schema.json`](schemas/narration-delivery.schema.json) records append-only delivery revisions for preparation, physical session generation, speech request/provider item identity, idempotent canonical message ID, playback/interruption, terminal status, and watermark sequence. Speech with unknown crash outcome is never replayed automatically.
+[`narration-delivery.schema.json`](schemas/narration-delivery.schema.json) records append-only delivery revisions with explicit predecessor status, terminal finality, and the Voice route/epoch/owner claim that was active during delivery, preparation, physical session generation, speech request/provider item identity, idempotent canonical message ID, playback/interruption, terminal status, and watermark sequence. Speech with unknown crash outcome is never replayed automatically.
 
 ## Usage snapshot
 
@@ -192,7 +223,7 @@ Every value identifies whether it came from a provider or local estimate. UI cod
 
 ## Provider capabilities
 
-[`provider-capabilities.schema.json`](schemas/provider-capabilities.schema.json) is refreshed at adapter startup, expiry, and provider upgrades. Routing depends on each capability’s explicit `supported`/`unsupported`/`unknown` state, stability, method, evidence, and verification time; `unknown` never acts as supported.
+[`provider-capabilities.schema.json`](schemas/provider-capabilities.schema.json) is refreshed independently for each realtime or strong-agent adapter at startup, expiry, and provider upgrades. One report has exactly one adapter role and cannot combine providers, credentials, versions, evidence, or expiry windows. `observed_at` must precede `expires_at`; capability evidence cannot be dated after observation, and routing rejects the report once expired. Routing depends on each capability’s explicit `supported`/`unsupported`/`unknown` state, stability, method, evidence, and verification time; `unknown` never acts as supported.
 
 Capabilities are evidence, not configuration wishes. An unavailable capability selects a fallback route or blocks with an explicit reason.
 
@@ -221,6 +252,12 @@ interface RealtimeForegroundAdapter {
 
 interface PrimaryAgentAdapter {
   capabilities(): Promise<ProviderCapabilityReport>
+  respondDirect(input: {
+    conversationId: string
+    route: ForegroundRoute
+    userMessageId: string
+    signal: AbortSignal
+  }): Promise<DirectTurnHandle>
   start(packet: DelegationPacket, signal: AbortSignal): Promise<AttemptHandle>
   steer(attemptId: string, revision: ContextRevision): Promise<OwnerContextAcknowledgement>
   pause(attemptId: string): Promise<ParkEvidence>
@@ -229,6 +266,8 @@ interface PrimaryAgentAdapter {
 }
 
 interface TaskController {
+  activateForeground(input: ForegroundActivation): Promise<ForegroundRoute>
+  releaseForeground(routeId: string, reason: string): Promise<ForegroundRoute>
   route(input: CanonicalUserInput): Promise<RouteDecision>
   proposeTask(input: TaskProposal): Promise<Task>
   applyTaskEvent(event: TaskEvent): Promise<Task>
@@ -264,8 +303,10 @@ Every event carries session generation and provider item/turn identity when avai
 
 ## Primary-agent events
 
-A primary adapter normalizes provider-specific turn/tool events into:
+A primary adapter normalizes provider-specific direct Chat and task events into:
 
+- direct-turn text deltas/finals bound to foreground route and owner claim;
+- structured tool/command/diff/test activity for redacted timeline projection;
 - attempt start/heartbeat/finish;
 - bounded progress;
 - artifact/evidence attachment;
@@ -276,11 +317,11 @@ A primary adapter normalizes provider-specific turn/tool events into:
 - completion candidate;
 - usage update.
 
-Raw tool output remains in private records and task details.
+Raw tool output remains in private records. Chat may render bounded, redacted structured activity inline; neither raw output nor activity rows become canonical assistant prose or TTS.
 
 ## Compatibility policy
 
-- Persisted schema changes follow [`schemas/README.md`](schemas/README.md).
+- Persisted schema changes follow [`schemas/README.md`](schemas/README.md). This foreground-routing revision introduces operation-intent, narration-delivery, resume, and provider-report version 2; v1 records follow the documented migration/discard rules rather than being validated as v2.
 - Adapter protocol versions are independent from domain schema versions.
 - Experimental provider fields remain inside adapter modules.
 - A startup compatibility check fails closed when a required method or event is absent.

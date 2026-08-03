@@ -1,17 +1,17 @@
 {
   "schema_version": 2,
-  "adapter_id": "example_realtime_adapter",
+  "adapter_id": "example_strong_agent_adapter",
   "adapter_version": "0.1.0",
   "provider_version": "example-2026-08",
   "auth_mode": "provider_account",
-  "adapter_role": "realtime_foreground",
+  "adapter_role": "strong_agent",
   "observed_at": "2026-08-02T12:00:00Z",
   "expires_at": "2026-08-03T12:00:00Z",
-  "realtime": {
-    "session": {
+  "primary_agent": {
+    "private_task_sessions": {
       "support": "supported",
       "stability": "experimental",
-      "method": "realtime/start",
+      "method": "thread/start + turn/start",
       "evidence": [
         "adapter_assertion",
         "interoperability_test"
@@ -19,167 +19,129 @@
       "verified_at": "2026-08-02T12:00:00Z",
       "notes": []
     },
-    "transports": [
-      "webrtc"
-    ],
-    "input_modalities": [
-      "audio",
-      "text"
-    ],
-    "output_modalities": [
-      "audio"
-    ],
-    "audio_input": {
+    "direct_chat_turns": {
       "support": "supported",
       "stability": "experimental",
-      "method": "media-track",
-      "evidence": [
-        "interoperability_test"
-      ],
-      "verified_at": "2026-08-02T12:00:00Z",
-      "notes": []
-    },
-    "audio_output": {
-      "support": "supported",
-      "stability": "experimental",
-      "method": "remote-media-track",
-      "evidence": [
-        "interoperability_test"
-      ],
-      "verified_at": "2026-08-02T12:00:00Z",
-      "notes": []
-    },
-    "transcript_events": {
-      "support": "supported",
-      "stability": "experimental",
-      "method": "transcript.delta/transcript.done",
+      "method": "canonical chat turn/start",
       "evidence": [
         "adapter_assertion",
         "interoperability_test"
       ],
       "verified_at": "2026-08-02T12:00:00Z",
-      "notes": []
+      "notes": [
+        "Direct output still commits through the conversation gateway."
+      ]
     },
-    "session_context_seed": {
+    "gateway_controlled_output": {
       "support": "supported",
       "stability": "experimental",
-      "method": "initialItems",
+      "method": "normalized turn and item event stream",
       "evidence": [
-        "adapter_assertion"
-      ],
-      "verified_at": "2026-08-02T12:00:00Z",
-      "notes": []
-    },
-    "silent_context_append": {
-      "support": "supported",
-      "stability": "experimental",
-      "method": "realtime/appendText",
-      "evidence": [
+        "adapter_assertion",
         "interoperability_test"
       ],
       "verified_at": "2026-08-02T12:00:00Z",
       "notes": [
-        "Does not itself request a response in the tested adapter version."
+        "The adapter can quarantine output from stale foreground-route epochs."
       ]
     },
-    "explicit_speech": {
+    "structured_tool_events": {
       "support": "supported",
       "stability": "experimental",
-      "method": "realtime/appendSpeech",
+      "method": "normalized tool item events",
       "evidence": [
         "adapter_assertion"
-      ],
-      "verified_at": "2026-08-02T12:00:00Z",
-      "notes": []
-    },
-    "direct_image_input": {
-      "support": "unsupported",
-      "stability": "experimental",
-      "method": null,
-      "evidence": [
-        "interoperability_test"
       ],
       "verified_at": "2026-08-02T12:00:00Z",
       "notes": [
-        "Image input routes through the private primary-agent adapter."
+        "Arguments and output require redaction before timeline projection."
       ]
     },
-    "arbitrary_client_tools": {
-      "support": "unsupported",
+    "text_input": {
+      "support": "supported",
       "stability": "experimental",
-      "method": null,
+      "method": "turn/start",
       "evidence": [
         "adapter_assertion"
       ],
       "verified_at": "2026-08-02T12:00:00Z",
       "notes": []
     },
-    "sideband_control": {
+    "image_input": {
       "support": "supported",
       "stability": "experimental",
-      "method": "app-server-control",
-      "evidence": [
-        "adapter_assertion"
-      ],
-      "verified_at": "2026-08-02T12:00:00Z",
-      "notes": []
-    },
-    "voice_list": {
-      "support": "supported",
-      "stability": "experimental",
-      "method": "realtime/listVoices",
-      "evidence": [
-        "adapter_assertion"
-      ],
-      "verified_at": "2026-08-02T12:00:00Z",
-      "notes": []
-    },
-    "interruption": {
-      "support": "supported",
-      "stability": "experimental",
-      "method": "local-playback-stop",
+      "method": "turn/start image input",
       "evidence": [
         "interoperability_test"
       ],
       "verified_at": "2026-08-02T12:00:00Z",
       "notes": []
     },
-    "response_cancel": {
-      "support": "unknown",
-      "stability": "unknown",
-      "method": null,
-      "evidence": [],
-      "verified_at": null,
-      "notes": [
-        "Local playback stops immediately; stale provider output must be quarantined by item/generation identity."
-      ]
+    "tools": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "provider task tools",
+      "evidence": [
+        "adapter_assertion"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "steering": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "turn/steer",
+      "evidence": [
+        "adapter_assertion"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "interrupt": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "turn/interrupt",
+      "evidence": [
+        "adapter_assertion"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
     },
     "usage_events": {
       "support": "supported",
       "stability": "experimental",
-      "method": "session.usage.updated",
+      "method": "account/rateLimits/read",
       "evidence": [
         "adapter_assertion"
       ],
       "verified_at": "2026-08-02T12:00:00Z",
       "notes": []
     },
-    "session_expiry_signal": {
+    "checkpoint_resume": {
       "support": "unknown",
       "stability": "unknown",
       "method": null,
       "evidence": [],
       "verified_at": null,
-      "notes": []
+      "notes": [
+        "Controller-level checkpoints remain authoritative."
+      ]
     },
-    "max_session_seconds": 3600,
-    "known_limits": [
-      "Synthetic capability fixture for documentation validation."
-    ]
+    "private_output_stream": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "private turn event stream",
+      "evidence": [
+        "adapter_assertion"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": [
+        "Private output remains noncanonical whenever Realtime owns the foreground route."
+      ]
+    }
   },
   "experimental_adapter": true,
   "notes": [
-    "Synthetic capability fixture for documentation validation.",
-    "This report describes only the realtime foreground adapter."
+    "Synthetic strong-agent capability fixture for contract validation."
   ]
 }

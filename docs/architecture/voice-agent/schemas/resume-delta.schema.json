@@ -19,7 +19,7 @@
     "generated_at"
   ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "const": 2 },
     "delta_id": { "$ref": "common.schema.json#/$defs/id" },
     "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
     "base_packet_id": { "$ref": "common.schema.json#/$defs/id" },
@@ -39,6 +39,15 @@
             "properties": {
               "change_type": { "const": "context_revision" },
               "record": { "$ref": "context-revision.schema.json" }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["change_type", "record"],
+            "properties": {
+              "change_type": { "const": "foreground_route" },
+              "record": { "$ref": "foreground-route.schema.json" }
             },
             "additionalProperties": false
           },
@@ -112,13 +121,29 @@
               "change_type": { "const": "conversation_message" },
               "record": {
                 "type": "object",
-                "required": ["message_id", "role", "content", "created_at"],
+                "required": ["message_id", "role", "modality", "foreground_route_id", "route_epoch", "canonical_commit_receipt_id", "content", "created_at"],
                 "properties": {
                   "message_id": { "$ref": "common.schema.json#/$defs/id" },
                   "role": { "type": "string", "enum": ["user", "assistant"] },
+                  "modality": { "type": "string", "enum": ["text", "speech", "image", "multimodal"] },
+                  "foreground_route_id": { "$ref": "common.schema.json#/$defs/id" },
+                  "route_epoch": { "type": "integer", "minimum": 1 },
+                  "canonical_commit_receipt_id": {
+                    "oneOf": [
+                      { "$ref": "common.schema.json#/$defs/id" },
+                      { "type": "null" }
+                    ]
+                  },
                   "content": { "type": "string", "maxLength": 20000 },
                   "created_at": { "$ref": "common.schema.json#/$defs/timestamp" }
                 },
+                "allOf": [
+                  {
+                    "if": { "properties": { "role": { "const": "assistant" } }, "required": ["role"] },
+                    "then": { "properties": { "canonical_commit_receipt_id": { "$ref": "common.schema.json#/$defs/id" } } },
+                    "else": { "properties": { "canonical_commit_receipt_id": { "type": "null" } } }
+                  }
+                ],
                 "additionalProperties": false
               }
             },

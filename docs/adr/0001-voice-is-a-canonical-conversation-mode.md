@@ -4,6 +4,7 @@
 - **Date:** 2026-08-02
 - **Owners:** Zyra maintainers
 - **Specification:** [Voice-agent architecture](../architecture/voice-agent/README.md)
+- **Refined by:** [ADR-0007](0007-canonical-chat-and-explicit-voice-foreground-routing.md)
 
 ## Context
 
@@ -16,9 +17,11 @@ A production voice feature that creates its own chat, history, composer, permiss
 Voice becomes a mode of the existing canonical conversation.
 
 - Spoken, typed, and image messages share one conversation ID and canonical history.
+- The normal Chat surface routes directly to the strong agent; an explicit Start Voice action attaches Realtime to that same conversation.
 - Voice reuses the existing composer, attachments, settings, permission policy, task controller, and runtime.
 - A physical realtime session is disposable and never becomes the chat identity.
-- Closing Voice detaches media while durable tasks continue.
+- Starting Voice attaches to a running task without cancelling or restarting its execution attempt.
+- Closing Voice detaches media, returns foreground ownership to Chat, and leaves durable tasks running.
 - The Lab remains experimental evidence and is not promoted as a second production chat product.
 
 ## Consequences

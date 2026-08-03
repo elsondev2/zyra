@@ -1,6 +1,6 @@
 [
   {
-    "schema_version": 1,
+    "schema_version": 2,
     "delivery_id": "delivery_demo_complete",
     "revision": 1,
     "previous_revision": null,
@@ -20,10 +20,14 @@
     "watermark_sequence": null,
     "created_at": "2026-08-02T12:30:00Z",
     "updated_at": "2026-08-02T12:30:00Z",
-    "terminal_at": null
+    "terminal_at": null,
+    "foreground_route_id": "foreground_route_voice_demo_02",
+    "foreground_route_epoch": 2,
+    "foreground_owner_claim_id": "foreground_claim_voice_demo_02",
+    "previous_status": null
   },
   {
-    "schema_version": 1,
+    "schema_version": 2,
     "delivery_id": "delivery_demo_complete",
     "revision": 2,
     "previous_revision": 1,
@@ -43,10 +47,14 @@
     "watermark_sequence": null,
     "created_at": "2026-08-02T12:30:00Z",
     "updated_at": "2026-08-02T12:30:01Z",
-    "terminal_at": null
+    "terminal_at": null,
+    "foreground_route_id": "foreground_route_voice_demo_02",
+    "foreground_route_epoch": 2,
+    "foreground_owner_claim_id": "foreground_claim_voice_demo_02",
+    "previous_status": "prepared"
   },
   {
-    "schema_version": 1,
+    "schema_version": 2,
     "delivery_id": "delivery_demo_complete",
     "revision": 3,
     "previous_revision": 2,
@@ -66,10 +74,14 @@
     "watermark_sequence": null,
     "created_at": "2026-08-02T12:30:00Z",
     "updated_at": "2026-08-02T12:30:02Z",
-    "terminal_at": null
+    "terminal_at": null,
+    "foreground_route_id": "foreground_route_voice_demo_02",
+    "foreground_route_epoch": 2,
+    "foreground_owner_claim_id": "foreground_claim_voice_demo_02",
+    "previous_status": "speech_requested"
   },
   {
-    "schema_version": 1,
+    "schema_version": 2,
     "delivery_id": "delivery_demo_complete",
     "revision": 4,
     "previous_revision": 3,
@@ -89,6 +101,10 @@
     "watermark_sequence": 13,
     "created_at": "2026-08-02T12:30:00Z",
     "updated_at": "2026-08-02T12:30:05Z",
-    "terminal_at": "2026-08-02T12:30:05Z"
+    "terminal_at": "2026-08-02T12:30:05Z",
+    "foreground_route_id": "foreground_route_voice_demo_02",
+    "foreground_route_epoch": 2,
+    "foreground_owner_claim_id": "foreground_claim_voice_demo_02",
+    "previous_status": "speaking"
   }
 ]

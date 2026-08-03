@@ -5,9 +5,9 @@
 
 ## Architectural shape
 
-Zyra uses a manager-style orchestration pattern. The realtime foreground agent owns the conversational relationship. The strong primary agent acts as a durable execution worker. A deterministic controller mediates between them and remains authoritative for state and policy.
+Zyra uses a manager-style orchestration pattern around one canonical chat. The strong primary owns direct responses while Chat is active. The realtime foreground owns conversation and narration while Voice is active. A deterministic foreground route and task controller mediate these roles and remain authoritative for ownership, state, and policy.
 
-The logical foreground identity can survive many physical WebRTC sessions. Closing a voice connection does not end the canonical conversation or an active task.
+The canonical conversation can survive many Chat/Voice handoffs and physical WebRTC sessions. Starting or closing Voice does not end the conversation, cancel an active task, or transfer the task’s execution authority.
 
 ```mermaid
 flowchart TB
@@ -18,8 +18,9 @@ flowchart TB
 
     subgraph Runtime[Trusted local runtime]
         AS[Agent server\nprocess and chat owner]
-        GW[Conversation gateway\nidentity + input normalization]
-        TC[Task controller\nstate machine + routing]
+        GW[Conversation gateway\nidentity + canonical commits]
+        FR[Foreground route controller\nChat ⇄ Voice ownership]
+        TC[Task controller\nstate machine + work routing]
         INSPECT[Inspection gateway\nread/search/status only]
         PG[Permission gate\napprovals + capability leases]
         NS[Narration scheduler\nvisibility + speech policy]
@@ -48,12 +49,14 @@ flowchart TB
     T <--> AS
     AS <--> GW
     GW <--> CL
+    GW <--> FR
     GW <--> TC
     AS <--> EJ
     AS --> UI
 
-    GW <--> RA
+    FR <--> RA
     RA <--> FG
+    FR <--> PA
     TC --> INSPECT
     TC <--> PA
     PA <--> SM
@@ -68,6 +71,7 @@ flowchart TB
     AR --> CS
     CS --> RA
 
+    FR <--> TL
     TC <--> TL
     PA <--> AR
     FA <--> AR
@@ -84,13 +88,16 @@ Each concern has one authority. A projection MAY cache authority data but MUST b
 | Concern | Authority | Derived consumers |
 |---|---|---|
 | Conversation identity and user-visible message history | Canonical Pi session JSONL | Desktop SQLite, renderer stores, realtime resume view |
+| Active Chat/Voice response ownership and route epoch | Canonical `ForegroundRoute` revisions in `controller.sqlite` | Gateway commit checks, surface state, continuity view |
 | Root task lifecycle, context version, decisions, approvals, attempts, and artifacts | Canonical `controller.sqlite` records reduced from orchestration events | Task cards, narration candidates, continuity view |
 | Primary/subagent private execution streams | Existing fleet/agent records linked to controller attempts | Root task projection, Inspector, usage summaries |
 | Runtime lifetime and client attachment | Zyra agent server | Desktop and TUI presence indicators |
 | Permissions and approvals | Durable controller records plus trusted permission gate/permission epoch | Models receive only scoped results, never lease bearer material |
 | Desktop/browser/computer authority | Electron main-process `AgentControlBroker` | Primary agent through approved bounded calls |
-| Spoken output selection | Narration scheduler policy | Realtime adapter receives approved speakable content |
-| Spoken wording and conversational turn-taking | Realtime foreground model | Audio output and transcript |
+| User-facing response owner | Active foreground route | Strong primary for Chat; realtime foreground for Voice |
+| Spoken output selection | Narration scheduler policy | Realtime adapter receives approved speakable content only while Voice owns the route |
+| Spoken wording and Voice turn-taking | Realtime foreground model | Audio output and transcript |
+| Direct Chat wording | Strong primary under a foreground owner claim | Canonical text response through the conversation gateway |
 | Resume context | Continuity materialized view | New physical realtime sessions |
 | Provider usage and reset truth | Provider-reported usage events/endpoints | Usage monitor and local estimates |
 | UI presentation | Surface adapters | Desktop/TUI components |
@@ -99,11 +106,25 @@ Each concern has one authority. A projection MAY cache authority data but MUST b
 
 ### Conversation gateway
 
-The conversation gateway normalizes speech, typed text, and image messages into canonical user-message records. It MUST assign a client message ID before provider submission so replay and retries remain idempotent. It attaches the active conversation ID, current context version, and attachment references.
+The conversation gateway normalizes speech, typed text, and image messages into canonical user-message records. It MUST assign a client message ID before provider submission so replay and retries remain idempotent. It attaches the conversation ID, current context version, attachment references, active `foreground_route_id`, and route epoch.
 
-It is also the sole assistant-message commit seam. Foreground provider items and narration deliveries map to deterministic canonical message IDs; final/interrupted text commits idempotently and returns a durable receipt. Cross-store commits use the controller outbox, so recovery retries the same ID rather than duplicating a turn.
+It is also the sole assistant-message commit seam. Strong Chat turns, realtime provider items, and narration deliveries map to deterministic canonical message IDs; final/interrupted text commits idempotently and returns a durable receipt. Every commit proves that its owner claim and route epoch are current. Cross-store commits use the controller outbox, so recovery retries the same ID rather than duplicating a turn.
 
-The gateway routes conversational input to the realtime adapter and durable intent to the task controller. It does not make capability or permission decisions and rejects private worker output as a direct canonical message source.
+The gateway sends normal Chat input to the strong adapter, Voice input to the realtime adapter, and durable intent from either route to the task controller. It does not make capability or permission decisions. Private execution output becomes user-facing only when the strong role owns the active Chat route and the output is explicitly bound to its foreground claim.
+
+### Foreground route controller
+
+The route controller persists one active [`ForegroundRoute`](schemas/foreground-route.schema.json) per conversation. A route binds a monotonic epoch and non-authorizing owner claim to either `strong_primary` in Chat or `realtime_foreground` in Voice. It:
+
+- makes ordinary Chat the default/home route;
+- prepares Voice transport and complete hydration before ownership changes;
+- atomically supersedes the old route and activates the new route;
+- rejects provider events, message commits, and narration deliveries from stale route epochs;
+- attaches active task IDs for context without changing task attempts, slots, locks, leases, or cancellation state;
+- returns ownership to Chat when Voice exits or fails;
+- replays the pre-crash route, then rekeys it to a fresh Chat epoch/owner claim before accepting new input or output.
+
+The owner claim authorizes response production only. It grants no shell, write, control, or approval capability. During a Voice handoff, an in-flight strong response reaches a completed or explicitly interrupted canonical boundary before the route swap; its durable task execution can continue.
 
 ### Realtime foreground adapter
 
@@ -118,11 +139,11 @@ The adapter owns physical media/session mechanics:
 - expose capability discovery rather than relying on provider assumptions;
 - reject stale events from replaced session generations and never replay unknown-outcome speech.
 
-It MUST NOT become a task-state authority.
+It MUST NOT become a task-state authority or commit output after its foreground route epoch is superseded.
 
-### Foreground model
+### Realtime foreground model
 
-The foreground model is the single user-facing voice identity. It can:
+The realtime foreground model is the user-facing response owner only while Voice holds the active foreground route. It remains Zyra’s sole spoken narrator. It can:
 
 - answer from its current context;
 - clarify intent;
@@ -166,7 +187,14 @@ Results are bounded, provenance-tagged, and treated as untrusted content. The ga
 
 ### Strong primary agent
 
-The primary agent receives a durable delegation packet and owns execution end to end. It runs in a server-owned **private task session** linked to the canonical conversation and task; it never runs as a canonical user-facing root turn and cannot append assistant messages to the conversation ledger. The private session can use the ordinary Zyra/Pi/Codex tool runtime under current sandbox and approval policy. The initial release schedules at most one active strong-primary attempt per canonical conversation; queued tasks can take the slot only after the current attempt parks or terminates and releases its slot, locks, and leases. It:
+The strong role supports two controller-separated lanes:
+
+1. **Direct Chat lane.** While `strong_primary` owns the active foreground route, an ordinary canonical Chat turn can answer directly. Provider text commits only through the conversation gateway under the current owner claim. Structured tool calls, commands, diffs, tests, and artifacts render as execution activity; raw payloads remain bounded/redacted and outside assistant prose.
+2. **Private execution lane.** A durable task runs in a server-owned task session linked to the canonical conversation and task. While Realtime owns Voice, this lane cannot append assistant messages directly; it emits task events, evidence, and narration candidates.
+
+The same provider/model can implement both lanes, but route ownership and task execution authority remain separate. A Chat turn that crosses into writes, commands, tests, deep work, or asynchronous work is promoted to a controller task without losing its direct surface. Starting Voice changes only the response lane: the existing primary attempt keeps its ID, slot, locks, leases, and context obligations while Realtime becomes narrator.
+
+The initial release schedules at most one active strong-primary attempt per canonical conversation; queued tasks can take the slot only after the current attempt parks or terminates and releases its slot, locks, and leases. The primary:
 
 - preserves the exact request and inherited constraints;
 - investigates, edits, runs commands, and tests as authorized;
@@ -176,7 +204,7 @@ The primary agent receives a durable delegation packet and owns execution end to
 - verifies acceptance criteria;
 - emits a structured completion candidate into private/task records.
 
-The controller rejects completion if required verification, approvals, or context acknowledgements are missing. Only the conversation gateway may commit a final foreground/narrator assistant message to canonical Pi JSONL.
+The controller rejects completion if required verification, approvals, or context acknowledgements are missing. Only the conversation gateway may commit a canonical assistant message. It accepts strong output only under an active Chat owner claim and realtime output only under an active Voice owner claim.
 
 ### Exceptional subagents
 
@@ -191,7 +219,7 @@ Children receive attenuated tools and narrow context. Their output is untrusted 
 
 ### Narration scheduler
 
-The scheduler turns task events into zero or more narration items. It filters private data, applies urgency and interruption rules, deduplicates updates, and sends only explicit `speakable` content to the realtime adapter. It never forwards raw event payloads.
+The scheduler turns task events into zero or more narration items. It filters private data, applies urgency and interruption rules, and deduplicates updates. While Voice owns the route, it sends only explicit `speakable` content to the realtime adapter. In Chat, the same validated events feed visual activity and bounded user-facing summaries without TTS. It never forwards raw event payloads.
 
 ### Continuity service
 
@@ -246,6 +274,8 @@ A seam is real when at least two adapters or a deterministic fake exercise it. T
 
 | Seam | First adapter | Required test adapter |
 |---|---|---|
+| Foreground route persistence | Controller SQLite route revisions + gateway owner checks | In-memory transactional route store |
+| Direct strong Chat | Existing Zyra Pi/Codex canonical turn path behind gateway control | Scripted strong conversation adapter |
 | Realtime foreground | Experimental Codex thread realtime | Deterministic fake realtime session |
 | Primary coding agent | Zyra Pi/Codex runtime | Scripted fake worker |
 | Inspection tools | Local bounded inspection gateway | In-memory fixture gateway |
@@ -254,6 +284,37 @@ A seam is real when at least two adapters or a deterministic fake exercise it. T
 | Usage reporting | Codex/provider usage adapter | Synthetic limit source |
 
 Provider-specific records MUST be normalized at these seams. Surface components consume provider-neutral domain events.
+
+## Chat-to-Voice handoff while work continues
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant G as Conversation gateway
+    participant R as Foreground route controller
+    participant S as Strong primary
+    participant C as Continuity service
+    participant V as Realtime foreground
+
+    U->>G: Typed Chat request
+    G->>R: Claim Chat route epoch 21
+    R->>S: Direct strong turn under Chat claim
+    S-->>G: Structured tools and bounded response text
+    Note over S: Durable attempt continues
+    U->>R: Start Voice
+    R->>G: Quiesce strong output and commit completed/interrupted prefix
+    G-->>R: Canonical boundary receipt at watermark W
+    R->>C: Materialize messages through W plus current task/route state
+    C-->>V: Hydrate new physical session and startup deltas silently
+    V-->>R: Barrier acknowledged through connection high-watermark
+    R->>R: Atomically supersede Chat and activate Voice epoch 22
+    Note over S: Same attempt, slot, locks, leases, and context
+    U->>V: Next spoken turn
+    V-->>U: Current conversational response
+```
+
+Voice preparation does not grant response ownership. The Chat response lane is quiesced and its final/partial canonical text commits before the resume snapshot is taken. The Chat route remains authoritative until Voice acknowledges that commit plus every startup delta and the route swap commits. If preparation fails, the controller atomically rekeys Chat into a new route epoch/owner claim before reopening its response lane; the strong task continues unchanged.
 
 ## End-to-end delegated flow
 
@@ -267,7 +328,7 @@ sequenceDiagram
     participant P as Primary agent
     participant N as Narration scheduler
 
-    U->>F: Spoken, typed, or image-backed request
+    U->>F: Voice request after route activation
     F->>C: Propose durable task + verbatim request
     C->>L: Append task.proposed and task.queued
     C->>P: Start private attempt with delegation packet
@@ -297,8 +358,9 @@ sequenceDiagram
 
 Each role receives the smallest useful context:
 
-- foreground: recent user-visible turns, prepared task summaries, pending questions, and safe inspection results;
-- primary private task session: verbatim request, relevant turns/attachments, current task context, constraints, project state, and foreground findings;
+- active foreground owner: recent user-visible turns, current route epoch, prepared task summaries, pending questions, and safe inspection results;
+- direct strong Chat lane: canonical conversation context plus route claim and policy-bounded execution activity;
+- primary private task lane: verbatim request, relevant turns/attachments, current task context, constraints, project state, and foreground findings;
 - subagent: one objective, inherited constraints, scoped files/artifacts, success criteria, and explicit return schema;
 - narration: event summary, significance, and safe speakable facts only.
 
@@ -306,11 +368,12 @@ Full worker transcripts remain private task records and are retrieved on demand.
 
 ## Failure containment
 
-The architecture isolates four independent lifetimes:
+The architecture isolates five independent lifetimes:
 
 1. **Physical realtime session** — reconnectable and disposable.
-2. **Logical foreground identity** — tied to the canonical conversation.
-3. **Durable task** — survives client and media loss.
-4. **Execution attempt** — retryable worker process with a unique attempt ID.
+2. **Foreground route epoch** — exclusive Chat or Voice response ownership for the conversation.
+3. **Logical Zyra identity** — tied to the canonical conversation across route changes.
+4. **Durable task** — survives client, route, and media changes.
+5. **Execution attempt** — retryable worker process with a unique attempt ID.
 
 A failure in one lifetime MUST NOT silently corrupt another. Detailed transition and recovery rules are in [Lifecycle and routing](lifecycle-and-routing.md).

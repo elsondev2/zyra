@@ -10,7 +10,8 @@ Voice presence and coding work consume different allowances. Zyra must never com
 
 ```mermaid
 flowchart LR
-    U[User in Voice mode] --> R[Realtime foreground session]
+    U[User] -->|Start Voice| R[Realtime foreground session]
+    U -->|Normal Chat| P[Strong primary]
     U --> T[Durable task]
     T --> P[Primary agent]
     P -. exceptional .-> S[Subagent]
@@ -22,11 +23,13 @@ flowchart LR
 
 | Activity | Voice meter | Agent-work meter |
 |---|---:|---:|
-| Live conversation with no delegated task | Yes | No separate primary run |
-| Foreground bounded inspection | Voice session continues | Provider-dependent; local deterministic tools do not create a strong-model turn |
+| Normal direct strong-agent Chat | No | Yes |
+| Live Voice conversation with no delegated task | Yes | No separate primary run |
+| Realtime bounded inspection | Voice session continues | Provider-dependent; local deterministic tools do not create a strong-model turn |
 | Primary agent task while Voice remains open | Yes | Yes |
 | Subagent work | Voice only if session remains open | Yes for every model run |
-| Voice closes while task continues | Stops/ends per provider accounting | Continues |
+| Voice starts while a task continues | Starts per provider accounting | Existing attempt continues without a new charge category |
+| Voice closes while task continues | Stops/ends per provider accounting | Continues; Chat becomes available |
 | Reconnect later for result | New physical voice session | Existing task usage remains attributed to task |
 
 ## OpenAI/Codex plan behavior
@@ -60,6 +63,8 @@ Zyra labels values as:
 An “unlimited” plan displays `Unlimited · fair use applies`, not an invented remaining-minute count.
 
 ### Agent work
+
+Direct strong-agent Chat turns, primary execution, and subagent work all count toward the agent-work meter. Starting Voice does not reset or duplicate attribution for an already running attempt.
 
 Provider rate-limit snapshots and completed-turn usage are authoritative. Local task attribution can sum reported tokens/requests/cost for primary and child runs, but broad subscription “messages remaining” may be weighted and approximate.
 
@@ -161,6 +166,7 @@ Operational health is tracked independently for:
 
 | Area | States |
 |---|---|
+| Foreground route | chat, voice_preparing, voice, switching, recovery_required |
 | Realtime transport | disconnected, connecting, ready, degraded, closing, failed |
 | Input media | unavailable, permission_required, muted, active, failed |
 | Output media | muted, active, interrupted, failed |
@@ -179,7 +185,7 @@ Record structured, redacted metrics:
 - media/data/control readiness;
 - session duration and reconnect count;
 - transcript finalization and duplicate suppression;
-- route class and promotion reason;
+- foreground route epoch, handoff latency, stale-owner rejection, route class, and promotion reason;
 - task time in each state;
 - decision/approval wait time;
 - primary and child attempt count;
@@ -205,8 +211,8 @@ Metrics use synthetic or opaque IDs. Logs exclude audio, secrets, raw private co
 
 - adapter/provider versions and capability report;
 - event watermarks and sequence gaps;
-- physical session generation;
-- current owner/leases/locks;
+- active foreground route/epoch and physical session generation;
+- response owner plus execution slot/leases/locks;
 - process and media cleanup state;
 - redacted last error category;
 - schema validation and recovery warnings.
@@ -218,6 +224,7 @@ Initial targets for local development:
 | Measure | Target |
 |---|---:|
 | Warm Voice readiness | p95 under 3 seconds where provider permits |
+| Chat-to-Voice owner handoff after hydration | p95 under 250 ms, with zero duplicate owners |
 | User interruption to local playback stop | p95 under 200 ms |
 | Task event to visual projection | p95 under 500 ms |
 | High-priority event to queued narration | p95 under 1 second |
@@ -235,8 +242,8 @@ These are product targets, not provider guarantees.
 1. stop/clean the physical session generation;
 2. reconcile each narration/provider item as completed, interrupted, or `outcome_unknown` and never replay uncertainty;
 3. preserve idempotently committed canonical transcript text;
-4. continue task and text UI;
-5. rebuild resume packet and offer reconnect without restarting work.
+4. atomically return foreground ownership to Chat while continuing the task;
+5. rebuild the resume packet and offer Voice reconnect without restarting work.
 
 ### Primary worker fails, Voice healthy
 
@@ -257,7 +264,7 @@ These are product targets, not provider guarantees.
 ### App restarts
 
 1. validate/migrate canonical stores, replay ledgers, and reconcile attempts plus outbox receipts;
-2. restore exact pending decisions/approvals, permission epoch, revocations, writer ownership, and narration delivery state without reviving expired authority;
+2. replay the pre-crash foreground route, supersede it with a fresh Chat route epoch/owner claim, and restore pending decisions/approvals, permission epoch, revocations, writer ownership, and narration delivery state without reviving expired authority;
 3. rebuild a complete continuity snapshot and apply lossless deltas through a hydration barrier;
 4. attach clients to the canonical conversation;
 5. wait silently for user speech unless an urgent undelivered event qualifies.

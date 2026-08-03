@@ -25,8 +25,8 @@ flowchart LR
 
 - compile the JSON Schemas in this package;
 - add TypeScript/domain types generated or hand-maintained from schemas;
-- implement fake realtime, primary, permission, usage, and ledger adapters;
-- implement state-transition and context-revision reducers in isolation;
+- implement fake realtime, direct-Chat/primary, permission, usage, and ledger adapters;
+- implement foreground-route, state-transition, and context-revision reducers in isolation;
 - encode the routing, narration, continuity, and security scenario corpus;
 - establish redacted evidence-bundle format.
 
@@ -47,6 +47,9 @@ All contract/property tests pass with no provider or microphone connection. Inva
 
 ### Deliver
 
+- first-class foreground-route records with one active owner per canonical conversation;
+- gateway checks binding assistant commits to route epoch and owner claim;
+- direct strong-agent Chat through the existing canonical surface with structured activity projection;
 - first-class task records linked to the canonical root session;
 - canonical `controller.sqlite` event/record/snapshot/outbox store with backup, migration, and recovery tests;
 - `task.*` events normalized from the existing orchestration domain;
@@ -59,7 +62,7 @@ All contract/property tests pass with no provider or microphone connection. Inva
 
 ### Exit gate
 
-A text-only canonical chat can create, steer, pause, resume, recover, verify, and complete a durable task. Existing fleet/workflow behavior remains compatible.
+A text-only canonical chat can talk directly to the strong agent, show structured tool/command activity, and create, steer, pause, resume, recover, verify, and complete a durable task without starting Realtime. Existing fleet/workflow behavior remains compatible.
 
 ## Phase 2 — bounded foreground inspection gateway
 
@@ -74,7 +77,7 @@ A text-only canonical chat can create, steer, pause, resume, recover, verify, an
 
 ### Exit gate
 
-Routing scenarios correctly separate direct answers, bounded inspections, and durable promotion. Security tests prove no mutation path from foreground tools.
+Routing scenarios correctly separate direct strong Chat, realtime Voice answers, bounded realtime inspections, and durable promotion. Security tests prove no mutation path from foreground tools.
 
 ## Phase 3 — provider-neutral realtime seam
 
@@ -87,8 +90,9 @@ Routing scenarios correctly separate direct answers, bounded inspections, and du
 
 ### Deliver
 
+- gateway-controlled strong direct-turn seam and deterministic fake;
 - `RealtimeForegroundAdapter` domain seam;
-- deterministic fake adapter in the focused test suite;
+- deterministic fake realtime adapter in the focused test suite;
 - versioned capability discovery;
 - normalized transcripts, interruption, usage, and session health;
 - generation-safe start/stop/retry cleanup;
@@ -104,7 +108,8 @@ The same domain suite passes against the fake and supported Codex adapter. Unsup
 ### Integrate with
 
 - canonical chat identity and history APIs;
-- existing Desktop assistant conversation, composer, message store, attachments, settings, and permissions;
+- active foreground route/epoch and atomic owner handoff;
+- existing Desktop assistant conversation, composer, message store, inline execution activity, attachments, settings, and permissions;
 - server-owned runtime attachment/replay;
 - TUI task visibility.
 
@@ -120,6 +125,7 @@ Retain proven media and presentation work where compatible:
 
 Replace Lab-only foundations:
 
+- Voice as a destination/page → explicit Start Voice action from the normal canonical Chat surface;
 - ephemeral separate thread → canonical conversation attachment;
 - isolated transcript array → canonical message projection;
 - parallel composer → existing canonical composer/message transport;
@@ -129,17 +135,17 @@ Replace Lab-only foundations:
 
 ### Exit gate
 
-Starting Voice in an existing chat does not create a second chat ID. Speech, text, images, history, permissions, and task state remain consistent across Desktop/TUI and reconnect.
+Starting Voice in an existing chat does not create a second chat ID. The strong Chat route remains active until Voice hydration succeeds. A running task keeps the same attempt, slot, locks, leases, and context while Realtime becomes foreground owner. Exiting Voice returns to direct strong Chat.
 
 ## Phase 5 — primary delegation, steering, and exceptional children
 
 ### Deliver
 
 - delegation packet builder;
-- one on-demand strong primary lineage with one slot-owning attempt per canonical conversation and durable park/terminal release receipts;
+- one strong primary execution lineage activated for durable work, with one slot-owning attempt per canonical conversation and durable park/terminal release receipts;
 - client/provider promotion signal proven in isolation;
 - context-delta steering and acknowledgement;
-- task events from private primary task turns with no direct canonical assistant output;
+- task events from private primary execution; direct canonical output allowed only under an active strong Chat owner claim;
 - exceptional child justification and narrow envelopes;
 - primary integration and verification authority;
 - dynamic model-role routing with visible fallback reason.
@@ -158,7 +164,7 @@ Quick inspection can promote without intent loss. User corrections reach the pri
 - explicit-speech adapter route;
 - visual fallback when explicit speech is unavailable;
 - user speaking/assistant speaking interruption policy;
-- background task summaries in canonical timeline;
+- background task summaries plus compact structured execution activity in the canonical Chat timeline;
 - per-user progress narration preference.
 
 ### Exit gate
@@ -173,7 +179,7 @@ The speech corpus produces zero raw tool/log/code/private output. Decisions, app
 - adapter-specific packet budgets with nontruncatable critical records;
 - OS-key-wrapped encrypted packet cache keyed by complete canonical watermarks;
 - silent startup, hydration barrier, and typed/hash-checked nontruncated deltas;
-- permission/revocation/writer safety state and narration-delivery watermark;
+- foreground route/epoch plus permission/revocation/writer safety state and narration-delivery watermark;
 - exact pending decision/approval records and typed retrieval references;
 - restart reconciliation and unknown-outcome handling;
 - repeated physical-session expiry/reconnect tests.
@@ -209,6 +215,7 @@ src/
     contracts.mjs
     reducer.mjs
     controller.mjs
+    foreground-routes.mjs
     routing-policy.mjs
     context-revisions.mjs
     decisions.mjs
@@ -221,6 +228,10 @@ src/
     result-policy.mjs
 
 desktop/src/main/assistant/
+  foreground/
+    route-owner.ts
+    strong-chat-adapter.ts
+    activity-projection.ts
   voice/
     realtime-adapter.ts
     codex-realtime-adapter.ts
@@ -242,20 +253,24 @@ The task controller may deserve a deep module behind a small interface. Avoid pa
 
 The first release should be additive:
 
-1. existing canonical conversations remain unchanged;
-2. existing fleet records remain readable;
-3. compatible fleet events import once into canonical controller records with stable root/fleet links and verified counts/hashes;
-4. controller/task/attempt snapshots rebuild from append-only records;
-5. Desktop projections can drop/rebuild without touching JSONL;
-6. Voice Lab preferences migrate only after explicit mapping;
-7. no old session or Lab transcript is silently imported as production history;
-8. feature rollback uses a controller-schema-compatible runtime, disables new routing/Voice, and keeps canonical text plus existing fleet/private records readable.
+1. Existing canonical JSONL bytes remain unchanged.
+2. Migration verifies every existing message ID, role, modality, timestamp, source sequence, and source-record hash before routing is enabled.
+3. One initial `migration` Chat route is created at epoch 1 with `created_at` no later than the first verified canonical message.
+4. A [`LegacyMessageRouteBinding`](schemas/legacy-message-route-binding.schema.json) records each message’s route identity, source hash/sequence, and one shared migration-manifest hash. Assistant bindings mint deterministic **migration receipts** proving that the canonical record already existed; they do not claim a historical provider route or replay an old response.
+5. Resume v2 materialization reads route/modality/receipt metadata from these bindings while continuing to read message text from immutable canonical JSONL. Missing, duplicate, corrupt, or unprovable records hold the conversation read-only and block Voice until repaired or explicitly excluded; the migrator never guesses.
+6. Existing fleet records remain readable; compatible fleet events import once into canonical controller records with stable root/fleet links and verified counts/hashes.
+7. Controller/task/attempt snapshots rebuild from append-only records, and Desktop projections can drop/rebuild without touching JSONL.
+8. Voice Lab preferences migrate only after explicit mapping; old Lab transcripts are never silently imported as production history.
+9. Feature rollback uses a controller-schema-compatible runtime, disables new routing/Voice, and keeps canonical text plus existing fleet/private records and migration bindings readable.
 
 ## Feature flags
 
 Recommended independent flags:
 
 - task controller domain projection;
+- exclusive foreground-route enforcement;
+- direct strong Chat gateway lane;
+- inline structured execution activity;
 - foreground inspection tools;
 - canonical Voice mode;
 - Codex realtime adapter version;
@@ -287,7 +302,7 @@ These require isolated evidence before the relevant phase:
 3. Which explicit-speech path consistently speaks typed/image/background results without triggering an unrelated response?
 4. Which existing fleet event versions can migrate losslessly into the canonical controller tables, and which require compatibility adapters?
 5. What idle timeout balances seamless presence, provider usage, and accessibility?
-6. Which task events belong in the main canonical message timeline versus task-only projection?
+6. Which structured tool/activity fields can be shown inline by default while keeping raw payloads private and redacted?
 7. How should primary model role selection interact with explicit user model pinning and subscription pressure?
 8. Can an authenticated anti-replay voice-confirmation profile ever meet or exceed the baseline trusted-control approval guarantees?
 

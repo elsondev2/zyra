@@ -21,6 +21,8 @@ More context is not automatically better. Each role receives a deterministic env
 ```mermaid
 erDiagram
     CONVERSATION ||--o{ MESSAGE : contains
+    CONVERSATION ||--o{ FOREGROUND_ROUTE : owns
+    FOREGROUND_ROUTE ||--o{ MESSAGE : accepts
     CONVERSATION ||--o{ CONTEXT_REVISION : advances
     CONVERSATION ||--o{ TASK : owns
     TASK ||--o{ TASK_EVENT : records
@@ -49,7 +51,17 @@ erDiagram
       string message_id PK
       string role
       string modality
+      string foreground_route_id FK
+      integer route_epoch
       string task_id FK
+    }
+    FOREGROUND_ROUTE {
+      string foreground_route_id PK
+      integer route_epoch
+      string surface_mode
+      string response_owner
+      string owner_claim_id
+      string status
     }
     TASK {
       string task_id PK
@@ -116,9 +128,15 @@ erDiagram
 
 ### Conversation ledger
 
-The canonical Pi session JSONL remains the user-visible message and model-context history. Speech transcripts, typed messages, and image-backed messages MUST become ordinary canonical messages with stable IDs and modality metadata.
+The canonical Pi session JSONL remains the user-visible message and model-context history. Speech transcripts, typed messages, image-backed messages, and direct strong-agent Chat responses MUST become ordinary canonical messages with stable IDs, modality metadata, `foreground_route_id`, and route epoch. Assistant messages also retain the durable canonical commit receipt that proves they committed while that route/owner claim was active.
 
-A voice transcript is not authoritative until the turn identity and completion state are known. Partial transcript deltas are presentation events; the final canonical message is idempotently committed by provider turn/item identity or a client-generated message ID.
+A voice transcript or streamed strong response is not authoritative until its provider/turn identity, completion state, and current foreground owner claim are known. Pre-routing canonical messages retain their original JSONL bytes and gain route/modality/receipt metadata only through hash-verified [`LegacyMessageRouteBinding`](schemas/legacy-message-route-binding.schema.json) records tied to an initial `migration` Chat route. An unverified legacy record blocks v2 materialization rather than receiving guessed metadata. Partial deltas are presentation events; final or interrupted text commits idempotently. Output from a superseded route epoch cannot append to history.
+
+### Foreground-route ledger
+
+`ForegroundRoute` revisions live in `controller.sqlite` beside task authority records. Transactional uniqueness plus a conversation invariant require exactly one active route for every non-deleted conversation before input or output is accepted. A new route records its predecessor, monotonic epoch, surface, response owner, non-authorizing claim ID, context version, an immutable snapshot of relevant active task IDs at activation, and physical realtime session identity when applicable. Route history is canonical orchestration truth; renderer mode state is only a projection.
+
+A Voice route becomes active only after complete hydration. Superseding the prior route and installing the new gateway claim commit together. Task attempts and capability authority are referenced for context but never transferred by this transaction.
 
 ### Task and orchestration ledger
 
@@ -128,7 +146,7 @@ The reduced task snapshot is derived. The append-only controller events and immu
 
 ### Private agent records
 
-Primary and child transcripts, detailed tool events, code, logs, and large results remain private task records. A primary uses a private provider/Pi session linked by task and attempt IDs, never the canonical user-facing root turn. The foreground receives bounded summaries and artifact references. A user can inspect private details through task UI without injecting them into speech or the main message timeline.
+Primary and child transcripts, detailed tool payloads, code, logs, and large results remain private task records. While Chat owns the foreground route, the strong primary may emit gateway-controlled response text and structured execution lifecycle events; the raw payloads remain private. While Voice owns the route, primary output is private task evidence and Realtime receives bounded validated summaries and artifact references. A user can inspect redacted activity inline or in task details without injecting raw execution data into assistant prose, model history, or speech.
 
 ### Reconnect journals and UI databases
 
@@ -234,6 +252,7 @@ The continuity service is a deterministic materialized view over canonical recor
 ```mermaid
 flowchart TD
     CL[Conversation ledger watermark] --> R[Deterministic reducer]
+    FR[Foreground-route watermark] --> R
     TL[Task ledger watermark] --> R
     AR[Agent record checkpoints] --> R
     PR[Preferences and provider capability] --> R
@@ -254,17 +273,18 @@ The service MUST NOT:
 
 A prepared packet contains:
 
-1. **Identity and watermarks** — conversation ID, context version, task/event sequences, generation time.
-2. **Current focus** — what the user is discussing or waiting for.
-3. **Pending user obligations** — exact decision question/options or approval action/hash/scope/expiry, never a summary alone.
-4. **Active task cards** — state, current attempt/primary lineage, latest verified activity, blockers, and next expected event.
-5. **Exact active constraints** — stable IDs and scope.
-6. **Current decisions** — selected option and rationale, excluding superseded decisions.
-7. **Recent verbatim turns** — enough dialogue to preserve deixis, tone, and corrections.
-8. **Retrieval references** — canonical message, artifact, and task-record pointers for older detail.
-9. **Safety state** — permission epoch, emergency-stop state, active lease IDs, revocation watermark, primary slot, and writer-lock owner.
-10. **Narration delivery watermark** — terminal sequence plus pending and unknown-outcome delivery IDs, preventing speech replay after a crash.
-11. **Integrity and usage** — critical-record completeness/hash/staleness plus optional safe usage context.
+1. **Identity and watermarks** — conversation ID, context version, active foreground-route epoch, task/event sequences, generation time.
+2. **Active foreground route** — exact Chat/Voice owner claim, predecessor, physical session generation when applicable, and attached active tasks.
+3. **Current focus** — what the user is discussing or waiting for.
+4. **Pending user obligations** — exact decision question/options or approval action/hash/scope/expiry, never a summary alone.
+5. **Active task cards** — state, current attempt/primary lineage, latest verified activity, blockers, and next expected event. At most one card is `running`, and its attempt matches the canonical primary slot and any writer lock.
+6. **Exact active constraints** — stable IDs and scope.
+7. **Current decisions** — selected option and rationale, excluding superseded decisions.
+8. **Recent verbatim turns** — enough dialogue to preserve deixis, tone, and corrections, including modality, route identity, and assistant commit receipt.
+9. **Retrieval references** — canonical message, artifact, and task-record pointers for older detail.
+10. **Safety state** — permission epoch, emergency-stop state, active lease IDs, revocation watermark, primary slot, and writer-lock owner.
+11. **Narration delivery watermark** — terminal sequence plus pending and unknown-outcome delivery IDs, preventing speech replay after a crash.
+12. **Integrity and usage** — critical-record completeness/hash/staleness plus optional safe usage context.
 
 `packet_integrity.canonical_sha256` is SHA-256 over RFC 8785 canonical JSON after omitting that hash field. The initial target is **24–32 KiB encoded JSON**, to be validated experimentally per provider. This is a conservative proposal, not a published Codex limit.
 
@@ -272,19 +292,22 @@ A prepared packet contains:
 
 When the packet exceeds its adapter-specific budget, retain content in this order:
 
-1. unresolved approvals and questions;
-2. active blockers and failures;
-3. exact active constraints and corrections;
-4. active task state and latest verified evidence;
-5. current decisions;
-6. current focus;
-7. recent verbatim turns;
-8. older summaries;
-9. retrieval references for omitted material.
+1. active foreground route and any unresolved response ownership;
+2. unresolved approvals and questions;
+3. active blockers and failures;
+4. exact active constraints and corrections;
+5. active task state and latest verified evidence;
+6. current decisions;
+7. current focus;
+8. recent verbatim turns;
+9. older summaries;
+10. retrieval references for omitted material.
 
-The reducer truncates complete records only. Pending decisions/approvals, active constraints/corrections, safety state, active task ownership, blockers, and narration unknown-outcome records are **critical** and cannot be omitted. If the critical set alone exceeds the adapter’s safe context limit, materialization fails closed and Voice does not answer history-dependent input until a complete larger packet or safe replacement snapshot is available. Noncritical omissions generate typed retrieval references and section/count metadata; UTF-8 strings are never cut mid-record.
+The reducer truncates complete records only. Active foreground route/epoch, pending decisions/approvals, active constraints/corrections, safety state, active task ownership, blockers, and narration unknown-outcome records are **critical** and cannot be omitted. If the critical set alone exceeds the adapter’s safe context limit, materialization fails closed and Voice does not answer history-dependent input until a complete larger packet or safe replacement snapshot is available. Noncritical omissions generate typed retrieval references and section/count metadata; UTF-8 strings are never cut mid-record.
 
-## Silent resume flow
+## Silent activation and resume flow
+
+Starting Voice from Chat and replacing an expired Voice session use the same hydration barrier. The current route remains canonical while the realtime transport prepares. During first activation that route is Chat. After packet/delta acknowledgement, the controller atomically activates a new Voice route epoch; failed initial preparation or replacement activates a fresh Chat route epoch/owner claim before direct output resumes.
 
 ```mermaid
 sequenceDiagram
@@ -314,17 +337,20 @@ sequenceDiagram
 
 Activation behavior:
 
-- The client SHOULD load the prepared snapshot before allowing the first model response.
+- Before materialization, the gateway quiesces any strong Chat output and commits its completed/interrupted prefix; the snapshot conversation watermark includes that receipt.
+- The client SHOULD load that prepared snapshot before allowing the first model response.
+- A Chat-to-Voice handoff atomically supersedes the Chat route and activates the Voice route only after hydration covers the committed Chat prefix and every startup delta; attached primary execution continues unchanged.
+- Canonical commits and provider callbacks carry route epoch as well as physical session generation, and either stale identity causes rejection.
 - The packet is reference/developer context, never a new user utterance.
 - The foreground remains silent until the user speaks or a pending urgent event requires policy-approved narration.
 - Input can be captured during connection, but the adapter buffers response generation behind a hydration barrier until every delta through the connection high-watermark is acknowledged.
 - State changes during or after connection become ordered, lossless silent deltas; task completion, revocation, and pending user items are never summary-only updates.
-- Physical session expiry closes that generation, reconciles in-flight narration delivery, and starts a new generation from a fresh packet. A speech request without a terminal receipt becomes `outcome_unknown` and is not replayed.
+- Physical session expiry closes that generation, reconciles in-flight narration delivery, and prepares a new physical session from a fresh packet. Successful hydration activates a new Voice route epoch; failed replacement activates a fresh Chat route epoch/owner claim. A speech request without a terminal receipt becomes `outcome_unknown` and is not replayed.
 - The foreground mentions “catching up” only when a complete packet cannot be applied promptly and the user asks a history-dependent question.
 
 ## Delta hydration
 
-A [`ResumeDelta`](schemas/resume-delta.schema.json) contains exact changed domain records, before/after source watermarks, resulting safety state, and an integrity hash computed over RFC 8785 canonical JSON with `canonical_sha256` omitted. Deltas are not truncated. The adapter validates base packet ID, monotonic context/watermarks, record schemas, and hash; applies each delta transactionally in order; and acknowledges the resulting watermark. Duplicate delta IDs are idempotent. A gap, hash mismatch, unsupported record, or oversized delta requests a fresh complete snapshot rather than guessing.
+A [`ResumeDelta`](schemas/resume-delta.schema.json) contains exact changed domain records, before/after source watermarks, resulting safety state, and an integrity hash computed over RFC 8785 canonical JSON with `canonical_sha256` omitted. Deltas are not truncated. For each delta, the adapter validates base packet ID, monotonic context/watermarks, record schemas, hash, foreground-route transitions, and safety authority. Any slot/lock/lease change requires matching same-conversation task, attempt, and lease identities plus the corresponding watermark advance. Unrelated valid records cannot justify safety state. A slot A → B delta proves A released slot/locks/leases before B acquired, and terminal lease revisions continue the exact prior identity. The adapter then applies the delta transactionally in order and acknowledges the resulting watermark. Duplicate delta IDs are idempotent. A gap, hash mismatch, unsupported record, or oversized delta requests a fresh complete snapshot rather than guessing.
 
 ```mermaid
 sequenceDiagram
@@ -341,10 +367,10 @@ sequenceDiagram
 
 ## Checkpoint production
 
-Both active model roles contribute structured checkpoints during normal work:
+Both model roles contribute structured checkpoints during normal work:
 
-- foreground checkpoints current focus, recent user-visible conclusions, and unresolved conversational references;
-- primary checkpoints task progress, verified evidence, blockers, artifacts, and expected next action;
+- the active Chat or Voice foreground owner checkpoints current focus, recent user-visible conclusions, and unresolved conversational references;
+- the strong primary checkpoints task progress, verified evidence, blockers, artifacts, and expected next action regardless of foreground route;
 - controller validates and stores these as typed records;
 - continuity reducer selects from those records without invoking another model.
 
@@ -367,6 +393,8 @@ The foreground can request older detail through a dedicated read-only retrieval 
 
 Machine-readable definitions:
 
+- [`foreground-route.schema.json`](schemas/foreground-route.schema.json)
+- [`legacy-message-route-binding.schema.json`](schemas/legacy-message-route-binding.schema.json)
 - [`context-revision.schema.json`](schemas/context-revision.schema.json)
 - [`delegation-packet.schema.json`](schemas/delegation-packet.schema.json)
 - [`resume-packet.schema.json`](schemas/resume-packet.schema.json)

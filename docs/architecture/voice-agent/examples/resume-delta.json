@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "delta_id": "delta_resume_demo_01",
   "conversation_id": "chat_resume_demo",
   "base_packet_id": "packet_resume_demo_01",
@@ -7,6 +7,7 @@
   "to_context_version": 8,
   "from_watermarks": {
     "conversation_sequence": 18,
+    "foreground_route_epoch": 2,
     "task_sequence": 44,
     "attempt_sequence": 11,
     "context_sequence": 7,
@@ -19,6 +20,7 @@
   },
   "to_watermarks": {
     "conversation_sequence": 19,
+    "foreground_route_epoch": 2,
     "task_sequence": 44,
     "attempt_sequence": 11,
     "context_sequence": 8,
@@ -35,6 +37,10 @@
       "record": {
         "message_id": "message_resume_user_08",
         "role": "user",
+        "modality": "text",
+        "foreground_route_id": "foreground_route_voice_02",
+        "route_epoch": 2,
+        "canonical_commit_receipt_id": null,
         "content": "Include a concrete threat model in the published specification.",
         "created_at": "2026-08-02T12:06:00Z"
       }
@@ -88,6 +94,6 @@
     }
   },
   "critical_records_complete": true,
-  "canonical_sha256": "4a7d13128dda8fd4e9abc23f8c091137a1cfd2d76930cd1591858bc3c14024f7",
+  "canonical_sha256": "104f2c4fdb5aa4cd3ec96cd7107eb2e4eba9019d111efb8c527ba953a877c611",
   "generated_at": "2026-08-02T12:06:02Z"
 }

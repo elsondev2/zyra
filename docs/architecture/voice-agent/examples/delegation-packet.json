@@ -48,7 +48,7 @@
   "decisions": [
     {
       "decision_id": "decision_model_roles",
-      "selection": "Use a realtime foreground role and one on-demand strong primary role.",
+      "selection": "Use direct strong-agent Chat, explicit realtime Voice, and one strong primary execution lineage.",
       "rationale": "This preserves low-latency conversation while keeping mutation behind the established coding-agent path."
     }
   ],

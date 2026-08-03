@@ -1,0 +1,2 @@
+{"message_id":"message_legacy_user_01","role":"user","modality":"text","content":"Can you explain this legacy project?","created_at":"2025-12-01T09:00:00Z"}
+{"message_id":"message_legacy_assistant_02","role":"assistant","modality":"text","content":"Yes. I’ll inspect the existing project context first.","created_at":"2025-12-01T09:00:05Z"}

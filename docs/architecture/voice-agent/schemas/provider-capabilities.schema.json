@@ -56,19 +56,19 @@
     "adapter_version",
     "provider_version",
     "auth_mode",
+    "adapter_role",
     "observed_at",
     "expires_at",
-    "realtime",
-    "primary_agent",
     "experimental_adapter",
     "notes"
   ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "const": 2 },
     "adapter_id": { "$ref": "common.schema.json#/$defs/id" },
     "adapter_version": { "type": "string", "minLength": 1, "maxLength": 128 },
     "provider_version": { "type": "string", "minLength": 1, "maxLength": 128 },
     "auth_mode": { "type": "string", "enum": ["api_key", "subscription_oauth", "provider_account", "local", "other", "unknown"] },
+    "adapter_role": { "type": "string", "enum": ["realtime_foreground", "strong_agent"] },
     "observed_at": { "$ref": "common.schema.json#/$defs/timestamp" },
     "expires_at": { "$ref": "common.schema.json#/$defs/timestamp" },
     "realtime": {
@@ -143,6 +143,9 @@
       "type": "object",
       "required": [
         "private_task_sessions",
+        "direct_chat_turns",
+        "gateway_controlled_output",
+        "structured_tool_events",
         "text_input",
         "image_input",
         "tools",
@@ -154,6 +157,9 @@
       ],
       "properties": {
         "private_task_sessions": { "$ref": "#/$defs/capability" },
+        "direct_chat_turns": { "$ref": "#/$defs/capability" },
+        "gateway_controlled_output": { "$ref": "#/$defs/capability" },
+        "structured_tool_events": { "$ref": "#/$defs/capability" },
         "text_input": { "$ref": "#/$defs/capability" },
         "image_input": { "$ref": "#/$defs/capability" },
         "tools": { "$ref": "#/$defs/capability" },
@@ -172,5 +178,21 @@
       "items": { "type": "string", "maxLength": 1000 }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "adapter_role": { "const": "realtime_foreground" } },
+        "required": ["adapter_role"]
+      },
+      "then": {
+        "required": ["realtime"],
+        "not": { "required": ["primary_agent"] }
+      },
+      "else": {
+        "required": ["primary_agent"],
+        "not": { "required": ["realtime"] }
+      }
+    }
+  ],
   "additionalProperties": false
 }
