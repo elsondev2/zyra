@@ -6,7 +6,7 @@ Zyra has one durable local agent service and multiple interchangeable clients. D
 
 Closing, reloading, or reconnecting a client must not terminate an active root turn, managed command, subagent, or workflow. An explicit Stop action still cancels work.
 
-The proposed [voice-agent architecture](voice-agent/README.md) extends this ownership model with a deterministic task controller, realtime-session coordinator, selective narration, and continuity view. That package is a draft specification; these modules are not claimed as current runtime behavior here.
+The proposed [voice-agent architecture](voice-agent/README.md) extends this ownership model with a deterministic task controller, realtime-session coordinator, selective narration, and continuity view. Optional Product Phase Two adds a relationship host, work-thread registry, attention queue, cross-conversation focus coordination, and Home controller activity receipts. That package is a draft specification; these modules are not claimed as current runtime behavior here.
 
 ## Sources Of Truth
 
@@ -17,6 +17,7 @@ Zyra uses one authority per concern:
 3. **Agent-server chat catalog** maps canonical Pi session IDs to project, path, display metadata, and known aliases.
 4. **Desktop SQLite** is a rebuildable UI projection/cache. It is not allowed to create a second chat identity or own runtime lifetime.
 5. **Renderer stores** remain presentation-only caches.
+6. **Proposed Phase Two controller records** would own relationship, work-thread, focus-lease, attention, visit, consultation, retrieval-access, budget-reservation, and Home-activity-receipt orchestration while each message remains in its canonical Pi session.
 
 A canonical chat ID is the Pi session header ID. Desktop `assistant-session:*` and `assistant-thread:*` IDs are aliases used by the shell until their projection is migrated.
 
@@ -111,6 +112,10 @@ Catalog registration is additive and local. It never copies, rewrites, or delete
 - Add richer Pi tool/activity reconstruction when importing a chat that Desktop has never projected; message history is imported now, while future live and replayed activity remains rich.
 - Exercise a live provider turn across an actual Desktop-close/TUI-open cycle after the next normal Electron restart.
 - Remove `ZYRA_EMBEDDED_RUNTIME` after one compatibility cycle.
+
+## Proposed Phase Two server extension
+
+After Product Phase One ships, the same server ownership model can expose one relationship-level subscription over several canonical chats. It must coordinate one relationship-wide focus lease with explicit multi-client takeover, prepare an immutable target provider binding and conversation hydration, transact paired route/focus changes, recover visits/budgets, and project Inbox/active-work state. It does not merge workers or JSONL histories, and a client disconnect still detaches rather than cancelling work. See [Phase Two — relationship-first interaction](voice-agent/relationship-first-interaction.md).
 
 ## Non-Goals
 

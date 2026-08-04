@@ -3,6 +3,7 @@
 - **Status:** Accepted design; implementation pending
 - **Date:** 2026-08-02
 - **Specification:** [Context and continuity](../architecture/voice-agent/context-and-continuity.md)
+- **Phase Two relationship scope refined by:** [ADR-0009](0009-group-home-and-work-threads-with-relationship-focus.md) and [ADR-0011](0011-use-attention-items-focus-visits-and-home-receipts.md)
 
 ## Context
 

@@ -55,6 +55,36 @@ sequenceDiagram
     U->>V: Next spoken turn
 ```
 
+## Phase Two relationship focus lifecycle
+
+Phase Two adds one relationship-wide [`RelationshipFocusLease`](relationship-first-interaction.md#focus-visits) above the per-conversation route lifecycle. Home and each work thread keep their own route epochs. The lease answers “which attachment owns the relationship conversation and which scope is active?”; foreground route answers “which role may produce output in that conversation?” Neither grants task authority. Other clients mirror or request explicit takeover; they cannot silently supersede routes.
+
+An accepted focus visit preserves its source modality and follows this order:
+
+1. a canonical decision, blocker, kickoff gap, deliberate review, actionable failure, or approval produces one source-revision-bound attention item; routine completion goes directly to Completed/Home activity;
+2. Zyra offers the visit after a natural pause or during explicit Inbox review;
+3. user acceptance creates `preparing`, copies immutable `visit_modality`, and saves the source return anchor; pre-acceptance deferral remains on AttentionItem and creates no visit;
+4. the target conversation packet and all startup deltas hydrate;
+5. for Chat, assert no realtime binding and CAS only the focus lease while validating unchanged source/target Chat route heads; for already-active Voice, prepare a new immutable target provider-thread/session binding and atomically transition source Voice → Chat, target Chat → Voice, and focus generation;
+6. the focused discussion records a decision/context revision in the target;
+7. start worker acknowledgement and source hydration concurrently with separate acknowledgement and return deadlines;
+8. return Chat visits in Chat; restore source Voice when ready, or source Chat/degraded Voice when the Voice return deadline or hydration failure requires fallback;
+9. one transaction restores source focus/routes and commits `returned`, `returned_acknowledged`, or `returned_pending_ack` according to whether acknowledgement is required/durable;
+10. one deterministic controller activity receipt projects into Home while the detailed transcript stays in the target thread;
+11. late acknowledgement changes `returned_pending_ack` exactly once to `returned_acknowledged` or `returned_blocked`; timeout/rejection creates a new blocker without reopening or re-entering the visit.
+
+Preparation failure leaves the source authoritative. A Chat/TUI open never starts Realtime. A crash/failure during return retries the same transaction; at `return_deadline_at` a Voice visit restores source Chat, marks Voice degraded/reconnectable, and preserves pending acknowledgement asynchronously. A stale focus lease, source record, route, provider thread, session generation, item, or visit revision cannot append, speak, steer, resolve attention, or return. Physical transport may change behind the stable surface only for Voice when provider context isolation requires it. Natural Home assistant text still requires an active Home owner claim; the activity receipt is not a message.
+
+### Work thread versus task
+
+A Phase Two work thread is a conversation-first container for substantial work. It may have zero tasks only while preparing/discussing; background execution requires at least one thread-bound durable task. A task remains one durable unit of intent and execution and may remain standalone. Its conversation identity never changes. If it becomes substantial, the controller safely releases/terminally links it and creates a new thread-bound successor task with preserved checkpoint/provenance and no operation replay. Threads do not nest in the initial release.
+
+### Relationship-level routing ladder
+
+In Voice, Realtime first attempts a bounded answer or inspection. Deeper one-shot reasoning may use a read-only strong consultation. Durable bounded work becomes a task. Substantial, asynchronous, or multi-step work creates/resumes a work thread whose strong coordinator decomposes tasks and whose normal primaries execute them. Typed Chat continues to start with the strong direct lane.
+
+Workers request missing context from the coordinator. The controller first issues an exact ContextRetrievalAuthorization binding requester, purpose, allowed source IDs/data classes, policy/context revisions, redaction/size limits, expiry, and use budget. Within it, the coordinator checks acknowledged task context, the current thread, project decisions, provenance-linked Home exchanges, and explicitly related threads; every read produces an access receipt. Trusted context becomes a scoped revision and resumes work silently; stale, conflicting, injected, unauthorized, or absent context reaches the user.
+
 ## Task versus execution attempt
 
 A **task** represents durable user intent. A **primary agent run** is a stable private worker/session lineage for that task. An **execution attempt** is one period in which that lineage owns the canonical conversation’s single strong-primary execution slot. Their state machines remain separate.
@@ -267,6 +297,12 @@ Conservative defaults:
 - overlapping write scopes serialized or isolated in retained worktrees;
 - no child-to-child delegation in the first production release.
 
+## Phase Two attention behavior
+
+The hybrid Inbox is a projection, not another task state machine. `Needs you` contains kickoff questions, decisions, approvals, blockers, deliberate reviews, and failures requiring user input; `Active` shows live/held work; `Completed` shows recent verified outcomes whether or not opened. Needs you alone owns the count. During ordinary conversation Zyra offers at most one unsolicited item per conversational segment. An explicit Inbox review may proceed sequentially. Deferral holds work safely and never means cancellation, decision resolution, or approval.
+
+Every attention response compare-and-swaps the item, exact source revision/watermark, context revision, and relationship focus lease/generation before it can steer or resume work. Routine progress stays in the source thread. Home receives idempotent controller activity receipts for launch, attention, failure, and verified outcome; natural assistant text/speech still uses the active route. Approval visits may explain or navigate to trusted controls but cannot authorize through speech.
+
 ## Typed lifecycle events
 
 Foreground ownership changes use append-only `ForegroundRoute` revisions with a monotonic per-conversation route epoch. Preparing a provider session does not change canonical ownership. Superseding the old route, activating the new route, advancing the active foreground-route epoch watermark, and installing the gateway owner claim commit atomically. Route changes are not task-state transitions.
@@ -398,6 +434,8 @@ Tasks MAY remain active concurrently when their read/write scopes and required a
 - bounded concurrency based on provider and user policy.
 
 A waiting task does not freeze the conversation or unrelated tasks. An active task also does not prevent a Chat-to-Voice handoff; Voice attaches to its current materialized state while execution continues.
+
+In Phase Two, each work thread remains a separate canonical conversation and therefore retains its per-conversation primary slot. Before consultation, coordinator work, or a new thread attempt dispatches, the controller atomically reserves the relationship concurrency/usage budget and later reconciles provider receipts; unknown usage remains conservatively reserved. Launching several threads never bypasses shared-root locks, permission epochs, exhausted/unknown budget policy, or user-configured limits. The strong coordinator classifies/decomposes/retrieves; each task primary remains the execution, integration, and verification owner.
 
 ## Idempotency
 

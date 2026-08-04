@@ -188,6 +188,29 @@ It maps:
 
 The adapter MUST quarantine output from stale route epochs, keep provider thread/turn IDs as provenance, and preserve canonical Zyra conversation/task IDs. Starting Voice changes the output lane without cancelling the active primary attempt.
 
+## Phase Two adapter requirements
+
+The optional relationship-first profile adds two provider-neutral requirements without assuming that a provider natively supports either.
+
+### Strong consultation
+
+A strong adapter MAY expose a bounded read-only consultation call. It accepts the exact Voice question plus scoped context/retrieval references and returns facts, provenance, uncertainty, usage, and a promotion recommendation. It has no mutation tools and no direct user-output claim. If unavailable or over budget, Zyra returns promotion-required evidence. The controller may launch a normal task/thread only when the original request already carries explicit substantial-work intent; otherwise Zyra asks once or explains that deeper work is required.
+
+### Voice conversation-focus handoff
+
+Chat/Desktop/TUI focus visits create no realtime session or provider binding; they remain on strong Chat routes. Every Voice focus target receives a new immutable binding `{conversation_id, realtime_provider_thread_id, realtime_session_id, session_generation, focus_generation}`. A provider thread ID remains mapped to one canonical conversation for life. A realtime adapter reports exactly one `focus_isolation_strategy` value from the shared enum:
+
+- `isolated_scope_switch` — one lower-level transport can host a separately identified target provider-thread/session binding and every callback names it; no existing provider thread is rebound;
+- `prewarmed_session_handoff` — Zyra prepares a separate physical session and switches media at a conversational boundary;
+- `reconnect_required` — a new physical session is required and the UI may need to acknowledge material delay;
+- `unsupported` or `unknown` — cross-conversation Voice focus is disabled; the relationship host may offer an explicit “Continue in Chat?” modality-change choice and keeps typed V2 available; decline creates no visit and leaves attention pending.
+
+The stable canvas is a UI guarantee, not evidence that one provider session survived. Sending “forget prior context,” replacing a system prompt, or clearing only local transcript state is never accepted as isolation proof. The capability report carries tri-state strategy support, verification method/evidence, provider/model/client versions, callback identity guarantees, `verified_at`, and `expires_at`; expired or changed evidence becomes `unknown`. Target conversation hydration, relationship focus-lease revision/generation, route epoch, provider thread/session generation, and stale callback rejection remain explicit. Subscription-backed Codex must be experimentally validated; generic Realtime handoff features are not assumed to exist there.
+
+### Coordinator and worker mapping
+
+The strong coordinator and work-thread primary can share one adapter/model family while retaining distinct domain records and usage. The coordinator classifies, decomposes, and performs authorized retrieval; each task primary owns execution, integration, and verification. A work thread maps to its own canonical conversation and private task sessions. Provider thread IDs remain provenance and never become `work_thread_id` or `relationship_id`. Consultation/coordinator/thread dispatch begins only after atomic relationship budget reservation.
+
 ## Capability negotiation
 
 ```mermaid
@@ -217,7 +240,10 @@ Required checks include:
 - ordinary text/image task input;
 - steering and interruption;
 - usage events/endpoints;
-- provider model/voice availability.
+- provider model/voice availability;
+- Phase Two read-only strong consultation support and hard limits;
+- Phase Two isolated new-binding switch, prewarmed handoff, reconnect, or unsupported status;
+- target preparation latency and whether the selected voice can remain consistent across replacement sessions.
 
 A cached report has an observation timestamp and adapter/provider version. A version change invalidates the cache.
 
@@ -254,6 +280,17 @@ Every realtime adapter must pass:
 - provider limit/error mapping;
 - complete media/process cleanup.
 
+A Phase Two realtime adapter must additionally pass for visits entered from already-active Voice:
+
+- target focus hydration before source/target route transition;
+- same-canvas handoff with exactly one accepted output generation;
+- source callback rejection after entry and target callback rejection after return;
+- safe fallback when target preparation or provider isolation fails;
+- no sibling-thread context leakage across provider sessions using seeded canary facts in both directions and after reconnect/replacement;
+- capability evidence expires on provider/model/client-version change, and prompt/local-history reset alone never qualifies as isolated scope switching;
+- immutable provider-thread-to-conversation mapping and mismatch rejection;
+- preserved mute/voice/accessibility behavior through the handoff.
+
 Every primary adapter must pass:
 
 - direct Chat response streaming and exactly-once gateway commit;
@@ -267,3 +304,5 @@ Every primary adapter must pass:
 - cancellation and unknown-outcome handling;
 - completion evidence and usage mapping;
 - restart/reconciliation.
+
+A Phase Two strong adapter must additionally pass consultation immutability, atomic usage reservation/promotion, coordinator retrieval authorization/access receipts, context provenance/conflict checks, primary integration ownership, work-thread identity isolation, and relationship-wide usage attribution.

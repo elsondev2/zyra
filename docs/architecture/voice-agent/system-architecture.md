@@ -5,7 +5,9 @@
 
 ## Architectural shape
 
-Zyra uses a manager-style orchestration pattern around one canonical chat. The strong primary owns direct responses while Chat is active. The realtime foreground owns conversation and narration while Voice is active. A deterministic foreground route and task controller mediate these roles and remain authoritative for ownership, state, and policy.
+Product Phase One uses a manager-style orchestration pattern around one canonical chat. The strong primary owns direct responses while Chat is active. The realtime foreground owns conversation and narration while Voice is active. A deterministic foreground route and task controller mediate these roles and remain authoritative for ownership, state, and policy.
+
+Optional Product Phase Two composes this architecture across multiple scoped canonical conversations under one AssistantRelationship. Phase One remains independently usable; see [Product phases](product-phases.md) and [Phase Two — relationship-first interaction](relationship-first-interaction.md).
 
 The canonical conversation can survive many Chat/Voice handoffs and physical WebRTC sessions. Starting or closing Voice does not end the conversation, cancel an active task, or transfer the task’s execution authority.
 
@@ -81,6 +83,45 @@ flowchart TB
     UM --> UI
 ```
 
+## Phase Two relationship overlay
+
+Phase Two adds product-level focus and orchestration above the Phase One conversation modules. It does not replace the conversation gateway, foreground routes, task controller, permission gate, or canonical ledgers.
+
+```mermaid
+flowchart TB
+    U[User] <--> CV[Stable conversation canvas\ncurrent relationship focus]
+    CV <--> RH[Relationship host\nfocus lease + return anchors]
+    RH --> H[Zyra Home\ncanonical conversation]
+    RH --> WR[Work-thread registry]
+    WR --> W1[Work thread A\ncanonical conversation + tasks]
+    WR --> W2[Work thread B\ncanonical conversation + tasks]
+    RH <--> FR[Focused conversation route]
+    FR <--> RT[Realtime foreground]
+    RT -->|bounded answer| GW[Conversation gateway\nfocused conversation only]
+    GW --> CV
+    RT -->|read-only one-shot| SC[Strong consultation]
+    SC --> RT
+
+    RH --> IN[Attention reducer\nInbox + active work]
+    RH --> CO[Strong coordinator]
+    W1 --> P1[Strong primary / exceptional workers]
+    W2 --> P2[Strong primary / exceptional workers]
+    P1 -->|context request| CO
+    P2 -->|context request| CO
+    CO --> CR[Authorized scoped retrieval]
+    CR -->|found| P1
+    CR -->|missing/conflict| IN
+    IN -->|natural-pause offer| RT
+
+    P1 -->|verified outcome| RC[Controller activity receipt]
+    P2 -->|verified outcome| RC
+    RC --> HP[Home timeline projection]
+```
+
+The relationship host owns no task or permission authority. It coordinates one current active-or-parked focus snapshot for a nonretired relationship with at most one live owner, target hydration, Chat focus-only transitions, paired conversation-route changes for Voice, explicit multi-client takeover, and recovery. Home and every work thread retain distinct conversation ledgers. The stable canvas can conceal a provider-session replacement during Voice, but never starts Realtime for Chat/TUI or bypasses target hydration/immutable Voice provider binding.
+
+The strong consultation, coordinator, and primary are separate domain lanes inside the existing strong-model role family. Work threads receive normal strong primaries; exceptional child workers still require ADR-0004 justification.
+
 ## Ownership table
 
 Each concern has one authority. A projection MAY cache authority data but MUST be rebuildable or reconcilable from its source.
@@ -95,6 +136,15 @@ Each concern has one authority. A projection MAY cache authority data but MUST b
 | Permissions and approvals | Durable controller records plus trusted permission gate/permission epoch | Models receive only scoped results, never lease bearer material |
 | Desktop/browser/computer authority | Electron main-process `AgentControlBroker` | Primary agent through approved bounded calls |
 | User-facing response owner | Active foreground route | Strong primary for Chat; realtime foreground for Voice |
+| Product interaction profile | Pure Phase One implicitly defaults to `conversation_scoped`; milestone 9 adds revisioned `InteractionProfilePreference` keyed by user space, where V1 needs no relationship and V2 activates only after bootstrap/transition receipt | Navigation/router selection |
+| Phase Two user-space/relationship identity | Stable `UserSpace`, `AssistantRelationship`, and `RelationshipConversationBinding` revisions in `controller.sqlite` | Home, Inbox, folder/thread navigation, settings; prompt/provider profiles remain separate |
+| Phase Two conversational focus owner | `RelationshipFocusLease` plus the focused conversation’s foreground route | Owner surface, mirrored clients, same-canvas projection, realtime adapter |
+| Work-thread identity and origin | `WorkThread` metadata linked to one canonical conversation | Thread list, folders, task anchors, search |
+| User-attention lifecycle | Canonical source records plus `AttentionItem` revisions | Needs you, active-work strip, natural-pause offer queue |
+| Home work activity receipt | Append-only `RelationshipReceipt` controller activity record | Compact Home timeline projection; not an assistant message; source thread retains full detail |
+| Strong consultation | Bounded private consultation record, relationship budget reservation, and strong-adapter receipt | Realtime receives facts/provenance; diagnostics receive usage |
+| Cross-thread retrieval | `ContextRetrievalAuthorization` plus append-only access receipt | Coordinator receives bounded redacted records; worker receives only selected context revision |
+| Phase Two aggregate budget | `RelationshipBudget` and atomic `UsageReservation` revisions | Scheduler, usage UI, diagnostics |
 | Spoken output selection | Narration scheduler policy | Realtime adapter receives approved speakable content only while Voice owns the route |
 | Spoken wording and Voice turn-taking | Realtime foreground model | Audio output and transcript |
 | Direct Chat wording | Strong primary under a foreground owner claim | Canonical text response through the conversation gateway |
@@ -235,6 +285,18 @@ The monitor maintains separate views for:
 - provider reset times and warnings.
 
 Provider-reported data is authoritative. Local elapsed time and token attribution are labeled estimates.
+
+### Phase Two relationship host
+
+The optional relationship host owns interaction-profile selection, stable user-space/relationship identity, revisioned conversation bindings, one current active-or-parked focus snapshot/generation for a nonretired relationship, target preparation, return anchors, Chat focus-only transitions, paired source/target route transitions for Voice, and explicit multi-client takeover. Cross-store Home/work-thread creation uses deterministic intent → canonical-header receipt → controller epoch-1-route/binding activation. The host reads controller and conversation state; membership grants no retrieval, and it cannot create execution capability or rewrite canonical messages. Disabling it at a quiescent boundary safely closes visits, parks focus, converts Voice only when proven or falls back to Chat, then returns that V2-capable runtime to Phase One conversation selection while unresolved kickoff questions/decisions/approvals/blocker-failure actions/reviews stay actionable through server-normalized V1 activity and additive records remain readable.
+
+### Phase Two work-thread and attention modules
+
+The work-thread registry binds substantial work to one canonical conversation, origin, folder, and task set. Background execution requires a task. Promotion creates a safely released linked successor rather than changing a task’s conversation ID. The attention reducer converts revision-bound canonical source records requiring user input into non-authorizing Inbox items and schedules natural-pause offers. Routine completion goes directly to Completed. The relationship receipt path appends one idempotent controller activity summary; natural assistant text/speech remains a separate route-bound delivery. Detailed work remains in the source thread.
+
+### Phase Two strong consultation and coordination
+
+A bounded consultation lets Realtime obtain deeper read-only reasoning without starting durable work. The strong coordinator classifies substantial work, creates or resumes threads, and arbitrates worker context requests through exact retrieval authorizations/access receipts. It does not become an editor/integration owner; each task primary retains execution, integration, verification, and completion. Atomic relationship budgets/reservations prevent concurrent lanes from racing past usage policy. These lanes use the existing strong-model family and task controller rather than introducing a third user-facing model.
 
 ## Deployment and process ownership
 

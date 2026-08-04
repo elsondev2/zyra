@@ -50,10 +50,74 @@ A provider payload MUST NOT be persisted as domain truth without normalization. 
 | `delivery_id` | One narration delivery lineage | Stable across prepared/requested/terminal revisions |
 | `context_version` | Conversation/task steering revision | Monotonic within a conversation |
 | `packet_id` | One delegation/resume materialization | Includes source watermarks |
+| `user_space_id` | One OS-user-owned Zyra data store/installation identity | Distinct from prompt profiles, provider accounts, projects, models, and interaction profiles |
+| `relationship_id` | One Phase Two assistant relationship | Unique per user space initially; groups bound Home/thread references and preferences; grants no authority |
+| `relationship_conversation_binding_id` | One append-only relationship membership lineage | Binds one canonical conversation role/source without granting retrieval |
+| `work_thread_id` | One Phase Two substantial-work container | Maps to exactly one canonical conversation and never denotes a provider thread |
+| `focus_generation` | One relationship-wide conversational scope epoch | Owned by a RelationshipFocusLease; stale generations reject output across clients |
+| `attention_item_id` | One Phase Two attention lineage | References one canonical source condition; never resolves it by itself |
+| `focus_visit_id` | One accepted purpose-bound work visit | Created only after acceptance/explicit open; stable across prepare, enter, resolve, acknowledge, and return revisions; pre-acceptance defer stays on AttentionItem |
+| `relationship_receipt_id` | One compact Home controller activity receipt | Deterministic from source thread/visit/kind/revision; never a canonical assistant message |
+| `consultation_id` | One bounded Phase Two strong consultation | Read-only, private, metered, and promotable with provenance |
 
-The canonical conversation maps to one active foreground route and a history of Chat/Voice route epochs. Each Voice route binds exactly one physical realtime session generation; a provider thread MAY span a sequence of fresh Voice route epochs, while each durable task maps to a primary lineage and one or more attempts. Provider threads never substitute for `conversation_id`. Strong output is canonical only while bound to an active Chat owner claim; under Voice it remains private/task evidence. Realtime output is canonical only while bound to the active Voice claim. Every assistant message still commits idempotently through the conversation gateway.
+The canonical conversation maps to one active foreground route and a history of Chat/Voice route epochs. Each Voice route binds exactly one immutable realtime scope binding and physical session generation. A provider thread MAY span replacement sessions/route epochs for the same canonical conversation, but it never rebinds to another conversation. Each durable task maps to one immutable `conversation_id`, a primary lineage, and one or more attempts. Provider threads never substitute for `conversation_id`. Strong output is canonical only while bound to an active Chat owner claim; under Voice it remains private/task evidence. Realtime output is canonical only while bound to the active Voice claim. Every assistant message still commits idempotently through the conversation gateway.
 
 For every append-only revisioned record, the controller enforces same-record identity, `revision = previous_revision + 1` where that field is present (task snapshots use event `task_revision`), compare-and-swap against the current revision, nondecreasing timestamps, and immutable prior bytes. A concurrent losing proposal is rejected/rebased; it never creates a fork under the same ID.
+
+## Phase Two proposed contracts
+
+Phase Two machine-readable schemas are introduced only after Phase One release gates pass. Until then, [Phase Two — relationship-first interaction](relationship-first-interaction.md#proposed-controller-records) defines their required semantics and prevents Phase One schemas from being overloaded prematurely.
+
+The following is the authoritative Phase Two persisted-contract inventory; roadmap and schema guidance must mirror it exactly:
+
+- `UserSpace` — random stable ID for one owner-ACL-protected local Zyra store, store generation/import lineage, lifecycle, and timestamps; never derived from prompt profiles or provider accounts;
+- `InteractionProfilePreference` — milestone-9 user-space requested/active profile, revision, compatibility/activation status, source, and timestamps; pure V1 predates/needs no record, while persisted V1 needs no relationship;
+- `AssistantRelationship` — unique user-space mapping, Home conversation ID/generation, active profile-preference/relationship/policy revisions, lifecycle, and timestamps;
+- `RelationshipConversationBinding` — relationship/conversation role, optional thread/folder/project, source/catalog manifest, status, and timestamps; canonical membership source with no retrieval authority;
+- `ConversationCreationIntent`/`ConversationCreationReceipt` — deterministic conversation/initial-Chat-route IDs, role/idempotency/controller heads, durably flushed canonical header/path hash, and activation status;
+- `WorkThreadCreationIntent` — relationship/origin/folder/objective, optional promotion-source task and expected authority-release heads, status, and activation receipt;
+- `HomeResetIntent`/`HomeResetReceipt` — trusted-control confirmation with disclosed old/new IDs, `archive` disposition and retention setting, fenced Home generation, expected relationship/Chat-route/focus/visit/operation/relationship-receipt/narration-delivery heads and physical-Realtime absence, writer-fence token, drained operation/receipt/narration watermarks, generation-unassigned post-fence receipt intents, replacement conversation receipt, activation/abort result, and timestamps;
+- `RelationshipFocusLease` — relationship, active/parked/retired lifecycle, optional owner attachment, lease revision/heartbeat/expiry/takeover state, monotonic focus generation, exact current conversation/thread/task, route/epoch, and realtime scope binding required only while Voice-focused/null for Chat/parked/retired;
+- `FocusTakeoverRequest`/`FocusTakeoverReceipt` — requester/current owner, observed lease head, target/reason/expiry, yield/disconnect policy evidence, winner/loser, quiescence, new generation/route, and timestamp;
+- `ProfileSwitchReceipt` — old/new interaction profile, selected source conversation, route/focus heads, quiescence proof, Voice conversion/fallback outcome, and committed timestamp;
+- `RelationshipCascadeManifest`/`RelationshipCascadeReceipt` — exact organization/content scope, ordered source IDs, precondition heads, per-source attention/visit closure and deletion/tombstone outcome, external failures, and resumable watermark;
+- `WorkThread` — relationship, distinct canonical conversation, origin message/scope, optional folder/project, objective, task IDs, related sibling links, and projection inputs;
+- `TaskContinuation` — immutable original/successor task IDs, revisions, conversation IDs, reason/work thread, transaction, checkpoint/operation heads, authority-release receipts, and timestamps; separate from Phase One task schemas;
+- `KickoffRequest` — work thread/conversation, source message, missing brief fields, exact question, deterministic action ID per request revision, source watermark, status, canonical reply commit receipt, immutable resolution/supersession, and timestamps; V1 receives that identity in a normalized pending-question activity;
+- `AttentionItem` — exact source ID/type/revision/watermark, context/policy/focus revisions, kind, facts, question, options/recommendation, required answer, priority, lifecycle, snooze/expiry, source-unavailable tombstone, and resume action;
+- `FocusVisit` — immutable source and selected `chat`/`voice` modalities plus required fallback-consent identity when they differ, source/target focus lease and route identities, item/source revisions, return anchor, hydration watermarks, target realtime scope binding required only for Voice/null for Chat, exact persisted state enum, separate resolution/return-transport outcomes, answer/context revision, independent acknowledgement/return deadlines, acknowledgement result, and terminal recovery status;
+- `RelationshipReceipt` — deterministic append-only controller activity ID/revision, Home projection target, source provenance/watermark/deletion state, and redacted verified summary; never a canonical assistant message;
+- `StrongConsultation` — exact request, scoped inputs/retrieval provenance, hard budget, read-only result/uncertainty, usage reservation/receipt, and optional promotion reference;
+- `ContextRetrievalAuthorization` — requester task/attempt/owner, purpose/query class, allowed source IDs/data classes, policy/context revisions, redaction/size limits, expiry, and use budget;
+- `ContextAccessReceipt` — authorization, requested/returned/denied source IDs/watermarks, redaction decision, hashes, outcome, and timestamp;
+- `ContextEscalation` — worker/task/thread identity, missing-information shape, authorization/access receipts, found provenance or conflict, resulting context revision or AttentionItem;
+- `RelationshipBudget` and `UsageReservation` — provider/account meter, concurrency/usage policy, revision/window, atomic reservations, provider reconciliation, and conservative unknown/exhausted behavior.
+
+`FocusVisit.state` is exactly `preparing | active | resolving | resolution_committed | return_preparing | returning | returning_degraded | returned_pending_ack | returned_acknowledged | returned_blocked | returned | preparation_failed`. Attention deferral is not a visit state. `resolution_outcome` and `return_transport_outcome` are orthogonal fields.
+
+Required cross-record invariants:
+
+1. every relationship Home/thread/Inbox/active-strip/receipt/task-source reference resolves through one current RelationshipConversationBinding; verified ambiguous backing conversations use `ordinary_reference`, while missing/unverifiable sources are excluded and block V2 activation when running/actionable. Membership never authorizes retrieval or execution, and every cross-thread read has exact authorization/access receipt;
+2. Home and every work thread retain distinct `conversation_id` values; every task retains its creation conversation forever;
+3. one nonretired relationship has one current active-or-parked focus snapshot and at most one active lease owner; exactly one fresh owner/generation is required for an accepted relationship turn, while detached state is parked and silent. Multi-client takeover quiesces/terminalizes the old attachment/session and activates the new owner/generation in one CAS transaction with explicit winner/loser receipts; old generations reject all relationship interaction; `retired` is terminal and can only be followed by fresh relationship bootstrap with a new ID;
+4. Chat focus changes advance only relationship focus while validating unchanged Chat route heads and carrying no realtime binding; Voice focus changes compose exact per-conversation route transitions plus an immutable provider-thread binding. Neither transfers task leases, locks, approvals, or operations;
+5. one source revision creates one attention lineage; resolution validates current item/source/context/focus revisions atomically;
+6. routine completion enters Completed directly; Needs you contains only actionable input/review;
+7. Inbox/active strip/thread status/relationship receipts are controller projections over canonical records, not assistant messages;
+8. one detailed visit transcript remains in its target conversation while Home receives at most one activity receipt lineage per source/kind revision;
+9. a resolved Chat visit CASes focus back while validating unchanged Chat route heads and restores its anchor (safe degraded Chat if hydration fails); a Voice visit returns by an independent deadline with safe Chat/degraded-Voice fallback; pending acknowledgement has one later acknowledged/blocker terminal revision;
+10. a hidden consultation has no mutation capability; crossing budget returns exact `promotion_required` evidence, and the controller launches work only when the original request satisfies explicit substantial-work policy or the user accepts one Ask;
+11. consultations, coordinator work, and new thread attempts reserve relationship usage/concurrency atomically before dispatch;
+12. profile switching cannot alter canonical messages, task/attempt state, authority, retention, or V1 visibility of unresolved source items; it commits at a quiescent boundary, safely closes any visit, parks/claims relationship focus, and either explicitly converts same-conversation Voice binding or falls back to fresh Chat before the new profile renders;
+13. active Home deletion is rejected. Reset is confirmed only by trusted non-speech control after active/preparing Voice returns to a fresh quiescent Chat route and physical Realtime closes. It CAS-installs a generation-bound writer fence after validating requester-owned Home focus and relationship/Chat-route/focus/visit/operation/receipt/narration heads; conversation, narration, focus, takeover/profile/visit, and activity-projection gateways then reject new generation-bound Home mutation. Pre-fence operations/receipts/NarrationDelivery drain exactly, uncertain speech becomes nonreplayable `outcome_unknown`, post-fence receipts wait generation-unassigned, and narration candidates remain undelivered source events. Final activation revalidates the fence token plus unchanged/drained heads before atomically switching Home/route/focus generations and assigning pending receipts to the new generation (or the retained old generation on abort); pre-fence receipts never copy. Reset defaults to archived/searchable old Home under its existing retention policy and never claims erasure; erasing it requires a separate post-activation trusted content cascade. Recovery resumes the same fenced intent or aborts by retaining the old generation, superseding its fenced route with fresh Chat, and releasing the fence; it never copies messages or accepts an indeterminate generation;
+14. the gateway first durably flushes/receipts the deterministic intended conversation ID/header; one later controller transaction appends its epoch-1 Chat route plus Home/work-thread metadata, bindings, tasks, and activity receipts; until then the header is non-listable/non-attachable `pending_activation`, and crash recovery reconciles the same intent without dispatching an orphan;
+15. deleting/redacting/withdrawing an attention source terminalizes its open item as `source_unavailable`, removes Needs-you actionability, safely closes/returns any visit, and retains only a non-opening minimal provenance tombstone; stale answers reject;
+16. default `ask_if_ambiguous` launch policy permits automatic thread launch only for explicit substantial-work intent; discussion/ideas remain conversational and proactive offers are natural-pause/actionable-only. Focus entry always has explicit acceptance/command, never starts Realtime from Chat, and changes Voice → Chat only after a separate fallback choice; decline creates no visit and leaves attention pending;
+17. pure pre-milestone-9 V1 is implicit `conversation_scoped` and requires neither preference nor relationship record; milestone-9 persisted V1 preference/activation requires no AssistantRelationship; requested and active profile are distinct, V2 becomes active only in the compatible relationship/route/focus switch transaction, and interruption leaves the prior profile active;
+18. V2 disablement deletes nothing; trusted-control relationship-organization removal terminalizes bindings/projections but preserves canonical sources, while content deletion requires a trusted-control explicit ordered per-source cascade that closes dependent attention/visits before each source tombstone;
+19. each V1 pending-question action binds one KickoffRequest ID/revision/source watermark; resolution requires its exact action plus canonical user-message commit receipt, replay is idempotent, and stale/unbound replies resolve nothing else;
+20. one TaskContinuation transaction binds an original terminal `promoted_to_work_thread` cancellation to exactly one successor whose `supersedes_task_id` names it, after original authority release; Phase One task schemas remain unchanged;
+21. proposing/offering a visit performs no target retrieval, hydration, or provider allocation. Exact acceptance first CAS-creates `FocusVisit.state = preparing`; only that accepted visit ID may authorize bounded target preparation, and preparation still grants no focus authority.
 
 ## Foreground route
 
@@ -98,6 +162,18 @@ A route claim is not a capability lease. It permits response production and cano
 - terminal/waiting/paused/verifying tasks have no current attempt;
 - terminal tasks have no active capability leases;
 - `terminal_at` exists only for terminal records.
+
+### Phase Two standalone-task continuation
+
+Phase Two never changes a task’s `conversation_id` and does not add a forward-link field to the Phase One Task/TaskEvent schemas. The successor uses existing `supersedes_task_id`; a separate Phase Two `TaskContinuation` carries the immutable forward/audit link. Promotion is an atomic lineage transition, not reparenting:
+
+1. quiesce/park any attempt and reconcile operations, leaving the original safely nonterminal;
+2. append a deterministic WorkThread/ConversationCreationIntent and obtain the durably flushed target ConversationCreationReceipt;
+3. in one controller transaction validate the receipt, activate the relationship binding/thread metadata, commit original task cancellation using existing reason `promoted_to_work_thread`, create the successor whose existing `supersedes_task_id` names the original, and append `TaskContinuation` with both task/revision/conversation IDs, checkpoint/operation heads, and release receipts;
+4. re-evaluate every protected action for the successor; old capability leases never transfer;
+5. dispatch the successor only after that activation/release transaction commits.
+
+If safe release, target conversation creation, or unknown-operation reconciliation cannot be proven, promotion is rejected and the original task remains visible in its safe parked/nonterminal state. The product can present one seamless promotion while audit/details preserve both IDs.
 
 ## Execution attempt
 
@@ -280,6 +356,92 @@ interface TaskController {
 }
 ```
 
+Phase Two introduces additional interfaces behind feature flags:
+
+```ts
+interface CanonicalConversationProvisioner {
+  fulfill(intent: ConversationCreationIntent, signal: AbortSignal): Promise<ConversationCreationReceipt>
+  reconcile(intentId: string): Promise<ConversationCreationReceipt | ConversationCreationConflict>
+  quarantine(conflictId: string, trustedAction: OrphanRecoveryAction): Promise<void>
+}
+
+interface RelationshipRegistry {
+  bootstrap(input: RelationshipBootstrapRequest, expected: UserSpaceCas): Promise<AssistantRelationship>
+  createWorkThread(input: WorkThreadCreationRequest, expected: RelationshipCreationCas): Promise<WorkThread>
+  bindConversation(input: RelationshipConversationBindingProposal, expected: RelationshipBindingCas): Promise<RelationshipConversationBinding>
+  switchProfile(input: InteractionProfileSwitch, expected: RelationshipRouteFocusCas): Promise<ProfileSwitchReceipt>
+  removeOrganization(input: RelationshipRemovalRequest, expected: RelationshipCascadeCas, trusted: TrustedDeletionControl): Promise<RelationshipCascadeReceipt>
+  deleteContainedContent(input: RelationshipContentCascadeRequest, trusted: TrustedDeletionControl): Promise<RelationshipCascadeReceipt>
+}
+
+interface RelationshipHost {
+  currentFocusLease(relationshipId: string): RelationshipFocusLease
+  requestTakeover(input: FocusTakeoverRequest): Promise<{ lease: RelationshipFocusLease; receipt: FocusTakeoverReceipt }>
+  parkDetachedFocus(relationshipId: string, expected: FocusLeaseCas): Promise<RelationshipFocusLease>
+  acceptVisit(input: FocusVisitProposal, acceptance: UserVisitAcceptance, expected: AttentionSourceCas): Promise<FocusVisit>
+  prepareAcceptedVisit(visitId: string, expected: FocusLeaseCas, signal: AbortSignal): Promise<PreparedFocusVisit>
+  enterPreparedVisit(preparedVisitId: string, expected: FocusLeaseCas): Promise<RelationshipFocusLease>
+  resolveVisit(visitId: string, resolution: VisitResolution, expected: AttentionSourceCas): Promise<FocusVisit>
+  returnFromVisit(visitId: string, expected: FocusLeaseCas): Promise<RelationshipFocusLease>
+  resetHome(input: HomeResetRequest, expected: HomeResetCas): Promise<{ relationship: AssistantRelationship; receipt: HomeResetReceipt }>
+}
+
+interface StrongConsultationAdapter {
+  consult(input: StrongConsultationRequest, signal: AbortSignal): Promise<StrongConsultationResult>
+}
+
+interface WorkCoordinator {
+  routeSubstantialWork(input: SubstantialWorkProposal, reservation: UsageReservation): Promise<WorkThread>
+  authorizeContext(input: ContextEscalationRequest): Promise<ContextRetrievalAuthorization>
+  retrieveContext(authorization: ContextRetrievalAuthorization): Promise<{ resolution: ContextEscalationResolution; receipt: ContextAccessReceipt }>
+  acknowledgeResolution(visitId: string, ownerAck: OwnerContextAcknowledgement): Promise<FocusVisit>
+}
+
+interface AttentionQueue {
+  project(relationshipId: string): RelationshipInbox
+  resolveKickoff(reply: KickoffReplyWithCanonicalCommitReceipt, expected: KickoffRequestActionCas): Promise<KickoffRequest>
+  offerNext(input: AttentionOfferPolicy): Promise<AttentionItem | null>
+  defer(itemId: string, instruction: DeferralInstruction, expected: AttentionSourceCas): Promise<AttentionItem>
+}
+
+interface RelationshipBudgetController {
+  reserve(input: RelationshipUsageProposal, expectedBudgetRevision: number): Promise<UsageReservation>
+  reconcile(reservationId: string, providerReceipt: ProviderUsageReceipt | null): Promise<RelationshipBudget>
+}
+
+interface RelationshipActivityStore {
+  appendReceipt(receipt: RelationshipReceipt): Promise<RelationshipReceipt>
+  projectHome(relationshipId: string, homeGeneration: number): RelationshipReceipt[]
+}
+```
+
+Interface-only value contracts are strict, versioned DTOs/read models. They are not new persistence authorities; a persisted result is always one of the authoritative records above.
+
+| Value contract | Required fields/meaning |
+|---|---|
+| `ConversationCreationConflict` | Intent/intended ID, observed path/header hash/size, reference status, conflict reason, inspection timestamp; grants no recovery action |
+| `OrphanRecoveryAction` | Trusted-control receipt, conflict/intent ID, `quarantine` or proven-empty `remove`, expected observed hash, idempotency key |
+| `RelationshipBootstrapRequest` / `UserSpaceCas` | User-space ID/store generation, requested profile, deterministic relationship/Home IDs, expected absence/current revisions, idempotency key |
+| `WorkThreadCreationRequest` / `RelationshipCreationCas` | Verbatim origin/objective/folder, deterministic conversation/route/thread IDs, optional promotion source, expected relationship/binding/task/authority heads |
+| `RelationshipConversationBindingProposal` / `RelationshipBindingCas` | Relationship/conversation/role/source/manifest plus expected relationship, binding-lineage, and catalog heads |
+| `InteractionProfileSwitch` / `RelationshipRouteFocusCas` | Requested profile/source attachment, selected canonical conversation, expected preference/relationship/focus/route/visit heads, quiescence and Voice conversion/fallback choice |
+| `RelationshipRemovalRequest` / `RelationshipContentCascadeRequest` / `RelationshipCascadeCas` | Organization-only or exact content scope, ordered source manifest/hash, expected retired/parked focus, binding/task/attention/visit/artifact heads, idempotency key |
+| `TrustedDeletionControl` | Broker-owned non-speech control receipt binding exact organization-removal or content-cascade manifest hash/revision and one-use decision; no model/renderer bearer authority |
+| `FocusLeaseCas` / `AttentionSourceCas` | Exact relationship/lease generation/owner and route heads; the latter also binds AttentionItem/source/context/policy revisions and watermarks |
+| `FocusVisitProposal` | Exact item/source and source/target identities, proposed source/selected modality, optional fallback offer, and return-anchor request; it performs no target retrieval, hydration, or provider allocation |
+| `UserVisitAcceptance` | Explicit action/proposal/item revision plus selected modality and fallback-consent ID when different; its CAS commit creates the durable `preparing` FocusVisit before preparation begins |
+| `PreparedFocusVisit` | Accepted visit ID/revision, hydration receipts/watermarks, optional Voice binding, preparation expiry; preparation grants no focus authority |
+| `VisitResolution` | Required-answer result plus canonical message/decision/context commit receipt and expected source revisions |
+| `HomeResetRequest` / `HomeResetCas` | Trusted-control receipt, expected Home Chat route, physical-Realtime absence, relationship/focus/visit/operation/receipt/narration heads, fence/intent revision and drain watermarks |
+| `StrongConsultationRequest` / `StrongConsultationResult` | Exact question, scoped provenance/budget/expiry; typed facts, uncertainty, usage, and promotion-required evidence with no mutation claim |
+| `SubstantialWorkProposal` | Verbatim actionable request, routing evidence, intended thread/task IDs, acceptance/launch-policy proof, reservation identity |
+| `ContextEscalationRequest` / `ContextEscalationResolution` / `OwnerContextAcknowledgement` | Requester/task/attempt/owner and missing-information shape; authorization/access provenance and resulting context revision; exact owner/version acknowledgement |
+| `RelationshipInbox` / `AttentionOfferPolicy` / `DeferralInstruction` | Read-only projection watermark and ordered item IDs; owner/natural-boundary/quiet/segment policy; exact snooze/later/recommend/stop intent |
+| `KickoffReplyWithCanonicalCommitReceipt` / `KickoffRequestActionCas` | Action/request/revision/source watermark, canonical user-message ID/commit receipt, expected current request/action, idempotency key |
+| `RelationshipUsageProposal` / `ProviderUsageReceipt` | Provider/account/window/lane/estimate and expected budget revision; signed/observed provider usage identity, amount, status, timestamp |
+
+These are orchestration interfaces. They do not allow renderers or models to mint focus authority, controller activity receipts, context truth, usage reservations, or approvals. A RelationshipReceipt is not a canonical message; natural assistant output still uses the Phase One gateway/narration interfaces.
+
 ## Realtime domain events
 
 A provider adapter SHOULD normalize at least:
@@ -299,7 +461,7 @@ A provider adapter SHOULD normalize at least:
 - `realtime.context.applied`
 - `realtime.speech.completed`
 
-Every event carries session generation and provider item/turn identity when available. Consumers reject events from stale generations.
+Every event carries session generation and provider item/turn identity when available. Phase Two additionally requires focus generation plus immutable provider-thread/scope-binding identity. Consumers reject events from stale or mismatched identities.
 
 ## Primary-agent events
 
@@ -323,9 +485,12 @@ Raw tool output remains in private records. Chat may render bounded, redacted st
 
 - Persisted schema changes follow [`schemas/README.md`](schemas/README.md). This foreground-routing revision introduces operation-intent, narration-delivery, and provider-report version 2. Resume packet/delta version 3 adds exact task/attempt heads, conversation-message sequences, and writer-lock IDs; v2 resume caches are regenerated from canonical attempt/authority records rather than inferring IDs from owner or scope text. Older records follow the documented migration/discard rules instead of validating as current.
 - Adapter protocol versions are independent from domain schema versions.
+- Product Phase One/V1 and Phase Two/V2 labels are interaction profiles, not schema versions. Phase Two records receive independent schema versions when their contract milestone begins.
+- Selecting the Phase One profile uses the same V2-capable server/runtime that implements these contracts. Its V1 presentation lists/opens Home and work-thread canonical conversations while ignoring relationship orchestration and normalizes every unresolved kickoff request, decision, approval, blocker/failure action, or review into known conversation/task activity; pending kickoff activity preserves exact action/request/source revision and canonical-reply receipt CAS.
+- Profile rollback is not binary/schema downgrade. An older protocol-compatible client receives only server-normalized records it understands; an incompatible client gets `upgrade_required` or read-only export. An older executable cannot write a Phase Two store or skip unknown records without a separately proven compatible migration/reader.
 - Experimental provider fields remain inside adapter modules.
 - A startup compatibility check fails closed when a required method or event is absent.
-- An older UI MAY show a generic card for a server-normalized presentation event the server already understands. An unknown canonical controller event is never ignored: server projection stops and the affected task remains read-only.
+- An older compatible UI MAY show a generic card for a server-normalized presentation event the server already understands, but any actionable reply control must round-trip the server’s opaque stable action identity. An unknown canonical controller event is never ignored: server projection stops and the affected task remains read-only.
 
 ## Examples
 

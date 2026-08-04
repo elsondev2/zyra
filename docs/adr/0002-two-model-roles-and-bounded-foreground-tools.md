@@ -4,6 +4,7 @@
 - **Date:** 2026-08-02
 - **Specification:** [System architecture](../architecture/voice-agent/system-architecture.md)
 - **Foreground ownership refined by:** [ADR-0007](0007-canonical-chat-and-explicit-voice-foreground-routing.md)
+- **Phase Two strong lanes refined by:** [ADR-0010](0010-use-strong-consultation-and-retrieval-first-worker-escalation.md)
 
 ## Context
 

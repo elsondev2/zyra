@@ -2,7 +2,7 @@
 
 Zyra keeps the terminal and desktop chat experiences intentionally different while sharing one semantic middle layer.
 
-The proposed [voice-agent architecture](voice-agent/README.md) follows this rule for task lifecycle, narration, pending decisions/approvals, continuity health, and split usage. Provider-neutral semantics belong in shared contracts; speech timing, transcript motion, and task-detail presentation remain surface responsibilities.
+The proposed [voice-agent architecture](voice-agent/README.md) follows this rule for task lifecycle, narration, pending decisions/approvals, continuity health, and split usage. Optional Phase Two applies it to relationship focus, work-thread status, attention items, Inbox classification, active-work summaries, visit lifecycle, and Home controller activity receipts. Provider-neutral semantics belong in shared contracts; speech timing, transcript motion, same-canvas transitions, and thread-detail presentation remain surface responsibilities.
 
 ## Flow
 
@@ -35,7 +35,7 @@ Each surface remains free to present the same descriptor appropriately:
 - The TUI chooses terminal-width wrapping, ANSI theme tokens, compact tool blocks, and keyboard behavior.
 - Desktop chooses React composition, animation, rich diffs, copy/delete actions, and responsive layout.
 
-Matching semantics are required. Matching pixels are not.
+Matching semantics are required. Matching pixels are not. In Phase Two, Desktop and TUI must agree on the focus-lease owner/generation, focused conversation, visit state, attention/source revisions, thread/task source, and activity receipt; Desktop may animate a stable canvas while TUI swaps a scoped transcript beneath a stable footer/composer.
 
 ## Adapter rule
 

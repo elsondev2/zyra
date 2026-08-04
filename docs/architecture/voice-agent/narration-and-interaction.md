@@ -5,7 +5,7 @@
 
 ## One conversational identity
 
-The user interacts with one Zyra identity. Worker names, provider names, and internal routing do not become competing speakers. The active foreground route chooses one response owner: the strong primary in Chat or the realtime foreground in Voice. Realtime remains the sole spoken narrator.
+The user interacts with one Zyra identity. Worker names, provider names, strong consultations, and internal routing do not become competing speakers. The active foreground route chooses one response owner: the strong primary in Chat or the realtime foreground in Voice. Realtime remains the sole spoken narrator. In optional Phase Two, that identity can move among Zyra Home and scoped work-thread conversations through one relationship-wide focus lease while every message retains its source conversation.
 
 Background agents produce structured events and private evidence. In Chat, the strong role can answer directly and expose bounded execution activity while it owns the route. In Voice, the narration scheduler decides when verified task facts should enter conversation or speech, and Realtime phrases approved facts naturally.
 
@@ -191,7 +191,7 @@ sequenceDiagram
 
 A transcript must reflect what was spoken or interrupted, rather than silently replacing an interrupted answer with its unplayed tail.
 
-## Chat home and Voice entry
+## Phase One Chat home and Voice entry
 
 The ordinary canonical timeline and composer are the home surface. They present two real actions at the point of intent:
 
@@ -201,6 +201,30 @@ The ordinary canonical timeline and composer are the home surface. They present 
 While Voice is active, speech and any typed/image input submitted from the Voice surface belong to the realtime foreground. **Return to Chat** ends/detaches media and activates a strong Chat route; the next ordinary send goes directly to the strong agent. The initial release has no hidden automatic foreground router and no per-message model selector.
 
 If a task is running, Start Voice attaches to its current state without cancelling or restarting it. Compact structured activity can continue updating in the same timeline while Realtime handles conversation and selective narration.
+
+## Phase Two relationship interaction
+
+The optional `relationship_first` profile makes Zyra Home the direct entry surface while preserving Phase One as a selectable profile. Home shows recent direct conversation plus compact provenance-linked controller activity receipts. Those receipts are not assistant messages or implicit TTS/model context. It does not copy full work-thread transcripts.
+
+### Active work and Inbox
+
+A verified compact strip above the composer shows running or attention-requiring work threads and standalone tasks; tasks inside one thread roll up into that thread row. `Needs you` contains only actionable input/review, outranks routine work, and owns the notification count. Routine verified completion enters Completed directly. The hybrid Inbox projects all three views from canonical source records. Collapsing a projection never clears the underlying attention item.
+
+### Conversation-first thread
+
+A thread opens as a scoped Zyra conversation. Title, folder, projected status, origin, and a compact task/objective summary support the conversation without turning it into a dashboard. Selecting a task anchors the thread timeline at that task; it does not create another chat. Detailed tools, files, tests, artifacts, and worker provenance remain deliberate secondary disclosures.
+
+### Same-canvas focus visit
+
+At a natural pause Zyra may ask, “Can we step into that thread for a decision and then come back?” Acceptance preserves the current modality. Chat/Desktop/TUI entry remains Chat, creates no realtime binding, and keeps valid Chat route heads while the relationship focus changes. Entry from already-active Voice prepares a new immutable target provider-thread/session binding before atomically changing focus/routes. The available composer/canvas remain mounted; the orb/microphone remain mounted only for active Voice. Provider transport may be replaced behind the Voice surface when isolation requires it. Other clients mirror or request explicit takeover; they never move automatically.
+
+The target discussion continues until the attention item’s required answer is satisfied and the context revision is committed. Zyra starts source hydration and worker acknowledgement in parallel. It states what was delegated, identifies acknowledgement as complete or pending, and restores the exact source position/cue by an independent return deadline—using safe Chat/degraded Voice if source Voice is not ready—and leaves one compact resolved/deferred Home activity receipt. Late acknowledgement updates the source asynchronously; timeout/rejection creates a new blocker rather than trapping or automatically returning the user.
+
+A declined visit safely holds work and remains in Needs you. It does not repeat during the same conversational segment. “Later,” “use your recommendation,” “stop,” and “open it now” remain distinct intents.
+
+### Natural-pause policy
+
+Visual state updates immediately. Voice offers actionable kickoff questions, decisions, blockers, reviews, and failures—and may mention informational verified outcomes—after the current exchange reaches a safe boundary. It does not interrupt user speech, an unresolved foreground question, or another focus visit. Ordinary conversation returns after one visit. Explicit Inbox review may continue item by item with a visible queue position.
 
 ## Multimodal message semantics
 
@@ -249,6 +273,8 @@ flowchart LR
 ```
 
 A user can inspect exact permitted commands, diffs, bounded logs, artifacts, child runs, and usage inline or in task details. Closing or collapsing activity does not alter task state or model context.
+
+In Phase Two, Home displays only thread-launch, attention, failure, and verified-outcome activity receipts by default. The active-work strip and Inbox are projections over source thread/task records. Opening an item enters the source conversation at the meaningful event. Returning restores Home and never duplicates the detailed thread transcript. A natural spoken/text announcement is separately delivered through the current route-bound narrator.
 
 ## Interaction and output modes
 
@@ -304,4 +330,12 @@ Users MUST be able to:
 - view pending decisions and approvals;
 - change involvement mode independently from permission mode;
 - disable automatic progress narration;
-- review what Zyra believes is currently active.
+- review what Zyra believes is currently active;
+- choose Phase One `conversation_scoped` or optional Phase Two `relationship_first` without rewriting history;
+- inspect and collapse the Phase Two active-work strip;
+- accept, defer, snooze, or stop a Phase Two attention item;
+- enter and return from a Chat focus visit through keyboard/pointer/TUI without starting Realtime, or through already-active Voice with explicit acceptance;
+- open a task in its parent thread and continue a substantial standalone task through a visible, safely linked successor without rewriting identity;
+- disable proactive attention offers while retaining the hybrid Inbox;
+- open Reset Home from Voice but confirm it only in trusted non-speech UI after Return to Chat and physical media closure;
+- use the V2-capable server’s V1 projection to see and act on every unresolved kickoff question, decision, approval, blocker/failure action, or review when V2 is disabled.

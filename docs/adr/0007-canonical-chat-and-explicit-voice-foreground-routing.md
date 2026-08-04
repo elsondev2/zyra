@@ -5,6 +5,7 @@
 - **Owners:** Zyra maintainers
 - **Specification:** [Voice-agent architecture](../architecture/voice-agent/README.md)
 - **Refines:** [ADR-0001](0001-voice-is-a-canonical-conversation-mode.md), [ADR-0002](0002-two-model-roles-and-bounded-foreground-tools.md), and [ADR-0004](0004-central-narration-and-exceptional-subagents.md)
+- **Phase Two relationship focus refined by:** [ADR-0008](0008-offer-relationship-first-interaction-as-an-optional-second-phase.md) and [ADR-0009](0009-group-home-and-work-threads-with-relationship-focus.md)
 
 ## Context
 
@@ -13,6 +14,8 @@ A user may want an ordinary coding-agent conversation in which typed messages go
 The earlier architecture assigned every conversational response to the realtime foreground. That rule would require a realtime session for normal text chat, add an unnecessary model hop, and prevent the strong agent from providing the familiar direct coding-chat experience.
 
 ## Decision
+
+> **Phase Two refinement:** The rule below is the permanent Phase One `conversation_scoped` profile and remains the per-conversation route contract inside Phase Two. ADR-0008 adds optional Zyra Home navigation; ADR-0009 composes separate conversation routes through one relationship focus.
 
 The canonical chat is the home surface. It has one durable foreground route at a time:
 

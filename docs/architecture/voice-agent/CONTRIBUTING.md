@@ -15,6 +15,9 @@ This specification is intended for public discussion and implementation. Small, 
 ## Problem
 What observable failure, limitation, or missing capability exists?
 
+## Product profile
+Does this affect Phase One `conversation_scoped`, Phase Two `relationship_first`, or both?
+
 ## Scope
 Which conversation/task/provider paths are affected?
 
@@ -101,6 +104,8 @@ Run the repository privacy check before publication. Use synthetic IDs, paths, m
 
 Any proposal that widens foreground tools, retention, child delegation, speech eligibility, or control authority requires a threat-model update and adversarial tests.
 
+A Phase Two proposal must also prove that Phase One remains independently usable on the same V2-capable candidate runtime, relationship membership does not authorize cross-thread context, focus changes transfer no task authority, and disabling V2 preserves Home/work-thread data plus unresolved kickoff/attention sources through the V1 projection. Do not describe profile rollback as executable/schema downgrade. Changes to Home/thread creation, focus takeover, source deletion, or relationship cascade require crash/race fixtures.
+
 ## Prior-art and novelty claims
 
 Prefer primary official sources. Record publisher, title, URL, and access date. State exactly which pattern a source demonstrates.
@@ -137,7 +142,8 @@ Run `npm run test:voice-agent-contracts` for the machine-readable package. Live 
 
 ## Pull-request checklist
 
-- [ ] Scope and status are explicit.
+- [ ] Product profile, scope, and status are explicit.
+- [ ] Phase Two changes include a green Phase One compatibility/rollback proof.
 - [ ] Architecture index and cross-links are current.
 - [ ] Mermaid blocks validate.
 - [ ] JSON Schemas compile and examples validate.

@@ -24,12 +24,12 @@ Status words used below:
 - [Agent surfaces](architecture/agent-surface.md) — **Current.** Desktop/TUI semantic projection boundaries.
 - [Assistant browser](architecture/assistant-browser.md) — **Current.** Browser ownership and visual-control architecture.
 - [Assistant resources](architecture/assistant-resources.md) — **Current.** Resource indexing and presentation ownership.
-- [Voice-agent architecture](architecture/voice-agent/README.md) — **Draft specification.** Open reference design for direct strong-agent Chat, optional realtime Voice, exclusive foreground routing, deterministic task control, selective speech, and resumable continuity.
+- [Voice-agent architecture](architecture/voice-agent/README.md) — **Draft specification.** Product Phase One defines direct strong-agent Chat, optional realtime Voice, exclusive foreground routing, deterministic task control, selective speech, and resumable continuity. Optional Product Phase Two adds a relationship-first Zyra Home, scoped work threads, hybrid Inbox, and voice-led focus visits while retaining Phase One. A linked Betum-informed research note explores evidence-owned adaptive coaching beyond these committed phases.
 
 ## Architecture decisions
 
 - [Decision record index](adr/README.md) — **Current record format.** Accepted design decisions and their implementation status.
-- [Voice-agent ADRs](adr/README.md#voice-agent-decisions) — **Accepted design; implementation pending.** Canonical Voice identity, two model roles, deterministic ledgers, central narration, continuity, and permission separation.
+- [Voice-agent ADRs](adr/README.md#voice-agent-decisions) — **Accepted design; implementation pending.** Canonical Voice identity, two model roles, deterministic ledgers, central narration, continuity, permission separation, product-profile coexistence, relationship focus, retrieval-first escalation, and attention visits.
 
 ## Implementation records
 

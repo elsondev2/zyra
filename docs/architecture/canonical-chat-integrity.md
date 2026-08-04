@@ -4,6 +4,8 @@ Zyra Desktop and the TUI share one canonical Pi transcript per chat. A client ma
 
 The draft [voice-agent architecture](voice-agent/README.md) applies the same rule to finalized speech, typed text, and image-backed messages. Physical realtime session IDs and provisional transcript deltas remain non-canonical transport/presentation identities.
 
+Its optional [Phase Two relationship profile](voice-agent/relationship-first-interaction.md) groups a distinguished Zyra Home conversation and work-thread conversations under one relationship index. Every Home/thread message still belongs to one canonical Pi transcript. Cross-thread Home controller activity receipts reference source IDs and watermarks rather than copying the detailed transcript or creating route-less assistant messages; selecting or disabling the profile never merges or rewrites JSONL.
+
 ## Identity, storage, and metadata
 
 These concerns are separate:
@@ -13,6 +15,7 @@ These concerns are separate:
 - **Project metadata** — the folder future turns use as their cwd.
 - **Title metadata** — the shared display title.
 - **Desktop local ID** — a compatibility key for Desktop SQLite and IPC.
+- **Phase Two relationship/work-thread ID** — additive controller metadata pointing to canonical chat IDs; never a replacement chat ID or provider thread ID.
 
 `src/agent-server/catalog.mjs` stores aliases, mutable project/title metadata, and known physical session roots. `src/agent-server/chat-index.mjs` indexes JSONL files by canonical ID and physical path.
 

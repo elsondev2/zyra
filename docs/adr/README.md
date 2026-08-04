@@ -19,6 +19,10 @@ Status vocabulary:
 - [ADR-0005: Build continuity as a materialized view](0005-continuity-as-a-materialized-view.md)
 - [ADR-0006: Separate involvement preferences from permissions](0006-separate-involvement-from-permissions.md)
 - [ADR-0007: Keep canonical Chat primary and make Voice an explicit foreground route](0007-canonical-chat-and-explicit-voice-foreground-routing.md)
+- [ADR-0008: Offer relationship-first interaction as an optional second phase](0008-offer-relationship-first-interaction-as-an-optional-second-phase.md)
+- [ADR-0009: Group Home and work threads with relationship focus](0009-group-home-and-work-threads-with-relationship-focus.md)
+- [ADR-0010: Use strong consultation and retrieval-first worker escalation](0010-use-strong-consultation-and-retrieval-first-worker-escalation.md)
+- [ADR-0011: Use attention items, focus visits, and Home receipts](0011-use-attention-items-focus-visits-and-home-receipts.md)
 
 ## Format
 

@@ -1,6 +1,6 @@
 # Voice-agent contract examples
 
-All examples use synthetic identifiers, paths, content, and usage values.
+All examples use synthetic identifiers, paths, content, and usage values. The current fixture set covers Product Phase One. Product Phase Two fixtures begin at roadmap milestone 9 alongside its versioned schemas; the required scenario set is already normative in [Phase Two acceptance scenarios](../relationship-first-interaction.md#phase-two-acceptance-scenarios).
 
 | Example | Schema |
 |---|---|

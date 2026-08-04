@@ -1,6 +1,8 @@
 # Voice-agent schemas
 
-These files are JSON Schema Draft 2020-12 contracts for the proposed Zyra voice-agent architecture.
+These files are JSON Schema Draft 2020-12 contracts for Product Phase One of the proposed Zyra voice-agent architecture.
+
+Optional Product Phase Two is fully specified in prose before implementation, but its persisted schemas are deliberately deferred to roadmap milestone 9 so Phase One contracts remain stable and independently shippable. Mirroring the authoritative inventory in [Contracts](../contracts.md#phase-two-proposed-contracts), planned Phase Two contracts cover UserSpace, InteractionProfilePreference, AssistantRelationship, RelationshipConversationBinding, ConversationCreationIntent and ConversationCreationReceipt, WorkThreadCreationIntent, HomeResetIntent and HomeResetReceipt, RelationshipFocusLease, FocusTakeoverRequest and FocusTakeoverReceipt, ProfileSwitchReceipt, RelationshipCascadeManifest and RelationshipCascadeReceipt, WorkThread, TaskContinuation, KickoffRequest, AttentionItem, FocusVisit, RelationshipReceipt, StrongConsultation, ContextRetrievalAuthorization and ContextAccessReceipt, ContextEscalation, RelationshipBudget, and UsageReservation. See [Phase Two — relationship-first interaction](../relationship-first-interaction.md#proposed-controller-records).
 
 | Schema | Record |
 |---|---|
@@ -45,6 +47,10 @@ These files are JSON Schema Draft 2020-12 contracts for the proposed Zyra voice-
 | Provider capability report | 2 | Discard v1 combined/expired reports and probe each realtime or strong adapter independently |
 
 Other schemas remain version 1. A reader MUST dispatch by the record’s `schema_version`; it cannot validate an older record against a newer schema and silently fill authority fields. Migration follows the backup, validation, atomic activation, and downgrade rules in [Security and privacy](../security-and-privacy.md).
+
+## Phase Two schema gate
+
+A Phase Two schema contribution must include strict versions, synthetic examples, reducers, semantic cross-record tests, V1 compatibility tests, migration/rollback fixtures, and rejection cases for stale focus/provider bindings, cross-thread leakage, duplicated attention/activity receipts, source-revision races, visit authority transfer, consultation mutation, budget oversubscription, linked-successor promotion, Home/work-thread cross-store creation and orphan recovery, fenced Home reset, modality-preserving Chat/Voice visits, and profile-switch races. No Phase Two field is added to a Phase One authority record merely to avoid defining the proper relationship contract.
 
 ## Validation
 

@@ -4,6 +4,7 @@
 - **Date:** 2026-08-02
 - **Specification:** [Narration and interaction](../architecture/voice-agent/narration-and-interaction.md)
 - **Foreground ownership refined by:** [ADR-0007](0007-canonical-chat-and-explicit-voice-foreground-routing.md)
+- **Phase Two interaction refined by:** [ADR-0010](0010-use-strong-consultation-and-retrieval-first-worker-escalation.md) and [ADR-0011](0011-use-attention-items-focus-visits-and-home-receipts.md)
 
 ## Context
 

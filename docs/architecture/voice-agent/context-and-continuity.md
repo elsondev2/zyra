@@ -5,7 +5,7 @@
 
 ## Context layers
 
-Zyra maintains four context scopes:
+Phase One maintains four context scopes. Optional Phase Two composes two additional scopes without copying conversation history:
 
 | Scope | Purpose | Typical consumers |
 |---|---|---|
@@ -13,6 +13,8 @@ Zyra maintains four context scopes:
 | Conversation | User-visible turns, attachments, shared decisions, current focus | Foreground and relevant tasks |
 | Task | Verbatim request, constraints, acceptance criteria, artifacts, status | Controller and primary |
 | Child run | One narrow objective, inherited constraints, scoped evidence | One subagent |
+| Relationship (Phase Two) | Home generation, thread/attention index, interaction preferences, relationship focus lease, and budget heads | Relationship host and continuity reducer; never sent wholesale to a model |
+| Work thread (Phase Two) | One substantial objective, scoped conversation, linked tasks/decisions/artifacts | Focused foreground, strong coordinator, and relevant primaries |
 
 More context is not automatically better. Each role receives a deterministic envelope containing only what it needs.
 
@@ -125,6 +127,29 @@ erDiagram
       integer byte_length
     }
 ```
+
+### Phase Two relationship records
+
+```mermaid
+flowchart TD
+    U[UserSpace] --> IP[InteractionProfilePreference]
+    U --> R[AssistantRelationship]
+    IP -. active revision .-> R
+    R --> B[RelationshipConversationBinding revisions]
+    B --> H[Home conversation ID]
+    B --> W[WorkThread metadata]
+    R --> F[RelationshipFocusLease revisions]
+    R --> HR[HomeResetIntent fence and receipt]
+    W --> C[Distinct canonical conversation]
+    W --> T[Linked tasks]
+    W --> A[Attention items]
+    F --> V[Focus visits and return anchors]
+    A --> I[Inbox / active-strip projections]
+    V --> RR[Controller activity receipts]
+    RR --> HP[Home timeline projection]
+```
+
+The stable user-space ID, InteractionProfilePreference, AssistantRelationship, and RelationshipConversationBinding records live in `controller.sqlite`. Prompt profiles and provider accounts do not define relationship identity. Bindings are the canonical membership source. They index and coordinate canonical sources but never become a merged message ledger. `RelationshipFocusLease`, `FocusVisit`, and `AttentionItem` revisions are append-only. Inbox, active strip, thread status, and Home activity receipts remain projections. A receipt retains source thread/task/visit identity and watermarks but is not a canonical assistant message; natural text/speech still follows the active foreground route.
 
 ### Conversation ledger
 
@@ -247,7 +272,7 @@ A child does not automatically receive the full canonical conversation or primar
 
 ## Continuity service
 
-The continuity service is a deterministic materialized view over canonical records. It updates when any source watermark relevant to an active conversation changes.
+The continuity service is a deterministic materialized view over canonical records. It updates when any source watermark relevant to an active conversation changes. In Phase Two, a small relationship index identifies Home generation, relationship focus-lease head/owner, work-thread/task heads, pending actionable attention, activity receipts, and budget reservations, while each focused conversation retains an isolated packet and delta stream.
 
 ```mermaid
 flowchart TD
@@ -261,9 +286,13 @@ flowchart TD
     C --> S[Next physical realtime session]
 ```
 
+A Phase Two focus packet may include relationship-level attention summaries and typed references to sibling threads. It never includes complete sibling transcripts. Preparing a focus visit saves source watermarks/return cue and hydrates the target packet. Chat visits keep a null realtime binding and compare-and-swap focus while validating unchanged Chat route heads. Visits entered from active Voice additionally create an immutable target provider-thread/session binding and atomically transition focus plus source/target routes. Returning performs the inverse through current source watermarks. Other clients mirror or receive explicit takeover/conflict state.
+
 The service MUST NOT:
 
 - call a third summarization model;
+- merge Home and work-thread conversations into one model history;
+- treat relationship membership as cross-thread retrieval authority;
 - write new facts back into canonical ledgers;
 - convert unverified worker claims into decisions;
 - include credentials, raw tool logs, or hidden reasoning;
@@ -304,7 +333,7 @@ When the packet exceeds its adapter-specific budget, retain content in this orde
 9. older summaries;
 10. retrieval references for omitted material.
 
-The reducer truncates complete records only. Active foreground route/epoch, pending decisions/approvals, active constraints/corrections, safety state, active task ownership, blockers, and narration unknown-outcome records are **critical** and cannot be omitted. If the critical set alone exceeds the adapter’s safe context limit, materialization fails closed and Voice does not answer history-dependent input until a complete larger packet or safe replacement snapshot is available. Noncritical omissions generate typed retrieval references and section/count metadata; UTF-8 strings are never cut mid-record.
+The reducer truncates complete records only. Active foreground route/epoch, pending decisions/approvals, active constraints/corrections, safety state, active task ownership, blockers, and narration unknown-outcome records are **critical** and cannot be omitted. In Phase Two, the relationship focus lease head, active visit/return state, actionable attention source revisions, and unknown/exhausted budget reservations are also critical. If the critical set alone exceeds the adapter’s safe context limit, materialization fails closed and Voice does not answer history-dependent input until a complete larger packet or safe replacement snapshot is available. Noncritical omissions generate typed retrieval references and section/count metadata; UTF-8 strings are never cut mid-record.
 
 ## Silent activation and resume flow
 
@@ -348,6 +377,9 @@ Activation behavior:
 - State changes during or after connection become ordered, lossless silent deltas; task completion, revocation, and pending user items are never summary-only updates.
 - Physical session expiry closes that generation, reconciles in-flight narration delivery, and prepares a new physical session from a fresh packet. Successful hydration activates a new Voice route epoch; failed replacement activates a fresh Chat route epoch/owner claim. A speech request without a terminal receipt becomes `outcome_unknown` and is not replayed.
 - The foreground mentions “catching up” only when a complete packet cannot be applied promptly and the user asks a history-dependent question.
+- In Phase Two, target focus preparation follows the same barrier. The source remains authoritative until the target packet and startup deltas are acknowledged; a safe provider-session replacement may occur behind the stable canvas.
+- A focus return hydrates the saved source conversation through current watermarks before restoring it. Detailed target messages remain in the target ledger; Home receives one compact controller activity receipt after resolution/defer state commits.
+- Return never waits for `ack_deadline_at`: independent `return_deadline_at` restores source Voice or safe Chat first; unresolved worker acknowledgement persists as `returned_pending_ack`, then terminally becomes acknowledged or a new blocker after the user is back.
 
 ## Delta hydration
 
@@ -381,6 +413,8 @@ Checkpoints are bounded and factual. A model-authored summary is evidence with p
 
 The foreground can request older detail through a dedicated read-only retrieval operation. Retrieval returns canonical records by stable reference, applies redaction, and has a bounded result. Retrieved detail is appended as temporary session context unless a new user-visible fact or task context revision must be persisted.
 
+In Phase Two, every worker escalation first receives a ContextRetrievalAuthorization binding requester, purpose, exact allowed source IDs/data classes, policy/context revisions, redaction/size limits, expiry, and use budget. Within it, retrieval follows least-privilege order: acknowledged task context, current thread, project decisions, provenance-linked Home exchanges, then explicitly related threads/artifacts. Every access writes a receipt with requested/returned/denied sources and watermarks. Stale, conflicting, injected, or unauthorized results are not silently selected; one revision-bound attention item asks the user. Found context becomes a scoped revision and requires affected-owner acknowledgements before completion.
+
 ## Retention and deletion
 
 - Canonical conversation retention follows Zyra’s existing session policy.
@@ -389,10 +423,13 @@ The foreground can request older detail through a dedicated read-only retrieval 
 - Resume caches are replaceable, encrypted at rest with OS-backed key storage, owner-only ACLs, and deleted with their canonical conversation.
 - Deleting a UI projection does not delete canonical data.
 - A canonical deletion flow MUST remove or tombstone derived resume packets and private task references consistently.
+- Phase Two source deletion/redaction first terminalizes dependent attention/visits as non-actionable `source_unavailable`; relationship indexes and Home activity receipts retain only minimal non-opening provenance tombstones and cannot preserve deleted private detail.
+- Active Home cannot be directly deleted. Reset Home requires trusted non-speech confirmation after active/preparing Voice returns to fresh quiescent Chat and physical Realtime closes, then CAS-installs a generation-bound writer fence, blocks new turn/visit/takeover/profile/activity-projection writes, drains pre-fence operation/receipt/NarrationDelivery streams exactly (uncertain speech becomes nonreplayable `outcome_unknown`), holds post-fence source receipts generation-unassigned, receipts the replacement header, then revalidates fence/heads/watermarks while atomically appending its epoch-1 Chat route/binding, advancing Home/focus, and assigning pending receipts to the selected generation. Recovery resumes or safely aborts the fenced intent; no messages copy. Reset archives the old Home as searchable V1/History data under existing retention, and erasure requires a separate trusted post-activation content cascade.
+- Disabling the relationship-first profile retains additive records, exposes underlying Home/thread conversations and unresolved source affordances through the same V2-capable runtime’s V1 projection, and is not deletion. Removing relationship organization preserves those canonical sources; deleting content requires an explicit resumable per-source cascade.
 
 ## Schema references
 
-Machine-readable definitions:
+Phase One machine-readable definitions:
 
 - [`foreground-route.schema.json`](schemas/foreground-route.schema.json)
 - [`legacy-message-route-binding.schema.json`](schemas/legacy-message-route-binding.schema.json)
@@ -400,3 +437,5 @@ Machine-readable definitions:
 - [`delegation-packet.schema.json`](schemas/delegation-packet.schema.json)
 - [`resume-packet.schema.json`](schemas/resume-packet.schema.json)
 - [`resume-delta.schema.json`](schemas/resume-delta.schema.json)
+
+Phase Two adds schemas for relationship, focus lease, work-thread, attention, visit, consultation, retrieval authorization/access receipt, budget/reservation, context escalation, and Home activity receipt records during its contract milestone. Their required semantics are defined now in [Phase Two — relationship-first interaction](relationship-first-interaction.md#proposed-controller-records); Phase One schemas are not overloaded before that milestone.

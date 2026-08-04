@@ -6,7 +6,7 @@
 
 ## Security objective
 
-Adding Voice to normal coding chat must not widen agent authority. Models propose; trusted code authorizes, records, and executes. Realtime receives less authority than the strong primary. Foreground route ownership grants response production only and never execution capability.
+Adding Voice to normal coding chat must not widen agent authority. Models propose; trusted code authorizes, records, and executes. Realtime receives less authority than the strong primary. Foreground route ownership grants response production only and never execution capability. Optional Phase Two relationship membership, Inbox ranking, strong consultation, thread filing, and focus visits likewise grant no authority.
 
 ## Trust zones
 
@@ -90,6 +90,13 @@ Capability checks occur at execution time. Prompt instructions are defense in de
 | Runaway child fleet | Default zero children, bounded depth/concurrency/budget, cancellation tree, and explicit exceptional reason. |
 | Crash repeats consequential work | Reconcile receipts; unknown outcome blocks automatic replay; expired grants remain expired. |
 | Provider protocol changes | Startup capability probe and versioned schema validation fail closed. |
+| Phase Two cross-thread context leakage | Home and every work thread retain distinct conversations; every read requires a non-bearer ContextRetrievalAuthorization plus access receipt binding requester, purpose, allowed sources/data classes, policy/context revisions, redaction, limits, and expiry. |
+| Worker fabricates a need for user attention | Context requests are untrusted proposals; coordinator retrieval and attention policy validate source task/thread, required answer, priority, and dedupe identity. |
+| Hidden consultation mutates state | Consultation adapter exposes no mutation/protected tools; budget crossing returns promotion-required evidence, and work launches only from explicit substantial intent or accepted Ask. |
+| Focus visit transfers task authority | Focus and route changes alter response scope only; leases, locks, approvals, operations, and attempts remain bound to their source task/attempt. |
+| Stale focus/session writes into another thread | Relationship focus-lease revision/owner/generation, per-conversation route epoch, immutable provider-thread/session binding, provider item identity, and target hydration receipt all validate. |
+| Home receipt leaks private thread detail or bypasses route ownership | Receipt policy allows only redacted verified controller activity and source references; it cannot become assistant prose/TTS without a separate active route-bound delivery. |
+| Relationship profile silently merges history | Profile switching changes projections only; canonical messages are never copied, merged, or rewritten. |
 
 ## Prompt-injection boundaries
 
@@ -101,6 +108,20 @@ The system separates four channels:
 4. **Execution authority** — tool implementations, sandbox, permission gate, and capability leases.
 
 Reference data never becomes policy merely because it contains instruction-like text. A resume packet is injected as bounded reference context and labels quoted user text and untrusted findings.
+
+## Phase Two relationship boundaries
+
+A stable user-space ID identifies one OS-user-owned local Zyra store and is independent from prompt profiles and provider accounts. Revisioned RelationshipConversationBinding records are the canonical membership source. An AssistantRelationship is an index and focus aggregate, not an authorization domain. Folder membership implies no context access. A work thread receives only objective/task context and records selected through an exact ContextRetrievalAuthorization. Every access has a redacted audit receipt. A model-proposed relation between threads is untrusted until controller policy explicitly allows source IDs and purpose.
+
+The default `ask_if_ambiguous` policy launches work automatically only for explicit substantial-work intent; discussion, ideas, and unclear ownership remain conversational. Proactive behavior is limited to quiet projections plus actionable attention/verified outcomes at natural pauses, and never starts Voice or moves focus. A focus visit requires explicit acceptance or user command before any target retrieval, hydration, or provider allocation; the offer reads projected item metadata only. One relationship-wide focus lease binds active/parked/retired lifecycle, optional owner attachment, heartbeat/expiry, focus generation, route, and a provider scope binding required only for active Voice/null for Chat or parked/retired. Detached/parked state preserves logical focus but accepts no relationship input/output until a fresh generation is claimed. Organization removal consumes parked focus into terminal `retired`; it cannot reactivate. Multi-client takeover requires current-owner yield, trusted UI confirmation under policy, or reconciled expiry/disconnect. One CAS transition quiesces/terminalizes the old attachment/session before activating the new generation and returns explicit winner/loser receipts; stale generations cannot input, output, speak, visit, or return. Acceptance permits target conversation/response focus only. Speech may resolve ordinary context questions and product decisions; it cannot resolve trusted approval. Deferral cannot be interpreted as consent, cancellation, or permission.
+
+Every target receives a new immutable provider-thread/session binding for one canonical conversation. A lower transport may host it only when callbacks identify and isolate the new binding; otherwise Zyra prepares another session or reconnects. Provider thread IDs never rebind. Stale source and target identities are quarantined.
+
+Strong consultations remain inspectable through private records and usage while staying out of the user timeline by default. “Mostly invisible” means presentation restraint, not missing audit evidence. Consultations/coordinator turns/thread starts reserve relationship budget atomically before dispatch; budget availability never grants execution authority.
+
+Routine completion is informational and cannot inflate Needs you. Every attention answer validates current item/source/context/focus revisions before steering. Source deletion/redaction/withdrawal terminalizes open attention as non-actionable `source_unavailable`, safely closes any visit, and retains only a non-opening provenance tombstone; stale answers reject. A Home activity receipt is not a canonical assistant message. Active Home deletion is rejected; reset requires trusted non-speech confirmation after active/preparing Voice returns to fresh quiescent Chat and physical Realtime closes, then CAS-installs a generation-bound writer fence that blocks new Home turns/output/visits/takeovers/profile/activity-projection writes, drains pre-fence operation/receipt/NarrationDelivery streams exactly with uncertain speech nonreplayable as `outcome_unknown`, holds post-fence source receipts generation-unassigned, and revalidates fence/heads/watermarks before generation/receipt assignment. Recovery resumes or safely aborts the same fence without copying messages. Reset confirmation discloses archive/search visibility and retention; old-Home erasure is a separate trusted post-activation content cascade, so reset never claims deletion.
+
+Standalone-task promotion never changes `conversation_id` or transfers leases. The original attempt is parked while the exact target conversation is created/receipted; one controller activation transaction then binds the thread, cancels the original with the existing reason, creates the successor using existing `supersedes_task_id`, appends the separate Phase Two TaskContinuation, and proves release before successor authority. Unknown-outcome operations block promotion.
 
 ## Permission versus decision
 
@@ -173,6 +194,7 @@ The reference implementation uses clear ownership rather than treating every SQL
 
 - existing canonical conversation JSONL remains the source of user/assistant message truth;
 - a per-user `controller.sqlite` is canonical for foreground-route revisions, append-only controller events, context revisions, tasks, execution attempts, operation intents, completion candidates, decisions, approval requests, capability leases, narration items/deliveries, idempotency receipts, and side-effect outbox entries;
+- optional Phase Two user-space, relationship/conversation-binding, work-thread, focus-lease, attention-item, focus-visit, consultation, retrieval-authorization/access-receipt, context-escalation, relationship-budget/reservation, and relationship-activity-receipt records live in the same controller authority; Inbox and active-work state remain derived;
 - private provider/worker records remain under existing ignored task-run storage and are referenced by stable IDs;
 - Desktop search/timeline SQLite remains a disposable projection and never mints authority;
 - resume packets are replaceable encrypted cache blobs derived from the canonical stores.
@@ -180,6 +202,8 @@ The reference implementation uses clear ownership rather than treating every SQL
 `controller.sqlite` uses foreign keys, WAL, transaction boundaries, and durable synchronization for authority/side-effect records. Domain events and resolved requests are immutable; projections/snapshots are replaceable. A transaction appends the event, updates its reduced snapshot, updates relevant source watermarks, and writes any outbox intent atomically.
 
 Conversation JSONL and the controller database cannot share one filesystem transaction. The controller therefore writes an outbox intent with a deterministic canonical message ID, the conversation gateway appends and durably flushes that ID idempotently, and the controller records the commit receipt. Recovery retries the ID, never a new message. External side effects use the same durable-intent/receipt pattern and classify missing receipts as `outcome_unknown` rather than assuming failure.
+
+Phase Two Home/work-thread creation uses a parallel conversation-creation intent/receipt protocol. Controller metadata, relationship binding, tasks/promotion lineage, and Home activity receipt remain inactive until the gateway durably creates the exact intended canonical ID/header and returns its hash/path receipt; the activation transaction then appends the deterministic epoch-1 Chat route with those records. Before controller activation, the receipted header is non-listable/non-attachable `pending_activation` and has no input-accepting route. Recovery reconciles the same intent after either-side crash. Conflicting/nonempty orphans are quarantined; only a proven empty unreferenced session created by the failed intent can be removed. Worker dispatch begins only after controller activation.
 
 ### At-rest protection
 
@@ -201,7 +225,7 @@ Full-disk encryption remains recommended but is not treated as a substitute for 
 
 Canonical-message route migration does not rewrite historical JSONL. It creates one initial `migration` Chat route plus per-message hash/sequence bindings and deterministic assistant migration receipts under one manifest hash. Any missing, duplicate, hash-mismatched, or temporally impossible source record leaves the conversation read-only and Voice disabled until repaired; migration never fabricates provider provenance.
 
-Downgrade never writes through a newer schema. Crash recovery replays from the last committed sequence, validates outbox receipts and active lease/slot invariants, revokes orphaned authority, and regenerates projections/resume caches. Migration tests include interruption at every durable step and restoration from the backup.
+Selecting the V1 interaction profile retains the same V2-capable runtime that implements this contract and is not an executable downgrade. An older compatible client receives server-normalized conversations/tasks/pending activities; an incompatible client is upgrade-required or read-only. Executable downgrade never writes through a newer schema. Crash recovery replays from the last committed sequence, validates outbox receipts and active lease/slot invariants, revokes orphaned authority, and regenerates projections/resume caches. Migration tests include interruption at every durable step and restoration from the backup.
 
 ### Reference retention defaults
 
@@ -216,8 +240,12 @@ User deletion and stricter configured policy always win. Initial defaults are:
 | Resume cache | Replace on every newer packet; delete after 7 disconnected days or with the conversation |
 | Raw microphone/provider audio | Never retained unless a separate explicit recording feature/policy is enabled |
 | Screenshots/control artifacts | Existing bounded artifact policy, with visible deletion controls |
+| Phase Two attention/focus/activity-receipt metadata | Follow source retention; terminalize open attention/visits first, then retain only minimal non-opening source-unavailable/provenance tombstones required by audit policy |
+| Phase Two retrieval access receipts and budget reservations | Follow controller audit/usage policy without retaining copied source content or provider secrets |
 
-Compaction preserves canonical messages, task terminal outcome, decisions, approval outcome, artifact metadata, and audit hashes while removing raw logs/content according to policy. Deletion tombstones references transactionally, revokes active leases, cancels active attempts, removes encrypted derivatives, and reports any external artifact it could not delete.
+V2 disablement is presentation/routing rollback and deletes nothing. Trusted non-speech removal of relationship organization terminalizes bindings/budgets/projections while retaining canonical conversations/tasks as V1 data. Deleting contained content is a separate trusted-control ordered per-source cascade with explicit scope and resumable receipts; relationship membership is never blanket deletion consent.
+
+Compaction preserves canonical messages, task terminal outcome, decisions, approval outcome, artifact metadata, and audit hashes while removing raw logs/content according to policy. Deletion first CAS-terminalizes dependent attention/visits/receipts, then tombstones references transactionally, revokes active leases, cancels active attempts, removes encrypted derivatives, and reports any external artifact it could not delete.
 
 ## Logging
 
@@ -271,7 +299,16 @@ Minimum adversarial coverage appears in [Evaluation plan](evaluation.md) and inc
 - child direct-speech attempts;
 - symlink/path escape;
 - disconnect/restart during approval and control action;
-- usage-drain and runaway-delegation limits.
+- usage-drain and runaway-delegation limits;
+- cross-thread retrieval injection, stale/conflicting context, and unauthorized related-thread links;
+- focus-generation/session replay during entry and return;
+- Home receipt duplication or private-detail leakage;
+- hidden consultation mutation/promotion bypass;
+- profile-switch, linked-successor promotion, Home reset writer-fence bypass/late operation, deletion, and bootstrap races;
+- multi-client focus-lease takeover and provider-thread rebinding attempts;
+- relationship budget reservation race/unknown-usage exhaustion;
+- deferral misread as decision, cancellation, or approval;
+- source deletion racing a stale attention answer or leaving an orphan Needs-you card.
 
 ## Incident posture
 

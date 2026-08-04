@@ -19,7 +19,8 @@ This review did not find a public source documenting the complete Zyra combinati
 - selective central narration;
 - canonical multimodal chat/task ledgers;
 - prepared silent continuity across expiring physical sessions;
-- separate user-involvement and permission policy.
+- separate user-involvement and permission policy;
+- an optional relationship-first Home that launches scoped work threads, conducts purpose-bound focus visits, and preserves a conversation-scoped fallback.
 
 That finding is not proof of global uniqueness. Zyra should describe its contribution as an integrated open reference design and implementation, not as a world first.
 
@@ -67,7 +68,7 @@ The open-source Codex App Server is a public protocol for rich clients. It expos
 
 OpenAI’s ChatGPT Voice documentation says the Desktop feature can start separate threads for longer tasks, inspect active threads, send follow-up instructions, and bring progress, blockers, and results back to the voice conversation. It follows the permissions of the tasks it directs. OpenAI’s pricing documentation states that Desktop Voice uses a duplex model: GPT-Live manages conversation while GPT-5.6 Terra starts and coordinates tasks. Voice and task usage are metered separately.
 
-Together, these are the closest public/deployed precedent for a voice foreground coordinating coding work. Zyra adds a public deterministic task/context/narration specification, provider seams, explicit continuity projection, restrained subagent policy, and integration with its canonical local chat.
+Together, these are the closest public/deployed precedent for a voice foreground coordinating coding work and bringing thread activity back to a Voice conversation. Zyra adds a public deterministic task/context/narration specification, provider seams, explicit continuity projection, restrained subagent policy, integration with canonical local chat, and an optional relationship-focus contract that keeps Home and work-thread histories distinct.
 
 Sources:
 
@@ -132,6 +133,12 @@ Sources:
 - Temporal, [Workflow Execution overview](https://docs.temporal.io/workflow-execution), accessed 2026-08-02.
 - LangChain, [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence), accessed 2026-08-02.
 
+## Persistent-assistant product inspiration
+
+Fictional assistants such as JARVIS popularized an expectation of one persistent conversational counterpart coordinating many systems without asking the user to choose a transcript first. Fiction is product inspiration, not technical prior art or evidence that a particular state, permission, context, or recovery design works.
+
+Phase Two uses the generic term **relationship-first interaction** for this posture. Its implementable contribution is bounded canonical conversations, work-thread receipts, retrieval-first escalation, explicit focus authority, safe provider-session isolation, and a permanent V1 fallback. The project should not imply affiliation with or endorsement by a fictional property’s owners.
+
 ## Where Zyra can contribute
 
 ### 1. A complete open contract
@@ -158,6 +165,10 @@ Collaboration preferences control when the system asks for judgment. Permission 
 
 The public core can support multiple providers while the experimental Codex adapter demonstrates the difficult subscription-backed case. Capability discovery prevents generic API features from leaking into unsupported assumptions.
 
+### 7. Optional relationship-first interaction with a complete fallback
+
+Phase Two can make Zyra Home the direct entry point, branch substantial work into conversation-first threads, retrieve context before interrupting the user, and conduct same-canvas focus visits. Phase One remains independently supported, giving the architecture an explicit compatibility and rollback contract rather than requiring the new posture.
+
 ## Claims Zyra should avoid
 
 - “The first voice coding agent.”
@@ -171,7 +182,7 @@ The public core can support multiple providers while the experimental Codex adap
 
 ## Suggested project description
 
-> Zyra Voice is an open reference architecture for a persistent coding assistant with normal direct strong-agent Chat and optional realtime Voice: one canonical conversation, explicit foreground ownership, a deterministic task controller, selective spoken narration, and resumable task context across sessions.
+> Zyra Voice is an open reference architecture for a persistent coding assistant with normal direct strong-agent Chat and optional realtime Voice. Product Phase One provides canonical conversation ownership, deterministic task control, selective narration, and safe resume. Optional Product Phase Two adds a relationship-first Zyra Home, scoped background work threads, retrieval-first attention, and voice-led focus visits while preserving Phase One as a supported profile.
 
 ## Research limits
 

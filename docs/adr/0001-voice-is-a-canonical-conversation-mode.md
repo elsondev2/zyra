@@ -4,7 +4,7 @@
 - **Date:** 2026-08-02
 - **Owners:** Zyra maintainers
 - **Specification:** [Voice-agent architecture](../architecture/voice-agent/README.md)
-- **Refined by:** [ADR-0007](0007-canonical-chat-and-explicit-voice-foreground-routing.md)
+- **Refined by:** [ADR-0007](0007-canonical-chat-and-explicit-voice-foreground-routing.md) and Phase Two [ADR-0009](0009-group-home-and-work-threads-with-relationship-focus.md)
 
 ## Context
 
@@ -13,6 +13,8 @@ Zyra already has a canonical Pi session identity shared by Desktop and TUI, serv
 A production voice feature that creates its own chat, history, composer, permission state, or task identity would split user context and make handoff/resume unreliable.
 
 ## Decision
+
+> **Phase Two refinement:** This remains the complete Phase One behavior and remains true within each focused Home/work-thread conversation. ADR-0009 adds explicit cross-conversation relationship focus without merging their histories.
 
 Voice becomes a mode of the existing canonical conversation.
 

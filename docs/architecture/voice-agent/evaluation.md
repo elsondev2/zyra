@@ -364,6 +364,99 @@ Subscription-backed Codex and generic API Realtime run as separate suites. Passi
 - unauthorized local socket client;
 - runaway usage, child spawning, or speech queue.
 
+## Phase Two relationship-first evaluations
+
+These gates apply only when the optional `relationship_first` profile is enabled. They cannot replace or weaken any Phase One gate.
+
+### Profile coexistence
+
+- run the entire Phase One suite with every Phase Two flag disabled;
+- switch V1 → V2 → V1 without changing canonical JSONL bytes, task/attempt IDs, approvals, artifacts, or running authority; interruption between requested and active profile leaves the prior profile/rendering active;
+- expose Zyra Home and every work-thread canonical conversation as ordinary selectable conversations in V1 without requiring WorkThread presentation semantics;
+- expose every unresolved source kickoff question, decision, approval, blocker/failure action, and review through V1-compatible conversation/task affordances normalized by the V2-capable candidate server;
+- disable V2 during active work without cancelling, duplicating, or hiding that work;
+- switch profiles from Chat, active Voice, and an accepted visit only at quiescent boundaries: visits return/abort safely, selected canonical source restores, relationship focus parks/claims by CAS, stale focus generations reject, and unsupported Voice conversion falls back to fresh Chat before rendering;
+- distinguish product V1/V2 labels from every schema/provider/database version;
+- prove V1 profile rollback on the same V2-capable candidate runtime, server-normalized behavior for an older compatible client, `upgrade_required`/read-only behavior for an incompatible client, and write rejection from an older executable against the Phase Two store.
+
+### Home, work threads, and simple tasks
+
+- immediate Home conversation creates no task or realtime session unless requested;
+- casual conversation, brainstorming, mentions, and future ideas remain unstructured under default `ask_if_ambiguous`; an explicit substantial-work command may create exactly one visible thread receipt, while ambiguous ownership asks before dispatch;
+- proactive behavior never starts Voice or changes focus, offers at most one actionable item at a natural pause, and obeys quiet/deferred preferences;
+- one bounded action stays a standalone task;
+- a preparing/discussing thread may have zero tasks, while background execution without a thread-bound task rejects;
+- a zero-task kickoff gap creates one revisioned KickoffRequest/AttentionItem and remains answerable after V2 rollback through a V1 pending-question action carrying exact request/action/source revision; exact replay is idempotent, while stale, unbound, or wrong-card replies remain canonical text but resolve no request;
+- substantial, asynchronous, or multi-step work creates exactly one work thread and deterministic launch activity receipt;
+- crash before/after conversation creation/durable receipt, controller epoch-1 route/binding/thread activation, original-task terminal link, and successor creation reconciles the same intent with no duplicate active thread, listable/attachable preactivation orphan, orphan dispatch, or prematurely cancelled source task;
+- generated folder inference is reversible and uncertain filing can remain empty;
+- related work resumes its thread while a distinct objective creates a sibling;
+- no initial operation can create a nested work thread;
+- a standalone task promotion releases/cancels the original with existing reason, creates one successor whose existing `supersedes_task_id` names it, and appends one same-transaction Phase Two TaskContinuation; Phase One task schemas/conversation IDs do not change, and no old lease, duplicate operation, or unknown-outcome replay transfers;
+- selecting a task opens its parent thread at the task rather than creating another conversation.
+
+### Request ladder and strong consultation
+
+- Voice answers a hydrated bounded question without a strong consultation;
+- deeper one-shot reasoning uses a read-only consultation and produces no task/thread;
+- consultation mutation/protected-tool attempts fail at the adapter/controller seam;
+- latency acknowledgment appears only when policy requires it;
+- crossing duration, tool, verification, or scope budgets returns exact promotion-required request/context/evidence/usage; work launches only for already-explicit substantial intent or one accepted Ask;
+- typed Chat continues to use the strong direct lane;
+- workers and consultations never address the user directly.
+
+### Retrieval-first context escalation
+
+- a worker emits one structured missing-context request;
+- controller issues one exact ContextRetrievalAuthorization; coordinator stays inside its requester/purpose/source/data-class/policy/context/redaction/limit/expiry scope and writes an access receipt;
+- coordinator searches allowed acknowledged task context, current thread, project decisions, provenance-linked Home exchanges, and explicitly related sources in policy order;
+- a fresh nonconflicting answer creates one scoped context revision and resumes the affected worker without user interruption;
+- stale, conflicting, unavailable, injected, cross-project, or authority-bearing content creates one attention item rather than a guessed answer;
+- unrelated workers do not receive the revision;
+- affected evidence producers acknowledge the revision before completion.
+
+### Attention, Inbox, and active work
+
+- Needs you, Active, and Completed agree with canonical task/decision/approval/visit state after replay;
+- Needs you alone owns the notification count, and routine completion goes directly to Completed plus one activity receipt;
+- active strip state is verified, includes standalone tasks, rolls thread tasks into one row, and never invents progress percentages;
+- collapsing a projection does not acknowledge or resolve its source;
+- one exact source revision creates one deduplicated attention lineage, and resolution compare-and-swaps item/source/context/focus revisions;
+- source deletion/redaction/withdrawal racing an answer terminalizes the item as non-actionable `source_unavailable`, safely closes/returns a visit, retains only a non-opening provenance tombstone, and never applies the stale answer;
+- ordinary conversation offers at most one unsolicited item per conversational segment;
+- explicit Inbox review advances one item at a time with stable queue position;
+- “no,” “later,” “tomorrow,” “use your recommendation,” and “stop” produce distinct safe actions;
+- deferral does not approve, cancel, resolve, or repeatedly nag;
+- approval discussion still requires the trusted control challenge.
+
+### Same-canvas focus visits
+
+Inject failures before and after every step: source anchor, target packet, provider target readiness, paired route/focus commit, first target output, decision/context commit, parallel worker acknowledgement/source rehydration, return deadline/fallback, return commit, and Home receipt.
+
+Assert:
+
+- offer/proposal reads projected item metadata only; no target retrieval, hydration, or provider allocation occurs before exact acceptance CAS-creates the `preparing` visit, and entry still waits for preparation;
+- Chat/Desktop/TUI entry stays Chat with null realtime binding and no realtime process/session start; only a visit entered from active Voice prepares a provider binding;
+- target hydration completes before focus changes;
+- source remains authoritative after preparation failure;
+- at most one relationship focus-lease owner/generation can produce accepted output; a Voice visit additionally has exactly one immutable provider-thread/session scope binding, while Chat has none; detached state parks focus and accepts none until reattachment claims a fresh generation;
+- provider thread IDs never rebind between canonical conversations;
+- source callbacks fail after entry and target callbacks fail after return;
+- prewarmed replacement/reconnect passes bidirectional seeded-canary isolation tests; prompt/local-history reset alone is rejected as proof, and provider/model/client-version change expires capability evidence to `unknown`;
+- `unsupported`/`unknown` Voice isolation disables Voice preparation and offers an explicit “Continue in Chat?” modality change without disabling typed V2; acceptance carries fallback-consent identity, while decline creates no visit and leaves attention pending; only base relationship/runtime incompatibility selects V1 fallback;
+- orb/Voice state/composer remain semantically stable and accessible while scope changes;
+- source visual position and conversational cue restore exactly;
+- source hydration and worker acknowledgement run concurrently; resolution returns Chat visits in Chat and Voice visits by an independent deadline through ready Voice or safe Chat/degraded-Voice fallback, while pending acknowledgement later succeeds or creates a blocker without reopening the visit;
+- detailed target transcript stays in the thread;
+- Home receives one compact redacted provenance-linked controller activity receipt and no route-less assistant message;
+- restart cannot duplicate speech, decisions, steering, attention, or receipts;
+- multi-client focus-lease takeover quiesces/terminalizes the old attachment/session and activates exactly one new generation in one CAS transition, emits winner/loser receipts, rejects stale-generation input/output/speech/visit/return, and never moves the canvas silently;
+- deterministic user-space bootstrap cannot create duplicate relationship/Home generation-1 records after interruption; prompt-profile/provider-account changes do not change relationship identity;
+- every Home/thread/Inbox/active-strip/receipt/task-source reference resolves through one current RelationshipConversationBinding; verified ambiguous sources use `ordinary_reference`, missing/unverifiable sources are excluded, and a running/actionable unbound source blocks V2 activation rather than being guessed;
+- active Home deletion rejects; Reset Home requires trusted non-speech confirmation and first returns active/preparing Voice to fresh quiescent Chat with no physical Realtime; it rejects without requester-owned focus/clean visit heads, then CAS-installs a writer fence, rejects late input/output/visit/takeover/profile-switch/activity-projection attempts, drains pre-fence operation/receipt/NarrationDelivery streams exactly, marks uncertain speech nonreplayable `outcome_unknown`, holds post-fence source receipts generation-unassigned, and revalidates fence/heads/watermarks before atomic generation/receipt assignment; crashes resume/abort without copied receipts or late old-Home messages; reset UI discloses archived/searchable retention and never claims erasure, while a separately selected post-activation cascade proves deletion/tombstone failures;
+- V2 disablement parks focus and deletes nothing; trusted-control organization removal consumes that ownerless parked lease into terminal `retired`, preserves ordinary V1 conversations/tasks, and later V2 enablement creates a new relationship ID rather than reactivating it, while interrupted trusted-control explicit content cascade resumes from its manifest after closing attention/visits and never applies blanket membership deletion;
+- concurrent budget reservations cannot oversubscribe relationship limits, including unknown provider usage.
+
 ## Accessibility and interaction evaluations
 
 - keyboard-only normal Chat, Start Voice, return to Chat, mute, stop, task inspection, decisions, and approvals;
@@ -374,7 +467,10 @@ Subscription-backed Codex and generic API Realtime run as separate suites. Passi
 - transcript manual scroll lock and recovery to latest;
 - equivalent text for every spoken result;
 - visual state does not rely on color;
-- voice failure leaves full text/task functionality.
+- voice failure leaves full text/task functionality;
+- Phase Two active-work/Inbox rows expose status, source, and action as keyboard/screen-reader semantics rather than color or motion alone;
+- focus-visit offer, target-scope entry, degraded return, and exact source restoration are announced once; focus returns to the initiating control/anchor without a trap;
+- every Voice-led visit, attention answer, defer, takeover conflict, and Inbox review has an equivalent non-speech keyboard path.
 
 ## Live end-to-end matrix
 
@@ -393,6 +489,12 @@ Use a supported non-default voice and hard-mute automated audio capture. Manual 
 | Close Voice while task runs, then resume | Required | Required |
 | Provider/session expiration and hydration | Required | Required |
 | Usage warning | Synthetic first; live when safely reproducible | Synthetic first |
+| V2 Home launches substantial work thread and stays conversational | Required when V2 enabled | Required when V2 enabled |
+| V2 Chat/Desktop/TUI focus visit preserves Chat and starts no realtime session | N/A; assert no audio/session | Required when V2 enabled |
+| V2 natural-pause Voice attention offer, accepted visit, independent-deadline Voice/Chat return, and late worker update | Required when V2 enabled | Required when V2 enabled |
+| V2 declined/deferred visit remains in Needs you without repeated offer | Required when V2 enabled | Required when V2 enabled |
+| V2 provider scope isolation or safe replacement session | Required per advertised capability | Required per advertised capability |
+| V2 → V1 rollback with work still running | Required when V2 enabled | Required when V2 enabled |
 
 ## Quality gates
 
@@ -412,7 +514,9 @@ A production release requires:
 - successful real microphone sessions in supported output modes;
 - privacy check and secret scan clean;
 - provider version/capability evidence recorded;
-- documented known gaps and rollback route.
+- documented known gaps and rollback route;
+- when V2 is enabled, a fully green V1 suite plus zero cross-thread leakage, duplicate attention/activity receipts, stale-focus commits, provider-thread rebinding, budget oversubscription, or authority transfer through visits;
+- when V2 is enabled, proven profile rollback that leaves Home/thread canonical conversations, unresolved source affordances, tasks, and running attempts available through V1.
 
 ## Evidence bundle
 

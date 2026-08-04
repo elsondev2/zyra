@@ -160,9 +160,11 @@ The complete agent/workflow guide, safety boundaries, definition formats, persis
 
 ## Open Voice-Agent Architecture
 
-Zyra’s proposed conversation architecture is documented as an open, provider-aware reference design. Normal Chat routes directly to the strong coding agent; an explicit Start Voice action attaches a capable realtime foreground to the same conversation and active work. Deterministic task control, exceptional subagents, selective speech, canonical multimodal context, and silent resume remain shared across both surfaces.
+Zyra’s proposed conversation architecture is documented as an open, provider-aware reference design. Product Phase One routes normal Chat directly to the strong coding agent and lets an explicit Start Voice action attach a capable realtime foreground to the same conversation and active work. Deterministic task control, exceptional subagents, selective speech, canonical multimodal context, and silent resume remain shared across both surfaces.
 
-Start with the [Voice-Agent Architecture](docs/architecture/voice-agent/README.md). The package includes Mermaid diagrams, ADRs, machine-readable JSON Schemas, synthetic examples, security and usage boundaries, prior-art research, an evaluation plan, and a phased implementation roadmap. Its status is **draft specification; implementation pending**.
+Optional Product Phase Two is specified as a separate relationship-first profile implemented only after Phase One passes. It adds a permanent Zyra Home entry point, conversation-first background work threads, a hybrid Inbox and active-work strip, retrieval-first worker escalation, mostly invisible strong consultation, and voice-led same-canvas focus visits. Any runtime implementing Phase Two must keep Phase One selectable and expose every Phase Two canonical conversation without data rewriting.
+
+Start with the [Voice-Agent Architecture](docs/architecture/voice-agent/README.md), [Product phases](docs/architecture/voice-agent/product-phases.md), [Phase Two relationship-first interaction](docs/architecture/voice-agent/relationship-first-interaction.md), and the noncommitting [adaptive-coaching future direction](docs/architecture/voice-agent/future-adaptive-coaching.md). The package includes Mermaid diagrams, ADRs, machine-readable Phase One JSON Schemas, synthetic examples, security and usage boundaries, prior-art research, evaluation plans, and a two-product-phase implementation roadmap. Its status is **draft specification; implementation pending**.
 
 ## Project Shape
 
