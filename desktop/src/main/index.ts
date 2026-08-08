@@ -4,7 +4,6 @@
  */
 
 import { app, BrowserWindow, Menu, shell, ipcMain, nativeTheme, protocol, globalShortcut, session, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
-import { randomBytes } from 'node:crypto'
 import { join } from 'path'
 import { existsSync, statSync } from 'fs'
 import { electronApp, is } from './utils'
@@ -13,16 +12,12 @@ import { registerIpcHandlers } from './ipc'
 import { disposeAssistantService, getAssistantService } from './assistant'
 import { persistAssistantClipboardImage, resolveAssistantClipboardAttachment } from './assistant/clipboard-attachments'
 import { getCodexVoiceTranscriptionState, transcribeVoiceWithCodex } from './assistant/codex-voice-transcription'
-import { BrowserAssistantBridge, getBrowserAssistantBridgeOrigins } from './assistant/browser-assistant-bridge'
+import { BrowserClientRuntime } from './browser-client-runtime'
 import { disposeUpdater, initializeUpdater, registerUpdateWindow } from './update/manager'
 import { registerFileProtocol } from './file-protocol'
 import { isSafeBrowserNavigationUrl, isZyraBrowserPartition } from './ipc/handlers/browser-preview-handlers'
 import { disposeAgentControlBroker, getAgentControlBroker } from './agent-control'
 import { trustedBrowserGuests } from './agent-control/trusted-guest-registry'
-import { BrowserDevscopeRelay } from './browser-devscope-relay'
-import { BrowserClientHost, getBrowserClientHostOrigins } from './browser-client-host'
-import { setActiveBrowserAssistantClientCount } from './assistant/browser-client-lease'
-import { BROWSER_ASSISTANT_BRIDGE_DESCRIPTOR_NAME } from '../shared/browser-assistant-bridge'
 
 const APP_NAME = "Zyra"
 const DEV_APP_NAME = `${APP_NAME}-dev`
@@ -78,9 +73,7 @@ console.warn = log.warn
 
 let mainWindow: BrowserWindow | null = null
 let quickPreviewWindow: BrowserWindow | null = null
-let browserAssistantBridge: BrowserAssistantBridge | null = null
-let browserClientHost: BrowserClientHost | null = null
-let browserDevscopeRelay: BrowserDevscopeRelay | null = null
+let browserClientRuntime: BrowserClientRuntime | null = null
 let hasRegisteredIpcHandlers = false
 const FILE_PROTOCOL = 'zyra'
 const QUICK_PREVIEW_ROUTE = '/quick-open'
@@ -480,54 +473,29 @@ app.whenReady().then(() => {
     electronApp.setAppUserModelId(runtimeIdentity.appUserModelId)
     void initializeUpdater()
     const rendererUrl = process.env['ELECTRON_RENDERER_URL']
-    const browserCapability = randomBytes(32).toString('base64url')
-    const browserAllowedOrigins = getBrowserClientHostOrigins()
-    if (rendererUrl) {
-        for (const origin of getBrowserAssistantBridgeOrigins(rendererUrl)) browserAllowedOrigins.add(origin)
-    }
-    const devscopeRelay = new BrowserDevscopeRelay(() => mainWindow?.webContents || null)
-    const assistantBridge = new BrowserAssistantBridge({
-        service: getAssistantService(),
-        allowedOrigins: browserAllowedOrigins,
-        capability: browserCapability,
-        descriptorPath: join(app.getPath('userData'), BROWSER_ASSISTANT_BRIDGE_DESCRIPTOR_NAME),
-        invokeDevscope: (path, args) => devscopeRelay.invoke(path, args),
-        subscribeDevscopeEvents: (listener) => devscopeRelay.subscribeEvents(listener),
-        onAssistantClientCountChanged: setActiveBrowserAssistantClientCount,
-        persistClipboardImage: persistAssistantClipboardImage,
-        resolveClipboardAttachment: resolveAssistantClipboardAttachment,
-        getVoiceTranscriptionState: getCodexVoiceTranscriptionState,
-        transcribeVoice: transcribeVoiceWithCodex
-    })
-    browserDevscopeRelay = devscopeRelay
-    browserAssistantBridge = assistantBridge
-    void assistantBridge.start().then(async (bridgeAddress) => {
-        if (browserAssistantBridge !== assistantBridge) {
-            await assistantBridge.stop()
-            return
-        }
-        const clientHost = new BrowserClientHost({
-            bridge: { ...bridgeAddress, capability: browserCapability },
-            ...(is.dev && rendererUrl
-                ? { devRendererUrl: rendererUrl }
-                : { staticRoot: join(__dirname, '../renderer') })
+    try {
+        const runtime = new BrowserClientRuntime({
+            service: getAssistantService(),
+            getDevscopeTarget: () => mainWindow?.webContents || null,
+            userDataPath: app.getPath('userData'),
+            staticRoot: join(__dirname, '../renderer'),
+            ...(is.dev && rendererUrl ? { rendererUrl } : {}),
+            persistClipboardImage: persistAssistantClipboardImage,
+            resolveClipboardAttachment: resolveAssistantClipboardAttachment,
+            getVoiceTranscriptionState: getCodexVoiceTranscriptionState,
+            transcribeVoice: transcribeVoiceWithCodex
         })
-        browserClientHost = clientHost
-        const clientAddress = await clientHost.start()
-        if (browserClientHost !== clientHost) {
-            await clientHost.stop()
-            return
-        }
-        log.info('[BrowserClientHost] ready', clientAddress.origin)
-    }).catch((error) => {
-        log.warn('[BrowserClientHost] failed to start', error)
-        if (browserClientHost) void browserClientHost.stop()
-        browserClientHost = null
-        if (browserAssistantBridge === assistantBridge) {
-            void assistantBridge.stop()
-            browserAssistantBridge = null
-        }
-    })
+        browserClientRuntime = runtime
+        void runtime.start().then((address) => {
+            if (browserClientRuntime === runtime) log.info('[BrowserClientHost] ready', address.origin)
+        }).catch((error) => {
+            log.warn('[BrowserClientHost] failed to start', error)
+            if (browserClientRuntime === runtime) browserClientRuntime = null
+        })
+    } catch (error) {
+        log.warn('[BrowserClientHost] could not initialize', error)
+        browserClientRuntime = null
+    }
     registerFileProtocol(FILE_PROTOCOL)
     configureMainRendererMediaPermissions()
     nativeTheme.on('updated', syncOpenWindowIcons)
@@ -570,12 +538,8 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-    void browserClientHost?.stop()
-    browserClientHost = null
-    void browserAssistantBridge?.stop()
-    browserAssistantBridge = null
-    browserDevscopeRelay?.dispose()
-    browserDevscopeRelay = null
+    void browserClientRuntime?.stop()
+    browserClientRuntime = null
     disposeAssistantService()
     disposeUpdater()
     void disposeAgentControlBroker()
@@ -586,12 +550,8 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
     globalShortcut.unregisterAll()
-    void browserClientHost?.stop()
-    browserClientHost = null
-    void browserAssistantBridge?.stop()
-    browserAssistantBridge = null
-    browserDevscopeRelay?.dispose()
-    browserDevscopeRelay = null
+    void browserClientRuntime?.stop()
+    browserClientRuntime = null
     disposeAssistantService()
     disposeUpdater()
     void disposeAgentControlBroker()
