@@ -20,6 +20,7 @@ import { isSafeBrowserNavigationUrl, isZyraBrowserPartition } from './ipc/handle
 import { disposeAgentControlBroker, getAgentControlBroker } from './agent-control'
 import { trustedBrowserGuests } from './agent-control/trusted-guest-registry'
 import { BrowserDevscopeRelay } from './browser-devscope-relay'
+import { BrowserClientHost, getBrowserClientHostOrigins } from './browser-client-host'
 import { setActiveBrowserAssistantClientCount } from './assistant/browser-client-lease'
 import { BROWSER_ASSISTANT_BRIDGE_DESCRIPTOR_NAME } from '../shared/browser-assistant-bridge'
 
@@ -78,6 +79,7 @@ console.warn = log.warn
 let mainWindow: BrowserWindow | null = null
 let quickPreviewWindow: BrowserWindow | null = null
 let browserAssistantBridge: BrowserAssistantBridge | null = null
+let browserClientHost: BrowserClientHost | null = null
 let browserDevscopeRelay: BrowserDevscopeRelay | null = null
 let hasRegisteredIpcHandlers = false
 const FILE_PROTOCOL = 'zyra'
@@ -478,25 +480,54 @@ app.whenReady().then(() => {
     electronApp.setAppUserModelId(runtimeIdentity.appUserModelId)
     void initializeUpdater()
     const rendererUrl = process.env['ELECTRON_RENDERER_URL']
-    if (is.dev && rendererUrl) {
-        browserDevscopeRelay = new BrowserDevscopeRelay(() => mainWindow?.webContents || null)
-        browserAssistantBridge = new BrowserAssistantBridge({
-            service: getAssistantService(),
-            allowedOrigins: getBrowserAssistantBridgeOrigins(rendererUrl),
-            capability: randomBytes(32).toString('base64url'),
-            descriptorPath: join(app.getPath('userData'), BROWSER_ASSISTANT_BRIDGE_DESCRIPTOR_NAME),
-            invokeDevscope: (path, args) => browserDevscopeRelay!.invoke(path, args),
-            onAssistantClientCountChanged: setActiveBrowserAssistantClientCount,
-            persistClipboardImage: persistAssistantClipboardImage,
-            resolveClipboardAttachment: resolveAssistantClipboardAttachment,
-            getVoiceTranscriptionState: getCodexVoiceTranscriptionState,
-            transcribeVoice: transcribeVoiceWithCodex
-        })
-        void browserAssistantBridge.start().catch((error) => {
-            log.warn('[BrowserAssistantBridge] failed to start', error)
-            browserAssistantBridge = null
-        })
+    const browserCapability = randomBytes(32).toString('base64url')
+    const browserAllowedOrigins = getBrowserClientHostOrigins()
+    if (rendererUrl) {
+        for (const origin of getBrowserAssistantBridgeOrigins(rendererUrl)) browserAllowedOrigins.add(origin)
     }
+    const devscopeRelay = new BrowserDevscopeRelay(() => mainWindow?.webContents || null)
+    const assistantBridge = new BrowserAssistantBridge({
+        service: getAssistantService(),
+        allowedOrigins: browserAllowedOrigins,
+        capability: browserCapability,
+        descriptorPath: join(app.getPath('userData'), BROWSER_ASSISTANT_BRIDGE_DESCRIPTOR_NAME),
+        invokeDevscope: (path, args) => devscopeRelay.invoke(path, args),
+        subscribeDevscopeEvents: (listener) => devscopeRelay.subscribeEvents(listener),
+        onAssistantClientCountChanged: setActiveBrowserAssistantClientCount,
+        persistClipboardImage: persistAssistantClipboardImage,
+        resolveClipboardAttachment: resolveAssistantClipboardAttachment,
+        getVoiceTranscriptionState: getCodexVoiceTranscriptionState,
+        transcribeVoice: transcribeVoiceWithCodex
+    })
+    browserDevscopeRelay = devscopeRelay
+    browserAssistantBridge = assistantBridge
+    void assistantBridge.start().then(async (bridgeAddress) => {
+        if (browserAssistantBridge !== assistantBridge) {
+            await assistantBridge.stop()
+            return
+        }
+        const clientHost = new BrowserClientHost({
+            bridge: { ...bridgeAddress, capability: browserCapability },
+            ...(is.dev && rendererUrl
+                ? { devRendererUrl: rendererUrl }
+                : { staticRoot: join(__dirname, '../renderer') })
+        })
+        browserClientHost = clientHost
+        const clientAddress = await clientHost.start()
+        if (browserClientHost !== clientHost) {
+            await clientHost.stop()
+            return
+        }
+        log.info('[BrowserClientHost] ready', clientAddress.origin)
+    }).catch((error) => {
+        log.warn('[BrowserClientHost] failed to start', error)
+        if (browserClientHost) void browserClientHost.stop()
+        browserClientHost = null
+        if (browserAssistantBridge === assistantBridge) {
+            void assistantBridge.stop()
+            browserAssistantBridge = null
+        }
+    })
     registerFileProtocol(FILE_PROTOCOL)
     configureMainRendererMediaPermissions()
     nativeTheme.on('updated', syncOpenWindowIcons)
@@ -539,6 +570,8 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
+    void browserClientHost?.stop()
+    browserClientHost = null
     void browserAssistantBridge?.stop()
     browserAssistantBridge = null
     browserDevscopeRelay?.dispose()
@@ -553,6 +586,8 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
     globalShortcut.unregisterAll()
+    void browserClientHost?.stop()
+    browserClientHost = null
     void browserAssistantBridge?.stop()
     browserAssistantBridge = null
     browserDevscopeRelay?.dispose()

@@ -25,6 +25,8 @@
         "smoke:browser-visual": "node scripts/maint/run-zyra-browser-visual-smoke.mjs",
         "test:browser-annotation": "bun scripts/test-browser-annotation-composer.ts && node scripts/maint/run-browser-annotation-test.mjs",
         "test:browser-assistant-bridge": "bun scripts/test-browser-assistant-bridge.ts",
+        "test:browser-client-host": "bun scripts/test-browser-client-host.ts",
+        "test:browser-devscope-live": "bun scripts/test-browser-devscope-live-adapter.ts",
         "test:assistant-diff": "bun scripts/test-assistant-diff-contract.ts",
         "test:assistant-history": "bun scripts/test-assistant-history-persistence.ts && bun scripts/test-assistant-paged-history.ts",
         "test:assistant-canonical-review": "bun scripts/test-assistant-canonical-review.ts",

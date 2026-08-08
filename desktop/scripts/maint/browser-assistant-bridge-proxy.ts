@@ -75,7 +75,7 @@ async function proxyBrowserAssistantRequest(request: IncomingMessage, response: 
         response.end()
         return
     }
-    if (request.method !== 'GET' && request.method !== 'POST') {
+    if (request.method !== 'GET' && request.method !== 'HEAD' && request.method !== 'POST') {
         writeProxyError(response, 405, 'Browser bridge method is not allowed.')
         return
     }
@@ -99,12 +99,13 @@ async function proxyBrowserAssistantRequest(request: IncomingMessage, response: 
             Accept: String(request.headers.accept || '*/*'),
             'Content-Type': String(request.headers['content-type'] || 'application/json'),
             Origin: origin,
+            ...(request.headers.range ? { Range: String(request.headers.range) } : {}),
             [BROWSER_ASSISTANT_BRIDGE_HEADER]: BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE,
             [BROWSER_ASSISTANT_BRIDGE_CAPABILITY_HEADER]: descriptor.capability
         }
     }, (upstreamResponse) => {
         response.statusCode = upstreamResponse.statusCode || 502
-        for (const header of ['content-type', 'cache-control', 'content-length'] as const) {
+        for (const header of ['accept-ranges', 'content-range', 'content-security-policy', 'content-type', 'cache-control', 'content-length'] as const) {
             const value = upstreamResponse.headers[header]
             if (value !== undefined) response.setHeader(header, value)
         }

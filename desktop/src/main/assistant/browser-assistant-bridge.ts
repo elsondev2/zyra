@@ -1,5 +1,6 @@
-import { timingSafeEqual } from 'node:crypto'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { randomUUID, timingSafeEqual } from 'node:crypto'
+import { createReadStream } from 'node:fs'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { dirname } from 'node:path'
 import log from 'electron-log'
@@ -13,14 +14,18 @@ import {
     BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH,
     BROWSER_ASSISTANT_BRIDGE_PORT,
     BROWSER_ASSISTANT_BRIDGE_PORT_CANDIDATES,
+    BROWSER_DEVSCOPE_BRIDGE_EVENTS_PATH,
     BROWSER_DEVSCOPE_BRIDGE_INVOKE_PATH,
+    BROWSER_FILE_BRIDGE_PATH,
     isBrowserAssistantBridgeMethod,
     isBrowserDevscopeBridgePath,
     type BrowserAssistantBridgeDescriptor,
     type BrowserAssistantBridgeInvokeRequest,
     type BrowserAssistantBridgeInvokeResponse,
     type BrowserAssistantBridgeMethod,
-    type BrowserDevscopeBridgeInvokeRequest
+    type BrowserDevscopeBridgeInvokeRequest,
+    type BrowserDevscopeRelayEvent,
+    type BrowserDevscopeStreamEvent
 } from '../../shared/browser-assistant-bridge'
 import type {
     AssistantEventStreamPayload,
@@ -28,12 +33,45 @@ import type {
     AssistantTranscribeVoiceInput,
     AssistantVoiceTranscriptionState
 } from '../../shared/assistant/contracts'
+import { resolveFileMimeType, resolveProtocolFilePath } from '../local-file-content'
 import type { AssistantService } from './service'
 
 const MAX_REQUEST_BYTES = 32 * 1024 * 1024
 const EVENT_HEARTBEAT_MS = 15_000
 const MAX_EVENT_CLIENTS = 4
+const MAX_DEVSCOPE_EVENT_JOURNAL_ITEMS = 512
+const MAX_DEVSCOPE_EVENT_JOURNAL_BYTES = 4 * 1024 * 1024
+const MAX_DEVSCOPE_EVENT_JOURNAL_AGE_MS = 2 * 60_000
 const DIRECT_READ_METHODS = new Set<BrowserAssistantBridgeMethod>(['bootstrap', 'getSnapshot', 'getStatus'])
+
+type BrowserFileRange = { start: number; end: number }
+
+function parseBrowserFileRange(value: string, size: number): BrowserFileRange | null | false {
+    const raw = value.trim()
+    if (!raw) return null
+    const match = raw.match(/^bytes=(\d*)-(\d*)$/i)
+    if (!match || size <= 0) return false
+    const startText = match[1]
+    const endText = match[2]
+    if (!startText && !endText) return false
+
+    if (!startText) {
+        const suffixLength = Number(endText)
+        if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return false
+        return { start: Math.max(0, size - suffixLength), end: size - 1 }
+    }
+
+    const start = Number(startText)
+    const requestedEnd = endText ? Number(endText) : size - 1
+    if (
+        !Number.isSafeInteger(start)
+        || !Number.isSafeInteger(requestedEnd)
+        || start < 0
+        || requestedEnd < start
+        || start >= size
+    ) return false
+    return { start, end: Math.min(requestedEnd, size - 1) }
+}
 
 type BrowserAssistantBridgeDependencies = {
     service: AssistantService
@@ -41,6 +79,7 @@ type BrowserAssistantBridgeDependencies = {
     capability: string
     descriptorPath?: string
     invokeDevscope: (path: string[], args: unknown[]) => Promise<unknown>
+    subscribeDevscopeEvents: (listener: (event: BrowserDevscopeRelayEvent) => void) => () => void
     onAssistantClientCountChanged?: (count: number) => void
     host?: string
     port?: number
@@ -53,8 +92,14 @@ type BrowserAssistantBridgeDependencies = {
 export class BrowserAssistantBridge {
     private server: Server | null = null
     private readonly eventResponses = new Set<ServerResponse>()
+    private readonly devscopeEventResponses = new Set<ServerResponse>()
+    private readonly devscopeEventStreamId = randomUUID()
+    private readonly devscopeEventJournal: Array<{ event: BrowserDevscopeRelayEvent['event']; line: string; bytes: number; createdAt: number }> = []
+    private devscopeEventJournalBytes = 0
+    private devscopeEventSequence = 0
     private heartbeatTimer: NodeJS.Timeout | null = null
     private unsubscribeAssistantEvents: (() => void) | null = null
+    private unsubscribeDevscopeEvents: (() => void) | null = null
 
     constructor(private readonly dependencies: BrowserAssistantBridgeDependencies) {}
 
@@ -74,10 +119,18 @@ export class BrowserAssistantBridge {
         this.unsubscribeAssistantEvents = this.dependencies.service.subscribeExternalEvents((payload) => {
             this.broadcastEvent(payload)
         })
+        this.unsubscribeDevscopeEvents = this.dependencies.subscribeDevscopeEvents((event) => {
+            this.broadcastDevscopeEvent(event)
+        })
         this.heartbeatTimer = setInterval(() => {
             for (const response of [...this.eventResponses]) {
                 if (response.write(': heartbeat\n\n')) continue
                 this.removeEventResponse(response)
+                response.end()
+            }
+            for (const response of [...this.devscopeEventResponses]) {
+                if (response.write(': heartbeat\n\n')) continue
+                this.removeDevscopeEventResponse(response)
                 response.end()
             }
         }, EVENT_HEARTBEAT_MS)
@@ -121,7 +174,11 @@ export class BrowserAssistantBridge {
         this.cleanupSubscriptions()
         await this.removeDescriptor()
         for (const response of [...this.eventResponses]) response.end()
+        for (const response of [...this.devscopeEventResponses]) response.end()
         this.eventResponses.clear()
+        this.devscopeEventResponses.clear()
+        this.devscopeEventJournal.length = 0
+        this.devscopeEventJournalBytes = 0
         this.dependencies.onAssistantClientCountChanged?.(0)
         if (!server) return
         await new Promise<void>((resolve) => server.close(() => resolve()))
@@ -157,6 +214,8 @@ export class BrowserAssistantBridge {
     private cleanupSubscriptions(): void {
         this.unsubscribeAssistantEvents?.()
         this.unsubscribeAssistantEvents = null
+        this.unsubscribeDevscopeEvents?.()
+        this.unsubscribeDevscopeEvents = null
         if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
         this.heartbeatTimer = null
     }
@@ -217,12 +276,20 @@ export class BrowserAssistantBridge {
         }
 
         const requestUrl = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)
+        if ((request.method === 'GET' || request.method === 'HEAD') && requestUrl.pathname === BROWSER_FILE_BRIDGE_PATH) {
+            await this.serveFileContent(request, response, requestUrl)
+            return
+        }
         if (request.method === 'GET' && requestUrl.pathname === BROWSER_ASSISTANT_BRIDGE_HEALTH_PATH) {
             this.writeJson(response, 200, { ok: true, service: 'zyra-browser-assistant', version: 1 })
             return
         }
         if (request.method === 'GET' && requestUrl.pathname === BROWSER_ASSISTANT_BRIDGE_EVENTS_PATH) {
             this.openEventStream(request, response)
+            return
+        }
+        if (request.method === 'GET' && requestUrl.pathname === BROWSER_DEVSCOPE_BRIDGE_EVENTS_PATH) {
+            this.openDevscopeEventStream(request, response)
             return
         }
         if (request.method === 'POST' && requestUrl.pathname === BROWSER_DEVSCOPE_BRIDGE_INVOKE_PATH) {
@@ -375,9 +442,32 @@ export class BrowserAssistantBridge {
         request.on('close', () => this.removeEventResponse(response))
     }
 
+    private openDevscopeEventStream(request: IncomingMessage, response: ServerResponse): void {
+        if (this.devscopeEventResponses.size >= MAX_EVENT_CLIENTS) {
+            this.writeJson(response, 429, { ok: false, error: 'Too many browser action event clients are connected.' })
+            return
+        }
+        response.statusCode = 200
+        response.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
+        response.setHeader('Cache-Control', 'no-cache, no-transform')
+        response.setHeader('Connection', 'keep-alive')
+        response.flushHeaders()
+        response.write(': connected\n\n')
+        this.devscopeEventResponses.add(response)
+        this.pruneDevscopeEventJournal()
+        if (this.devscopeEventJournal.length > 0) {
+            response.write(this.devscopeEventJournal.map((entry) => entry.line).join(''))
+        }
+        request.on('close', () => this.removeDevscopeEventResponse(response))
+    }
+
     private removeEventResponse(response: ServerResponse): void {
         if (!this.eventResponses.delete(response)) return
         this.dependencies.onAssistantClientCountChanged?.(this.eventResponses.size)
+    }
+
+    private removeDevscopeEventResponse(response: ServerResponse): void {
+        this.devscopeEventResponses.delete(response)
     }
 
     private serializeEvent(payload: AssistantEventStreamPayload): string {
@@ -394,6 +484,124 @@ export class BrowserAssistantBridge {
             if (response.write(line)) continue
             this.removeEventResponse(response)
             response.end()
+        }
+    }
+
+    private broadcastDevscopeEvent(event: BrowserDevscopeRelayEvent): void {
+        const streamEvent: BrowserDevscopeStreamEvent = {
+            ...event,
+            streamId: this.devscopeEventStreamId,
+            sequence: ++this.devscopeEventSequence
+        }
+        const line = `data: ${JSON.stringify(streamEvent)}\n\n`
+        const bytes = Buffer.byteLength(line)
+        const createdAt = Date.now()
+        this.pruneDevscopeEventJournal(createdAt)
+        if (event.event === 'agentControlCursor' || event.event === 'agentControlState') {
+            let previousIndex = -1
+            for (let index = this.devscopeEventJournal.length - 1; index >= 0; index -= 1) {
+                if (this.devscopeEventJournal[index].event !== event.event) continue
+                previousIndex = index
+                break
+            }
+            if (previousIndex >= 0) {
+                const [removed] = this.devscopeEventJournal.splice(previousIndex, 1)
+                this.devscopeEventJournalBytes -= removed.bytes
+            }
+        }
+        this.devscopeEventJournal.push({ event: event.event, line, bytes, createdAt })
+        this.devscopeEventJournalBytes += bytes
+        while (
+            this.devscopeEventJournal.length > MAX_DEVSCOPE_EVENT_JOURNAL_ITEMS
+            || this.devscopeEventJournalBytes > MAX_DEVSCOPE_EVENT_JOURNAL_BYTES
+        ) {
+            const removed = this.devscopeEventJournal.shift()
+            if (!removed) break
+            this.devscopeEventJournalBytes -= removed.bytes
+        }
+        for (const response of [...this.devscopeEventResponses]) {
+            if (response.destroyed || response.writableEnded) {
+                this.removeDevscopeEventResponse(response)
+                continue
+            }
+            if (response.write(line)) continue
+            this.removeDevscopeEventResponse(response)
+            response.end()
+        }
+    }
+
+    private async serveFileContent(request: IncomingMessage, response: ServerResponse, requestUrl: URL): Promise<void> {
+        const rawSource = String(requestUrl.searchParams.get('source') || '')
+        if (!rawSource || rawSource.length > 16_384) {
+            this.writeJson(response, 400, { ok: false, error: 'Browser file source is invalid.' })
+            return
+        }
+        const source = rawSource.startsWith('devscope://')
+            ? `zyra://${rawSource.slice('devscope://'.length)}`
+            : rawSource
+        if (!source.startsWith('zyra://')) {
+            this.writeJson(response, 400, { ok: false, error: 'Browser file source is invalid.' })
+            return
+        }
+
+        let filePath: string
+        try {
+            filePath = resolveProtocolFilePath(source)
+        } catch {
+            this.writeJson(response, 400, { ok: false, error: 'Browser file source is invalid.' })
+            return
+        }
+        const fileStat = await stat(filePath).catch(() => null)
+        if (!fileStat?.isFile()) {
+            this.writeJson(response, 404, { ok: false, error: 'Browser file was not found.' })
+            return
+        }
+
+        const range = parseBrowserFileRange(String(request.headers.range || ''), fileStat.size)
+        if (range === false) {
+            response.statusCode = 416
+            response.setHeader('Content-Range', `bytes */${fileStat.size}`)
+            response.end()
+            return
+        }
+        const start = range?.start ?? 0
+        const end = range?.end ?? Math.max(0, fileStat.size - 1)
+        const contentLength = fileStat.size === 0 ? 0 : end - start + 1
+        response.statusCode = range ? 206 : 200
+        response.setHeader('Accept-Ranges', 'bytes')
+        response.setHeader('Cache-Control', 'private, no-store')
+        response.setHeader('Content-Length', String(contentLength))
+        response.setHeader('Content-Type', resolveFileMimeType(filePath))
+        response.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; style-src 'unsafe-inline'")
+        response.setHeader('X-Content-Type-Options', 'nosniff')
+        if (range) response.setHeader('Content-Range', `bytes ${start}-${end}/${fileStat.size}`)
+        if (request.method === 'HEAD' || fileStat.size === 0) {
+            response.end()
+            return
+        }
+
+        await new Promise<void>((resolveStream) => {
+            const stream = createReadStream(filePath, { start, end })
+            stream.on('error', () => {
+                if (!response.headersSent) this.writeJson(response, 500, { ok: false, error: 'Browser file could not be read.' })
+                else response.end()
+                resolveStream()
+            })
+            stream.on('end', resolveStream)
+            response.on('close', () => {
+                stream.destroy()
+                resolveStream()
+            })
+            stream.pipe(response)
+        })
+    }
+
+    private pruneDevscopeEventJournal(now = Date.now()): void {
+        const cutoff = now - MAX_DEVSCOPE_EVENT_JOURNAL_AGE_MS
+        while (this.devscopeEventJournal.length > 0 && this.devscopeEventJournal[0].createdAt < cutoff) {
+            const removed = this.devscopeEventJournal.shift()
+            if (!removed) break
+            this.devscopeEventJournalBytes -= removed.bytes
         }
     }
 

@@ -1,6 +1,10 @@
+import { projectLocalFileUrl } from '@/lib/browser-file-url'
+
 function getFileUrl(path: string): string {
-    if (path.startsWith('http') || path.startsWith('data:') || path.startsWith('zyra://')) return path
-    if (path.startsWith('devscope://')) return `zyra://${path.slice('devscope://'.length)}`
+    if (path.startsWith('http') || path.startsWith('data:')) return path
+    if (path.startsWith('zyra://') || path.startsWith('devscope://') || path.startsWith('file://')) {
+        return projectLocalFileUrl(path)
+    }
 
     const normalizedPath = path.replace(/\\/g, '/')
     const isUncPath = normalizedPath.startsWith('//')
@@ -9,12 +13,13 @@ function getFileUrl(path: string): string {
         : normalizedPath.startsWith('/') ? normalizedPath.slice(1) : normalizedPath
     const encodedPath = encodeURI(trimmed).replace(/#/g, '%23').replace(/\?/g, '%3F')
 
-    return isUncPath ? `zyra://${encodedPath}` : `zyra:///${encodedPath}`
+    return projectLocalFileUrl(isUncPath ? `zyra://${encodedPath}` : `zyra:///${encodedPath}`)
 }
 
 export function resolveImageSrc(src: string, filePath?: string): string {
-    if (!src || src.startsWith('http') || src.startsWith('data:') || src.startsWith('file:')) {
-        return src
+    if (!src || src.startsWith('http') || src.startsWith('data:')) return src
+    if (src.startsWith('file:') || src.startsWith('zyra:') || src.startsWith('devscope:')) {
+        return projectLocalFileUrl(src)
     }
 
     if (!filePath) return src
