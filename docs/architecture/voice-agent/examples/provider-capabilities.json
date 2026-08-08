@@ -1,0 +1,185 @@
+{
+  "schema_version": 2,
+  "adapter_id": "example_realtime_adapter",
+  "adapter_version": "0.1.0",
+  "provider_version": "example-2026-08",
+  "auth_mode": "provider_account",
+  "adapter_role": "realtime_foreground",
+  "observed_at": "2026-08-02T12:00:00Z",
+  "expires_at": "2026-08-03T12:00:00Z",
+  "realtime": {
+    "session": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "realtime/start",
+      "evidence": [
+        "adapter_assertion",
+        "interoperability_test"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "transports": [
+      "webrtc"
+    ],
+    "input_modalities": [
+      "audio",
+      "text"
+    ],
+    "output_modalities": [
+      "audio"
+    ],
+    "audio_input": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "media-track",
+      "evidence": [
+        "interoperability_test"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "audio_output": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "remote-media-track",
+      "evidence": [
+        "interoperability_test"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "transcript_events": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "transcript.delta/transcript.done",
+      "evidence": [
+        "adapter_assertion",
+        "interoperability_test"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "session_context_seed": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "initialItems",
+      "evidence": [
+        "adapter_assertion"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "silent_context_append": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "realtime/appendText",
+      "evidence": [
+        "interoperability_test"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": [
+        "Does not itself request a response in the tested adapter version."
+      ]
+    },
+    "explicit_speech": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "realtime/appendSpeech",
+      "evidence": [
+        "adapter_assertion"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "direct_image_input": {
+      "support": "unsupported",
+      "stability": "experimental",
+      "method": null,
+      "evidence": [
+        "interoperability_test"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": [
+        "Image input routes through the private primary-agent adapter."
+      ]
+    },
+    "arbitrary_client_tools": {
+      "support": "unsupported",
+      "stability": "experimental",
+      "method": null,
+      "evidence": [
+        "adapter_assertion"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "sideband_control": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "app-server-control",
+      "evidence": [
+        "adapter_assertion"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "voice_list": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "realtime/listVoices",
+      "evidence": [
+        "adapter_assertion"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "interruption": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "local-playback-stop",
+      "evidence": [
+        "interoperability_test"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "response_cancel": {
+      "support": "unknown",
+      "stability": "unknown",
+      "method": null,
+      "evidence": [],
+      "verified_at": null,
+      "notes": [
+        "Local playback stops immediately; stale provider output must be quarantined by item/generation identity."
+      ]
+    },
+    "usage_events": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "session.usage.updated",
+      "evidence": [
+        "adapter_assertion"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "session_expiry_signal": {
+      "support": "unknown",
+      "stability": "unknown",
+      "method": null,
+      "evidence": [],
+      "verified_at": null,
+      "notes": []
+    },
+    "max_session_seconds": 3600,
+    "known_limits": [
+      "Synthetic capability fixture for documentation validation."
+    ]
+  },
+  "experimental_adapter": true,
+  "notes": [
+    "Synthetic capability fixture for documentation validation.",
+    "This report describes only the realtime foreground adapter."
+  ]
+}

@@ -54,12 +54,14 @@ export type AssistantRealtimeVoiceEvent =
     | {
         type: 'transcript.delta'
         threadId?: string
+        providerItemId?: string
         role: string
         delta: string
     }
     | {
         type: 'transcript.done'
         threadId?: string
+        providerItemId?: string
         role: string
         text: string
     }

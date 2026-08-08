@@ -83,6 +83,18 @@ assert.equal(realtimeParams.voice, 'sol')
 assert.equal(realtimeParams.codexResponseHandoffMode, 'bemTags')
 assert.equal(realtimeParams.delegationAckFiller, false)
 assert.deepEqual(realtimeParams.transport, { type: 'webrtc', sdp: offerSdp })
+const canonicalRealtimeParams = buildInstructorRealtimeStartParams('thread-1', offerSdp, instructions, {
+    initialItems: [
+        { role: 'user', text: 'Earlier canonical user turn.' },
+        { role: 'assistant', text: 'Earlier canonical assistant turn.' }
+    ],
+    clientManagedHandoffs: true
+})
+assert.deepEqual(canonicalRealtimeParams.initialItems, [
+    { role: 'user', text: 'Earlier canonical user turn.' },
+    { role: 'assistant', text: 'Earlier canonical assistant turn.' }
+])
+assert.equal(canonicalRealtimeParams.clientManagedHandoffs, true)
 
 const normalizedRealtimeMessage = normalizeInstructorRealtimeMessage({
     text: '  What is in this image?  ',
@@ -221,6 +233,21 @@ assert.deepEqual(
         threadId: 'thread-1',
         role: 'user',
         delta: 'Hello'
+    }
+)
+assert.deepEqual(
+    parseInstructorRealtimeNotification('thread/realtime/transcript/delta', {
+        threadId: 'thread-1',
+        itemId: 'provider-item-1',
+        role: 'assistant',
+        delta: 'Identified'
+    }),
+    {
+        type: 'transcript.delta',
+        threadId: 'thread-1',
+        providerItemId: 'provider-item-1',
+        role: 'assistant',
+        delta: 'Identified'
     }
 )
 assert.deepEqual(

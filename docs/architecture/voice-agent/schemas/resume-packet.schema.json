@@ -1,0 +1,492 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zyra.dev/schemas/voice-agent/resume-packet.schema.json",
+  "title": "Zyra realtime resume packet",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "packet_id",
+    "conversation_id",
+    "generated_at",
+    "context_version",
+    "source_watermarks",
+    "foreground_route",
+    "current_focus",
+    "pending_user_items",
+    "active_tasks",
+    "constraints",
+    "decisions",
+    "recent_verbatim_turns",
+    "retrieval_refs",
+    "safety_state",
+    "operation_revision_index",
+    "narration_watermark",
+    "packet_integrity",
+    "truncation"
+  ],
+  "properties": {
+    "schema_version": { "const": 3 },
+    "packet_id": { "$ref": "common.schema.json#/$defs/id" },
+    "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
+    "generated_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
+    "source_watermarks": {
+      "type": "object",
+      "required": ["conversation_sequence", "foreground_route_epoch", "task_sequence", "attempt_sequence", "context_sequence", "decision_sequence", "approval_sequence", "capability_lease_sequence", "operation_sequence", "agent_checkpoint_sequence", "narration_delivery_sequence"],
+      "properties": {
+        "conversation_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "foreground_route_epoch": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "task_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "Latest global controller sequence occupied by a task event." },
+        "attempt_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "Latest global controller sequence occupied by an attempt event." },
+        "context_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "decision_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "approval_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "capability_lease_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "operation_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "agent_checkpoint_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "narration_delivery_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+      },
+      "additionalProperties": false
+    },
+    "foreground_route": {
+      "allOf": [
+        { "$ref": "foreground-route.schema.json" },
+        { "properties": { "status": { "const": "active" } }, "required": ["status"] }
+      ]
+    },
+    "current_focus": {
+      "oneOf": [
+        { "type": "string", "maxLength": 4000 },
+        { "type": "null" }
+      ]
+    },
+    "pending_user_items": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["kind", "request_id", "record_revision", "task_id", "context_version", "question", "why_user_needed", "options", "recommended_option_id", "recommendation_rationale", "involvement_mode", "created_at"],
+            "properties": {
+              "kind": { "const": "decision" },
+              "request_id": { "$ref": "common.schema.json#/$defs/id" },
+              "record_revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+              "task_id": { "$ref": "common.schema.json#/$defs/id" },
+              "context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
+              "question": { "type": "string", "minLength": 1, "maxLength": 2000 },
+              "why_user_needed": { "type": "string", "minLength": 1, "maxLength": 2000 },
+              "options": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 5,
+                "items": {
+                  "type": "object",
+                  "required": ["option_id", "label", "description", "consequences"],
+                  "properties": {
+                    "option_id": { "$ref": "common.schema.json#/$defs/id" },
+                    "label": { "type": "string", "minLength": 1, "maxLength": 200 },
+                    "description": { "type": "string", "minLength": 1, "maxLength": 1000 },
+                    "consequences": {
+                      "type": "array",
+                      "maxItems": 16,
+                      "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "recommended_option_id": {
+                "oneOf": [
+                  { "$ref": "common.schema.json#/$defs/id" },
+                  { "type": "null" }
+                ]
+              },
+              "recommendation_rationale": { "type": "string", "maxLength": 2000 },
+              "involvement_mode": { "type": "string", "enum": ["mostly_autonomous", "balanced", "highly_collaborative", "tightly_controlled"] },
+              "created_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["kind", "request_id", "record_revision", "task_id", "requesting_attempt_id", "context_version", "action", "action_hash", "capability", "scope", "preconditions", "risk_summary", "allowed_decisions", "requested_lease_duration_seconds", "requested_session_max_actions", "decline_behavior", "created_at", "expires_at"],
+            "properties": {
+              "kind": { "const": "approval" },
+              "request_id": { "$ref": "common.schema.json#/$defs/id" },
+              "record_revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+              "task_id": { "$ref": "common.schema.json#/$defs/id" },
+              "requesting_attempt_id": {
+                "oneOf": [
+                  { "$ref": "common.schema.json#/$defs/id" },
+                  { "type": "null" }
+                ]
+              },
+              "context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
+              "action": { "type": "string", "minLength": 1, "maxLength": 2000 },
+              "action_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+              "capability": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "scope": { "type": "object", "minProperties": 1, "additionalProperties": true },
+              "preconditions": { "type": "object", "minProperties": 1, "additionalProperties": true },
+              "risk_summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
+              "allowed_decisions": {
+                "type": "array",
+                "minItems": 2,
+                "uniqueItems": true,
+                "items": { "type": "string", "enum": ["accept_once", "accept_for_session", "decline"] }
+              },
+              "requested_lease_duration_seconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
+              "requested_session_max_actions": { "type": "integer", "minimum": 1, "maximum": 10000 },
+              "decline_behavior": { "type": "string", "minLength": 1, "maxLength": 2000 },
+              "created_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+              "expires_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["kind", "request_id", "task_id", "question", "created_at"],
+            "properties": {
+              "kind": { "const": "clarification" },
+              "request_id": { "$ref": "common.schema.json#/$defs/id" },
+              "task_id": { "$ref": "common.schema.json#/$defs/id" },
+              "question": { "type": "string", "minLength": 1, "maxLength": 2000 },
+              "created_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "active_tasks": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "required": ["task_id", "title", "state", "task_revision", "task_event_sequence", "latest_verified_activity", "required_context_version", "current_attempt_id", "current_attempt_state", "current_attempt_event_sequence", "primary_agent_run_id"],
+        "properties": {
+          "task_id": { "$ref": "common.schema.json#/$defs/id" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "state": {
+            "type": "string",
+            "enum": ["proposed", "queued", "running", "waiting_for_user", "waiting_for_approval", "paused", "verifying", "failed"]
+          },
+          "task_revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+          "task_event_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+          "latest_verified_activity": { "type": "string", "maxLength": 2000 },
+          "next_expected_event": { "type": "string", "maxLength": 500 },
+          "blocker": {
+            "oneOf": [
+              { "type": "string", "maxLength": 2000 },
+              { "type": "null" }
+            ]
+          },
+          "required_context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
+          "current_attempt_id": {
+            "oneOf": [
+              { "$ref": "common.schema.json#/$defs/id" },
+              { "type": "null" }
+            ]
+          },
+          "current_attempt_state": {
+            "oneOf": [
+              { "type": "string", "enum": ["created", "queued", "starting", "running", "parking", "parked", "completed", "failed", "cancelled", "interrupted"] },
+              { "type": "null" }
+            ]
+          },
+          "current_attempt_event_sequence": {
+            "oneOf": [
+              { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+              { "type": "null" }
+            ]
+          },
+          "primary_agent_run_id": {
+            "oneOf": [
+              { "$ref": "common.schema.json#/$defs/id" },
+              { "type": "null" }
+            ]
+          },
+          "artifact_refs": {
+            "type": "array",
+            "maxItems": 32,
+            "items": { "$ref": "common.schema.json#/$defs/artifactRef" }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "state": { "const": "running" } },
+              "required": ["state"]
+            },
+            "then": {
+              "properties": {
+                "current_attempt_id": { "$ref": "common.schema.json#/$defs/id" },
+                "current_attempt_state": { "type": "string", "enum": ["starting", "running", "parking"] },
+                "current_attempt_event_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+                "primary_agent_run_id": { "$ref": "common.schema.json#/$defs/id" }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": { "state": { "enum": ["waiting_for_user", "waiting_for_approval", "paused", "verifying", "failed"] } },
+              "required": ["state"]
+            },
+            "then": {
+              "properties": {
+                "current_attempt_id": { "type": "null" },
+                "current_attempt_state": { "type": "null" },
+                "current_attempt_event_sequence": { "type": "null" }
+              }
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "contains": {
+        "type": "object",
+        "properties": { "state": { "const": "running" } },
+        "required": ["state"]
+      },
+      "minContains": 0,
+      "maxContains": 1
+    },
+    "constraints": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "required": ["constraint_id", "scope", "text"],
+        "properties": {
+          "constraint_id": { "$ref": "common.schema.json#/$defs/id" },
+          "scope": { "type": "string", "enum": ["global", "conversation", "task", "task_subtree"] },
+          "task_id": { "$ref": "common.schema.json#/$defs/id" },
+          "text": { "type": "string", "minLength": 1, "maxLength": 4000 }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "scope": { "enum": ["task", "task_subtree"] } },
+              "required": ["scope"]
+            },
+            "then": { "required": ["task_id"] },
+            "else": { "not": { "required": ["task_id"] } }
+          }
+        ],
+        "additionalProperties": false
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "required": ["decision_id", "task_id", "selection"],
+        "properties": {
+          "decision_id": { "$ref": "common.schema.json#/$defs/id" },
+          "task_id": { "$ref": "common.schema.json#/$defs/id" },
+          "selection": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "rationale": { "type": "string", "maxLength": 2000 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "recent_verbatim_turns": {
+      "type": "array",
+      "maxItems": 24,
+      "items": {
+        "type": "object",
+        "required": ["message_id", "conversation_sequence", "role", "modality", "foreground_route_id", "route_epoch", "canonical_commit_receipt_id", "content", "created_at"],
+        "properties": {
+          "message_id": { "$ref": "common.schema.json#/$defs/id" },
+          "conversation_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+          "role": { "type": "string", "enum": ["user", "assistant"] },
+          "modality": { "type": "string", "enum": ["text", "speech", "image", "multimodal"] },
+          "foreground_route_id": { "$ref": "common.schema.json#/$defs/id" },
+          "route_epoch": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+          "canonical_commit_receipt_id": {
+            "oneOf": [
+              { "$ref": "common.schema.json#/$defs/id" },
+              { "type": "null" }
+            ]
+          },
+          "content": { "type": "string", "maxLength": 20000 },
+          "created_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "role": { "const": "assistant" } }, "required": ["role"] },
+            "then": { "properties": { "canonical_commit_receipt_id": { "$ref": "common.schema.json#/$defs/id" } } },
+            "else": { "properties": { "canonical_commit_receipt_id": { "type": "null" } } }
+          }
+        ],
+        "additionalProperties": false
+      }
+    },
+    "retrieval_refs": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "common.schema.json#/$defs/sourceRef" }
+    },
+    "safety_state": {
+      "type": "object",
+      "required": ["permission_epoch", "emergency_stop_active", "active_capability_lease_ids", "revocation_watermark", "primary_slot_attempt_id", "writer_lock"],
+      "properties": {
+        "permission_epoch": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "emergency_stop_active": { "type": "boolean" },
+        "active_capability_lease_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "common.schema.json#/$defs/id" }
+        },
+        "revocation_watermark": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "primary_slot_attempt_id": {
+          "oneOf": [
+            { "$ref": "common.schema.json#/$defs/id" },
+            { "type": "null" }
+          ]
+        },
+        "writer_lock": {
+          "oneOf": [
+            {
+              "type": "object",
+              "description": "Exact active writer-lock ID set and its owning task/attempt; scope is a bounded display summary, not lock identity.",
+              "required": ["task_id", "attempt_id", "writer_lock_ids", "scope"],
+              "properties": {
+                "task_id": { "$ref": "common.schema.json#/$defs/id" },
+                "attempt_id": { "$ref": "common.schema.json#/$defs/id" },
+                "writer_lock_ids": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 64,
+                  "uniqueItems": true,
+                  "items": { "$ref": "common.schema.json#/$defs/id" }
+                },
+                "scope": { "type": "string", "minLength": 1, "maxLength": 1000 }
+              },
+              "additionalProperties": false
+            },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "operation_revision_index": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "required": ["operation_id", "source_sequence", "revision", "status", "immutable_identity_sha256", "idempotency_key", "canonical_message_id", "assigned_receipt_id"],
+        "properties": {
+          "operation_id": { "$ref": "common.schema.json#/$defs/id" },
+          "source_sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+          "revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+          "status": { "type": "string", "enum": ["intended", "dispatched", "succeeded", "failed", "cancelled", "outcome_unknown"] },
+          "immutable_identity_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 512 },
+          "canonical_message_id": {
+            "oneOf": [
+              { "$ref": "common.schema.json#/$defs/id" },
+              { "type": "null" }
+            ]
+          },
+          "assigned_receipt_id": {
+            "oneOf": [
+              { "$ref": "common.schema.json#/$defs/id" },
+              { "type": "null" }
+            ]
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "status": { "enum": ["succeeded", "failed", "cancelled"] } },
+              "required": ["status"]
+            },
+            "then": { "properties": { "assigned_receipt_id": { "$ref": "common.schema.json#/$defs/id" } } },
+            "else": { "properties": { "assigned_receipt_id": { "type": "null" } } }
+          }
+        ],
+        "additionalProperties": false
+      }
+    },
+    "narration_watermark": {
+      "type": "object",
+      "required": ["terminal_sequence", "pending_delivery_ids", "unknown_outcome_delivery_ids"],
+      "properties": {
+        "terminal_sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "pending_delivery_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "common.schema.json#/$defs/id" }
+        },
+        "unknown_outcome_delivery_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "common.schema.json#/$defs/id" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "packet_integrity": {
+      "type": "object",
+      "required": ["critical_records_complete", "canonical_sha256", "stale_after"],
+      "properties": {
+        "critical_records_complete": { "const": true },
+        "canonical_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "stale_after": { "$ref": "common.schema.json#/$defs/timestamp" }
+      },
+      "additionalProperties": false
+    },
+    "usage_summary": {
+      "oneOf": [
+        { "$ref": "usage-snapshot.schema.json" },
+        { "type": "null" }
+      ]
+    },
+    "truncation": {
+      "type": "object",
+      "required": ["truncated", "omitted_record_count", "critical_records_omitted", "omitted_sections", "byte_budget"],
+      "properties": {
+        "truncated": { "type": "boolean" },
+        "omitted_record_count": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "critical_records_omitted": { "const": 0 },
+        "omitted_sections": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["recent_verbatim_turns", "retrieval_refs", "completed_task_context", "usage_summary"] }
+        },
+        "byte_budget": { "type": "integer", "minimum": 1024, "maximum": 1048576 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "safety_state": {
+            "type": "object",
+            "properties": { "emergency_stop_active": { "const": true } },
+            "required": ["emergency_stop_active"]
+          }
+        },
+        "required": ["safety_state"]
+      },
+      "then": {
+        "properties": {
+          "safety_state": {
+            "type": "object",
+            "properties": {
+              "active_capability_lease_ids": { "type": "array", "maxItems": 0 },
+              "primary_slot_attempt_id": { "type": "null" },
+              "writer_lock": { "type": "null" }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

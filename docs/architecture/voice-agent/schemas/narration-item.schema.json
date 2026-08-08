@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zyra.dev/schemas/voice-agent/narration-item.schema.json",
+  "title": "Zyra narration item",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "narration_id",
+    "conversation_id",
+    "source_event_id",
+    "kind",
+    "priority",
+    "speech_policy",
+    "visual_summary",
+    "speakable_facts",
+    "dedupe_key",
+    "expires_at",
+    "contains_sensitive_detail",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "narration_id": { "$ref": "common.schema.json#/$defs/id" },
+    "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
+    "task_id": { "$ref": "common.schema.json#/$defs/id" },
+    "source_event_id": { "$ref": "common.schema.json#/$defs/id" },
+    "kind": {
+      "type": "string",
+      "enum": ["acknowledgement", "progress", "decision", "approval", "blocker", "failure", "completion", "recovery"]
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["low", "normal", "high", "urgent"]
+    },
+    "speech_policy": {
+      "type": "string",
+      "enum": ["silent", "when_idle", "next_response", "interrupt_when_safe"]
+    },
+    "visual_summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "speakable_facts": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "type": "string", "minLength": 1, "maxLength": 1000 }
+    },
+    "suggested_utterance": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "dedupe_key": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "expires_at": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/timestamp" },
+        { "type": "null" }
+      ]
+    },
+    "contains_sensitive_detail": {
+      "type": "boolean",
+      "const": false
+    },
+    "created_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "speech_policy": { "not": { "const": "silent" } } },
+        "required": ["speech_policy"]
+      },
+      "then": {
+        "properties": { "speakable_facts": { "minItems": 1 } }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

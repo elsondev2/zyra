@@ -25,6 +25,7 @@ Status words used below:
 - [Assistant browser](architecture/assistant-browser.md) — **Current.** Browser ownership and visual-control architecture.
 - [Assistant resources](architecture/assistant-resources.md) — **Current.** Resource indexing and presentation ownership.
 - [Desktop theme contract](architecture/desktop-theme-contract.md) — **Current.** Shared shell surfaces, accessible palette resolution, specialized renderers, and validation.
+- [Voice-agent architecture](architecture/voice-agent/README.md) — **Draft.** Normative Phase One Chat/Voice authority, provider, continuity, and delivery contracts, plus optional Phase Two sequencing.
 
 ## Implementation records
 
@@ -42,6 +43,7 @@ Status words used below:
 - [File-change streaming specification](handoffs/file-change-streaming-spec.html) — **Historical.** Agent execution contract and acceptance evidence.
 - [In-app visual browser control](handoffs/in-app-visual-browser-control.md) — **Historical.** Visual browser implementation handoff.
 - [Subagents/workflows](handoffs/subagents-workflows.md) — **Historical.** Builder completion record.
+- [V1 Voice core merge handoff](handoffs/v1-voice-core-merge-handoff.md) — **Current.** Mike's merge boundary, evidence, and remaining production integration gates.
 
 ## Plans
 

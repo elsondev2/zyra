@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zyra.dev/schemas/voice-agent/delegation-packet.schema.json",
+  "title": "Zyra primary-agent delegation packet",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "packet_id",
+    "conversation_id",
+    "task_id",
+    "task_revision",
+    "task_state",
+    "attempt_id",
+    "created_at",
+    "required_context_version",
+    "verbatim_request",
+    "relevant_turns",
+    "acceptance_criteria",
+    "constraints",
+    "decisions",
+    "attachments",
+    "inspection_findings",
+    "project",
+    "capability_policy",
+    "capability_lease_ids",
+    "requested_role",
+    "requested_model",
+    "reasoning_effort",
+    "budgets",
+    "return_contract"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "packet_id": { "$ref": "common.schema.json#/$defs/id" },
+    "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
+    "task_id": { "$ref": "common.schema.json#/$defs/id" },
+    "task_revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "task_state": { "type": "string", "enum": ["proposed", "queued", "running", "waiting_for_user", "waiting_for_approval", "paused", "verifying"] },
+    "attempt_id": { "$ref": "common.schema.json#/$defs/id" },
+    "created_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "required_context_version": { "$ref": "common.schema.json#/$defs/contextVersion" },
+    "verbatim_request": { "type": "string", "minLength": 1, "maxLength": 100000 },
+    "relevant_turns": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "required": ["message_id", "role", "content"],
+        "properties": {
+          "message_id": { "$ref": "common.schema.json#/$defs/id" },
+          "role": { "type": "string", "enum": ["user", "assistant"] },
+          "content": { "type": "string", "maxLength": 20000 },
+          "verbatim": { "type": "boolean", "const": true }
+        },
+        "additionalProperties": false
+      }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "required": ["criterion_id", "description"],
+        "properties": {
+          "criterion_id": { "$ref": "common.schema.json#/$defs/id" },
+          "description": { "type": "string", "minLength": 1, "maxLength": 2000 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "required": ["constraint_id", "scope", "text"],
+        "properties": {
+          "constraint_id": { "$ref": "common.schema.json#/$defs/id" },
+          "scope": { "type": "string", "enum": ["global", "conversation", "task", "task_subtree"] },
+          "text": { "type": "string", "minLength": 1, "maxLength": 4000 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "required": ["decision_id", "selection", "rationale"],
+        "properties": {
+          "decision_id": { "$ref": "common.schema.json#/$defs/id" },
+          "selection": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "rationale": { "type": "string", "maxLength": 4000 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "attachments": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "common.schema.json#/$defs/artifactRef" }
+    },
+    "inspection_findings": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "required": ["finding_id", "summary", "source_refs"],
+        "properties": {
+          "finding_id": { "$ref": "common.schema.json#/$defs/id" },
+          "summary": { "type": "string", "minLength": 1, "maxLength": 4000 },
+          "source_refs": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": { "$ref": "common.schema.json#/$defs/sourceRef" }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "project": {
+      "type": "object",
+      "required": ["cwd", "source_state"],
+      "properties": {
+        "cwd": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "source_state": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "allowed_roots": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+        }
+      },
+      "additionalProperties": false
+    },
+    "capability_policy": {
+      "type": "object",
+      "required": ["permission_mode", "tools", "approval_required_for"],
+      "properties": {
+        "permission_mode": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "tools": { "type": "array", "uniqueItems": true, "items": { "type": "string", "maxLength": 128 } },
+        "approval_required_for": { "type": "array", "uniqueItems": true, "items": { "type": "string", "maxLength": 128 } }
+      },
+      "additionalProperties": false
+    },
+    "capability_lease_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "common.schema.json#/$defs/id" }
+    },
+    "requested_role": { "const": "strong_primary" },
+    "requested_model": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 256 },
+        { "type": "null" }
+      ]
+    },
+    "reasoning_effort": { "type": "string", "enum": ["minimal", "low", "medium", "high", "max"] },
+    "budgets": {
+      "type": "object",
+      "required": ["max_turns", "max_subagents", "max_elapsed_seconds", "max_tokens"],
+      "properties": {
+        "max_turns": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "max_subagents": { "type": "integer", "minimum": 0, "maximum": 16 },
+        "max_elapsed_seconds": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "max_tokens": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      },
+      "additionalProperties": false
+    },
+    "return_contract": {
+      "type": "object",
+      "required": ["event_schema", "completion_requires_verification"],
+      "properties": {
+        "event_schema": { "type": "string", "format": "uri-reference" },
+        "completion_requires_verification": { "type": "boolean", "const": true }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

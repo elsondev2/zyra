@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "conversation_id": "chat_demo",
+  "voice": {
+    "provider": "example_realtime",
+    "status": "unlimited",
+    "metering_source": "provider_and_local_estimate",
+    "elapsed_seconds_estimate": 900,
+    "fair_use_applies": true
+  },
+  "agent_work": {
+    "provider": "example_agent_provider",
+    "status": "normal",
+    "metering_source": "provider",
+    "used_percent": 35,
+    "window_seconds": 604800,
+    "resets_at": "2026-08-09T00:00:00Z",
+    "model": "strong-primary",
+    "usage": {
+      "requests": 4,
+      "input_tokens": 30000,
+      "cached_input_tokens": 12000,
+      "output_tokens": 5000,
+      "reasoning_tokens": 2500
+    }
+  },
+  "observed_at": "2026-08-02T12:05:00Z"
+}

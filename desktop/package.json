@@ -33,6 +33,7 @@
         "test:assistant-account-runtime": "node scripts/test-assistant-account-electron-runtime.mjs",
         "test:assistant-markdown": "bun scripts/test-assistant-markdown-cache.tsx",
         "test:assistant-realtime-voice": "bun scripts/test-assistant-realtime-voice.ts",
+        "test:assistant-voice-core": "bun scripts/test-assistant-voice-core.ts",
         "test:assistant-voice-transcription": "bun scripts/test-assistant-voice-transcription.ts",
         "test:markdown-links": "bun scripts/test-markdown-link-contract.ts",
         "test:markdown-renderer": "bun scripts/test-markdown-renderer-features.tsx",

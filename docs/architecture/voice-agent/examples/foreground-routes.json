@@ -1,0 +1,74 @@
+[
+  {
+    "schema_version": 1,
+    "foreground_route_id": "foreground_route_chat_01",
+    "revision": 1,
+    "previous_revision": null,
+    "conversation_id": "chat_resume_demo",
+    "route_epoch": 1,
+    "surface_mode": "chat",
+    "response_owner": "strong_primary",
+    "status": "active",
+    "activation_reason": "conversation_open",
+    "context_version": 7,
+    "owner_claim_id": "foreground_claim_chat_01",
+    "realtime_session_id": null,
+    "realtime_session_generation": null,
+    "supersedes_route_id": null,
+    "superseded_by_route_id": null,
+    "attached_task_ids": [
+      "task_resume_voice_docs"
+    ],
+    "created_at": "2026-08-02T11:55:00Z",
+    "updated_at": "2026-08-02T11:55:00Z",
+    "terminal_at": null
+  },
+  {
+    "schema_version": 1,
+    "foreground_route_id": "foreground_route_chat_01",
+    "revision": 2,
+    "previous_revision": 1,
+    "conversation_id": "chat_resume_demo",
+    "route_epoch": 1,
+    "surface_mode": "chat",
+    "response_owner": "strong_primary",
+    "status": "superseded",
+    "activation_reason": "conversation_open",
+    "context_version": 7,
+    "owner_claim_id": "foreground_claim_chat_01",
+    "realtime_session_id": null,
+    "realtime_session_generation": null,
+    "supersedes_route_id": null,
+    "superseded_by_route_id": "foreground_route_voice_02",
+    "attached_task_ids": [
+      "task_resume_voice_docs"
+    ],
+    "created_at": "2026-08-02T11:55:00Z",
+    "updated_at": "2026-08-02T12:04:00Z",
+    "terminal_at": "2026-08-02T12:04:00Z"
+  },
+  {
+    "schema_version": 1,
+    "foreground_route_id": "foreground_route_voice_02",
+    "revision": 1,
+    "previous_revision": null,
+    "conversation_id": "chat_resume_demo",
+    "route_epoch": 2,
+    "surface_mode": "voice",
+    "response_owner": "realtime_foreground",
+    "status": "active",
+    "activation_reason": "start_voice",
+    "context_version": 7,
+    "owner_claim_id": "foreground_claim_voice_02",
+    "realtime_session_id": "realtime_session_resume_12",
+    "realtime_session_generation": 12,
+    "supersedes_route_id": "foreground_route_chat_01",
+    "superseded_by_route_id": null,
+    "attached_task_ids": [
+      "task_resume_voice_docs"
+    ],
+    "created_at": "2026-08-02T12:04:00Z",
+    "updated_at": "2026-08-02T12:04:00Z",
+    "terminal_at": null
+  }
+]

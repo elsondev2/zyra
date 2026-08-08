@@ -1,0 +1,225 @@
+{
+  "schema_version": 3,
+  "packet_id": "packet_resume_demo_01",
+  "conversation_id": "chat_resume_demo",
+  "generated_at": "2026-08-02T12:05:00Z",
+  "context_version": 7,
+  "source_watermarks": {
+    "conversation_sequence": 18,
+    "foreground_route_epoch": 2,
+    "task_sequence": 10,
+    "attempt_sequence": 11,
+    "context_sequence": 7,
+    "decision_sequence": 3,
+    "approval_sequence": 0,
+    "capability_lease_sequence": 0,
+    "operation_sequence": 1,
+    "agent_checkpoint_sequence": 9,
+    "narration_delivery_sequence": 12
+  },
+  "foreground_route": {
+    "schema_version": 1,
+    "foreground_route_id": "foreground_route_voice_02",
+    "revision": 1,
+    "previous_revision": null,
+    "conversation_id": "chat_resume_demo",
+    "route_epoch": 2,
+    "surface_mode": "voice",
+    "response_owner": "realtime_foreground",
+    "status": "active",
+    "activation_reason": "start_voice",
+    "context_version": 7,
+    "owner_claim_id": "foreground_claim_voice_02",
+    "realtime_session_id": "realtime_session_resume_12",
+    "realtime_session_generation": 12,
+    "supersedes_route_id": "foreground_route_chat_01",
+    "superseded_by_route_id": null,
+    "attached_task_ids": [
+      "task_resume_voice_docs"
+    ],
+    "created_at": "2026-08-02T12:04:00Z",
+    "updated_at": "2026-08-02T12:04:00Z",
+    "terminal_at": null
+  },
+  "current_focus": "Publishing a complete open architecture specification for production Zyra Voice.",
+  "pending_user_items": [
+    {
+      "kind": "decision",
+      "request_id": "decision_license",
+      "record_revision": 1,
+      "task_id": "task_resume_voice_docs",
+      "context_version": 7,
+      "question": "Which permissive license should govern the public project?",
+      "why_user_needed": "The choice affects downstream redistribution and patent terms.",
+      "options": [
+        {
+          "option_id": "apache_2",
+          "label": "Apache-2.0",
+          "description": "A permissive license with an explicit patent grant.",
+          "consequences": [
+            "Requires preserving notices",
+            "Provides explicit patent terms"
+          ]
+        },
+        {
+          "option_id": "mit",
+          "label": "MIT",
+          "description": "A short permissive license widely used for software.",
+          "consequences": [
+            "Very simple reuse terms",
+            "No explicit patent-license language"
+          ]
+        }
+      ],
+      "recommended_option_id": "apache_2",
+      "recommendation_rationale": "The explicit patent grant is useful for an agent architecture intended for broad implementation.",
+      "involvement_mode": "balanced",
+      "created_at": "2026-08-02T12:05:00Z"
+    }
+  ],
+  "active_tasks": [
+    {
+      "task_id": "task_resume_voice_docs",
+      "title": "Document the voice-agent architecture",
+      "state": "running",
+      "task_revision": 9,
+      "task_event_sequence": 10,
+      "latest_verified_activity": "The provider-neutral contracts and ADRs have been drafted.",
+      "next_expected_event": "Validate diagrams, schemas, links, and privacy.",
+      "blocker": null,
+      "required_context_version": 7,
+      "current_attempt_id": "attempt_resume_01",
+      "current_attempt_state": "running",
+      "current_attempt_event_sequence": 11,
+      "primary_agent_run_id": "agent_run_resume_01",
+      "artifact_refs": []
+    }
+  ],
+  "constraints": [
+    {
+      "constraint_id": "constraint_resume_public_only",
+      "scope": "task_subtree",
+      "task_id": "task_resume_voice_docs",
+      "text": "Use only public, synthetic, or clean-room evidence in published documentation."
+    },
+    {
+      "constraint_id": "constraint_resume_no_runtime_changes",
+      "scope": "task",
+      "task_id": "task_resume_voice_docs",
+      "text": "Do not change runtime behavior as part of the documentation task."
+    }
+  ],
+  "decisions": [
+    {
+      "decision_id": "decision_resume_model_roles",
+      "task_id": "task_resume_voice_docs",
+      "selection": "Use direct strong-agent Chat, explicit realtime Voice, and one strong primary execution lineage.",
+      "rationale": "Keep conversation responsive and mutation controlled."
+    }
+  ],
+  "recent_verbatim_turns": [
+    {
+      "message_id": "message_resume_user_07",
+      "conversation_sequence": 17,
+      "role": "user",
+      "modality": "text",
+      "foreground_route_id": "foreground_route_chat_01",
+      "route_epoch": 1,
+      "canonical_commit_receipt_id": null,
+      "content": "Make it open for everyone and document the whole architecture.",
+      "created_at": "2026-08-02T11:55:00Z"
+    },
+    {
+      "message_id": "message_resume_assistant_07",
+      "conversation_sequence": 18,
+      "role": "assistant",
+      "modality": "text",
+      "foreground_route_id": "foreground_route_chat_01",
+      "route_epoch": 1,
+      "canonical_commit_receipt_id": "receipt_chat_message_commit_01",
+      "content": "I’ll create a publishable architecture package and keep provider experiments clearly labeled.",
+      "created_at": "2026-08-02T11:55:10Z"
+    }
+  ],
+  "retrieval_refs": [
+    {
+      "kind": "task_event",
+      "id": "event_resume_task_started"
+    },
+    {
+      "kind": "artifact",
+      "id": "docs_voice_architecture",
+      "uri": "docs/architecture/voice-agent/README.md"
+    }
+  ],
+  "safety_state": {
+    "permission_epoch": 2,
+    "emergency_stop_active": false,
+    "active_capability_lease_ids": [],
+    "revocation_watermark": 4,
+    "primary_slot_attempt_id": "attempt_resume_01",
+    "writer_lock": {
+      "task_id": "task_resume_voice_docs",
+      "attempt_id": "attempt_resume_01",
+      "writer_lock_ids": [
+        "writer_lock_resume_docs"
+      ],
+      "scope": "documentation worktree"
+    }
+  },
+  "operation_revision_index": [
+    {
+      "operation_id": "operation_chat_message_commit_01",
+      "source_sequence": 1,
+      "revision": 1,
+      "status": "succeeded",
+      "immutable_identity_sha256": "8b2b26c438e6f454fa797f2a0ec82c8a25e0f2cf9ba3dc5357edbb1792d47ffa",
+      "idempotency_key": "chat_resume_demo:foreground_route_chat_01:message_resume_assistant_07",
+      "canonical_message_id": "message_resume_assistant_07",
+      "assigned_receipt_id": "receipt_chat_message_commit_01"
+    }
+  ],
+  "narration_watermark": {
+    "terminal_sequence": 12,
+    "pending_delivery_ids": [],
+    "unknown_outcome_delivery_ids": []
+  },
+  "packet_integrity": {
+    "critical_records_complete": true,
+    "canonical_sha256": "58c97cd2781f9c3a584f9c52d1af39a343100ec738a2eb4acba0ddf464fc4173",
+    "stale_after": "2026-08-02T12:10:00Z"
+  },
+  "usage_summary": {
+    "schema_version": 1,
+    "conversation_id": "chat_resume_demo",
+    "voice": {
+      "provider": "example_realtime",
+      "status": "unlimited",
+      "metering_source": "provider_and_local_estimate",
+      "elapsed_seconds_estimate": 900,
+      "fair_use_applies": true
+    },
+    "agent_work": {
+      "provider": "example_agent_provider",
+      "status": "normal",
+      "metering_source": "provider",
+      "used_percent": 35,
+      "window_seconds": 604800,
+      "resets_at": "2026-08-09T00:00:00Z",
+      "model": "strong-primary",
+      "usage": {
+        "requests": 4,
+        "input_tokens": 30000,
+        "output_tokens": 5000
+      }
+    },
+    "observed_at": "2026-08-02T12:05:00Z"
+  },
+  "truncation": {
+    "truncated": false,
+    "omitted_record_count": 0,
+    "critical_records_omitted": 0,
+    "omitted_sections": [],
+    "byte_budget": 32768
+  }
+}

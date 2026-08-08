@@ -86,7 +86,12 @@ export function buildInstructorRealtimeStartParams(
     threadId: string,
     sdp: string,
     instructions: string,
-    options: { voice?: unknown; outputModality?: unknown } = {}
+    options: {
+        voice?: unknown
+        outputModality?: unknown
+        initialItems?: Array<{ role: 'developer' | 'user' | 'assistant'; text: string }>
+        clientManagedHandoffs?: boolean
+    } = {}
 ) {
     return {
         threadId,
@@ -94,6 +99,10 @@ export function buildInstructorRealtimeStartParams(
         // text-only mode keeps this transport alive and suppresses local playback.
         outputModality: 'audio',
         includeStartupContext: false,
+        ...(options.initialItems?.length ? { initialItems: options.initialItems } : {}),
+        ...(options.clientManagedHandoffs !== undefined
+            ? { clientManagedHandoffs: options.clientManagedHandoffs }
+            : {}),
         prompt: instructions,
         version: 'v3',
         voice: normalizeInstructorRealtimeVoice(options.voice),
@@ -164,6 +173,13 @@ export function buildInstructorRealtimeMessageTurnParams(
     }
 }
 
+function realtimeProviderItemId(payload: Record<string, unknown>): string | undefined {
+    return asString(payload['itemId'])
+        || asString(payload['turnId'])
+        || asString(asRecord(payload['item'])?.['id'])
+        || undefined
+}
+
 export function parseInstructorRealtimeNotification(method: string, payloadValue: unknown): AssistantRealtimeVoiceEvent | null {
     const payload = asRecord(payloadValue) || {}
     const threadId = asString(payload['threadId']) || undefined
@@ -179,9 +195,11 @@ export function parseInstructorRealtimeNotification(method: string, payloadValue
     if (method === 'thread/realtime/transcript/delta') {
         const delta = asTranscriptDelta(payload['delta'])
         if (!delta) return null
+        const providerItemId = realtimeProviderItemId(payload)
         return {
             type: 'transcript.delta',
             threadId,
+            ...(providerItemId ? { providerItemId } : {}),
             role: asString(payload['role']) || 'assistant',
             delta
         }
@@ -189,9 +207,11 @@ export function parseInstructorRealtimeNotification(method: string, payloadValue
     if (method === 'thread/realtime/transcript/done') {
         const text = asString(payload['text'])
         if (!text) return null
+        const providerItemId = realtimeProviderItemId(payload)
         return {
             type: 'transcript.done',
             threadId,
+            ...(providerItemId ? { providerItemId } : {}),
             role: asString(payload['role']) || 'assistant',
             text
         }

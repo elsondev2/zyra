@@ -82,10 +82,13 @@ export class CodexRealtimeVoiceRuntime extends EventEmitter {
         instructions?: string
         voice?: InstructorRealtimeVoice
         outputModality?: InstructorOutputModality
+        initialItems?: Array<{ role: 'developer' | 'user' | 'assistant'; text: string }>
+        clientManagedHandoffs?: boolean
     }): Promise<{
         threadId: string
         sdp: string
         realtimeVersion: string
+        realtimeSessionId?: string
     }> {
         const generation = ++this.lifecycleGeneration
         await this.stopCurrent()
@@ -128,7 +131,9 @@ export class CodexRealtimeVoiceRuntime extends EventEmitter {
                 'thread/realtime/start',
                 buildInstructorRealtimeStartParams(threadId, offerSdp, instructions, {
                     voice: input.voice,
-                    outputModality: input.outputModality
+                    outputModality: input.outputModality,
+                    initialItems: input.initialItems,
+                    clientManagedHandoffs: input.clientManagedHandoffs
                 }),
                 45_000
             )
@@ -144,7 +149,12 @@ export class CodexRealtimeVoiceRuntime extends EventEmitter {
             }
 
             log.info('[InstructorVoice] Codex realtime v3 signaling ready', { threadId })
-            return { threadId, sdp: answerSdp, realtimeVersion: started.version }
+            return {
+                threadId,
+                sdp: answerSdp,
+                realtimeVersion: started.version,
+                realtimeSessionId: started.realtimeSessionId
+            }
         } catch (error) {
             if (generation === this.lifecycleGeneration) {
                 const message = error instanceof Error ? error.message : 'Codex realtime voice failed to start.'
@@ -174,6 +184,24 @@ export class CodexRealtimeVoiceRuntime extends EventEmitter {
         if (!turnId) throw new Error('Codex did not return a typed voice turn id.')
         this.composerTurnText.set(turnId, '')
         return { mode: message.images.length > 0 ? 'vision-turn' : 'text-turn' }
+    }
+
+    async appendContext(items: Array<{ role: 'developer' | 'user' | 'assistant'; text: string }>): Promise<void> {
+        const threadId = this.requireActiveThread()
+        for (const item of items) {
+            await this.sendRequest('thread/realtime/appendText', {
+                threadId,
+                role: item.role,
+                text: item.text
+            }, 15_000)
+        }
+    }
+
+    async requestSpeech(text: string): Promise<void> {
+        const threadId = this.requireActiveThread()
+        const normalized = String(text || '').trim()
+        if (!normalized) throw new Error('Speech text is required.')
+        await this.sendRequest('thread/realtime/appendSpeech', { threadId, text: normalized }, 15_000)
     }
 
     async stop(): Promise<void> {
@@ -371,6 +399,13 @@ export class CodexRealtimeVoiceRuntime extends EventEmitter {
             text,
             error: error || (status === 'failed' ? 'The typed voice turn failed.' : undefined)
         })
+    }
+
+    private requireActiveThread(): string {
+        if (!this.child?.stdin.writable || !this.threadId || this.stopping) {
+            throw new Error('Start the realtime voice session first.')
+        }
+        return this.threadId
     }
 
     private sendRequest(method: string, params: JsonRecord, timeoutMs: number): Promise<unknown> {
