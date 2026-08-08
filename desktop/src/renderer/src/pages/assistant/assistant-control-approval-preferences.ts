@@ -84,6 +84,15 @@ export function findRememberedBrowserControlApproval(
     )) || null
 }
 
+export function removeBrowserControlApprovalPreference(origin: string, createdAt: string): void {
+    const next = readBrowserControlApprovalPreferences().filter((entry) => (
+        entry.origin !== origin || entry.createdAt !== createdAt
+    ))
+    if (next.length > 0) localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+    else localStorage.removeItem(STORAGE_KEY)
+    window.dispatchEvent(new CustomEvent(CHANGE_EVENT))
+}
+
 export function clearBrowserControlApprovalPreferences(): void {
     localStorage.removeItem(STORAGE_KEY)
     window.dispatchEvent(new CustomEvent(CHANGE_EVENT))

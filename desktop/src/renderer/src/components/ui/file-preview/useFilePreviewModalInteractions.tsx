@@ -262,7 +262,7 @@ export function useFilePreviewModalInteractions(input: {
         return (
             <div
                 className={cn(
-                    'pointer-events-none inline-flex items-center gap-2 rounded-md border border-white/[0.12] bg-[#0f1722]/96 px-2 py-1.5 text-[11px] text-white shadow-[0_16px_36px_rgba(0,0,0,0.38)]',
+                    'pointer-events-none inline-flex items-center gap-2 rounded-md border border-sparkle-border bg-sparkle-card/96 px-2 py-1.5 text-[11px] text-sparkle-text shadow-[0_16px_36px_rgba(0,0,0,0.24)]',
                     activeDragOverlay.type === 'tab' ? 'max-w-[220px]' : 'max-w-[280px]'
                 )}
             >

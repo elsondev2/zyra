@@ -9,8 +9,6 @@ import { DiffStats } from './DiffStats'
 import PatchDiffViewer from '@/components/ui/diff-viewer/PatchDiffViewer'
 import { parsePatchForRendering, resolveFileDiffPath } from '@/lib/diffRendering'
 
-const DIFF_RENDER_MODE_STORAGE_KEY = 'devscope:project-details:diff-render-mode:v1'
-
 interface FileDiffDetailModalProps {
     isOpen: boolean
     filePath: string
@@ -27,12 +25,12 @@ interface FileDiffDetailModalProps {
 function getStatusTone(status?: FileDiffDetailModalProps['status']) {
     switch (status) {
         case 'modified':
-            return 'bg-[#E2C08D]/20 text-[#E2C08D]'
+            return 'bg-amber-500/20 text-amber-300'
         case 'untracked':
         case 'added':
-            return 'bg-[#73C991]/20 text-[#73C991]'
+            return 'bg-emerald-500/20 text-emerald-300'
         case 'deleted':
-            return 'bg-[#FF6B6B]/20 text-[#FF6B6B]'
+            return 'bg-red-500/20 text-red-300'
         case 'renamed':
             return 'bg-blue-500/20 text-blue-300'
         default:
@@ -52,17 +50,10 @@ export function FileDiffDetailModal({
     subtitle,
     onClose
 }: FileDiffDetailModalProps) {
-    const { settings } = useSettings()
+    const { settings, updateSettings } = useSettings()
     const iconTheme = settings?.theme === 'light' ? 'light' : 'dark'
     const [copied, setCopied] = useState(false)
-    const [renderMode, setRenderMode] = useState<'stacked' | 'split'>(() => {
-        try {
-            const stored = String(window.localStorage.getItem(DIFF_RENDER_MODE_STORAGE_KEY) || '').trim()
-            return stored === 'split' ? 'split' : 'stacked'
-        } catch {
-            return 'stacked'
-        }
-    })
+    const renderMode = settings.fileDiffRenderMode
     const [parsedDiff, setParsedDiff] = useState(() => parsePatchForRendering('', 'file-detail:initial'))
     const [isPreparingDiff, setIsPreparingDiff] = useState(false)
 
@@ -111,14 +102,6 @@ export function FileDiffDetailModal({
     const hasDiff = Boolean(resolvedFileDiff || parsedDiff.patch)
     const isBusy = loading || isPreparingDiff
 
-    useEffect(() => {
-        try {
-            window.localStorage.setItem(DIFF_RENDER_MODE_STORAGE_KEY, renderMode)
-        } catch {
-            // Ignore storage failures.
-        }
-    }, [renderMode])
-
     if (!isOpen) return null
 
     const handleCopyPath = async () => {
@@ -156,7 +139,7 @@ export function FileDiffDetailModal({
                         {!loading && hasDiff && (
                             <div className="flex items-center gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-1">
                                 <button
-                                    onClick={() => setRenderMode('stacked')}
+                                    onClick={() => updateSettings({ fileDiffRenderMode: 'stacked' })}
                                     className={cn(
                                         'inline-flex h-8 w-8 items-center justify-center rounded-lg border transition-all',
                                         renderMode === 'stacked'
@@ -168,7 +151,7 @@ export function FileDiffDetailModal({
                                     <Rows3 size={13} />
                                 </button>
                                 <button
-                                    onClick={() => setRenderMode('split')}
+                                    onClick={() => updateSettings({ fileDiffRenderMode: 'split' })}
                                     className={cn(
                                         'inline-flex h-8 w-8 items-center justify-center rounded-lg border transition-all',
                                         renderMode === 'split'

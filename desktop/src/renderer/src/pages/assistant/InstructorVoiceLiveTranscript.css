@@ -1,0 +1,67 @@
+.instructor-voice-transcript-copy {
+    text-align: center;
+    transition:
+        color 300ms ease,
+        opacity 300ms ease;
+}
+
+.instructor-voice-transcript-viewport {
+    overscroll-behavior: contain;
+    scrollbar-color: color-mix(in srgb, currentColor 24%, transparent) transparent;
+    scrollbar-gutter: stable both-edges;
+    scrollbar-width: thin;
+    scroll-behavior: smooth;
+}
+
+.instructor-voice-transcript-viewport::-webkit-scrollbar {
+    width: 4px;
+}
+
+.instructor-voice-transcript-viewport::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.instructor-voice-transcript-viewport::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: color-mix(in srgb, currentColor 24%, transparent);
+}
+
+.instructor-voice-transcript-viewport[data-content-above]:not([data-content-below]) {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, 0.3) 10%, #000 32%, #000 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, rgba(0, 0, 0, 0.3) 10%, #000 32%, #000 100%);
+}
+
+.instructor-voice-transcript-viewport[data-content-below]:not([data-content-above]) {
+    -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 68%, rgba(0, 0, 0, 0.3) 90%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 0, #000 68%, rgba(0, 0, 0, 0.3) 90%, transparent 100%);
+}
+
+.instructor-voice-transcript-viewport[data-content-above][data-content-below] {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 24%, #000 76%, transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 24%, #000 76%, transparent 100%);
+}
+
+.instructor-voice-transcript-word {
+    position: relative;
+    display: inline-block;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    vertical-align: top;
+    opacity: 1;
+    filter: blur(0);
+    will-change: opacity, filter, transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .instructor-voice-transcript-viewport {
+        scroll-behavior: auto;
+    }
+
+    .instructor-voice-transcript-word {
+        opacity: 1;
+        filter: none;
+        transform: none;
+        animation: none;
+        will-change: auto;
+    }
+}

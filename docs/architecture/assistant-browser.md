@@ -15,13 +15,24 @@ The browser keeps presentation and authority separate:
   - gates every `<webview>` attachment;
   - forces sandboxing, context isolation, Node isolation, and web security;
   - rejects unapproved partitions, preloads, source schemes, redirects, and popups.
+- `desktop/src/main/ipc/handlers/browser-preview-developer-handlers.ts`
+  - resolves every guest-targeted developer operation through the trusted owner-window/tab registry;
+  - owns bounded DevTools, reload, zoom, color emulation, in-page annotation, capture, and recording operations;
+  - starts annotation code in a dedicated Chromium isolated world and captures the marked result before tearing that world down;
+  - stores captures under app-owned user data and exposes opaque artifact IDs rather than arbitrary file operations.
 - `desktop/src/preload/adapters/projects-adapter.ts`
-  - exposes only typed browser configuration and external-open operations.
+  - exposes typed Browser configuration, developer actions, and recording-frame events without exposing Electron `webContents`.
 - `desktop/src/renderer/src/pages/assistant/assistant-browser-workspace-state.ts`
-  - owns bounded per-chat browser-tab metadata and URL normalization;
-  - persists only safe HTTP(S) page URLs, bounded safe favicon references, titles, active-tab selection, and an optional two-tab split.
+  - owns bounded per-chat Browser metadata and URL normalization;
+  - persists safe HTTP(S) URLs, bounded favicon references, titles, viewport dimensions/presets, aspect lock, page zoom, color emulation, and active selection.
 - `desktop/src/renderer/src/pages/assistant/AssistantBrowserWorkspace.tsx`
-  - owns Browser controls, internal tabs, project server suggestions, and rendered states.
+  - owns flat Browser chrome, project server suggestions, annotation-session lifecycle, developer actions, and rendered states; outer Inspector tabs own page selection and closure.
+- `desktop/src/main/ipc/handlers/browser-preview-annotation-script.ts`
+  - renders Select, Region, Draw, Erase, Clear, Cancel, comment, and Attach controls directly inside the guest’s dedicated isolated world;
+  - has DOM access but no preload, Node, Electron, or Zyra bridge, and returns only a bounded annotation payload;
+  - Attach captures the marked crop, stages it under Assistant attachment storage through an opaque `clipboard://` reference, and adds one removable annotation card to the selected chat composer.
+- `desktop/src/renderer/src/pages/assistant/AssistantInspectorDeveloperToast.tsx`
+  - owns transient Browser results as a correctly proportioned bottom-right image followed by compact artifact buttons.
 - `desktop/src/renderer/src/pages/assistant/AssistantBrowserWebview.tsx`
   - owns one live Chromium guest and projects its navigation events into tab metadata.
 
@@ -31,9 +42,9 @@ The guest page never receives Zyra’s preload or `window.devscope` bridge.
 
 Browser is lazy-loaded after the user selects its Inspector tile. Once opened, the Browser workspace stays mounted while Review, Explorer, or Terminal is selected.
 
-Each internal browser tab also keeps its `<webview>` mounted. Inactive guests are hidden and made non-interactive rather than destroyed, preserving Chromium history, form state, scroll position, and application state during ordinary tab switches. Browser-only side-by-side mode gives two retained guests independent half-width viewports; it does not clone, reparent, or recreate either guest.
+Each Browser page has one outer Inspector tab and keeps its `<webview>` mounted while its Browser workspace exists. Inactive guests cross-fade, become hidden/non-interactive after the transition, and are not destroyed, preserving Chromium history, form state, scroll position, and application state during ordinary outer-tab switches. There is no nested Browser tab strip or Browser-only split layout.
 
-Closing the outer Browser workspace destroys the live guests. Safe current URLs, reported favicons, and tab selection remain in bounded per-chat local persistence and reload when Browser is opened again. Chromium cookies, local storage, IndexedDB, cache storage, service workers, and HTTP authentication live in one Zyra-wide persistent partition, so ordinary site logins survive Browser, thread, chat-session, project, and app restarts.
+Closing a Browser page destroys only that guest. Safe current URLs, reported favicons, viewport settings, and active selection remain in bounded per-chat local persistence. On Inspector remount or refresh, genuinely persisted Browser pages immediately repopulate their outer tabs; a fabricated blank fallback is never restored into an untouched chat. Chromium cookies, local storage, IndexedDB, cache storage, service workers, and HTTP authentication live in one Zyra-wide persistent partition, so ordinary site logins survive Browser, thread, chat-session, project, and app restarts.
 
 ## Navigation
 
@@ -46,7 +57,7 @@ The address field accepts:
 
 Local file, JavaScript, data, browser-internal, and custom protocols are rejected in both renderer normalization and the main-process guest gate.
 
-Back, Forward, Reload/Stop, New Tab, Close Tab, and Open External operate on the active guest. Main-frame navigation owns loading state, so subframes and late background requests cannot restart the settled refresh indicator. Chromium title, favicon, history, completion, and main-frame failure events update the active tab contract.
+Back, Forward, Reload/Stop, the outer Inspector page tabs, and Open External operate on the active guest. Main-frame navigation owns loading state, so subframes and late background requests cannot restart the settled refresh indicator. Chromium title, favicon, history, completion, and main-frame failure events update the active tab contract.
 
 ## Local Development Servers
 
@@ -58,9 +69,30 @@ External process changes require **Refresh local servers**. Terminal output is n
 
 The integrated Browser uses one global local profile. The partition identifier is derived in the main process from a fixed versioned profile key; renderer workspace, thread, session, and project identifiers cannot choose or widen the credential partition. Browser tab metadata remains per chat, while website authentication state is shared across Zyra.
 
-The profile is stored under Electron’s local `userData` directory and is not copied into chat history, Resources, prompts, or website-card metadata requests. The Browser toolbar identifies the local profile and provides a two-step **Clear local browsing data** action. Clearing removes site storage, cookies, cache, and HTTP authentication, then reloads mounted Browser guests.
+The profile is stored under Electron’s local `userData` directory and is not copied into chat history, Resources, prompts, or website-card metadata requests. The Browser menu identifies the shared local profile on its two-step **Clear all local browsing data** action. Clearing removes site storage, cookies, cache, and HTTP authentication, then reloads mounted Browser guests.
 
 Legacy chat-scoped partitions are neither copied into the global profile nor deleted automatically. Users sign in once in the new profile; any cleanup of legacy partition directories must be a separate explicit destructive operation.
+
+## Developer Suite
+
+The active Browser page supports:
+
+- full-panel and responsive freeform sizing plus Chrome DevTools' standard 17-device Phone and Tablet catalog;
+- bounded editable dimensions, aspect locking, rotation, fit-to-panel presentation, pointer resize rails, and keyboard resize steps;
+- per-tab page zoom and `prefers-color-scheme` emulation;
+- reload, hard reload, detached guest DevTools, external opening, separate HTTP-cache and cookie/auth clearing, and full local-profile clearing;
+- one finite in-page annotation session with Select, Region, Draw, Erase, Clear, Cancel, a change comment, Attach, and Escape;
+- viewport screenshots shown at their natural aspect ratio from a bounded 640×440 high-density preview, with compact opaque copy image, open, reveal, copy path, annotation, and close buttons;
+- thumbnail arrival, staggered action entry, right-drag dismissal, and animated click/timeout closure, all disabled when reduced motion is requested;
+- one-at-a-time CDP screencast recording, renderer-side bounded video encoding, and reveal/copy-path actions.
+
+The renderer identifies a guest using the `<webview>` guest ID it already receives plus Zyra’s stable Browser tab ID. Main accepts the request only when `TrustedGuestRegistry.resolveOwned()` proves the requesting renderer owns that guest and the guest is bound to that exact tab. No API accepts an arbitrary Electron `webContents` ID by itself.
+
+Screenshots and recordings are written only below the app-owned Browser artifact directory. The renderer receives an opaque artifact ID and, for screenshots, a bounded thumbnail—not the artifact filesystem path. Open, reveal, and clipboard APIs accept generated artifact IDs, validate owner-window identity and the unchanged file, and cannot operate on arbitrary paths. Recording saves additionally require a one-use, 60-second grant produced by a real stopped recording for the same window, guest, and tab; payloads are capped at 128 MB.
+
+Annotation does not use CDP inspect mode. Main injects one self-contained script into a dedicated Chromium isolated world after owner/window/tab validation. The page can neither access that world nor keep its controls alive: Attach, Cancel, Escape, navigation, tab changes, Inspector closure, recording, DevTools, guest destruction, and capture completion all tear it down. The resulting marks are captured before teardown and returned with the bounded annotation payload. Attach then copies the owner-scoped artifact into Assistant attachment storage without exposing its path, adds the crop to the current composer, and appends a bounded `<preview_annotation>` context block when the message is sent.
+
+Recording still uses allowlisted CDP operations against the trusted guest. Opening guest DevTools deliberately releases that guest’s CDP session, and the supervised Browser driver reattaches on its next operation. Color emulation is restored after DevTools closes. Annotation and recording cannot be active together.
 
 ## Security Defaults
 
@@ -132,8 +164,8 @@ Coordinate actions run against hidden retained guests and do not activate the Br
 - executable per-action approval for irreversible external side effects;
 - richer visible Take Over/Resume controls beyond the structured chat choices;
 - richer agent ownership labels and action history in the Browser toolbar;
-- persisted Chromium back/forward history after the outer Browser workspace is closed;
+- persisted Chromium back/forward history after a Browser guest is closed;
 - automatic server discovery from terminal output or filesystem watchers;
-- freeform viewport sizing and device emulation.
+- user-agent, device-pixel-ratio, and touch emulation beyond the current standard CSS viewport dimensions.
 
 Chrome background visual use is specified separately in `docs/implementations/chrome-visual-browser-use.md`. Windows isolation is specified in `docs/implementations/windows-isolated-computer-use.md`.

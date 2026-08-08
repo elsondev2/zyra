@@ -8,6 +8,7 @@ import type {
 import type {
     AssistantAccountOverview,
     AssistantDomainEvent,
+    AssistantRateLimitResetRedemption,
     AssistantGetHistoryPageInput,
     AssistantGetReviewIndexInput,
     AssistantGetTurnDetailInput,
@@ -33,6 +34,7 @@ export const ASSISTANT_IPC = {
     workflowAction: 'devscope:assistant:workflowAction',
     getStatus: 'devscope:assistant:getStatus',
     getAccountOverview: 'devscope:assistant:getAccountOverview',
+    redeemAccountReset: 'devscope:assistant:redeemAccountReset',
     getSessionTurnUsage: 'devscope:assistant:getSessionTurnUsage',
     listModels: 'devscope:assistant:listModels',
     connect: 'devscope:assistant:connect',
@@ -67,11 +69,11 @@ export const ASSISTANT_IPC = {
     subscribeRealtimeVoice: 'devscope:assistant:realtimeVoice:subscribe',
     unsubscribeRealtimeVoice: 'devscope:assistant:realtimeVoice:unsubscribe',
     startRealtimeVoice: 'devscope:assistant:realtimeVoice:start',
+    sendRealtimeVoiceMessage: 'devscope:assistant:realtimeVoice:sendMessage',
     stopRealtimeVoice: 'devscope:assistant:realtimeVoice:stop',
     realtimeVoiceEvent: 'devscope:assistant:realtimeVoice:event',
-    getTranscriptionModelState: 'devscope:assistant:getTranscriptionModelState',
-    downloadTranscriptionModel: 'devscope:assistant:downloadTranscriptionModel',
-    transcribeAudioWithLocalModel: 'devscope:assistant:transcribeAudioWithLocalModel',
+    getVoiceTranscriptionState: 'devscope:assistant:getVoiceTranscriptionState',
+    transcribeVoice: 'devscope:assistant:transcribeVoice',
     eventStream: 'devscope:assistant:event'
 } as const
 
@@ -88,6 +90,17 @@ export interface AssistantBootstrapPayload {
 
 export interface AssistantAccountOverviewPayload {
     overview: AssistantAccountOverview
+}
+
+export interface AssistantRedeemAccountResetInput {
+    creditId: string
+    confirmed: true
+}
+
+export interface AssistantRedeemAccountResetPayload {
+    redemption: AssistantRateLimitResetRedemption
+    overview: AssistantAccountOverview | null
+    refreshError: string | null
 }
 
 export interface AssistantFleetSnapshotPayload {
@@ -230,20 +243,21 @@ export interface AssistantUserInputResponseInput {
     answers: Record<string, string | string[]>
 }
 
-export type AssistantTranscriptionModelStatus = 'missing' | 'downloading' | 'ready' | 'error'
+export type AssistantVoiceTranscriptionStatus = 'ready' | 'signed-out' | 'unavailable'
 
-export interface AssistantTranscriptionModelState {
-    provider: 'vosk'
-    modelId: string
-    modelName: string
-    status: AssistantTranscriptionModelStatus
-    installPath: string | null
-    downloadUrl: string
-    error: string | null
+export interface AssistantVoiceTranscriptionState {
+    provider: 'codex'
+    status: AssistantVoiceTranscriptionStatus
+    available: boolean
+    signedIn: boolean
+    message: string | null
 }
 
-export interface AssistantTranscribeAudioInput {
-    audioBuffer: ArrayBuffer
+export interface AssistantTranscribeVoiceInput {
+    audioBase64: string
+    mimeType: 'audio/wav'
+    sampleRateHz: 24_000
+    durationMs: number
 }
 
 export interface AssistantEventStreamPayload {

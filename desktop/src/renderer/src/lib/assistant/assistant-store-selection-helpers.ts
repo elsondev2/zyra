@@ -248,6 +248,32 @@ export function areAssistantConversationSelectionsEqual(left: AssistantConversat
         && areAssistantLatestProposedPlansEqual(left.latestProposedPlan, right.latestProposedPlan)
 }
 
+function getRailThreadSignature(thread: AssistantSnapshot['sessions'][number]['threads'][number]): string {
+    const presence = thread.canonicalPresence
+    return [
+        thread.id,
+        thread.providerThreadId || '',
+        thread.source,
+        thread.parentThreadId || '',
+        thread.providerParentThreadId || '',
+        thread.subagentDepth ?? '',
+        thread.agentNickname || '',
+        thread.agentRole || '',
+        thread.state,
+        thread.updatedAt,
+        thread.latestTurn?.id || '',
+        thread.latestTurn?.state || '',
+        thread.hasPendingApprovals ? '1' : '0',
+        thread.hasPendingUserInputs ? '1' : '0',
+        thread.hasActivePlan ? '1' : '0',
+        thread.lastError || '',
+        presence?.state || '',
+        presence?.activeTurnId || '',
+        presence?.backgroundWorkActive ? '1' : '0',
+        presence?.latestSequence ?? ''
+    ].join(':')
+}
+
 function getRailSessionSignature(session: AssistantSnapshot['sessions'][number]): string {
     const activeThread = session.threads.find((thread) => thread.id === session.activeThreadId) || null
     const earliestCreatedThread = session.threads.reduce<typeof activeThread>((earliest, thread) => {
@@ -258,7 +284,7 @@ function getRailSessionSignature(session: AssistantSnapshot['sessions'][number])
     const hasVisibleChats = session.threads.some((thread) => (thread.messageCount || 0) > 0)
     return [
         session.id, session.title, session.mode, session.projectPath || '', session.playgroundLabId || '', session.pendingLabRequest?.id || '', session.pendingLabRequest?.kind || '', session.archived ? '1' : '0', session.createdAt, session.activeThreadId || '',
-        session.threads.map((thread) => [thread.id, thread.providerThreadId || '', thread.source, thread.parentThreadId || '', thread.providerParentThreadId || '', thread.subagentDepth ?? '', thread.agentNickname || '', thread.agentRole || '', thread.state, thread.updatedAt, thread.latestTurn?.id || '', thread.latestTurn?.state || ''].join(':')).join('|'),
+        session.threads.map(getRailThreadSignature).join('|'),
         hasVisibleChats ? '1' : '0', activeThread?.state || '', activeThread?.messageCount || 0, activeThread?.lastSeenCompletedTurnId || '', activeThread?.latestTurn?.id || '', activeThread?.latestTurn?.state || '', activeThread?.cwd || '', earliestCreatedThread?.cwd || ''
     ].join('|')
 }

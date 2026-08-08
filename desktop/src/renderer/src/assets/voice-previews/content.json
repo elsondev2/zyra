@@ -1,0 +1,38 @@
+{
+  "arbor": {
+    "topic": "The hidden language of forests",
+    "text": "Beneath a quiet forest, roots and fungi form living networks that move water, minerals, and chemical signals between trees. An older tree can share resources with a shaded sapling, while nearby plants warn one another when insects arrive. The forest looks still from above, but underground it is constantly exchanging information."
+  },
+  "breeze": {
+    "topic": "Reading the ocean without instruments",
+    "text": "Long before electronic navigation, Polynesian wayfinders crossed enormous stretches of ocean by reading stars, swells, clouds, birds, and subtle changes in wind. They carried a detailed map in memory rather than on paper. Every reflection and current became a clue, turning the open sea into a landscape they could recognize."
+  },
+  "cove": {
+    "topic": "Why the ocean glows at night",
+    "text": "On certain nights, a breaking wave can sparkle electric blue because microscopic plankton produce light when the water around them moves. The flash may startle predators or reveal them to larger hunters. A single organism is almost invisible, yet millions together can transform a dark shoreline into something that looks like a moving field of stars."
+  },
+  "ember": {
+    "topic": "Shaping light from molten glass",
+    "text": "A glassblower begins with a glowing drop that behaves somewhere between honey and fire. By turning the pipe, adding air, and working quickly, they guide gravity instead of fighting it. Small changes in heat alter every movement. The finished vessel feels permanent, even though it began as a few seconds of carefully controlled motion."
+  },
+  "juniper": {
+    "topic": "How scent unlocks old memories",
+    "text": "A familiar scent can revive a memory with unusual speed because smell connects closely to brain regions involved in emotion and memory. Fresh rain, a particular soap, or food from childhood may recover details that seemed forgotten. The experience feels sudden, but the association may have been quietly preserved for years."
+  },
+  "maple": {
+    "topic": "The monarch butterfly relay",
+    "text": "Monarch butterflies travel thousands of miles between Mexico and northern regions, yet no single butterfly completes the entire round trip. Several generations continue the route, guided by sunlight and an inherited sense of direction. The migration is less like one long journey and more like a relay carried forward by butterflies that never met."
+  },
+  "sol": {
+    "topic": "A photon escaping the Sun",
+    "text": "Light made in the Sun's core may spend thousands of years bouncing through dense matter before reaching the surface. Once it finally escapes, the trip across space to Earth takes only about eight minutes. A warm patch of sunlight can therefore contain energy with both an ancient history and a remarkably quick final journey."
+  },
+  "spruce": {
+    "topic": "Painting the sky with solar wind",
+    "text": "The northern lights begin when charged particles from the Sun meet Earth's magnetic field and are guided toward the poles. There they collide with gases high in the atmosphere, producing curtains of green, violet, and red light. What looks calm from the ground is the visible edge of a storm arriving from space."
+  },
+  "vale": {
+    "topic": "Why old maps left blank spaces",
+    "text": "Early mapmakers filled known coastlines with careful detail while distant interiors remained empty, speculative, or decorated with imagined creatures. Those blank spaces revealed the limits of travel as much as geography. A map was never only a picture of the world; it was also a record of what its maker could verify, guess, or dream."
+  }
+}

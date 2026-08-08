@@ -1,0 +1,332 @@
+.instructor-voice-settings-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 130;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgb(0 0 0 / 0.58);
+    backdrop-filter: blur(6px);
+}
+
+.instructor-voice-settings-dialog {
+    position: relative;
+    width: min(880px, 100%);
+    height: min(590px, calc(100vh - 48px));
+    min-height: 480px;
+    overflow: hidden;
+    outline: none;
+    border: 1px solid var(--color-border-secondary);
+    border-radius: 12px;
+    background: var(--color-card);
+    box-shadow: 0 28px 90px rgb(0 0 0 / 0.42);
+}
+
+.instructor-voice-settings-close {
+    position: absolute;
+    top: 17px;
+    right: 17px;
+    z-index: 3;
+    display: inline-flex;
+    width: 34px;
+    height: 34px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 5px;
+    color: var(--color-text-secondary);
+    transition: color 160ms ease, background-color 160ms ease;
+}
+
+.instructor-voice-settings-close:hover {
+    background: var(--color-accent);
+    color: var(--color-text);
+}
+
+.instructor-voice-settings-close:focus-visible,
+.instructor-voice-settings-arrow:focus-visible,
+.instructor-voice-settings-preview:focus-visible,
+.instructor-voice-settings-dot:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--voice-settings-accent) 55%, transparent);
+    outline-offset: 2px;
+}
+
+.instructor-voice-settings-layout {
+    display: grid;
+    grid-template-columns: minmax(280px, 0.86fr) minmax(340px, 1.14fr);
+    gap: clamp(30px, 5vw, 58px);
+    width: 100%;
+    height: 100%;
+    padding: 24px 34px 32px;
+}
+
+.instructor-voice-settings-heading {
+    color: var(--color-text);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+
+.instructor-voice-settings-voice-pane {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    transition: opacity 180ms ease;
+}
+
+.instructor-voice-settings-voice-pane.is-disabled .instructor-voice-settings-carousel,
+.instructor-voice-settings-voice-pane.is-disabled .instructor-voice-settings-voice-copy,
+.instructor-voice-settings-voice-pane.is-disabled .instructor-voice-settings-dots {
+    opacity: 0.36;
+}
+
+.instructor-voice-settings-carousel {
+    display: grid;
+    grid-template-columns: 40px 160px 40px;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 38px;
+}
+
+.instructor-voice-settings-arrow {
+    display: inline-flex;
+    width: 38px;
+    height: 38px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 5px;
+    color: var(--color-text-secondary);
+    transition: color 160ms ease, background-color 160ms ease;
+}
+
+.instructor-voice-settings-arrow:hover:not(:disabled) {
+    background: var(--color-accent);
+    color: var(--color-text);
+}
+
+.instructor-voice-settings-arrow:disabled,
+.instructor-voice-settings-preview:disabled,
+.instructor-voice-settings-dot:disabled {
+    cursor: not-allowed;
+}
+
+.instructor-voice-settings-preview {
+    position: relative;
+    width: 160px;
+    height: 160px;
+    border-radius: 50%;
+}
+
+.instructor-voice-settings-preview-icon {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    color: white;
+    opacity: 0;
+    filter: drop-shadow(0 1px 6px rgb(0 0 0 / 0.8));
+    transition: opacity 180ms ease;
+}
+
+.instructor-voice-settings-preview:hover .instructor-voice-settings-preview-icon,
+.instructor-voice-settings-preview:focus-visible .instructor-voice-settings-preview-icon,
+.instructor-voice-settings-preview-icon.is-visible {
+    opacity: 0.78;
+}
+
+.instructor-voice-settings-voice-copy {
+    margin-top: 13px;
+    text-align: center;
+    transition: opacity 180ms ease;
+}
+
+.instructor-voice-settings-voice-copy h4 {
+    color: var(--color-text);
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.instructor-voice-settings-voice-copy p {
+    margin-top: 3px;
+    color: var(--color-text-secondary);
+    font-size: 9px;
+}
+
+.instructor-voice-settings-dots {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 14px;
+    transition: opacity 180ms ease;
+}
+
+.instructor-voice-settings-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-text-muted);
+    transition: transform 160ms ease, background-color 160ms ease;
+}
+
+.instructor-voice-settings-dot:hover:not(:disabled) {
+    transform: scale(1.35);
+}
+
+.instructor-voice-settings-dot.is-selected {
+    background: var(--voice-settings-accent);
+    transform: scale(1.25);
+}
+
+.instructor-voice-settings-preview-error {
+    margin-top: 10px;
+    color: rgb(248 113 113);
+    font-size: 9px;
+    text-align: center;
+}
+
+.instructor-voice-settings-output-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    margin-top: auto;
+    padding-top: 24px;
+    border-top: 1px solid var(--color-border);
+}
+
+.instructor-voice-settings-output-row label {
+    color: var(--color-text);
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.instructor-voice-settings-output-row select {
+    width: 126px;
+    height: 36px;
+    padding: 0 10px;
+    border: 1px solid var(--color-border-secondary);
+    border-radius: 5px;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-size: 10px;
+    outline: none;
+    transition: border-color 160ms ease, opacity 160ms ease;
+}
+
+.instructor-voice-settings-output-row select:focus {
+    border-color: color-mix(in srgb, var(--voice-settings-accent) 58%, transparent);
+}
+
+.instructor-voice-settings-output-row select:disabled,
+.instructor-voice-settings-instructions-pane textarea:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
+.instructor-voice-settings-instructions-pane {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding-right: 20px;
+}
+
+.instructor-voice-settings-instructions-heading {
+    display: flex;
+    min-height: 24px;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.instructor-voice-settings-instructions-heading span {
+    color: var(--color-text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 8px;
+}
+
+.instructor-voice-settings-instructions-pane textarea {
+    min-height: 0;
+    flex: 1;
+    width: 100%;
+    margin-top: 16px;
+    resize: none;
+    padding: 16px;
+    border: 1px solid var(--color-border-secondary);
+    border-radius: 7px;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-size: 11px;
+    line-height: 1.65;
+    outline: none;
+    transition: border-color 160ms ease, opacity 160ms ease;
+}
+
+.instructor-voice-settings-instructions-pane textarea:focus {
+    border-color: color-mix(in srgb, var(--voice-settings-accent) 60%, transparent);
+}
+
+@media (max-width: 720px) {
+    .instructor-voice-settings-backdrop {
+        align-items: center;
+        padding: 12px;
+    }
+
+    .instructor-voice-settings-dialog {
+        height: auto;
+        min-height: 0;
+        max-height: calc(100vh - 24px);
+        overflow-y: auto;
+    }
+
+    .instructor-voice-settings-layout {
+        grid-template-columns: 1fr;
+        gap: 32px;
+        height: auto;
+        padding: 22px 22px 28px;
+    }
+
+    .instructor-voice-settings-voice-pane,
+    .instructor-voice-settings-instructions-pane {
+        padding-right: 0;
+    }
+
+    .instructor-voice-settings-carousel {
+        margin-top: 24px;
+    }
+
+    .instructor-voice-settings-output-row {
+        margin-top: 28px;
+    }
+
+    .instructor-voice-settings-instructions-pane textarea {
+        min-height: 220px;
+        flex: none;
+    }
+}
+
+@media (max-width: 390px) {
+    .instructor-voice-settings-carousel {
+        grid-template-columns: 34px 140px 34px;
+        gap: 6px;
+    }
+
+    .instructor-voice-settings-preview,
+    .instructor-voice-settings-preview .instructor-voice-orb {
+        width: 140px;
+        height: 140px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .instructor-voice-settings-voice-pane,
+    .instructor-voice-settings-arrow,
+    .instructor-voice-settings-preview-icon,
+    .instructor-voice-settings-dot {
+        transition: none;
+    }
+}

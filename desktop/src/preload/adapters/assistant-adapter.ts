@@ -16,13 +16,15 @@ import type {
     AssistantGetTurnDetailInput,
     AssistantPersistClipboardImageInput,
     AssistantRealtimeVoiceEvent,
+    AssistantRedeemAccountResetInput,
     AssistantResolveClipboardAttachmentInput,
     AssistantSearchTurnsInput,
     AssistantSendPromptOptions,
+    AssistantSendRealtimeVoiceMessageInput,
     AssistantSelectThreadInput,
     AssistantStartRealtimeVoiceInput,
     AssistantSetPlaygroundRootInput,
-    AssistantTranscribeAudioInput,
+    AssistantTranscribeVoiceInput,
     AssistantUserInputResponseInput,
     FleetOperationInput
 } from '../../shared/assistant/contracts'
@@ -42,6 +44,8 @@ export function createAssistantAdapter() {
             workflowAction: (input: FleetOperationInput) => ipcRenderer.invoke(ASSISTANT_IPC.workflowAction, input),
             getStatus: () => ipcRenderer.invoke(ASSISTANT_IPC.getStatus),
             getAccountOverview: () => ipcRenderer.invoke(ASSISTANT_IPC.getAccountOverview),
+            redeemAccountReset: (input: AssistantRedeemAccountResetInput) =>
+                ipcRenderer.invoke(ASSISTANT_IPC.redeemAccountReset, input),
             getSessionTurnUsage: (input?: { sessionId?: string }) => ipcRenderer.invoke(ASSISTANT_IPC.getSessionTurnUsage, input),
             listModels: (forceRefresh = false) => ipcRenderer.invoke(ASSISTANT_IPC.listModels, forceRefresh),
             connect: (options?: AssistantConnectOptions) => ipcRenderer.invoke(ASSISTANT_IPC.connect, options),
@@ -87,6 +91,8 @@ export function createAssistantAdapter() {
                 ipcRenderer.invoke(ASSISTANT_IPC.respondUserInput, input),
             startRealtimeVoice: (input: AssistantStartRealtimeVoiceInput) =>
                 ipcRenderer.invoke(ASSISTANT_IPC.startRealtimeVoice, input),
+            sendRealtimeVoiceMessage: (input: AssistantSendRealtimeVoiceMessageInput) =>
+                ipcRenderer.invoke(ASSISTANT_IPC.sendRealtimeVoiceMessage, input),
             stopRealtimeVoice: () => ipcRenderer.invoke(ASSISTANT_IPC.stopRealtimeVoice),
             onRealtimeVoiceEvent: (callback: (event: AssistantRealtimeVoiceEvent) => void) => {
                 const listener = (_event: Electron.IpcRendererEvent, payload: AssistantRealtimeVoiceEvent) => callback(payload)
@@ -97,9 +103,8 @@ export function createAssistantAdapter() {
                     void ipcRenderer.invoke(ASSISTANT_IPC.unsubscribeRealtimeVoice).catch(() => undefined)
                 }
             },
-            getTranscriptionModelState: () => ipcRenderer.invoke(ASSISTANT_IPC.getTranscriptionModelState),
-            downloadTranscriptionModel: () => ipcRenderer.invoke(ASSISTANT_IPC.downloadTranscriptionModel),
-            transcribeAudioWithLocalModel: (input: AssistantTranscribeAudioInput) => ipcRenderer.invoke(ASSISTANT_IPC.transcribeAudioWithLocalModel, input),
+            getVoiceTranscriptionState: () => ipcRenderer.invoke(ASSISTANT_IPC.getVoiceTranscriptionState),
+            transcribeVoice: (input: AssistantTranscribeVoiceInput) => ipcRenderer.invoke(ASSISTANT_IPC.transcribeVoice, input),
             onEvent: (callback: (payload: AssistantEventStreamPayload) => void) => {
                 const listener = (_event: Electron.IpcRendererEvent, payload: AssistantEventStreamPayload) => {
                     callback(payload)

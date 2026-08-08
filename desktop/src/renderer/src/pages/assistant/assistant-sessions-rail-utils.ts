@@ -167,19 +167,9 @@ export function resolveAssistantThreadStatusPill(
     thread: AssistantThread | null,
     isActiveThread: boolean,
     recencyTierByThreadId?: ReadonlyMap<string, number>,
-    context?: AssistantSidebarStatusContext
+    _context?: AssistantSidebarStatusContext
 ): SessionStatusPill | null {
     if (!thread) return null
-    if (context?.connecting) {
-        return {
-            label: 'Connecting',
-            colorClass: 'text-sky-400',
-            dotClass: 'bg-sky-400',
-            badgeClass: 'bg-sky-500/[0.12] text-sky-100',
-            pulse: true,
-            showLabel: true
-        }
-    }
 
     const phase = getAssistantThreadPhase(thread)
     const latestTurn = thread.latestTurn
@@ -269,9 +259,8 @@ export function resolveAssistantThreadStatusPill(
                 label: 'Stopped',
                 colorClass: 'text-sparkle-text-muted',
                 dotClass: 'bg-sparkle-text-muted/55',
-                badgeClass: 'bg-white/[0.045] text-sparkle-text-secondary',
                 pulse: false,
-                showLabel: true
+                showLabel: false
             }
         default:
             return resolveAssistantThreadRecencyPill(thread, isActiveThread, recencyTierByThreadId)
@@ -289,7 +278,12 @@ export function getAssistantThreadLastMessageAt(thread: AssistantThread | null):
         return getSortableTimestamp(messageAt) > getSortableTimestamp(latest) ? messageAt : latest
     }, null)
 
-    return latestMessageAt || thread.createdAt
+    return latestMessageAt
+        || thread.latestTurn?.completedAt
+        || thread.latestTurn?.startedAt
+        || thread.latestTurn?.requestedAt
+        || thread.updatedAt
+        || thread.createdAt
 }
 
 export function getSessionLastActivityAt(session: AssistantSession): string {

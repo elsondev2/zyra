@@ -22,11 +22,14 @@ import type {
     AssistantPlaygroundResultPayload,
     AssistantPersistClipboardImageInput,
     AssistantRealtimeVoiceEvent,
+    AssistantRedeemAccountResetInput,
+    AssistantRedeemAccountResetPayload,
     AssistantReviewIndexResultPayload,
     AssistantRuntimeStatus,
     AssistantSearchTurnsInput,
     AssistantSearchTurnsResultPayload,
     AssistantSendPromptOptions,
+    AssistantSendRealtimeVoiceMessageInput,
     AssistantSelectThreadInput,
     AssistantStartRealtimeVoiceInput,
     AssistantSetPlaygroundRootInput,
@@ -36,8 +39,8 @@ import type {
     AssistantThreadDetailResultPayload,
     AssistantHistoryPageResultPayload,
     AssistantTurnDetailResultPayload,
-    AssistantTranscribeAudioInput,
-    AssistantTranscriptionModelState,
+    AssistantTranscribeVoiceInput,
+    AssistantVoiceTranscriptionState,
     AssistantUserInputResponseInput,
     FleetOperationInput
 } from '../assistant/contracts'
@@ -76,6 +79,7 @@ import type {
     DevScopePythonPreviewEvent
 } from './devscope-project-contracts'
 import type { ZyraMemoryApi } from './memory-contracts'
+import type { DevScopeFontsApi } from './font-contracts'
 import type {
     ControlCursorState,
     ControlGrant,
@@ -95,6 +99,7 @@ import type {
 export * from './devscope-git-contracts'
 export * from './devscope-project-contracts'
 export * from './memory-contracts'
+export * from './font-contracts'
 
 export type DevScopeOk<T = Record<string, unknown>> = { success: true } & T
 export type DevScopeErr = { success: false; error: string }
@@ -114,6 +119,103 @@ export type DevScopeBrowserLinkPreview = {
     imageUrl: string | null
     siteName: string | null
 }
+
+export type DevScopeBrowserGuestTargetInput = {
+    guestWebContentsId: number
+    tabId: string
+}
+
+export type DevScopeBrowserColorScheme = 'system' | 'light' | 'dark'
+
+export type DevScopeBrowserCaptureArtifact = {
+    artifactId: string
+    tabId: string
+    kind: 'screenshot' | 'recording'
+    mimeType: string
+    sizeBytes: number
+    createdAt: string
+    width?: number
+    height?: number
+    thumbnailDataUrl?: string
+}
+
+export type DevScopeBrowserRecordingFrame = {
+    tabId: string
+    data: string
+    width: number
+    height: number
+    receivedAt: string
+}
+
+export type DevScopeBrowserAnnotationPoint = { x: number; y: number }
+export type DevScopeBrowserAnnotationRect = { x: number; y: number; width: number; height: number }
+
+export type DevScopeBrowserPickedElement = {
+    id: string
+    tabId: string
+    url: string | null
+    title: string | null
+    selector: string
+    tagName: string
+    attributes: Record<string, string>
+    bounds: DevScopeBrowserAnnotationRect | null
+    createdAt: string
+}
+
+export type DevScopeBrowserAnnotationRegion = {
+    id: string
+    rect: DevScopeBrowserAnnotationRect
+}
+
+export type DevScopeBrowserAnnotationStroke = {
+    id: string
+    color: string
+    width: number
+    points: DevScopeBrowserAnnotationPoint[]
+    bounds: DevScopeBrowserAnnotationRect
+}
+
+export type DevScopeBrowserAnnotationStyleChange = {
+    targetId: string
+    selector: string | null
+    property: string
+    previousValue: string
+    value: string
+}
+
+export type DevScopeBrowserAnnotationDraft = {
+    tabId: string
+    url: string | null
+    title: string | null
+    comment: string
+    elements: DevScopeBrowserPickedElement[]
+    regions: DevScopeBrowserAnnotationRegion[]
+    strokes: DevScopeBrowserAnnotationStroke[]
+    styleChanges: DevScopeBrowserAnnotationStyleChange[]
+}
+
+export type DevScopeBrowserAnnotationPayload = DevScopeBrowserAnnotationDraft & {
+    id: string
+    createdAt: string
+}
+
+export type DevScopeBrowserAnnotationTheme = {
+    colorScheme: 'light' | 'dark'
+    background: string
+    foreground: string
+    popover: string
+    mutedForeground: string
+    border: string
+    primary: string
+    primaryForeground: string
+    fontFamily: string
+}
+
+export type DevScopeBrowserAnnotationInput = DevScopeBrowserGuestTargetInput & {
+    theme: DevScopeBrowserAnnotationTheme
+}
+
+export const BROWSER_PREVIEW_RECORDING_FRAME_CHANNEL = 'devscope:browserPreview:recordingFrame'
 
 export type DevScopePreviewTerminalEvent = {
     sessionId: string
@@ -263,6 +365,7 @@ export interface DevScopeAssistantApi {
     workflowAction: (input: FleetOperationInput) => Promise<DevScopeResult<AssistantFleetOperationResultPayload>>
     getStatus: () => Promise<AssistantRuntimeStatus>
     getAccountOverview: () => Promise<DevScopeResult<AssistantAccountOverviewPayload>>
+    redeemAccountReset: (input: AssistantRedeemAccountResetInput) => Promise<DevScopeResult<AssistantRedeemAccountResetPayload>>
     getSessionTurnUsage: (input?: AssistantGetSessionTurnUsageInput) => Promise<DevScopeResult<AssistantSessionTurnUsageResultPayload>>
     listModels: (forceRefresh?: boolean) => Promise<DevScopeResult<{ models: AssistantModelInfo[] }>>
     connect: (options?: AssistantConnectOptions) => Promise<DevScopeResult<{ threadId: string }>>
@@ -296,12 +399,12 @@ export interface DevScopeAssistantApi {
     interruptTurn: (turnId?: string, sessionId?: string) => Promise<DevScopeResult>
     respondApproval: (input: AssistantApprovalResponseInput) => Promise<DevScopeResult>
     respondUserInput: (input: AssistantUserInputResponseInput) => Promise<DevScopeResult>
-    startRealtimeVoice: (input: AssistantStartRealtimeVoiceInput) => Promise<DevScopeResult<{ threadId: string; sdp: string }>>
+    startRealtimeVoice: (input: AssistantStartRealtimeVoiceInput) => Promise<DevScopeResult<{ threadId: string; sdp: string; realtimeVersion: string }>>
+    sendRealtimeVoiceMessage: (input: AssistantSendRealtimeVoiceMessageInput) => Promise<DevScopeResult<{ mode: 'text-turn' | 'vision-turn' }>>
     stopRealtimeVoice: () => Promise<DevScopeResult>
     onRealtimeVoiceEvent: (callback: (event: AssistantRealtimeVoiceEvent) => void) => () => void
-    getTranscriptionModelState: () => Promise<DevScopeResult<{ state: AssistantTranscriptionModelState }>>
-    downloadTranscriptionModel: () => Promise<DevScopeResult<{ state: AssistantTranscriptionModelState }>>
-    transcribeAudioWithLocalModel: (input: AssistantTranscribeAudioInput) => Promise<DevScopeResult<{ text: string }>>
+    getVoiceTranscriptionState: () => Promise<DevScopeResult<{ state: AssistantVoiceTranscriptionState }>>
+    transcribeVoice: (input: AssistantTranscribeVoiceInput) => Promise<DevScopeResult<{ text: string }>>
     onEvent: (callback: (event: AssistantEventStreamPayload) => void) => () => void
 }
 
@@ -511,6 +614,23 @@ export interface DevScopeApi {
     onPreviewTerminalEvent: (callback: (event: DevScopePreviewTerminalEvent) => void) => () => void
     getBrowserPreviewConfig: () => Promise<DevScopeResult<DevScopeBrowserPreviewConfig>>
     clearBrowserPreviewData: () => Promise<DevScopeResult<{ cleared: boolean }>>
+    clearBrowserPreviewCache: () => Promise<DevScopeResult<{ cleared: boolean }>>
+    clearBrowserPreviewCookies: () => Promise<DevScopeResult<{ cleared: boolean }>>
+    hardReloadBrowserPreview: (input: DevScopeBrowserGuestTargetInput) => Promise<DevScopeResult>
+    setBrowserPreviewZoom: (input: DevScopeBrowserGuestTargetInput & { factor: number }) => Promise<DevScopeResult<{ factor: number }>>
+    setBrowserPreviewColorScheme: (input: DevScopeBrowserGuestTargetInput & { colorScheme: DevScopeBrowserColorScheme }) => Promise<DevScopeResult>
+    openBrowserPreviewDevTools: (input: DevScopeBrowserGuestTargetInput) => Promise<DevScopeResult>
+    captureBrowserPreviewScreenshot: (input: DevScopeBrowserGuestTargetInput) => Promise<DevScopeResult<{ artifact: DevScopeBrowserCaptureArtifact }>>
+    stageBrowserPreviewArtifactForAssistant: (artifactId: string) => Promise<DevScopeResult<{ reference: string }>>
+    openBrowserPreviewArtifact: (artifactId: string) => Promise<DevScopeResult>
+    revealBrowserPreviewArtifact: (artifactId: string) => Promise<DevScopeResult>
+    copyBrowserPreviewArtifact: (input: { artifactId: string; mode: 'image' | 'path' }) => Promise<DevScopeResult>
+    startBrowserPreviewAnnotation: (input: DevScopeBrowserAnnotationInput) => Promise<DevScopeResult<{ annotation: DevScopeBrowserAnnotationPayload | null; artifact: DevScopeBrowserCaptureArtifact | null }>>
+    cancelBrowserPreviewAnnotation: (input: DevScopeBrowserGuestTargetInput) => Promise<DevScopeResult>
+    startBrowserPreviewRecording: (input: DevScopeBrowserGuestTargetInput) => Promise<DevScopeResult<{ startedAt: string }>>
+    stopBrowserPreviewRecording: (input: DevScopeBrowserGuestTargetInput) => Promise<DevScopeResult>
+    saveBrowserPreviewRecording: (input: DevScopeBrowserGuestTargetInput & { mimeType: string; data: Uint8Array }) => Promise<DevScopeResult<{ artifact: DevScopeBrowserCaptureArtifact }>>
+    onBrowserPreviewRecordingFrame: (callback: (frame: DevScopeBrowserRecordingFrame) => void) => () => void
     getBrowserLinkPreview: (input: { url: string }) => Promise<DevScopeResult<{ preview: DevScopeBrowserLinkPreview | null }>>
     openBrowserPreviewExternal: (url: string) => Promise<DevScopeResult>
     openFile: (filePath: string) => Promise<DevScopeResult>
@@ -536,6 +656,7 @@ export interface DevScopeApi {
     getFileSystemRoots: () => Promise<DevScopeResult<{ roots: string[] }>>
 
     terminal: DevScopeTerminalApi
+    fonts: DevScopeFontsApi
     memory: ZyraMemoryApi
     assistant: DevScopeAssistantApi
     agentscope: DevScopeAgentScopeApi

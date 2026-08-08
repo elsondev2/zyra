@@ -345,6 +345,8 @@ const serviceDeps = {
     findThreadRecord: () => ({ session: projectedCodexSession, thread: projectedCodexThread }),
     queueAssistantTextDelta: () => undefined,
     flushAssistantTextDelta: () => undefined,
+    queueAssistantActivityDelta: () => undefined,
+    flushAssistantActivityDelta: () => undefined,
     appendEvent: (type: AssistantDomainEvent['type'], _occurredAt: string, payload: Record<string, unknown>) => {
         if (type !== 'thread.activity.appended') return
         const activity = payload['activity'] as AssistantActivity

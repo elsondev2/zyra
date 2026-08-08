@@ -94,7 +94,7 @@ export default function ImagePreviewContent({
         <div
             className={cn(
                 'relative h-full w-full overflow-hidden',
-                isExpanded ? 'bg-black/35' : 'bg-black/20'
+                isExpanded ? 'bg-media-black/35' : 'bg-media-black/20'
             )}
         >
             <div
@@ -132,11 +132,11 @@ export default function ImagePreviewContent({
             </div>
 
             <div className="pointer-events-none absolute bottom-4 right-4 z-10">
-                <div className="pointer-events-auto inline-flex items-center gap-1 rounded-full border border-white/10 bg-black/65 p-1.5 text-white/85 shadow-lg backdrop-blur-md">
+                <div className="pointer-events-auto inline-flex items-center gap-1 rounded-full border border-media-white/10 bg-media-black/65 p-1.5 text-media-white/85 shadow-lg backdrop-blur-md">
                     <button
                         type="button"
                         onClick={() => applyScale(activeScale / 1.15)}
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-full transition-colors hover:bg-white/[0.08] hover:text-white"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full transition-colors hover:bg-media-white/[0.08] hover:text-media-white"
                         title="Zoom out"
                     >
                         <Minus size={14} />
@@ -146,7 +146,7 @@ export default function ImagePreviewContent({
                         onClick={resetToFit}
                         className={cn(
                             'inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-medium transition-colors',
-                            fitToViewport ? 'bg-white/[0.08] text-white' : 'hover:bg-white/[0.08] hover:text-white'
+                            fitToViewport ? 'bg-media-white/[0.08] text-media-white' : 'hover:bg-media-white/[0.08] hover:text-media-white'
                         )}
                         title="Fit image to view"
                     >
@@ -159,8 +159,8 @@ export default function ImagePreviewContent({
                         className={cn(
                             'rounded-full px-3 py-1.5 text-xs font-medium transition-colors',
                             !fitToViewport && Math.abs(activeScale - 1) < 0.01
-                                ? 'bg-white/[0.08] text-white'
-                                : 'hover:bg-white/[0.08] hover:text-white'
+                                ? 'bg-media-white/[0.08] text-media-white'
+                                : 'hover:bg-media-white/[0.08] hover:text-media-white'
                         )}
                         title="Actual size"
                     >
@@ -169,12 +169,12 @@ export default function ImagePreviewContent({
                     <button
                         type="button"
                         onClick={() => applyScale(activeScale * 1.15)}
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-full transition-colors hover:bg-white/[0.08] hover:text-white"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-full transition-colors hover:bg-media-white/[0.08] hover:text-media-white"
                         title="Zoom in"
                     >
                         <Plus size={14} />
                     </button>
-                    <div className="min-w-[54px] pr-2 text-right text-[11px] font-semibold tracking-[0.08em] text-white/70">
+                    <div className="min-w-[54px] pr-2 text-right text-[11px] font-semibold tracking-[0.08em] text-media-white/70">
                         {zoomPercent}%
                     </div>
                 </div>

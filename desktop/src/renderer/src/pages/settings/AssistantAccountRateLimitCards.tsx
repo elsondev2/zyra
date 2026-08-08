@@ -3,9 +3,9 @@ import { cn } from '@/lib/utils'
 import type { RateLimitCard, UsageMode } from './assistant-account-rate-limits'
 
 const LEVEL_COLORS = {
-    good: '#34d399',
-    warn: '#fbbf24',
-    danger: '#f87171'
+    good: 'var(--status-success)',
+    warn: 'var(--status-warning)',
+    danger: 'var(--status-danger)'
 } as const
 
 function useAnimatedNumber(target: number, duration = 450): number {
@@ -123,7 +123,7 @@ export function RateLimitUsageCard({ card, mode }: { card: RateLimitCard; mode: 
                         style={{
                             width: `${animatedPct}%`,
                             backgroundColor: color,
-                            boxShadow: `0 0 12px ${color}22`,
+                            boxShadow: `0 0 12px color-mix(in srgb, ${color} 18%, transparent)`,
                             transition: 'background-color 0.45s ease, box-shadow 0.45s ease'
                         }}
                     />

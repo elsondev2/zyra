@@ -1,5 +1,6 @@
 import { useEffect, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from 'react'
 import type { AssistantInteractionMode, AssistantRuntimeMode } from '@shared/assistant/contracts'
+import { TRANSIENT_MENU_DISMISS_EVENT } from '@/lib/transient-menu'
 import {
     ensureListItemVisible,
     syncScrollAffordance,
@@ -42,8 +43,6 @@ export function useAssistantComposerControllerEffects(input: {
     mentionCandidatesLength: number
     activeMentionIndex: number
     showModelDropdown: boolean
-    modelQuery: string
-    modelsError: string | null
     modelsLoading: boolean
     filteredModelOptionsLength: number
     activeModelIndex: number
@@ -91,8 +90,6 @@ export function useAssistantComposerControllerEffects(input: {
     setShowBranchDropdown: Dispatch<SetStateAction<boolean>>
     setMentionCanScrollUp: Dispatch<SetStateAction<boolean>>
     setMentionCanScrollDown: Dispatch<SetStateAction<boolean>>
-    setModelCanScrollUp: Dispatch<SetStateAction<boolean>>
-    setModelCanScrollDown: Dispatch<SetStateAction<boolean>>
     setIsCompactFooter: Dispatch<SetStateAction<boolean>>
 }) {
     const {
@@ -112,8 +109,6 @@ export function useAssistantComposerControllerEffects(input: {
         mentionCandidatesLength,
         activeMentionIndex,
         showModelDropdown,
-        modelQuery,
-        modelsError,
         modelsLoading,
         filteredModelOptionsLength,
         activeModelIndex,
@@ -161,8 +156,6 @@ export function useAssistantComposerControllerEffects(input: {
         setShowBranchDropdown,
         setMentionCanScrollUp,
         setMentionCanScrollDown,
-        setModelCanScrollUp,
-        setModelCanScrollDown,
         setIsCompactFooter
     } = input
 
@@ -280,39 +273,47 @@ export function useAssistantComposerControllerEffects(input: {
     }, [activeMentionIndex, mentionCandidatesLength, mentionListRef, setMentionCanScrollDown, setMentionCanScrollUp, showMentionMenu])
 
     useEffect(() => {
-        if (!showModelDropdown) {
-            setModelCanScrollUp(false)
-            setModelCanScrollDown(false)
-            return
-        }
-        const frame = window.requestAnimationFrame(() => syncScrollAffordance(modelListRef.current, setModelCanScrollUp, setModelCanScrollDown))
-        return () => window.cancelAnimationFrame(frame)
-    }, [filteredModelOptionsLength, modelListRef, modelQuery, modelsError, modelsLoading, setModelCanScrollDown, setModelCanScrollUp, showModelDropdown])
-
-    useEffect(() => {
         if (!showModelDropdown || !modelListRef.current) return
         const activeButton = modelListRef.current.querySelector(`[data-model-index="${activeModelIndex}"]`) as HTMLButtonElement | null
         if (!activeButton) return
-        ensureListItemVisible(modelListRef.current, activeButton, { topInset: 24, bottomInset: 24 })
-        syncScrollAffordance(modelListRef.current, setModelCanScrollUp, setModelCanScrollDown)
-    }, [activeModelIndex, filteredModelOptionsLength, modelListRef, setModelCanScrollDown, setModelCanScrollUp, showModelDropdown])
+        ensureListItemVisible(modelListRef.current, activeButton, { topInset: 0, bottomInset: 0 })
+    }, [activeModelIndex, filteredModelOptionsLength, modelListRef, showModelDropdown])
 
     useEffect(() => {
         if (!showModelDropdown && !showTraitsDropdown && !showBranchDropdown && !showMentionMenu) return
-        const handleClickOutside = (event: MouseEvent) => {
+        const dismissMenus = () => {
+            setShowModelDropdown(false)
+            setShowTraitsDropdown(false)
+            setShowBranchDropdown(false)
+            setShowMentionMenu(false)
+        }
+        const handleClickOutside = (event: PointerEvent) => {
             if (modelDropdownRef.current && !modelDropdownRef.current.contains(event.target as Node)) setShowModelDropdown(false)
             if (traitsDropdownRef.current && !traitsDropdownRef.current.contains(event.target as Node)) setShowTraitsDropdown(false)
             if (branchDropdownRef.current && !branchDropdownRef.current.contains(event.target as Node)) setShowBranchDropdown(false)
             if (mentionMenuRef.current && !mentionMenuRef.current.contains(event.target as Node)) setShowMentionMenu(false)
         }
-        document.addEventListener('mousedown', handleClickOutside)
-        return () => document.removeEventListener('mousedown', handleClickOutside)
+        const handleEscape = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') dismissMenus()
+        }
+        document.addEventListener('pointerdown', handleClickOutside, true)
+        window.addEventListener('keydown', handleEscape)
+        window.addEventListener('blur', dismissMenus)
+        window.addEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissMenus)
+        return () => {
+            document.removeEventListener('pointerdown', handleClickOutside, true)
+            window.removeEventListener('keydown', handleEscape)
+            window.removeEventListener('blur', dismissMenus)
+            window.removeEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissMenus)
+        }
     }, [
         branchDropdownRef,
         mentionMenuRef,
         modelDropdownRef,
+        setShowBranchDropdown,
         setShowMentionMenu,
         setShowModelDropdown,
+        setShowTraitsDropdown,
         showBranchDropdown,
         showMentionMenu,
         showModelDropdown,

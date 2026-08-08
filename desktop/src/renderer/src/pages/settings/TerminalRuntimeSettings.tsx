@@ -1,0 +1,78 @@
+import { useEffect, useMemo, useState } from 'react'
+import { RefreshCw } from 'lucide-react'
+import type { DevScopeInstalledPackageRuntime, DevScopePackageRuntimeId } from '@shared/contracts/devscope-api'
+import { useSettings, type PackageRuntimePreference } from '@/lib/settings'
+import {
+    SettingsButton,
+    SettingsInput,
+    SettingsPageContainer,
+    SettingsRow,
+    SettingsSection,
+    SettingsSegmented,
+    SettingsSelect,
+    SettingsSwitch
+} from './settings-layout'
+
+const RUNTIME_OPTIONS: Array<{ value: PackageRuntimePreference; runtimeId?: DevScopePackageRuntimeId; label: string }> = [
+    { value: 'auto', label: 'Auto (project lockfile)' },
+    { value: 'node', runtimeId: 'node', label: 'Node.js' },
+    { value: 'npm', runtimeId: 'npm', label: 'npm' },
+    { value: 'pnpm', runtimeId: 'pnpm', label: 'pnpm' },
+    { value: 'yarn', runtimeId: 'yarn', label: 'Yarn' },
+    { value: 'bun', runtimeId: 'bun', label: 'Bun' }
+]
+
+export default function TerminalRuntimeSettings() {
+    const { settings, updateSettings } = useSettings()
+    const [runtimes, setRuntimes] = useState<DevScopeInstalledPackageRuntime[]>([])
+    const [runtimeLoading, setRuntimeLoading] = useState(false)
+    const [runtimeError, setRuntimeError] = useState<string | null>(null)
+
+    const refreshRuntimes = async () => {
+        setRuntimeLoading(true)
+        setRuntimeError(null)
+        try {
+            const result = await window.devscope.listInstalledPackageRuntimes()
+            if (!result.success) throw new Error(result.error || 'Runtime detection failed.')
+            setRuntimes(result.runtimes)
+        } catch (error) {
+            setRuntimeError(error instanceof Error ? error.message : 'Runtime detection failed.')
+        } finally {
+            setRuntimeLoading(false)
+        }
+    }
+
+    useEffect(() => { void refreshRuntimes() }, [])
+    const runtimeById = useMemo(() => new Map(runtimes.map((runtime) => [runtime.id, runtime])), [runtimes])
+
+    return (
+        <SettingsPageContainer>
+            <SettingsSection title="Terminal">
+                <SettingsRow title="Default shell" description="Choose the shell used for terminal actions." control={<SettingsSegmented value={settings.defaultShell} options={[{ value: 'powershell', label: 'PowerShell' }, { value: 'cmd', label: 'Command Prompt' }]} onChange={(defaultShell) => updateSettings({ defaultShell })} label="Default shell" />} />
+                <SettingsRow title="Font size" description="Apply the terminal text size to Assistant and file-preview terminals." control={<SettingsInput type="number" min={10} max={24} value={settings.terminalFontSize} onChange={(event) => updateSettings({ terminalFontSize: Math.max(10, Math.min(24, Math.round(Number(event.target.value) || 12))) })} className="sm:w-24" aria-label="Terminal font size" />} />
+                <SettingsRow title="Blinking cursor" description="Blink the cursor in embedded terminals." control={<SettingsSwitch checked={settings.terminalCursorBlink} onCheckedChange={(terminalCursorBlink) => updateSettings({ terminalCursorBlink })} label="Blinking terminal cursor" />} />
+                <SettingsRow title="Scrollback" description="Lines retained by each embedded terminal, from 1,000 to 50,000." control={<SettingsInput type="number" min={1000} max={50000} step={1000} value={settings.terminalScrollback} onChange={(event) => updateSettings({ terminalScrollback: Math.max(1_000, Math.min(50_000, Math.round(Number(event.target.value) || 5_000))) })} className="sm:w-28" aria-label="Terminal scrollback lines" />} />
+                <SettingsRow title="Preview panel height" description="Default height, in pixels, for the file-preview terminal panel." control={<SettingsInput type="number" min={140} max={720} value={settings.filePreviewTerminalPanelHeight} onChange={(event) => updateSettings({ filePreviewTerminalPanelHeight: Math.max(140, Math.min(720, Number(event.target.value) || 220)) })} className="sm:w-24" aria-label="Terminal panel height" />} />
+            </SettingsSection>
+
+            <SettingsSection title="Package runtime" headerAction={<SettingsButton variant="ghost" onClick={() => void refreshRuntimes()} disabled={runtimeLoading}><RefreshCw size={12} className={runtimeLoading ? 'animate-spin' : ''} />Refresh</SettingsButton>}>
+                <SettingsRow
+                    title="Project script runner"
+                    description="Choose the runtime used by project script actions. Auto follows project lockfiles."
+                    status={runtimeError ? 'Unavailable' : runtimeLoading ? 'Checking' : null}
+                    statusTone={runtimeError ? 'danger' : 'info'}
+                    statusTitle={runtimeError || undefined}
+                    control={
+                        <SettingsSelect value={settings.packageRuntimePreference} onChange={(event) => updateSettings({ packageRuntimePreference: event.target.value as PackageRuntimePreference })} aria-label="Package runtime">
+                            {RUNTIME_OPTIONS.map((option) => {
+                                const runtime = option.runtimeId ? runtimeById.get(option.runtimeId) : null
+                                const installed = option.value === 'auto' || runtime?.installed === true
+                                return <option key={option.value} value={option.value} disabled={!installed}>{option.label}{runtime?.version ? ` · ${runtime.version}` : installed ? '' : ' · not installed'}</option>
+                            })}
+                        </SettingsSelect>
+                    }
+                />
+            </SettingsSection>
+        </SettingsPageContainer>
+    )
+}

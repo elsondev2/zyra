@@ -37,6 +37,7 @@ import { parseJson, toNullableString, toNumber } from './persistence-utils'
 
 export const INITIAL_ASSISTANT_HISTORY_TURN_LIMIT = 20
 export const OLDER_ASSISTANT_HISTORY_TURN_LIMIT = 15
+export const INITIAL_ASSISTANT_HISTORY_PAGE_MAX_RECORDS = 160
 export const ASSISTANT_HISTORY_PAGE_MAX_RECORDS = 320
 export const ASSISTANT_HISTORY_PAGE_MAX_CHARACTERS = 1_800_000
 const LEGACY_RECORDS_PER_TURN = 8
@@ -224,6 +225,7 @@ export function readAssistantHistoryPage(db: SqlDatabase, input: AssistantGetHis
     }
 
     const upper = decodeCursor(threadId, input.before)
+    const maxRecords = input.before ? ASSISTANT_HISTORY_PAGE_MAX_RECORDS : INITIAL_ASSISTANT_HISTORY_PAGE_MAX_RECORDS
     const turnLimit = clampTurnLimit(input.turnLimit, input.before ? OLDER_ASSISTANT_HISTORY_TURN_LIMIT : INITIAL_ASSISTANT_HISTORY_TURN_LIMIT)
     const beforeClause = upper
         ? ' AND (created_at, COALESCE(timeline_sequence, -1), 0, id) < (?, ?, ?, ?)'
@@ -249,7 +251,7 @@ export function readAssistantHistoryPage(db: SqlDatabase, input: AssistantGetHis
         }
         const size = readHistoryRangeSize(db, threadId, candidateLower, upper)
         const withinBudget = index === 0 || (
-            size.records <= ASSISTANT_HISTORY_PAGE_MAX_RECORDS
+            size.records <= maxRecords
             && size.characters <= ASSISTANT_HISTORY_PAGE_MAX_CHARACTERS
         )
         if (withinBudget) {

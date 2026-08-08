@@ -242,7 +242,7 @@ export function deriveAssistantComposerCapabilities(
             inputDisabled: false,
             attachDisabled: attachmentsLocked,
             controlsLocked,
-            voiceDisabled: true,
+            voiceDisabled: false,
             canSend,
             canStop,
             sendDisabled: !(canStop || canSend),

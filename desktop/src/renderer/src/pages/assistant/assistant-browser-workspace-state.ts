@@ -1,4 +1,69 @@
+import type { DevScopeBrowserColorScheme } from '@shared/contracts/devscope-api'
+
 export type AssistantBrowserTabStatus = 'idle' | 'loading' | 'ready' | 'error'
+
+export type AssistantBrowserViewportPresetId =
+    | 'iphone-se'
+    | 'iphone-xr'
+    | 'iphone-12-pro'
+    | 'iphone-14-pro-max'
+    | 'pixel-7'
+    | 'samsung-galaxy-s8-plus'
+    | 'samsung-galaxy-s20-ultra'
+    | 'ipad-mini'
+    | 'ipad-air'
+    | 'ipad-pro'
+    | 'surface-pro-7'
+    | 'surface-duo'
+    | 'galaxy-z-fold-5'
+    | 'asus-zenbook-fold'
+    | 'samsung-galaxy-a51-71'
+    | 'nest-hub'
+    | 'nest-hub-max'
+
+export type AssistantBrowserViewportSetting =
+    | { mode: 'fill' }
+    | {
+        mode: 'freeform' | 'preset'
+        width: number
+        height: number
+        presetId: AssistantBrowserViewportPresetId | null
+        aspectRatio: number | null
+    }
+
+export type AssistantBrowserViewportPreset = {
+    id: AssistantBrowserViewportPresetId
+    label: string
+    category: 'Phone' | 'Tablet'
+    detail: string
+    width: number
+    height: number
+}
+
+// Chrome DevTools' standard device order and CSS viewport dimensions.
+export const ASSISTANT_BROWSER_VIEWPORT_PRESETS: AssistantBrowserViewportPreset[] = [
+    { id: 'iphone-se', label: 'iPhone SE', category: 'Phone', detail: '375 × 667', width: 375, height: 667 },
+    { id: 'iphone-xr', label: 'iPhone XR', category: 'Phone', detail: '414 × 896', width: 414, height: 896 },
+    { id: 'iphone-12-pro', label: 'iPhone 12 Pro', category: 'Phone', detail: '390 × 844', width: 390, height: 844 },
+    { id: 'iphone-14-pro-max', label: 'iPhone 14 Pro Max', category: 'Phone', detail: '430 × 932', width: 430, height: 932 },
+    { id: 'pixel-7', label: 'Pixel 7', category: 'Phone', detail: '412 × 915', width: 412, height: 915 },
+    { id: 'samsung-galaxy-s8-plus', label: 'Samsung Galaxy S8+', category: 'Phone', detail: '360 × 740', width: 360, height: 740 },
+    { id: 'samsung-galaxy-s20-ultra', label: 'Samsung Galaxy S20 Ultra', category: 'Phone', detail: '412 × 915', width: 412, height: 915 },
+    { id: 'ipad-mini', label: 'iPad Mini', category: 'Tablet', detail: '768 × 1024', width: 768, height: 1024 },
+    { id: 'ipad-air', label: 'iPad Air', category: 'Tablet', detail: '820 × 1180', width: 820, height: 1180 },
+    { id: 'ipad-pro', label: 'iPad Pro', category: 'Tablet', detail: '1024 × 1366', width: 1024, height: 1366 },
+    { id: 'surface-pro-7', label: 'Surface Pro 7', category: 'Tablet', detail: '912 × 1368', width: 912, height: 1368 },
+    { id: 'surface-duo', label: 'Surface Duo', category: 'Phone', detail: '540 × 720', width: 540, height: 720 },
+    { id: 'galaxy-z-fold-5', label: 'Galaxy Z Fold 5', category: 'Phone', detail: '344 × 882', width: 344, height: 882 },
+    { id: 'asus-zenbook-fold', label: 'Asus Zenbook Fold', category: 'Tablet', detail: '853 × 1280', width: 853, height: 1280 },
+    { id: 'samsung-galaxy-a51-71', label: 'Samsung Galaxy A51/71', category: 'Phone', detail: '412 × 914', width: 412, height: 914 },
+    { id: 'nest-hub', label: 'Nest Hub', category: 'Tablet', detail: '1024 × 600', width: 1024, height: 600 },
+    { id: 'nest-hub-max', label: 'Nest Hub Max', category: 'Tablet', detail: '1280 × 800', width: 1280, height: 800 }
+]
+
+export const ASSISTANT_BROWSER_VIEWPORT_MIN = 240
+export const ASSISTANT_BROWSER_VIEWPORT_MAX = 2560
+export const ASSISTANT_BROWSER_VIEWPORT_MAX_AREA = 5_000_000
 
 export type AssistantBrowserTabState = {
     id: string
@@ -10,6 +75,9 @@ export type AssistantBrowserTabState = {
     canGoForward: boolean
     audible: boolean
     faviconUrl: string | null
+    viewport: AssistantBrowserViewportSetting
+    zoomFactor: number
+    colorScheme: DevScopeBrowserColorScheme
     updatedAt: number
 }
 
@@ -42,6 +110,9 @@ export function createAssistantBrowserTab(id: string, url = ''): AssistantBrowse
         canGoForward: false,
         audible: false,
         faviconUrl: null,
+        viewport: { mode: 'fill' },
+        zoomFactor: 1,
+        colorScheme: 'system',
         updatedAt: Date.now()
     }
 }
@@ -123,6 +194,9 @@ export function updateAssistantBrowserTab(
         && current.canGoForward === nextTab.canGoForward
         && current.audible === nextTab.audible
         && current.faviconUrl === nextTab.faviconUrl
+        && viewportSettingKey(current.viewport) === viewportSettingKey(nextTab.viewport)
+        && current.zoomFactor === nextTab.zoomFactor
+        && current.colorScheme === nextTab.colorScheme
     ) return state
     const tabs = state.tabs.slice()
     tabs[index] = nextTab
@@ -174,6 +248,9 @@ export function normalizeAssistantBrowserWorkspaceState(
                 canGoForward: false,
                 audible: false,
                 faviconUrl: normalizeAssistantBrowserFaviconUrl(tab.faviconUrl),
+                viewport: normalizeAssistantBrowserViewport(tab.viewport),
+                zoomFactor: normalizeAssistantBrowserZoom(tab.zoomFactor),
+                colorScheme: normalizeAssistantBrowserColorScheme(tab.colorScheme),
                 updatedAt: Number.isFinite(tab.updatedAt) ? Number(tab.updatedAt) : Date.now()
             }]
         })
@@ -192,6 +269,16 @@ export function normalizeAssistantBrowserWorkspaceState(
     }
 }
 
+export function hasPersistedAssistantBrowserWorkspaceState(workspaceKey: string): boolean {
+    if (!workspaceKey || typeof window === 'undefined') return false
+    try {
+        const stored = JSON.parse(localStorage.getItem(ASSISTANT_BROWSER_STORAGE_KEY) || '{}') as Record<string, unknown>
+        return Object.prototype.hasOwnProperty.call(stored, workspaceKey)
+    } catch {
+        return false
+    }
+}
+
 export function loadAssistantBrowserWorkspaceState(workspaceKey: string): AssistantBrowserWorkspaceState {
     if (!workspaceKey || typeof window === 'undefined') return createAssistantBrowserWorkspaceState()
     try {
@@ -200,6 +287,21 @@ export function loadAssistantBrowserWorkspaceState(workspaceKey: string): Assist
     } catch {
         return createAssistantBrowserWorkspaceState()
     }
+}
+
+export function countPersistedAssistantBrowserWorkspaces(): number {
+    if (typeof window === 'undefined') return 0
+    try {
+        const stored = JSON.parse(localStorage.getItem(ASSISTANT_BROWSER_STORAGE_KEY) || '{}') as Record<string, unknown>
+        return Object.keys(stored).length
+    } catch {
+        return 0
+    }
+}
+
+export function clearPersistedAssistantBrowserWorkspaces(): void {
+    if (typeof window === 'undefined') return
+    localStorage.removeItem(ASSISTANT_BROWSER_STORAGE_KEY)
 }
 
 export function persistAssistantBrowserWorkspaceState(
@@ -218,6 +320,51 @@ export function persistAssistantBrowserWorkspaceState(
     } catch {
         // Browser state is helpful continuity, never a reason to break navigation.
     }
+}
+
+export function normalizeAssistantBrowserZoom(value: unknown): number {
+    const numeric = Number(value)
+    if (!Number.isFinite(numeric)) return 1
+    return Math.round(Math.min(2, Math.max(0.25, numeric)) * 100) / 100
+}
+
+export function normalizeAssistantBrowserColorScheme(value: unknown): DevScopeBrowserColorScheme {
+    return value === 'light' || value === 'dark' ? value : 'system'
+}
+
+export function normalizeAssistantBrowserViewportDimension(value: unknown, fallback: number): number {
+    const numeric = Math.round(Number(value))
+    return Number.isFinite(numeric)
+        ? Math.min(ASSISTANT_BROWSER_VIEWPORT_MAX, Math.max(ASSISTANT_BROWSER_VIEWPORT_MIN, numeric))
+        : fallback
+}
+
+export function normalizeAssistantBrowserViewport(value: unknown): AssistantBrowserViewportSetting {
+    if (!value || typeof value !== 'object' || (value as { mode?: unknown }).mode === 'fill') return { mode: 'fill' }
+    const candidate = value as Partial<Exclude<AssistantBrowserViewportSetting, { mode: 'fill' }>>
+    const requestedPresetId = String(candidate.presetId || '')
+    const preset = ASSISTANT_BROWSER_VIEWPORT_PRESETS.find((entry) => entry.id === requestedPresetId) || null
+    let width = normalizeAssistantBrowserViewportDimension(candidate.width, preset?.width || 1280)
+    let height = normalizeAssistantBrowserViewportDimension(candidate.height, preset?.height || 800)
+    if (width * height > ASSISTANT_BROWSER_VIEWPORT_MAX_AREA) {
+        const scale = Math.sqrt(ASSISTANT_BROWSER_VIEWPORT_MAX_AREA / (width * height))
+        width = Math.max(ASSISTANT_BROWSER_VIEWPORT_MIN, Math.floor(width * scale))
+        height = Math.max(ASSISTANT_BROWSER_VIEWPORT_MIN, Math.floor(height * scale))
+    }
+    const rawRatio = Number(candidate.aspectRatio)
+    return {
+        mode: candidate.mode === 'preset' && preset ? 'preset' : 'freeform',
+        width,
+        height,
+        presetId: candidate.mode === 'preset' && preset ? preset.id : null,
+        aspectRatio: Number.isFinite(rawRatio) && rawRatio > 0 ? rawRatio : null
+    }
+}
+
+export function viewportSettingKey(value: AssistantBrowserViewportSetting): string {
+    return value.mode === 'fill'
+        ? 'fill'
+        : `${value.mode}:${value.presetId || ''}:${value.width}:${value.height}:${value.aspectRatio || ''}`
 }
 
 export function normalizeAssistantBrowserFaviconUrl(value: unknown): string | null {

@@ -21,44 +21,44 @@ interface ColumnTheme {
 const COLUMN_THEMES: ColumnTheme[] = [
     {
         headerBackground: 'rgba(56, 189, 248, 0.2)',
-        headerText: 'rgb(186, 230, 253)',
+        headerText: 'var(--color-text)',
         cellBackground: 'rgba(56, 189, 248, 0.08)',
-        cellText: 'rgba(224, 242, 254, 0.95)',
+        cellText: 'var(--color-text-dark)',
         borderColor: 'rgba(56, 189, 248, 0.26)'
     },
     {
         headerBackground: 'rgba(16, 185, 129, 0.22)',
-        headerText: 'rgb(167, 243, 208)',
+        headerText: 'var(--color-text)',
         cellBackground: 'rgba(16, 185, 129, 0.09)',
-        cellText: 'rgba(209, 250, 229, 0.95)',
+        cellText: 'var(--color-text-dark)',
         borderColor: 'rgba(16, 185, 129, 0.3)'
     },
     {
         headerBackground: 'rgba(245, 158, 11, 0.24)',
-        headerText: 'rgb(254, 240, 138)',
+        headerText: 'var(--color-text)',
         cellBackground: 'rgba(245, 158, 11, 0.1)',
-        cellText: 'rgba(254, 249, 195, 0.95)',
+        cellText: 'var(--color-text-dark)',
         borderColor: 'rgba(245, 158, 11, 0.3)'
     },
     {
         headerBackground: 'rgba(168, 85, 247, 0.24)',
-        headerText: 'rgb(233, 213, 255)',
+        headerText: 'var(--color-text)',
         cellBackground: 'rgba(168, 85, 247, 0.1)',
-        cellText: 'rgba(243, 232, 255, 0.95)',
+        cellText: 'var(--color-text-dark)',
         borderColor: 'rgba(168, 85, 247, 0.3)'
     },
     {
         headerBackground: 'rgba(244, 63, 94, 0.24)',
-        headerText: 'rgb(254, 205, 211)',
+        headerText: 'var(--color-text)',
         cellBackground: 'rgba(244, 63, 94, 0.1)',
-        cellText: 'rgba(255, 228, 230, 0.95)',
+        cellText: 'var(--color-text-dark)',
         borderColor: 'rgba(244, 63, 94, 0.3)'
     },
     {
         headerBackground: 'rgba(59, 130, 246, 0.24)',
-        headerText: 'rgb(191, 219, 254)',
+        headerText: 'var(--color-text)',
         cellBackground: 'rgba(59, 130, 246, 0.1)',
-        cellText: 'rgba(219, 234, 254, 0.95)',
+        cellText: 'var(--color-text-dark)',
         borderColor: 'rgba(59, 130, 246, 0.3)'
     }
 ]

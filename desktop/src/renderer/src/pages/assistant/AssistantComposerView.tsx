@@ -22,6 +22,7 @@ import {
     X
 } from 'lucide-react'
 import AssistantAttachmentPreviewModal from './AssistantAttachmentPreviewModal'
+import { AssistantVoiceRecorderBar } from './AssistantVoiceRecorderBar'
 import { ComposerAttachmentsShelf, ComposerFooterControls, ComposerMentionMenu, ComposerSendButton, ComposerVoiceButton } from './AssistantComposerSections'
 import { formatAssistantModelLabel } from './assistant-model-labels'
 import {
@@ -29,6 +30,7 @@ import {
     reconcileInlineMentionTags,
 } from './assistant-composer-inline-mentions'
 import type { AssistantComposerController } from './useAssistantComposerController'
+import { writeFullAccessConfirmSuppressed } from './assistant-safety-preferences'
 import { deriveAssistantComposerViewState } from './assistant-composer-view-state'
 import {
     getContentTypeTag,
@@ -36,16 +38,6 @@ import {
     isPastedTextAttachment,
     toKbLabel
 } from './assistant-composer-utils'
-
-const FULL_ACCESS_CONFIRM_SUPPRESSED_KEY = 'zyra-ui:full-access-confirm-suppressed:v1'
-
-function writeFullAccessConfirmSuppressed(value: boolean) {
-    try {
-        window.localStorage.setItem(FULL_ACCESS_CONFIRM_SUPPRESSED_KEY, value ? 'true' : 'false')
-    } catch {
-        // Keep full-access toggle usable if localStorage is unavailable.
-    }
-}
 
 export function AssistantComposerView({ controller }: { controller: AssistantComposerController }) {
     const navigate = useNavigate()
@@ -73,6 +65,10 @@ export function AssistantComposerView({ controller }: { controller: AssistantCom
     const composerPlaceholder = controller.selectedInteractionMode === 'plan'
         ? 'Add plan step...'
         : capabilities.placeholder
+    const sendActionDisabled = capabilities.sendDisabled || (voiceBusy && !capabilities.canStop)
+    const showCodexRecorder = transcriptionEnabled
+        && settings.assistantTranscriptionEngine === 'codex'
+        && (controller.voiceInput.isRecording || controller.voiceInput.isTranscribing)
 
     useEffect(() => {
         if (settings.assistantTranscriptionEngine !== 'browser') {
@@ -392,7 +388,8 @@ export function AssistantComposerView({ controller }: { controller: AssistantCom
                                 event.currentTarget.value = ''
                             }}
                         />
-                        <div ref={controller.mentionMenuRef} className="relative px-3 pb-1.5 pt-2.5 sm:px-3.5 sm:pt-3">
+                        <AnimatedHeight isOpen={!showCodexRecorder} duration={220}>
+                            <div ref={controller.mentionMenuRef} className="relative px-3 pb-1.5 pt-2.5 sm:px-3.5 sm:pt-3">
                             <ComposerMentionMenu
                                 isOpen={controller.showMentionMenu}
                                 mentionCanScrollUp={controller.mentionCanScrollUp}
@@ -471,8 +468,41 @@ export function AssistantComposerView({ controller }: { controller: AssistantCom
                                     />
                                 </div>
                             </div>
-                        </div>
-                        <div className={cn('flex items-center justify-between px-1.5 pb-1.5 sm:px-2 sm:pb-2', controller.isCompactFooter ? 'gap-2' : 'flex-wrap gap-2.5 sm:flex-nowrap sm:gap-3')}>
+                            </div>
+                        </AnimatedHeight>
+                        <div className={cn(
+                            'flex items-center justify-between',
+                            showCodexRecorder
+                                ? 'gap-2 px-2 py-2'
+                                : controller.isCompactFooter
+                                    ? 'gap-2 px-1.5 pb-1.5 sm:px-2 sm:pb-2'
+                                    : 'flex-wrap gap-2.5 px-1.5 pb-1.5 sm:flex-nowrap sm:gap-3 sm:px-2 sm:pb-2'
+                        )}>
+                            {showCodexRecorder ? (
+                                <>
+                                    <AssistantVoiceRecorderBar
+                                        disabled={capabilities.voiceDisabled}
+                                        durationLabel={controller.voiceInput.durationLabel}
+                                        isTranscribing={controller.voiceInput.isTranscribing}
+                                        waveformLevels={controller.voiceInput.waveformLevels}
+                                        onCancel={controller.voiceInput.cancelRecording}
+                                        onSubmit={controller.voiceInput.submitRecording}
+                                    />
+                                    {capabilities.canStop ? (
+                                        <ComposerSendButton
+                                            disabled={false}
+                                            isConnected={controller.isConnected}
+                                            isThinking={true}
+                                            canSend={false}
+                                            reconnectPending={controller.reconnectPending}
+                                            onStop={controller.onStop}
+                                            onReconnect={controller.onReconnect}
+                                            onSend={() => void controller.handleSend()}
+                                        />
+                                    ) : null}
+                                </>
+                            ) : (
+                                <>
                         <ComposerFooterControls
                             isCompactFooter={controller.isCompactFooter}
                             placement={controller.placement}
@@ -485,10 +515,6 @@ export function AssistantComposerView({ controller }: { controller: AssistantCom
                                 modelQuery={controller.modelQuery}
                                 setModelQuery={controller.setModelQuery}
                                 setActiveModelIndex={controller.setActiveModelIndex}
-                                modelCanScrollUp={controller.modelCanScrollUp}
-                                modelCanScrollDown={controller.modelCanScrollDown}
-                                setModelCanScrollUp={controller.setModelCanScrollUp}
-                                setModelCanScrollDown={controller.setModelCanScrollDown}
                                 modelListRef={controller.modelListRef}
                                 filteredModelOptions={controller.filteredModelOptions}
                                 activeModelIndex={controller.activeModelIndex}
@@ -532,8 +558,9 @@ export function AssistantComposerView({ controller }: { controller: AssistantCom
                                 ) : null}
                                 <ComposerVoiceButton
                                     supported={transcriptionEnabled && controller.voiceInput.isSupported}
+                                    isStarting={controller.voiceInput.isStarting}
                                     isRecording={controller.voiceInput.isRecording}
-                                    disabled={capabilities.voiceDisabled || controller.voiceInput.isTranscribing}
+                                    disabled={capabilities.voiceDisabled || controller.voiceInput.isStarting || controller.voiceInput.isTranscribing}
                                     onToggle={controller.voiceInput.toggleRecording}
                                 />
                                 {controller.queuedMessageCount > 0 ? (
@@ -546,7 +573,7 @@ export function AssistantComposerView({ controller }: { controller: AssistantCom
                                         <button
                                             type="button"
                                             onClick={() => void controller.handleSend()}
-                                            className="inline-flex h-[36px] items-center justify-center rounded-full border border-white/10 bg-[#2246a8] px-3.5 text-[12px] font-semibold text-white transition-all duration-150 hover:scale-[1.03] hover:border-white/20 hover:bg-[#2955ca]"
+                                            className="inline-flex h-[36px] items-center justify-center rounded-full border border-[var(--accent-primary)] bg-[var(--accent-primary)] px-3.5 text-[12px] font-semibold text-[var(--accent-contrast)] transition-all duration-150 hover:scale-[1.03] hover:bg-[color-mix(in_srgb,var(--accent-primary)_88%,var(--color-text))]"
                                             title={`${defaultBusyActionLabel} this message while the current turn is still running`}
                                         >
                                             {defaultBusyActionLabel}
@@ -560,7 +587,7 @@ export function AssistantComposerView({ controller }: { controller: AssistantCom
                                             {secondaryBusyActionLabel}
                                         </button>
                                         <ComposerSendButton
-                                            disabled={capabilities.sendDisabled || voiceBusy}
+                                            disabled={sendActionDisabled}
                                             isConnected={controller.isConnected}
                                             isThinking={true}
                                             canSend={false}
@@ -573,7 +600,7 @@ export function AssistantComposerView({ controller }: { controller: AssistantCom
                                     </>
                                 ) : (
                                     <ComposerSendButton
-                                        disabled={capabilities.sendDisabled || voiceBusy}
+                                        disabled={sendActionDisabled}
                                         isConnected={controller.isConnected}
                                         isThinking={controller.isThinking}
                                         canSend={canSend}
@@ -585,6 +612,8 @@ export function AssistantComposerView({ controller }: { controller: AssistantCom
                                     />
                                 )}
                             </div>
+                                </>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -618,7 +647,7 @@ export function AssistantComposerView({ controller }: { controller: AssistantCom
             <ConfirmModal
                 isOpen={showBrowserSpeechFallbackModal}
                 title="Browser speech failed"
-                message="The runtime speech service could not complete transcription. Open assistant settings to switch engines or install the local Vosk model."
+                message="The browser speech service could not complete dictation. Open assistant settings to switch to ChatGPT voice-note transcription."
                 confirmLabel="Open settings"
                 cancelLabel="Dismiss"
                 variant="info"

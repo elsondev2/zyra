@@ -214,10 +214,10 @@ export function ProjectDetailsGitManageView(props: ProjectDetailsGitManageViewPr
                             visibleSummaryCards >= 2 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'
                         )}>
                             {hasWorkingChanges && (
-                                <div className="bg-[#E2C08D]/5 rounded-xl border border-[#E2C08D]/20 p-4">
+                                <div className="bg-amber-500/5 rounded-xl border border-amber-500/20 p-4">
                                     <div className="flex items-center justify-between mb-2">
-                                        <h4 className="text-sm font-medium text-[#E2C08D]">Working Changes</h4>
-                                        <span className="text-xs bg-[#E2C08D]/20 text-[#E2C08D] px-2 py-0.5 rounded-full">
+                                        <h4 className="text-sm font-medium text-amber-300">Working Changes</h4>
+                                        <span className="text-xs bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-full">
                                             {loadingCounts ? '...' : changedFiles.length}
                                         </span>
                                     </div>
@@ -226,7 +226,7 @@ export function ProjectDetailsGitManageView(props: ProjectDetailsGitManageViewPr
                                             <div key={file.path} className="text-xs text-white/60 truncate">{file.name}</div>
                                         ))}
                                         {changedFiles.length > 3 && (
-                                            <button onClick={() => setGitView('changes')} className="text-xs text-[#E2C08D] hover:underline">
+                                            <button onClick={() => setGitView('changes')} className="text-xs text-amber-300 hover:underline">
                                                 +{changedFiles.length - 3} more...
                                             </button>
                                         )}

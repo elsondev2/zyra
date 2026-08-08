@@ -1,4 +1,4 @@
-import type { AssistantThreadState } from '../../shared/assistant/contracts'
+import type { AssistantLatestTurn, AssistantThreadState } from '../../shared/assistant/contracts'
 import type { CanonicalAgentChatPresence } from './zyra-agent-server-worker'
 
 const ACTIVE_CANONICAL_PRESENCE_STATES = new Set<CanonicalAgentChatPresence['state']>(['running', 'background'])
@@ -28,4 +28,49 @@ export function resolveCanonicalPresenceThreadState(input: {
         return 'ready'
     }
     return currentState
+}
+
+export function resolveCanonicalPresenceAttention(input: {
+    currentHasPendingApprovals: boolean
+    currentHasPendingUserInputs: boolean
+    hasLocalPendingApproval: boolean
+    hasLocalPendingInput: boolean
+    presence?: CanonicalAgentChatPresence | null
+}): { hasPendingApprovals: boolean; hasPendingUserInputs: boolean } {
+    const canonicalAttentionReported = Boolean(
+        input.presence
+        && Object.prototype.hasOwnProperty.call(input.presence, 'attention')
+    )
+    if (!canonicalAttentionReported) {
+        return {
+            hasPendingApprovals: input.currentHasPendingApprovals || input.hasLocalPendingApproval,
+            hasPendingUserInputs: input.currentHasPendingUserInputs || input.hasLocalPendingInput
+        }
+    }
+    return {
+        hasPendingApprovals: input.hasLocalPendingApproval || input.presence?.attention === 'approval',
+        hasPendingUserInputs: input.hasLocalPendingInput || input.presence?.attention === 'input'
+    }
+}
+
+export function mergeCanonicalPresenceLatestTurn(
+    current: AssistantLatestTurn | null,
+    presence?: CanonicalAgentChatPresence | null
+): AssistantLatestTurn | null {
+    const canonical = presence?.latestTurn
+    if (!canonical) return current
+    if (!current || current.id !== canonical.id) {
+        return {
+            ...canonical,
+            usage: null
+        }
+    }
+    return {
+        ...current,
+        ...canonical,
+        assistantMessageId: canonical.assistantMessageId || current.assistantMessageId,
+        effort: current.effort,
+        serviceTier: current.serviceTier,
+        usage: current.usage || null
+    }
 }

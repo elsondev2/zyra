@@ -1,6 +1,7 @@
 import { resolve } from 'path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { browserAssistantBridgeProxyPlugin } from './scripts/maint/browser-assistant-bridge-proxy'
 
 const projectRoot = resolve(__dirname)
 const rendererRoot = resolve(__dirname, 'src/renderer')
@@ -21,7 +22,7 @@ export default defineConfig({
         reportCompressedSize: false,
         chunkSizeWarningLimit: 5_000
     },
-    plugins: [react()],
+    plugins: [react(), browserAssistantBridgeProxyPlugin()],
     resolve: {
         alias: {
             '@': resolve(projectRoot, 'src/renderer/src'),

@@ -1,39 +1,48 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AssistantActivity, AssistantMessage, AssistantTurnDetail, FleetSnapshot } from '@shared/assistant/contracts'
-import { FilePreviewModal } from '@/components/ui/FilePreviewModal'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { AssistantActivity, AssistantMessage, AssistantSession, AssistantTurnDetail, FleetSnapshot } from '@shared/assistant/contracts'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import { useFilePreview } from '@/components/ui/file-preview/useFilePreview'
 import { useAssistantStoreActions, useAssistantStoreSelector } from '@/lib/assistant/store'
 import { getActiveAssistantThread, getSelectedAssistantSession } from '@/lib/assistant/selectors'
 import { ConnectedAssistantSessionsRail } from './AssistantConnectedSessionsRail'
 import { AssistantConversationPane } from './AssistantConversationPane'
-import { AssistantDiffPanel, type AssistantDiffRevealRequest } from './AssistantDiffPanel'
+import type { AssistantDiffRevealRequest } from './AssistantDiffPanel'
 import { buildAssistantDiffTurns } from './assistant-diff-turns'
 import { resolveAssistantDiffTarget, type AssistantDiffTarget } from './assistant-diff-types'
 import { openAssistantFileTarget } from './assistant-file-navigation'
-import { resolveAssistantLeftSidebarWidth, resolveAssistantPaneLayout } from './assistant-pane-layout'
+import { resolveAssistantPaneLayout } from './assistant-pane-layout'
 import { mergeAssistantReviewIndex } from './assistant-review-index'
 import { AssistantTransientToast, DeleteHistoryConfirm, useAssistantTransientToast } from './AssistantPageHelpers'
 import { useAssistantBrowserSurfaceRequests } from './useAssistantBrowserSurfaceRequests'
 import { useAssistantPageSidebarState } from './useAssistantPageSidebarState'
 import { useAssistantReviewIndex } from './useAssistantReviewIndex'
+import { useAssistantChatRouting } from './useAssistantChatRouting'
 
 type AssistantPageShellSelection = {
     bootstrapped: boolean
     commandPending: boolean
+    sessions: AssistantSession[]
     selectedSessionId: string | null
+    activeThreadId: string | null
     selectedSessionMode: 'work'
 }
 
 function areAssistantPageShellSelectionsEqual(left: AssistantPageShellSelection, right: AssistantPageShellSelection): boolean {
     return left.bootstrapped === right.bootstrapped
         && left.commandPending === right.commandPending
+        && left.sessions === right.sessions
         && left.selectedSessionId === right.selectedSessionId
+        && left.activeThreadId === right.activeThreadId
         && left.selectedSessionMode === right.selectedSessionMode
 }
 
 const EMPTY_ASSISTANT_MESSAGES: AssistantMessage[] = []
 const EMPTY_ASSISTANT_ACTIVITIES: AssistantActivity[] = []
+const loadAssistantDiffPanel = async () => ({
+    default: (await import('./AssistantDiffPanel')).AssistantDiffPanel
+})
+const AssistantDiffPanel = lazy(loadAssistantDiffPanel)
+const FilePreviewModal = lazy(() => import('@/components/ui/FilePreviewModal'))
 
 type AssistantDiffSourceSelection = {
     threadId: string | null
@@ -62,10 +71,21 @@ export default function AssistantPage() {
         return {
             bootstrapped: state.hydrated,
             commandPending: state.commandPending,
+            sessions: state.snapshot.sessions,
             selectedSessionId: selectedSession?.id || null,
+            activeThreadId: selectedSession?.activeThreadId || null,
             selectedSessionMode: 'work'
         }
     }, areAssistantPageShellSelectionsEqual)
+    useAssistantChatRouting({
+        bootstrapped: shell.bootstrapped,
+        commandPending: shell.commandPending,
+        sessions: shell.sessions,
+        selectedSessionId: shell.selectedSessionId,
+        activeThreadId: shell.activeThreadId,
+        selectSession: actions.selectSession,
+        selectThread: actions.selectThread
+    })
     const autoRoutedSelectionRef = useRef<string | null>(null)
     const diffSessionIdRef = useRef<string | null>(shell.selectedSessionId)
     const diffRevealSequenceRef = useRef(1)
@@ -117,6 +137,21 @@ export default function AssistantPage() {
         }
     }, areAssistantDiffSourceSelectionsEqual)
     const inspectorOpen = rightPanelMode === 'review'
+    const [inspectorMounted, setInspectorMounted] = useState(inspectorOpen)
+    useEffect(() => {
+        if (inspectorOpen) setInspectorMounted(true)
+    }, [inspectorOpen])
+    useEffect(() => {
+        const preload = () => {
+            void loadAssistantDiffPanel().catch(() => undefined)
+        }
+        if (typeof window.requestIdleCallback === 'function') {
+            const idleId = window.requestIdleCallback(preload, { timeout: 4_000 })
+            return () => window.cancelIdleCallback(idleId)
+        }
+        const timerId = window.setTimeout(preload, 1_500)
+        return () => window.clearTimeout(timerId)
+    }, [])
     const revealBrowserInspector = useCallback(() => setRightPanelMode('review'), [setRightPanelMode])
     const resizeBrowserInspector = useCallback((width: number) => {
         setRightPanelMode('review')
@@ -215,11 +250,6 @@ export default function AssistantPage() {
         inspectorOpen,
         inspectorWidth: rightSidebarWidth
     })
-
-
-    const pinnedBubbleHeaderInset = paneLayout.leftSidebarCollapsed && bubblePreviewPinned
-        ? resolveAssistantLeftSidebarWidth(leftSidebarWidth, paneLayout.maxLeftSidebarWidth) + 8
-        : 0
 
     useEffect(() => {
         const turnId = selectedDiffTurn?.detailLoaded === false ? selectedDiffTurn.id : null
@@ -367,9 +397,12 @@ export default function AssistantPage() {
 
     useEffect(() => {
         window.dispatchEvent(new CustomEvent('zyra:assistant-sidebar-state', {
-            detail: { collapsed: leftSidebarCollapsed }
+            detail: {
+                collapsed: paneLayout.leftSidebarCollapsed,
+                width: paneLayout.leftSidebarWidth || leftSidebarWidth
+            }
         }))
-    }, [leftSidebarCollapsed])
+    }, [leftSidebarWidth, paneLayout.leftSidebarCollapsed, paneLayout.leftSidebarWidth])
 
     const handleCancelPendingMessageDelete = useCallback(() => {
         if (deletingMessageId) return
@@ -418,7 +451,7 @@ export default function AssistantPage() {
     const noop = useCallback(() => undefined, [])
 
     return (
-        <div className="flex h-[calc(100vh-34px)] min-h-[calc(100vh-34px)] flex-col overflow-hidden animate-fadeIn [--accent-primary:var(--color-primary)] [--accent-secondary:var(--color-secondary)]">
+        <div className="flex h-[calc(100vh-34px)] min-h-[calc(100vh-34px)] flex-col overflow-hidden [--accent-primary:var(--color-primary)] [--accent-secondary:var(--color-secondary)]">
             <div className="min-h-0 flex-1 overflow-hidden">
                 <div className="flex h-full min-w-0 overflow-x-hidden">
                     <ConnectedAssistantSessionsRail
@@ -444,8 +477,6 @@ export default function AssistantPage() {
                             rightPanelMode={rightPanelMode}
                             showRightSidebarToggle
                             deletingMessageId={deletingMessageId}
-                            leftSidebarCollapsed={paneLayout.leftSidebarCollapsed}
-                            pinnedBubbleHeaderInset={pinnedBubbleHeaderInset}
                             fallbackSessionMode={railMode}
                             playgroundRootMissing={false}
                             playgroundTerminalAccess={false}
@@ -453,7 +484,6 @@ export default function AssistantPage() {
                             autoStartDetachedPlaygroundChat={false}
                             onPlaygroundTerminalAccessChange={handlePlaygroundTerminalAccessChange}
                             onPlaygroundTerminalAccessRequestMutedChange={handlePlaygroundTerminalAccessRequestMutedChange}
-                            onToggleLeftSidebar={handleToggleAssistantLeftSidebar}
                             onChoosePlaygroundRoot={handleChoosePlaygroundRoot}
                             onStartDetachedPlaygroundChat={handleStartDetachedPlaygroundChat}
                             onRequestDeleteUserMessage={setPendingMessageDelete}
@@ -465,33 +495,43 @@ export default function AssistantPage() {
                             onViewDiff={handleViewDiff}
                             onShowToast={showToast}
                         />
-                        <AssistantDiffPanel
-                            open={inspectorOpen}
-                            sessionId={shell.selectedSessionId}
-                            threadId={diffSource.threadId}
-                            width={paneLayout.inspectorWidth}
-                            maxWidth={paneLayout.maxInspectorWidth}
-                            turns={diffTurns}
-                            reviewIndexReady={Boolean(reviewIndex)}
-                            reviewIndexLoading={reviewIndexLoading && !reviewIndex}
-                            reviewIndexError={reviewIndexError}
-                            turnDetailError={effectiveDiffTurnId ? reviewTurnDetailErrors[effectiveDiffTurnId] || null : null}
-                            activeTurnId={diffSource.activeTurnId}
-                            revealRequest={diffRevealRequest}
-                            selectedTurnId={effectiveDiffTurnId}
-                            selectedDiff={selectedDiff}
-                            projectPath={diffSource.projectRootPath}
-                            fleetSnapshot={diffSource.fleetSnapshot}
-                            browserSurfaceRequest={browserSurfaceRequest}
-                            onBrowserSurfaceRequestHandled={handleBrowserSurfaceRequestHandled}
-                            onOpenPreview={preview.openPreview}
-                            onOpenPreviewInNewTab={preview.openPreviewInNewTab}
-                            onWidthChange={setRightSidebarWidth}
-                            onSelectTurn={handleSelectDiffTurn}
-                            onSelectDiff={handleSelectInspectorDiff}
-                            onRevealRequestHandled={handleDiffRevealRequestHandled}
-                            onClose={handleCloseDiff}
-                        />
+                        {inspectorMounted || inspectorOpen ? (
+                            <Suspense fallback={inspectorOpen ? (
+                                <aside
+                                    className="h-full shrink-0 border-l border-[var(--surface-panel-divider)] bg-[var(--surface-panel)]"
+                                    style={{ width: paneLayout.inspectorWidth }}
+                                    aria-label="Opening inspector"
+                                />
+                            ) : null}>
+                                <AssistantDiffPanel
+                                    open={inspectorOpen}
+                                    sessionId={shell.selectedSessionId}
+                                    threadId={diffSource.threadId}
+                                    width={paneLayout.inspectorWidth}
+                                    maxWidth={paneLayout.maxInspectorWidth}
+                                    turns={diffTurns}
+                                    reviewIndexReady={Boolean(reviewIndex)}
+                                    reviewIndexLoading={reviewIndexLoading && !reviewIndex}
+                                    reviewIndexError={reviewIndexError}
+                                    turnDetailError={effectiveDiffTurnId ? reviewTurnDetailErrors[effectiveDiffTurnId] || null : null}
+                                    activeTurnId={diffSource.activeTurnId}
+                                    revealRequest={diffRevealRequest}
+                                    selectedTurnId={effectiveDiffTurnId}
+                                    selectedDiff={selectedDiff}
+                                    projectPath={diffSource.projectRootPath}
+                                    fleetSnapshot={diffSource.fleetSnapshot}
+                                    browserSurfaceRequest={browserSurfaceRequest}
+                                    onBrowserSurfaceRequestHandled={handleBrowserSurfaceRequestHandled}
+                                    onOpenPreview={preview.openPreview}
+                                    onOpenPreviewInNewTab={preview.openPreviewInNewTab}
+                                    onWidthChange={setRightSidebarWidth}
+                                    onSelectTurn={handleSelectDiffTurn}
+                                    onSelectDiff={handleSelectInspectorDiff}
+                                    onRevealRequestHandled={handleDiffRevealRequestHandled}
+                                    onClose={handleCloseDiff}
+                                />
+                            </Suspense>
+                        ) : null}
                     </div>
                 </div>
             </div>
@@ -503,27 +543,29 @@ export default function AssistantPage() {
             />
             <AssistantTransientToast toast={toast} />
             {preview.previewFile ? (
-                <FilePreviewModal
-                    file={preview.previewFile}
-                    previewTabs={preview.previewTabs}
-                    activePreviewTabId={preview.activePreviewTabId}
-                    content={preview.previewContent}
-                    loading={preview.loadingPreview}
-                    truncated={preview.previewTruncated}
-                    size={preview.previewSize}
-                    previewBytes={preview.previewBytes}
-                    modifiedAt={preview.previewModifiedAt}
-                    projectPath={diffSource.projectRootPath || undefined}
-                    disableFullscreen
-                    mediaItems={preview.previewMediaItems}
-                    onOpenLinkedPreview={preview.openPreview}
-                    onOpenLinkedPreviewInNewTab={preview.openPreviewInNewTab}
-                    onSelectPreviewTab={preview.setActivePreviewTab}
-                    onClosePreviewTab={preview.closePreviewTab}
-                    onReorderPreviewTabs={preview.reorderPreviewTabs}
-                    onShowToast={showToast}
-                    onClose={preview.closePreview}
-                />
+                <Suspense fallback={null}>
+                    <FilePreviewModal
+                        file={preview.previewFile}
+                        previewTabs={preview.previewTabs}
+                        activePreviewTabId={preview.activePreviewTabId}
+                        content={preview.previewContent}
+                        loading={preview.loadingPreview}
+                        truncated={preview.previewTruncated}
+                        size={preview.previewSize}
+                        previewBytes={preview.previewBytes}
+                        modifiedAt={preview.previewModifiedAt}
+                        projectPath={diffSource.projectRootPath || undefined}
+                        disableFullscreen
+                        mediaItems={preview.previewMediaItems}
+                        onOpenLinkedPreview={preview.openPreview}
+                        onOpenLinkedPreviewInNewTab={preview.openPreviewInNewTab}
+                        onSelectPreviewTab={preview.setActivePreviewTab}
+                        onClosePreviewTab={preview.closePreviewTab}
+                        onReorderPreviewTabs={preview.reorderPreviewTabs}
+                        onShowToast={showToast}
+                        onClose={preview.closePreview}
+                    />
+                </Suspense>
             ) : null}
         </div>
     )

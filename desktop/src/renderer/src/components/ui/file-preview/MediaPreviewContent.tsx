@@ -36,7 +36,7 @@ function MediaNavButton({
             <button
                 type="button"
                 onClick={() => { void onSelect?.(item) }}
-                className="pointer-events-auto flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-black/55 text-white/80 shadow-xl backdrop-blur-md transition-colors duration-200 hover:border-white/20 hover:bg-black/70 hover:text-white"
+                className="pointer-events-auto flex h-12 w-12 items-center justify-center rounded-full border border-media-white/10 bg-media-black/55 text-media-white/80 shadow-xl backdrop-blur-md transition-colors duration-200 hover:border-media-white/20 hover:bg-media-black/70 hover:text-media-white"
                 title={`${side === 'left' ? 'Previous' : 'Next'} media`}
             >
                 {side === 'left' ? <ChevronLeft size={20} /> : <ChevronRight size={20} />}
@@ -64,7 +64,7 @@ function renderMediaStage(targetFile: PreviewFile, activeMediaItem: PreviewMedia
                     controls
                     playsInline
                     className={cn(
-                        'max-w-full bg-black/20 object-contain',
+                        'max-w-full bg-media-black/20 object-contain',
                         isExpanded ? 'h-full max-h-full w-full rounded-none shadow-none' : 'max-h-full rounded-xl shadow-2xl'
                     )}
                 />
@@ -74,22 +74,22 @@ function renderMediaStage(targetFile: PreviewFile, activeMediaItem: PreviewMedia
 
     return (
         <div className="flex h-full w-full items-center justify-center p-6">
-            <div className="w-full max-w-2xl rounded-3xl border border-white/10 bg-black/35 p-6 shadow-2xl backdrop-blur-md">
+            <div className="w-full max-w-2xl rounded-3xl border border-media-white/10 bg-media-black/35 p-6 shadow-2xl backdrop-blur-md">
                 <div className="flex items-center gap-3">
                     {activeMediaItem?.thumbnailPath ? (
                         <img
                             src={getFileUrl(activeMediaItem.thumbnailPath)}
                             alt={`${targetFile.name} cover`}
-                            className="h-14 w-14 rounded-2xl border border-white/10 object-cover"
+                            className="h-14 w-14 rounded-2xl border border-media-white/10 object-cover"
                         />
                     ) : (
-                        <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04]">
+                        <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-media-white/10 bg-media-white/[0.04]">
                             <Music4 size={24} className="text-sky-200" />
                         </div>
                     )}
                     <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-white">{targetFile.name}</div>
-                        <div className="text-xs uppercase tracking-[0.16em] text-white/45">Audio Preview</div>
+                        <div className="truncate text-sm font-semibold text-media-white">{targetFile.name}</div>
+                        <div className="text-xs uppercase tracking-[0.16em] text-media-white/45">Audio Preview</div>
                     </div>
                 </div>
                 <audio

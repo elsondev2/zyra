@@ -62,6 +62,7 @@ export interface AssistantRuntimeEventBase {
     providerThreadId?: string
     rawMethod?: string
     rawPayload?: Record<string, unknown>
+    sourceSequence?: number
 }
 
 export type AssistantRuntimeEvent =
@@ -77,6 +78,15 @@ export type AssistantRuntimeEvent =
             runtimeMode: AssistantRuntimeMode
             interactionMode: AssistantInteractionMode
             profile?: string
+        }
+    })
+    | (AssistantRuntimeEventBase & {
+        type: 'session.config.updated'
+        payload: {
+            model: string
+            thinking: AssistantReasoningEffort
+            profile: string
+            runtimeMode: AssistantRuntimeMode
         }
     })
     | (AssistantRuntimeEventBase & {
@@ -119,6 +129,13 @@ export type AssistantRuntimeEvent =
             effort?: AssistantReasoningEffort
             serviceTier?: 'fast' | 'flex'
             usage?: AssistantTurnUsage | null
+        }
+    })
+    | (AssistantRuntimeEventBase & {
+        type: 'user.message.received'
+        payload: {
+            messageId: string
+            text: string
         }
     })
     | (AssistantRuntimeEventBase & {

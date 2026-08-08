@@ -331,7 +331,7 @@ function runToolOutputWordWrapRegression() {
   const output = "alpha beta gamma delta epsilon zeta eta theta iota kappa";
   const lines = renderToolBlock({
     state: "done",
-    toolName: "read",
+    toolName: "search",
     result: { content: [{ type: "text", text: output }] },
     durationMs: 100,
   }, undefined, 34).map(stripAnsi);
@@ -339,8 +339,24 @@ function runToolOutputWordWrapRegression() {
 
   assert.equal(body.some((line) => line === "alpha beta gamma delta epsilon"), true, "tool prose output should wrap at word boundaries");
   assert.equal(body.some((line) => line === "zeta eta theta iota kappa"), true, "tool prose output should continue with whole words");
-  assert.equal(body.every((line) => !/\b[a-z]{1,2}$/.test(line) || ["read succeeded", "0.1s succeeded"].includes(line)), true, "tool prose output should not leave chopped word fragments");
+  assert.equal(body.every((line) => !/\b[a-z]{1,2}$/.test(line) || ["search succeeded", "0.1s succeeded"].includes(line)), true, "tool prose output should not leave chopped word fragments");
   assert.equal(lines.every((line) => line.length <= 34), true);
+}
+
+function runReadToolCompactPresentationRegression() {
+  const lines = renderToolBlock({
+    state: "done",
+    toolName: "read",
+    args: { path: "src/zyra-ui.mjs", offset: 41, limit: 20 },
+    result: { content: [{ type: "text", text: "first line\nsecond line\nthird line" }] },
+    durationMs: 100,
+  }, undefined, 80).map(stripAnsi);
+  const meaningful = lines.map((line) => line.trim()).filter(Boolean);
+
+  assert.equal(meaningful.length, 1, "successful reads should render as one compact call line");
+  assert.match(meaningful[0], /^read src\/zyra-ui\.mjs:41-60$/);
+  assert.doesNotMatch(meaningful.join("\n"), /first line|second line|third line|succeeded/);
+  assert.equal(lines.every((line) => line.length <= 80), true);
 }
 
 function runEditToolPiLikeRegression() {
@@ -410,7 +426,7 @@ function runToolCallThemeStylingRegression() {
     "styled tool rows must still fit the render width",
   );
 
-  const done = renderToolBlock({ state: "done", toolName: "read" }, theme, 80).join("\n");
+  const done = renderToolBlock({ state: "done", toolName: "search" }, theme, 80).join("\n");
   const failed = renderToolBlock({ state: "error", toolName: "write", isError: true }, theme, 80).join("\n");
   assert.match(done, /\x1b\[48;2;2;3;4m/, "done tool rows should use theme toolCall.successBackground");
   assert.match(done, /\x1b\[38;2;0;255;0msucceeded/, "done state should use theme toolCall.success");
@@ -993,9 +1009,9 @@ function runConsecutiveToolSpacingRegression() {
   ui._debugBeginInteractiveForTests();
   ui.event({
     type: "tool_execution_end",
-    toolName: "read",
+    toolName: "search",
     toolCallId: "tool-a",
-    args: { path: "a.txt" },
+    args: { query: "a-output" },
     result: { content: [{ type: "text", text: "a-output" }] },
   });
   ui.event({
@@ -2535,6 +2551,7 @@ runToolLongCommandAndHugeOutputClampRegression();
 runToolOutputUsesFullBlockWidthRegression();
 runCommandCardStableHeightRegression();
 runToolOutputWordWrapRegression();
+runReadToolCompactPresentationRegression();
 runEditToolPiLikeRegression();
 runToolCallThemeStylingRegression();
 runInteractiveAssistantComponentRegression();

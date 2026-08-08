@@ -17,6 +17,10 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
     session,
     initialOutput,
     theme,
+    fontFamily,
+    fontSize,
+    cursorBlink,
+    scrollback,
     active,
     visible,
     focusRequestId,
@@ -30,6 +34,10 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
     session: DevScopePreviewTerminalSessionSummary
     initialOutput: string
     theme: ITheme
+    fontFamily: string
+    fontSize: number
+    cursorBlink: boolean
+    scrollback: number
     active: boolean
     visible: boolean
     focusRequestId: number
@@ -83,12 +91,12 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
         void loadPreviewTerminalRuntime().then((runtime) => {
             if (disposed || hostRef.current !== host) return
             const terminal = new runtime.Terminal({
-                cursorBlink: true,
+                cursorBlink,
                 convertEol: true,
-                fontFamily: '"Cascadia Code", Consolas, "SFMono-Regular", monospace',
-                fontSize: 12,
+                fontFamily,
+                fontSize,
                 lineHeight: 1.08,
-                scrollback: 5000,
+                scrollback,
                 allowProposedApi: true,
                 theme: themeRef.current
             })
@@ -197,6 +205,17 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
         terminal.options.theme = theme
         terminal.refresh(0, Math.max(0, terminal.rows - 1))
     }, [theme])
+
+    useEffect(() => {
+        const terminal = terminalRef.current
+        if (!terminal) return
+        terminal.options.cursorBlink = cursorBlink
+        terminal.options.fontFamily = fontFamily
+        terminal.options.fontSize = fontSize
+        terminal.options.scrollback = scrollback
+        const fitAddon = fitAddonRef.current
+        if (fitAddon && visible) fitTerminalSafely(fitAddon)
+    }, [cursorBlink, fontFamily, fontSize, scrollback, visible])
 
     return (
         <div

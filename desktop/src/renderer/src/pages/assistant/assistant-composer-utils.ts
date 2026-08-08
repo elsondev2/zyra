@@ -1,4 +1,8 @@
 import type { AssistantPromptImageInput } from '@shared/assistant/contracts'
+import {
+    buildAssistantBrowserAnnotationPrompt,
+    parseAssistantBrowserAnnotation
+} from './assistant-browser-annotation-composer'
 import type { ComposerContextFile } from './assistant-composer-types'
 
 export const SLASH_COMMANDS = [
@@ -206,6 +210,7 @@ function isClipboardOriginAttachment(file: ComposerContextFile): boolean {
 
 function getClipboardAttachmentDisplayName(file: ComposerContextFile, category: ReturnType<typeof getContextFileMeta>['category']): string {
     const mime = String(file.mimeType || '').toLowerCase()
+    if (parseAssistantBrowserAnnotation(file.content)) return 'Browser annotation'
     if (category === 'image') return 'Pasted image'
     if (
         category === 'code'
@@ -227,7 +232,10 @@ export function buildPromptWithContextFiles(prompt: string, contextFiles: Compos
     const attachmentSections = contextFiles.map((file, index) => {
         const meta = getContextFileMeta(file)
         const isClipboardAttachment = isClipboardOriginAttachment(file)
-        const inlineContent = meta.category === 'image' ? '' : String(file.content || '')
+        const browserAnnotation = parseAssistantBrowserAnnotation(file.content)
+        const inlineContent = browserAnnotation
+            ? buildAssistantBrowserAnnotationPrompt(browserAnnotation)
+            : meta.category === 'image' ? '' : String(file.content || '')
         const headerLabel = isClipboardAttachment
             ? getClipboardAttachmentDisplayName(file, meta.category)
             : meta.name
@@ -241,7 +249,8 @@ export function buildPromptWithContextFiles(prompt: string, contextFiles: Compos
                     ? 'origin: pasted from clipboard; treat this as inline context only, not as a workspace file path or current working directory.'
                     : '',
                 file.mimeType ? `mime: ${file.mimeType}` : '',
-                Number.isFinite(file.sizeBytes) ? `size: ${Number(file.sizeBytes)} bytes` : ''
+                Number.isFinite(file.sizeBytes) ? `size: ${Number(file.sizeBytes)} bytes` : '',
+                inlineContent ? `content:\n${inlineContent}` : ''
             ].filter(Boolean)
             : [
                 isClipboardAttachment

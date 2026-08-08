@@ -357,10 +357,6 @@ export function AssistantPendingUserInputFooter(props: {
                 modelQuery={composerController.modelQuery}
                 setModelQuery={composerController.setModelQuery}
                 setActiveModelIndex={composerController.setActiveModelIndex}
-                modelCanScrollUp={composerController.modelCanScrollUp}
-                modelCanScrollDown={composerController.modelCanScrollDown}
-                setModelCanScrollUp={composerController.setModelCanScrollUp}
-                setModelCanScrollDown={composerController.setModelCanScrollDown}
                 modelListRef={composerController.modelListRef}
                 filteredModelOptions={composerController.filteredModelOptions}
                 activeModelIndex={composerController.activeModelIndex}

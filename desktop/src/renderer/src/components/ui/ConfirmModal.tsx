@@ -1,6 +1,6 @@
-import { cn } from '@/lib/utils'
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { cn } from '@/lib/utils'
 
 interface ConfirmModalProps {
     isOpen: boolean
@@ -28,14 +28,15 @@ export function ConfirmModal({
     checkboxLabel
 }: ConfirmModalProps) {
     const [checkboxChecked, setCheckboxChecked] = useState(false)
+    const titleId = useId()
+    const messageId = useId()
 
     useEffect(() => {
-        if (isOpen) {
-            const originalOverflow = document.body.style.overflow
-            document.body.style.overflow = 'hidden'
-            return () => {
-                document.body.style.overflow = originalOverflow
-            }
+        if (!isOpen) return
+        const originalOverflow = document.body.style.overflow
+        document.body.style.overflow = 'hidden'
+        return () => {
+            document.body.style.overflow = originalOverflow
         }
     }, [isOpen])
 
@@ -43,32 +44,60 @@ export function ConfirmModal({
         if (isOpen) setCheckboxChecked(false)
     }, [isOpen])
 
-    if (!isOpen) return null
-    if (typeof document === 'undefined') return null
+    useEffect(() => {
+        if (!isOpen) return
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') onCancel()
+        }
+        window.addEventListener('keydown', handleKeyDown)
+        return () => window.removeEventListener('keydown', handleKeyDown)
+    }, [isOpen, onCancel])
 
-    const content = (
-        <>
-            <h3 className="text-base font-semibold text-sparkle-text">{title}</h3>
-            <p className="mt-2 text-sm leading-5 text-sparkle-text-secondary">
-                {message}
-            </p>
-            <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                {checkboxLabel ? (
-                    <label className="flex cursor-pointer items-center gap-2 text-[13px] text-sparkle-text-muted transition-colors hover:text-sparkle-text-secondary">
-                        <input
-                            type="checkbox"
-                            checked={checkboxChecked}
-                            onChange={(event) => setCheckboxChecked(event.currentTarget.checked)}
-                            className="size-3.5 rounded border-white/15 bg-transparent accent-amber-300"
-                        />
-                        <span>{checkboxLabel}</span>
-                    </label>
-                ) : <span />}
-                <div className="flex items-center justify-end gap-2">
+    if (!isOpen || typeof document === 'undefined') return null
+
+    return createPortal((
+        <div
+            className={cn(
+                'fixed inset-0 z-[120] flex items-center justify-center p-4 backdrop-blur-sm animate-fadeIn',
+                fullscreen ? 'bg-[var(--color-bg)]' : 'bg-black/60'
+            )}
+            onMouseDown={(event) => {
+                if (event.target === event.currentTarget) onCancel()
+            }}
+        >
+            <section
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={titleId}
+                aria-describedby={messageId}
+                className={cn(
+                    'w-full overflow-hidden rounded-xl border border-white/10 bg-sparkle-card shadow-2xl animate-modal-in',
+                    fullscreen ? 'max-w-xl' : 'max-w-[440px]'
+                )}
+            >
+                <div className="px-5 py-4">
+                    <h2 id={titleId} className="text-[14px] font-semibold tracking-[-0.01em] text-sparkle-text">{title}</h2>
+                    <p id={messageId} className="mt-1.5 text-[12px] leading-5 text-sparkle-text-secondary">
+                        {message}
+                    </p>
+                    {checkboxLabel ? (
+                        <label className="mt-4 flex w-fit cursor-pointer items-center gap-2 text-[12px] text-sparkle-text-muted transition-colors hover:text-sparkle-text-secondary">
+                            <input
+                                type="checkbox"
+                                checked={checkboxChecked}
+                                onChange={(event) => setCheckboxChecked(event.currentTarget.checked)}
+                                className="size-3.5 shrink-0 rounded border-white/15 bg-transparent accent-[var(--accent-primary)]"
+                            />
+                            <span>{checkboxLabel}</span>
+                        </label>
+                    ) : null}
+                </div>
+
+                <footer className="flex items-center justify-end gap-2 border-t border-white/[0.08] px-4 py-3">
                     <button
                         type="button"
                         onClick={onCancel}
-                        className="rounded-lg border border-white/10 px-3 py-1.5 text-sm text-sparkle-text-secondary transition-colors hover:border-white/20 hover:bg-white/[0.03] hover:text-sparkle-text"
+                        className="inline-flex h-8 items-center justify-center whitespace-nowrap rounded-md border border-white/10 px-3 text-[12px] font-medium text-sparkle-text-secondary transition-colors hover:border-white/20 hover:bg-white/[0.04] hover:text-sparkle-text"
                     >
                         {cancelLabel}
                     </button>
@@ -76,46 +105,16 @@ export function ConfirmModal({
                         type="button"
                         onClick={() => onConfirm({ checkboxChecked })}
                         className={cn(
-                            'rounded-lg border border-white/10 px-3 py-1.5 text-sm transition-colors shadow-sm hover:border-white/20',
-                            variant === 'danger' && 'bg-red-500/15 text-red-200 hover:bg-red-500/25',
-                            variant === 'warning' && 'bg-amber-500/15 text-amber-200 hover:bg-amber-500/25',
-                            variant === 'info' && 'bg-sparkle-primary/15 text-white/90 hover:bg-sparkle-primary/25'
+                            'inline-flex h-8 items-center justify-center whitespace-nowrap rounded-md border px-3 text-[12px] font-semibold transition-colors',
+                            variant === 'danger' && 'border-red-400/20 bg-red-500/10 text-red-100 hover:bg-red-500/18',
+                            variant === 'warning' && 'border-amber-400/20 bg-amber-500/10 text-amber-100 hover:bg-amber-500/18',
+                            variant === 'info' && 'border-[color-mix(in_srgb,var(--accent-primary)_24%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_12%,transparent)] text-sparkle-text hover:bg-[color-mix(in_srgb,var(--accent-primary)_18%,transparent)]'
                         )}
                     >
                         {confirmLabel}
                     </button>
-                </div>
-            </div>
-        </>
-    )
-
-    return createPortal((
-        <div
-            className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-md animate-fadeIn"
-            onClick={onCancel}
-        >
-            <div
-                className={cn(
-                    fullscreen
-                        ? 'h-screen w-screen max-w-none rounded-none border-0 bg-sparkle-bg/98 p-0 shadow-none'
-                        : 'w-full max-w-md rounded-2xl border border-white/10 bg-sparkle-card p-6 shadow-2xl m-4'
-                )}
-                onClick={(e) => e.stopPropagation()}
-            >
-                {fullscreen ? (
-                    <div className="flex h-full w-full items-center justify-center p-6">
-                        <div
-                            className={cn(
-                                'w-full max-w-xl rounded-2xl border border-white/10 bg-sparkle-card p-6 shadow-2xl animate-modal-in'
-                            )}
-                        >
-                            {content}
-                        </div>
-                    </div>
-                ) : (
-                    content
-                )}
-            </div>
+                </footer>
+            </section>
         </div>
     ), document.body)
 }

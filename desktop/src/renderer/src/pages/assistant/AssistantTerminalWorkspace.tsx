@@ -14,9 +14,10 @@ import {
 import type { DevScopePreviewTerminalSessionSummary } from '@shared/contracts/devscope-api'
 import type { ITheme } from 'xterm'
 import type { Shell } from '@/lib/settings'
-import { useSettings } from '@/lib/settings'
+import { getAppearanceCodeFontStack, useSettings } from '@/lib/settings'
 import { createPreviewTerminalSessionId, readCssVariable } from '@/components/ui/file-preview/modalShared'
 import { cn } from '@/lib/utils'
+import { useThemeRevision } from '@/lib/use-theme-revision'
 import { AssistantTerminalViewport } from './AssistantTerminalViewport'
 import {
     activateAssistantTerminalSession,
@@ -62,6 +63,7 @@ export const AssistantTerminalWorkspace = memo(function AssistantTerminalWorkspa
     active: boolean
 }) {
     const { settings } = useSettings()
+    const themeRevision = useThemeRevision()
     const normalizedProjectPath = String(projectPath || '').trim()
     const [sessions, setSessions] = useState<TerminalSessionItem[]>([])
     const [uiState, setUiState] = useState<AssistantTerminalWorkspaceState>(() => (
@@ -87,6 +89,12 @@ export const AssistantTerminalWorkspace = memo(function AssistantTerminalWorkspa
         const bg = readCssVariable('--color-bg', '#020617')
         const text = readCssVariable('--color-text', '#e5e7eb')
         const muted = readCssVariable('--color-text-secondary', '#94a3b8')
+        const danger = readCssVariable('--status-danger', '#f87171')
+        const warning = readCssVariable('--status-warning', '#facc15')
+        const success = readCssVariable('--status-success', '#4ade80')
+        const info = readCssVariable('--status-info', '#60a5fa')
+        const secondary = readCssVariable('--color-secondary', '#c084fc')
+        const accentSecondary = readCssVariable('--accent-secondary', '#22d3ee')
         return {
             background: bg,
             foreground: text,
@@ -95,22 +103,22 @@ export const AssistantTerminalWorkspace = memo(function AssistantTerminalWorkspa
             selectionBackground: `${accent}33`,
             black: bg,
             brightBlack: muted,
-            red: '#f87171',
-            brightRed: '#fca5a5',
-            green: '#4ade80',
-            brightGreen: '#86efac',
-            yellow: '#facc15',
-            brightYellow: '#fde047',
-            blue: '#60a5fa',
-            brightBlue: '#93c5fd',
-            magenta: '#c084fc',
-            brightMagenta: '#e9d5ff',
-            cyan: '#22d3ee',
-            brightCyan: '#67e8f9',
+            red: danger,
+            brightRed: danger,
+            green: success,
+            brightGreen: success,
+            yellow: warning,
+            brightYellow: warning,
+            blue: info,
+            brightBlue: info,
+            magenta: secondary,
+            brightMagenta: secondary,
+            cyan: accentSecondary,
+            brightCyan: accentSecondary,
             white: muted,
             brightWhite: text
         }
-    }, [settings.accentColor.primary, settings.theme])
+    }, [settings.accentColor.primary, settings.theme, themeRevision])
 
     const commitUiState = useCallback((nextState: AssistantTerminalWorkspaceState) => {
         uiStateRef.current = nextState
@@ -404,6 +412,10 @@ export const AssistantTerminalWorkspace = memo(function AssistantTerminalWorkspa
                                             session={session}
                                             initialOutput={outputBuffersRef.current.get(session.sessionId) || String(session.recentOutput || '')}
                                             theme={terminalTheme}
+                                            fontFamily={getAppearanceCodeFontStack(settings.appearanceCodeFont)}
+                                            fontSize={settings.terminalFontSize}
+                                            cursorBlink={settings.terminalCursorBlink}
+                                            scrollback={settings.terminalScrollback}
                                             active={sessionActive}
                                             visible={active}
                                             focusRequestId={focusRequestId}

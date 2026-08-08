@@ -116,7 +116,11 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
         ? latestUserRow.message.turnId
         : null
     const latestBoundaryTurnId = [...rows.slice(latestUserIndex + 1)].reverse().map(getRowTurnId).find(Boolean) || null
-    const activeTurnId = isWorking ? runningTurnId || latestUserTurnId || latestBoundaryTurnId : null
+    const activeTurnId = isWorking
+        ? latestUserIndex >= 0
+            ? latestUserTurnId || latestBoundaryTurnId
+            : latestBoundaryTurnId || runningTurnId
+        : null
     const activeFinalMessageId = activeTurnId ? finalByTurn.get(activeTurnId) || null : null
     const settledFinalIndex = activeFinalMessageId
         ? rows.findIndex((row) => (
@@ -192,8 +196,8 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
                 && index !== latestNarrationIndex
                 && rowMustStayVisible(row)
             ))
-            const startedAt = runningTurnId
-                ? turnUsageById?.get(runningTurnId)?.startedAt || turnUsageById?.get(runningTurnId)?.requestedAt
+            const startedAt = activeTurnId
+                ? turnUsageById?.get(activeTurnId)?.startedAt || turnUsageById?.get(activeTurnId)?.requestedAt
                 : null
 
             activeRange = activeEndIndex >= userIndex + 1 ? {
@@ -235,25 +239,14 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
         let userIndex = -1
         for (let index = finalIndex - 1; index >= 0; index -= 1) {
             const candidate = rows[index]
-            if (
-                candidate.kind === 'message'
-                && candidate.message.role === 'user'
-                && (candidate.message.turnId === turnId || !candidate.message.turnId)
-            ) {
-                userIndex = index
-                break
-            }
+            if (candidate.kind !== 'message' || candidate.message.role !== 'user') continue
+            if (candidate.message.turnId === turnId || !candidate.message.turnId) userIndex = index
+            break
         }
         if (userIndex < 0 || finalIndex - userIndex <= 1) continue
 
         const workRows = rows.slice(userIndex + 1, finalIndex)
-        if (
-            workRows.length === 0
-            || workRows.some((row) => {
-                const rowTurnId = getRowTurnId(row)
-                return (rowTurnId !== turnId && rowTurnId !== null) || rowMustStayVisible(row)
-            })
-        ) continue
+        if (workRows.length === 0 || workRows.some(rowMustStayVisible)) continue
 
         const startedAt = usage?.startedAt
             || usage?.requestedAt
@@ -300,11 +293,6 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
         if (turnRows.length === 0) continue
         const turnId = inferLegacyUserTurnId(userRow.message, turnRows, turnUsageById)
         if (!turnId) continue
-        const legacyBoundary = !userRow.message.turnId
-        if (!legacyBoundary && turnRows.some((row) => {
-            const rowTurnId = getRowTurnId(row)
-            return rowTurnId !== turnId && rowTurnId !== null
-        })) continue
 
         const usage = turnUsageById?.get(turnId)
         const terminalIncomplete = usage?.state === 'interrupted' || usage?.state === 'error'

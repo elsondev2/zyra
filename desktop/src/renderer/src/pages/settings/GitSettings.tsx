@@ -1,63 +1,47 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { ArrowLeft, GitBranch, GitPullRequest, RefreshCw, Sparkles, UserRound } from 'lucide-react'
-import { Checkbox, Input, Select, Textarea } from '@/components/ui/FormControls'
+import { FolderOpen } from 'lucide-react'
 import { useSettings } from '@/lib/settings'
-import { cn } from '@/lib/utils'
-import { SettingsBetaBadge } from './SettingsBetaBadge'
-
-type GitSettingsTab = 'pull-requests' | 'workflow' | 'defaults' | 'identity'
-
-const TABS: Array<{ id: GitSettingsTab; label: string }> = [
-    { id: 'pull-requests', label: 'Pull Requests' },
-    { id: 'workflow', label: 'Workflow' },
-    { id: 'defaults', label: 'Defaults' },
-    { id: 'identity', label: 'Identity' }
-]
+import {
+    SettingsButton,
+    SettingsDialog,
+    SettingsInput,
+    SettingsNotice,
+    SettingsPageContainer,
+    SettingsRow,
+    SettingsSection,
+    SettingsSegmented,
+    SettingsSelect,
+    SettingsSwitch,
+    SettingsTextarea
+} from './settings-layout'
 
 export default function GitSettings() {
     const { settings, updateSettings } = useSettings()
-    const [activeTab, setActiveTab] = useState<GitSettingsTab>('pull-requests')
     const [globalAuthorDraft, setGlobalAuthorDraft] = useState({ name: '', email: '' })
     const [savedGlobalAuthor, setSavedGlobalAuthor] = useState({ name: '', email: '' })
     const [globalAuthorMessage, setGlobalAuthorMessage] = useState('')
     const [globalAuthorLoading, setGlobalAuthorLoading] = useState(false)
+    const [editDialog, setEditDialog] = useState<'target-branch' | 'global-guide' | 'initial-branch' | 'identity' | null>(null)
+    const [editValue, setEditValue] = useState('')
 
     useEffect(() => {
         let cancelled = false
         setGlobalAuthorLoading(true)
-
-        void window.devscope.getGlobalGitUser()
-            .then((result) => {
-                if (cancelled) return
-                const nextAuthor = result?.success && result.user
-                    ? { name: String(result.user.name || ''), email: String(result.user.email || '') }
-                    : { name: '', email: '' }
-
-                setGlobalAuthorDraft(nextAuthor)
-                setSavedGlobalAuthor(nextAuthor)
-                setGlobalAuthorMessage(result?.success ? '' : (result?.error || 'Failed to read global Git author.'))
-            })
-            .catch((err: any) => {
-                if (!cancelled) {
-                    setGlobalAuthorMessage(err?.message || 'Failed to read global Git author.')
-                }
-            })
-            .finally(() => {
-                if (!cancelled) {
-                    setGlobalAuthorLoading(false)
-                }
-            })
-
-        return () => {
-            cancelled = true
-        }
+        void window.devscope.getGlobalGitUser().then((result) => {
+            if (cancelled) return
+            const nextAuthor = result?.success && result.user ? { name: String(result.user.name || ''), email: String(result.user.email || '') } : { name: '', email: '' }
+            setGlobalAuthorDraft(nextAuthor)
+            setSavedGlobalAuthor(nextAuthor)
+            setGlobalAuthorMessage(result?.success ? '' : result?.error || 'Could not read the global Git author.')
+        }).catch((error) => {
+            if (!cancelled) setGlobalAuthorMessage(error instanceof Error ? error.message : 'Could not read the global Git author.')
+        }).finally(() => {
+            if (!cancelled) setGlobalAuthorLoading(false)
+        })
+        return () => { cancelled = true }
     }, [])
 
-    const globalAuthorDirty = useMemo(
-        () => globalAuthorDraft.name.trim() !== savedGlobalAuthor.name.trim() || globalAuthorDraft.email.trim() !== savedGlobalAuthor.email.trim(),
-        [globalAuthorDraft.email, globalAuthorDraft.name, savedGlobalAuthor.email, savedGlobalAuthor.name]
-    )
+    const globalAuthorDirty = useMemo(() => globalAuthorDraft.name.trim() !== savedGlobalAuthor.name.trim() || globalAuthorDraft.email.trim() !== savedGlobalAuthor.email.trim(), [globalAuthorDraft, savedGlobalAuthor])
 
     const saveGlobalAuthor = async () => {
         const name = globalAuthorDraft.name.trim()
@@ -66,440 +50,119 @@ export default function GitSettings() {
             setGlobalAuthorMessage('Name and email are both required.')
             return
         }
-
         setGlobalAuthorLoading(true)
         try {
             const result = await window.devscope.setGlobalGitUser({ name, email })
-            if (!result?.success) {
-                throw new Error(result?.error || 'Failed to save global Git author.')
-            }
+            if (!result?.success) throw new Error(result?.error || 'Could not save the global Git author.')
             setSavedGlobalAuthor({ name, email })
             setGlobalAuthorMessage('Global Git author updated.')
-        } catch (err: any) {
-            setGlobalAuthorMessage(err?.message || 'Failed to save global Git author.')
+            setEditDialog(null)
+        } catch (error) {
+            setGlobalAuthorMessage(error instanceof Error ? error.message : 'Could not save the global Git author.')
         } finally {
             setGlobalAuthorLoading(false)
         }
     }
 
+    const openTextEditor = (dialog: Exclude<typeof editDialog, 'identity' | null>, value: string) => {
+        setEditValue(value)
+        setEditDialog(dialog)
+    }
+
+    const closeEditor = () => {
+        if (editDialog === 'identity') setGlobalAuthorDraft(savedGlobalAuthor)
+        setEditDialog(null)
+    }
+
+    const saveTextEditor = () => {
+        if (editDialog === 'target-branch') updateSettings({ gitPullRequestDefaultTargetBranch: editValue.trim() || 'main' })
+        if (editDialog === 'initial-branch') updateSettings({ gitInitDefaultBranch: editValue.trim() || 'main' })
+        if (editDialog === 'global-guide') updateSettings({ gitPullRequestGlobalGuide: { ...settings.gitPullRequestGlobalGuide, text: editValue } })
+        setEditDialog(null)
+    }
+
     const chooseGlobalGuideFile = async () => {
         const result = await window.devscope.selectMarkdownFile()
         if (!result?.success || result.cancelled || !result.filePath) return
-        updateSettings({
-            gitPullRequestGlobalGuide: {
-                ...settings.gitPullRequestGlobalGuide,
-                mode: 'file',
-                filePath: result.filePath
-            }
-        })
+        updateSettings({ gitPullRequestGlobalGuide: { ...settings.gitPullRequestGlobalGuide, mode: 'file', filePath: result.filePath } })
     }
 
     return (
-        <div className="animate-fadeIn">
-            <div className="mb-6 flex items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                    <div className="rounded-lg bg-orange-500/10 p-2">
-                        <GitBranch className="text-orange-400" size={24} />
-                    </div>
-                    <div>
-                        <div className="flex items-center gap-2">
-                            <h1 className="text-xl font-semibold text-sparkle-text">Git</h1>
-                            <SettingsBetaBadge compact />
-                        </div>
-                        <p className="text-sm text-sparkle-text-secondary">Branch defaults, PR flow, and machine-wide Git identity.</p>
-                    </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                    <Link
-                        to="/settings/ai"
-                        className="inline-flex items-center gap-2 rounded-lg border border-transparent bg-white/[0.04] px-4 py-2 text-sm text-sparkle-text transition-all hover:bg-white/[0.07] hover:text-white"
-                    >
-                        <Sparkles size={16} />
-                        Git AI
-                    </Link>
-                    <Link
-                        to="/settings"
-                        className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-sparkle-card px-4 py-2 text-sm text-sparkle-text transition-all hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
-                    >
-                        <ArrowLeft size={16} />
-                        Back to Settings
-                    </Link>
-                </div>
-            </div>
+        <SettingsPageContainer>
+            <SettingsSection title="Pull requests">
+                <SettingsRow title="Default guide source" description="Instructions used unless the active project stores its own PR settings." control={<SettingsSelect value={settings.gitPullRequestDefaultGuideSource} onChange={(event) => updateSettings({ gitPullRequestDefaultGuideSource: event.target.value as typeof settings.gitPullRequestDefaultGuideSource })} aria-label="Default PR guide source"><option value="global">Global guide</option><option value="repo-template">Repository template</option><option value="none">None</option></SettingsSelect>} />
+                <SettingsRow title="Default target branch" description="Base branch proposed by the pull-request flow." status={settings.gitPullRequestDefaultTargetBranch} control={<SettingsButton onClick={() => openTextEditor('target-branch', settings.gitPullRequestDefaultTargetBranch)}>Edit</SettingsButton>} />
+                <SettingsRow title="Default change source" description="Choose which local changes are proposed when a new pull-request flow starts." control={<SettingsSelect value={settings.gitPullRequestDefaultChangeSource} onChange={(event) => updateSettings({ gitPullRequestDefaultChangeSource: event.target.value as typeof settings.gitPullRequestDefaultChangeSource })} aria-label="Default pull-request change source"><option value="unstaged">Unstaged changes</option><option value="staged">Staged changes</option><option value="local-commits">Local commits</option><option value="all-local-work">All local work</option></SettingsSelect>} />
+                <SettingsRow title="Draft by default" description="Create new pull requests as drafts unless the project overrides this setting." control={<SettingsSwitch checked={settings.gitPullRequestDefaultDraft} onCheckedChange={(gitPullRequestDefaultDraft) => updateSettings({ gitPullRequestDefaultDraft })} label="Create draft pull requests by default" />} />
+                <SettingsRow title="Global guide mode" description="Write the fallback guide here or load it from a markdown file." control={<SettingsSegmented value={settings.gitPullRequestGlobalGuide.mode} options={[{ value: 'text', label: 'Text' }, { value: 'file', label: 'Markdown file' }]} onChange={(mode) => updateSettings({ gitPullRequestGlobalGuide: { ...settings.gitPullRequestGlobalGuide, mode } })} label="Global pull-request guide mode" />} />
+                {settings.gitPullRequestGlobalGuide.mode === 'text' ? (
+                    <SettingsRow title="Global guide" description="Fallback structure, checklist, and tone for generated pull-request bodies." status={settings.gitPullRequestGlobalGuide.text.trim() ? 'Custom guide saved' : 'No guide written'} statusTone={settings.gitPullRequestGlobalGuide.text.trim() ? 'ready' : 'muted'} control={<SettingsButton onClick={() => openTextEditor('global-guide', settings.gitPullRequestGlobalGuide.text)}>Edit guide</SettingsButton>} />
+                ) : (
+                    <SettingsRow title="Guide file" description="Markdown file used as the global pull-request guide." status={settings.gitPullRequestGlobalGuide.filePath || 'No file selected'} statusTone={settings.gitPullRequestGlobalGuide.filePath ? 'muted' : 'warning'} control={<div className="flex gap-1"><SettingsButton onClick={() => void chooseGlobalGuideFile()}><FolderOpen size={13} />Choose .md</SettingsButton><SettingsButton variant="ghost" disabled={!settings.gitPullRequestGlobalGuide.filePath} onClick={() => updateSettings({ gitPullRequestGlobalGuide: { ...settings.gitPullRequestGlobalGuide, filePath: '' } })}>Clear</SettingsButton></div>} />
+                )}
+            </SettingsSection>
 
-            <div className="mb-6 inline-flex items-center rounded-lg border border-white/10 bg-sparkle-card p-1">
-                {TABS.map((tab) => (
-                    <button
-                        key={tab.id}
-                        type="button"
-                        onClick={() => setActiveTab(tab.id)}
-                        className={cn(
-                            'rounded-md px-3 py-1.5 text-xs transition-colors',
-                            activeTab === tab.id
-                                ? 'bg-[var(--accent-primary)] text-white'
-                                : 'text-sparkle-text-secondary hover:bg-white/[0.03] hover:text-sparkle-text'
-                        )}
-                    >
-                        {tab.label}
-                    </button>
-                ))}
-            </div>
+            <SettingsSection title="Workflow">
+                <SettingsRow title="Auto-refresh on project open" description="Refresh status, history, remotes, and branches when a project opens." control={<SettingsSwitch checked={settings.gitAutoRefreshOnProjectOpen} onCheckedChange={(gitAutoRefreshOnProjectOpen) => updateSettings({ gitAutoRefreshOnProjectOpen })} label="Auto-refresh Git on project open" />} />
+                <SettingsRow title="Warn on author mismatch" description="Confirm before committing when repository ownership and Git author do not align." control={<SettingsSwitch checked={settings.gitWarnOnAuthorMismatch} onCheckedChange={(gitWarnOnAuthorMismatch) => updateSettings({ gitWarnOnAuthorMismatch })} label="Warn on Git author mismatch" />} />
+                <SettingsRow title="Auto-create working branch" description="Create a branch before the stacked PR flow when the current branch is also the target." control={<SettingsSwitch checked={settings.gitAutoCreateBranchWhenTargetMatches} onCheckedChange={(gitAutoCreateBranchWhenTargetMatches) => updateSettings({ gitAutoCreateBranchWhenTargetMatches })} label="Auto-create Git branch" />} />
+                <SettingsNotice>The PR action pushes when needed, reuses an existing open PR, and otherwise creates one through an authenticated GitHub CLI (`gh`) session.</SettingsNotice>
+            </SettingsSection>
 
-            {activeTab === 'pull-requests' ? (
-                <div className="grid gap-4 xl:grid-cols-[1.04fr_0.96fr]">
-                    <Section title="PR defaults" description="Used unless a project stores its own PR settings.">
-                        <div className="grid gap-4 md:grid-cols-2">
-                            <Field label="Default guide source">
-                                <Select
-                                    value={settings.gitPullRequestDefaultGuideSource}
-                                    onChange={(value) => updateSettings({ gitPullRequestDefaultGuideSource: value as typeof settings.gitPullRequestDefaultGuideSource })}
-                                    options={[
-                                        { value: 'global', label: 'Global guide' },
-                                        { value: 'repo-template', label: 'Repo template' },
-                                        { value: 'none', label: 'None' }
-                                    ]}
-                                />
-                            </Field>
-                            <Field label="Default target branch">
-                                <Input
-                                    value={settings.gitPullRequestDefaultTargetBranch}
-                                    onChange={(value) => updateSettings({ gitPullRequestDefaultTargetBranch: value.trim() || 'main' })}
-                                />
-                            </Field>
-                        </div>
+            <SettingsSection title="Repository defaults">
+                <SettingsRow title="Initial branch" description="Branch name proposed when initializing a repository." status={settings.gitInitDefaultBranch} control={<SettingsButton onClick={() => openTextEditor('initial-branch', settings.gitInitDefaultBranch)}>Edit</SettingsButton>} />
+                <SettingsRow title="Create .gitignore" description="Preselect .gitignore generation in the repository initialization flow." control={<SettingsSwitch checked={settings.gitInitCreateGitignore} onCheckedChange={(gitInitCreateGitignore) => updateSettings({ gitInitCreateGitignore })} label="Create .gitignore by default" />} />
+                <SettingsRow title="Create initial commit" description="Preselect the first commit step in the initialization flow." control={<SettingsSwitch checked={settings.gitInitCreateInitialCommit} onCheckedChange={(gitInitCreateInitialCommit) => updateSettings({ gitInitCreateInitialCommit })} label="Create initial Git commit by default" />} />
+                <SettingsRow title="Bulk action scope" description="Set whether stage-all and unstage-all affect the project folder or whole repository." control={<SettingsSegmented value={settings.gitBulkActionScope} options={[{ value: 'project', label: 'Project' }, { value: 'repo', label: 'Repository' }]} onChange={(gitBulkActionScope) => updateSettings({ gitBulkActionScope })} label="Git bulk action scope" />} />
+            </SettingsSection>
 
-                        <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3">
-                            <Checkbox
-                                checked={settings.gitPullRequestDefaultDraft}
-                                onChange={(checked) => updateSettings({ gitPullRequestDefaultDraft: checked })}
-                                label={settings.gitPullRequestDefaultDraft ? 'Create draft PRs by default' : 'Open PRs ready for review by default'}
-                                description="Project-specific PR flows can still override this."
-                                size="sm"
-                            />
-                        </div>
-                    </Section>
+            <SettingsSection title="Global identity">
+                {globalAuthorMessage ? <SettingsNotice tone={globalAuthorMessage.includes('updated') ? 'success' : 'neutral'}>{globalAuthorMessage}</SettingsNotice> : null}
+                <SettingsRow
+                    title="Git author"
+                    description="Machine-wide author used by future commits. This does not change GitHub authentication."
+                    status={savedGlobalAuthor.name && savedGlobalAuthor.email ? `${savedGlobalAuthor.name} · ${savedGlobalAuthor.email}` : 'No global identity configured'}
+                    statusTone={savedGlobalAuthor.name && savedGlobalAuthor.email ? 'ready' : 'warning'}
+                    control={<SettingsButton onClick={() => { setGlobalAuthorDraft(savedGlobalAuthor); setEditDialog('identity') }} disabled={globalAuthorLoading}>{globalAuthorLoading ? 'Loading…' : 'Edit identity'}</SettingsButton>}
+                />
+            </SettingsSection>
 
-                    <Section title="Global PR guide" description="Fallback instructions for PR bodies when a project does not override them.">
-                        <div className="space-y-4">
-                            <Field label="Guide mode">
-                                <Select
-                                    value={settings.gitPullRequestGlobalGuide.mode}
-                                    onChange={(value) => updateSettings({
-                                        gitPullRequestGlobalGuide: {
-                                            ...settings.gitPullRequestGlobalGuide,
-                                            mode: value as typeof settings.gitPullRequestGlobalGuide.mode
-                                        }
-                                    })}
-                                    options={[
-                                        { value: 'text', label: 'Write here' },
-                                        { value: 'file', label: 'Use markdown file' }
-                                    ]}
-                                />
-                            </Field>
-
-                            {settings.gitPullRequestGlobalGuide.mode === 'text' ? (
-                                <Field label="Guide text">
-                                    <Textarea
-                                        value={settings.gitPullRequestGlobalGuide.text}
-                                        onChange={(value) => updateSettings({
-                                            gitPullRequestGlobalGuide: {
-                                                ...settings.gitPullRequestGlobalGuide,
-                                                text: value
-                                            }
-                                        })}
-                                        rows={10}
-                                        placeholder="Describe the PR structure, checklist, and tone you want."
-                                    />
-                                </Field>
-                            ) : (
-                                <div className="rounded-xl border border-white/10 bg-black/20 p-4">
-                                    <div className="flex flex-wrap items-center justify-between gap-3">
-                                        <div className="min-w-0">
-                                            <p className="text-sm font-medium text-white/82">
-                                                {settings.gitPullRequestGlobalGuide.filePath ? tail(settings.gitPullRequestGlobalGuide.filePath) : 'No guide file selected'}
-                                            </p>
-                                            <p className="mt-1 truncate text-xs text-white/45">
-                                                {settings.gitPullRequestGlobalGuide.filePath || 'Choose a markdown file to use as the global PR guide.'}
-                                            </p>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            <button
-                                                type="button"
-                                                onClick={() => { void chooseGlobalGuideFile() }}
-                                                className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-white/75 transition-all hover:border-white/20 hover:bg-white/[0.05] hover:text-white"
-                                            >
-                                                Choose .md
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => updateSettings({
-                                                    gitPullRequestGlobalGuide: {
-                                                        ...settings.gitPullRequestGlobalGuide,
-                                                        filePath: ''
-                                                    }
-                                                })}
-                                                className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white/55 transition-all hover:border-white/20 hover:bg-white/[0.04] hover:text-white"
-                                            >
-                                                Clear
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    </Section>
-                </div>
-            ) : null}
-
-            {activeTab === 'workflow' ? (
-                <div className="grid gap-4 xl:grid-cols-2">
-                    <Section title="Refresh behavior" description="How aggressively Zyra keeps Git data current.">
-                        <ToggleRow
-                            title="Auto-refresh Git on project open"
-                            description="Refresh status, history, remotes, and branches when a project opens."
-                            checked={settings.gitAutoRefreshOnProjectOpen}
-                            onChange={(checked) => updateSettings({ gitAutoRefreshOnProjectOpen: checked })}
-                        />
-                    </Section>
-
-                    <Section title="Safety checks" description="Guardrails that stop confusing or destructive Git actions.">
-                        <div className="space-y-4">
-                            <ToggleRow
-                                title="Warn on author mismatch"
-                                description="Confirm before committing when the repo owner and configured Git author do not line up."
-                                checked={settings.gitWarnOnAuthorMismatch}
-                                onChange={(checked) => updateSettings({ gitWarnOnAuthorMismatch: checked })}
-                            />
-                            <ToggleRow
-                                title="Confirm partial push range"
-                                description="Show the local-only push approval modal before pushing only part of the commit chain."
-                                checked={settings.gitConfirmPartialPushRange}
-                                onChange={(checked) => updateSettings({ gitConfirmPartialPushRange: checked })}
-                            />
-                        </div>
-                    </Section>
-
-                    <Section title="Branch automation" description="Optional helpers for the stacked commit, push, and PR flow.">
-                        <ToggleRow
-                            title="Auto-create branch when target matches current branch"
-                            description="If you are on the target branch, Zyra creates a new branch automatically before running the stacked PR flow."
-                            checked={settings.gitAutoCreateBranchWhenTargetMatches}
-                            onChange={(checked) => updateSettings({ gitAutoCreateBranchWhenTargetMatches: checked })}
-                        />
-                    </Section>
-
-                    <Section title="PR flow runtime" description="How the built-in PR action behaves.">
-                        <Notice>
-                            Zyra pushes the current branch when needed, reuses an existing open PR when one already exists, and creates a new GitHub PR when it does not.
-                        </Notice>
-                        <Notice className="mt-3">
-                            GitHub CLI (`gh`) still needs to be installed and authenticated on this machine.
-                        </Notice>
-                    </Section>
-                </div>
-            ) : null}
-
-            {activeTab === 'defaults' ? (
-                <div className="grid gap-4 xl:grid-cols-2">
-                    <Section title="Repository init" description="Defaults used when you initialize Git inside project details.">
-                        <Field label="Default initial branch">
-                            <Input
-                                value={settings.gitInitDefaultBranch}
-                                onChange={(value) => updateSettings({ gitInitDefaultBranch: value.trim() || 'main' })}
-                            />
-                        </Field>
-
-                        <div className="mt-4 space-y-4">
-                            <ToggleRow
-                                title="Create .gitignore by default"
-                                description="Preselect .gitignore generation when starting a new repository."
-                                checked={settings.gitInitCreateGitignore}
-                                onChange={(checked) => updateSettings({ gitInitCreateGitignore: checked })}
-                            />
-                            <ToggleRow
-                                title="Create initial commit by default"
-                                description="Preselect the first commit step in the init flow."
-                                checked={settings.gitInitCreateInitialCommit}
-                                onChange={(checked) => updateSettings({ gitInitCreateInitialCommit: checked })}
-                            />
-                        </div>
-                    </Section>
-
-                    <Section title="Bulk action scope" description="Used by stage-all and unstage-all actions.">
-                        <div className="grid gap-3">
-                            <ChoiceCard
-                                active={settings.gitBulkActionScope === 'project'}
-                                title="Project only"
-                                description="Affects files inside the current project folder only."
-                                onClick={() => updateSettings({ gitBulkActionScope: 'project' })}
-                            />
-                            <ChoiceCard
-                                active={settings.gitBulkActionScope === 'repo'}
-                                title="Whole repository"
-                                description="Affects the full repo, even when the project lives in a subfolder."
-                                onClick={() => updateSettings({ gitBulkActionScope: 'repo' })}
-                            />
-                        </div>
-                    </Section>
-                </div>
-            ) : null}
-
-            {activeTab === 'identity' ? (
-                <div className="grid gap-4 xl:grid-cols-[minmax(0,1.08fr)_minmax(320px,0.92fr)]">
-                    <Section title="Global Git author" description="Sets the machine-wide `user.name` and `user.email` used by Git.">
-                        <div className="grid gap-4 md:grid-cols-2">
-                            <Field label="Name">
-                                <Input
-                                    value={globalAuthorDraft.name}
-                                    onChange={(value) => setGlobalAuthorDraft((prev) => ({ ...prev, name: value }))}
-                                    placeholder="Jane Doe"
-                                />
-                            </Field>
-                            <Field label="Email">
-                                <Input
-                                    value={globalAuthorDraft.email}
-                                    onChange={(value) => setGlobalAuthorDraft((prev) => ({ ...prev, email: value }))}
-                                    placeholder="jane@example.com"
-                                    type="email"
-                                />
-                            </Field>
-                        </div>
-
-                        {globalAuthorMessage ? <Notice className="mt-4">{globalAuthorMessage}</Notice> : null}
-
-                        <div className="mt-4 flex flex-wrap items-center gap-3">
-                            <button
-                                type="button"
-                                onClick={() => { void saveGlobalAuthor() }}
-                                disabled={globalAuthorLoading || !globalAuthorDirty}
-                                className={cn(
-                                    'rounded-xl border px-4 py-2.5 text-sm transition-all',
-                                    globalAuthorLoading || !globalAuthorDirty
-                                        ? 'cursor-not-allowed border-white/10 bg-white/5 text-white/35'
-                                        : 'border-emerald-500/40 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25'
-                                )}
-                            >
-                                {globalAuthorLoading ? 'Saving...' : 'Save global author'}
-                            </button>
-                        </div>
-                    </Section>
-
-                    <Section title="Auth note" description="Git identity and GitHub PR auth are separate layers.">
-                        <div className="space-y-4 text-sm text-sparkle-text-secondary">
-                            <div className="flex items-start gap-3 rounded-xl border border-white/10 bg-black/20 px-4 py-3">
-                                <UserRound size={16} className="mt-0.5 shrink-0 text-emerald-300" />
-                                <span>
-                                    This page changes Git&apos;s global author. It does not sign you into GitHub or change push credentials.
-                                </span>
-                            </div>
-                            <div className="flex items-start gap-3 rounded-xl border border-white/10 bg-black/20 px-4 py-3">
-                                <GitPullRequest size={16} className="mt-0.5 shrink-0 text-violet-300" />
-                                <span>
-                                    PR creation still depends on your Git remote access plus an authenticated `gh` session.
-                                </span>
-                            </div>
-                            <div className="flex items-start gap-3 rounded-xl border border-white/10 bg-black/20 px-4 py-3">
-                                <RefreshCw size={16} className="mt-0.5 shrink-0 text-sky-300" />
-                                <span>
-                                    Changing the author here affects future commits created by Git on this machine.
-                                </span>
-                            </div>
-                        </div>
-                    </Section>
-                </div>
-            ) : null}
-        </div>
-    )
-}
-
-function Section({ title, description, children }: { title: string; description: string; children: React.ReactNode }) {
-    return (
-        <div className="rounded-xl border border-white/10 bg-sparkle-card p-5">
-            <h2 className="font-semibold text-sparkle-text">{title}</h2>
-            <p className="mt-1 text-sm text-sparkle-text-secondary">{description}</p>
-            <div className="mt-4">{children}</div>
-        </div>
-    )
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-    return (
-        <div>
-            <p className="mb-2 text-[11px] uppercase tracking-[0.18em] text-white/35">{label}</p>
-            {children}
-        </div>
-    )
-}
-
-function ToggleRow({
-    title,
-    description,
-    checked,
-    onChange
-}: {
-    title: string
-    description: string
-    checked: boolean
-    onChange: (checked: boolean) => void
-}) {
-    return (
-        <label className="flex items-start justify-between gap-4 rounded-xl border border-white/10 bg-black/20 px-4 py-3">
-            <div>
-                <div className="text-sm font-medium text-sparkle-text">{title}</div>
-                <div className="mt-1 text-xs text-sparkle-text-muted">{description}</div>
-            </div>
-            <button
-                type="button"
-                role="switch"
-                aria-checked={checked}
-                onClick={(event) => {
-                    event.preventDefault()
-                    onChange(!checked)
-                }}
-                className={cn(
-                    'relative mt-1 inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors',
-                    checked ? 'border-[var(--accent-primary)]/60 bg-[var(--accent-primary)]/30' : 'border-white/10 bg-white/5'
+            <SettingsDialog
+                open={editDialog !== null}
+                title={editDialog === 'target-branch' ? 'Edit default target branch' : editDialog === 'initial-branch' ? 'Edit initial branch' : editDialog === 'global-guide' ? 'Edit global pull-request guide' : 'Edit global Git identity'}
+                description={editDialog === 'identity' ? 'This writes the machine-wide Git user.name and user.email values.' : 'Review the value, then save it explicitly.'}
+                onClose={closeEditor}
+                footer={(
+                    <>
+                        <SettingsButton variant="ghost" onClick={closeEditor}>Cancel</SettingsButton>
+                        <SettingsButton
+                            variant="accent"
+                            disabled={editDialog === 'identity' ? globalAuthorLoading || !globalAuthorDirty : false}
+                            onClick={() => editDialog === 'identity' ? void saveGlobalAuthor() : saveTextEditor()}
+                        >
+                            {globalAuthorLoading && editDialog === 'identity' ? 'Saving…' : 'Save changes'}
+                        </SettingsButton>
+                    </>
                 )}
             >
-                <span className={cn('inline-block h-4 w-4 translate-x-1 rounded-full bg-white transition-transform', checked && 'translate-x-6')} />
-            </button>
-        </label>
+                {editDialog === 'global-guide' ? (
+                    <SettingsTextarea autoFocus rows={10} value={editValue} onChange={(event) => setEditValue(event.target.value)} placeholder="Describe the PR structure and checklist you want." aria-label="Global pull-request guide" />
+                ) : editDialog === 'identity' ? (
+                    <>
+                        <label className="space-y-1.5 text-[12px] font-medium text-[var(--settings-text)]">
+                            <span>Name</span>
+                            <SettingsInput autoFocus value={globalAuthorDraft.name} onChange={(event) => setGlobalAuthorDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Jane Doe" className="sm:w-full" />
+                        </label>
+                        <label className="space-y-1.5 text-[12px] font-medium text-[var(--settings-text)]">
+                            <span>Email</span>
+                            <SettingsInput type="email" value={globalAuthorDraft.email} onChange={(event) => setGlobalAuthorDraft((current) => ({ ...current, email: event.target.value }))} placeholder="jane@example.com" className="sm:w-full" />
+                        </label>
+                        {globalAuthorMessage && !globalAuthorMessage.includes('updated') ? <SettingsNotice tone="error">{globalAuthorMessage}</SettingsNotice> : null}
+                    </>
+                ) : (
+                    <SettingsInput autoFocus value={editValue} onChange={(event) => setEditValue(event.target.value)} className="sm:w-full" aria-label={editDialog === 'target-branch' ? 'Default pull-request target branch' : 'Initial Git branch'} />
+                )}
+            </SettingsDialog>
+        </SettingsPageContainer>
     )
-}
-
-function ChoiceCard({
-    active,
-    title,
-    description,
-    onClick
-}: {
-    active: boolean
-    title: string
-    description: string
-    onClick: () => void
-}) {
-    return (
-        <button
-            type="button"
-            onClick={onClick}
-            className={cn(
-                'rounded-xl border px-4 py-3 text-left transition-all',
-                active ? 'border-cyan-500/40 bg-cyan-500/10' : 'border-white/10 bg-black/20 hover:border-white/20 hover:bg-white/[0.04]'
-            )}
-        >
-            <div className="text-sm font-medium text-sparkle-text">{title}</div>
-            <div className="mt-1 text-xs text-sparkle-text-muted">{description}</div>
-        </button>
-    )
-}
-
-function Notice({ children, className }: { children: React.ReactNode; className?: string }) {
-    return <div className={cn('rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-sparkle-text-secondary', className)}>{children}</div>
-}
-
-function tail(path: string): string {
-    const normalized = String(path || '').trim().replace(/[\\/]+$/, '')
-    if (!normalized) return ''
-    const parts = normalized.split(/[/\\]/)
-    return parts[parts.length - 1] || normalized
 }

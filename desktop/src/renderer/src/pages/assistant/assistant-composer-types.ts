@@ -69,6 +69,7 @@ export type AssistantComposerProps = {
     isConnected: boolean
     isConnecting?: boolean
     activeModel?: string
+    activeEffort?: AssistantReasoningEffort | null
     modelOptions?: AssistantModelInfo[]
     modelsLoading?: boolean
     modelsError?: string | null
@@ -79,6 +80,7 @@ export type AssistantComposerProps = {
     runtimeMode?: AssistantRuntimeMode
     interactionMode?: AssistantInteractionMode
     projectPath?: string | null
+    acceptBrowserAnnotations?: boolean
     compact?: boolean
     submitLabel?: string
     dirtySubmitLabel?: string

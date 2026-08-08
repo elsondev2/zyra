@@ -193,6 +193,9 @@ export function renderToolBlock(toolState, theme = fallbackTheme, width = 100) {
   const isError = agentSurface.lifecycle === "failed";
   const isStopped = agentSurface.lifecycle === "stopped";
   const isDone = agentSurface.lifecycle === "completed";
+  if (agentSurface.kind === "file-read" && !isError) {
+    return renderCompactFileReadToolBlock(toolState, agentSurface, resolvedTheme, width);
+  }
   const stateLabel = isError ? "failed" : isStopped ? "stopped" : isDone ? "succeeded" : "running";
   const state = isError ? "error" : isStopped ? "stopped" : isDone ? "done" : "running";
   const title = agentSurface.toolName ?? toolState.toolName ?? "tool";
@@ -234,6 +237,24 @@ export function renderToolBlock(toolState, theme = fallbackTheme, width = 100) {
     innerBlank,
     "",
   ];
+}
+
+function renderCompactFileReadToolBlock(toolState, surface, theme, width) {
+  const args = toolState.args ?? toolState.arguments ?? {};
+  const target = surface.paths[0] ?? firstStringValue(args, ["path", "filePath", "file_path"]) ?? "";
+  const offset = Number(args.offset);
+  const limit = Number(args.limit);
+  const hasOffset = Number.isFinite(offset) && offset > 0;
+  const hasLimit = Number.isFinite(limit) && limit > 0;
+  const start = hasOffset ? Math.trunc(offset) : 1;
+  const range = hasOffset || hasLimit
+    ? `:${start}${hasLimit ? `-${start + Math.trunc(limit) - 1}` : ""}`
+    : "";
+  const terminalWidth = Math.max(24, Number(width) || 100);
+  const prefix = `${theme.toolTitleFg ?? theme.toolFg ?? ""}${bold}read${normalIntensity}`;
+  const available = Math.max(1, terminalWidth - visibleWidth("  read "));
+  const path = truncatePlain(`${target}${range}`, available);
+  return ["", `  ${prefix} ${theme.toolArgsFg ?? theme.toolDetailFg ?? theme.toolFg ?? ""}${path}${reset}`];
 }
 
 function renderFileChangeToolBlock(toolState, theme, width) {

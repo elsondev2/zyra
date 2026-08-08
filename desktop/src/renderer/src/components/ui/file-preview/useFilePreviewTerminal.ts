@@ -5,9 +5,21 @@ import type { FitAddon as XtermFitAddon } from 'xterm-addon-fit'
 import type { PreviewFile } from './types'
 import { createPreviewTerminalSessionId, mapTerminalStatusToState, PREVIEW_TERMINAL_MIN_HEIGHT, readCssVariable, TERMINAL_PANEL_ANIMATION_MS, type PreviewTerminalSessionItem, type PreviewTerminalState, type TerminalPanelPhase } from './modalShared'
 import { loadPreviewTerminalRuntime } from './previewTerminalRuntime'
+import { useThemeRevision } from '@/lib/use-theme-revision'
 
 type UseFilePreviewTerminalParams = {
-    canUsePreviewTerminal: boolean; file: PreviewFile; projectPath?: string; defaultShell: Shell; accentColorPrimary?: string; themeKey?: string; initialHeight: number; persistHeight: (height: number) => void
+    canUsePreviewTerminal: boolean
+    file: PreviewFile
+    projectPath?: string
+    defaultShell: Shell
+    accentColorPrimary?: string
+    themeKey?: string
+    initialHeight: number
+    fontSize: number
+    fontFamily: string
+    cursorBlink: boolean
+    scrollback: number
+    persistHeight: (height: number) => void
 }
 
 export function useFilePreviewTerminal({
@@ -18,8 +30,13 @@ export function useFilePreviewTerminal({
     accentColorPrimary,
     themeKey,
     initialHeight,
+    fontSize,
+    fontFamily,
+    cursorBlink,
+    scrollback,
     persistHeight
 }: UseFilePreviewTerminalParams) {
+    const themeRevision = useThemeRevision()
     const [terminalVisible, setTerminalVisible] = useState(false)
     const [terminalSessions, setTerminalSessions] = useState<PreviewTerminalSessionItem[]>([])
     const [terminalState, setTerminalState] = useState<PreviewTerminalState>('idle')
@@ -50,9 +67,14 @@ export function useFilePreviewTerminal({
         const accent = readCssVariable('--accent-primary', accentColorPrimary || '#38bdf8')
         const card = readCssVariable('--color-card', '#0b1220')
         const bg = readCssVariable('--color-bg', '#020617')
-        const text = '#e5e7eb'
-        const textSecondary = '#94a3b8'
-        const borderSecondary = readCssVariable('--color-border-secondary', '#334155')
+        const text = readCssVariable('--color-text', '#e5e7eb')
+        const textSecondary = readCssVariable('--color-text-secondary', '#94a3b8')
+        const danger = readCssVariable('--status-danger', '#f87171')
+        const warning = readCssVariable('--status-warning', '#facc15')
+        const success = readCssVariable('--status-success', '#4ade80')
+        const info = readCssVariable('--status-info', '#60a5fa')
+        const secondary = readCssVariable('--color-secondary', '#c084fc')
+        const accentSecondary = readCssVariable('--accent-secondary', '#22d3ee')
         return {
             background: card,
             foreground: text,
@@ -60,23 +82,23 @@ export function useFilePreviewTerminal({
             cursorAccent: card,
             selectionBackground: `${accent}33`,
             black: bg,
-            brightBlack: borderSecondary,
-            red: '#f87171',
-            brightRed: '#fca5a5',
-            green: '#4ade80',
-            brightGreen: '#86efac',
-            yellow: '#facc15',
-            brightYellow: '#fde047',
-            blue: '#60a5fa',
-            brightBlue: '#93c5fd',
-            magenta: '#c084fc',
-            brightMagenta: '#e9d5ff',
-            cyan: '#22d3ee',
-            brightCyan: '#67e8f9',
+            brightBlack: textSecondary,
+            red: danger,
+            brightRed: danger,
+            green: success,
+            brightGreen: success,
+            yellow: warning,
+            brightYellow: warning,
+            blue: info,
+            brightBlue: info,
+            magenta: secondary,
+            brightMagenta: secondary,
+            cyan: accentSecondary,
+            brightCyan: accentSecondary,
             white: textSecondary,
             brightWhite: text
         }
-    }, [accentColorPrimary, themeKey])
+    }, [accentColorPrimary, themeKey, themeRevision])
 
     const shouldShowTerminalPanel = canUsePreviewTerminal && terminalVisible
     const renderTerminalPanel = terminalPanelPhase !== 'hidden'
@@ -302,11 +324,11 @@ export function useFilePreviewTerminal({
                 }
                 if (!terminal || !fitAddon) {
                     terminal = new runtime.Terminal({
-                        cursorBlink: true,
-                        fontFamily: 'Consolas, "Cascadia Code", monospace',
-                        fontSize: Math.max(11, Number.parseInt(readCssVariable('--terminal-font-size', '14'), 10) || 14),
+                        cursorBlink,
+                        fontFamily,
+                        fontSize,
                         convertEol: true,
-                        scrollback: 5000,
+                        scrollback,
                         allowProposedApi: true,
                         theme: terminalTheme
                     })
@@ -378,7 +400,21 @@ export function useFilePreviewTerminal({
             window.clearTimeout(retrySyncTimer)
             window.clearTimeout(settleSyncTimer)
         }
-    }, [canUsePreviewTerminal, currentTerminalSession, disposePreviewTerminal, renderTerminalPanel, terminalTheme, terminalVisible])
+    }, [canUsePreviewTerminal, currentTerminalSession, cursorBlink, disposePreviewTerminal, fontFamily, fontSize, renderTerminalPanel, scrollback, terminalTheme, terminalVisible])
+
+    useEffect(() => {
+        const terminal = xtermRef.current
+        if (!terminal) return
+        terminal.options.cursorBlink = cursorBlink
+        terminal.options.fontFamily = fontFamily
+        terminal.options.fontSize = fontSize
+        terminal.options.scrollback = scrollback
+        try {
+            fitAddonRef.current?.fit()
+        } catch {
+            // A hidden terminal will be fitted when it becomes visible again.
+        }
+    }, [cursorBlink, fontFamily, fontSize, scrollback])
 
     useEffect(() => {
         if (!terminalVisible || !renderTerminalPanel) return

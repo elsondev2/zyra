@@ -1,8 +1,9 @@
 import Editor from '@monaco-editor/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { editor as MonacoEditor } from 'monaco-editor'
-import { useSettings } from '@/lib/settings'
+import { getAppearanceCodeFontStack, useSettings } from '@/lib/settings'
 import { monaco } from '@/lib/monaco/runtime'
+import { useThemeRevision } from '@/lib/use-theme-revision'
 import { parseUnifiedDiffMarkers, type GitLineMarker } from './gitDiff'
 
 const MONACO_THEME_ID = 'devscope-preview'
@@ -67,7 +68,6 @@ const baseOptions: MonacoEditor.IStandaloneEditorConstructionOptions = {
         verticalScrollbarSize: 10,
         horizontalScrollbarSize: 10
     },
-    fontFamily: 'JetBrains Mono, Consolas, Monaco, "Courier New", monospace',
     fontSize: 13,
     lineHeight: 20,
     padding: { top: 14, bottom: 14 },
@@ -204,6 +204,7 @@ export default function MonacoPreviewEditor({
     lineMarkersOverride
 }: MonacoPreviewEditorProps) {
     const { settings } = useSettings()
+    const themeRevision = useThemeRevision()
     const editorTheme = useMemo(() => MONACO_THEME_ID, [])
     const [compactLayout, setCompactLayout] = useState(() => {
         if (typeof window === 'undefined') return false
@@ -216,7 +217,7 @@ export default function MonacoPreviewEditor({
 
     useEffect(() => {
         applyMonacoTheme(settings.theme)
-    }, [settings.theme, settings.accentColor.primary, settings.accentColor.secondary])
+    }, [settings.theme, settings.accentColor.primary, settings.accentColor.secondary, themeRevision])
 
     useEffect(() => {
         if (typeof window === 'undefined') return
@@ -283,10 +284,13 @@ export default function MonacoPreviewEditor({
         const editor = editorRef.current
         if (!editor) return
 
+        const success = readThemeVariable('--status-success', '#22c55e')
+        const warning = readThemeVariable('--status-warning', '#d97706')
+        const danger = readThemeVariable('--status-danger', '#dc2626')
         const markerPalette = {
-            added: { solid: '#73C991', minimap: '#73C991B3' },
-            modified: { solid: '#E2C08D', minimap: '#E2C08DB3' },
-            deleted: { solid: '#FF6B6B', minimap: '#FF6B6BB3' }
+            added: { solid: success, minimap: `${success}B3` },
+            modified: { solid: warning, minimap: `${warning}B3` },
+            deleted: { solid: danger, minimap: `${danger}B3` }
         } as const
 
         const nextDecorations = lineMarkers.map((marker) => ({
@@ -311,7 +315,7 @@ export default function MonacoPreviewEditor({
         }))
 
         decorationIdsRef.current = editor.deltaDecorations(decorationIdsRef.current, nextDecorations)
-    }, [lineMarkers])
+    }, [lineMarkers, themeRevision])
 
     useEffect(() => {
         return () => {
@@ -360,6 +364,7 @@ export default function MonacoPreviewEditor({
             selectionHighlight: !readOnly,
             quickSuggestions: !readOnly,
             wordWrap,
+            fontFamily: getAppearanceCodeFontStack(settings.appearanceCodeFont),
             fontSize,
             minimap: {
                 ...(base.minimap || {}),
@@ -385,7 +390,7 @@ export default function MonacoPreviewEditor({
             lineHeight: 18,
             padding: { top: 10, bottom: 10 }
         }
-    }, [compactLayout, fontSize, isLargeFile, minimapEnabled, readOnly, wordWrap])
+    }, [compactLayout, fontSize, isLargeFile, minimapEnabled, readOnly, settings.appearanceCodeFont, themeRevision, wordWrap])
 
     useEffect(() => {
         if (findRequestToken <= 0) return

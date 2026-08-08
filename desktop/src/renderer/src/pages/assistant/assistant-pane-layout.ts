@@ -6,6 +6,7 @@ export const ASSISTANT_MAX_INSPECTOR_VIEWPORT_RATIO = 0.75
 export const ASSISTANT_TIMELINE_COMPOSER_GAP_PX = 16
 export const ASSISTANT_COMPOSER_OVERLAY_TOP_PADDING_PX = 40
 export const ASSISTANT_MIN_BOTTOM_COMPOSER_INSET_PX = 144
+export const ASSISTANT_LEFT_SIDEBAR_WIDTH_STORAGE_KEY = 'assistant-left-sidebar-width'
 
 type AssistantPaneLayoutInput = {
     viewportWidth: number
@@ -36,6 +37,11 @@ export function resolveAssistantLeftSidebarWidth(
 ): number {
     const resolvedMaximum = Math.min(ASSISTANT_MAX_LEFT_SIDEBAR_WIDTH, maximum)
     return clampWidth(width || 322, ASSISTANT_MIN_LEFT_SIDEBAR_WIDTH, resolvedMaximum)
+}
+
+export function resolveStoredAssistantLeftSidebarWidth(value: string | null): number {
+    const storedWidth = Number(value)
+    return resolveAssistantLeftSidebarWidth(Number.isFinite(storedWidth) && storedWidth > 0 ? storedWidth : 322)
 }
 
 export function resolveAssistantComposerInsetEnd(input: {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, RefObject } from 'react'
+import { rendererVisibility, shouldSnapRendererPresentation } from './renderer-visibility'
 
 interface SmoothScrollOptions {
   ease?: number
@@ -32,8 +33,26 @@ export function useSmoothScroll(
       return
     }
 
+    const snapToTarget = () => {
+      if (animationFrame.current !== null) {
+        cancelAnimationFrame(animationFrame.current)
+        animationFrame.current = null
+      }
+      const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight)
+      const settledTarget = Math.max(0, Math.min(targetY.current, maxScroll))
+      targetY.current = settledTarget
+      currentY.current = settledTarget
+      container.scrollTop = settledTarget
+      isAnimating.current = false
+    }
+
     const animate = () => {
-      if (!container) return
+      animationFrame.current = null
+      const visibility = rendererVisibility.getSnapshot()
+      if (shouldSnapRendererPresentation(visibility, visibility.resumeRevision)) {
+        snapToTarget()
+        return
+      }
 
       const diff = targetY.current - currentY.current
 
@@ -50,6 +69,11 @@ export function useSmoothScroll(
     }
 
     const startAnimation = () => {
+      const visibility = rendererVisibility.getSnapshot()
+      if (shouldSnapRendererPresentation(visibility, visibility.resumeRevision)) {
+        snapToTarget()
+        return
+      }
       if (!isAnimating.current) {
         isAnimating.current = true
         animationFrame.current = requestAnimationFrame(animate)
@@ -88,14 +112,17 @@ export function useSmoothScroll(
       }
     }
 
+    const unsubscribeVisibility = rendererVisibility.subscribe(snapToTarget)
     container.addEventListener('wheel', handleWheel, { passive: false })
     container.addEventListener('scroll', handleScroll, { passive: true })
 
     return () => {
+      unsubscribeVisibility()
       container.removeEventListener('wheel', handleWheel)
       container.removeEventListener('scroll', handleScroll)
-      if (animationFrame.current) {
+      if (animationFrame.current !== null) {
         cancelAnimationFrame(animationFrame.current)
+        animationFrame.current = null
       }
     }
   }, [ease, enabled, containerRef])

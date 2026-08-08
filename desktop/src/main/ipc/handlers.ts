@@ -33,7 +33,6 @@ import {
     handleAssistantDeleteMessage,
     handleAssistantDeleteSession,
     handleAssistantDeclinePendingPlaygroundLabRequest,
-    handleAssistantDownloadTranscriptionModel,
     handleAssistantDisconnect,
     handleAssistantGetAccountOverview,
     handleAssistantGetFleetSnapshot,
@@ -41,7 +40,7 @@ import {
     handleAssistantGetReviewIndex,
     handleAssistantGetSessionTurnUsage,
     handleAssistantGetThreadDetailBootstrap,
-    handleAssistantGetTranscriptionModelState,
+    handleAssistantGetVoiceTranscriptionState,
     handleAssistantGetTurnDetail,
     handleAssistantGetSnapshot,
     handleAssistantGetStatus,
@@ -49,14 +48,16 @@ import {
     handleAssistantListModels,
     handleAssistantNewThread,
     handleAssistantPersistClipboardImage,
+    handleAssistantRedeemAccountReset,
     handleAssistantResolveClipboardAttachment,
     handleAssistantRenameSession,
     handleAssistantRespondApproval,
     handleAssistantRespondUserInput,
+    handleAssistantSendRealtimeVoiceMessage,
     handleAssistantStartRealtimeVoice,
     handleAssistantStopRealtimeVoice,
     handleAssistantSubscribeRealtimeVoice,
-    handleAssistantTranscribeAudioWithLocalModel,
+    handleAssistantTranscribeVoice,
     handleAssistantUnsubscribeRealtimeVoice,
     handleAssistantWorkflowAction,
     handleAssistantSearchTurns,
@@ -121,11 +122,37 @@ import {
     handleOpenBrowserPreviewExternal
 } from './handlers/browser-preview-handlers'
 import {
+    handleCancelBrowserPreviewAnnotation,
+    handleCaptureBrowserPreviewScreenshot,
+    handleClearBrowserPreviewCache,
+    handleClearBrowserPreviewCookies,
+    handleCopyBrowserPreviewArtifact,
+    handleHardReloadBrowserPreview,
+    handleOpenBrowserPreviewArtifact,
+    handleOpenBrowserPreviewDevTools,
+    handleRevealBrowserPreviewArtifact,
+    handleSaveBrowserPreviewRecording,
+    handleSetBrowserPreviewColorScheme,
+    handleSetBrowserPreviewZoom,
+    handleStageBrowserPreviewArtifactForAssistant,
+    handleStartBrowserPreviewAnnotation,
+    handleStartBrowserPreviewRecording,
+    handleStopBrowserPreviewRecording
+} from './handlers/browser-preview-developer-handlers'
+import {
     handleCheckForUpdates,
     handleDownloadUpdate,
     handleGetUpdateState,
     handleInstallUpdate
 } from './handlers/update-handlers'
+import {
+    handleDownloadGoogleFont,
+    handleImportFontFile,
+    handleListManagedFonts,
+    handleListSystemFonts,
+    handleReadManagedFont,
+    handleRemoveManagedFont
+} from './handlers/font-handlers'
 import {
     handleCheckIsGitRepo,
     handleGenerateCustomGitignoreContent,
@@ -222,6 +249,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     ipcMain.handle('devscope:setStartupSettings', handleSetStartupSettings)
     ipcMain.handle('devscope:getStartupSettings', handleGetStartupSettings)
     ipcMain.handle('devscope:listInstalledPackageRuntimes', handleListInstalledPackageRuntimes)
+    ipcMain.handle('devscope:fonts:listManaged', handleListManagedFonts)
+    ipcMain.handle('devscope:fonts:listSystem', handleListSystemFonts)
+    ipcMain.handle('devscope:fonts:downloadGoogle', handleDownloadGoogleFont)
+    ipcMain.handle('devscope:fonts:importFile', handleImportFontFile)
+    ipcMain.handle('devscope:fonts:removeManaged', handleRemoveManagedFont)
+    ipcMain.handle('devscope:fonts:readManaged', handleReadManagedFont)
     ipcMain.handle('devscope:testGroqConnection', handleTestGroqConnection)
     ipcMain.handle('devscope:testGeminiConnection', handleTestGeminiConnection)
     ipcMain.handle('devscope:testCodexConnection', handleTestCodexConnection)
@@ -238,6 +271,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     ipcMain.handle(ASSISTANT_IPC.workflowAction, handleAssistantWorkflowAction)
     ipcMain.handle(ASSISTANT_IPC.getStatus, handleAssistantGetStatus)
     ipcMain.handle(ASSISTANT_IPC.getAccountOverview, handleAssistantGetAccountOverview)
+    ipcMain.handle(ASSISTANT_IPC.redeemAccountReset, handleAssistantRedeemAccountReset)
     ipcMain.handle(ASSISTANT_IPC.getSessionTurnUsage, handleAssistantGetSessionTurnUsage)
     ipcMain.handle(ASSISTANT_IPC.listModels, handleAssistantListModels)
     ipcMain.handle(ASSISTANT_IPC.connect, handleAssistantConnect)
@@ -272,10 +306,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     ipcMain.handle(ASSISTANT_IPC.subscribeRealtimeVoice, handleAssistantSubscribeRealtimeVoice)
     ipcMain.handle(ASSISTANT_IPC.unsubscribeRealtimeVoice, handleAssistantUnsubscribeRealtimeVoice)
     ipcMain.handle(ASSISTANT_IPC.startRealtimeVoice, handleAssistantStartRealtimeVoice)
+    ipcMain.handle(ASSISTANT_IPC.sendRealtimeVoiceMessage, handleAssistantSendRealtimeVoiceMessage)
     ipcMain.handle(ASSISTANT_IPC.stopRealtimeVoice, handleAssistantStopRealtimeVoice)
-    ipcMain.handle(ASSISTANT_IPC.getTranscriptionModelState, handleAssistantGetTranscriptionModelState)
-    ipcMain.handle(ASSISTANT_IPC.downloadTranscriptionModel, handleAssistantDownloadTranscriptionModel)
-    ipcMain.handle(ASSISTANT_IPC.transcribeAudioWithLocalModel, handleAssistantTranscribeAudioWithLocalModel)
+    ipcMain.handle(ASSISTANT_IPC.getVoiceTranscriptionState, handleAssistantGetVoiceTranscriptionState)
+    ipcMain.handle(ASSISTANT_IPC.transcribeVoice, handleAssistantTranscribeVoice)
 
     ipcMain.handle('devscope:selectFolder', handleSelectFolder)
     ipcMain.handle('devscope:selectMarkdownFile', handleSelectMarkdownFile)
@@ -297,6 +331,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     ipcMain.handle('devscope:previewTerminal:close', handleClosePreviewTerminal)
     ipcMain.handle('devscope:browserPreview:getConfig', handleGetBrowserPreviewConfig)
     ipcMain.handle('devscope:browserPreview:clearData', handleClearBrowserPreviewData)
+    ipcMain.handle('devscope:browserPreview:clearCache', handleClearBrowserPreviewCache)
+    ipcMain.handle('devscope:browserPreview:clearCookies', handleClearBrowserPreviewCookies)
+    ipcMain.handle('devscope:browserPreview:hardReload', handleHardReloadBrowserPreview)
+    ipcMain.handle('devscope:browserPreview:setZoom', handleSetBrowserPreviewZoom)
+    ipcMain.handle('devscope:browserPreview:setColorScheme', handleSetBrowserPreviewColorScheme)
+    ipcMain.handle('devscope:browserPreview:openDevTools', handleOpenBrowserPreviewDevTools)
+    ipcMain.handle('devscope:browserPreview:captureScreenshot', handleCaptureBrowserPreviewScreenshot)
+    ipcMain.handle('devscope:browserPreview:stageArtifactForAssistant', handleStageBrowserPreviewArtifactForAssistant)
+    ipcMain.handle('devscope:browserPreview:openArtifact', handleOpenBrowserPreviewArtifact)
+    ipcMain.handle('devscope:browserPreview:revealArtifact', handleRevealBrowserPreviewArtifact)
+    ipcMain.handle('devscope:browserPreview:copyArtifact', handleCopyBrowserPreviewArtifact)
+    ipcMain.handle('devscope:browserPreview:startAnnotation', handleStartBrowserPreviewAnnotation)
+    ipcMain.handle('devscope:browserPreview:cancelAnnotation', handleCancelBrowserPreviewAnnotation)
+    ipcMain.handle('devscope:browserPreview:startRecording', handleStartBrowserPreviewRecording)
+    ipcMain.handle('devscope:browserPreview:stopRecording', handleStopBrowserPreviewRecording)
+    ipcMain.handle('devscope:browserPreview:saveRecording', handleSaveBrowserPreviewRecording)
     ipcMain.handle('devscope:browserPreview:getLinkPreview', handleGetBrowserLinkPreview)
     ipcMain.handle('devscope:browserPreview:openExternal', handleOpenBrowserPreviewExternal)
     ipcMain.handle('devscope:pythonPreview:run', handleRunPythonPreview)

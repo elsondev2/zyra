@@ -24,6 +24,7 @@ Status words used below:
 - [Agent surfaces](architecture/agent-surface.md) — **Current.** Desktop/TUI semantic projection boundaries.
 - [Assistant browser](architecture/assistant-browser.md) — **Current.** Browser ownership and visual-control architecture.
 - [Assistant resources](architecture/assistant-resources.md) — **Current.** Resource indexing and presentation ownership.
+- [Desktop theme contract](architecture/desktop-theme-contract.md) — **Current.** Shared shell surfaces, accessible palette resolution, specialized renderers, and validation.
 
 ## Implementation records
 

@@ -1,5 +1,5 @@
 import { memo, useCallback, type RefObject, type WheelEvent as ReactWheelEvent } from 'react'
-import type { AssistantApprovalDecision, AssistantPendingApproval, AssistantPendingUserInput, AssistantPlaygroundPendingLabRequest, AssistantTurnUsage } from '@shared/assistant/contracts'
+import type { AssistantApprovalDecision, AssistantPendingApproval, AssistantPendingUserInput, AssistantPlaygroundPendingLabRequest, AssistantReasoningEffort, AssistantTurnUsage } from '@shared/assistant/contracts'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import { cn } from '@/lib/utils'
 import { AssistantComposer } from './AssistantComposer'
@@ -35,6 +35,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
     selectedProjectPath: string | null
     availableModels: Array<{ id: string; label: string; description?: string }>
     activeModel: string | undefined
+    activeEffort?: AssistantReasoningEffort | null
     modelsLoading: boolean
     latestTurnUsage?: AssistantTurnUsage | null
     runtimeMode: 'approval-required' | 'full-access'
@@ -161,7 +162,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
                         <div className="pointer-events-none mb-5 px-2 text-center">
                             <p
                                 className="mx-auto max-w-[680px] text-[30px] font-medium leading-[1.08] tracking-[-0.035em] text-sparkle-text/90"
-                                style={{ fontFamily: '"Bricolage Grotesque", "Bricolage Grotesque Variable", "Hanken Grotesk Variable", "Hanken Grotesk", system-ui, sans-serif' }}
+                                style={{ fontFamily: 'var(--font-ui, "Bricolage Grotesque", "Hanken Grotesk", system-ui, sans-serif)' }}
                             >
                                 {props.newChatPrompt}
                             </p>
@@ -184,6 +185,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
                         isConnected={props.assistantConnected}
                         isConnecting={isConnecting}
                         activeModel={props.activeModel}
+                        activeEffort={props.activeEffort}
                         modelOptions={props.availableModels}
                         modelsLoading={props.modelsLoading}
                         modelsError={null}

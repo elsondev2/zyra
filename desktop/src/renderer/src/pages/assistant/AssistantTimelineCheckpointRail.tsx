@@ -490,7 +490,7 @@ export const AssistantTimelineCheckpointRail = memo(function AssistantTimelineCh
             </button>
             {hoveredCheckpoint ? (
                 <div
-                    className="pointer-events-none absolute left-12 w-[320px] max-w-[min(320px,calc(100vw-108px))] overflow-hidden rounded-[12px] border border-white/[0.08] bg-[#1b1829]/95 px-3 py-2.5 text-left shadow-[0_20px_56px_rgba(0,0,0,0.38),inset_0_1px_0_rgba(255,255,255,0.035)] backdrop-blur-xl transition-[top] duration-150 ease-out"
+                    className="pointer-events-none absolute left-12 w-[320px] max-w-[min(320px,calc(100vw-108px))] overflow-hidden rounded-[12px] border border-sparkle-border bg-sparkle-card/95 px-3 py-2.5 text-left shadow-[0_20px_56px_rgba(0,0,0,0.38),inset_0_1px_0_rgba(255,255,255,0.035)] backdrop-blur-xl transition-[top] duration-150 ease-out"
                     style={{
                         top: `calc(50% - ${railGeometry.railHeight / 2}px + ${hoverCardTop}px)`,
                         transform: `translateY(${hoverCardTranslate})`

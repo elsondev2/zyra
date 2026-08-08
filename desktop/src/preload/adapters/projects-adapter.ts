@@ -1,11 +1,17 @@
 import { ipcRenderer } from 'electron'
 import type {
+    DevScopeBrowserAnnotationInput,
+    DevScopeBrowserGuestTargetInput,
+    DevScopeBrowserRecordingFrame,
     DevScopeGitCloneInput,
     DevScopeGitCloneProgressEvent,
     DevScopePreviewTerminalEvent,
     DevScopePythonPreviewEvent
 } from '../../shared/contracts/devscope-api'
-import { GIT_CLONE_PROGRESS_CHANNEL } from '../../shared/contracts/devscope-api'
+import {
+    BROWSER_PREVIEW_RECORDING_FRAME_CHANNEL,
+    GIT_CLONE_PROGRESS_CHANNEL
+} from '../../shared/contracts/devscope-api'
 
 export function createProjectsAdapter() {
     const PYTHON_PREVIEW_EVENT_CHANNEL = 'devscope:pythonPreview:event'
@@ -222,6 +228,43 @@ export function createProjectsAdapter() {
             ipcRenderer.invoke('devscope:browserPreview:getConfig'),
         clearBrowserPreviewData: () =>
             ipcRenderer.invoke('devscope:browserPreview:clearData'),
+        clearBrowserPreviewCache: () =>
+            ipcRenderer.invoke('devscope:browserPreview:clearCache'),
+        clearBrowserPreviewCookies: () =>
+            ipcRenderer.invoke('devscope:browserPreview:clearCookies'),
+        hardReloadBrowserPreview: (input: DevScopeBrowserGuestTargetInput) =>
+            ipcRenderer.invoke('devscope:browserPreview:hardReload', input),
+        setBrowserPreviewZoom: (input: DevScopeBrowserGuestTargetInput & { factor: number }) =>
+            ipcRenderer.invoke('devscope:browserPreview:setZoom', input),
+        setBrowserPreviewColorScheme: (input: DevScopeBrowserGuestTargetInput & { colorScheme: 'system' | 'light' | 'dark' }) =>
+            ipcRenderer.invoke('devscope:browserPreview:setColorScheme', input),
+        openBrowserPreviewDevTools: (input: DevScopeBrowserGuestTargetInput) =>
+            ipcRenderer.invoke('devscope:browserPreview:openDevTools', input),
+        captureBrowserPreviewScreenshot: (input: DevScopeBrowserGuestTargetInput) =>
+            ipcRenderer.invoke('devscope:browserPreview:captureScreenshot', input),
+        stageBrowserPreviewArtifactForAssistant: (artifactId: string) =>
+            ipcRenderer.invoke('devscope:browserPreview:stageArtifactForAssistant', artifactId),
+        openBrowserPreviewArtifact: (artifactId: string) =>
+            ipcRenderer.invoke('devscope:browserPreview:openArtifact', artifactId),
+        revealBrowserPreviewArtifact: (artifactId: string) =>
+            ipcRenderer.invoke('devscope:browserPreview:revealArtifact', artifactId),
+        copyBrowserPreviewArtifact: (input: { artifactId: string; mode: 'image' | 'path' }) =>
+            ipcRenderer.invoke('devscope:browserPreview:copyArtifact', input),
+        startBrowserPreviewAnnotation: (input: DevScopeBrowserAnnotationInput) =>
+            ipcRenderer.invoke('devscope:browserPreview:startAnnotation', input),
+        cancelBrowserPreviewAnnotation: (input: DevScopeBrowserGuestTargetInput) =>
+            ipcRenderer.invoke('devscope:browserPreview:cancelAnnotation', input),
+        startBrowserPreviewRecording: (input: DevScopeBrowserGuestTargetInput) =>
+            ipcRenderer.invoke('devscope:browserPreview:startRecording', input),
+        stopBrowserPreviewRecording: (input: DevScopeBrowserGuestTargetInput) =>
+            ipcRenderer.invoke('devscope:browserPreview:stopRecording', input),
+        saveBrowserPreviewRecording: (input: DevScopeBrowserGuestTargetInput & { mimeType: string; data: Uint8Array }) =>
+            ipcRenderer.invoke('devscope:browserPreview:saveRecording', input),
+        onBrowserPreviewRecordingFrame: (callback: (frame: DevScopeBrowserRecordingFrame) => void) => {
+            const listener = (_event: Electron.IpcRendererEvent, frame: DevScopeBrowserRecordingFrame) => callback(frame)
+            ipcRenderer.on(BROWSER_PREVIEW_RECORDING_FRAME_CHANNEL, listener)
+            return () => ipcRenderer.removeListener(BROWSER_PREVIEW_RECORDING_FRAME_CHANNEL, listener)
+        },
         getBrowserLinkPreview: (input: { url: string }) =>
             ipcRenderer.invoke('devscope:browserPreview:getLinkPreview', input),
         openBrowserPreviewExternal: (url: string) =>

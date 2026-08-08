@@ -10,29 +10,29 @@ function getContextTone(percent: number | null): {
 } {
     if (percent == null) {
         return {
-            ringColor: 'rgba(148, 163, 184, 0.85)',
+            ringColor: 'var(--color-text-muted)',
             textClass: 'text-sparkle-text-secondary',
-            glowClass: 'shadow-[0_0_0_1px_rgba(255,255,255,0.05)]'
+            glowClass: 'shadow-[0_0_0_1px_color-mix(in_srgb,var(--color-text)_5%,transparent)]'
         }
     }
     if (percent >= 90) {
         return {
-            ringColor: 'rgba(248, 113, 113, 0.95)',
+            ringColor: 'var(--status-danger)',
             textClass: 'text-red-300',
-            glowClass: 'shadow-[0_0_0_1px_rgba(248,113,113,0.18)]'
+            glowClass: 'shadow-[0_0_0_1px_color-mix(in_srgb,var(--status-danger)_18%,transparent)]'
         }
     }
     if (percent >= 70) {
         return {
-            ringColor: 'rgba(251, 191, 36, 0.95)',
+            ringColor: 'var(--status-warning)',
             textClass: 'text-amber-300',
-            glowClass: 'shadow-[0_0_0_1px_rgba(251,191,36,0.16)]'
+            glowClass: 'shadow-[0_0_0_1px_color-mix(in_srgb,var(--status-warning)_16%,transparent)]'
         }
     }
     return {
-        ringColor: 'rgba(52, 211, 153, 0.95)',
+        ringColor: 'var(--status-success)',
         textClass: 'text-emerald-300',
-        glowClass: 'shadow-[0_0_0_1px_rgba(52,211,153,0.16)]'
+        glowClass: 'shadow-[0_0_0_1px_color-mix(in_srgb,var(--status-success)_16%,transparent)]'
     }
 }
 
@@ -71,10 +71,10 @@ export const AssistantComposerContextIndicator = memo(function AssistantComposer
                 <span
                     className="relative flex h-[18px] w-[18px] items-center justify-center rounded-full"
                     style={{
-                        background: `conic-gradient(${tone.ringColor} 0deg ${visualPercent * 3.6}deg, rgba(255,255,255,0.09) ${visualPercent * 3.6}deg 360deg)`
+                        background: `conic-gradient(${tone.ringColor} 0deg ${visualPercent * 3.6}deg, color-mix(in srgb, var(--color-text) 9%, transparent) ${visualPercent * 3.6}deg 360deg)`
                     }}
                 >
-                    <span className="absolute inset-[2.5px] rounded-full bg-sparkle-card shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]" />
+                    <span className="absolute inset-[2.5px] rounded-full bg-sparkle-card shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--color-text)_5%,transparent)]" />
                     <span className={cn('relative z-10 text-[7px] font-semibold tabular-nums', tone.textClass)}>
                         {centerLabel}
                     </span>

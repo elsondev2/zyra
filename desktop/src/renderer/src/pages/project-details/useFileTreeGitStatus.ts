@@ -24,50 +24,50 @@ export function getGitStatusVisual(status: FileGitStatus) {
         case 'modified':
             return {
                 nameClass: 'font-semibold',
-                metaClass: '!text-[#EAC883]',
-                nameColor: '#F6D38F',
+                metaClass: '!text-[var(--status-warning)]',
+                nameColor: 'var(--status-warning)',
                 metaColor: '',
-                pulseColor: '#E2C08D',
-                badgeClass: 'bg-[#E2C08D]/30 text-[#F4D6A7]',
+                pulseColor: 'var(--status-warning)',
+                badgeClass: 'bg-amber-500/30 text-amber-300',
                 badgeLabel: 'M'
             }
         case 'added':
             return {
                 nameClass: 'font-semibold',
-                metaClass: '!text-[#86E0A2]',
-                nameColor: '#9AF3B5',
+                metaClass: '!text-[var(--status-success)]',
+                nameColor: 'var(--status-success)',
                 metaColor: '',
-                pulseColor: '#73C991',
-                badgeClass: 'bg-[#73C991]/30 text-[#8DE2AA]',
+                pulseColor: 'var(--status-success)',
+                badgeClass: 'bg-emerald-500/30 text-emerald-300',
                 badgeLabel: 'A'
             }
         case 'untracked':
             return {
                 nameClass: 'font-semibold',
-                metaClass: '!text-[#86E0A2]',
-                nameColor: '#9AF3B5',
+                metaClass: '!text-[var(--status-success)]',
+                nameColor: 'var(--status-success)',
                 metaColor: '',
-                pulseColor: '#73C991',
-                badgeClass: 'bg-[#73C991]/30 text-[#8DE2AA]',
+                pulseColor: 'var(--status-success)',
+                badgeClass: 'bg-emerald-500/30 text-emerald-300',
                 badgeLabel: 'U'
             }
         case 'deleted':
             return {
                 nameClass: 'font-semibold line-through',
-                metaClass: '!text-[#EF8A8A]',
-                nameColor: '#FF9A9A',
+                metaClass: '!text-[var(--status-danger)]',
+                nameColor: 'var(--status-danger)',
                 metaColor: '',
-                pulseColor: '#FF6B6B',
-                badgeClass: 'bg-[#FF6B6B]/30 text-[#FF8A8A]',
+                pulseColor: 'var(--status-danger)',
+                badgeClass: 'bg-red-500/30 text-red-300',
                 badgeLabel: 'D'
             }
         case 'renamed':
             return {
                 nameClass: 'font-semibold',
-                metaClass: '!text-[#78BFF5]',
-                nameColor: '#88CCFF',
+                metaClass: '!text-[var(--accent-primary)]',
+                nameColor: 'var(--accent-primary)',
                 metaColor: '',
-                pulseColor: '#60A5FA',
+                pulseColor: 'var(--accent-primary)',
                 badgeClass: 'bg-blue-500/30 text-blue-300',
                 badgeLabel: 'R'
             }

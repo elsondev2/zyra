@@ -3,13 +3,23 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import initSqlJs from 'sql.js/dist/sql-asm.js'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { FleetSnapshot } from '../src/shared/assistant/contracts'
+import type { AgentTranscriptPage, FleetSnapshot } from '../src/shared/assistant/contracts'
 import { ASSISTANT_IPC, assertAssistantIpcContract } from '../src/shared/assistant/contracts'
 import { applyAssistantDomainEvent, createDefaultAssistantSnapshot } from '../src/shared/assistant/projector'
 import { initializeAssistantPersistenceSchema } from '../src/main/assistant/persistence-utils'
 import { projectFleetSnapshot, readFleetSnapshot } from '../src/main/assistant/fleet-persistence'
 import { FleetProjection } from '../src/main/assistant/fleet-projection'
+import { AssistantAgentDetailPage } from '../src/renderer/src/pages/assistant/AssistantAgentDetailPage'
+import { ASSISTANT_AGENT_DIRECTORY_PAGE_SIZE } from '../src/renderer/src/pages/assistant/AssistantAgentDirectory'
 import { AssistantFleetWorkspace } from '../src/renderer/src/pages/assistant/AssistantFleetWorkspace'
+import { AssistantWorkflowDetailPage } from '../src/renderer/src/pages/assistant/AssistantWorkflowDetailPage'
+import { AssistantWorkflowDirectory } from '../src/renderer/src/pages/assistant/AssistantWorkflowDirectory'
+import { resolveAssistantWorkflowIdentity } from '../src/renderer/src/pages/assistant/assistant-workflow-presentation'
+import {
+    mergeAssistantAgentTranscriptPages,
+    projectAssistantAgentTranscriptMessages,
+    resolveAssistantAgentIdentity
+} from '../src/renderer/src/pages/assistant/assistant-agent-presentation'
 
 const now = new Date().toISOString()
 const fleet: FleetSnapshot = {
@@ -75,21 +85,176 @@ assert.equal(db.exec("SELECT COUNT(*) FROM assistant_workflow_calls WHERE root_t
 assert.equal(db.exec("SELECT COUNT(*) FROM assistant_agent_relationships WHERE root_thread_id = 'thread-1'")[0]?.values[0]?.[0], 1)
 
 globalThis.window = { devscope: { assistant: { agentAction: async () => ({ success: true, result: {} }) } } } as unknown as Window & typeof globalThis
+const agentRun = fleet.agents['agent-1']
+assert.ok(agentRun)
+const identity = resolveAssistantAgentIdentity(agentRun)
+assert.deepEqual(resolveAssistantAgentIdentity(agentRun), identity, 'agent identity remains deterministic for the stable run id')
+assert.equal(identity.roleTitle, 'Code Reviewer')
+assert.doesNotMatch(identity.name, /\s/, 'agent identities use one evocative name rather than a generated first and surname')
+
+const directoryMarkup = renderToStaticMarkup(<AssistantFleetWorkspace threadId="thread-1" snapshot={fleet} selectedAgentRunId={null} selectedWorkflowRunId={null} onSelectAgent={() => {}} onSelectWorkflow={() => {}} />)
+assert.doesNotMatch(directoryMarkup, /Agent directory/)
+assert.match(directoryMarkup, /Delegated work/)
+assert.match(directoryMarkup, new RegExp(identity.name))
+assert.match(directoryMarkup, /Code Reviewer/)
+assert.match(directoryMarkup, /data-dicebear-style="bottts"/)
+assert.match(directoryMarkup, /data-testid="assistant-agent-card-grid"/)
+assert.match(directoryMarkup, /data-max-columns="3"/)
+assert.match(directoryMarkup, /data-card-width="16\.5rem"/)
+assert.match(directoryMarkup, /data-card-height="12\.5rem"/)
+assert.match(directoryMarkup, /data-testid="assistant-agent-directory-footer"/)
+assert.doesNotMatch(directoryMarkup, /Run details/, 'the directory does not dump selected agent details below its cards')
+
 const markup = renderToStaticMarkup(<AssistantFleetWorkspace threadId="thread-1" snapshot={fleet} selectedAgentRunId="agent-1" selectedWorkflowRunId={null} onSelectAgent={() => {}} onSelectWorkflow={() => {}} />)
 assert.match(markup, /Agents/)
-assert.match(markup, /code-reviewer/)
+assert.match(markup, new RegExp(identity.name))
+assert.match(markup, /Back to agent directory/)
+assert.match(markup, /Open run details for/)
 assert.match(markup, /Run details/)
 assert.match(markup, /openai-codex\/gpt-5\.6-terra/)
+assert.doesNotMatch(markup, /<details\b/, 'run details are not an inline disclosure')
+assert.doesNotMatch(markup, /data-testid="assistant-agent-directory"/, 'agent details replace the directory as a dedicated page')
+
+assert.equal(ASSISTANT_AGENT_DIRECTORY_PAGE_SIZE, 9)
+const manyAgents = Object.fromEntries(Array.from({ length: 10 }, (_, index) => {
+    const agentRunId = `agent-${index + 1}`
+    return [agentRunId, {
+        ...agentRun,
+        agentRunId,
+        label: `agent ${index + 1}`,
+        createdAt: new Date(Date.parse(now) - index * 1000).toISOString()
+    }]
+}))
+const manyAgentsMarkup = renderToStaticMarkup(<AssistantFleetWorkspace threadId="thread-1" snapshot={{ ...fleet, agents: manyAgents }} selectedAgentRunId={null} selectedWorkflowRunId={null} onSelectAgent={() => {}} onSelectWorkflow={() => {}} />)
+assert.equal((manyAgentsMarkup.match(/data-testid="assistant-agent-card"/g) || []).length, 9, 'the directory bounds a page to a 3 by 3 set of cards')
+assert.match(manyAgentsMarkup, /1–9 of 10 agents/)
+assert.match(manyAgentsMarkup, /Page 1 of 2/)
+
+const workflowRun = fleet.workflows['workflow-1']
+assert.ok(workflowRun)
+const workflowIdentity = resolveAssistantWorkflowIdentity(workflowRun)
+let alternateWorkflowRun = { ...workflowRun, workflowRunId: 'workflow-alternate-1', createdAt: new Date(Date.parse(now) - 1000).toISOString() }
+for (let index = 2; resolveAssistantWorkflowIdentity(alternateWorkflowRun).avatarStyle === workflowIdentity.avatarStyle; index += 1) {
+    alternateWorkflowRun = { ...alternateWorkflowRun, workflowRunId: `workflow-alternate-${index}` }
+}
+const workflowDirectoryMarkup = renderToStaticMarkup(
+    <AssistantWorkflowDirectory
+        workflows={[workflowRun, alternateWorkflowRun]}
+        page={0}
+        onPageChange={() => {}}
+        onOpenWorkflow={() => {}}
+    />
+)
+assert.match(workflowDirectoryMarkup, /Workflow runs/)
+assert.match(workflowDirectoryMarkup, /data-testid="assistant-workflow-card-grid"/)
+assert.match(workflowDirectoryMarkup, /data-dicebear-style="loops"/)
+assert.match(workflowDirectoryMarkup, /data-dicebear-style="waves"/)
+assert.match(workflowDirectoryMarkup, /Phase progress|phases/)
+assert.match(workflowDirectoryMarkup, /Pause/)
+assert.match(workflowDirectoryMarkup, /Stop/)
+
+const workflowDetailMarkup = renderToStaticMarkup(
+    <AssistantWorkflowDetailPage
+        run={workflowRun}
+        agents={fleet.agents}
+        onBack={() => {}}
+        onOpenAgent={() => {}}
+    />
+)
+assert.match(workflowDetailMarkup, /Back to workflow directory/)
+assert.match(workflowDetailMarkup, /Phase progress/)
+assert.match(workflowDetailMarkup, /Agent calls/)
+assert.match(workflowDetailMarkup, /Usage &amp; budget/)
+assert.match(workflowDetailMarkup, new RegExp(identity.name))
+assert.match(workflowDetailMarkup, /Reading auth/)
+assert.doesNotMatch(workflowDetailMarkup, /definitionHash|workflowCallId|stableKey/)
+
+const transcriptPage: AgentTranscriptPage = {
+    entries: [
+        { index: 0, type: 'message', timestamp: now, message: { role: 'user', content: [{ type: 'text', text: 'Root instruction for the child.' }] } },
+        { index: 1, type: 'message', timestamp: now, message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'private reasoning' }] } },
+        { index: 2, type: 'message', timestamp: now, message: { role: 'toolResult', content: [{ type: 'text', text: 'tool output should stay hidden' }] } },
+        { index: 3, type: 'message', timestamp: now, message: { role: 'assistant', content: [{ type: 'text', text: 'Agent **answer**.' }] } }
+    ],
+    nextBefore: null,
+    totalEntries: 4,
+    bytes: 400,
+    truncatedEntries: 0,
+    hydrated: 4
+}
+assert.deepEqual(
+    projectAssistantAgentTranscriptMessages(transcriptPage.entries).map(({ role, text }) => ({ role, text })),
+    [
+        { role: 'user', text: 'Root instruction for the child.' },
+        { role: 'assistant', text: 'Agent **answer**.' }
+    ],
+    'transcript projection exposes root and agent chat messages without thoughts or tool results'
+)
+const mergedTranscript = mergeAssistantAgentTranscriptPages(
+    { ...transcriptPage, entries: transcriptPage.entries.slice(3), hydrated: 1 },
+    { ...transcriptPage, entries: transcriptPage.entries.slice(0, 3), nextBefore: null, hydrated: 3 }
+)
+assert.deepEqual(mergedTranscript.entries.map((entry) => entry.index), [0, 1, 2, 3])
+
+const transcriptMarkup = renderToStaticMarkup(
+    <AssistantAgentDetailPage
+        run={{ ...agentRun, sessionFile: 'child-session.jsonl' }}
+        transcript={transcriptPage}
+        loading={false}
+        error={null}
+        onBack={() => {}}
+        onLoadOlder={() => {}}
+        onRetry={() => {}}
+    />
+)
+assert.match(transcriptMarkup, /data-agent-transcript-role="user"/)
+assert.match(transcriptMarkup, /Root instruction for the child/)
+assert.match(transcriptMarkup, /data-agent-transcript-role="assistant"/)
+assert.match(transcriptMarkup, /Agent <strong[^>]*>answer<\/strong>/)
+assert.doesNotMatch(transcriptMarkup, /private reasoning|tool output should stay hidden/)
+assert.doesNotMatch(transcriptMarkup, /No final response was written/)
+assert.doesNotMatch(transcriptMarkup, /<(?:input|textarea)\b/, 'the agent transcript page remains read-only without a composer')
+
+const missingFinalMarkup = renderToStaticMarkup(
+    <AssistantAgentDetailPage
+        run={{ ...agentRun, status: 'completed', sessionFile: 'empty-final-child-session.jsonl' }}
+        transcript={{ ...transcriptPage, entries: transcriptPage.entries.slice(0, 1), totalEntries: 1, hydrated: 1 }}
+        loading={false}
+        error={null}
+        onBack={() => {}}
+        onLoadOlder={() => {}}
+        onRetry={() => {}}
+    />
+)
+assert.match(missingFinalMarkup, /data-agent-transcript-state="missing-final-response"/)
+assert.match(missingFinalMarkup, /No final response was written/)
+assert.match(missingFinalMarkup, /saved transcript ends without assistant answer text/)
 
 const root = path.resolve(import.meta.dirname, '..', '..')
-const [bridge, adapter, inspector] = await Promise.all([
+const [bridge, adapter, inspector, runDetailsModal, fleetWorkspaceSource, agentDirectorySource, desktopPackageSource] = await Promise.all([
     readFile(path.join(root, 'src', 'zyra-ui-bridge.mjs'), 'utf8'),
     readFile(path.join(root, 'desktop', 'src', 'preload', 'adapters', 'assistant-adapter.ts'), 'utf8'),
-    readFile(path.join(root, 'desktop', 'src', 'renderer', 'src', 'pages', 'assistant', 'AssistantDiffPanel.tsx'), 'utf8')
+    readFile(path.join(root, 'desktop', 'src', 'renderer', 'src', 'pages', 'assistant', 'AssistantDiffPanel.tsx'), 'utf8'),
+    readFile(path.join(root, 'desktop', 'src', 'renderer', 'src', 'pages', 'assistant', 'AssistantAgentRunDetailsModal.tsx'), 'utf8'),
+    readFile(path.join(root, 'desktop', 'src', 'renderer', 'src', 'pages', 'assistant', 'AssistantFleetWorkspace.tsx'), 'utf8'),
+    readFile(path.join(root, 'desktop', 'src', 'renderer', 'src', 'pages', 'assistant', 'AssistantAgentDirectory.tsx'), 'utf8'),
+    readFile(path.join(root, 'desktop', 'package.json'), 'utf8')
 ])
 for (const operation of ['agents.list', 'agents.spawn', 'agents.transcript', 'workflows.run', 'workflows.restart']) assert(bridge.includes(`case "${operation}"`))
 assert(adapter.includes('ASSISTANT_IPC.agentAction'))
 assert(adapter.includes('ASSISTANT_IPC.workflowAction'))
 assert(inspector.includes('AssistantFleetWorkspace'))
+assert(runDetailsModal.includes('createPortal'))
+assert(runDetailsModal.includes('fixed inset-0 z-[2147482000]'))
+assert(runDetailsModal.includes('max-h-[90vh] w-full max-w-5xl'))
+assert.equal(runDetailsModal.includes('h-screen w-screen'), false, 'run details remain a bounded modal rather than a full-screen page')
+for (const section of ['Execution', 'Access', 'Tools', 'Timeline', 'Outcome']) assert(runDetailsModal.includes(`title=\"${section}\"`))
+assert.equal(runDetailsModal.includes('<pre'), false, 'run details do not expose a raw data surface')
+assert.equal(runDetailsModal.includes('JSON.stringify'), false, 'run details do not dump internal objects')
+assert.equal(fleetWorkspaceSource.includes('WorkflowRows'), false, 'workflows no longer use the old inline row dump')
+assert.equal(fleetWorkspaceSource.includes('WorkflowDetail'), true, 'workflow selection opens the dedicated detail page')
+assert.equal(agentDirectorySource.includes("repeat(auto-fit, minmax(0, 16.5rem))"), true, 'agent cards use packed fixed-width tracks without stretched column gaps')
+assert.equal(desktopPackageSource.includes('"@dicebear/styles"'), true, 'official DiceBear style definitions back Bottts, Loops, and Waves locally')
+assert.equal(desktopPackageSource.includes('"@dicebear/bottts"'), false, 'the retired DiceBear v9 style package is removed')
 
 console.log('Desktop assistant fleet contract tests passed.')

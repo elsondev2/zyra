@@ -22,7 +22,7 @@ const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const HANDSHAKE_TIMEOUT_MS = 5_000;
 const BRIDGE_CONNECT_TIMEOUT_MS = 120_000;
 const ACTIVE_FLEET_STATUSES = new Set(["queued", "starting", "running", "waiting", "paused", "recovering"]);
-const BRIDGE_REQUEST_PATTERN = /^(?:prompt|abort|steer|follow_up|compact|clear_queue|reload|approval\.respond|agents\.[a-zA-Z0-9._-]+|workflows\.[a-zA-Z0-9._-]+)$/;
+const BRIDGE_REQUEST_PATTERN = /^(?:prompt|configure|abort|steer|follow_up|compact|clear_queue|reload|approval\.respond|agents\.[a-zA-Z0-9._-]+|workflows\.[a-zA-Z0-9._-]+)$/;
 
 function hashAuthorityProof(value) {
   return createHash("sha256").update(String(value || "")).digest("base64url");
@@ -267,12 +267,21 @@ export class ZyraAgentServer extends EventEmitter {
   sessionPresence(sessionKeyValue) {
     const sessionKey = String(sessionKeyValue || "").trim();
     const session = this.sessions.get(sessionKey);
-    if (!session) return { state: "detached", activeTurnId: null, clients: [], backgroundWorkActive: false };
+    if (!session) return {
+      state: "detached",
+      activeTurnId: null,
+      clients: [],
+      backgroundWorkActive: false,
+      attention: null,
+      latestTurn: null
+    };
     return {
       state: session.activeRequestContext ? "running" : session.hasBackgroundWork() ? "background" : "ready",
       activeTurnId: session.activeRequestContext?.turnId || null,
       clients: [...session.clients].map((client) => ({ clientId: client.clientId, surface: client.surface })),
       backgroundWorkActive: session.hasBackgroundWork(),
+      attention: session.pendingApprovalRequestIds.size > 0 ? "approval" : null,
+      latestTurn: session.latestTurn ? { ...session.latestTurn } : null,
       latestSequence: session.sequence
     };
   }
@@ -474,6 +483,8 @@ class ServerOwnedSession {
     this.journal = null;
     this.activeRequests = 0;
     this.activeRequestContext = null;
+    this.latestTurn = null;
+    this.pendingApprovalRequestIds = new Set();
     this.backgroundFleetActive = false;
     this.managedJobIds = new Set();
     this.connectPromise = null;
@@ -528,6 +539,7 @@ class ServerOwnedSession {
     if (this.events.length > MAX_AGENT_SERVER_REPLAY_EVENTS) {
       this.events.splice(0, this.events.length - MAX_AGENT_SERVER_REPLAY_EVENTS);
     }
+    this.rebuildLatestTurnSummary();
   }
 
   attach(client) {
@@ -570,6 +582,15 @@ class ServerOwnedSession {
     this.activeRequests += 1;
     if (type === "prompt") {
       this.activeRequestContext = requestContext;
+      const startedAt = new Date().toISOString();
+      this.latestTurn = {
+        id: requestContext.turnId,
+        state: "running",
+        requestedAt: startedAt,
+        startedAt,
+        completedAt: null,
+        assistantMessageId: null
+      };
       this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, presence: true });
     }
     try {
@@ -596,7 +617,22 @@ class ServerOwnedSession {
   }
 
   publish(event) {
+    const occurredAt = new Date().toISOString();
+    const previousAttention = this.pendingApprovalRequestIds.size > 0;
+    const previousBackgroundWork = this.hasBackgroundWork();
     this.updateBackgroundWork(event);
+    this.updateRuntimeSummary(event, this.activeRequestContext, occurredAt);
+    if (event?.type === "session_config") {
+      const config = {
+        model: event.model,
+        thinking: event.thinking,
+        profile: event.profile,
+        runtimeMode: event.runtimeMode,
+        webSearch: event.webSearch,
+        webFetch: event.webFetch
+      };
+      this.connectedResult = { ...(this.connectedResult || {}), ...config, config };
+    }
     if (event?.type === "session_title" && event.title) {
       void this.server.catalog.updateChat(this.sessionKey, { title: event.title }).then(() => {
         this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, title: true });
@@ -604,7 +640,7 @@ class ServerOwnedSession {
     }
     const entry = {
       sequence: ++this.sequence,
-      occurredAt: new Date().toISOString(),
+      occurredAt,
       event,
       ...(this.activeRequestContext ? { requestContext: this.activeRequestContext } : {})
     };
@@ -618,7 +654,65 @@ class ServerOwnedSession {
     for (const client of this.clients) {
       this.server.send(client, { type: "session.event", sessionKey: this.sessionKey, ...entry });
     }
+    if (
+      previousAttention !== (this.pendingApprovalRequestIds.size > 0)
+      || previousBackgroundWork !== this.hasBackgroundWork()
+    ) {
+      this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, presence: true });
+    }
     this.scheduleIdleStop();
+  }
+
+  rebuildLatestTurnSummary() {
+    this.latestTurn = null;
+    for (const entry of this.events) {
+      this.updateLatestTurnSummary(entry.event, entry.requestContext, entry.occurredAt);
+    }
+  }
+
+  updateRuntimeSummary(event, requestContext, occurredAt) {
+    if (event?.type === "approval_requested" && event.requestId) {
+      this.pendingApprovalRequestIds.add(String(event.requestId));
+    }
+    if (event?.type === "approval_resolved" && event.requestId) {
+      this.pendingApprovalRequestIds.delete(String(event.requestId));
+    }
+    this.updateLatestTurnSummary(event, requestContext, occurredAt);
+    if (event?.type === "zyra_server_turn_completed") this.pendingApprovalRequestIds.clear();
+  }
+
+  updateLatestTurnSummary(event, requestContext, occurredAt) {
+    const turnId = String(requestContext?.turnId || "").trim();
+    if (turnId && this.latestTurn?.id !== turnId) {
+      this.latestTurn = {
+        id: turnId,
+        state: "running",
+        requestedAt: occurredAt,
+        startedAt: occurredAt,
+        completedAt: null,
+        assistantMessageId: null
+      };
+    }
+    if (event?.type === "message_end" && event.message?.role === "assistant" && event.message.id && this.latestTurn) {
+      this.latestTurn = { ...this.latestTurn, assistantMessageId: String(event.message.id) };
+    }
+    if (event?.type !== "zyra_server_turn_completed") return;
+    const completedTurnId = turnId || this.latestTurn?.id;
+    if (!completedTurnId) return;
+    const base = this.latestTurn?.id === completedTurnId
+      ? this.latestTurn
+      : {
+          id: completedTurnId,
+          requestedAt: occurredAt,
+          startedAt: occurredAt,
+          assistantMessageId: null
+        };
+    const outcome = String(event.outcome || "completed");
+    this.latestTurn = {
+      ...base,
+      state: outcome === "failed" ? "error" : outcome === "interrupted" ? "interrupted" : "completed",
+      completedAt: occurredAt
+    };
   }
 
   updateBackgroundWork(event) {
@@ -649,6 +743,8 @@ class ServerOwnedSession {
       clients: [...this.clients].map((client) => ({ clientId: client.clientId, surface: client.surface })),
       activeRequests: this.activeRequests,
       activeRequestContext: this.activeRequestContext,
+      latestTurn: this.latestTurn ? { ...this.latestTurn } : null,
+      attention: this.pendingApprovalRequestIds.size > 0 ? "approval" : null,
       backgroundWorkActive: this.hasBackgroundWork(),
       latestSequence: this.sequence,
       alive: this.worker.isAlive()

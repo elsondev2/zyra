@@ -162,7 +162,7 @@ export function createGitCommitAndPullRequestActions(params: GitActionParams) {
 
         const selectedProvider = resolvePreferredGitTextProvider(params.settings)
         if (!selectedProvider) {
-            params.showToast('No AI provider is configured for commit generation.', 'Open AI Settings', '/settings/ai')
+            params.showToast('No AI provider is configured for commit generation.', 'Open Providers', '/settings/providers')
             return
         }
 

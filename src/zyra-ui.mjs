@@ -714,8 +714,8 @@ export function createZyraUi(options = {}) {
         host.invalidate({ force: true });
       }
     },
-    async requestApproval(request = {}) {
-      if (!inputActive) return "decline";
+    async requestApproval(request = {}, options = {}) {
+      if (!inputActive || options.signal?.aborted) return "decline";
       const command = String(request.command || request.detail || "").replace(/\s+/g, " ").trim();
       const subject = command ? command.slice(0, 180) : String(request.title || "A tool needs approval.");
       const dialog = createChoiceDialog({
@@ -730,7 +730,13 @@ export function createZyraUi(options = {}) {
         initialIndex: 0,
         help: "↑↓ navigate • enter choose • esc deny",
       }, { theme });
-      return (await runZyraInputDialog(host, dialog)) || "decline";
+      const cancel = () => dialog.cancel?.();
+      options.signal?.addEventListener?.("abort", cancel, { once: true });
+      try {
+        return (await runZyraInputDialog(host, dialog)) || "decline";
+      } finally {
+        options.signal?.removeEventListener?.("abort", cancel);
+      }
     },
     async selectCodexResetCredit(credits) {
       if (!inputActive) return null;

@@ -5,6 +5,9 @@ import { MAX_AGENT_SERVER_REPLAY_EVENTS } from "./protocol.mjs";
 
 const MAX_JOURNAL_BYTES = 8 * 1024 * 1024;
 const MAX_DURABLE_EVENT_BYTES = 1024 * 1024;
+// Live sessions replay these from ServerOwnedSession memory. Persisting every token/update
+// synchronously blocks the shared server event loop and delays the turn completion itself.
+const TRANSIENT_EVENT_TYPES = new Set(["message_update", "tool_execution_update"]);
 
 export class AgentEventJournal {
   constructor(directory, canonicalChatId) {
@@ -15,6 +18,7 @@ export class AgentEventJournal {
   }
 
   append(entry) {
+    if (TRANSIENT_EVENT_TYPES.has(entry?.event?.type)) return;
     mkdirSync(this.directory, { recursive: true });
     const durableEntry = toDurableEntry(entry);
     this.entries.push(durableEntry);

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, GitBranch } from 'lucide-react'
 import type { DevScopeGitBranchSummary } from '@shared/contracts/devscope-api'
+import { TRANSIENT_MENU_DISMISS_EVENT } from '@/lib/transient-menu'
 import { cn } from '@/lib/utils'
 
 function getDefaultBranchName(branches: DevScopeGitBranchSummary[]): string | null {
@@ -44,12 +45,24 @@ export function AssistantHeaderBranchChip(props: {
 
     useEffect(() => {
         if (!open) return
+        const dismissMenu = () => setOpen(false)
         const handlePointerDown = (event: PointerEvent) => {
             if (rootRef.current?.contains(event.target as Node)) return
-            setOpen(false)
+            dismissMenu()
         }
-        window.addEventListener('pointerdown', handlePointerDown)
-        return () => window.removeEventListener('pointerdown', handlePointerDown)
+        const handleEscape = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') dismissMenu()
+        }
+        window.addEventListener('pointerdown', handlePointerDown, true)
+        window.addEventListener('keydown', handleEscape)
+        window.addEventListener('blur', dismissMenu)
+        window.addEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissMenu)
+        return () => {
+            window.removeEventListener('pointerdown', handlePointerDown, true)
+            window.removeEventListener('keydown', handleEscape)
+            window.removeEventListener('blur', dismissMenu)
+            window.removeEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissMenu)
+        }
     }, [open])
 
     const currentBranch = branches.find((branch) => branch.current) || null
@@ -105,7 +118,7 @@ export function AssistantHeaderBranchChip(props: {
                     <div className="px-2.5 py-1.5 text-[12px] text-sparkle-text-muted">
                         Branch
                     </div>
-                    <div className="max-h-64 space-y-0.5 overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#3b3c40_transparent]">
+                    <div className="custom-scrollbar max-h-64 space-y-0.5 overflow-y-auto [scrollbar-width:thin]">
                         {visibleBranches.map((branch) => {
                             const isCurrent = branch.current
                             const isDefault = branch.name === defaultBranchName

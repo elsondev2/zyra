@@ -145,6 +145,8 @@ export interface AssistantThreadShell {
     agentNickname: string | null
     agentRole: string | null
     model: string
+    thinking?: AssistantReasoningEffort | null
+    profile?: string | null
     cwd: string | null
     messageCount: number
     activityCount: number
@@ -158,6 +160,8 @@ export interface AssistantThreadShell {
         activeTurnId: string | null
         clients: Array<{ clientId: string; surface: string }>
         backgroundWorkActive: boolean
+        attention?: 'approval' | 'input' | null
+        latestTurn?: AssistantLatestTurn | null
         latestSequence?: number
     }
     lastError: string | null
@@ -351,12 +355,39 @@ export interface AssistantRateLimitSnapshot {
     planType: AssistantAccountPlanType | null
 }
 
+export interface AssistantRateLimitResetCredit {
+    id: string
+    title: string
+    status: string
+    available: boolean
+    resetType: string | null
+    grantedAt: string | null
+    expiresAt: string | null
+    description: string | null
+}
+
+export interface AssistantRateLimitResetRedemption {
+    code: string | null
+    windowsReset: number | null
+    redeemedAt: string | null
+    credit: AssistantRateLimitResetCredit | null
+}
+
 export interface AssistantAccountOverview {
+    provider: string | null
+    source: string | null
     account: AssistantAccountIdentity | null
+    accountId: string | null
+    emailVerified: boolean | null
+    tokenExpiresAt: string | null
     authMode: AssistantAuthMode | null
     requiresOpenaiAuth: boolean
     rateLimits: AssistantRateLimitSnapshot | null
     rateLimitsByLimitId: Record<string, AssistantRateLimitSnapshot>
+    usageError: string | null
+    availableResetCount: number | null
+    resetCredits: AssistantRateLimitResetCredit[]
+    resetCreditsError: string | null
     fetchedAt: string
 }
 

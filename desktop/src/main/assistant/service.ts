@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto'
+import { mkdir } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import log from 'electron-log'
 import type {
-    AssistantAccountOverview,
     AssistantApprovePendingPlaygroundLabRequestInput,
     AssistantAttachSessionToPlaygroundLabInput,
     AssistantClearLogsInput,
@@ -14,10 +16,13 @@ import type {
     AssistantDomainEvent,
     AssistantGetHistoryPageInput,
     AssistantGetSessionTurnUsageInput,
+    AssistantRedeemAccountResetInput,
+    AssistantEventStreamPayload,
     AssistantActivity,
     AssistantMessage,
     AssistantRuntimeStatus,
     AssistantSendPromptOptions,
+    AssistantSendRealtimeVoiceMessageInput,
     AssistantSession,
     AssistantStartRealtimeVoiceInput,
     AssistantThread,
@@ -28,7 +33,12 @@ import { isAssistantToolLifecycleStartEvent } from '../../shared/assistant/tool-
 import { AssistantTextDeltaBuffer } from './assistant-text-delta-buffer'
 import { AssistantActivityDeltaBuffer } from './assistant-activity-delta-buffer'
 import { CodexRealtimeVoiceRuntime } from './codex-realtime-voice'
-import { ZyraPiRuntime } from './zyra-pi-runtime'
+import { ZyraAccountService } from './zyra-account-service'
+import {
+    classifyZyraToolActivity,
+    readPiFileChangeData,
+    ZyraPiRuntime
+} from './zyra-pi-runtime'
 import { nowIso } from './utils'
 import { materializeCanonicalImage } from './canonical-media-cache'
 import { createAssistantSessionRecord } from './service-records'
@@ -71,7 +81,8 @@ import {
     buildStreamingToolActivity,
     handleAssistantRuntimeEvent
 } from './service-runtime-events'
-import { resolveCanonicalPresenceThreadState } from './service-canonical-presence'
+import { mergeCanonicalPresenceLatestTurn, resolveCanonicalPresenceAttention, resolveCanonicalPresenceThreadState } from './service-canonical-presence'
+import { TrailingAsyncReconciler } from './trailing-async-reconciler'
 import {
     type AssistantStateRecord,
     createAssistantThread,
@@ -83,6 +94,8 @@ import {
     requireThread
 } from './service-state'
 
+const REALTIME_VOICE_LAB_CWD = join(tmpdir(), 'zyra-voice-lab')
+
 export class AssistantService {
     private static readonly MAX_IN_MEMORY_EVENTS = 256
     private static readonly ASSISTANT_TEXT_DELTA_FLUSH_MS = 40
@@ -90,6 +103,7 @@ export class AssistantService {
     private static readonly ASSISTANT_EVENT_BROADCAST_BATCH_MS = 16
 
     private readonly runtime = new ZyraPiRuntime()
+    private readonly accountService = new ZyraAccountService()
     private readonly realtimeVoiceRuntime = new CodexRealtimeVoiceRuntime()
     private readonly persistence = new AssistantPersistence()
     private readonly fleetProjection = new FleetProjection()
@@ -137,7 +151,9 @@ export class AssistantService {
         }
     })
     private readonly subscribers = new Set<number>()
+    private readonly externalEventSubscribers = new Set<(payload: AssistantEventStreamPayload) => void>()
     private readonly realtimeVoiceSubscribers = new Set<number>()
+    private realtimeVoiceOwnerId: number | null = null
     private readonly planBuffers = new Map<string, string>()
     private readonly assistantTextBuffers = new Map<string, string>()
     private readonly suppressedAssistantTextTurns = new Set<string>()
@@ -150,7 +166,9 @@ export class AssistantService {
     }
     private pendingBroadcastEvents: AssistantDomainEvent[] = []
     private pendingBroadcastTimer: NodeJS.Timeout | null = null
-    private canonicalImportPromise: Promise<void> | null = null
+    private readonly canonicalCatalogReconciler = new TrailingAsyncReconciler(() => this.importCanonicalChats())
+    private readonly canonicalReviewHistoryState = new Map<string, { threadId: string; totalEntries: number; modifiedAt: string }>()
+    private readonly canonicalReviewIndexPromises = new Map<string, Promise<void>>()
     private readonly canonicalHistoryState = new Map<string, {
         before: string | null
         hasOlder: boolean
@@ -188,6 +206,9 @@ export class AssistantService {
             void this.queueCanonicalChatImport()
         })
         this.realtimeVoiceRuntime.on('event', (event) => {
+            if (event.type === 'session.error' || event.type === 'session.closed') {
+                this.realtimeVoiceOwnerId = null
+            }
             broadcastAssistantRealtimeVoiceEvent(this.realtimeVoiceSubscribers, event)
         })
         void this.readyPromise
@@ -205,6 +226,17 @@ export class AssistantService {
         return { success: true as const }
     }
 
+    subscribeExternalEvents(listener: (payload: AssistantEventStreamPayload) => void): () => void {
+        this.externalEventSubscribers.add(listener)
+        return () => this.externalEventSubscribers.delete(listener)
+    }
+
+    getExternalEventReplay(): AssistantEventStreamPayload {
+        const events = [...this.state.events]
+        if (events.length === 0) return {}
+        return events.length === 1 ? { event: events[0] } : { events }
+    }
+
     subscribeRealtimeVoice(senderId: number) {
         this.realtimeVoiceSubscribers.add(senderId)
         return { success: true as const }
@@ -212,6 +244,12 @@ export class AssistantService {
 
     unsubscribeRealtimeVoice(senderId: number) {
         this.realtimeVoiceSubscribers.delete(senderId)
+        if (this.realtimeVoiceOwnerId === senderId) {
+            this.realtimeVoiceOwnerId = null
+            void this.realtimeVoiceRuntime.stop().catch((error) => {
+                log.warn('[InstructorVoice] Failed to stop voice after its renderer disconnected', error)
+            })
+        }
         return { success: true as const }
     }
 
@@ -264,21 +302,18 @@ export class AssistantService {
 
     async getAccountOverview() {
         await this.ensureReady()
-        const [accountPayload, rateLimitPayload] = await Promise.all([
-            this.runtime.getAccount(),
-            this.runtime.getAccountRateLimits()
-        ])
-
-        const overview: AssistantAccountOverview = {
-            account: accountPayload.account,
-            authMode: accountPayload.authMode,
-            requiresOpenaiAuth: accountPayload.requiresOpenaiAuth,
-            rateLimits: rateLimitPayload.rateLimits,
-            rateLimitsByLimitId: rateLimitPayload.rateLimitsByLimitId,
-            fetchedAt: nowIso()
+        return {
+            success: true as const,
+            overview: await this.accountService.getOverview()
         }
+    }
 
-        return { success: true as const, overview }
+    async redeemAccountReset(input: AssistantRedeemAccountResetInput) {
+        await this.ensureReady()
+        return {
+            success: true as const,
+            ...await this.accountService.redeemAccountReset(input)
+        }
     }
 
     async getSessionTurnUsage(input?: AssistantGetSessionTurnUsageInput) {
@@ -336,8 +371,10 @@ export class AssistantService {
 
     async getReviewIndex(threadId: string) {
         await this.ensureReady()
-        const localThreadId = requireThread(this.state.snapshot, threadId).id
-        return { success: true as const, index: await this.persistence.readReviewIndex(localThreadId) }
+        const record = findThreadRecord(this.state.snapshot, threadId)
+        if (!record) throw new Error(`Assistant thread not found: ${threadId}`)
+        await this.ensureCanonicalReviewHistoryIndexed(record.session, record.thread)
+        return { success: true as const, index: await this.persistence.readReviewIndex(record.thread.id) }
     }
 
     async searchTurns(threadId: string, query: string, limit?: number) {
@@ -425,22 +462,47 @@ export class AssistantService {
         return respondAssistantUserInputAction(this.actionDeps, input)
     }
 
-    async startRealtimeVoice(input: AssistantStartRealtimeVoiceInput) {
-        await this.ensureReady()
-        const session = getSelectedSession(this.state.snapshot)
-        const thread = getActiveThread(session)
-        const cwd = session && thread ? this.getSessionRuntimeCwd(session, thread) : process.cwd()
-        const result = await this.realtimeVoiceRuntime.start({
-            cwd,
-            sdp: input.sdp,
-            instructions: input.instructions
-        })
+    async startRealtimeVoice(input: AssistantStartRealtimeVoiceInput, senderId: number) {
+        if (this.realtimeVoiceOwnerId !== null && this.realtimeVoiceOwnerId !== senderId) {
+            throw new Error('Voice Lab is already active in another Zyra window.')
+        }
+
+        this.realtimeVoiceOwnerId = senderId
+        try {
+            await mkdir(REALTIME_VOICE_LAB_CWD, { recursive: true })
+            const result = await this.realtimeVoiceRuntime.start({
+                cwd: REALTIME_VOICE_LAB_CWD,
+                sdp: input.sdp,
+                instructions: input.instructions,
+                voice: input.voice,
+                outputModality: input.outputModality
+            })
+            return { success: true as const, ...result }
+        } catch (error) {
+            if (this.realtimeVoiceOwnerId === senderId) this.realtimeVoiceOwnerId = null
+            throw error
+        }
+    }
+
+    async sendRealtimeVoiceMessage(input: AssistantSendRealtimeVoiceMessageInput, senderId: number) {
+        if (this.realtimeVoiceOwnerId !== senderId) {
+            throw new Error('Only the Zyra window running Voice Lab can send to this session.')
+        }
+        const result = await this.realtimeVoiceRuntime.sendMessage(input)
         return { success: true as const, ...result }
     }
 
-    async stopRealtimeVoice() {
-        await this.realtimeVoiceRuntime.stop()
-        return { success: true as const }
+    async stopRealtimeVoice(senderId: number) {
+        if (this.realtimeVoiceOwnerId !== null && this.realtimeVoiceOwnerId !== senderId) {
+            throw new Error('Only the Zyra window that started Voice Lab can stop it.')
+        }
+
+        try {
+            await this.realtimeVoiceRuntime.stop()
+            return { success: true as const }
+        } finally {
+            if (this.realtimeVoiceOwnerId === senderId) this.realtimeVoiceOwnerId = null
+        }
     }
 
     async approvePendingPlaygroundLabRequest(input: AssistantApprovePendingPlaygroundLabRequestInput) {
@@ -452,8 +514,10 @@ export class AssistantService {
     }
 
     dispose() {
+        this.externalEventSubscribers.clear()
         this.assistantTextDeltaBuffer.dispose()
         this.assistantActivityDeltaBuffer.dispose()
+        this.realtimeVoiceOwnerId = null
         this.realtimeVoiceRuntime.dispose()
         this.runtime.dispose()
         void this.persistence.flush()
@@ -482,11 +546,7 @@ export class AssistantService {
 
     private async queueCanonicalChatImport(): Promise<void> {
         await this.ensureReady()
-        if (this.canonicalImportPromise) return this.canonicalImportPromise
-        this.canonicalImportPromise = this.importCanonicalChats().finally(() => {
-            this.canonicalImportPromise = null
-        })
-        return this.canonicalImportPromise
+        return this.canonicalCatalogReconciler.request()
     }
 
     private async importCanonicalChats(): Promise<void> {
@@ -519,20 +579,39 @@ export class AssistantService {
                     }, existing.session.id, existing.thread.id)
                 }
                 const nextCwd = chat.cwd || chat.project
-                const nextMessageCount = Math.max(existing.thread.messageCount, messageCount)
+                const canonicalTurnActive = chat.presence?.state === 'running' || chat.presence?.state === 'background'
+                const nextMessageCount = canonicalTurnActive ? Math.max(existing.thread.messageCount, messageCount) : messageCount
                 const nextActivityCount = Math.max(existing.thread.activityCount, activityCount)
-                const presenceChanged = JSON.stringify(existing.thread.canonicalPresence || null) !== JSON.stringify(chat.presence || null)
+                const nextCanonicalPresence = chat.presence ? {
+                    ...chat.presence,
+                    latestSequence: existing.thread.canonicalPresence?.latestSequence || 0
+                } : undefined
+                const presenceChanged = JSON.stringify(existing.thread.canonicalPresence || null) !== JSON.stringify(nextCanonicalPresence || null)
                 const nextThreadState = resolveCanonicalPresenceThreadState({
                     currentState: existing.thread.state,
                     previousPresence: existing.thread.canonicalPresence,
+                    presence: nextCanonicalPresence
+                })
+                const nextLatestTurn = mergeCanonicalPresenceLatestTurn(existing.thread.latestTurn, nextCanonicalPresence)
+                const latestTurnChanged = JSON.stringify(existing.thread.latestTurn || null) !== JSON.stringify(nextLatestTurn || null)
+                const nextAttention = resolveCanonicalPresenceAttention({
+                    currentHasPendingApprovals: existing.thread.hasPendingApprovals,
+                    currentHasPendingUserInputs: existing.thread.hasPendingUserInputs,
+                    hasLocalPendingApproval: existing.thread.pendingApprovals.some((entry) => entry.status === 'pending'),
+                    hasLocalPendingInput: existing.thread.pendingUserInputs.some((entry) => entry.status === 'pending'),
                     presence: chat.presence
                 })
+                const nextHasPendingApprovals = nextAttention.hasPendingApprovals
+                const nextHasPendingUserInputs = nextAttention.hasPendingUserInputs
                 if (
                     existing.thread.providerThreadId !== chat.canonicalChatId
                     || (nextCwd && existing.thread.cwd !== nextCwd)
                     || existing.thread.messageCount !== nextMessageCount
                     || existing.thread.activityCount !== nextActivityCount
                     || existing.thread.state !== nextThreadState
+                    || existing.thread.hasPendingApprovals !== nextHasPendingApprovals
+                    || existing.thread.hasPendingUserInputs !== nextHasPendingUserInputs
+                    || latestTurnChanged
                     || presenceChanged
                 ) {
                     this.appendEvent('thread.updated', updatedAt, {
@@ -542,7 +621,10 @@ export class AssistantService {
                             cwd: nextCwd,
                             messageCount: nextMessageCount,
                             activityCount: nextActivityCount,
-                            canonicalPresence: chat.presence,
+                            canonicalPresence: nextCanonicalPresence,
+                            latestTurn: nextLatestTurn,
+                            hasPendingApprovals: nextHasPendingApprovals,
+                            hasPendingUserInputs: nextHasPendingUserInputs,
                             state: nextThreadState,
                             updatedAt
                         }
@@ -559,8 +641,12 @@ export class AssistantService {
             thread.providerThreadId = chat.canonicalChatId
             thread.messageCount = messageCount
             thread.activityCount = activityCount
-            thread.canonicalPresence = chat.presence
+            thread.canonicalPresence = chat.presence ? { ...chat.presence, latestSequence: 0 } : undefined
+            thread.latestTurn = mergeCanonicalPresenceLatestTurn(null, chat.presence)
+            thread.hasPendingApprovals = chat.presence?.attention === 'approval'
+            thread.hasPendingUserInputs = chat.presence?.attention === 'input'
             if (chat.presence?.state === 'running') thread.state = 'running'
+            if (chat.presence?.state === 'background') thread.state = 'waiting'
             thread.updatedAt = updatedAt
             const session = createAssistantSessionRecord({
                 sessionId,
@@ -626,18 +712,40 @@ export class AssistantService {
                 input.canonicalChatId,
                 input.key,
                 input.fallbackCreatedAt,
-                Number(history.pageInfo?.startCursor || 0)
+                Number(history.pageInfo?.startCursor || 0),
+                history.chat.cwd || input.project
             )
             const record = findThreadRecord(this.state.snapshot, input.threadId)
             if (record && (projection.messages.length > 0 || projection.activities.length > 0)) {
+                const persistedTimeline = await this.persistence.readTimelineProjectionRows(input.threadId)
+                const removedMessageIds = [...new Set([
+                    ...projection.legacyMessageIds,
+                    ...findDuplicateProjectedMessageIds(persistedTimeline.messages),
+                    ...findSupersededCanonicalMessageIds(
+                        persistedTimeline.messages,
+                        projection.messages,
+                        projection.legacyMessageIds
+                    )
+                ])]
+                const removedActivityIds = [...new Set([
+                    ...projection.legacyActivityIds,
+                    ...findDuplicateProjectedActivityIds(persistedTimeline.activities),
+                    ...findSupersededCanonicalActivityIds(
+                        persistedTimeline.activities,
+                        projection.activities,
+                        projection.legacyActivityIds
+                    )
+                ])]
                 this.appendEvent('thread.updated', normalizeCatalogDate(history.chat.modifiedAt, record.thread.updatedAt), {
                     threadId: input.threadId,
                     patch: {
                         messages: projection.messages,
                         activities: projection.activities,
-                        messageCount: Math.max(record.thread.messageCount, Number(history.chat.displayMessageCount || 0), projection.messages.length),
-                        activityCount: Math.max(record.thread.activityCount, Number(history.chat.toolCallCount || 0) + Number(history.chat.errorCount || 0), projection.activities.length)
-                    }
+                        messageCount: countMergedCanonicalRecords(persistedTimeline.messages, projection.messages, removedMessageIds),
+                        activityCount: countMergedCanonicalRecords(persistedTimeline.activities, projection.activities, removedActivityIds)
+                    },
+                    removedMessageIds,
+                    removedActivityIds
                 }, input.sessionId, input.threadId)
             }
             this.canonicalHistoryState.set(input.canonicalChatId, {
@@ -651,6 +759,119 @@ export class AssistantService {
         } catch (error) {
             log.warn('[Assistant] Failed to import canonical chat history page', { canonicalChatId: input.canonicalChatId, error })
         }
+    }
+
+    private async ensureCanonicalReviewHistoryIndexed(session: AssistantSession, thread: AssistantThread): Promise<void> {
+        const canonicalChatId = thread.providerThreadId
+        if (!canonicalChatId) return
+        const pending = this.canonicalReviewIndexPromises.get(canonicalChatId)
+        if (pending) {
+            await pending
+            return
+        }
+        const indexing = this.indexCanonicalReviewHistory(session, thread)
+            .catch((error) => {
+                log.warn('[Assistant] Failed to index complete canonical Review history', { canonicalChatId, error })
+            })
+            .finally(() => {
+                if (this.canonicalReviewIndexPromises.get(canonicalChatId) === indexing) {
+                    this.canonicalReviewIndexPromises.delete(canonicalChatId)
+                }
+            })
+        this.canonicalReviewIndexPromises.set(canonicalChatId, indexing)
+        await indexing
+    }
+
+    private async indexCanonicalReviewHistory(session: AssistantSession, thread: AssistantThread): Promise<void> {
+        const canonicalChatId = thread.providerThreadId
+        if (!canonicalChatId) return
+        const project = session.projectPath || thread.cwd || process.cwd()
+        const latest = await this.runtime.readCanonicalChatHistory(canonicalChatId, project, { limit: 2_000 })
+        if (!latest) return
+
+        const totalEntries = Math.max(0, Number(latest.pageInfo?.totalEntries) || latest.entries.length)
+        const modifiedAt = normalizeCatalogDate(latest.chat.modifiedAt, thread.updatedAt)
+        const cachedState = this.canonicalReviewHistoryState.get(canonicalChatId)
+        const previous = cachedState?.threadId === thread.id ? cachedState : null
+        if (previous?.totalEntries === totalEntries && previous.modifiedAt === modifiedAt) return
+
+        let entries = latest.entries || []
+        let baseEntryIndex = Math.max(0, Number(latest.pageInfo?.startCursor) || 0)
+        let completeBackfill = !previous || totalEntries < previous.totalEntries
+        if (!completeBackfill && previous && totalEntries > previous.totalEntries) {
+            const firstNewLocalIndex = previous.totalEntries - baseEntryIndex
+            const anchorIndex = findCanonicalReviewTurnAnchor(entries, firstNewLocalIndex)
+            if (anchorIndex >= 0) {
+                entries = entries.slice(anchorIndex)
+                baseEntryIndex += anchorIndex
+            } else {
+                completeBackfill = true
+            }
+        } else if (previous && totalEntries === previous.totalEntries) {
+            completeBackfill = true
+        }
+
+        if (completeBackfill) {
+            const pages: unknown[][] = [entries]
+            let before = latest.pageInfo?.oldestCursor || null
+            let hasOlder = latest.pageInfo?.hasOlder === true
+            let oldestStart = baseEntryIndex
+            const seenCursors = new Set<string>()
+            while (hasOlder && before && !seenCursors.has(before)) {
+                seenCursors.add(before)
+                const older = await this.runtime.readCanonicalChatHistory(canonicalChatId, project, {
+                    before,
+                    limit: 2_000
+                })
+                if (!older) break
+                pages.push(older.entries || [])
+                oldestStart = Math.max(0, Number(older.pageInfo?.startCursor) || 0)
+                before = older.pageInfo?.oldestCursor || null
+                hasOlder = older.pageInfo?.hasOlder === true
+            }
+            if (hasOlder || oldestStart > 0) {
+                throw new Error('Canonical Review history paging ended before the oldest entry.')
+            }
+            entries = pages.reverse().flat()
+            baseEntryIndex = oldestStart
+        }
+
+        const key = createHash('sha256').update(canonicalChatId).digest('hex').slice(0, 24)
+        const projection = projectCanonicalTimeline(
+            entries,
+            canonicalChatId,
+            key,
+            thread.createdAt,
+            baseEntryIndex,
+            latest.chat.cwd || project
+        )
+        const persistedTimeline = await this.persistence.readTimelineProjectionRows(thread.id)
+        const removedMessageIds = [...new Set([
+            ...projection.legacyMessageIds,
+            ...findDuplicateProjectedMessageIds(persistedTimeline.messages),
+            ...findSupersededCanonicalMessageIds(
+                persistedTimeline.messages,
+                projection.messages,
+                projection.legacyMessageIds
+            )
+        ])]
+        const removedActivityIds = [...new Set([
+            ...projection.legacyActivityIds,
+            ...findDuplicateProjectedActivityIds(persistedTimeline.activities),
+            ...findSupersededCanonicalActivityIds(
+                persistedTimeline.activities,
+                projection.activities,
+                projection.legacyActivityIds
+            )
+        ])]
+        await this.persistence.projectCanonicalReviewTimeline({
+            threadId: thread.id,
+            messages: projection.messages,
+            activities: projection.activities,
+            removedMessageIds,
+            removedActivityIds
+        })
+        this.canonicalReviewHistoryState.set(canonicalChatId, { threadId: thread.id, totalEntries, modifiedAt })
     }
 
     private async recoverSelectedSessionTitle(): Promise<void> {
@@ -730,7 +951,15 @@ export class AssistantService {
     private flushBroadcastEvents(): void {
         if (this.pendingBroadcastEvents.length === 0) return
         const events = this.pendingBroadcastEvents.splice(0, this.pendingBroadcastEvents.length)
-        broadcastAssistantPayload(this.subscribers, events.length === 1 ? { event: events[0] } : { events })
+        const payload: AssistantEventStreamPayload = events.length === 1 ? { event: events[0] } : { events }
+        broadcastAssistantPayload(this.subscribers, payload)
+        for (const listener of [...this.externalEventSubscribers]) {
+            try {
+                listener(payload)
+            } catch (error) {
+                log.warn('[Assistant] External event subscriber failed', error)
+            }
+        }
     }
 
     private handleRuntimeEvent(event: Parameters<typeof handleAssistantRuntimeEvent>[0]) {
@@ -759,6 +988,25 @@ export class AssistantService {
                 })
             }
         })
+
+        if (event.type === 'turn.completed') {
+            const completedRecord = findThreadRecord(this.state.snapshot, event.threadId)
+            if (completedRecord) {
+                const removedMessageIds = findDuplicateProjectedMessageIds(completedRecord.thread.messages)
+                const removedActivityIds = findDuplicateProjectedActivityIds(completedRecord.thread.activities)
+                if (removedMessageIds.length > 0 || removedActivityIds.length > 0) {
+                    this.appendEvent('thread.updated', event.createdAt, {
+                        threadId: completedRecord.thread.id,
+                        patch: {
+                            messageCount: Math.max(0, completedRecord.thread.messages.length - removedMessageIds.length),
+                            activityCount: Math.max(0, completedRecord.thread.activities.length - removedActivityIds.length)
+                        },
+                        removedMessageIds,
+                        removedActivityIds
+                    }, completedRecord.session.id, completedRecord.thread.id)
+                }
+            }
+        }
 
         if (
             event.type === 'turn.completed'
@@ -791,15 +1039,33 @@ function normalizeCatalogDate(value: unknown, fallback = nowIso()): string {
     return Number.isNaN(date.getTime()) ? fallback : date.toISOString()
 }
 
-function projectCanonicalTimeline(
+function findCanonicalReviewTurnAnchor(entries: unknown[], firstNewLocalIndex: number): number {
+    if (!Number.isSafeInteger(firstNewLocalIndex) || firstNewLocalIndex < 0 || firstNewLocalIndex > entries.length) return -1
+    for (let index = Math.min(firstNewLocalIndex, entries.length - 1); index >= 0; index -= 1) {
+        const entry = asCanonicalRecord(entries[index])
+        const message = entry?.['type'] === 'message' ? asCanonicalRecord(entry['message']) : null
+        if (message?.['role'] === 'user') return index
+    }
+    return -1
+}
+
+export function projectCanonicalTimeline(
     entries: unknown[],
     canonicalChatId: string,
     key: string,
     fallbackCreatedAt: string,
-    baseEntryIndex: number
-): { messages: AssistantMessage[]; activities: AssistantActivity[] } {
+    baseEntryIndex: number,
+    cwd = process.cwd()
+): {
+    messages: AssistantMessage[]
+    activities: AssistantActivity[]
+    legacyMessageIds: string[]
+    legacyActivityIds: string[]
+} {
     const messages: AssistantMessage[] = []
     const activities = new Map<string, AssistantActivity>()
+    const legacyMessageIds = new Set<string>()
+    const legacyActivityIds = new Set<string>()
     let activeTurnId: string | null = null
     for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
         const entryValue = entries[entryIndex]
@@ -827,13 +1093,16 @@ function projectCanonicalTimeline(
         const message = asCanonicalRecord(entry['message'])
         if (!message) continue
         const role = String(message['role'] || '')
-        const messageId = String(message['id'] || entryId)
+        const legacyMessageId = String(message['id'] || entryId)
+        const sourceMessageId = canonicalPiMessageSourceId(message, legacyMessageId)
+        const messageId = canonicalDesktopMessageId(role, sourceMessageId)
+        if (messageId !== legacyMessageId) legacyMessageIds.add(legacyMessageId)
         const messageOccurredAt = normalizeCatalogDate(message['timestamp'] || entry['timestamp'], occurredAt)
         const content = canonicalContentParts(message['content'])
         if (role === 'user') {
-            activeTurnId = `shared-turn:${key}:${messageId}`
+            activeTurnId = `shared-turn:${key}:${sourceMessageId}`
         } else if (role === 'assistant' && !activeTurnId) {
-            activeTurnId = `shared-turn:${key}:${messageId}`
+            activeTurnId = `shared-turn:${key}:${sourceMessageId}`
         }
 
         if (role === 'user' || role === 'assistant' || role === 'system') {
@@ -859,8 +1128,11 @@ function projectCanonicalTimeline(
                 })
             }
             if (role === 'assistant' && imageAttachments.length > 0) {
-                activities.set(`shared-media:${messageId}`, {
-                    id: `shared-media:${messageId}`,
+                const mediaActivityId = `shared-media:${sourceMessageId}`
+                const legacyMediaActivityId = `shared-media:${legacyMessageId}`
+                if (mediaActivityId !== legacyMediaActivityId) legacyActivityIds.add(legacyMediaActivityId)
+                activities.set(mediaActivityId, {
+                    id: mediaActivityId,
                     kind: 'media',
                     tone: 'info',
                     summary: `${imageAttachments.length} image${imageAttachments.length === 1 ? '' : 's'}`,
@@ -878,8 +1150,10 @@ function projectCanonicalTimeline(
             .join('\n')
             .trim()
         if (thinking) {
-            activities.set(`shared-thinking:${messageId}`, {
-                id: `shared-thinking:${messageId}`,
+            const thinkingActivityId = `assistant-internal-${sourceMessageId}`
+            legacyActivityIds.add(`shared-thinking:${legacyMessageId}`)
+            activities.set(thinkingActivityId, {
+                id: thinkingActivityId,
                 kind: 'reasoning',
                 tone: 'info',
                 summary: 'Reasoning',
@@ -894,17 +1168,37 @@ function projectCanonicalTimeline(
         for (const part of content.filter((candidate) => candidate['type'] === 'toolCall')) {
             const toolCallId = String(part['id'] || `${messageId}:tool:${activities.size + 1}`)
             const toolName = String(part['name'] || 'tool')
+            const args = asCanonicalRecord(part['arguments'])
             const activityId = `zyra-tool-${toolCallId}`
+            const classified = classifyZyraToolActivity({
+                toolName,
+                args,
+                result: null,
+                partialResult: null,
+                state: 'running'
+            })
+            if (classified.kind === 'file-change') {
+                Object.assign(classified.data, readPiFileChangeData({
+                    cwd,
+                    toolName,
+                    args,
+                    result: null,
+                    partialResult: null,
+                    type: 'tool_execution_start',
+                    state: 'running'
+                }))
+            }
             activities.set(activityId, {
                 id: activityId,
-                kind: 'tool',
+                kind: classified.kind,
                 tone: 'tool',
-                summary: toolName,
-                detail: canonicalToolDetail(part['arguments']),
+                summary: classified.summary,
+                detail: classified.detail || canonicalToolDetail(part['arguments']),
                 turnId: activeTurnId,
                 timelineSequence,
                 createdAt: messageOccurredAt,
                 payload: {
+                    ...classified.data,
                     status: 'running',
                     toolName,
                     args: part['arguments'],
@@ -919,6 +1213,7 @@ function projectCanonicalTimeline(
             const activityId = `zyra-tool-${toolCallId}`
             const existing = activities.get(activityId)
             const toolName = String(message['toolName'] || existing?.payload?.['toolName'] || 'tool')
+            const args = asCanonicalRecord(existing?.payload?.['args'])
             const imagePaths = content
                 .map((part, partIndex) => part['type'] === 'image'
                     ? canonicalImageAttachment(canonicalChatId, messageId, partIndex, part)
@@ -926,22 +1221,42 @@ function projectCanonicalTimeline(
                 .filter((value): value is string => Boolean(value))
             const output = canonicalMessageText(content)
             const isError = message['isError'] === true
+            const state = isError ? 'error' : 'completed'
+            const classified = classifyZyraToolActivity({
+                toolName,
+                args,
+                result: message,
+                partialResult: message,
+                state,
+                output
+            })
+            if (classified.kind === 'file-change') {
+                Object.assign(classified.data, readPiFileChangeData({
+                    cwd,
+                    toolName,
+                    args,
+                    result: message,
+                    partialResult: message,
+                    type: 'tool_execution_end',
+                    state
+                }))
+            }
             activities.set(activityId, {
                 id: activityId,
-                kind: existing?.kind || 'tool',
+                kind: classified.kind,
                 tone: isError ? 'error' : 'tool',
-                summary: isError ? `${toolName} failed` : toolName,
-                detail: existing?.detail,
+                summary: classified.summary,
+                detail: classified.detail || existing?.detail,
                 turnId: existing?.turnId || activeTurnId,
                 timelineSequence: existing?.timelineSequence || timelineSequence,
                 createdAt: existing?.createdAt || messageOccurredAt,
                 payload: {
                     ...(existing?.payload || {}),
+                    ...classified.data,
                     status: isError ? 'failed' : 'completed',
                     toolName,
                     toolCallId,
                     output,
-                    result: content,
                     imageAttachments: imagePaths,
                     completedAt: messageOccurredAt,
                     canonicalMessageId: messageId
@@ -951,8 +1266,11 @@ function projectCanonicalTimeline(
 
         const errorMessage = String(message['errorMessage'] || '').trim()
         if (errorMessage || message['stopReason'] === 'error') {
-            activities.set(`shared-error:${messageId}`, {
-                id: `shared-error:${messageId}`,
+            const errorActivityId = `shared-error:${sourceMessageId}`
+            const legacyErrorActivityId = `shared-error:${legacyMessageId}`
+            if (errorActivityId !== legacyErrorActivityId) legacyActivityIds.add(legacyErrorActivityId)
+            activities.set(errorActivityId, {
+                id: errorActivityId,
                 kind: 'error',
                 tone: 'error',
                 summary: 'Assistant error',
@@ -967,7 +1285,152 @@ function projectCanonicalTimeline(
             })
         }
     }
-    return { messages, activities: [...activities.values()] }
+    return {
+        messages,
+        activities: [...activities.values()],
+        legacyMessageIds: [...legacyMessageIds],
+        legacyActivityIds: [...legacyActivityIds]
+    }
+}
+
+const CANONICAL_REPLAY_RECONCILIATION_WINDOW_MS = 10 * 60 * 1000
+
+function countMergedCanonicalRecords<T extends { id: string }>(existing: T[], incoming: T[], removedIds: string[]): number {
+    const ids = new Set(existing.map((entry) => entry.id))
+    for (const id of removedIds) ids.delete(id)
+    for (const entry of incoming) ids.add(entry.id)
+    return ids.size
+}
+
+function canonicalPiMessageSourceId(message: Record<string, unknown>, fallback: string): string {
+    const timestamp = Number(message['timestamp'])
+    const role = String(message['role'] || 'unknown')
+    return Number.isFinite(timestamp) && timestamp > 0
+        ? `pi-message:${role}:${Math.trunc(timestamp)}`
+        : fallback
+}
+
+function canonicalDesktopMessageId(role: string, sourceMessageId: string): string {
+    if (role === 'assistant') return `assistant-message-${sourceMessageId}`
+    if (role === 'user') return `assistant-message-user-${sourceMessageId}`
+    return sourceMessageId
+}
+
+function canonicalMessageSignature(message: Pick<AssistantMessage, 'role' | 'text'>): string {
+    return `${message.role}\u0000${message.text}`
+}
+
+export function findDuplicateProjectedMessageIds(messages: AssistantMessage[]): string[] {
+    const groups = new Map<string, AssistantMessage[]>()
+    for (const message of messages) {
+        const signature = canonicalMessageSignature(message)
+        const group = groups.get(signature)
+        if (group) group.push(message)
+        else groups.set(signature, [message])
+    }
+    const removed = new Set<string>()
+    for (const group of groups.values()) {
+        if (group.length < 2) continue
+        const isCanonicalMessageId = (id: string) => !id.startsWith('assistant-message-') || id.includes('pi-message:')
+        const canonical = group.filter((message) => isCanonicalMessageId(message.id))
+        const generated = group.filter((message) => !isCanonicalMessageId(message.id))
+        for (const message of generated) {
+            const timestamp = Date.parse(message.createdAt)
+            if (canonical.some((candidate) => Math.abs(Date.parse(candidate.createdAt) - timestamp) <= CANONICAL_REPLAY_RECONCILIATION_WINDOW_MS)) {
+                removed.add(message.id)
+            }
+        }
+        const generatedByTurn = new Map<string, AssistantMessage[]>()
+        for (const message of generated) {
+            if (!message.turnId || removed.has(message.id)) continue
+            const key = message.turnId
+            generatedByTurn.set(key, [...(generatedByTurn.get(key) || []), message])
+        }
+        for (const sameTurn of generatedByTurn.values()) {
+            if (sameTurn.length < 2) continue
+            sameTurn.sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+            for (const duplicate of sameTurn.slice(1)) removed.add(duplicate.id)
+        }
+    }
+    return [...removed]
+}
+
+export function findSupersededCanonicalMessageIds(
+    existing: AssistantMessage[],
+    canonical: AssistantMessage[],
+    legacyIds: string[]
+): string[] {
+    const canonicalIds = new Set(canonical.map((message) => message.id))
+    const legacyIdSet = new Set(legacyIds)
+    const canonicalBySignature = new Map<string, number[]>()
+    for (const message of canonical) {
+        const timestamp = Date.parse(message.createdAt)
+        const timestamps = canonicalBySignature.get(canonicalMessageSignature(message)) || []
+        if (Number.isFinite(timestamp)) timestamps.push(timestamp)
+        canonicalBySignature.set(canonicalMessageSignature(message), timestamps)
+    }
+    return existing.flatMap((message) => {
+        if (canonicalIds.has(message.id)) return []
+        if (legacyIdSet.has(message.id)) return [message.id]
+        if (!message.id.startsWith('assistant-message-')) return []
+        const canonicalTimestamps = canonicalBySignature.get(canonicalMessageSignature(message)) || []
+        const timestamp = Date.parse(message.createdAt)
+        return canonicalTimestamps.some((candidate) => Math.abs(candidate - timestamp) <= CANONICAL_REPLAY_RECONCILIATION_WINDOW_MS)
+            ? [message.id]
+            : []
+    })
+}
+
+function canonicalActivitySignature(activity: AssistantActivity): string {
+    return `${activity.detail || ''}\u0000${activity.summary}`
+}
+
+export function findDuplicateProjectedActivityIds(activities: AssistantActivity[]): string[] {
+    const groups = new Map<string, AssistantActivity[]>()
+    for (const activity of activities) {
+        if (!activity.turnId || !activity.id.startsWith('assistant-internal-')) continue
+        const signature = `${activity.turnId}\u0000${activity.kind}\u0000${canonicalActivitySignature(activity)}`
+        const group = groups.get(signature)
+        if (group) group.push(activity)
+        else groups.set(signature, [activity])
+    }
+    const removed: string[] = []
+    for (const group of groups.values()) {
+        if (group.length < 2) continue
+        group.sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+        removed.push(...group.slice(1).map((activity) => activity.id))
+    }
+    return removed
+}
+
+export function findSupersededCanonicalActivityIds(
+    existing: AssistantActivity[],
+    canonical: AssistantActivity[],
+    legacyIds: string[]
+): string[] {
+    const canonicalIds = new Set(canonical.map((activity) => activity.id))
+    const legacyIdSet = new Set(legacyIds)
+    const canonicalBySignature = new Map<string, number[]>()
+    const canonicalByDetail = new Map<string, number[]>()
+    for (const activity of canonical) {
+        const timestamp = Date.parse(activity.createdAt)
+        const signature = canonicalActivitySignature(activity)
+        canonicalBySignature.set(signature, [...(canonicalBySignature.get(signature) || []), timestamp])
+        if (activity.detail) canonicalByDetail.set(activity.detail, [...(canonicalByDetail.get(activity.detail) || []), timestamp])
+    }
+    return existing.flatMap((activity) => {
+        if (canonicalIds.has(activity.id)) return []
+        if (legacyIdSet.has(activity.id)) return [activity.id]
+        if (!activity.id.startsWith('assistant-internal-') && !activity.id.startsWith('assistant-activity-')) return []
+        const timestamp = Date.parse(activity.createdAt)
+        const candidates = [
+            ...(canonicalBySignature.get(canonicalActivitySignature(activity)) || []),
+            ...(activity.detail ? canonicalByDetail.get(activity.detail) || [] : [])
+        ]
+        return candidates.some((candidate) => Math.abs(candidate - timestamp) <= CANONICAL_REPLAY_RECONCILIATION_WINDOW_MS)
+            ? [activity.id]
+            : []
+    })
 }
 
 function canonicalContentParts(content: unknown): Record<string, unknown>[] {

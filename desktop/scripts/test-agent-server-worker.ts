@@ -111,6 +111,7 @@ try {
     await waitUntil(() => events.length === 2)
     assert.equal((events[0].event as { type: string }).type, 'message_update')
     assert.equal(events[0].metadata?.turnId, 'turn:desktop-test')
+    assert.equal(events[0].metadata?.localThreadId, 'assistant-thread:desktop-test')
     assert.equal((events[1].event as { type: string }).type, 'zyra_server_turn_completed')
     assert.equal(secondEvents.length, 2, 'two local Desktop projections must receive the same canonical events')
 
@@ -122,7 +123,7 @@ try {
     connection.close()
 
     const reconnectConnection = new DesktopAgentServerConnection(root, { stateDirectory, channel, autoStart: false, authorityProof: 'desktop-test-authority' })
-    const reconnectWorker = reconnectConnection.createWorker(project)
+    const reconnectWorker = reconnectConnection.createWorker(project, 1)
     const replay: Array<Record<string, unknown> | undefined> = []
     reconnectWorker.onEvent((_event, metadata) => replay.push(metadata))
     await reconnectWorker.request('connect', {
@@ -132,9 +133,12 @@ try {
         providerThreadId: 'chat:desktop-test'
     })
     reconnectWorker.flushReplay()
-    assert.equal(replay.length, 3)
+    assert.equal(replay.length, 2, 'a persisted sequence watermark must skip already-projected events')
     assert.equal(replay[0]?.replay, true)
     assert.equal(replay[0]?.turnId, 'turn:desktop-test')
+    const latestSequence = reconnectWorker.latestSequence
+    reconnectWorker.markRemoteDetached()
+    assert.equal(reconnectWorker.latestSequence, latestSequence, 'transport reconnects must retain the replay watermark')
     reconnectWorker.dispose()
     reconnectConnection.close()
     process.stdout.write('desktop agent-server worker tests passed\n')
