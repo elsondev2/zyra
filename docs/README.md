@@ -36,6 +36,7 @@ Status words used below:
 
 ## Handoffs
 
+- [V1 local browser client](handoffs/2026-08-09-jake-v1-local-browser.md) — **Current.** Jake’s same-device browser branch merge and validation record.
 - [Agent-platform integration](handoffs/agent-platform-integration.md) — **Historical.** Integration checkpoint merged into the main line.
 - [Browser/computer use](handoffs/browser-computer-use.md) — **Historical.** Builder transfer record.
 - [Chat performance](handoffs/chat-performance.md) — **Historical.** End-to-end performance implementation handoff.

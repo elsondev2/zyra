@@ -1,0 +1,22 @@
+{
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "types": [
+            "node"
+        ]
+    },
+    "files": [
+        "src/types/sqljs.d.ts",
+        "src/renderer/src/vite-env.d.ts",
+        "src/renderer/src/monaco-workers.d.ts",
+        "src/preload/index.ts",
+        "src/main/index.ts",
+        "src/renderer/src/lib/browser-devscope-live-adapter.ts",
+        "src/renderer/src/lib/browser-file-url.ts",
+        "src/renderer/src/components/ui/file-preview/utils.ts",
+        "src/renderer/src/components/ui/markdown/paths.ts",
+        "src/renderer/src/pages/settings/BrowserControlSettings.tsx"
+    ],
+    "include": [],
+    "references": []
+}

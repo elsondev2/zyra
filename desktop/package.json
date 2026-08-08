@@ -14,6 +14,7 @@
         "preview": "electron-vite preview",
         "preview:browser": "vite preview --config vite.browser.config.ts --host 127.0.0.1",
         "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+        "typecheck:browser-runtime": "tsc --noEmit -p tsconfig.browser-runtime.json",
         "test:activity-rail": "bun scripts/test-activity-rail-contract.ts",
         "test:settings": "bun scripts/test-settings-contract.ts",
         "test:themes": "bun scripts/test-theme-contract.ts",

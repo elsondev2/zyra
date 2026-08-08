@@ -88,6 +88,7 @@ Loopback protects against network access, not hostile software running as the sa
 ## Focused Verification
 
 ```bash
+bun run --cwd desktop typecheck:browser-runtime
 bun desktop/scripts/test-browser-client-host.ts
 bun desktop/scripts/test-browser-assistant-bridge.ts
 bun desktop/scripts/test-browser-devscope-live-adapter.ts
