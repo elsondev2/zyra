@@ -4,6 +4,7 @@ import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from '@dnd-kit/modifiers'
 import { ChevronDown, ChevronRight, MoreHorizontal, Plus, SquarePen } from 'lucide-react'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
+import { TRANSIENT_MENU_DISMISS_EVENT } from '@/lib/transient-menu'
 import { cn } from '@/lib/utils'
 import {
     ProjectGroupIcon,
@@ -34,11 +35,16 @@ function RailSectionHeader(props: {
         const handleEscape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') setMenuOpen(false)
         }
-        document.addEventListener('mousedown', handlePointerDown)
+        const dismissMenu = () => setMenuOpen(false)
+        document.addEventListener('pointerdown', handlePointerDown, true)
         window.addEventListener('keydown', handleEscape)
+        window.addEventListener('blur', dismissMenu)
+        window.addEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissMenu)
         return () => {
-            document.removeEventListener('mousedown', handlePointerDown)
+            document.removeEventListener('pointerdown', handlePointerDown, true)
             window.removeEventListener('keydown', handleEscape)
+            window.removeEventListener('blur', dismissMenu)
+            window.removeEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissMenu)
         }
     }, [menuOpen])
 
@@ -200,7 +206,7 @@ export function AssistantSessionsRailBody(props: {
     }
 
     return (
-        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1 [scrollbar-width:thin] [scrollbar-color:#2c2c2c_transparent]">
+        <div className="min-h-0 flex-1 custom-scrollbar overflow-y-auto overflow-x-hidden pr-1 [scrollbar-width:thin]">
             <div>
                 {pinnedGroup ? (
                     <>

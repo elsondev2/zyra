@@ -1,303 +1,268 @@
-/**
- * Zyra - Appearance Settings Page
- */
-
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
-import { AlertTriangle, ArrowLeft, Check, ChevronLeft, ChevronRight, Palette } from 'lucide-react'
-import { useSettings, THEMES, ACCENT_COLORS } from '@/lib/settings'
-import { cn } from '@/lib/utils'
-
-const THEME_PAGE_SIZE = 6
+import { RotateCcw } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import type { DevScopeManagedFont } from '@shared/contracts/font-contracts'
+import {
+    ACCENT_COLORS,
+    APPEARANCE_CODE_FONTS,
+    APPEARANCE_UI_FONTS,
+    THEMES,
+    getAppearanceLocalFontFamily,
+    getAppearanceManagedFontId,
+    getSystemAppearanceTheme,
+    useSettings,
+    type AppearanceCodeFont,
+    type AppearanceThemeMode,
+    type AppearanceUiFont,
+    type DarkTheme,
+    type Theme
+} from '@/lib/settings'
+import type { ThemeTokens } from '@/lib/settings-theme-catalog'
+import { listAppearanceManagedFonts } from '@/lib/appearance-font-runtime'
+import {
+    SettingsButton,
+    SettingsPageContainer,
+    SettingsRow,
+    SettingsSection,
+    SettingsSegmented,
+    SettingsSwitch
+} from './settings-layout'
+import { AppearanceFontManagerDialog } from './appearance/AppearanceFontManagerDialog'
+import { AppearanceThemeController } from './appearance/AppearanceThemeController'
+import {
+    AppearanceCodePreview,
+    AppearanceSystemThemeCard,
+    AppearanceThemeCard
+} from './appearance/AppearancePreviews'
 
 export default function AppearanceSettings() {
     const { settings, updateSettings } = useSettings()
-    const darkThemes = useMemo(() => THEMES.filter((theme) => theme.id !== 'light'), [])
-    const activeDarkThemeId = settings.theme === 'light' ? settings.lastDarkTheme : settings.theme
-    const resolveThemePage = (themeId: string) => {
-        const selectedIndex = darkThemes.findIndex((theme) => theme.id === themeId)
-        return selectedIndex >= 0 ? Math.floor(selectedIndex / THEME_PAGE_SIZE) : 0
+    const [fontManagerTarget, setFontManagerTarget] = useState<'ui' | 'code' | null>(null)
+    const [managedFonts, setManagedFonts] = useState<DevScopeManagedFont[]>([])
+    const baseSelectedTheme = THEMES.find((theme) => theme.id === settings.theme) || THEMES[0]
+    const lightTheme = THEMES.find((theme) => theme.id === 'light') || THEMES[0]
+    const defaultDarkTheme = THEMES.find((theme) => theme.id === 'dark') || THEMES[0]
+    const selectedDarkTheme = THEMES.find((theme) => theme.id === settings.appearanceDarkTheme) || defaultDarkTheme
+    const customThemeActive = settings.appearanceCustomThemeActive
+        && settings.appearanceCustomTheme?.baseTheme === settings.theme
+    const selectedTheme = customThemeActive && settings.appearanceCustomTheme
+        ? { ...baseSelectedTheme, tokens: settings.appearanceCustomTheme.tokens }
+        : baseSelectedTheme
+    useEffect(() => {
+        let active = true
+        void listAppearanceManagedFonts().then((fonts) => {
+            if (active) setManagedFonts(fonts)
+        }).catch(() => undefined)
+        return () => { active = false }
+    }, [])
+
+    const resolveFontLabel = (font: AppearanceUiFont | AppearanceCodeFont) => {
+        const builtIn = [...APPEARANCE_UI_FONTS, ...APPEARANCE_CODE_FONTS].find((entry) => entry.id === font)
+        if (builtIn) return builtIn.label
+        const managedFontId = getAppearanceManagedFontId(font)
+        if (managedFontId) return managedFonts.find((entry) => entry.id === managedFontId)?.family || 'Managed font'
+        return getAppearanceLocalFontFamily(font) || 'Local font'
     }
-    const [themePage, setThemePage] = useState(() => resolveThemePage(activeDarkThemeId))
 
-    const handleThemeChange = (themeId: string) => {
-        const selectedTheme = THEMES.find((theme) => theme.id === themeId)
-        if (!selectedTheme) return
+    const paletteChanged = settings.appearanceThemeMode !== 'system'
+        || settings.appearanceDarkTheme !== 'dark'
+        || settings.appearanceCustomThemeActive
+        || settings.appearanceUiFont !== 'hanken'
+        || settings.appearanceCodeFont !== 'system-mono'
+        || settings.accentColor.name !== 'Blue'
 
-        const matchingAccent = ACCENT_COLORS.find((color) => color.name === selectedTheme.accentColor)
-        if (matchingAccent) {
+    const getPresetAccent = (theme: Theme) => {
+        const definition = THEMES.find((entry) => entry.id === theme)
+        return ACCENT_COLORS.find((accent) => accent.name === definition?.accentColor) || ACCENT_COLORS[0]
+    }
+
+    const selectThemeMode = (appearanceThemeMode: AppearanceThemeMode) => {
+        const theme: Theme = appearanceThemeMode === 'system'
+            ? getSystemAppearanceTheme()
+            : appearanceThemeMode === 'light'
+                ? 'light'
+                : settings.appearanceDarkTheme
+        updateSettings({
+            appearanceThemeMode,
+            theme,
+            appearanceCustomThemeActive: false,
+            appearanceUiFont: 'hanken',
+            appearanceCodeFont: 'system-mono',
+            accentColor: getPresetAccent(theme)
+        })
+    }
+
+    const selectThemePreset = (theme: Theme | 'custom') => {
+        if (theme === 'custom') {
+            const customTheme = settings.appearanceCustomTheme
+            if (!customTheme) return
+            const isLight = customTheme.baseTheme === 'light'
             updateSettings({
-                theme: selectedTheme.id,
-                accentColor: matchingAccent
+                appearanceThemeMode: isLight ? 'light' : 'dark',
+                appearanceDarkTheme: isLight ? settings.appearanceDarkTheme : customTheme.baseTheme as DarkTheme,
+                appearanceCustomThemeActive: true,
+                appearanceUiFont: customTheme.uiFont,
+                appearanceCodeFont: customTheme.codeFont,
+                theme: customTheme.baseTheme,
+                accentColor: customTheme.accentColor
             })
             return
         }
-
-        updateSettings({ theme: selectedTheme.id })
-    }
-
-    const isLightModeEnabled = settings.theme === 'light'
-    const handleLightModeToggle = (enabled: boolean) => {
-        if (enabled) {
-            updateSettings({ theme: 'light' })
+        if (theme === 'light') {
+            updateSettings({
+                appearanceThemeMode: 'light',
+                appearanceCustomThemeActive: false,
+                appearanceUiFont: 'hanken',
+                appearanceCodeFont: 'system-mono',
+                theme,
+                accentColor: getPresetAccent(theme)
+            })
             return
         }
-
-        if (settings.theme === 'light') {
-            updateSettings({ theme: settings.lastDarkTheme })
-        }
+        updateSettings({
+            appearanceThemeMode: 'dark',
+            appearanceDarkTheme: theme as DarkTheme,
+            appearanceCustomThemeActive: false,
+            appearanceUiFont: 'hanken',
+            appearanceCodeFont: 'system-mono',
+            theme,
+            accentColor: getPresetAccent(theme)
+        })
     }
 
-    useEffect(() => {
-        setThemePage((current) => {
-            const next = resolveThemePage(activeDarkThemeId)
-            return current === next ? current : next
+    const saveCustomTheme = (
+        tokens: ThemeTokens,
+        accentColor = settings.accentColor,
+        uiFont: AppearanceUiFont = settings.appearanceUiFont,
+        codeFont: AppearanceCodeFont = settings.appearanceCodeFont
+    ) => {
+        const baseTheme = settings.theme
+        const isLight = baseTheme === 'light'
+        updateSettings({
+            appearanceThemeMode: isLight ? 'light' : 'dark',
+            appearanceDarkTheme: isLight ? settings.appearanceDarkTheme : baseTheme as DarkTheme,
+            appearanceCustomTheme: { baseTheme, tokens, accentColor, uiFont, codeFont },
+            appearanceCustomThemeActive: true,
+            appearanceUiFont: uiFont,
+            appearanceCodeFont: codeFont,
+            accentColor
         })
-    }, [activeDarkThemeId])
+    }
 
-    const totalThemePages = Math.max(1, Math.ceil(darkThemes.length / THEME_PAGE_SIZE))
-    const themePageStart = themePage * THEME_PAGE_SIZE
-    const visibleThemes = darkThemes.slice(themePageStart, themePageStart + THEME_PAGE_SIZE)
+    const resetTheme = () => {
+        updateSettings({
+            appearanceThemeMode: 'system',
+            appearanceDarkTheme: 'dark',
+            appearanceCustomThemeActive: false,
+            appearanceUiFont: 'hanken',
+            appearanceCodeFont: 'system-mono',
+            theme: getSystemAppearanceTheme(),
+            accentColor: ACCENT_COLORS[0]
+        })
+    }
 
     return (
-        <div className="animate-fadeIn">
-            <div className="mb-6">
-                <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                        <div className="rounded-lg bg-purple-500/10 p-2">
-                            <Palette className="text-purple-400" size={24} />
-                        </div>
-                        <div>
-                            <h1 className="text-xl font-semibold text-sparkle-text">Appearance</h1>
-                            <p className="text-sm text-sparkle-text-secondary">Theme, colors, and display options</p>
-                        </div>
-                    </div>
-                    <Link
-                        to="/settings"
-                        className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-white/10 bg-sparkle-card px-4 py-2 text-sm text-sparkle-text transition-all hover:border-white/20 hover:bg-white/[0.03] hover:text-[var(--accent-primary)]"
-                    >
-                        <ArrowLeft size={16} />
-                        Back to Settings
-                    </Link>
+        <SettingsPageContainer className="!max-w-[780px] !gap-8">
+            <header className="px-0.5">
+                <h1 className="text-[24px] font-medium tracking-[-0.025em] text-[var(--settings-text)]">Appearance</h1>
+            </header>
+
+            <section className="space-y-4" aria-labelledby="appearance-theme-title">
+                <div className="flex min-h-7 items-center justify-between gap-4 px-0.5">
+                    <h2 id="appearance-theme-title" className="text-[14px] font-semibold tracking-[-0.01em] text-[var(--settings-text)]">Theme</h2>
+                    {paletteChanged ? (
+                        <SettingsButton variant="ghost" onClick={resetTheme}>
+                            <RotateCcw size={12} />
+                            Reset
+                        </SettingsButton>
+                    ) : null}
                 </div>
-            </div>
 
-            <div className="space-y-6">
-                <SettingsSection
-                    title="Themes"
-                    description="Browse the dark-theme library a page at a time. Light mode stays available below."
-                    headerActions={(
-                        <div className="flex items-center gap-2">
-                            <button
-                                type="button"
-                                onClick={() => setThemePage((current) => Math.max(0, current - 1))}
-                                disabled={themePage === 0}
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-transparent bg-white/[0.03] px-3 py-1.5 text-xs text-sparkle-text-secondary transition-colors hover:bg-white/[0.05] hover:text-sparkle-text disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                                <ChevronLeft size={14} />
-                                Prev
-                            </button>
-                            <span className="min-w-[72px] text-center text-xs text-sparkle-text-secondary">
-                                Page <span className="text-sparkle-text">{themePage + 1}</span> / {totalThemePages}
-                            </span>
-                            <button
-                                type="button"
-                                onClick={() => setThemePage((current) => Math.min(totalThemePages - 1, current + 1))}
-                                disabled={themePage >= totalThemePages - 1}
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-transparent bg-white/[0.03] px-3 py-1.5 text-xs text-sparkle-text-secondary transition-colors hover:bg-white/[0.05] hover:text-sparkle-text disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                                Next
-                                <ChevronRight size={14} />
-                            </button>
-                        </div>
-                    )}
-                >
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" role="radiogroup" aria-label="Appearance mode">
+                    <AppearanceSystemThemeCard
+                        darkTheme={defaultDarkTheme}
+                        lightTheme={lightTheme}
+                        selected={settings.appearanceThemeMode === 'system'}
+                        onSelect={() => selectThemeMode('system')}
+                    />
+                    <AppearanceThemeCard
+                        theme={customThemeActive && settings.theme === 'light' ? selectedTheme : lightTheme}
+                        label="Light"
+                        selected={settings.appearanceThemeMode === 'light'}
+                        onSelect={() => selectThemeMode('light')}
+                    />
+                    <AppearanceThemeCard
+                        theme={customThemeActive && settings.theme !== 'light' ? selectedTheme : selectedDarkTheme}
+                        label="Dark"
+                        selected={settings.appearanceThemeMode === 'dark'}
+                        onSelect={() => selectThemeMode('dark')}
+                    />
+                </div>
 
-                    <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
-                        {visibleThemes.map((theme) => {
-                            const active = settings.theme !== 'light' && settings.theme === theme.id
-                            return (
-                                <button
-                                    key={theme.id}
-                                    type="button"
-                                    onClick={() => handleThemeChange(theme.id)}
-                                    className={cn(
-                                        'w-full rounded-xl border px-4 py-3 text-left transition-colors',
-                                        active
-                                            ? 'border-white/20 bg-white/[0.05]'
-                                            : 'border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.04]'
-                                    )}
-                                >
-                                    <div className="flex items-start gap-3">
-                                        <ThemeRadio active={active} />
-                                        <div
-                                            className="mt-0.5 h-9 w-9 shrink-0 rounded-lg border border-white/10 shadow-inner"
-                                            style={{ backgroundColor: theme.color }}
-                                        />
-                                        <div className="min-w-0 flex-1">
-                                            <div className="flex flex-wrap items-center gap-2">
-                                                <p className="text-sm font-medium text-sparkle-text">{theme.name}</p>
-                                                <span className="inline-flex rounded-full border border-transparent bg-white/[0.04] px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] text-sparkle-text-secondary">
-                                                    {theme.accentColor}
-                                                </span>
-                                                {active && (
-                                                    <span className="inline-flex rounded-full border border-white/10 bg-[var(--accent-primary)]/12 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-[var(--accent-primary)]">
-                                                        Active
-                                                    </span>
-                                                )}
-                                            </div>
-                                            <p className="mt-1 text-xs text-sparkle-text-secondary">{theme.description}</p>
-                                        </div>
-                                    </div>
-                                </button>
-                            )
-                        })}
-                    </div>
+                <AppearanceCodePreview theme={selectedTheme} accent={settings.accentColor} compact={settings.compactMode} />
 
-                    <div className="mt-4 flex justify-end text-xs text-sparkle-text-secondary">
-                        <span>
-                            Showing <span className="text-sparkle-text">{themePageStart + 1}-{Math.min(themePageStart + THEME_PAGE_SIZE, darkThemes.length)}</span> of <span className="text-sparkle-text">{darkThemes.length}</span> dark themes
-                        </span>
-                    </div>
-                </SettingsSection>
+                <AppearanceThemeController
+                    mode={settings.appearanceThemeMode}
+                    theme={selectedTheme}
+                    accent={settings.accentColor}
+                    customActive={customThemeActive}
+                    customAvailable={settings.appearanceCustomTheme !== null}
+                    uiFont={settings.appearanceUiFont}
+                    codeFont={settings.appearanceCodeFont}
+                    uiFontLabel={resolveFontLabel(settings.appearanceUiFont)}
+                    codeFontLabel={resolveFontLabel(settings.appearanceCodeFont)}
+                    onPresetChange={selectThemePreset}
+                    onTokensChange={(tokens) => saveCustomTheme(tokens)}
+                    onAccentChange={(accentColor) => saveCustomTheme(selectedTheme.tokens, accentColor)}
+                    onUiFontChange={(uiFont) => saveCustomTheme(selectedTheme.tokens, settings.accentColor, uiFont)}
+                    onCodeFontChange={(codeFont) => saveCustomTheme(selectedTheme.tokens, settings.accentColor, settings.appearanceUiFont, codeFont)}
+                    onOpenFontManager={setFontManagerTarget}
+                />
+            </section>
 
-                <SettingsSection title="Accent Color" description="Customize the highlight color throughout the app.">
-                    <div className="flex flex-wrap gap-3">
-                        {ACCENT_COLORS.map((color) => (
-                            <button
-                                key={color.name}
-                                onClick={() => updateSettings({ accentColor: color })}
-                                className={cn(
-                                    'flex h-12 w-12 items-center justify-center rounded-xl border-2 transition-all',
-                                    settings.accentColor.name === color.name
-                                        ? 'scale-110 border-white shadow-lg'
-                                        : 'border-transparent hover:scale-105'
-                                )}
-                                style={{ backgroundColor: color.primary }}
-                                title={color.name}
-                            >
-                                {settings.accentColor.name === color.name && (
-                                    <Check size={18} className="text-white drop-shadow" />
-                                )}
-                            </button>
-                        ))}
-                    </div>
-                    <p className="mt-3 text-xs text-sparkle-text-muted">
-                        Current: <span className="text-[var(--accent-primary)]">{settings.accentColor.name}</span>
-                    </p>
-                </SettingsSection>
-
-                <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(280px,0.7fr)]">
-                    <SettingsSection title="Compact Mode" description="Reduce spacing for a denser interface.">
-                        <ToggleOption
-                            checked={settings.compactMode}
-                            onChange={(value) => updateSettings({ compactMode: value })}
-                            label={settings.compactMode ? 'Enabled' : 'Disabled'}
+            <SettingsSection title="Preferences">
+                <SettingsRow
+                    title="Interface density"
+                    description="Choose comfortable spacing or fit more information on screen."
+                    control={(
+                        <SettingsSegmented
+                            value={settings.compactMode ? 'compact' : 'comfortable'}
+                            options={[
+                                { value: 'comfortable', label: 'Comfortable' },
+                                { value: 'compact', label: 'Compact' }
+                            ]}
+                            onChange={(value) => updateSettings({ compactMode: value === 'compact' })}
+                            label="Interface density"
                         />
-                    </SettingsSection>
-
-                    <div className="self-start rounded-xl border border-red-400/20 bg-red-500/8 p-4 text-left">
-                        <div className="flex items-start gap-3">
-                            <div className="mt-0.5 rounded-lg border border-red-400/20 bg-red-500/10 p-2 text-red-200">
-                                <AlertTriangle size={15} />
-                            </div>
-                            <div className="min-w-0 flex-1">
-                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-red-200">
-                                    Danger Zone
-                                </p>
-                                <p className="mt-2 text-sm font-medium text-sparkle-text">
-                                    Light mode
-                                </p>
-                                <p className="mt-1 text-xs text-sparkle-text-secondary">
-                                    Built by people who live in dark mode. Light mode exists, but some screens may still come out a little cursed because that path gets far less real use.
-                                </p>
-                                <div className="mt-4 rounded-lg border border-white/10 bg-black/10 p-3">
-                                    <ToggleOption
-                                        checked={isLightModeEnabled}
-                                        onChange={handleLightModeToggle}
-                                        label={isLightModeEnabled ? 'Enabled' : 'Disabled'}
-                                    />
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    )
-}
-
-function ThemeRadio({ active }: { active: boolean }) {
-    return (
-        <span
-            className={cn(
-                'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors',
-                active
-                    ? 'border-[var(--accent-primary)]'
-                    : 'border-white/15'
-            )}
-        >
-            <span
-                className={cn(
-                    'h-2.5 w-2.5 rounded-full transition-colors',
-                    active ? 'bg-[var(--accent-primary)]' : 'bg-transparent'
-                )}
-            />
-        </span>
-    )
-}
-
-function SettingsSection({
-    title,
-    description,
-    children,
-    headerActions
-}: {
-    title: string
-    description: string
-    children: ReactNode
-    headerActions?: ReactNode
-}) {
-    return (
-        <div className="rounded-xl border border-white/10 bg-sparkle-card p-5">
-            <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
-                    <h2 className="mb-1 font-semibold text-sparkle-text">{title}</h2>
-                    <p className="text-sm text-sparkle-text-secondary">{description}</p>
-                </div>
-                {headerActions ? <div className="shrink-0">{headerActions}</div> : null}
-            </div>
-            {children}
-        </div>
-    )
-}
-
-function ToggleOption({
-    checked,
-    onChange,
-    label
-}: {
-    checked: boolean
-    onChange: (value: boolean) => void
-    label: string
-}) {
-    return (
-        <div className="flex items-center justify-between">
-            <span className="text-sm text-sparkle-text">{label}</span>
-            <button
-                onClick={() => onChange(!checked)}
-                className={cn(
-                    'relative h-7 w-12 rounded-full transition-colors',
-                    checked ? 'bg-[var(--accent-primary)]' : 'bg-white/10'
-                )}
-            >
-                <div
-                    className={cn(
-                        'absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-transform',
-                        checked ? 'translate-x-6' : 'translate-x-1'
                     )}
                 />
-            </button>
-        </div>
+                <SettingsRow
+                    title="Reduce motion"
+                    description="Minimize transitions, animation, and smooth scrolling."
+                    control={<SettingsSwitch checked={settings.accessibilityReduceMotion} onCheckedChange={(accessibilityReduceMotion) => updateSettings({ accessibilityReduceMotion })} label="Reduce motion" />}
+                />
+            </SettingsSection>
+
+            <AppearanceFontManagerDialog
+                open={fontManagerTarget !== null}
+                target={fontManagerTarget || 'ui'}
+                managedFonts={managedFonts}
+                currentFont={fontManagerTarget === 'code' ? settings.appearanceCodeFont : settings.appearanceUiFont}
+                usedManagedFontIds={[
+                    getAppearanceManagedFontId(settings.appearanceUiFont),
+                    getAppearanceManagedFontId(settings.appearanceCodeFont),
+                    settings.appearanceCustomTheme ? getAppearanceManagedFontId(settings.appearanceCustomTheme.uiFont) : null,
+                    settings.appearanceCustomTheme ? getAppearanceManagedFontId(settings.appearanceCustomTheme.codeFont) : null
+                ].filter((fontId): fontId is string => Boolean(fontId))}
+                onManagedFontsChange={setManagedFonts}
+                onSelect={(font) => {
+                    if (fontManagerTarget === 'code') {
+                        saveCustomTheme(selectedTheme.tokens, settings.accentColor, settings.appearanceUiFont, font as AppearanceCodeFont)
+                    } else {
+                        saveCustomTheme(selectedTheme.tokens, settings.accentColor, font as AppearanceUiFont)
+                    }
+                }}
+                onClose={() => setFontManagerTarget(null)}
+            />
+        </SettingsPageContainer>
     )
 }

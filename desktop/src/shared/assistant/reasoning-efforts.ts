@@ -43,6 +43,7 @@ export function getAssistantModelReasoningEfforts(
         const supported = model.supportedEfforts.filter((effort) => (
             isAssistantReasoningEffort(effort) && SELECTABLE_CHATGPT_REASONING_EFFORTS.has(effort)
         ))
+        if (isGpt56AssistantModel(model) && !supported.includes('max')) supported.push('max')
         if (supported.length > 0) return [...supported]
     }
     return [...(isGpt56AssistantModel(model) ? GPT_56_REASONING_EFFORTS : CHATGPT_REASONING_EFFORTS)]

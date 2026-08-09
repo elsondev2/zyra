@@ -6,10 +6,16 @@ import type { AssistantMessage, AssistantSession, AssistantThread } from '@share
 import { useCommandPalette } from '@/lib/commandPalette'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
+import { useLoadingScreenActive } from '@/components/ui/LoadingState'
 import { cn } from '@/lib/utils'
 import type { AssistantToastInput } from './AssistantPageHelpers'
+import { AssistantAgentInboxSidebar } from './AssistantAgentInboxSidebar'
 import { RenameSessionModal } from './AssistantSessionsRailDialogs'
 import { ASSISTANT_MAX_LEFT_SIDEBAR_WIDTH, ASSISTANT_MIN_LEFT_SIDEBAR_WIDTH, resolveAssistantLeftSidebarWidth } from './assistant-pane-layout'
+import {
+    ASSISTANT_SIDEBAR_COLLAPSE_MORPH_MS,
+    ASSISTANT_SIDEBAR_PREVIEW_CLOSE_MS
+} from './assistant-sidebar-preview-state'
 import { createSessionActionMenuItems } from './assistant-sessions-rail-menus'
 import { isAssistantDraftSession, resolveAssistantThreadStatusPill, resolveSessionProjectPath } from './assistant-sessions-rail-utils'
 import { useAssistantRailContextMenu } from './useAssistantRailContextMenu'
@@ -106,7 +112,12 @@ function getThreadLastActivityAt(thread: AssistantThread | null): string {
         return getSortableTimestamp(messageAt) > getSortableTimestamp(latest) ? messageAt : latest
     }, null)
 
-    return latestMessageAt || thread.createdAt
+    return latestMessageAt
+        || thread.latestTurn?.completedAt
+        || thread.latestTurn?.startedAt
+        || thread.latestTurn?.requestedAt
+        || thread.updatedAt
+        || thread.createdAt
 }
 
 function getSessionLastActivityAt(session: AssistantSession): string {
@@ -141,12 +152,6 @@ function getSessionDisplayTitle(session: AssistantSession): string {
 function getThreadDisplayTitle(thread: AssistantThread, index: number): string {
     if (thread.source === 'subagent') return thread.agentNickname || thread.agentRole || `Subagent ${index + 1}`
     return index === 0 ? 'Main thread' : `Thread ${index + 1}`
-}
-
-function isThreadBusy(thread: AssistantThread | null): boolean {
-    if (!thread) return false
-    const state = String(thread.state || '')
-    return state === 'running' || state === 'starting' || state === 'waiting' || state === 'waiting-approval' || state === 'waiting-input'
 }
 
 function getPrimaryThread(session: AssistantSession): AssistantThread | null {
@@ -184,6 +189,8 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
     width: number
     maxWidth?: number
     previewPinned: boolean
+    agentInboxEnabled: boolean
+    projectIconOverrides: Record<string, string>
     sessions: AssistantSession[]
     activeSessionId: string | null
     activeThreadId: string | null
@@ -204,6 +211,8 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         width,
         maxWidth = ASSISTANT_MAX_LEFT_SIDEBAR_WIDTH,
         previewPinned,
+        agentInboxEnabled,
+        projectIconOverrides,
         sessions,
         activeSessionId,
         activeThreadId,
@@ -223,6 +232,9 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
     const { open } = useCommandPalette()
     const { openContextMenu, contextMenuPortal } = useAssistantRailContextMenu()
     const resizeStateRef = useRef<{ pointerId: number; startX: number; startWidth: number; width: number } | null>(null)
+    const resizeFrameRef = useRef(0)
+    const layoutShellRef = useRef<HTMLDivElement | null>(null)
+    const sidebarSurfaceRef = useRef<HTMLElement | null>(null)
     const previewCloseTimerRef = useRef<number | null>(null)
     const wasCollapsedRef = useRef(collapsed)
     const shouldBootstrapProjectExpansionRef = useRef<boolean | null>(null)
@@ -231,7 +243,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         shouldBootstrapProjectExpansionRef.current = !hasStoredExpandedProjectPathKeys()
     }
     const [isResizing, setIsResizing] = useState(false)
-    const [loadingScreenActive, setLoadingScreenActive] = useState(false)
+    const loadingScreenActive = useLoadingScreenActive()
     const [previewOpen, setPreviewOpen] = useState(previewPinned)
     const [pendingDeleteSession, setPendingDeleteSession] = useState<AssistantSession | null>(null)
     const [renameTarget, setRenameTarget] = useState<AssistantSession | null>(null)
@@ -287,13 +299,23 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         Math.min(ASSISTANT_MAX_LEFT_SIDEBAR_WIDTH, Math.round(maxWidth))
     )
     const resolvedWidth = resolveAssistantLeftSidebarWidth(width, resolvedMaxWidth)
+    const renderedWidth = resizeStateRef.current?.width ?? resolvedWidth
     const layoutShellStyle = {
-        width: collapsed ? '0px' : `${resolvedWidth}px`,
+        width: loadingScreenActive || collapsed ? '0px' : `${renderedWidth}px`,
         willChange: 'width'
     } as const
-    const sidebarStyle = collapsed
+    const sidebarStyle = loadingScreenActive
         ? {
-            width: `${resolvedWidth}px`,
+            width: `${renderedWidth}px`,
+            opacity: 0,
+            pointerEvents: 'none',
+            transform: 'translate3d(-18px, 0, 0)',
+            transformOrigin: 'left center',
+            willChange: 'opacity, transform'
+        } as const
+        : collapsed
+        ? {
+            width: `${renderedWidth}px`,
             opacity: previewOpen ? 1 : 0,
             pointerEvents: previewOpen ? 'auto' : 'none',
             transform: previewOpen ? 'translate3d(0, 0, 0)' : 'translate3d(-18px, 0, 0)',
@@ -301,7 +323,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
             willChange: 'opacity, transform'
         } as const
         : {
-            width: `${resolvedWidth}px`,
+            width: `${renderedWidth}px`,
             opacity: 1,
             pointerEvents: 'auto',
             transform: 'translate3d(0, 0, 0)',
@@ -326,10 +348,27 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         return () => window.removeEventListener('keydown', handleKeyDown)
     }, [commandPending, onCreateChat, onCreateProjectChat])
 
+    const publishLiveSidebarWidth = useCallback((nextWidth: number) => {
+        window.dispatchEvent(new CustomEvent('zyra:assistant-sidebar-state', {
+            detail: { width: nextWidth }
+        }))
+    }, [])
+
+    const applyLiveSidebarWidth = useCallback((nextWidth: number) => {
+        layoutShellRef.current?.style.setProperty('width', `${nextWidth}px`)
+        sidebarSurfaceRef.current?.style.setProperty('width', `${nextWidth}px`)
+        publishLiveSidebarWidth(nextWidth)
+    }, [publishLiveSidebarWidth])
+
     const stopResize = useCallback((pointerId: number, handle?: HTMLButtonElement | null) => {
         const resizeState = resizeStateRef.current
         if (!resizeState) return
         resizeStateRef.current = null
+        if (resizeFrameRef.current) window.cancelAnimationFrame(resizeFrameRef.current)
+        resizeFrameRef.current = 0
+        applyLiveSidebarWidth(resizeState.width)
+        layoutShellRef.current?.style.removeProperty('transition')
+        sidebarSurfaceRef.current?.style.removeProperty('transition')
         setIsResizing(false)
         onWidthChange?.(resizeState.width)
         if (handle?.hasPointerCapture(pointerId)) {
@@ -337,12 +376,14 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         }
         document.body.style.removeProperty('cursor')
         document.body.style.removeProperty('user-select')
-    }, [onWidthChange])
+    }, [applyLiveSidebarWidth, onWidthChange])
 
     const handleResizePointerDown = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
         if (collapsed || !onWidthChange || event.button !== 0) return
         event.preventDefault()
         event.stopPropagation()
+        layoutShellRef.current?.style.setProperty('transition', 'none')
+        sidebarSurfaceRef.current?.style.setProperty('transition', 'none')
         resizeStateRef.current = {
             pointerId: event.pointerId,
             startX: event.clientX,
@@ -359,13 +400,17 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         const resizeState = resizeStateRef.current
         if (!resizeState || resizeState.pointerId !== event.pointerId || !onWidthChange) return
         event.preventDefault()
-        const nextWidth = Math.max(
+        resizeState.width = Math.max(
             ASSISTANT_MIN_LEFT_SIDEBAR_WIDTH,
             Math.min(resolvedMaxWidth, Math.round(resizeState.startWidth + (event.clientX - resizeState.startX)))
         )
-        resizeState.width = nextWidth
-        onWidthChange(nextWidth)
-    }, [onWidthChange, resolvedMaxWidth])
+        if (resizeFrameRef.current) return
+        resizeFrameRef.current = window.requestAnimationFrame(() => {
+            resizeFrameRef.current = 0
+            const latest = resizeStateRef.current
+            if (latest) applyLiveSidebarWidth(latest.width)
+        })
+    }, [applyLiveSidebarWidth, onWidthChange, resolvedMaxWidth])
 
     const handleResizePointerEnd = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
         const resizeState = resizeStateRef.current
@@ -377,20 +422,14 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
     useEffect(() => {
         return () => {
             resizeStateRef.current = null
+            if (resizeFrameRef.current) window.cancelAnimationFrame(resizeFrameRef.current)
+            resizeFrameRef.current = 0
+            layoutShellRef.current?.style.removeProperty('transition')
+            sidebarSurfaceRef.current?.style.removeProperty('transition')
             if (previewCloseTimerRef.current !== null) window.clearTimeout(previewCloseTimerRef.current)
             document.body.style.removeProperty('cursor')
             document.body.style.removeProperty('user-select')
         }
-    }, [])
-
-    useEffect(() => {
-        const handleLoadingScreenState = (event: Event) => {
-            const detail = (event as CustomEvent<{ active?: boolean }>).detail
-            setLoadingScreenActive(Boolean(detail?.active))
-        }
-
-        window.addEventListener('zyra:loading-screen-state', handleLoadingScreenState)
-        return () => window.removeEventListener('zyra:loading-screen-state', handleLoadingScreenState)
     }, [])
 
     const togglePinnedSession = (session: AssistantSession) => {
@@ -434,12 +473,12 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         setPendingDeleteSession(session)
     }
 
-    const getSessionMenuItems = (session: AssistantSession): FileActionsMenuItem[] => (
+    const getSessionMenuItems = (session: AssistantSession, showPin = true): FileActionsMenuItem[] => (
         createSessionActionMenuItems({
             session,
             pinned: pinnedSessionIds.has(session.id),
             onOpenRename: (target) => { void renameSession(target) },
-            onTogglePinned: () => togglePinnedSession(session),
+            onTogglePinned: showPin ? () => togglePinnedSession(session) : undefined,
             onArchiveSession: () => { void archiveSession(session) },
             onDeleteRequest: (target) => { void deleteSession(target) }
         })
@@ -470,7 +509,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
     ]
 
     const openSessionContextMenu = (event: ReactMouseEvent<HTMLElement>, session: AssistantSession) => {
-        openContextMenu(event, `${getSessionDisplayTitle(session)} actions`, getSessionMenuItems(session))
+        openContextMenu(event, `${getSessionDisplayTitle(session)} actions`, getSessionMenuItems(session, !agentInboxEnabled))
     }
 
     const openProjectContextMenu = (event: ReactMouseEvent<HTMLElement>, group: ProjectGroup, expanded: boolean) => {
@@ -508,7 +547,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         setPreviewOpen(true)
     }, [])
 
-    const schedulePreviewClose = useCallback((delayMs = 180) => {
+    const schedulePreviewClose = useCallback((delayMs = ASSISTANT_SIDEBAR_PREVIEW_CLOSE_MS) => {
         if (previewPinned) return
         if (previewCloseTimerRef.current !== null) window.clearTimeout(previewCloseTimerRef.current)
         previewCloseTimerRef.current = window.setTimeout(() => {
@@ -533,7 +572,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
 
         if (!wasCollapsed && collapsed && !loadingScreenActive) {
             setPreviewOpen(true)
-            schedulePreviewClose(1100)
+            schedulePreviewClose(ASSISTANT_SIDEBAR_COLLAPSE_MORPH_MS)
         }
     }, [collapsed, loadingScreenActive, onPreviewPinnedChange, schedulePreviewClose])
 
@@ -542,7 +581,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         window.dispatchEvent(new CustomEvent('zyra:toggle-assistant-sidebar'))
     }
 
-    const forceSchedulePreviewClose = (delayMs = 180) => {
+    const forceSchedulePreviewClose = (delayMs = ASSISTANT_SIDEBAR_PREVIEW_CLOSE_MS) => {
         if (previewCloseTimerRef.current !== null) window.clearTimeout(previewCloseTimerRef.current)
         previewCloseTimerRef.current = window.setTimeout(() => {
             previewCloseTimerRef.current = null
@@ -610,32 +649,92 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         })
     }, [activeSessionId, projectGroups])
 
+    const collapsedPreviewControls = collapsed ? (
+        <div className="flex shrink-0 items-center gap-0.5">
+            <button
+                type="button"
+                onClick={togglePreviewPinned}
+                className={cn(
+                    'inline-flex size-8 items-center justify-center rounded-md text-sparkle-text-muted transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text',
+                    previewPinned && 'text-sparkle-text-secondary'
+                )}
+                title={previewPinned ? 'Unpin bubble sidebar' : 'Pin bubble sidebar'}
+                aria-label={previewPinned ? 'Unpin bubble sidebar' : 'Pin bubble sidebar'}
+                aria-pressed={previewPinned}
+            >
+                <Pin size={14} strokeWidth={1.8} className={cn(previewPinned && 'rotate-45 fill-current')} />
+            </button>
+            <button
+                type="button"
+                onClick={expandCollapsedSidebar}
+                className="inline-flex size-8 items-center justify-center rounded-md text-sparkle-text-muted transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
+                title="Expand sidebar"
+                aria-label="Expand sidebar"
+            >
+                <PanelLeftOpen size={14} strokeWidth={1.8} />
+            </button>
+        </div>
+    ) : null
+
+    const baseSidebarActions = (
+        <div className="shrink-0 space-y-0.5 px-0.5 pb-3">
+            <div className="flex items-center gap-1">
+                <div className="min-w-0 flex-1">
+                    <RailButton
+                        icon={<SquarePen size={15} strokeWidth={1.7} />}
+                        label="New chat"
+                        shortcut="Ctrl N"
+                        disabled={commandPending}
+                        onClick={() => void onCreateChat()}
+                    />
+                </div>
+                {collapsedPreviewControls}
+            </div>
+            <RailButton
+                icon={<NewProjectIcon />}
+                label="New project"
+                shortcut="Ctrl Shift N"
+                disabled={commandPending}
+                onClick={() => void onCreateProjectChat()}
+            />
+            <RailButton
+                icon={<Search size={15} strokeWidth={1.7} />}
+                label="Search"
+                shortcut="Ctrl K"
+                onClick={open}
+            />
+        </div>
+    )
+
     return (
         <>
             {collapsed && !loadingScreenActive ? (
                 <div
-                    className="fixed bottom-0 left-0 top-[34px] z-[42] w-6"
+                    className="pointer-events-auto fixed bottom-0 left-0 top-[34px] z-[59] w-6"
                     onMouseEnter={openPreview}
                     onMouseLeave={() => schedulePreviewClose()}
                     aria-hidden="true"
                 >
                     <div
                         className={cn(
-                            'absolute left-1 top-1/2 h-16 w-1.5 -translate-y-1/2 rounded-full border border-white/[0.06] bg-white/[0.08] shadow-[0_0_18px_rgba(255,255,255,0.04)] transition-[opacity,transform,background-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
-                            previewOpen ? '-translate-x-1 opacity-0' : 'translate-x-0 opacity-100 hover:bg-white/[0.12]'
+                            'absolute left-1 top-1/2 h-16 w-1.5 -translate-y-1/2 rounded-full border border-[var(--surface-divider)] bg-[var(--surface-scrollbar)] transition-[opacity,transform,background-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+                            previewOpen ? '-translate-x-1 opacity-0' : 'translate-x-0 opacity-100 hover:bg-[var(--surface-scrollbar-hover)]'
                         )}
                     />
                 </div>
             ) : null}
             <div
+                ref={layoutShellRef}
                 className={cn(
                     'relative h-full shrink-0 overflow-visible transition-[width] duration-[520ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
-                    isResizing && 'transition-none'
+                    !collapsed && !loadingScreenActive && '[contain:layout]',
+                    (isResizing || loadingScreenActive) && 'transition-none'
                 )}
                 style={layoutShellStyle}
-                aria-hidden={collapsed && !previewOpen}
+                aria-hidden={loadingScreenActive || (collapsed && !previewOpen)}
             >
                 <aside
+                    ref={sidebarSurfaceRef}
                     onMouseEnter={() => {
                         if (collapsed) openPreview()
                     }}
@@ -644,72 +743,32 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                     }}
                     className={cn(
                         collapsed
-                            ? 'absolute bottom-3 left-2 top-2 z-[43] h-auto overflow-hidden rounded-[22px] border border-white/[0.085] bg-[#1b1829]/95 shadow-[0_24px_80px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.035)] backdrop-blur-xl transition-[opacity,transform,border-radius,box-shadow,top,bottom,left] duration-[520ms] ease-[cubic-bezier(0.22,1,0.36,1)]'
-                            : 'absolute bottom-0 left-0 top-0 h-full overflow-hidden rounded-none border border-transparent bg-[#1b1829]/95 shadow-none transition-[opacity,transform,border-radius,box-shadow,top,bottom,left] duration-[520ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
-                        isResizing && 'transition-none'
+                            ? 'zyra-sidebar-floating-surface absolute bottom-3 left-2 top-2 z-[60] h-auto overflow-hidden rounded-[22px] transition-[opacity,transform,border-radius,box-shadow,top,bottom,left] duration-[520ms] ease-[cubic-bezier(0.22,1,0.36,1)]'
+                            : 'zyra-sidebar-surface absolute bottom-0 left-0 top-0 h-full overflow-hidden rounded-none shadow-none [contain:layout_paint] transition-[opacity,transform,border-radius,box-shadow,top,bottom,left] duration-[520ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
+                        (isResizing || loadingScreenActive) && 'transition-none'
                     )}
                     style={sidebarStyle}
-                    aria-hidden={collapsed && !previewOpen}
+                    aria-hidden={loadingScreenActive || (collapsed && !previewOpen)}
                 >
             <div className="flex h-full flex-col px-2 py-2.5">
-                <div className="shrink-0 space-y-0.5 px-0.5 pb-3">
-                    <div className="flex items-center gap-1">
-                        <div className="min-w-0 flex-1">
-                            <RailButton
-                                icon={<SquarePen size={15} strokeWidth={1.7} />}
-                                label="New chat"
-                                shortcut="Ctrl N"
-                                disabled={commandPending}
-                                onClick={() => void onCreateChat()}
-                            />
-                        </div>
-                        {collapsed ? (
-                            <div className="flex shrink-0 items-center gap-0.5">
-                                <button
-                                    type="button"
-                                    onClick={togglePreviewPinned}
-                                    className={cn(
-                                        'inline-flex size-8 items-center justify-center rounded-lg text-sparkle-text-muted transition-colors hover:bg-white/[0.045] hover:text-sparkle-text',
-                                        previewPinned && 'text-[#d7d0e3]'
-                                    )}
-                                    title={previewPinned ? 'Unpin bubble sidebar' : 'Pin bubble sidebar'}
-                                    aria-label={previewPinned ? 'Unpin bubble sidebar' : 'Pin bubble sidebar'}
-                                    aria-pressed={previewPinned}
-                                >
-                                    <Pin
-                                        size={14}
-                                        strokeWidth={1.8}
-                                        className={cn(previewPinned && 'rotate-45 fill-current')}
-                                    />
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={expandCollapsedSidebar}
-                                    className="inline-flex size-8 items-center justify-center rounded-lg text-sparkle-text-muted transition-colors hover:bg-white/[0.045] hover:text-sparkle-text"
-                                    title="Expand sidebar"
-                                    aria-label="Expand sidebar"
-                                >
-                                    <PanelLeftOpen size={14} strokeWidth={1.8} />
-                                </button>
-                            </div>
-                        ) : null}
-                    </div>
-                    <RailButton
-                        icon={<NewProjectIcon />}
-                        label="New project"
-                        shortcut="Ctrl Shift N"
-                        disabled={commandPending}
-                        onClick={() => void onCreateProjectChat()}
+                {agentInboxEnabled ? (
+                    <AssistantAgentInboxSidebar
+                        sessions={sessions}
+                        activeSessionId={activeSessionId}
+                        activeThreadId={activeThreadId}
+                        commandPending={commandPending}
+                        projectIconOverrides={projectIconOverrides}
+                        headerActions={baseSidebarActions}
+                        onCreateProjectChat={onCreateProjectChat}
+                        onSelectSession={onSelectSession}
+                        onRename={renameSession}
+                        onOpenContextMenu={openSessionContextMenu}
                     />
-                    <RailButton
-                        icon={<Search size={15} strokeWidth={1.7} />}
-                        label="Search"
-                        shortcut="Ctrl K"
-                        onClick={open}
-                    />
-                </div>
+                ) : (
+                    <>
+                {baseSidebarActions}
 
-                <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-0.5 [scrollbar-width:thin] [scrollbar-color:#383347_transparent]">
+                <div className="assistant-chat-scrollbar assistant-sidebar-scrollbar min-h-0 flex-1 overflow-y-scroll overflow-x-hidden pr-0.5">
                     {pinnedSessions.length > 0 ? (
                         <SidebarSection label="Pinned" className="mt-1">
                             {pinnedSessions.map((session) => (
@@ -746,7 +805,9 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                                 />
                             ))
                         ) : (
-                            <div className="px-2.5 py-1.5 text-[12px] text-sparkle-text-muted/45">No chats yet</div>
+                            <div className="flex h-[30px] min-w-0 items-center rounded-[10px] px-2.5 text-[13px] leading-none text-sparkle-text-secondary/50">
+                                <span className="min-w-0 truncate">No chats yet</span>
+                            </div>
                         )}
                     </SidebarSection>
 
@@ -772,7 +833,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                                                 toggleProject(group.path, expanded)
                                             }}
                                             className={cn(
-                                                'group/project-header flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-[10px] pl-1.5 pr-1 transition-colors hover:bg-white/[0.04] focus:outline-none focus-visible:ring-1 focus-visible:ring-white/10'
+                                                'group/project-header flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-[10px] pl-1.5 pr-1 transition-colors hover:bg-[var(--surface-hover)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]/35'
                                             )}
                                             title={group.path}
                                         >
@@ -795,8 +856,8 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                                                     title={`${group.label} actions`}
                                                     triggerIcon={<MoreHorizontal size={14} />}
                                                     presentation="portal"
-                                                    buttonClassName="h-6 w-6 rounded-[7px] border-transparent bg-transparent p-0 text-sparkle-text-muted/65 hover:border-transparent hover:bg-white/[0.04] hover:text-sparkle-text"
-                                                    openButtonClassName="rounded-[7px] border-transparent bg-white/[0.04] p-0 text-sparkle-text"
+                                                    buttonClassName="h-6 w-6 rounded-[7px] border-transparent bg-transparent p-0 text-sparkle-text-muted/65 hover:border-transparent hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
+                                                    openButtonClassName="rounded-[7px] border-transparent bg-[var(--surface-hover)] p-0 text-sparkle-text"
                                                 />
                                                 <button
                                                     type="button"
@@ -804,7 +865,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                                                         event.stopPropagation()
                                                         void onCreateProjectChat(group.path)
                                                     }}
-                                                    className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-[7px] border border-transparent bg-transparent p-0 text-sparkle-text-muted/58 transition-colors hover:bg-white/[0.04] hover:text-sparkle-text focus:outline-none focus-visible:ring-1 focus-visible:ring-white/10"
+                                                    className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-[7px] border border-transparent bg-transparent p-0 text-sparkle-text-muted/58 transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]/35"
                                                     title="New chat in project"
                                                 >
                                                     <SquarePen size={13} />
@@ -837,14 +898,19 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                         </SidebarSection>
                     ) : null}
                 </div>
+                    </>
+                )}
 
-                <div className="mt-auto shrink-0 border-t border-white/[0.055] pt-2">
+                <div className="mt-auto shrink-0 border-t border-[var(--surface-divider)] pt-2">
                     <button
                         type="button"
                         onClick={() => navigate('/settings')}
-                        className="group flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 text-[13px] leading-none text-[#b9b2c8] transition-colors hover:bg-white/[0.035] hover:text-[#eeeaf7] focus:outline-none focus-visible:ring-1 focus-visible:ring-white/10"
+                        className={cn(
+                            'group flex h-8 w-full cursor-pointer items-center text-sparkle-text-secondary transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]/35',
+                            agentInboxEnabled ? 'gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sparkle-text-muted/80' : 'gap-2.5 rounded-lg px-2.5 text-[13px] leading-none'
+                        )}
                     >
-                        <Settings size={15} strokeWidth={1.75} className="text-[#918aa0] transition-colors group-hover:text-[#c9c2d6]" />
+                        <Settings size={agentInboxEnabled ? 18 : 15} strokeWidth={1.75} className="text-sparkle-text-secondary/70 transition-colors group-hover:text-sparkle-text" />
                         <span className="truncate">Settings</span>
                     </button>
                 </div>
@@ -863,22 +929,19 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                 onSubmit={() => void submitRename()}
             />
             {contextMenuPortal}
-            {!collapsed && onWidthChange && !loadingScreenActive ? (
-                <button
-                    type="button"
-                    aria-label="Resize sidebar"
-                    title="Drag to resize sidebar"
-                    onPointerDown={handleResizePointerDown}
-                    onPointerMove={handleResizePointerMove}
-                    onPointerUp={handleResizePointerEnd}
-                    onPointerCancel={handleResizePointerEnd}
-                    className={cn(
-                        'absolute inset-y-0 right-0 z-20 w-2 cursor-col-resize touch-none bg-transparent transition-colors after:absolute after:inset-y-0 after:right-0 after:w-px after:bg-transparent hover:bg-white/[0.025] hover:after:bg-white/[0.10]',
-                        isResizing && 'bg-white/[0.035] after:bg-white/[0.16]'
-                    )}
-                />
-            ) : null}
                 </aside>
+                {!collapsed && onWidthChange && !loadingScreenActive ? (
+                    <button
+                        type="button"
+                        aria-label="Resize sidebar"
+                        title="Drag to resize sidebar"
+                        onPointerDown={handleResizePointerDown}
+                        onPointerMove={handleResizePointerMove}
+                        onPointerUp={handleResizePointerEnd}
+                        onPointerCancel={handleResizePointerEnd}
+                        className="absolute inset-y-0 right-0 z-20 w-3 translate-x-1/2 cursor-col-resize touch-none bg-transparent"
+                    />
+                ) : null}
             </div>
         </>
     )
@@ -898,7 +961,7 @@ function ChatDeleteConfirmModal(props: {
     return createPortal(
         <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/55 px-4 backdrop-blur-md animate-fadeIn" onClick={onCancel}>
             <div
-                className="w-full max-w-[380px] rounded-2xl border border-white/[0.085] bg-[#1b1829] p-4 shadow-[0_22px_70px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.035)]"
+                className="w-full max-w-[380px] rounded-2xl border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-4 shadow-[0_22px_70px_rgba(0,0,0,0.32)]"
                 onClick={(event) => event.stopPropagation()}
             >
                 <div className="flex items-start gap-3">
@@ -915,7 +978,7 @@ function ChatDeleteConfirmModal(props: {
                                 type="button"
                                 onClick={onCancel}
                                 disabled={deleting}
-                                className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg text-sparkle-text-muted transition-colors hover:bg-white/[0.045] hover:text-sparkle-text disabled:pointer-events-none disabled:opacity-50"
+                                className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg text-sparkle-text-muted transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text disabled:pointer-events-none disabled:opacity-50"
                                 aria-label="Cancel delete"
                             >
                                 <X size={15} />
@@ -931,7 +994,7 @@ function ChatDeleteConfirmModal(props: {
                         type="button"
                         onClick={onCancel}
                         disabled={deleting}
-                        className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-[13px] font-medium text-sparkle-text-secondary transition-colors hover:bg-white/[0.035] hover:text-sparkle-text disabled:pointer-events-none disabled:opacity-50"
+                        className="rounded-lg border border-[var(--surface-divider)] px-3 py-1.5 text-[13px] font-medium text-sparkle-text-secondary transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text disabled:pointer-events-none disabled:opacity-50"
                     >
                         Keep chat
                     </button>
@@ -953,7 +1016,7 @@ function ChatDeleteConfirmModal(props: {
 function SidebarSection(props: { label: string; className?: string; childrenClassName?: string; children: ReactNode }) {
     return (
         <section className={props.className}>
-            <div className="px-2.5 pb-1.5 pt-1 text-[12px] font-medium leading-none text-[#8d849b]/70">
+            <div className="px-2.5 pb-1.5 pt-1 text-[12px] font-medium leading-none text-sparkle-text-secondary/55">
                 {props.label}
             </div>
             <div className={props.childrenClassName || 'space-y-0.5 pl-2 pr-1'}>{props.children}</div>
@@ -978,7 +1041,6 @@ function ChatRow(props: {
         session,
         activeSessionId,
         activeThreadId,
-        commandPending,
         compact = false,
         projectNested = false,
         onSelectSession,
@@ -993,9 +1055,7 @@ function ChatRow(props: {
     const showThreads = isActiveSession && sessionThreads.length > 0
     const statusPill = resolveAssistantThreadStatusPill(
         statusThread,
-        isActiveSession && statusThread?.id === activeThreadId,
-        undefined,
-        { connecting: Boolean(isActiveSession && commandPending && !isThreadBusy(statusThread)) }
+        isActiveSession && statusThread?.id === activeThreadId
     )
     const showStatusPill = Boolean(statusPill && statusPill.showLabel !== false)
     const timeLabel = formatRelativeTime(getSessionLastActivityAt(session))
@@ -1014,13 +1074,12 @@ function ChatRow(props: {
                     void onSelectSession(session.id)
                 }}
                 className={cn(
-                    'group relative flex h-[30px] min-w-0 cursor-pointer items-center gap-2 rounded-[10px] px-2.5 text-left transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-white/10',
+                    'group relative flex h-[30px] min-w-0 cursor-pointer items-center gap-2 rounded-[10px] px-2.5 text-left transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]/35',
                     isActiveSession
-                        ? 'bg-[#403a51] text-[#f1eef8]'
-                        : 'text-[#c8c1d3] hover:bg-white/[0.04] hover:text-[#f1eef8]',
+                        ? 'bg-[var(--surface-active)] text-sparkle-text'
+                        : 'text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text',
                     compact && 'h-7 rounded-[9px]',
-                    projectNested && 'h-7 rounded-[10px] px-2',
-                    projectNested && isActiveSession && 'bg-white/[0.06]'
+                    projectNested && 'h-7 rounded-[10px] px-2'
                 )}
                 title={getSessionDisplayTitle(session)}
             >
@@ -1040,7 +1099,7 @@ function ChatRow(props: {
                             <span>{statusPill.label}</span>
                         </span>
                     ) : null}
-                    <span className="mr-0.5 shrink-0 text-right text-[11px] leading-none tabular-nums text-[#9b93aa]/72 group-hover:hidden">
+                    <span className="mr-0.5 shrink-0 text-right text-[11px] leading-none tabular-nums text-sparkle-text-secondary/60 group-hover:hidden">
                         {timeLabel}
                     </span>
                 </span>
@@ -1050,8 +1109,8 @@ function ChatRow(props: {
                         title="Chat actions"
                         triggerIcon={<MoreHorizontal size={13} />}
                         presentation="portal"
-                        buttonClassName="h-5 w-5 rounded-md border-transparent bg-transparent p-0 text-sparkle-text-muted/55 hover:border-transparent hover:bg-white/[0.05] hover:text-sparkle-text"
-                        openButtonClassName="rounded-md border-transparent bg-white/[0.05] p-0 text-sparkle-text"
+                        buttonClassName="h-5 w-5 rounded-md border-transparent bg-transparent p-0 text-sparkle-text-muted/55 hover:border-transparent hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
+                        openButtonClassName="rounded-md border-transparent bg-[var(--surface-hover)] p-0 text-sparkle-text"
                     />
                 </div>
             </div>
@@ -1068,7 +1127,7 @@ function ChatRow(props: {
                                     'flex h-7 w-full min-w-0 cursor-pointer items-center gap-2 rounded-[9px] px-2 text-left text-[12px] transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-white/10',
                                     isActiveThread
                                         ? 'bg-violet-500/[0.14] text-violet-100'
-                                        : 'text-sparkle-text-muted/70 hover:bg-white/[0.035] hover:text-sparkle-text-secondary'
+                                        : 'text-sparkle-text-muted/70 hover:bg-[var(--surface-hover)] hover:text-sparkle-text-secondary'
                                 )}
                             >
                                 <Bot size={12} className="shrink-0" />
@@ -1089,7 +1148,7 @@ function NewProjectIcon() {
             <Plus
                 size={8}
                 strokeWidth={2}
-                className="absolute -bottom-0.5 -right-0.5 rounded-[3px] bg-[#1b1829]"
+                className="absolute -bottom-0.5 -right-0.5 rounded-[3px] bg-[var(--surface-sidebar)]"
             />
         </span>
     )
@@ -1110,18 +1169,18 @@ function RailButton(props: {
             onClick={onClick}
             disabled={disabled}
             className={cn(
-                'group flex h-7 w-full cursor-pointer items-center gap-2 rounded-[9px] px-2.5 text-left text-[13px] leading-none transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-white/10',
+                'group flex h-7 w-full cursor-pointer items-center gap-2 rounded-[9px] px-2.5 text-left text-[13px] leading-none transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]/35',
                 disabled
-                    ? 'cursor-not-allowed text-[#7e768d]/45'
-                    : 'text-[#b9b2c8] hover:bg-white/[0.03] hover:text-[#eeeaf7]'
+                    ? 'cursor-not-allowed text-sparkle-text-muted/45'
+                    : 'text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text'
             )}
         >
-            <span className={cn('inline-flex h-4 w-4 shrink-0 items-center justify-center text-[#918aa0] transition-colors group-hover:text-[#c9c2d6]', disabled && 'text-[#7e768d]/40')}>
+            <span className={cn('inline-flex h-4 w-4 shrink-0 items-center justify-center text-sparkle-text-secondary/70 transition-colors group-hover:text-sparkle-text', disabled && 'text-sparkle-text-muted/40')}>
                 {icon}
             </span>
             <span className="min-w-0 flex-1 truncate">{label}</span>
             {shortcut ? (
-                <span className="pointer-events-none hidden shrink-0 rounded-md bg-white/[0.07] px-1.5 py-0.5 text-[10px] leading-none text-[#bdb6ca]/80 group-hover:inline-flex">
+                <span className="pointer-events-none hidden shrink-0 rounded-md bg-[var(--surface-hover)] px-1.5 py-0.5 text-[10px] leading-none text-sparkle-text-secondary/80 group-hover:inline-flex">
                     {shortcut}
                 </span>
             ) : null}

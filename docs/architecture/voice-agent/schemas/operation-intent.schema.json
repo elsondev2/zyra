@@ -1,0 +1,274 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zyra.dev/schemas/voice-agent/operation-intent.schema.json",
+  "title": "Zyra side-effect intent and receipt",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "operation_id",
+    "revision",
+    "previous_revision",
+    "conversation_id",
+    "task_id",
+    "attempt_id",
+    "foreground_route_id",
+    "foreground_route_epoch",
+    "foreground_owner_claim_id",
+    "canonical_message_id",
+    "idempotency_key",
+    "operation_class",
+    "consequence",
+    "action_hash",
+    "capability_lease_id",
+    "adapter_id",
+    "protected_payload_ref",
+    "payload_sha256",
+    "redacted_summary",
+    "status",
+    "intent_at",
+    "dispatched_at",
+    "terminal_at",
+    "receipt",
+    "unknown_reason"
+  ],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "operation_id": { "$ref": "common.schema.json#/$defs/id" },
+    "revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "previous_revision": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        { "type": "null" }
+      ]
+    },
+    "conversation_id": { "$ref": "common.schema.json#/$defs/id" },
+    "task_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "attempt_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "foreground_route_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "foreground_route_epoch": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        { "type": "null" }
+      ]
+    },
+    "foreground_owner_claim_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "canonical_message_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "operation_class": {
+      "type": "string",
+      "enum": ["file_write", "command", "git", "network_publish", "deployment", "desktop_control", "canonical_message_commit", "other"]
+    },
+    "consequence": { "type": "string", "enum": ["reversible", "consequential", "irreversible"] },
+    "action_hash": {
+      "oneOf": [
+        { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        { "type": "null" }
+      ]
+    },
+    "capability_lease_id": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/id" },
+        { "type": "null" }
+      ]
+    },
+    "adapter_id": { "$ref": "common.schema.json#/$defs/id" },
+    "protected_payload_ref": { "$ref": "common.schema.json#/$defs/id" },
+    "payload_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "redacted_summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "status": { "type": "string", "enum": ["intended", "dispatched", "succeeded", "failed", "cancelled", "outcome_unknown"] },
+    "intent_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "dispatched_at": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/timestamp" },
+        { "type": "null" }
+      ]
+    },
+    "terminal_at": {
+      "oneOf": [
+        { "$ref": "common.schema.json#/$defs/timestamp" },
+        { "type": "null" }
+      ]
+    },
+    "receipt": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["receipt_id", "outcome", "external_receipt_id", "observed_at", "result_ref"],
+          "properties": {
+            "receipt_id": { "$ref": "common.schema.json#/$defs/id" },
+            "outcome": { "type": "string", "enum": ["succeeded", "failed", "cancelled"] },
+            "external_receipt_id": {
+              "oneOf": [
+                { "type": "string", "minLength": 1, "maxLength": 1000 },
+                { "type": "null" }
+              ]
+            },
+            "observed_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+            "result_ref": {
+              "oneOf": [
+                { "$ref": "common.schema.json#/$defs/sourceRef" },
+                { "type": "null" }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        { "type": "null" }
+      ]
+    },
+    "unknown_reason": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 2000 },
+        { "type": "null" }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "revision": { "const": 1 } },
+        "required": ["revision"]
+      },
+      "then": { "properties": { "previous_revision": { "type": "null" } } },
+      "else": { "properties": { "previous_revision": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 } } }
+    },
+    {
+      "if": {
+        "properties": { "operation_class": { "const": "canonical_message_commit" } },
+        "required": ["operation_class"]
+      },
+      "then": {
+        "properties": {
+          "foreground_route_id": { "$ref": "common.schema.json#/$defs/id" },
+          "foreground_route_epoch": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+          "foreground_owner_claim_id": { "$ref": "common.schema.json#/$defs/id" },
+          "canonical_message_id": { "$ref": "common.schema.json#/$defs/id" }
+        }
+      },
+      "else": {
+        "properties": {
+          "task_id": { "$ref": "common.schema.json#/$defs/id" },
+          "attempt_id": { "$ref": "common.schema.json#/$defs/id" },
+          "foreground_route_id": { "type": "null" },
+          "foreground_route_epoch": { "type": "null" },
+          "foreground_owner_claim_id": { "type": "null" },
+          "canonical_message_id": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "intended" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "dispatched_at": { "type": "null" },
+          "terminal_at": { "type": "null" },
+          "receipt": { "type": "null" },
+          "unknown_reason": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "dispatched" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "dispatched_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+          "terminal_at": { "type": "null" },
+          "receipt": { "type": "null" },
+          "unknown_reason": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "enum": ["succeeded", "failed", "cancelled"] } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "terminal_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+          "receipt": { "type": "object" },
+          "unknown_reason": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "succeeded" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "dispatched_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+          "receipt": { "type": "object", "properties": { "outcome": { "const": "succeeded" } } }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "failed" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "dispatched_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+          "receipt": { "type": "object", "properties": { "outcome": { "const": "failed" } } }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "cancelled" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": { "receipt": { "type": "object", "properties": { "outcome": { "const": "cancelled" } } } }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "outcome_unknown" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "dispatched_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+          "terminal_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+          "receipt": { "type": "null" },
+          "unknown_reason": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

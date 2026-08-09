@@ -1,0 +1,356 @@
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { ArrowLeft, PanelLeftOpen, Pin, Search, X } from 'lucide-react'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { useSettings } from '@/lib/settings'
+import { cn } from '@/lib/utils'
+import {
+    ASSISTANT_SIDEBAR_COLLAPSE_MORPH_MS,
+    ASSISTANT_SIDEBAR_PREVIEW_CLOSE_MS,
+    readAssistantBubblePreviewPinned,
+    writeAssistantBubblePreviewPinned
+} from '../assistant/assistant-sidebar-preview-state'
+import { findSettingsNavigationItem, SETTINGS_NAVIGATION_GROUPS } from './settings-navigation'
+
+const SETTINGS_SIDEBAR_MIN_WIDTH = 260
+const SETTINGS_SIDEBAR_MAX_WIDTH = 420
+const SETTINGS_SIDEBAR_WIDTH_KEY = 'assistant-left-sidebar-width'
+
+function clampSidebarWidth(width: number) {
+    return Math.max(SETTINGS_SIDEBAR_MIN_WIDTH, Math.min(SETTINGS_SIDEBAR_MAX_WIDTH, Math.round(width || 322)))
+}
+
+export default function SettingsShell() {
+    const location = useLocation()
+    const navigate = useNavigate()
+    const { settings, updateSettings } = useSettings()
+    const [query, setQuery] = useState('')
+    const [sidebarWidth, setSidebarWidth] = useState(() => clampSidebarWidth(Number(localStorage.getItem(SETTINGS_SIDEBAR_WIDTH_KEY))))
+    const [resizingSidebar, setResizingSidebar] = useState(false)
+    const resizeStateRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null)
+    const contentScrollRef = useRef<HTMLElement | null>(null)
+    const previewCloseTimerRef = useRef<number | null>(null)
+    const wasCollapsedRef = useRef(settings.sidebarCollapsed)
+    const [previewPinned, setPreviewPinned] = useState(readAssistantBubblePreviewPinned)
+    const [previewOpen, setPreviewOpen] = useState(previewPinned)
+    const normalizedQuery = query.trim().toLowerCase()
+    const activeItem = findSettingsNavigationItem(location.pathname)
+    const visibleGroups = useMemo(() => SETTINGS_NAVIGATION_GROUPS
+        .map((group) => ({
+            ...group,
+            items: normalizedQuery
+                ? group.items.filter((item) => `${item.label} ${item.description} ${item.keywords || ''}`.toLowerCase().includes(normalizedQuery))
+                : group.items
+        }))
+        .filter((group) => group.items.length > 0), [normalizedQuery])
+
+    useLayoutEffect(() => {
+        const scrollContainer = contentScrollRef.current
+        if (!scrollContainer) return
+        scrollContainer.scrollTop = 0
+        scrollContainer.scrollLeft = 0
+    }, [location.pathname])
+
+    useEffect(() => {
+        const toggleSidebar = () => updateSettings({ sidebarCollapsed: !settings.sidebarCollapsed })
+        window.addEventListener('zyra:toggle-assistant-sidebar', toggleSidebar)
+        return () => window.removeEventListener('zyra:toggle-assistant-sidebar', toggleSidebar)
+    }, [settings.sidebarCollapsed, updateSettings])
+
+    useEffect(() => {
+        window.dispatchEvent(new CustomEvent('zyra:assistant-sidebar-state', {
+            detail: { collapsed: settings.sidebarCollapsed, width: sidebarWidth }
+        }))
+    }, [settings.sidebarCollapsed, sidebarWidth])
+
+    useEffect(() => {
+        writeAssistantBubblePreviewPinned(previewPinned)
+    }, [previewPinned])
+
+    const openPreview = useCallback(() => {
+        if (previewCloseTimerRef.current !== null) {
+            window.clearTimeout(previewCloseTimerRef.current)
+            previewCloseTimerRef.current = null
+        }
+        setPreviewOpen(true)
+    }, [])
+
+    const schedulePreviewClose = useCallback((delayMs = ASSISTANT_SIDEBAR_PREVIEW_CLOSE_MS) => {
+        if (previewPinned) return
+        if (previewCloseTimerRef.current !== null) window.clearTimeout(previewCloseTimerRef.current)
+        previewCloseTimerRef.current = window.setTimeout(() => {
+            previewCloseTimerRef.current = null
+            setPreviewOpen(false)
+        }, delayMs)
+    }, [previewPinned])
+
+    const forceSchedulePreviewClose = useCallback((delayMs = ASSISTANT_SIDEBAR_PREVIEW_CLOSE_MS) => {
+        if (previewCloseTimerRef.current !== null) window.clearTimeout(previewCloseTimerRef.current)
+        previewCloseTimerRef.current = window.setTimeout(() => {
+            previewCloseTimerRef.current = null
+            setPreviewOpen(false)
+        }, delayMs)
+    }, [])
+
+    useEffect(() => {
+        const wasCollapsed = wasCollapsedRef.current
+        wasCollapsedRef.current = settings.sidebarCollapsed
+
+        if (!settings.sidebarCollapsed) {
+            if (previewCloseTimerRef.current !== null) {
+                window.clearTimeout(previewCloseTimerRef.current)
+                previewCloseTimerRef.current = null
+            }
+            setPreviewOpen(false)
+            setPreviewPinned(false)
+            return
+        }
+
+        if (!wasCollapsed) {
+            setPreviewOpen(true)
+            schedulePreviewClose(ASSISTANT_SIDEBAR_COLLAPSE_MORPH_MS)
+        }
+    }, [schedulePreviewClose, settings.sidebarCollapsed])
+
+    const expandCollapsedSidebar = useCallback(() => {
+        setPreviewPinned(false)
+        window.dispatchEvent(new CustomEvent('zyra:toggle-assistant-sidebar'))
+    }, [])
+
+    const togglePreviewPinned = useCallback(() => {
+        if (previewPinned) {
+            setPreviewPinned(false)
+            forceSchedulePreviewClose()
+            return
+        }
+        setPreviewPinned(true)
+        openPreview()
+    }, [forceSchedulePreviewClose, openPreview, previewPinned])
+
+    const handleResizePointerDown = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+        if (settings.sidebarCollapsed || event.button !== 0) return
+        event.preventDefault()
+        event.currentTarget.setPointerCapture(event.pointerId)
+        resizeStateRef.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: sidebarWidth }
+        setResizingSidebar(true)
+        document.body.style.cursor = 'col-resize'
+        document.body.style.userSelect = 'none'
+    }, [settings.sidebarCollapsed, sidebarWidth])
+
+    const handleResizePointerMove = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+        const resizeState = resizeStateRef.current
+        if (!resizeState || resizeState.pointerId !== event.pointerId) return
+        event.preventDefault()
+        setSidebarWidth(clampSidebarWidth(resizeState.startWidth + event.clientX - resizeState.startX))
+    }, [])
+
+    const handleResizePointerEnd = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+        const resizeState = resizeStateRef.current
+        if (!resizeState || resizeState.pointerId !== event.pointerId) return
+        event.preventDefault()
+        resizeStateRef.current = null
+        setResizingSidebar(false)
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+        const nextWidth = clampSidebarWidth(resizeState.startWidth + event.clientX - resizeState.startX)
+        setSidebarWidth(nextWidth)
+        localStorage.setItem(SETTINGS_SIDEBAR_WIDTH_KEY, String(nextWidth))
+        document.body.style.removeProperty('cursor')
+        document.body.style.removeProperty('user-select')
+    }, [])
+
+    useEffect(() => () => {
+        if (previewCloseTimerRef.current !== null) window.clearTimeout(previewCloseTimerRef.current)
+        document.body.style.removeProperty('cursor')
+        document.body.style.removeProperty('user-select')
+    }, [])
+
+    const sidebarLayoutStyle = {
+        width: settings.sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
+        willChange: 'width'
+    } as const
+    const sidebarSurfaceStyle = settings.sidebarCollapsed
+        ? {
+            width: `${sidebarWidth}px`,
+            opacity: previewOpen ? 1 : 0,
+            pointerEvents: previewOpen ? 'auto' : 'none',
+            transform: previewOpen ? 'translate3d(0, 0, 0)' : 'translate3d(-18px, 0, 0)',
+            transformOrigin: 'left center',
+            willChange: 'opacity, transform'
+        } as const
+        : {
+            width: `${sidebarWidth}px`,
+            opacity: 1,
+            pointerEvents: 'auto',
+            transform: 'translate3d(0, 0, 0)',
+            transformOrigin: 'left center',
+            willChange: 'width, opacity'
+        } as const
+
+    return (
+        <div className="zyra-settings-shell flex h-full min-h-0 overflow-hidden bg-[var(--settings-bg)] text-[var(--settings-text)]">
+            {settings.sidebarCollapsed ? (
+                <div
+                    className="pointer-events-auto fixed bottom-0 left-0 top-[34px] z-[59] w-6"
+                    onMouseEnter={openPreview}
+                    onMouseLeave={() => schedulePreviewClose()}
+                    aria-hidden="true"
+                    data-settings-sidebar-peek="true"
+                >
+                    <div
+                        className={cn(
+                            'absolute left-1 top-1/2 h-16 w-1.5 -translate-y-1/2 rounded-full border border-[var(--surface-divider)] bg-[var(--surface-scrollbar)] transition-[opacity,transform,background-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+                            previewOpen ? '-translate-x-1 opacity-0' : 'translate-x-0 opacity-100 hover:bg-[var(--surface-scrollbar-hover)]'
+                        )}
+                    />
+                </div>
+            ) : null}
+            <div
+                className={cn(
+                    'relative h-full shrink-0 overflow-visible transition-[width] duration-[520ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+                    !settings.sidebarCollapsed && '[contain:layout]',
+                    resizingSidebar && 'transition-none'
+                )}
+                style={sidebarLayoutStyle}
+                aria-hidden={settings.sidebarCollapsed && !previewOpen}
+            >
+                <aside
+                    onMouseEnter={() => {
+                        if (settings.sidebarCollapsed) openPreview()
+                    }}
+                    onMouseLeave={() => {
+                        if (settings.sidebarCollapsed) schedulePreviewClose()
+                    }}
+                    aria-hidden={settings.sidebarCollapsed && !previewOpen}
+                    className={cn(
+                        settings.sidebarCollapsed
+                            ? 'zyra-sidebar-floating-surface absolute bottom-3 left-2 top-2 z-[60] flex h-auto flex-col overflow-hidden rounded-[22px] transition-[opacity,transform,border-radius,box-shadow,top,bottom,left] duration-[520ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none'
+                            : 'zyra-sidebar-surface absolute bottom-0 left-0 top-0 flex h-full flex-col overflow-hidden rounded-none shadow-none [contain:layout_paint] transition-[opacity,transform,border-radius,box-shadow,top,bottom,left] duration-[520ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+                        resizingSidebar && 'transition-none'
+                    )}
+                    style={sidebarSurfaceStyle}
+                    data-settings-sidebar-bubble={settings.sidebarCollapsed ? 'true' : 'false'}
+                >
+                    <div className="flex h-full flex-col">
+                <div className="shrink-0 px-2.5 pb-2 pt-2.5">
+                    <div className="flex items-center gap-1">
+                    <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-[var(--settings-border)] bg-[var(--settings-control)] px-2 text-[var(--settings-text-muted)] transition-colors hover:border-[var(--settings-border-strong)] focus-within:border-[var(--accent-primary)] focus-within:text-[var(--settings-text-secondary)]">
+                        <Search size={13} strokeWidth={1.8} className="shrink-0" />
+                        <input
+                            value={query}
+                            onChange={(event) => setQuery(event.target.value)}
+                            placeholder="Find settings"
+                            aria-label="Find settings"
+                            className="min-w-0 flex-1 bg-transparent text-[12px] text-[var(--settings-text)] outline-none placeholder:text-[var(--settings-text-faint)]"
+                        />
+                        {query ? (
+                            <button
+                                type="button"
+                                onClick={() => setQuery('')}
+                                className="inline-flex size-5 shrink-0 items-center justify-center rounded text-[var(--settings-text-muted)] hover:bg-[var(--settings-nav-hover)] hover:text-[var(--settings-text)]"
+                                aria-label="Clear settings search"
+                            >
+                                <X size={11} strokeWidth={2} />
+                            </button>
+                        ) : null}
+                    </label>
+                    {settings.sidebarCollapsed ? (
+                        <div className="flex shrink-0 items-center gap-0.5">
+                            <button
+                                type="button"
+                                onClick={togglePreviewPinned}
+                                className={cn(
+                                    'inline-flex size-8 items-center justify-center rounded-md text-[var(--settings-text-muted)] transition-colors hover:bg-[var(--settings-nav-hover)] hover:text-[var(--settings-text)]',
+                                    previewPinned && 'text-[var(--settings-text-secondary)]'
+                                )}
+                                title={previewPinned ? 'Unpin bubble sidebar' : 'Pin bubble sidebar'}
+                                aria-label={previewPinned ? 'Unpin bubble sidebar' : 'Pin bubble sidebar'}
+                                aria-pressed={previewPinned}
+                            >
+                                <Pin size={14} strokeWidth={1.8} className={cn(previewPinned && 'rotate-45 fill-current')} />
+                            </button>
+                            <button
+                                type="button"
+                                onClick={expandCollapsedSidebar}
+                                className="inline-flex size-8 items-center justify-center rounded-md text-[var(--settings-text-muted)] transition-colors hover:bg-[var(--settings-nav-hover)] hover:text-[var(--settings-text)]"
+                                title="Expand sidebar"
+                                aria-label="Expand sidebar"
+                            >
+                                <PanelLeftOpen size={14} strokeWidth={1.8} />
+                            </button>
+                        </div>
+                    ) : null}
+                    </div>
+                </div>
+
+                <nav className="settings-sidebar-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3" aria-label="Settings sections">
+                    {visibleGroups.length ? visibleGroups.map((group) => (
+                        <div key={group.id} className="mb-3 last:mb-0">
+                            <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.09em] text-[var(--settings-text-faint)]">
+                                {group.label}
+                            </div>
+                            <div className="space-y-0.5">
+                                {group.items.map((item) => {
+                                    const Icon = item.icon
+                                    const isActive = location.pathname === item.to
+                                        || location.pathname.startsWith(`${item.to}/`)
+                                        || item.legacyPaths?.some((path) => location.pathname === path || location.pathname.startsWith(`${path}/`))
+                                    return (
+                                        <NavLink
+                                            key={item.id}
+                                            to={item.to}
+                                            aria-current={isActive ? 'page' : undefined}
+                                            className={cn(
+                                                'group flex min-h-8 items-center gap-2 rounded-md px-2 text-[12px] transition-colors duration-100',
+                                                isActive
+                                                    ? 'bg-[var(--settings-nav-active)] font-medium text-[var(--settings-text)]'
+                                                    : 'text-[var(--settings-text-secondary)] hover:bg-[var(--settings-nav-hover)] hover:text-[var(--settings-text)]'
+                                            )}
+                                        >
+                                            <Icon
+                                                size={14}
+                                                strokeWidth={isActive ? 1.9 : 1.7}
+                                                className={cn('shrink-0 transition-colors', isActive ? 'text-[var(--settings-text-secondary)]' : 'text-[var(--settings-text-faint)] group-hover:text-[var(--settings-text-secondary)]')}
+                                            />
+                                            <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                                        </NavLink>
+                                    )
+                                })}
+                            </div>
+                        </div>
+                    )) : (
+                        <div className="px-2 py-6 text-center text-[12px] text-[var(--settings-text-muted)]">No matching sections</div>
+                    )}
+                </nav>
+
+                <div className="mx-2 mt-auto shrink-0 border-t border-[var(--surface-divider)] pb-2.5 pt-2">
+                    <button
+                        type="button"
+                        onClick={() => navigate('/assistant')}
+                        className="group flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-[13px] font-medium text-[var(--settings-text-secondary)] transition-colors hover:bg-[var(--settings-nav-hover)] hover:text-[var(--settings-text)]"
+                    >
+                        <ArrowLeft size={14} strokeWidth={1.8} className="text-[var(--settings-text-faint)] transition-[color,transform] group-hover:-translate-x-0.5 group-hover:text-[var(--settings-text-secondary)]" />
+                        <span className="min-w-0 flex-1 truncate">Back to chats</span>
+                    </button>
+                </div>
+                {!settings.sidebarCollapsed ? (
+                    <button
+                        type="button"
+                        aria-label="Resize settings sidebar"
+                        title="Drag to resize sidebar"
+                        onPointerDown={handleResizePointerDown}
+                        onPointerMove={handleResizePointerMove}
+                        onPointerUp={handleResizePointerEnd}
+                        onPointerCancel={handleResizePointerEnd}
+                        className="absolute inset-y-0 right-0 z-20 w-3 translate-x-1/2 cursor-col-resize touch-none bg-transparent"
+                    />
+                ) : null}
+                    </div>
+                </aside>
+            </div>
+
+            <section ref={contentScrollRef} className="settings-content-scrollbar min-w-0 flex-1 overflow-y-auto overscroll-contain bg-[var(--settings-bg)]" aria-labelledby="settings-active-page-title">
+                <h2 id="settings-active-page-title" className="sr-only">{activeItem.label}</h2>
+                <Outlet />
+            </section>
+        </div>
+    )
+}

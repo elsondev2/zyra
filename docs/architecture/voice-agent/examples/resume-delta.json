@@ -1,0 +1,103 @@
+{
+  "schema_version": 3,
+  "delta_id": "delta_resume_demo_01",
+  "conversation_id": "chat_resume_demo",
+  "base_packet_id": "packet_resume_demo_01",
+  "from_context_version": 7,
+  "to_context_version": 8,
+  "from_watermarks": {
+    "conversation_sequence": 18,
+    "foreground_route_epoch": 2,
+    "task_sequence": 10,
+    "attempt_sequence": 11,
+    "context_sequence": 7,
+    "decision_sequence": 3,
+    "approval_sequence": 0,
+    "capability_lease_sequence": 0,
+    "operation_sequence": 1,
+    "agent_checkpoint_sequence": 9,
+    "narration_delivery_sequence": 12
+  },
+  "to_watermarks": {
+    "conversation_sequence": 19,
+    "foreground_route_epoch": 2,
+    "task_sequence": 10,
+    "attempt_sequence": 11,
+    "context_sequence": 8,
+    "decision_sequence": 3,
+    "approval_sequence": 0,
+    "capability_lease_sequence": 0,
+    "operation_sequence": 1,
+    "agent_checkpoint_sequence": 9,
+    "narration_delivery_sequence": 12
+  },
+  "changes": [
+    {
+      "change_type": "conversation_message",
+      "record": {
+        "message_id": "message_resume_user_08",
+        "conversation_sequence": 19,
+        "role": "user",
+        "modality": "text",
+        "foreground_route_id": "foreground_route_voice_02",
+        "route_epoch": 2,
+        "canonical_commit_receipt_id": null,
+        "content": "Include a concrete threat model in the published specification.",
+        "created_at": "2026-08-02T12:06:00Z"
+      }
+    },
+    {
+      "change_type": "context_revision",
+      "record": {
+        "schema_version": 1,
+        "conversation_id": "chat_resume_demo",
+        "version": 8,
+        "parent_version": 7,
+        "scope": {
+          "kind": "task",
+          "target_id": "task_resume_voice_docs"
+        },
+        "actor": {
+          "role": "user",
+          "id": "user_local"
+        },
+        "changes": [
+          {
+            "change_id": "constraint_resume_include_threat_model",
+            "kind": "constraint.added",
+            "content": {
+              "text": "Include a concrete threat model in the published specification."
+            },
+            "propagate_to_descendants": true,
+            "source_refs": [
+              {
+                "kind": "message",
+                "id": "message_resume_user_08",
+                "excerpt": "Include a concrete threat model."
+              }
+            ]
+          }
+        ],
+        "created_at": "2026-08-02T12:06:01Z"
+      }
+    }
+  ],
+  "safety_state": {
+    "permission_epoch": 2,
+    "emergency_stop_active": false,
+    "active_capability_lease_ids": [],
+    "revocation_watermark": 4,
+    "primary_slot_attempt_id": "attempt_resume_01",
+    "writer_lock": {
+      "task_id": "task_resume_voice_docs",
+      "attempt_id": "attempt_resume_01",
+      "writer_lock_ids": [
+        "writer_lock_resume_docs"
+      ],
+      "scope": "documentation worktree"
+    }
+  },
+  "critical_records_complete": true,
+  "canonical_sha256": "bfa05885e8e7147ee54d844e159c2eb1399dd3793bc536323945f0c589dffb40",
+  "generated_at": "2026-08-02T12:06:02Z"
+}

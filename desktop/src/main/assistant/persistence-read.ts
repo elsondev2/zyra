@@ -127,6 +127,17 @@ export function readHydratedThreadDetails(
     return detailsByThreadId
 }
 
+export function readAssistantTimelineProjectionRows(
+    db: SqlDatabase,
+    threadId: string
+): Pick<AssistantHydratedThreadData, 'messages' | 'activities'> {
+    const details = readThreadDetails(db, threadId)
+    return {
+        messages: details?.messages || [],
+        activities: details?.activities || []
+    }
+}
+
 function readThreadDetails(db: SqlDatabase, threadId: string): AssistantHydratedThreadData | null {
     if (!threadId) return null
 
@@ -334,12 +345,15 @@ function readAssistantSessionSummaries(db: SqlDatabase, playground: AssistantSna
             agent_nickname,
             agent_role,
             model,
+            thinking,
+            profile,
             cwd,
             message_count,
             last_seen_completed_turn_id,
             runtime_mode,
             interaction_mode,
             state,
+            canonical_presence_json,
             last_error,
             created_at,
             updated_at,
@@ -354,7 +368,7 @@ function readAssistantSessionSummaries(db: SqlDatabase, playground: AssistantSna
         const sessionId = String(row[1] || '')
         const session = sessions.get(sessionId)
         if (!session) continue
-        const persistedMessageCount = toNumber(row[11])
+        const persistedMessageCount = toNumber(row[13])
         const messageCount = messageCountByThreadId.get(threadId) ?? 0
         const thread: AssistantThread = summarizeThread({
             id: threadId,
@@ -366,21 +380,24 @@ function readAssistantSessionSummaries(db: SqlDatabase, playground: AssistantSna
             agentNickname: toNullableString(row[7]),
             agentRole: toNullableString(row[8]),
             model: String(row[9] || ''),
-            cwd: toNullableString(row[10]),
+            thinking: toNullableString(row[10]) as AssistantThread['thinking'],
+            profile: toNullableString(row[11]),
+            cwd: toNullableString(row[12]),
             messageCount,
             activityCount: activityCountByThreadId.get(threadId) ?? 0,
             proposedPlanCount: proposedPlanCountByThreadId.get(threadId) ?? 0,
-            lastSeenCompletedTurnId: toNullableString(row[12]),
-            runtimeMode: String(row[13] || 'approval-required') as AssistantThread['runtimeMode'],
-            interactionMode: String(row[14] || 'default') as AssistantThread['interactionMode'],
-            state: String(row[15] || 'idle') as AssistantThread['state'],
-            lastError: toNullableString(row[16]),
-            createdAt: String(row[17] || new Date(0).toISOString()),
-            updatedAt: String(row[18] || new Date(0).toISOString()),
-            latestTurn: parseJson(row[19], null),
+            lastSeenCompletedTurnId: toNullableString(row[14]),
+            runtimeMode: String(row[15] || 'approval-required') as AssistantThread['runtimeMode'],
+            interactionMode: String(row[16] || 'default') as AssistantThread['interactionMode'],
+            state: String(row[17] || 'idle') as AssistantThread['state'],
+            canonicalPresence: parseJson(row[18], undefined),
+            lastError: toNullableString(row[19]),
+            createdAt: String(row[20] || new Date(0).toISOString()),
+            updatedAt: String(row[21] || new Date(0).toISOString()),
+            latestTurn: parseJson(row[22], null),
             hasPendingApprovals: (pendingApprovalCountByThreadId.get(threadId) ?? 0) > 0,
             hasPendingUserInputs: (pendingUserInputCountByThreadId.get(threadId) ?? 0) > 0,
-            hasActivePlan: Boolean(parseJson(row[20], null)),
+            hasActivePlan: Boolean(parseJson(row[23], null)),
             activePlan: null,
             messages: [],
             proposedPlans: [],

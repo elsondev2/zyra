@@ -129,12 +129,15 @@ export function initializeAssistantPersistenceSchema(db: SqlDatabase): void {
             agent_nickname TEXT,
             agent_role TEXT,
             model TEXT NOT NULL,
+            thinking TEXT,
+            profile TEXT,
             cwd TEXT,
             message_count INTEGER NOT NULL,
             last_seen_completed_turn_id TEXT,
             runtime_mode TEXT NOT NULL,
             interaction_mode TEXT NOT NULL,
             state TEXT NOT NULL,
+            canonical_presence_json TEXT,
             last_error TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -312,6 +315,9 @@ export function initializeAssistantPersistenceSchema(db: SqlDatabase): void {
     ensureTableColumn(db, 'assistant_threads', 'subagent_depth', 'INTEGER')
     ensureTableColumn(db, 'assistant_threads', 'agent_nickname', 'TEXT')
     ensureTableColumn(db, 'assistant_threads', 'agent_role', 'TEXT')
+    ensureTableColumn(db, 'assistant_threads', 'thinking', 'TEXT')
+    ensureTableColumn(db, 'assistant_threads', 'profile', 'TEXT')
+    ensureTableColumn(db, 'assistant_threads', 'canonical_presence_json', 'TEXT')
     ensureTableColumn(db, 'assistant_messages', 'timeline_sequence', 'INTEGER')
     ensureTableColumn(db, 'assistant_activities', 'timeline_sequence', 'INTEGER')
     ensureTableColumn(db, 'assistant_proposed_plans', 'timeline_sequence', 'INTEGER')

@@ -266,6 +266,37 @@ assert.deepEqual(
 const workSummary = collapsedTurnRows[1]
 assert.equal(workSummary?.kind === 'turn-work-summary' ? workSummary.rows.length : 0, 5)
 
+const aliasedCompletedCompaction: AssistantActivity = {
+    ...completedCompactionActivity,
+    id: 'context-compaction-app-server-turn-alias',
+    turnId: 'app-server-turn-alias',
+    createdAt: iso(450),
+    payload: {
+        ...completedCompactionActivity.payload,
+        startedAt: iso(425),
+        completedAt: iso(450)
+    }
+}
+const collapsedRowsWithTurnAlias = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries(messages, [...activities, aliasedCompletedCompaction]), false, null),
+    messages,
+    latestAssistantMessageId: 'final',
+    latestTurnStartedAt: iso(0),
+    isWorking: false
+})
+assert.deepEqual(
+    collapsedRowsWithTurnAlias.map((row) => row.kind),
+    ['message', 'turn-work-summary', 'message'],
+    'a live app-server compaction ID inside one canonical user/final boundary cannot expose the completed work'
+)
+assert.equal(
+    collapsedRowsWithTurnAlias[1]?.kind === 'turn-work-summary'
+        ? collapsedRowsWithTurnAlias[1].rows.some((row) => row.id === aliasedCompletedCompaction.id)
+        : false,
+    true,
+    'the aliased lifecycle row remains available inside the completed work disclosure'
+)
+
 const pendingNextUser: AssistantMessage = {
     ...message({ id: 'pending-next-user', role: 'user', turnId: 'pending-next-turn', millisecond: 800, text: 'Start the next task.' }),
     turnId: null
@@ -289,6 +320,59 @@ assert.equal(
     summariesAfterSendingNextMessage[1]?.kind === 'turn-work-summary' ? summariesAfterSendingNextMessage[1].turnId : 'unexpected',
     null,
     'an optimistic user message waits for its own turn ID instead of borrowing the previous turn ID'
+)
+
+const freshTurnId = 'turn-after-stale-running-ledger'
+const freshTurnStartedAt = iso(900)
+const freshUser = message({
+    id: 'fresh-user-after-stale-running-ledger',
+    role: 'user',
+    turnId: freshTurnId,
+    millisecond: 900,
+    text: 'Run one more independent task.'
+})
+const staleRunningUsage: AssistantSessionTurnUsageEntry = {
+    id: turnId,
+    sessionId: 'session-activity-rail',
+    threadId: 'thread-activity-rail',
+    model: 'openai-codex/gpt-5.5',
+    state: 'running',
+    requestedAt: iso(0),
+    startedAt: iso(0),
+    completedAt: null,
+    assistantMessageId: 'final',
+    effort: 'high',
+    serviceTier: null,
+    usage: null,
+    updatedAt: iso(800)
+}
+const rowsWithStaleRunningLedger = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries([...messages, freshUser], activities), true, freshTurnStartedAt),
+    messages: [...messages, freshUser],
+    turnUsageById: new Map([[turnId, staleRunningUsage]]),
+    latestAssistantMessageId: null,
+    latestTurnStartedAt: freshTurnStartedAt,
+    isWorking: true
+})
+const summaryAfterStaleRunningLedger = rowsWithStaleRunningLedger.find((row) => (
+    row.kind === 'turn-work-summary' && row.running
+))
+assert.equal(
+    summaryAfterStaleRunningLedger?.kind === 'turn-work-summary' ? summaryAfterStaleRunningLedger.turnId : null,
+    freshTurnId,
+    'the newest visible prompt must outrank a stale running turn ledger entry'
+)
+assert.equal(
+    summaryAfterStaleRunningLedger?.kind === 'turn-work-summary' ? summaryAfterStaleRunningLedger.startedAt : null,
+    freshTurnStartedAt,
+    'a new prompt timer must not inherit the stale turn start time'
+)
+assert.equal(
+    rowsWithStaleRunningLedger.some((row) => (
+        row.kind === 'turn-work-summary' && !row.running && row.turnId === turnId
+    )),
+    true,
+    'completed work remains collapsed while the independent next turn is running'
 )
 const workSummaryMarkup = renderToStaticMarkup(createElement(TimelineTurnWorkSummary, {
     startedAt: iso(0),
@@ -380,13 +464,14 @@ const historyStoreSource = readFileSync(new URL('../src/renderer/src/lib/assista
 const historyStateSource = readFileSync(new URL('../src/renderer/src/lib/assistant/assistant-history-state.ts', import.meta.url), 'utf8')
 assert.equal(timelineSource.includes('<AssistantVirtualTimeline'), true, 'the timeline delegates mounting and measurement to the virtual list owner')
 assert.equal(virtualTimelineSource.includes('<LegendList'), true, 'long histories render through LegendList rather than renderer-only slicing')
-assert.equal(virtualTimelineSource.includes('maintainVisibleContentPosition={{ data: true }}'), true, 'database-page prepends preserve the measured visible anchor')
+assert.equal(virtualTimelineSource.includes('maintainVisibleContentPosition={{ data: true, size: false }}'), true, 'database-page prepends preserve the measured visible anchor without correcting ordinary row resizes under the pointer')
 assert.equal(virtualTimelineSource.includes('itemLayout: !disclosureLayoutActive'), true, 'user disclosures suspend item-layout end-follow while their row height animates')
 assert.equal(virtualTimelineSource.includes('layout: !disclosureLayoutActive'), true, 'viewport layout follow cannot compete with an active disclosure anchor')
 assert.equal(virtualTimelineSource.includes("addEventListener('pointerdown', handleTimelinePointerDown"), true, 'timeline controls suspend layout follow before their React click changes row height')
 assert.equal(virtualTimelineSource.includes('ASSISTANT_TIMELINE_DISCLOSURE_TOGGLE_EVENT'), true, 'automatic work collapse uses the same bounded disclosure window')
-assert.equal(virtualTimelineSource.includes('completionFollowActiveRef'), true, 'turn completion owns a bounded end-follow window through work collapse and Markdown handoff')
-assert.equal(virtualTimelineSource.includes('if (!scrollElement || !followingEndRef.current'), true, 'completion follow only activates when the viewer was already following the response end')
+assert.equal(virtualTimelineSource.includes('completionFollowTimerRef'), true, 'turn completion owns one bounded post-layout end correction through work collapse and Markdown handoff')
+assert.equal(virtualTimelineSource.includes("scrollModeRef.current !== 'following-end'"), true, 'completion follow only activates when the viewer was already following the response end')
+assert.equal(virtualTimelineSource.includes('COMPLETION_END_FOLLOW_DELAYS_MS'), false, 'turn completion cannot replay a viewport correction ladder')
 assert.equal(historyStoreSource.includes('getHistoryPage({'), true, 'earlier history comes from the main-process SQLite page contract')
 assert.equal(historyStateSource.includes('5 * 60_000'), true, 'recent thread detail is retained for a bounded five-minute idle window')
 assert.equal(timelineSource.includes('compactLiveNarration: true'), true, 'the staged preview remains mounted so it can retain the last settled narration')

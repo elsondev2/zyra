@@ -327,7 +327,7 @@ export function ProjectDetailsHeaderSection(props: ProjectDetailsHeaderSectionPr
                                 <GitBranch size={isCondensedLayout ? 14 : 15} />
                                 <span className="hidden sm:inline">Git</span>
                                 {changedFiles.length > 0 && (
-                                    <span className="rounded-full bg-[#E2C08D]/20 px-1.5 py-0.5 text-[#E2C08D]">
+                                    <span className="rounded-full bg-amber-500/20 px-1.5 py-0.5 text-amber-300">
                                         <DiffStats
                                             additions={workingChangesDiff.additions}
                                             deletions={workingChangesDiff.deletions}

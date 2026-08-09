@@ -6,9 +6,13 @@ import type {
 } from '../src/shared/assistant/contracts'
 import { deriveAssistantRuntimeStatus } from '../src/renderer/src/lib/assistant/assistant-store-runtime'
 import { shouldAutoReconnectAssistantOnStartup } from '../src/renderer/src/lib/assistant/assistant-runtime-preferences'
+import { areAssistantSessionsRailSelectionsEqual } from '../src/renderer/src/lib/assistant/assistant-store-selection-helpers'
 import { getAssistantThreadPhase } from '../src/renderer/src/lib/assistant/selectors'
+import { toAssistantThreadShell } from '../src/main/assistant/persistence-snapshot'
+import { TrailingAsyncReconciler } from '../src/main/assistant/trailing-async-reconciler'
 import { shouldAutoReconnectAssistantThread } from '../src/renderer/src/pages/assistant/assistant-connection-recovery-policy'
-import { resolveCanonicalPresenceThreadState } from '../src/main/assistant/service-canonical-presence'
+import { getAssistantThreadLastMessageAt, resolveAssistantThreadStatusPill } from '../src/renderer/src/pages/assistant/assistant-sessions-rail-utils'
+import { mergeCanonicalPresenceLatestTurn, resolveCanonicalPresenceAttention, resolveCanonicalPresenceThreadState } from '../src/main/assistant/service-canonical-presence'
 
 const now = '2026-07-10T08:00:00.000Z'
 const sessionId = 'startup-session'
@@ -80,12 +84,17 @@ const connectedStatus: AssistantRuntimeStatus = {
 }
 
 const connectCalls: Array<{ sessionId?: string } | undefined> = []
+const selectThreadCalls: Array<{ sessionId: string; threadId: string }> = []
 const disconnectCalls: Array<string | undefined> = []
 
 ;(globalThis as typeof globalThis & { window: unknown }).window = {
     devscope: {
         assistant: {
             bootstrap: async () => ({ snapshot, status: disconnectedStatus }),
+            selectThread: async (input: { sessionId: string; threadId: string }) => {
+                selectThreadCalls.push(input)
+                return { success: true as const, ...input }
+            },
             connect: async (options?: { sessionId?: string }) => {
                 connectCalls.push(options)
                 return { success: true as const, threadId }
@@ -118,6 +127,11 @@ const state = assistantStore.getState()
 assistantStore.release()
 
 assert.equal(state.hydrated, true, 'assistant store should finish bootstrap hydration')
+assert.deepEqual(
+    selectThreadCalls,
+    [{ sessionId, threadId }],
+    'cold bootstrap should restore the routed thread before reconnecting'
+)
 assert.deepEqual(
     connectCalls,
     [{ sessionId }],
@@ -183,6 +197,113 @@ assert.equal(
     }).key,
     'stale',
     'a detached canonical worker must not be presented as live work'
+)
+
+const pendingApprovalThread: AssistantThread = {
+    ...thread,
+    hasPendingApprovals: true,
+    hasPendingUserInputs: false
+}
+assert.equal(
+    getAssistantThreadPhase(pendingApprovalThread).key,
+    'waiting-approval',
+    'sidebar phase must trust shell-level pending approval state before a thread is opened'
+)
+assert.equal(
+    resolveAssistantThreadStatusPill(pendingApprovalThread, false)?.label,
+    'Pending',
+    'both sidebar renderers must show unopened approval state immediately'
+)
+
+const runningPresence = { ...readyPresence, state: 'running' as const, activeTurnId: 'turn:sidebar-sync' }
+assert.deepEqual(
+    toAssistantThreadShell({ ...thread, canonicalPresence: runningPresence }).canonicalPresence,
+    runningPresence,
+    'shell snapshots must retain canonical presence for unopened sidebar threads'
+)
+
+const completedAt = '2026-07-10T08:05:00.000Z'
+const completedLatestTurn = mergeCanonicalPresenceLatestTurn(null, {
+    ...readyPresence,
+    attention: null,
+    latestTurn: {
+        id: 'turn:sidebar-complete',
+        state: 'completed',
+        requestedAt: now,
+        startedAt: now,
+        completedAt,
+        assistantMessageId: null
+    }
+})
+assert.equal(completedLatestTurn?.state, 'completed', 'canonical completion must reach unopened thread shells')
+assert.equal(
+    resolveAssistantThreadStatusPill({ ...thread, latestTurn: completedLatestTurn }, false)?.label,
+    'Done',
+    'both sidebar renderers must show canonical completion before the thread is opened'
+)
+assert.equal(
+    getAssistantThreadLastMessageAt({ ...thread, latestTurn: completedLatestTurn }),
+    completedAt,
+    'sidebar recency must use canonical turn completion when history is not hydrated'
+)
+assert.deepEqual(
+    resolveCanonicalPresenceAttention({
+        currentHasPendingApprovals: false,
+        currentHasPendingUserInputs: false,
+        hasLocalPendingApproval: false,
+        hasLocalPendingInput: false,
+        presence: { ...readyPresence, attention: 'approval' }
+    }),
+    { hasPendingApprovals: true, hasPendingUserInputs: false },
+    'canonical approval attention must update unopened thread shells'
+)
+
+const pendingSnapshot: AssistantSnapshot = {
+    ...snapshot,
+    sessions: snapshot.sessions.map((session) => ({
+        ...session,
+        threads: session.threads.map((candidate) => candidate.id === threadId ? pendingApprovalThread : candidate)
+    }))
+}
+const baseRailSelection = {
+    snapshot,
+    sessions: snapshot.sessions,
+    playground: snapshot.playground,
+    activeSessionId: snapshot.selectedSessionId,
+    activeThreadId: threadId,
+    connected: true,
+    commandPending: false
+}
+const pendingRailSelection = {
+    ...baseRailSelection,
+    snapshot: pendingSnapshot,
+    sessions: pendingSnapshot.sessions
+}
+assert.equal(
+    areAssistantSessionsRailSelectionsEqual(baseRailSelection, pendingRailSelection),
+    false,
+    'both sidebar variants must rerender when unopened thread attention state changes'
+)
+
+let reconciliationRuns = 0
+let releaseFirstReconciliation!: () => void
+let markFirstReconciliationStarted!: () => void
+const firstReconciliationStarted = new Promise<void>((resolve) => { markFirstReconciliationStarted = resolve })
+const reconciler = new TrailingAsyncReconciler(async () => {
+    reconciliationRuns += 1
+    if (reconciliationRuns !== 1) return
+    markFirstReconciliationStarted()
+    await new Promise<void>((resolve) => { releaseFirstReconciliation = resolve })
+})
+const firstReconciliation = reconciler.request()
+await firstReconciliationStarted
+const trailingReconciliation = reconciler.request()
+releaseFirstReconciliation()
+await Promise.all([firstReconciliation, trailingReconciliation])
+assert.equal(
+    reconciliationRuns,
+    2,
+    'a canonical presence change received during reconciliation must trigger one trailing refresh'
 )
 
 console.log('Assistant startup connection: ok')

@@ -21,6 +21,30 @@ import {
     getAssistantStreamRevealCount,
     revealAssistantStreamText
 } from '../src/renderer/src/pages/assistant/useAssistantVisibleText'
+import {
+    RENDERER_VISIBILITY_RESUME_GRACE_MS,
+    RendererVisibilityStore,
+    shouldSnapRendererPresentation,
+    type RendererVisibilitySource
+} from '../src/renderer/src/lib/renderer-visibility'
+
+class FakeRendererVisibilitySource implements RendererVisibilitySource {
+    visibilityState: DocumentVisibilityState = 'visible'
+    private readonly listeners = new Set<EventListener>()
+
+    addEventListener(_type: 'visibilitychange', listener: EventListener): void {
+        this.listeners.add(listener)
+    }
+
+    removeEventListener(_type: 'visibilitychange', listener: EventListener): void {
+        this.listeners.delete(listener)
+    }
+
+    setVisibility(visibilityState: DocumentVisibilityState): void {
+        this.visibilityState = visibilityState
+        for (const listener of this.listeners) listener(new Event('visibilitychange'))
+    }
+}
 
 function event(
     sequence: number,
@@ -134,6 +158,13 @@ assert.equal(buildAssistantReadPreview(partialReadOutput).continuationNotice?.st
 
 const assistantMainServiceSource = readFileSync(new URL('../src/main/assistant/service.ts', import.meta.url), 'utf8')
 const assistantStoreSource = readFileSync(new URL('../src/renderer/src/lib/assistant/assistant-store-core.ts', import.meta.url), 'utf8')
+const assistantVisibleTextSource = readFileSync(new URL('../src/renderer/src/pages/assistant/useAssistantVisibleText.ts', import.meta.url), 'utf8')
+const assistantVirtualTimelineSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantVirtualTimeline.tsx', import.meta.url), 'utf8')
+const instructorConversationSource = readFileSync(new URL('../src/renderer/src/pages/assistant/InstructorVoiceConversation.tsx', import.meta.url), 'utf8')
+const instructorLiveTranscriptSource = readFileSync(new URL('../src/renderer/src/pages/assistant/InstructorVoiceLiveTranscript.tsx', import.meta.url), 'utf8')
+const strandsSource = readFileSync(new URL('../src/renderer/src/components/ui/strands/Strands.tsx', import.meta.url), 'utf8')
+const smoothScrollSource = readFileSync(new URL('../src/renderer/src/lib/useSmoothScroll.ts', import.meta.url), 'utf8')
+const desktopMainSource = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8')
 assert.match(
     assistantMainServiceSource,
     /isAssistantToolLifecycleStartEvent\(event\)[\s\S]*?this\.flushBroadcastEvents\(\)/,
@@ -144,6 +175,97 @@ assert.match(
     /isAssistantToolLifecycleStartEvent\(event\)[\s\S]*?this\.flushPendingAssistantEvents\(\)/,
     'renderer projection must commit a new running tool row without the normal stream checkpoint delay'
 )
+assert.match(
+    assistantStoreSource,
+    /rendererVisibility\.subscribe\([\s\S]*?getSnapshot\(\)\.visible[\s\S]*?flushPendingAssistantEvents\(\)/,
+    'restoring the renderer must flush one authoritative projection instead of leaving RAF work queued'
+)
+assert.match(
+    assistantVisibleTextSource,
+    /shouldSnapRendererPresentation[\s\S]*?assistantStreamPresentation\.getSnapshot\(channel, streamId\)/,
+    'visible text must read the latest stream snapshot when hidden presentation is reconciled'
+)
+assert.match(
+    assistantVirtualTimelineSource,
+    /shouldSnapRendererPresentation[\s\S]*?clearCompletionEndFollow\(\)[\s\S]*?cancelEndAlignment\(\)[\s\S]*?scrollToEnd\(\{ animated: false \}\)/,
+    'hidden timeline presentation collapses pending follow work into one non-animated end alignment'
+)
+assert.equal(
+    assistantVirtualTimelineSource.includes('scrollElement.scrollTop ='),
+    false,
+    'hidden reconciliation leaves viewport ownership with LegendList'
+)
+assert.match(
+    instructorConversationSource,
+    /reduceMotion \|\| shouldSnap \? 'auto' : 'smooth'/,
+    'voice conversation scrolling must become immediate across hidden time'
+)
+assert.match(
+    instructorLiveTranscriptSource,
+    /animatePresentation = !reduceMotion && !shouldSnap[\s\S]*?scrollToLatest\(animatePresentation \? 'smooth' : 'auto'\)/,
+    'voice transcript words and scrolling must skip hidden animation batches'
+)
+assert.match(
+    strandsSource,
+    /snapPresentationToProps[\s\S]*?rendererVisibility\.subscribe\(reconcileVisibility\)/,
+    'decorative WebGL state must pause and snap current props on restore'
+)
+assert.match(
+    smoothScrollSource,
+    /rendererVisibility\.subscribe\(snapToTarget\)/,
+    'the reusable smooth-scroll queue must settle when visibility changes'
+)
+assert.match(
+    desktopMainSource,
+    /webviewTag: true,[\s\S]{0,240}?backgroundThrottling: true/,
+    'the main renderer should pause hidden presentation rather than spend resources animating off-screen'
+)
+assert.match(
+    desktopMainSource,
+    /webPreferences\.backgroundThrottling = false/,
+    'Browser guests retain their existing background execution policy'
+)
+
+const visibilitySource = new FakeRendererVisibilitySource()
+const visibilityStore = new RendererVisibilityStore(visibilitySource)
+let visibilityNotifications = 0
+const unsubscribeVisibility = visibilityStore.subscribe(() => {
+    visibilityNotifications += 1
+})
+assert.deepEqual(visibilityStore.getSnapshot(), {
+    visible: true,
+    revision: 0,
+    resumeRevision: 0,
+    resumedAt: null
+})
+visibilitySource.setVisibility('hidden')
+const hiddenVisibility = visibilityStore.getSnapshot()
+assert.deepEqual(hiddenVisibility, {
+    visible: false,
+    revision: 1,
+    resumeRevision: 0,
+    resumedAt: null
+})
+assert.equal(shouldSnapRendererPresentation(hiddenVisibility, 0), true)
+visibilitySource.setVisibility('visible')
+const restoredVisibility = visibilityStore.getSnapshot()
+assert.equal(restoredVisibility.visible, true)
+assert.equal(restoredVisibility.revision, 2)
+assert.equal(restoredVisibility.resumeRevision, 1)
+assert.equal(typeof restoredVisibility.resumedAt, 'number')
+const resumedAt = restoredVisibility.resumedAt as number
+assert.equal(shouldSnapRendererPresentation(restoredVisibility, 0, resumedAt), true)
+assert.equal(shouldSnapRendererPresentation(restoredVisibility, 1, resumedAt + 1), true)
+assert.equal(
+    shouldSnapRendererPresentation(
+        restoredVisibility,
+        1,
+        resumedAt + RENDERER_VISIBILITY_RESUME_GRACE_MS + 1
+    ),
+    false
+)
+assert.equal(visibilityNotifications, 2)
+unsubscribeVisibility()
 
 assistantStreamPresentation.clear()
 let presentationNotifications = 0

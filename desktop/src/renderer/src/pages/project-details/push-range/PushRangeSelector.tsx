@@ -69,15 +69,15 @@ export function PushRangeSelector({
                         }
 
                         const y = index * rowStep + rowHeight / 2
-                        let stroke = 'rgba(255,255,255,0.12)'
+                        let stroke = 'color-mix(in srgb, var(--color-text) 12%, transparent)'
 
                         if (activeIndex >= 0) {
                             if (globalIndex < activeIndex - 1) {
-                                stroke = 'rgba(245,158,11,0.6)'
+                                stroke = 'color-mix(in srgb, var(--status-warning) 60%, transparent)'
                             } else if (globalIndex === activeIndex - 1 || globalIndex === activeIndex) {
-                                stroke = 'rgba(96,165,250,0.78)'
+                                stroke = 'color-mix(in srgb, var(--accent-primary) 78%, transparent)'
                             } else if (globalIndex > activeIndex) {
-                                stroke = 'rgba(52,211,153,0.6)'
+                                stroke = 'color-mix(in srgb, var(--status-success) 60%, transparent)'
                             }
                         }
 
@@ -102,19 +102,19 @@ export function PushRangeSelector({
                         const isRetained = activeIndex >= 0 && globalIndex < activeIndex
                         const isIncluded = activeIndex >= 0 && globalIndex > activeIndex
                         const stroke = isActive
-                            ? '#60a5fa'
+                            ? 'var(--accent-primary)'
                             : isRetained
-                                ? '#f59e0b'
+                                ? 'var(--status-warning)'
                                 : isIncluded
-                                    ? '#34d399'
-                                    : 'rgba(255,255,255,0.35)'
+                                    ? 'var(--status-success)'
+                                    : 'color-mix(in srgb, var(--color-text) 35%, transparent)'
                         const fill = isActive
-                            ? 'rgba(96,165,250,0.22)'
+                            ? 'color-mix(in srgb, var(--accent-primary) 22%, transparent)'
                             : isRetained
-                                ? 'rgba(245,158,11,0.16)'
+                                ? 'color-mix(in srgb, var(--status-warning) 16%, transparent)'
                                 : isIncluded
-                                    ? 'rgba(52,211,153,0.16)'
-                                    : '#09090b'
+                                    ? 'color-mix(in srgb, var(--status-success) 16%, transparent)'
+                                    : 'var(--color-card)'
 
                         return (
                             <circle

@@ -54,6 +54,20 @@ class TrustedGuestRegistry {
         return [...this.byGuestId.values()].find((entry) => entry.guestIdentity === guestIdentity)
     }
 
+    resolveOwned(ownerWebContentsId: number, guestWebContentsId: number, tabId: string): TrustedBrowserGuest {
+        const entry = this.byGuestId.get(guestWebContentsId)
+        if (!entry || entry.guest.isDestroyed()) {
+            throw new AgentControlError('CONTROL_TARGET_NOT_FOUND', 'The Browser guest is no longer available.')
+        }
+        if (entry.ownerWebContentsId !== ownerWebContentsId) {
+            throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The Browser guest belongs to another window.')
+        }
+        if (!isTrustedBrowserTabId(tabId) || entry.tabId !== tabId) {
+            throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The Browser guest is not bound to that tab.')
+        }
+        return entry
+    }
+
     onRemoved(listener: (entry: TrustedBrowserGuest) => void): () => void {
         this.removedListeners.add(listener)
         return () => this.removedListeners.delete(listener)

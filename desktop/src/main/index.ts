@@ -3,18 +3,25 @@
  * Main Process Entry Point
  */
 
-import { app, BrowserWindow, Menu, shell, ipcMain, nativeTheme, protocol, globalShortcut, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, Menu, shell, ipcMain, nativeTheme, protocol, globalShortcut, session, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { randomBytes } from 'node:crypto'
 import { join } from 'path'
 import { existsSync, statSync } from 'fs'
 import { electronApp, is } from './utils'
 import log from 'electron-log'
 import { registerIpcHandlers } from './ipc'
-import { disposeAssistantService } from './assistant'
+import { disposeAssistantService, getAssistantService } from './assistant'
+import { persistAssistantClipboardImage, resolveAssistantClipboardAttachment } from './assistant/clipboard-attachments'
+import { getCodexVoiceTranscriptionState, transcribeVoiceWithCodex } from './assistant/codex-voice-transcription'
+import { BrowserAssistantBridge, getBrowserAssistantBridgeOrigins } from './assistant/browser-assistant-bridge'
 import { disposeUpdater, initializeUpdater, registerUpdateWindow } from './update/manager'
 import { registerFileProtocol } from './file-protocol'
 import { isSafeBrowserNavigationUrl, isZyraBrowserPartition } from './ipc/handlers/browser-preview-handlers'
 import { disposeAgentControlBroker, getAgentControlBroker } from './agent-control'
 import { trustedBrowserGuests } from './agent-control/trusted-guest-registry'
+import { BrowserDevscopeRelay } from './browser-devscope-relay'
+import { setActiveBrowserAssistantClientCount } from './assistant/browser-client-lease'
+import { BROWSER_ASSISTANT_BRIDGE_DESCRIPTOR_NAME } from '../shared/browser-assistant-bridge'
 
 const APP_NAME = "Zyra"
 const DEV_APP_NAME = `${APP_NAME}-dev`
@@ -70,6 +77,8 @@ console.warn = log.warn
 
 let mainWindow: BrowserWindow | null = null
 let quickPreviewWindow: BrowserWindow | null = null
+let browserAssistantBridge: BrowserAssistantBridge | null = null
+let browserDevscopeRelay: BrowserDevscopeRelay | null = null
 let hasRegisteredIpcHandlers = false
 const FILE_PROTOCOL = 'zyra'
 const QUICK_PREVIEW_ROUTE = '/quick-open'
@@ -274,6 +283,26 @@ function buildExternalExplorerRoute(folderPath: string): string {
     return `/explorer/${encodeURIComponent(folderPath)}?${EXTERNAL_EXPLORER_LAUNCH_QUERY}`
 }
 
+function configureMainRendererMediaPermissions(): void {
+    const isTrustedMainRenderer = (webContents: Electron.WebContents | null) => (
+        Boolean(webContents && mainWindow && !mainWindow.isDestroyed() && webContents.id === mainWindow.webContents.id)
+    )
+
+    session.defaultSession.setPermissionCheckHandler((webContents, permission, _origin, details) => (
+        permission === 'media'
+        && details.isMainFrame
+        && details.mediaType === 'audio'
+        && isTrustedMainRenderer(webContents)
+    ))
+    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+        const mediaTypes = permission === 'media' && 'mediaTypes' in details && Array.isArray(details.mediaTypes)
+            ? details.mediaTypes
+            : []
+        const audioOnly = mediaTypes.length > 0 && mediaTypes.every((mediaType) => mediaType === 'audio')
+        callback(permission === 'media' && details.isMainFrame && audioOnly && isTrustedMainRenderer(webContents))
+    })
+}
+
 function createWindow(showOnReady = true, initialRoute = '/'): BrowserWindow {
     const iconPath = getAppIconPath()
     const window = new BrowserWindow({
@@ -291,6 +320,9 @@ function createWindow(showOnReady = true, initialRoute = '/'): BrowserWindow {
             contextIsolation: true,
             nodeIntegration: false,
             webviewTag: true,
+            // Pause renderer presentation while hidden; visibility reconciliation
+            // snaps transient queues to current Assistant state on restore.
+            backgroundThrottling: true,
             devTools: true
         }
     })
@@ -445,7 +477,28 @@ app.on('second-instance', (_event, argv) => {
 app.whenReady().then(() => {
     electronApp.setAppUserModelId(runtimeIdentity.appUserModelId)
     void initializeUpdater()
+    const rendererUrl = process.env['ELECTRON_RENDERER_URL']
+    if (is.dev && rendererUrl) {
+        browserDevscopeRelay = new BrowserDevscopeRelay(() => mainWindow?.webContents || null)
+        browserAssistantBridge = new BrowserAssistantBridge({
+            service: getAssistantService(),
+            allowedOrigins: getBrowserAssistantBridgeOrigins(rendererUrl),
+            capability: randomBytes(32).toString('base64url'),
+            descriptorPath: join(app.getPath('userData'), BROWSER_ASSISTANT_BRIDGE_DESCRIPTOR_NAME),
+            invokeDevscope: (path, args) => browserDevscopeRelay!.invoke(path, args),
+            onAssistantClientCountChanged: setActiveBrowserAssistantClientCount,
+            persistClipboardImage: persistAssistantClipboardImage,
+            resolveClipboardAttachment: resolveAssistantClipboardAttachment,
+            getVoiceTranscriptionState: getCodexVoiceTranscriptionState,
+            transcribeVoice: transcribeVoiceWithCodex
+        })
+        void browserAssistantBridge.start().catch((error) => {
+            log.warn('[BrowserAssistantBridge] failed to start', error)
+            browserAssistantBridge = null
+        })
+    }
     registerFileProtocol(FILE_PROTOCOL)
+    configureMainRendererMediaPermissions()
     nativeTheme.on('updated', syncOpenWindowIcons)
     globalShortcut.register('CommandOrControl+Alt+Escape', () => {
         void getAgentControlBroker().emergencyStop('Global emergency-stop shortcut pressed.')
@@ -486,6 +539,10 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
+    void browserAssistantBridge?.stop()
+    browserAssistantBridge = null
+    browserDevscopeRelay?.dispose()
+    browserDevscopeRelay = null
     disposeAssistantService()
     disposeUpdater()
     void disposeAgentControlBroker()
@@ -496,6 +553,10 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
     globalShortcut.unregisterAll()
+    void browserAssistantBridge?.stop()
+    browserAssistantBridge = null
+    browserDevscopeRelay?.dispose()
+    browserDevscopeRelay = null
     disposeAssistantService()
     disposeUpdater()
     void disposeAgentControlBroker()

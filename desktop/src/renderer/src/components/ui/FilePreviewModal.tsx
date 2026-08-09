@@ -7,7 +7,7 @@ import {
 } from '@dnd-kit/core'
 import { createPortal } from 'react-dom'
 import { getParentFolderPath } from '@/lib/filesystem/fileSystemPaths'
-import { useSettings } from '@/lib/settings'
+import { getAppearanceCodeFontStack, useSettings } from '@/lib/settings'
 import { isEditableFileType, PREVIEW_TERMINAL_MIN_HEIGHT } from './file-preview/modalShared'
 import type { FilePreviewModalProps } from './file-preview/modalTypes'
 import { PreviewModalLayout } from './file-preview/PreviewModalLayout'
@@ -172,6 +172,10 @@ export function FilePreviewModal({
         defaultStartExpanded,
         defaultLeftPanelOpen,
         defaultRightPanelOpen,
+        defaultCsvDistinctColorsEnabled: settings.fileCsvDistinctColorsEnabled,
+        defaultEditorWordWrap: settings.fileEditorWordWrap,
+        defaultEditorMinimapEnabled: settings.fileEditorMinimapEnabled,
+        defaultEditorFontSize: settings.fileEditorFontSize,
         initialFocusLine: file.focusLine ?? null,
         initialFocusLineRequestId: file.focusLineRequestId ?? null
     })
@@ -219,6 +223,10 @@ export function FilePreviewModal({
         accentColorPrimary: settings.accentColor.primary,
         themeKey: settings.theme,
         initialHeight: terminalInitialHeight,
+        fontSize: settings.terminalFontSize,
+        fontFamily: getAppearanceCodeFontStack(settings.appearanceCodeFont),
+        cursorBlink: settings.terminalCursorBlink,
+        scrollback: settings.terminalScrollback,
         persistHeight: (height) => {
             if (settings.filePreviewTerminalPanelHeight === height) return
             updateSettings({ filePreviewTerminalPanelHeight: height })

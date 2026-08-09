@@ -14,20 +14,27 @@ import type {
     AssistantGetReviewIndexInput,
     AssistantGetSessionTurnUsageInput,
     AssistantGetTurnDetailInput,
+    AssistantIngestRealtimeVoiceEventInput,
     AssistantPersistClipboardImageInput,
+    AssistantRedeemAccountResetInput,
     AssistantResolveClipboardAttachmentInput,
     AssistantSearchTurnsInput,
     AssistantSendPromptOptions,
+    AssistantSendRealtimeVoiceMessageInput,
     AssistantSelectThreadInput,
     AssistantStartRealtimeVoiceInput,
     AssistantSetPlaygroundRootInput,
-    AssistantTranscribeAudioInput,
+    AssistantTranscribeVoiceInput,
     AssistantUserInputResponseInput,
     FleetOperationInput
 } from '../../../shared/assistant/contracts'
 import { getAssistantService } from '../../assistant'
+import { hasActiveBrowserAssistantClient } from '../../assistant/browser-client-lease'
 import { persistAssistantClipboardImage, resolveAssistantClipboardAttachment } from '../../assistant/clipboard-attachments'
-import { getAssistantTranscriptionModelManager } from '../../assistant/transcription-models'
+import {
+    getCodexVoiceTranscriptionState,
+    transcribeVoiceWithCodex
+} from '../../assistant/codex-voice-transcription'
 
 async function withAssistantResult<T>(work: () => Promise<T> | T): Promise<T | { success: false; error: string }> {
     try {
@@ -37,6 +44,16 @@ async function withAssistantResult<T>(work: () => Promise<T> | T): Promise<T | {
         log.error('Assistant IPC failed:', error)
         return { success: false as const, error: message }
     }
+}
+
+function withDesktopAssistantSelectionLease<T>(work: () => Promise<T> | T) {
+    if (hasActiveBrowserAssistantClient()) {
+        return Promise.resolve({
+            success: false as const,
+            error: 'The browser app is currently controlling Assistant chat selection.'
+        })
+    }
+    return withAssistantResult(work)
 }
 
 export function handleAssistantSubscribe(event: Electron.IpcMainInvokeEvent) {
@@ -85,6 +102,10 @@ export function handleAssistantGetAccountOverview() {
     return withAssistantResult(() => getAssistantService().getAccountOverview())
 }
 
+export function handleAssistantRedeemAccountReset(_event: Electron.IpcMainInvokeEvent, input: AssistantRedeemAccountResetInput) {
+    return withAssistantResult(() => getAssistantService().redeemAccountReset(input))
+}
+
 export function handleAssistantGetSessionTurnUsage(_event: Electron.IpcMainInvokeEvent, input?: AssistantGetSessionTurnUsageInput) {
     log.info('IPC: assistant:getSessionTurnUsage', { sessionId: input?.sessionId })
     return withAssistantResult(() => getAssistantService().getSessionTurnUsage(input))
@@ -97,27 +118,27 @@ export function handleAssistantListModels(_event: Electron.IpcMainInvokeEvent, f
 
 export function handleAssistantConnect(_event: Electron.IpcMainInvokeEvent, options?: AssistantConnectOptions) {
     log.info('IPC: assistant:connect', { options })
-    return withAssistantResult(() => getAssistantService().connect(options))
+    return withDesktopAssistantSelectionLease(() => getAssistantService().connect(options))
 }
 
 export function handleAssistantDisconnect(_event: Electron.IpcMainInvokeEvent, sessionId?: string) {
     log.info('IPC: assistant:disconnect', { sessionId })
-    return withAssistantResult(() => getAssistantService().disconnect(sessionId))
+    return withDesktopAssistantSelectionLease(() => getAssistantService().disconnect(sessionId))
 }
 
 export function handleAssistantCreateSession(_event: Electron.IpcMainInvokeEvent, input?: AssistantCreateSessionInput) {
     log.info('IPC: assistant:createSession', { input })
-    return withAssistantResult(() => getAssistantService().createSession(input))
+    return withDesktopAssistantSelectionLease(() => getAssistantService().createSession(input))
 }
 
 export function handleAssistantSelectSession(_event: Electron.IpcMainInvokeEvent, sessionId: string) {
     log.info('IPC: assistant:selectSession', { sessionId })
-    return withAssistantResult(() => getAssistantService().selectSession(sessionId))
+    return withDesktopAssistantSelectionLease(() => getAssistantService().selectSession(sessionId))
 }
 
 export function handleAssistantSelectThread(_event: Electron.IpcMainInvokeEvent, input: AssistantSelectThreadInput) {
     log.info('IPC: assistant:selectThread', { sessionId: input?.sessionId, threadId: input?.threadId })
-    return withAssistantResult(() => getAssistantService().selectThread(input.sessionId, input.threadId))
+    return withDesktopAssistantSelectionLease(() => getAssistantService().selectThread(input.sessionId, input.threadId))
 }
 
 export function handleAssistantGetThreadDetailBootstrap(_event: Electron.IpcMainInvokeEvent, threadId: string) {
@@ -221,7 +242,7 @@ export function handleAssistantResolveClipboardAttachment(_event: Electron.IpcMa
 
 export function handleAssistantNewThread(_event: Electron.IpcMainInvokeEvent, sessionId?: string) {
     log.info('IPC: assistant:newThread', { sessionId })
-    return withAssistantResult(() => getAssistantService().newThread(sessionId))
+    return withDesktopAssistantSelectionLease(() => getAssistantService().newThread(sessionId))
 }
 
 export function handleAssistantSendPrompt(_event: Electron.IpcMainInvokeEvent, prompt: string, options?: AssistantSendPromptOptions) {
@@ -244,41 +265,53 @@ export function handleAssistantRespondUserInput(_event: Electron.IpcMainInvokeEv
     return withAssistantResult(() => getAssistantService().respondUserInput(input))
 }
 
-export function handleAssistantStartRealtimeVoice(_event: Electron.IpcMainInvokeEvent, input: AssistantStartRealtimeVoiceInput) {
+export function handleAssistantStartRealtimeVoice(event: Electron.IpcMainInvokeEvent, input: AssistantStartRealtimeVoiceInput) {
     log.info('IPC: assistant:realtimeVoice:start', {
         sdpLength: input?.sdp?.length || 0,
-        instructionsLength: input?.instructions?.length || 0
+        instructionsLength: input?.instructions?.length || 0,
+        voice: input?.voice,
+        outputModality: input?.outputModality
     })
-    return withAssistantResult(() => getAssistantService().startRealtimeVoice(input))
+    return withAssistantResult(() => getAssistantService().startRealtimeVoice(input, event.sender.id))
 }
 
-export function handleAssistantStopRealtimeVoice() {
+export function handleAssistantSendRealtimeVoiceMessage(
+    event: Electron.IpcMainInvokeEvent,
+    input: AssistantSendRealtimeVoiceMessageInput
+) {
+    log.info('IPC: assistant:realtimeVoice:sendMessage', {
+        textLength: input?.text?.length || 0,
+        imageCount: input?.images?.length || 0
+    })
+    return withAssistantResult(() => getAssistantService().sendRealtimeVoiceMessage(input, event.sender.id))
+}
+
+export function handleAssistantIngestRealtimeVoiceEvent(
+    event: Electron.IpcMainInvokeEvent,
+    input: AssistantIngestRealtimeVoiceEventInput
+) {
+    return withAssistantResult(() => getAssistantService().ingestRealtimeVoiceEvent(input, event.sender.id))
+}
+
+export function handleAssistantStopRealtimeVoice(event: Electron.IpcMainInvokeEvent) {
     log.info('IPC: assistant:realtimeVoice:stop')
-    return withAssistantResult(() => getAssistantService().stopRealtimeVoice())
+    return withAssistantResult(() => getAssistantService().stopRealtimeVoice(event.sender.id))
 }
 
-export function handleAssistantGetTranscriptionModelState() {
-    log.info('IPC: assistant:getTranscriptionModelState')
+export function handleAssistantGetVoiceTranscriptionState() {
     return withAssistantResult(async () => ({
         success: true as const,
-        state: await getAssistantTranscriptionModelManager().getState()
+        state: await getCodexVoiceTranscriptionState()
     }))
 }
 
-export function handleAssistantDownloadTranscriptionModel() {
-    log.info('IPC: assistant:downloadTranscriptionModel')
-    return withAssistantResult(async () => ({
-        success: true as const,
-        state: await getAssistantTranscriptionModelManager().downloadModel()
-    }))
-}
-
-export function handleAssistantTranscribeAudioWithLocalModel(_event: Electron.IpcMainInvokeEvent, input: AssistantTranscribeAudioInput) {
-    log.info('IPC: assistant:transcribeAudioWithLocalModel', {
-        byteLength: input?.audioBuffer ? input.audioBuffer.byteLength : 0
+export function handleAssistantTranscribeVoice(_event: Electron.IpcMainInvokeEvent, input: AssistantTranscribeVoiceInput) {
+    log.info('IPC: assistant:transcribeVoice', {
+        durationMs: Number(input?.durationMs) || 0,
+        encodedLength: typeof input?.audioBase64 === 'string' ? input.audioBase64.length : 0
     })
     return withAssistantResult(async () => ({
         success: true as const,
-        text: await getAssistantTranscriptionModelManager().transcribeWav(input.audioBuffer)
+        text: await transcribeVoiceWithCodex(input)
     }))
 }

@@ -100,10 +100,10 @@ export function getAssistantThreadPhase(thread: AssistantThread | null): {
     label: string
 } {
     if (!thread) return { key: 'idle', label: 'No active thread' }
-    if (getAssistantPendingApprovals(thread).length > 0) {
+    if (thread.hasPendingApprovals || getAssistantPendingApprovals(thread).length > 0) {
         return { key: 'waiting-approval', label: 'Waiting for approval' }
     }
-    if (getAssistantPendingUserInputs(thread).length > 0) {
+    if (thread.hasPendingUserInputs || getAssistantPendingUserInputs(thread).length > 0) {
         return { key: 'waiting-input', label: 'Waiting for input' }
     }
 

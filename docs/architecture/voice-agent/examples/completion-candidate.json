@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "candidate_id": "completion_candidate_voice_docs",
+  "conversation_id": "chat_demo",
+  "task_id": "task_demo_voice_docs",
+  "attempt_id": "attempt_demo_01",
+  "primary_agent_run_id": "agent_run_demo_01",
+  "context_version": 7,
+  "outcome_summary": "The complete public architecture package is drafted and validated.",
+  "acceptance_results": [
+    {
+      "criterion_id": "criterion_architecture",
+      "status": "passed",
+      "evidence_refs": [
+        {
+          "kind": "artifact",
+          "id": "docs_voice_architecture",
+          "uri": "docs/architecture/voice-agent/README.md"
+        }
+      ]
+    },
+    {
+      "criterion_id": "criterion_validation",
+      "status": "passed",
+      "evidence_refs": [
+        {
+          "kind": "artifact",
+          "id": "contract_validation_output"
+        }
+      ]
+    }
+  ],
+  "changed_artifacts": [
+    {
+      "artifact_id": "docs_voice_architecture",
+      "kind": "report",
+      "uri": "docs/architecture/voice-agent/README.md",
+      "label": "Voice-agent architecture package",
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+  ],
+  "tests": [
+    {
+      "name": "voice-agent contract suite",
+      "status": "passed",
+      "summary": "Schemas, examples, and semantic rejection cases passed.",
+      "evidence_refs": [
+        {
+          "kind": "artifact",
+          "id": "contract_validation_output"
+        }
+      ]
+    },
+    {
+      "name": "documentation validation",
+      "status": "passed",
+      "summary": "Mermaid, links, Markdown, and privacy checks passed.",
+      "evidence_refs": [
+        {
+          "kind": "artifact",
+          "id": "documentation_validation_output"
+        }
+      ]
+    }
+  ],
+  "remaining_assumptions": [
+    "Provider-specific context limits still require live interoperability testing."
+  ],
+  "fallback_behavior": [
+    "Unsupported selective speech falls back to one canonical visual message."
+  ],
+  "known_gaps": [
+    "Runtime implementation remains future work."
+  ],
+  "context_acknowledgements": [
+    {
+      "owner_kind": "primary",
+      "owner_id": "agent_run_demo_01",
+      "context_version": 7,
+      "relevant_change_ids": [
+        "constraint_public_only",
+        "constraint_no_runtime_changes"
+      ],
+      "acknowledged_at": "2026-08-02T12:01:00Z"
+    }
+  ],
+  "cleanup": [
+    {
+      "item": "Temporary validation outputs",
+      "status": "complete",
+      "evidence_refs": []
+    }
+  ],
+  "retained_worktrees": [],
+  "suggested_user_summary": "The architecture package is complete and all documentation checks passed.",
+  "suggested_speakable_summary": "The architecture package is complete, and all documentation checks passed.",
+  "created_at": "2026-08-02T12:25:00Z"
+}

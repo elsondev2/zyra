@@ -224,7 +224,7 @@ function PreviewWindowedHeader({
                     <button
                         type="button"
                         onClick={onToggleLeftPanel}
-                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#918aa0] transition-colors hover:bg-white/[0.035] hover:text-[#d7d0e3] focus:outline-none focus-visible:ring-1 focus-visible:ring-white/10"
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted transition-colors hover:bg-white/[0.035] hover:text-sparkle-text focus:outline-none focus-visible:ring-1 focus-visible:ring-white/10"
                         title={leftPanelOpen ? 'Hide file navigator' : 'Show file navigator'}
                         aria-label={leftPanelOpen ? 'Hide file navigator' : 'Show file navigator'}
                         aria-pressed={leftPanelOpen}

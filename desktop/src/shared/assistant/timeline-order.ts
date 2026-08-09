@@ -19,14 +19,19 @@ export function normalizeAssistantTimelineSequence(value: number | null | undefi
     return typeof value === 'number' && Number.isFinite(value) ? value : -1
 }
 
+export function compareAssistantTimelineStrings(left: string, right: string): number {
+    if (left === right) return 0
+    return left < right ? -1 : 1
+}
+
 export function compareAssistantTimelineOrderKeys(
     left: AssistantTimelineOrderKey,
     right: AssistantTimelineOrderKey
 ): number {
-    return left.createdAt.localeCompare(right.createdAt)
+    return compareAssistantTimelineStrings(left.createdAt, right.createdAt)
         || normalizeAssistantTimelineSequence(left.timelineSequence) - normalizeAssistantTimelineSequence(right.timelineSequence)
         || left.kindRank - right.kindRank
-        || left.id.localeCompare(right.id)
+        || compareAssistantTimelineStrings(left.id, right.id)
 }
 
 export function getAssistantTimelineOrderKey(

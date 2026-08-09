@@ -35,7 +35,7 @@ export function StatusPill({ tone, children, className }: StatusPillProps) {
         <span
             className={cn(
                 'inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]',
-                tone === 'accent' && 'border-[var(--accent-primary)]/35 bg-[var(--accent-primary)]/12 text-white/90',
+                tone === 'accent' && 'border-[color-mix(in_srgb,var(--accent-primary)_35%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_12%,transparent)] text-[var(--accent-primary)]',
                 tone === 'neutral' && 'border-white/10 bg-white/[0.04] text-sparkle-text-secondary',
                 tone === 'success' && 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
                 tone === 'danger' && 'border-red-500/25 bg-red-500/10 text-red-200',

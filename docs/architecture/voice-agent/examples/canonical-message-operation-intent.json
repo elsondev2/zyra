@@ -1,0 +1,37 @@
+{
+  "schema_version": 2,
+  "operation_id": "operation_chat_message_commit_01",
+  "revision": 1,
+  "previous_revision": null,
+  "conversation_id": "chat_resume_demo",
+  "task_id": null,
+  "attempt_id": null,
+  "foreground_route_id": "foreground_route_chat_01",
+  "foreground_route_epoch": 1,
+  "foreground_owner_claim_id": "foreground_claim_chat_01",
+  "canonical_message_id": "message_resume_assistant_07",
+  "idempotency_key": "chat_resume_demo:foreground_route_chat_01:message_resume_assistant_07",
+  "operation_class": "canonical_message_commit",
+  "consequence": "reversible",
+  "action_hash": null,
+  "capability_lease_id": null,
+  "adapter_id": "strong_chat_gateway",
+  "protected_payload_ref": "message_payload_resume_assistant_07",
+  "payload_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "redacted_summary": "Commit one strong-agent Chat response under the active foreground route.",
+  "status": "succeeded",
+  "intent_at": "2026-08-02T11:55:09Z",
+  "dispatched_at": "2026-08-02T11:55:09Z",
+  "terminal_at": "2026-08-02T11:55:10Z",
+  "receipt": {
+    "receipt_id": "receipt_chat_message_commit_01",
+    "outcome": "succeeded",
+    "external_receipt_id": null,
+    "observed_at": "2026-08-02T11:55:10Z",
+    "result_ref": {
+      "kind": "message",
+      "id": "message_resume_assistant_07"
+    }
+  },
+  "unknown_reason": null
+}

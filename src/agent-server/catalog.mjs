@@ -3,6 +3,7 @@ import path from "node:path";
 import { getProjectSessionsDir } from "../zyra-sdk.mjs";
 import { CanonicalChatIndex } from "./chat-index.mjs";
 import { getAgentServerPaths } from "./paths.mjs";
+import { appendCanonicalMessage, findCanonicalMessageReceipt } from "./canonical-message-ledger.mjs";
 
 const CATALOG_VERSION = 1;
 const MAX_KNOWN_PROJECTS = 256;
@@ -131,6 +132,29 @@ export class CanonicalChatCatalog {
     return chats.find((chat) => chat.canonicalChatId === normalized || pathKey(chat.sessionPath) === pathKey(normalized))
       || chats.find((chat) => chat.canonicalChatId.startsWith(normalized))
       || null;
+  }
+
+  async appendCanonicalMessage(selector, input) {
+    const chat = await this.find(selector, { allProjects: true });
+    if (!chat) throw new Error("Canonical chat was not found.");
+    const manager = await this.openSessionManager(chat);
+    const receipt = appendCanonicalMessage(manager, input);
+    if (!this.loadSessionManager) await this.index.refreshProject(chat.storageProject || chat.project);
+    return receipt;
+  }
+
+  async findCanonicalMessageReceipt(selector, operationId) {
+    const chat = await this.find(selector, { allProjects: true });
+    if (!chat) return null;
+    const manager = await this.openSessionManager(chat);
+    return findCanonicalMessageReceipt(manager, operationId);
+  }
+
+  async openSessionManager(chat) {
+    const SessionManager = this.loadSessionManager
+      ? await this.loadSessionManager()
+      : (await import("@earendil-works/pi-coding-agent")).SessionManager;
+    return SessionManager.open(chat.sessionPath, getProjectSessionsDir(chat.storageProject || chat.project));
   }
 
   async updateChat(selector, patch = {}) {

@@ -6,6 +6,10 @@ type UseFilePreviewChromeParams = {
     defaultStartExpanded: boolean
     defaultLeftPanelOpen: boolean
     defaultRightPanelOpen: boolean
+    defaultCsvDistinctColorsEnabled: boolean
+    defaultEditorWordWrap: 'on' | 'off'
+    defaultEditorMinimapEnabled: boolean
+    defaultEditorFontSize: number
     initialFocusLine?: number | null
     initialFocusLineRequestId?: number | null
 }
@@ -14,6 +18,10 @@ export function useFilePreviewChrome({
     defaultStartExpanded,
     defaultLeftPanelOpen,
     defaultRightPanelOpen,
+    defaultCsvDistinctColorsEnabled,
+    defaultEditorWordWrap,
+    defaultEditorMinimapEnabled,
+    defaultEditorFontSize,
     initialFocusLine = null,
     initialFocusLineRequestId = null
 }: UseFilePreviewChromeParams) {
@@ -24,10 +32,10 @@ export function useFilePreviewChrome({
     const [leftPanelWidth, setLeftPanelWidth] = useState(256)
     const [rightPanelWidth, setRightPanelWidth] = useState(288)
     const [isResizingPanels, setIsResizingPanels] = useState(false)
-    const [csvDistinctColorsEnabled, setCsvDistinctColorsEnabled] = useState(true)
-    const [editorWordWrap, setEditorWordWrap] = useState<'on' | 'off'>('on')
-    const [editorMinimapEnabled, setEditorMinimapEnabled] = useState(true)
-    const [editorFontSize, setEditorFontSize] = useState(13)
+    const [csvDistinctColorsEnabled, setCsvDistinctColorsEnabled] = useState(defaultCsvDistinctColorsEnabled)
+    const [editorWordWrap, setEditorWordWrap] = useState<'on' | 'off'>(defaultEditorWordWrap)
+    const [editorMinimapEnabled, setEditorMinimapEnabled] = useState(defaultEditorMinimapEnabled)
+    const [editorFontSize, setEditorFontSize] = useState(defaultEditorFontSize)
     const [findRequestToken, setFindRequestToken] = useState(0)
     const [replaceRequestToken, setReplaceRequestToken] = useState(0)
     const [focusLine, setFocusLine] = useState<number | null>(initialFocusLine)

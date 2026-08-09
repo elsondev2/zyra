@@ -5,7 +5,7 @@ import type { AssistantActivity, AssistantMessage, AssistantProposedPlan, Assist
 import { compareAssistantTimelineOrderKeys, getAssistantTimelineOrderKey } from '../src/shared/assistant/timeline-order'
 import {
     ASSISTANT_HISTORY_PAGE_MAX_CHARACTERS,
-    ASSISTANT_HISTORY_PAGE_MAX_RECORDS,
+    INITIAL_ASSISTANT_HISTORY_PAGE_MAX_RECORDS,
     readAssistantHistoryPage,
     readAssistantReviewIndex,
     readAssistantThreadDetail,
@@ -17,7 +17,7 @@ import {
     serializeAssistantActivityPayload
 } from '../src/main/assistant/persistence-activity-payload'
 import { initializeAssistantPersistenceSchema } from '../src/main/assistant/persistence-utils'
-import { replaceAssistantSnapshot } from '../src/main/assistant/persistence-write'
+import { replaceAssistantSnapshot, upsertAssistantCanonicalTimelineProjection } from '../src/main/assistant/persistence-write'
 import { createDefaultSnapshot } from '../src/main/assistant/projector'
 import { toAssistantShellSnapshot } from '../src/main/assistant/persistence-snapshot'
 import {
@@ -122,6 +122,40 @@ assert.deepEqual(indexedTurnTwo?.changes.map((change) => change.filePath), ['src
 assert.equal(indexedTurnTwo?.changes[0]?.additions, 1)
 assert.equal(indexedTurnTwo?.changes[0]?.deletions, 1)
 
+upsertAssistantCanonicalTimelineProjection(db, {
+    threadId: thread.id,
+    messages: [],
+    activities: [{
+        id: 'canonical-review-file-change',
+        kind: 'file-change',
+        tone: 'tool',
+        summary: 'Edited file',
+        detail: 'src/canonical-review.ts',
+        turnId: 'turn-1',
+        timelineSequence: 12,
+        createdAt: at(1),
+        payload: {
+            category: 'file-change',
+            provider: 'pi',
+            status: 'completed',
+            source: 'provider-result',
+            authoritative: true,
+            revision: 3,
+            paths: ['src/canonical-review.ts'],
+            createdPaths: [],
+            changes: [{ path: 'src/canonical-review.ts', kind: 'update', diff: '@@ -1 +1 @@\n-old\n+new' }],
+            patch: '--- a/src/canonical-review.ts\n+++ b/src/canonical-review.ts\n@@ -1 +1 @@\n-old\n+new',
+            fileCount: 1
+        }
+    }]
+})
+const canonicalReviewIndex = readAssistantReviewIndex(db, thread.id)
+assert.deepEqual(
+    canonicalReviewIndex.turns.find((turn) => turn.id === 'turn-1')?.changes.map((change) => change.filePath),
+    ['src/canonical-review.ts'],
+    'canonical/TUI backfill rows must be visible through the unchanged Desktop Review index'
+)
+
 const shell = toAssistantShellSnapshot(snapshot)
 assert.equal('messages' in shell.sessions[0]!.threads[0]!, false)
 assert.equal(JSON.stringify(shell).includes('Response 4'), false)
@@ -210,11 +244,11 @@ for (let index = 1; index <= 6; index += 1) {
     db.run(`INSERT INTO assistant_messages (id, thread_id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at) VALUES (?, ?, 'assistant', ?, ?, 0, ?, ?, ?)`, [`budget-assistant-${index}`, thread.id, `Budget response ${index}`, `budget-turn-${index}`, sequenceBase + 71, createdAt, createdAt])
 }
 const budgetedPage = readAssistantHistoryPage(db, { threadId: thread.id, turnLimit: 20 })
-assert.equal(budgetedPage.pageInfo.turnCount, 4, 'history keeps complete newest turns while enforcing page budgets')
-assert.equal(budgetedPage.messages.some((message) => message.id === 'budget-user-2'), false, 'the oldest over-budget turn remains on the next page')
+assert.equal(budgetedPage.pageInfo.turnCount, 2, 'initial history keeps complete newest turns within its smaller first-paint budget')
+assert.equal(budgetedPage.messages.some((message) => message.id === 'budget-user-4'), false, 'the oldest over-budget turn remains on the next page')
 assert.equal(budgetedPage.messages.some((message) => message.id === 'budget-user-6'), true, 'the newest turn is always retained')
 assert.equal(budgetedPage.messages.reduce((total, message) => total + message.text.length, 0) <= ASSISTANT_HISTORY_PAGE_MAX_CHARACTERS, true)
-assert.equal(budgetedPage.messages.length + budgetedPage.activities.length + budgetedPage.proposedPlans.length <= ASSISTANT_HISTORY_PAGE_MAX_RECORDS, true)
+assert.equal(budgetedPage.messages.length + budgetedPage.activities.length + budgetedPage.proposedPlans.length <= INITIAL_ASSISTANT_HISTORY_PAGE_MAX_RECORDS, true)
 assert.equal(budgetedPage.pageInfo.hasOlder, true)
 
 const oversizedCreatedAt = at(40)
@@ -238,14 +272,17 @@ assert.deepEqual(JSON.parse(compactedPayload).paths, ['assets/large-image.png'],
 assert.equal('result' in JSON.parse(compactedPayload), false, 'payload compaction removes the embedded result body')
 
 const virtualTimelineSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantVirtualTimeline.tsx', import.meta.url), 'utf8')
-assert.equal(virtualTimelineSource.includes('onLoad={handleInitialLoad}'), true, 'the virtual list explicitly settles at the newest row after bootstrap')
+assert.equal(virtualTimelineSource.includes('initialScrollAtEnd'), true, 'LegendList owns initial positioning at the newest row')
+assert.equal(virtualTimelineSource.includes('onLoad={handleInitialLoad}'), true, 'the virtual list waits for measured initial layout before arming older history')
+assert.equal(virtualTimelineSource.includes('INITIAL_END_FOLLOW_DELAYS_MS'), false, 'initial positioning does not replay timer-driven viewport corrections')
+assert.equal(virtualTimelineSource.includes('scrollElement.scrollTop ='), false, 'native DOM scrolling cannot fight LegendList during bootstrap or prepends')
 assert.equal(virtualTimelineSource.includes('key={props.windowKey}'), true, 'switching chats creates a fresh initial-scroll session')
 assert.equal(virtualTimelineSource.includes('startupSettled && olderLoadIntent && props.hasOlder'), true, 'older history cannot load before end positioning and upward user intent')
 assert.equal(virtualTimelineSource.includes('&& !props.loadOlderError ? requestOlderPage'), true, 'a failed older page cannot enter an automatic retry loop')
 assert.equal(virtualTimelineSource.includes('setOlderLoadIntentWindowKey(null)'), true, 'one upward gesture can request at most one older page')
 assert.equal(virtualTimelineSource.includes("event.deltaY < 0"), true, 'upward wheel intent arms automatic older-page loading')
-assert.equal(virtualTimelineSource.includes('previousContentInsetEndRef'), true, 'composer inset changes preserve the reachable end of the virtual timeline')
-assert.equal(virtualTimelineSource.includes('endAnchorThreshold'), true, 'composer resizing re-anchors only viewers already near the end')
+assert.equal(virtualTimelineSource.includes('contentInsetEndAdjustment={props.contentInsetEndAdjustment}'), true, 'LegendList receives the real composer inset for its own measured scroll range')
+assert.equal(virtualTimelineSource.includes('previousContentInsetEndRef'), false, 'composer resizing has no second viewport controller')
 
 db.close()
 console.log('Assistant paged history contract: ok')

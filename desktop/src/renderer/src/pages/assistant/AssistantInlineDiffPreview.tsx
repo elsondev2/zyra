@@ -97,12 +97,12 @@ export const AssistantInlineDiffPreview = memo(function AssistantInlineDiffPrevi
     const preview = useMemo(() => buildInlineDiffLines(patch), [patch])
 
     return (
-        <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-[#111827]">
-            <div className="flex h-8 shrink-0 items-center gap-2 border-b border-white/[0.08] bg-[#0c1320] px-2.5 text-[11px] leading-none">
-                <span className="min-w-0 flex-1 truncate font-medium text-[#dce5f2]">{displayPath}</span>
+        <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-sparkle-border bg-sparkle-card">
+            <div className="flex h-8 shrink-0 items-center gap-2 border-b border-sparkle-border bg-[color-mix(in_srgb,var(--color-card)_86%,var(--color-bg))] px-2.5 text-[11px] leading-none">
+                <span className="min-w-0 flex-1 truncate font-medium text-sparkle-text">{displayPath}</span>
                 <span className="inline-flex shrink-0 items-center gap-1.5 font-mono text-[10px] tabular-nums">
-                    <span className="text-[#73d69a]">+{additions}</span>
-                    <span className="text-[#ff8585]">-{deletions}</span>
+                    <span className="text-[var(--status-success)]">+{additions}</span>
+                    <span className="text-[var(--status-danger)]">-{deletions}</span>
                 </span>
                 {onOpenFullDiff ? (
                     <button
@@ -111,7 +111,7 @@ export const AssistantInlineDiffPreview = memo(function AssistantInlineDiffPrevi
                             event.stopPropagation()
                             onOpenFullDiff()
                         }}
-                        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--accent-primary)] hover:bg-white/[0.08] hover:text-white"
+                        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--accent-primary)] hover:bg-white/[0.08] hover:text-sparkle-text"
                         title={`Open full diff for ${displayPath} in side panel`}
                     >
                         <ArrowUpRight size={12} />
@@ -125,7 +125,7 @@ export const AssistantInlineDiffPreview = memo(function AssistantInlineDiffPrevi
             >
                 <div className="w-max min-w-full">
                     <Suspense fallback={(
-                        <div className="flex h-10 min-w-[20rem] items-center px-3 text-[10px] text-[#93a2b5]">
+                        <div className="flex h-10 min-w-[20rem] items-center px-3 text-[10px] text-sparkle-text-muted">
                             Applying syntax colors...
                         </div>
                     )}>
@@ -138,14 +138,14 @@ export const AssistantInlineDiffPreview = memo(function AssistantInlineDiffPrevi
                                 event.stopPropagation()
                                 onOpenFullDiff()
                             }}
-                            className="flex h-8 w-full items-center gap-1.5 border-t border-white/[0.08] bg-[#0c1320] px-2.5 text-left text-[10px] text-[var(--accent-primary)] hover:bg-white/[0.04] hover:text-white"
+                            className="flex h-8 w-full items-center gap-1.5 border-t border-sparkle-border bg-[color-mix(in_srgb,var(--color-card)_86%,var(--color-bg))] px-2.5 text-left text-[10px] text-[var(--accent-primary)] hover:bg-white/[0.04] hover:text-sparkle-text"
                             title={`Open full diff for ${displayPath} in side panel`}
                         >
                             <ArrowUpRight size={11} />
                             More lines — open full diff
                         </button>
                     ) : (
-                        <div className="h-8 border-t border-white/[0.06] bg-[#0c1320] px-2.5 text-[10px] leading-8 text-[#93a2b5]">
+                        <div className="h-8 border-t border-sparkle-border bg-[color-mix(in_srgb,var(--color-card)_86%,var(--color-bg))] px-2.5 text-[10px] leading-8 text-sparkle-text-muted">
                             More lines are available in the full diff
                         </div>
                     ) : null}

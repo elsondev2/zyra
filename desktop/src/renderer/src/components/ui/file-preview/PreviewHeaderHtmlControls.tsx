@@ -242,7 +242,7 @@ export function PreviewHeaderHtmlControls({
                     >
                         <AnimatedHeight isOpen={menuOpen} duration={MENU_ANIMATION_MS}>
                             <div className={cn(
-                                'border border-white/[0.08] bg-[#111927] p-1 shadow-2xl shadow-black/60',
+                                'border border-sparkle-border bg-sparkle-card p-1 shadow-2xl shadow-black/30',
                                 menuPosition.shellClassName
                             )}>
                                 {viewportEntries.map(([key, preset]) => {

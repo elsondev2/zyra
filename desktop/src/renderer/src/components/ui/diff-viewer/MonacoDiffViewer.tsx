@@ -1,8 +1,9 @@
 import { DiffEditor, Editor } from '@monaco-editor/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { editor as MonacoEditor } from 'monaco-editor'
-import { useSettings } from '@/lib/settings'
+import { getAppearanceCodeFontStack, useSettings } from '@/lib/settings'
 import { monaco } from '@/lib/monaco/runtime'
+import { useThemeRevision } from '@/lib/use-theme-revision'
 
 const MONACO_DIFF_THEME_ID = 'devscope-diff'
 
@@ -29,6 +30,8 @@ function applyMonacoDiffTheme(theme: string) {
     const bg = readThemeVariable('--color-bg', isLightTheme ? '#f9fafb' : '#0c121f')
     const border = readThemeVariable('--color-border', isLightTheme ? '#e2e8f0' : '#1f2a3d')
     const accent = readThemeVariable('--accent-primary', isLightTheme ? '#2563eb' : '#60a5fa')
+    const inserted = readThemeVariable('--status-success', isLightTheme ? '#15803d' : '#4ade80')
+    const removed = readThemeVariable('--status-danger', isLightTheme ? '#b91c1c' : '#f87171')
 
     const themeData: monaco.editor.IStandaloneThemeData = {
         base: isLightTheme ? 'vs' : 'vs-dark',
@@ -58,15 +61,15 @@ function applyMonacoDiffTheme(theme: string) {
             'scrollbarSlider.hoverBackground': `${accent}55`,
             'scrollbarSlider.activeBackground': `${accent}77`,
             // Diff-specific colors
-            'diffEditor.insertedTextBackground': isLightTheme ? '#73C99133' : '#73C99122',
-            'diffEditor.removedTextBackground': isLightTheme ? '#FF6B6B33' : '#FF6B6B22',
-            'diffEditor.insertedLineBackground': isLightTheme ? '#73C99118' : '#73C99110',
-            'diffEditor.removedLineBackground': isLightTheme ? '#FF6B6B18' : '#FF6B6B10',
+            'diffEditor.insertedTextBackground': `${inserted}${isLightTheme ? '33' : '22'}`,
+            'diffEditor.removedTextBackground': `${removed}${isLightTheme ? '33' : '22'}`,
+            'diffEditor.insertedLineBackground': `${inserted}${isLightTheme ? '18' : '10'}`,
+            'diffEditor.removedLineBackground': `${removed}${isLightTheme ? '18' : '10'}`,
             'diffEditor.diagonalFill': `${border}66`,
-            'diffEditorGutter.insertedLineBackground': isLightTheme ? '#73C99125' : '#73C99115',
-            'diffEditorGutter.removedLineBackground': isLightTheme ? '#FF6B6B25' : '#FF6B6B15',
-            'diffEditorOverview.insertedForeground': '#73C991',
-            'diffEditorOverview.removedForeground': '#FF6B6B'
+            'diffEditorGutter.insertedLineBackground': `${inserted}${isLightTheme ? '25' : '15'}`,
+            'diffEditorGutter.removedLineBackground': `${removed}${isLightTheme ? '25' : '15'}`,
+            'diffEditorOverview.insertedForeground': inserted,
+            'diffEditorOverview.removedForeground': removed
         }
     }
 
@@ -164,6 +167,7 @@ function parseDiffToOriginalAndModified(diff: string): { original: string; modif
 
 export default function MonacoDiffViewer({ filePath, diff, height = '100%', renderSideBySide = true }: MonacoDiffViewerProps) {
     const { settings } = useSettings()
+    const themeRevision = useThemeRevision()
     const language = useMemo(() => getLanguageFromFilePath(filePath), [filePath])
     const { original, modified } = useMemo(() => parseDiffToOriginalAndModified(diff), [diff])
     const [compactLayout, setCompactLayout] = useState(() => {
@@ -191,7 +195,7 @@ export default function MonacoDiffViewer({ filePath, diff, height = '100%', rend
             console.error('Failed to apply Monaco theme:', err)
             setError('Failed to initialize theme')
         }
-    }, [settings.theme, settings.accentColor.primary])
+    }, [settings.theme, settings.accentColor.primary, themeRevision])
 
     useEffect(() => {
         if (typeof window === 'undefined') return
@@ -252,7 +256,7 @@ export default function MonacoDiffViewer({ filePath, diff, height = '100%', rend
             verticalScrollbarSize: 10,
             horizontalScrollbarSize: 10
         },
-        fontFamily: 'JetBrains Mono, Consolas, Monaco, "Courier New", monospace',
+        fontFamily: getAppearanceCodeFontStack(settings.appearanceCodeFont),
         fontSize: 13,
         lineHeight: 20,
         padding: { top: 12, bottom: 12 },
@@ -286,7 +290,7 @@ export default function MonacoDiffViewer({ filePath, diff, height = '100%', rend
             verticalScrollbarSize: 10,
             horizontalScrollbarSize: 10
         },
-        fontFamily: 'JetBrains Mono, Consolas, Monaco, "Courier New", monospace',
+        fontFamily: getAppearanceCodeFontStack(settings.appearanceCodeFont),
         fontSize: compactLayout ? 12 : 13,
         lineHeight: compactLayout ? 18 : 20,
         padding: { top: 12, bottom: 12 },

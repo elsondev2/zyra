@@ -12,7 +12,7 @@ import type {
     AssistantSessionTurnUsageResultPayload,
     AssistantSnapshot,
     AssistantThread,
-    AssistantTranscriptionModelState
+    AssistantVoiceTranscriptionState
 } from '@shared/assistant/contracts'
 import type {
     DevScopeApi,
@@ -20,6 +20,8 @@ import type {
     DevScopeUpdateActionResult,
     DevScopeUpdateState
 } from '@shared/contracts/devscope-api'
+import { createBrowserAssistantBridgeAdapter } from './browser-assistant-bridge-adapter'
+import { createLiveBrowserDevscopeAdapter } from './browser-devscope-live-adapter'
 
 const BROWSER_PREVIEW_SESSION_ID = 'browser-preview-session'
 const BROWSER_PREVIEW_THREAD_ID = 'browser-preview-thread'
@@ -59,14 +61,12 @@ const browserUpdateState: DevScopeUpdateState = {
     canRetry: false
 }
 
-const browserTranscriptionModelState: AssistantTranscriptionModelState = {
-    provider: 'vosk',
-    modelId: 'browser-preview',
-    modelName: 'Browser preview',
-    status: 'missing',
-    installPath: null,
-    downloadUrl: '',
-    error: null
+const browserVoiceTranscriptionState: AssistantVoiceTranscriptionState = {
+    provider: 'codex',
+    status: 'unavailable',
+    available: false,
+    signedIn: false,
+    message: 'ChatGPT transcription requires the Zyra desktop bridge.'
 }
 
 function getBrowserPreviewMode(): BrowserPreviewMode {
@@ -678,6 +678,7 @@ function createAsyncUnavailableProxy(label: string): Record<string, unknown> {
 
 function createBrowserDevscopeAdapter(): DevScopeApi {
     let previewMode = getBrowserPreviewMode()
+    const liveAssistant = previewMode === 'empty' ? createBrowserAssistantBridgeAdapter() : null
     let runningCommandCount = getBrowserPreviewRunningCommandCount()
     let snapshot = createBrowserPreviewSnapshot(previewMode, runningCommandCount)
     const ensureSnapshot = () => {
@@ -736,7 +737,7 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
             installUpdate: updateAction,
             onStateChange: () => noopUnsubscribe
         },
-        assistant: {
+        assistant: liveAssistant || {
             subscribe: () => ok(),
             unsubscribe: () => ok(),
             bootstrap: () => Promise.resolve(bootstrapPayload()),
@@ -747,14 +748,24 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
             getStatus: () => Promise.resolve(createBrowserStatus(previewMode)),
             getAccountOverview: (): Promise<DevScopeResult<AssistantAccountOverviewPayload>> => ok({
                 overview: {
+                    provider: null,
+                    source: null,
                     account: null,
+                    accountId: null,
+                    emailVerified: null,
+                    tokenExpiresAt: null,
                     authMode: null,
                     requiresOpenaiAuth: true,
                     rateLimits: null,
                     rateLimitsByLimitId: {},
+                    usageError: null,
+                    availableResetCount: null,
+                    resetCredits: [],
+                    resetCreditsError: null,
                     fetchedAt: new Date().toISOString()
                 }
             }),
+            redeemAccountReset: () => unavailable('Banked resets require the Zyra desktop bridge.'),
             getSessionTurnUsage: (): Promise<DevScopeResult<AssistantSessionTurnUsageResultPayload>> => ok({
                 usage: {
                     sessionId: BROWSER_PREVIEW_SESSION_ID,
@@ -829,14 +840,24 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
             respondApproval: () => unavailable('Approvals require the Zyra desktop bridge.'),
             respondUserInput: () => unavailable('Guided responses require the Zyra desktop bridge.'),
             startRealtimeVoice: () => unavailable('Realtime voice requires the Zyra desktop bridge.'),
+            sendRealtimeVoiceMessage: () => unavailable('Realtime voice requires the Zyra desktop bridge.'),
+            ingestRealtimeVoiceEvent: () => unavailable('Realtime voice requires the Zyra desktop bridge.'),
             stopRealtimeVoice: () => ok(),
             onRealtimeVoiceEvent: () => noopUnsubscribe,
-            getTranscriptionModelState: () => ok({ state: browserTranscriptionModelState }),
-            downloadTranscriptionModel: () => unavailable('Local transcription requires the Zyra desktop bridge.'),
-            transcribeAudioWithLocalModel: () => unavailable('Local transcription requires the Zyra desktop bridge.'),
+            getVoiceTranscriptionState: () => ok({ state: browserVoiceTranscriptionState }),
+            transcribeVoice: () => unavailable('ChatGPT transcription requires the Zyra desktop bridge.'),
             onEvent: (_callback: (event: AssistantEventStreamPayload) => void) => noopUnsubscribe
         },
+        agentControl: createAsyncUnavailableProxy('agent control'),
         terminal: createAsyncUnavailableProxy('terminal'),
+        fonts: {
+            listManaged: () => ok({ fonts: [] }),
+            listSystem: () => ok({ fonts: [] }),
+            downloadGoogle: () => unavailable('Google Font downloads require the Zyra desktop bridge.'),
+            importFile: () => unavailable('Font imports require the Zyra desktop bridge.'),
+            removeManaged: () => unavailable('Managed fonts require the Zyra desktop bridge.'),
+            readManaged: () => unavailable('Managed fonts require the Zyra desktop bridge.')
+        },
         agentscope: createAsyncUnavailableProxy('agentscope'),
         memory: {
             getOverview: () => ok({
@@ -890,7 +911,7 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
         onPythonPreviewEvent: () => noopUnsubscribe
     }
 
-    return new Proxy(base, {
+    const fallbackAdapter = new Proxy(base, {
         get(target, property) {
             if (property === 'then') return undefined
             if (property in target) return target[property as keyof typeof target]
@@ -898,6 +919,7 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
             return () => unavailable(`${String(property)} requires the Zyra desktop bridge.`)
         }
     }) as unknown as DevScopeApi
+    return liveAssistant ? createLiveBrowserDevscopeAdapter(fallbackAdapter) : fallbackAdapter
 }
 
 export function installBrowserDevscopeAdapter() {

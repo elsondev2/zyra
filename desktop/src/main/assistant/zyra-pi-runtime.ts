@@ -6,11 +6,9 @@ import { createInterface, type Interface as ReadlineInterface } from 'node:readl
 import { isAbsolute, join, resolve } from 'node:path'
 import log from 'electron-log'
 import type {
-    AssistantAccountIdentity,
     AssistantApprovalDecision,
     AssistantInteractionMode,
     AssistantModelInfo,
-    AssistantRateLimitSnapshot,
     AssistantReasoningEffort,
     AssistantRuntimeEvent,
     AssistantRuntimeMode,
@@ -195,7 +193,7 @@ function readUsage(value: unknown): AssistantTurnUsage | null {
         outputTokens: numberValue('output'),
         cachedInputTokens: numberValue('cacheRead'),
         reasoningOutputTokens: numberValue('reasoning') ?? numberValue('reasoningTokens'),
-        totalTokens: numberValue('total')
+        totalTokens: numberValue('totalTokens') ?? numberValue('total')
     }
 }
 
@@ -430,7 +428,7 @@ function buildArgumentPreviewPatch(toolName: string, args: Record<string, unknow
     ].join('\n')
 }
 
-function readPiFileChangeData(input: {
+export function readPiFileChangeData(input: {
     cwd: string
     toolName: string
     args: Record<string, unknown> | null
@@ -471,11 +469,14 @@ function readPiFileChangeData(input: {
             ? resultPatch || resultDiff
             : undefined
     const writeExisting = Boolean(path && /\bwrite\b/.test(normalizedTool) && existsSync(isAbsolute(path) ? path : resolve(cwd, path)))
-    const kind = /\b(delete|remove)\b/.test(normalizedTool)
+    const effectivePatch = resultPatch || resultDiff || explicitPatch || previewPatch
+    const patchCreatesFile = Boolean(effectivePatch && /^---\s+(?:\/dev\/null|null)\s*$/m.test(effectivePatch))
+    const patchDeletesFile = Boolean(effectivePatch && /^\+\+\+\s+(?:\/dev\/null|null)\s*$/m.test(effectivePatch))
+    const kind = /\b(delete|remove)\b/.test(normalizedTool) || patchDeletesFile
         ? 'delete'
         : /\b(move|rename)\b/.test(normalizedTool)
             ? 'move'
-            : /\b(write|create)\b/.test(normalizedTool) && !writeExisting
+            : patchCreatesFile || /\b(write|create)\b/.test(normalizedTool) && !writeExisting
                 ? 'add'
                 : 'update'
     const changes = Array.isArray(details?.['changes'])
@@ -507,7 +508,7 @@ function readPiFileChangeData(input: {
     }
 }
 
-function classifyZyraToolActivity(input: {
+export function classifyZyraToolActivity(input: {
     toolName: string
     args: Record<string, unknown> | null
     result: Record<string, unknown> | null
@@ -936,6 +937,28 @@ export class ZyraPiRuntime extends EventEmitter {
         return this.getAgentServerConnection(resolveZyraRoot()).readCanonicalChatHistory(session, project, options)
     }
 
+    async appendCanonicalMessage(
+        conversationId: string,
+        message: Record<string, unknown>
+    ): Promise<Record<string, unknown>> {
+        const normalizedConversationId = String(conversationId || '').trim()
+        if (!normalizedConversationId) throw new Error('Canonical conversation id is required.')
+        return this.getAgentServerConnection(resolveZyraRoot()).appendCanonicalMessage(normalizedConversationId, message)
+    }
+
+    async findCanonicalMessageReceipt(
+        conversationId: string,
+        operationId: string
+    ): Promise<Record<string, unknown> | null> {
+        const normalizedConversationId = String(conversationId || '').trim()
+        const normalizedOperationId = String(operationId || '').trim()
+        if (!normalizedConversationId || !normalizedOperationId) return null
+        return this.getAgentServerConnection(resolveZyraRoot()).findCanonicalMessageReceipt(
+            normalizedConversationId,
+            normalizedOperationId
+        )
+    }
+
     async updateCanonicalChat(
         threadId: string,
         patch: { title?: string; project?: string; cwd?: string; archived?: boolean }
@@ -1000,24 +1023,6 @@ export class ZyraPiRuntime extends EventEmitter {
         }
     }
 
-    async getAccount(): Promise<{ account: AssistantAccountIdentity | null; authMode: 'apikey' | 'chatgpt' | 'chatgptAuthTokens' | null; requiresOpenaiAuth: boolean }> {
-        return {
-            account: null,
-            authMode: null,
-            requiresOpenaiAuth: false
-        }
-    }
-
-    async getAccountRateLimits(): Promise<{
-        rateLimits: AssistantRateLimitSnapshot | null
-        rateLimitsByLimitId: Record<string, AssistantRateLimitSnapshot>
-    }> {
-        return {
-            rateLimits: null,
-            rateLimitsByLimitId: {}
-        }
-    }
-
     async connect(thread: AssistantThread, cwd: string): Promise<void> {
         if (this.getSessionContext(thread.id) || (thread.providerThreadId && this.getSessionContext(thread.providerThreadId))) return
 
@@ -1027,7 +1032,10 @@ export class ZyraPiRuntime extends EventEmitter {
         }
 
         const root = resolveZyraRoot()
-        const worker = this.getAgentServerConnection(root).createWorker(cwd)
+        const worker = this.getAgentServerConnection(root).createWorker(
+            cwd,
+            thread.canonicalPresence?.latestSequence || 0
+        )
         const providerThreadId = getAssistantCanonicalThreadId(thread)
         const model = normalizeZyraModel(thread.model) || 'openai-codex/gpt-5.5'
         const context: ZyraSessionContext = {
@@ -1039,10 +1047,12 @@ export class ZyraPiRuntime extends EventEmitter {
             connectPromise: null,
             cwd,
             model,
-            thinking: 'medium',
+            thinking: isAssistantReasoningEffort(thread.thinking)
+                ? thread.thinking
+                : (isAssistantReasoningEffort(thread.latestTurn?.effort) ? thread.latestTurn.effort : 'medium'),
             runtimeMode: thread.runtimeMode,
             interactionMode: thread.interactionMode,
-            profile: 'default',
+            profile: normalizeZyraProfile(thread.profile),
             activeTurnId: null,
             completedTurnIds: new Set(),
             assistantMessageSequence: 0,
@@ -1433,12 +1443,20 @@ export class ZyraPiRuntime extends EventEmitter {
             const previousProviderThreadId = context.providerThreadId
             const providerThreadId = String(result['threadId'] || result['providerThreadId'] || context.resumeProviderThreadId || context.providerThreadId || randomUUID())
             const model = String(result['model'] || context.model)
+            const thinking = isAssistantReasoningEffort(result['thinking']) ? result['thinking'] : context.thinking
             const profile = normalizeZyraProfile(result['profile'] || context.profile)
+            const runtimeMode: AssistantRuntimeMode = result['runtimeMode'] === 'full-access'
+                ? 'full-access'
+                : result['runtimeMode'] === 'approval-required'
+                    ? 'approval-required'
+                    : context.runtimeMode
             const agentServerActiveTurnId = asString(result['agentServerActiveTurnId'])
             context.providerThreadId = providerThreadId
             context.resumeProviderThreadId = providerThreadId
             context.model = model
+            context.thinking = thinking
             context.profile = profile
+            context.runtimeMode = runtimeMode
             context.connected = true
             if (agentServerActiveTurnId && !context.activeTurnId) context.activeTurnId = agentServerActiveTurnId
             const connectedFleet = asRecord(result['fleet']) as unknown as FleetSnapshot | null
@@ -1466,6 +1484,19 @@ export class ZyraPiRuntime extends EventEmitter {
             }
             this.emitRuntime({
                 eventId: randomUUID(),
+                type: 'session.config.updated',
+                createdAt: nowIso(),
+                threadId: context.localThreadId,
+                providerThreadId,
+                payload: {
+                    model,
+                    thinking,
+                    profile,
+                    runtimeMode
+                }
+            })
+            this.emitRuntime({
+                eventId: randomUUID(),
                 type: 'thread.started',
                 createdAt: nowIso(),
                 threadId: context.localThreadId,
@@ -1488,6 +1519,25 @@ export class ZyraPiRuntime extends EventEmitter {
         if (!event) return
         const type = asString(event['type'])
         if (!type) return
+        if (type === 'session_config') {
+            const model = asString(event['model']) || context.model
+            const thinking = isAssistantReasoningEffort(event['thinking']) ? event['thinking'] : context.thinking
+            const profile = normalizeZyraProfile(event['profile'] || context.profile)
+            const runtimeMode: AssistantRuntimeMode = event['runtimeMode'] === 'full-access' ? 'full-access' : 'approval-required'
+            context.model = model
+            context.thinking = thinking
+            context.profile = profile
+            context.runtimeMode = runtimeMode
+            this.emitRuntime({
+                eventId: randomUUID(),
+                type: 'session.config.updated',
+                createdAt: nowIso(),
+                threadId: context.localThreadId,
+                providerThreadId: context.providerThreadId,
+                payload: { model, thinking, profile, runtimeMode }
+            })
+            return
+        }
         const observedTurnId = metadata?.turnId
         if (observedTurnId && context.activeTurnId !== observedTurnId && !context.completedTurnIds.has(observedTurnId)) {
             context.activeTurnId = observedTurnId
@@ -1529,6 +1579,7 @@ export class ZyraPiRuntime extends EventEmitter {
                 threadId: context.localThreadId,
                 providerThreadId: context.providerThreadId,
                 turnId,
+                sourceSequence: metadata?.sequence,
                 payload: {
                     outcome,
                     ...(outcome === 'failed' ? { errorMessage: asString(event['errorMessage']) || 'Zyra prompt failed.' } : {}),
@@ -1615,7 +1666,32 @@ export class ZyraPiRuntime extends EventEmitter {
 
         if (type === 'message_start' || type === 'message_update' || type === 'message_end') {
             const message = asRecord(event['message'])
-            if (message?.['role'] !== 'assistant' || !turnId) return
+            const role = asString(message?.['role'])
+            if (role === 'user') {
+                const originatedOutsideThisDesktopThread = Boolean(
+                    metadata?.localThreadId
+                    && metadata.localThreadId !== context.localThreadId
+                )
+                if (type !== 'message_start' || !turnId || !originatedOutsideThisDesktopThread) return
+                const content = extractAssistantEventContentParts(event, emptyAssistantContentParts(), type)
+                if (!content.text.trim()) return
+                const sourceMessageId = asString(message?.['id'])
+                this.emitRuntime({
+                    eventId: randomUUID(),
+                    type: 'user.message.received',
+                    createdAt: asString(event['timestamp']) || nowIso(),
+                    threadId: context.localThreadId,
+                    providerThreadId: context.providerThreadId,
+                    turnId,
+                    itemId: sourceMessageId || undefined,
+                    payload: {
+                        messageId: `assistant-message-user-${sourceMessageId || turnId}`,
+                        text: content.text
+                    }
+                })
+                return
+            }
+            if (role !== 'assistant' || !turnId) return
             const itemId = resolveAssistantEventItemId(context, event, turnId, type)
             const currentContent = {
                 thinking: context.internalTextByItemId.get(itemId) || '',
@@ -1623,7 +1699,7 @@ export class ZyraPiRuntime extends EventEmitter {
                 hasThinkingBlock: context.internalTextByItemId.has(itemId)
             }
             const content = extractAssistantEventContentParts(event, currentContent, type)
-            context.lastUsage = readUsage(message['usage']) || context.lastUsage
+            context.lastUsage = readUsage(message?.['usage']) || context.lastUsage
             if (hasAssistantThinkingText(content) || isReasoningOnlyAssistantEvent(event)) {
                 this.streamInternalText(context, turnId, content.thinking || content.text, itemId)
             }

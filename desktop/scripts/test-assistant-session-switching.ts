@@ -6,6 +6,7 @@ import {
 } from '../src/renderer/src/lib/assistant/assistant-store-runtime'
 import { selectAssistantStoreSession } from '../src/renderer/src/lib/assistant/assistant-store-session-selection'
 import type { CachedHydratedThreadState } from '../src/renderer/src/lib/assistant/session-hydration-cache'
+import { resolveAssistantThreadStatusPill } from '../src/renderer/src/pages/assistant/assistant-sessions-rail-utils'
 
 function thread(id: string, messageText: string) {
     return {
@@ -169,6 +170,11 @@ try {
     assert.equal(state.snapshot.selectedSessionId, 'b', 'the target chat becomes selected in the click task')
     assert.equal(state.snapshot.sessions, originalSessions, 'the immediate shell switch does not clone or scan timeline collections')
     assert.equal(state.selectionTransitionKey, 'b:thread-b', 'the target chat gets an explicit pre-paint transition key')
+    const switchingThread = state.snapshot.sessions.find((entry) => entry.id === 'b')!.threads[0]
+    const switchingPill = resolveAssistantThreadStatusPill(switchingThread, true, undefined, {
+        connecting: Boolean(state.commandPending && !['starting', 'running', 'waiting'].includes(switchingThread.state))
+    })
+    assert.notEqual(switchingPill?.label, 'Connecting', 'selecting an idle chat must not classify it as active work')
     assert.deepEqual(selectionCalls, [], 'IPC waits until the target shell has had a paint opportunity')
     await selectB
     assert.deepEqual(selectionCalls, ['b'], 'the selected chat is persisted after the shell transition')
@@ -196,11 +202,15 @@ try {
     const hookSource = readFileSync(new URL('../src/renderer/src/lib/assistant/assistant-store-hooks.ts', import.meta.url), 'utf8')
     const pageSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantPage.tsx', import.meta.url), 'utf8')
     const coreSource = readFileSync(new URL('../src/renderer/src/lib/assistant/assistant-store-core.ts', import.meta.url), 'utf8')
+    const agentInboxSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantAgentInboxSidebar.tsx', import.meta.url), 'utf8')
+    const legacyRailSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantChatSessionsRail.tsx', import.meta.url), 'utf8')
     assert.equal(hookSource.includes('timelineMessages: selectionTransitioning ? []'), true, 'the old timeline is removed during the urgent shell render')
     assert.equal(hookSource.includes('activityFeed: selectionTransitioning ? []'), true, 'old activity rows cannot remain visible during chat switching')
     assert.equal(pageSource.includes('messages: selectionTransitioning ? EMPTY_ASSISTANT_MESSAGES'), true, 'Inspector projections also drop stale chat data immediately')
     assert.equal(coreSource.includes('current.selectionRequestSessionId'), true, 'delayed domain events preserve the newest local chat selection')
     assert.equal(coreSource.includes('previousState.snapshot.sessions !== mergedState.snapshot.sessions'), true, 'selection-only snapshots skip full hydrated-thread cache scans')
+    assert.equal(agentInboxSource.includes('props.commandPending && !isThreadBusy'), false, 'Agent Inbox selection pending cannot masquerade as active work')
+    assert.equal(legacyRailSource.includes('commandPending && !isThreadBusy'), false, 'legacy sidebar selection pending cannot masquerade as active work')
 
     console.log('Assistant immediate session switching contract: ok')
 } finally {

@@ -1,13 +1,31 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, FolderTree, GitCompareArrows, LayoutGrid, Library, LoaderCircle, MessageSquareText, ShieldAlert, ShieldCheck, SquareTerminal, TriangleAlert, Volume2 } from 'lucide-react'
+import { Bot, FileDiff, Files, FolderTree, GitCompareArrows, Globe2, Library, LoaderCircle, MessageSquareText, ShieldAlert, ShieldCheck, SquareTerminal, TriangleAlert, Volume2 } from 'lucide-react'
 import type { FleetSnapshot } from '@shared/assistant/contracts'
 import type { ControlStateSnapshot, ControlWorkspaceSnapshot } from '@shared/agent-control/contracts'
 import type { BrowserSurfaceOpenRequest } from '@shared/agent-control/protocol'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
+import type { FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
+import { useSettings } from '@/lib/settings'
 import type { AssistantDiffTarget, AssistantDiffTurn } from './assistant-diff-types'
 import { AssistantBrowserPageIcon } from './AssistantBrowserPageIcon'
-import { AssistantInspectorNewTab } from './AssistantInspectorNewTab'
+import type { AssistantBrowserWorkspaceController } from './AssistantBrowserWorkspace'
+import {
+    hasPersistedAssistantBrowserWorkspaceState,
+    loadAssistantBrowserWorkspaceState,
+    type AssistantBrowserTabState,
+    type AssistantBrowserWorkspaceState
+} from './assistant-browser-workspace-state'
+import {
+    loadAssistantInspectorWorkspaceState,
+    persistAssistantInspectorWorkspaceState,
+    restoreAssistantInspectorWorkspaceState,
+    type AssistantInspectorWorkspaceTab
+} from './assistant-inspector-workspace-state'
 import { AssistantInspectorSidebar, type AssistantInspectorTab } from './AssistantInspectorSidebar'
+import {
+    AssistantInspectorDeveloperToast,
+    useAssistantInspectorDeveloperToast
+} from './AssistantInspectorDeveloperToast'
 import { AssistantReviewLanding } from './AssistantReviewLanding'
 import { AssistantTurnReview } from './AssistantTurnReview'
 
@@ -30,21 +48,13 @@ const AssistantControlWorkspace = lazy(async () => ({
     default: (await import('./AssistantControlWorkspace')).AssistantControlWorkspace
 }))
 
-type WorkspaceTab =
-    | { id: string; kind: 'new' }
-    | { id: 'review'; kind: 'review' }
-    | { id: 'explorer'; kind: 'explorer' }
-    | { id: 'terminal'; kind: 'terminal' }
-    | { id: 'browser'; kind: 'browser' }
-    | { id: 'control'; kind: 'control' }
-    | { id: 'resources'; kind: 'resources' }
-    | { id: 'agents'; kind: 'agents' }
-    | { id: string; kind: 'turn'; turnId: string }
+type WorkspaceTab = AssistantInspectorWorkspaceTab
+
+type BrowserWorkspaceTab = Extract<WorkspaceTab, { kind: 'browser' }>
 
 const REVIEW_TAB: WorkspaceTab = { id: 'review', kind: 'review' }
 const EXPLORER_TAB: WorkspaceTab = { id: 'explorer', kind: 'explorer' }
 const TERMINAL_TAB: WorkspaceTab = { id: 'terminal', kind: 'terminal' }
-const BROWSER_TAB: WorkspaceTab = { id: 'browser', kind: 'browser' }
 const CONTROL_TAB: WorkspaceTab = { id: 'control', kind: 'control' }
 const RESOURCES_TAB: WorkspaceTab = { id: 'resources', kind: 'resources' }
 const AGENTS_TAB: WorkspaceTab = { id: 'agents', kind: 'agents' }
@@ -113,20 +123,23 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
         onRevealRequestHandled,
         onClose
     } = props
-    const newTabSequenceRef = useRef(1)
+    const { settings } = useSettings()
     const reviewFileRevealSequenceRef = useRef(-1)
     const browserNavigationSequenceRef = useRef(1)
+    const browserUiTabSequenceRef = useRef(1)
     const processedBrowserSurfaceRequestRef = useRef<string | null>(null)
-    const wasOpenRef = useRef(open)
+    const pendingBrowserTabIdsRef = useRef(new Set<string>())
+    const browserControllerRef = useRef<AssistantBrowserWorkspaceController | null>(null)
     const loadingTimerRef = useRef(0)
-    const [activeTabId, setActiveTabId] = useState('new:0')
-    const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>([{ id: 'new:0', kind: 'new' }])
+    const [activeTabId, setActiveTabId] = useState<string>(REVIEW_TAB.id)
+    const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>([REVIEW_TAB])
+    const [workspaceHydratedKey, setWorkspaceHydratedKey] = useState<string | null>(null)
     const [reviewTurnId, setReviewTurnId] = useState<string | null>(null)
     const [focusedDiffRequestId, setFocusedDiffRequestId] = useState<number | null>(null)
     const [transitionLoadingTabId, setTransitionLoadingTabId] = useState<string | null>(null)
     const [contentLoadingTabId, setContentLoadingTabId] = useState<string | null>(null)
-    const [browserAudible, setBrowserAudible] = useState(false)
-    const [browserFaviconUrl, setBrowserFaviconUrl] = useState<string | null>(null)
+    const [browserTabs, setBrowserTabs] = useState<AssistantBrowserTabState[]>([])
+    const [browserActiveTabId, setBrowserActiveTabId] = useState<string | null>(null)
     const [browserNavigationRequest, setBrowserNavigationRequest] = useState<AssistantBrowserNavigationRequest | null>(null)
     const [selectedAgentRunId, setSelectedAgentRunId] = useState<string | null>(null)
     const [selectedWorkflowRunId, setSelectedWorkflowRunId] = useState<string | null>(null)
@@ -138,11 +151,9 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
         visibleTabIds: [],
         tabs: []
     })
+    const { developerToast, showDeveloperToast, dismissDeveloperToast } = useAssistantInspectorDeveloperToast()
 
-    const createNewTab = useCallback((): WorkspaceTab => ({
-        id: `new:${newTabSequenceRef.current++}`,
-        kind: 'new'
-    }), [])
+    const browserWorkspaceKey = sessionId || projectPath || 'detached'
 
     const beginTabTransition = useCallback((tabId: string) => {
         window.clearTimeout(loadingTimerRef.current)
@@ -177,71 +188,77 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     }, [])
 
     const pendingControlCount = controlState?.pendingGrants.length || 0
-    const pendingBrowserCount = controlState?.pendingGrants.filter((request) => (
-        controlState.targets.some((target) => target.targetId === request.targetId && target.kind === 'zyra-browser')
-    )).length || 0
 
     useEffect(() => {
         if (pendingControlCount === 0) return
         setWorkspaceTabs((current) => current.some((tab) => tab.kind === 'control') ? current : [...current, CONTROL_TAB])
+        setActiveTabId((current) => current || CONTROL_TAB.id)
     }, [pendingControlCount])
 
     useEffect(() => {
         void window.devscope.agentControl.updateWorkspaceState(null)
-        const newTab = createNewTab()
-        setActiveTabId(newTab.id)
-        setWorkspaceTabs([newTab])
+        const hasPersistedBrowser = settings.assistantBrowserRestoreTabs
+            && hasPersistedAssistantBrowserWorkspaceState(browserWorkspaceKey)
+        const persistedBrowser: AssistantBrowserWorkspaceState = settings.assistantBrowserRestoreTabs
+            ? loadAssistantBrowserWorkspaceState(browserWorkspaceKey)
+            : { version: 1, activeTabId: '', splitTabId: null, tabs: [] }
+        const restoredBrowserTabIds = hasPersistedBrowser
+            ? persistedBrowser.tabs.map((tab) => tab.id)
+            : []
+        const restoredWorkspace = restoreAssistantInspectorWorkspaceState(
+            loadAssistantInspectorWorkspaceState(browserWorkspaceKey),
+            restoredBrowserTabIds
+        )
+        setActiveTabId(restoredWorkspace.activeTabId)
+        setWorkspaceTabs(restoredWorkspace.tabs)
         setReviewTurnId(null)
         setFocusedDiffRequestId(null)
         setTransitionLoadingTabId(null)
         setContentLoadingTabId(null)
-        setBrowserAudible(false)
-        setBrowserFaviconUrl(null)
+        setBrowserTabs(persistedBrowser.tabs)
+        setBrowserActiveTabId(persistedBrowser.activeTabId)
         setBrowserNavigationRequest(null)
         setBrowserWorkspaceState({ open: false, activeTabId: null, splitTabId: null, visibleTabIds: [], tabs: [] })
+        browserControllerRef.current = null
+        pendingBrowserTabIdsRef.current.clear()
         processedBrowserSurfaceRequestRef.current = null
-    }, [createNewTab, sessionId])
+        setWorkspaceHydratedKey(browserWorkspaceKey)
+    }, [browserWorkspaceKey, settings.assistantBrowserRestoreTabs])
 
     useEffect(() => {
-        const opening = open && !wasOpenRef.current
-        wasOpenRef.current = open
-        if (!opening || revealRequest || workspaceTabs.some((tab) => tab.kind !== 'new')) return
-        const newTab = createNewTab()
-        setWorkspaceTabs([newTab])
-        setActiveTabId(newTab.id)
-        setReviewTurnId(null)
-        setFocusedDiffRequestId(null)
-        setTransitionLoadingTabId(null)
-        setContentLoadingTabId(null)
-        setBrowserNavigationRequest(null)
-    }, [createNewTab, open, revealRequest, workspaceTabs])
+        if (workspaceHydratedKey !== browserWorkspaceKey) return
+        persistAssistantInspectorWorkspaceState(browserWorkspaceKey, {
+            version: 1,
+            activeTabId,
+            tabs: workspaceTabs
+        })
+    }, [activeTabId, browserWorkspaceKey, workspaceHydratedKey, workspaceTabs])
 
     useEffect(() => {
         if (!browserSurfaceRequest || processedBrowserSurfaceRequestRef.current === browserSurfaceRequest.requestId) return
         processedBrowserSurfaceRequestRef.current = browserSurfaceRequest.requestId
         const mode = browserSurfaceRequest.mode || 'open'
         if (mode === 'close' || mode === 'external') return
-        setWorkspaceTabs((current) => {
-            const withoutChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
-            if (current.some((tab) => tab.kind === 'browser')) return withoutChooser
-            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? BROWSER_TAB : tab)
-            return replaced.some((tab) => tab.kind === 'browser') ? replaced : [...replaced, BROWSER_TAB]
-        })
-        if (browserSurfaceRequest.reveal) {
-            setActiveTabId('browser')
-            beginTabTransition('browser')
+        pendingBrowserTabIdsRef.current.add(browserSurfaceRequest.tabId)
+        const browserTab: WorkspaceTab = {
+            id: browserSurfaceRequest.tabId,
+            kind: 'browser',
+            browserTabId: browserSurfaceRequest.tabId
         }
-    }, [activeTabId, beginTabTransition, browserSurfaceRequest])
+        setWorkspaceTabs((current) => current.some((tab) => tab.id === browserTab.id)
+            ? current
+            : [...current, browserTab])
+        if (browserSurfaceRequest.reveal) {
+            setActiveTabId(browserTab.id)
+            beginTabTransition(browserTab.id)
+        }
+    }, [beginTabTransition, browserSurfaceRequest])
 
     useEffect(() => {
         if (!open || !revealRequest) return
-        setWorkspaceTabs((current) => {
-            const reviewExists = current.some((tab) => tab.kind === 'review')
-            const withoutActiveChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
-            if (reviewExists) return withoutActiveChooser
-            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? REVIEW_TAB : tab)
-            return replaced.some((tab) => tab.kind === 'review') ? replaced : [...replaced, REVIEW_TAB]
-        })
+        setWorkspaceTabs((current) => current.some((tab) => tab.kind === 'review')
+            ? current
+            : [...current, REVIEW_TAB])
         setActiveTabId('review')
         setReviewTurnId(revealRequest.turnId)
         setFocusedDiffRequestId(revealRequest.id)
@@ -249,30 +266,21 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     }, [onRevealRequestHandled, open, revealRequest])
 
     useEffect(() => {
+        if (!reviewIndexReady) return
         const invalidIds = new Set(workspaceTabs.flatMap((tab) => (
             tab.kind === 'turn' && !turns.some((turn) => turn.id === tab.turnId) ? [tab.id] : []
         )))
         if (invalidIds.size === 0) return
         const next = workspaceTabs.filter((tab) => !invalidIds.has(tab.id))
         setWorkspaceTabs(next)
-        if (invalidIds.has(activeTabId)) setActiveTabId(next[0]?.id || 'review')
-    }, [activeTabId, turns, workspaceTabs])
+        if (invalidIds.has(activeTabId)) setActiveTabId(next[0]?.id || '')
+    }, [activeTabId, reviewIndexReady, turns, workspaceTabs])
 
     useEffect(() => {
         setReviewTurnId((current) => current && turns.some((turn) => turn.id === current) ? current : null)
     }, [turns])
 
     const tabs = useMemo<AssistantInspectorTab[]>(() => workspaceTabs.flatMap((tab) => {
-        if (tab.kind === 'new') {
-            return [{
-                id: tab.id,
-                label: 'New tab',
-                icon: <LayoutGrid size={11} />,
-                closable: true,
-                loading: transitionLoadingTabId === tab.id,
-                preview: 'Choose an Inspector workspace'
-            }]
-        }
         if (tab.kind === 'review') {
             return [{
                 id: tab.id,
@@ -305,21 +313,26 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
             }]
         }
         if (tab.kind === 'browser') {
+            const browserTab = browserTabs.find((entry) => entry.id === tab.browserTabId)
+            const controlTab = browserWorkspaceState.tabs.find((entry) => entry.tabId === tab.browserTabId)
+            const pendingForTab = controlTab?.targetId
+                ? controlState?.pendingGrants.filter((request) => request.targetId === controlTab.targetId).length || 0
+                : 0
             return [{
                 id: tab.id,
-                label: 'Browser',
-                icon: <AssistantBrowserPageIcon faviconUrl={browserFaviconUrl} size={12} />,
-                statusIcon: browserAudible || pendingBrowserCount > 0 ? (
+                label: browserTab?.title || 'New tab',
+                icon: <AssistantBrowserPageIcon faviconUrl={browserTab?.faviconUrl || null} size={12} />,
+                statusIcon: browserTab?.audible || pendingForTab > 0 ? (
                     <span className="flex items-center gap-0.5">
-                        {browserAudible ? <Volume2 size={10} aria-label="A browser tab is playing audio" /> : null}
-                        {pendingBrowserCount > 0 ? <ShieldAlert size={10} className="text-amber-300 motion-safe:animate-pulse" aria-label="Browser control approval needed" /> : null}
+                        {browserTab?.audible ? <Volume2 size={10} aria-label="This Browser page is playing audio" /> : null}
+                        {pendingForTab > 0 ? <ShieldAlert size={10} className="text-amber-300 motion-safe:animate-pulse" aria-label="Browser control approval needed" /> : null}
                     </span>
                 ) : undefined,
-                count: pendingBrowserCount || undefined,
-                attention: pendingBrowserCount > 0,
+                count: pendingForTab || undefined,
+                attention: pendingForTab > 0,
                 closable: true,
-                loading: transitionLoadingTabId === tab.id,
-                preview: projectPath ? `Browser · ${projectPath}` : 'No project attached'
+                loading: transitionLoadingTabId === tab.id || browserTab?.status === 'loading',
+                preview: browserTab?.url || (projectPath ? `Browser · ${projectPath}` : 'No project attached')
             }]
         }
         if (tab.kind === 'control') {
@@ -366,15 +379,13 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
             loading: transitionLoadingTabId === tab.id || contentLoadingTabId === tab.id,
             preview: turn.prompt
         }] : []
-    }), [browserAudible, browserFaviconUrl, contentLoadingTabId, fleetSnapshot, pendingBrowserCount, pendingControlCount, projectPath, transitionLoadingTabId, turns, workspaceTabs])
+    }), [browserTabs, browserWorkspaceState.tabs, contentLoadingTabId, controlState?.pendingGrants, fleetSnapshot, pendingControlCount, projectPath, transitionLoadingTabId, turns, workspaceTabs])
 
     const activeWorkspaceTab = workspaceTabs.find((tab) => tab.id === activeTabId) || workspaceTabs[0] || null
     const activeTurnTab = activeWorkspaceTab?.kind === 'turn' ? activeWorkspaceTab : null
     const visibleTurnId = activeTurnTab?.turnId || (activeWorkspaceTab?.kind === 'review' ? reviewTurnId : null)
     const visibleTurn = turns.find((turn) => turn.id === visibleTurnId) || null
     const visibleSelectedDiff = visibleTurn && selectedTurnId === visibleTurn.id ? selectedDiff : visibleTurn?.files[0]?.target || null
-    const reviewOpen = workspaceTabs.some((tab) => tab.kind === 'review')
-    const explorerOpen = workspaceTabs.some((tab) => tab.kind === 'explorer')
     const terminalOpen = workspaceTabs.some((tab) => tab.kind === 'terminal')
     const browserOpen = workspaceTabs.some((tab) => tab.kind === 'browser')
     const controlOpen = workspaceTabs.some((tab) => tab.kind === 'control')
@@ -384,6 +395,45 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     const handleBrowserWorkspaceStateChange = useCallback((next: ControlWorkspaceSnapshot['browser']) => {
         setBrowserWorkspaceState((current) => JSON.stringify(current) === JSON.stringify(next) ? current : next)
     }, [])
+
+    const handleBrowserTabsChange = useCallback((next: AssistantBrowserWorkspaceState) => {
+        for (const tab of next.tabs) pendingBrowserTabIdsRef.current.delete(tab.id)
+        setBrowserTabs(next.tabs)
+        setBrowserActiveTabId(next.activeTabId)
+        setActiveTabId((current) => current.startsWith('browser:') && !next.tabs.some((tab) => tab.id === current)
+            ? next.activeTabId || ''
+            : current)
+    }, [])
+
+    const browserTabIdentity = browserTabs.map((tab) => tab.id).join('|')
+    useEffect(() => {
+        if (!browserOpen) return
+        const validIds = new Set([
+            ...browserTabs.map((tab) => tab.id),
+            ...pendingBrowserTabIdsRef.current
+        ])
+        setWorkspaceTabs((current) => {
+            const firstBrowserIndex = current.findIndex((tab) => tab.kind === 'browser')
+            const retainedBrowserTabs = current.filter((tab): tab is BrowserWorkspaceTab => (
+                tab.kind === 'browser' && validIds.has(tab.browserTabId)
+            ))
+            const retainedIds = new Set(retainedBrowserTabs.map((tab) => tab.browserTabId))
+            for (const tab of browserTabs) {
+                if (!retainedIds.has(tab.id)) retainedBrowserTabs.push({ id: tab.id, kind: 'browser', browserTabId: tab.id })
+            }
+            const nonBrowserTabs: WorkspaceTab[] = current.filter((tab) => tab.kind !== 'browser')
+            const insertionIndex = firstBrowserIndex < 0
+                ? nonBrowserTabs.length
+                : Math.min(firstBrowserIndex, nonBrowserTabs.length)
+            const next = nonBrowserTabs.slice()
+            next.splice(insertionIndex, 0, ...retainedBrowserTabs)
+            if (next.length === current.length && next.every((tab, index) => tab.id === current[index]?.id)) return current
+            return next
+        })
+        setActiveTabId((current) => current.startsWith('browser:') && !validIds.has(current)
+            ? browserActiveTabId || browserTabs[0]?.id || ''
+            : current)
+    }, [browserActiveTabId, browserOpen, browserTabIdentity, browserTabs])
 
     useEffect(() => {
         const activeWorkspace = open && activeWorkspaceTab
@@ -424,15 +474,12 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     }, [onSelectTurn])
 
     const openSingletonWorkspace = useCallback((workspace: WorkspaceTab) => {
-        setWorkspaceTabs((current) => {
-            const withoutActiveChooser = current.filter((tab) => tab.id !== activeTabId || tab.kind !== 'new')
-            if (current.some((tab) => tab.id === workspace.id)) return withoutActiveChooser
-            const replaced = current.map((tab) => tab.id === activeTabId && tab.kind === 'new' ? workspace : tab)
-            return replaced.some((tab) => tab.id === workspace.id) ? replaced : [...replaced, workspace]
-        })
+        setWorkspaceTabs((current) => current.some((tab) => tab.id === workspace.id)
+            ? current
+            : [...current, workspace])
         setActiveTabId(workspace.id)
         beginTabTransition(workspace.id)
-    }, [activeTabId, beginTabTransition])
+    }, [beginTabTransition])
 
     const handleOpenReviewWorkspace = useCallback(() => {
         setFocusedDiffRequestId(null)
@@ -441,7 +488,34 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     }, [openSingletonWorkspace])
     const handleOpenExplorerWorkspace = useCallback(() => openSingletonWorkspace(EXPLORER_TAB), [openSingletonWorkspace])
     const handleOpenTerminalWorkspace = useCallback(() => openSingletonWorkspace(TERMINAL_TAB), [openSingletonWorkspace])
-    const handleOpenBrowserWorkspace = useCallback(() => openSingletonWorkspace(BROWSER_TAB), [openSingletonWorkspace])
+    const openBrowserSurface = useCallback((url = '') => {
+        const reusableBlankTab = !browserOpen
+            ? browserTabs.find((tab) => !tab.url && tab.status === 'idle') || null
+            : null
+        const controller = browserControllerRef.current
+        const browserTabId = reusableBlankTab?.id
+            || controller?.createTab(url)
+            || `browser:desktop:${Date.now().toString(36)}:${browserUiTabSequenceRef.current++}`
+        const knownBrowserTabs = browserOpen
+            ? []
+            : browserTabs.map<WorkspaceTab>((tab) => ({ id: tab.id, kind: 'browser', browserTabId: tab.id }))
+        if (!browserTabs.some((tab) => tab.id === browserTabId)) pendingBrowserTabIdsRef.current.add(browserTabId)
+        const browserSurface: WorkspaceTab = { id: browserTabId, kind: 'browser', browserTabId }
+        setWorkspaceTabs((current) => {
+            const next = current.slice()
+            for (const tab of [...knownBrowserTabs, browserSurface]) {
+                if (!next.some((entry) => entry.id === tab.id)) next.push(tab)
+            }
+            return next
+        })
+        setActiveTabId(browserTabId)
+        beginTabTransition(browserTabId)
+        controller?.activateTab(browserTabId)
+        if (url && !controller) {
+            setBrowserNavigationRequest({ id: browserNavigationSequenceRef.current++, url })
+        }
+    }, [beginTabTransition, browserOpen, browserTabs])
+    const handleOpenBrowserWorkspace = useCallback(() => openBrowserSurface(), [openBrowserSurface])
     const handleOpenControlWorkspace = useCallback(() => openSingletonWorkspace(CONTROL_TAB), [openSingletonWorkspace])
     const handleOpenResourcesWorkspace = useCallback(() => openSingletonWorkspace(RESOURCES_TAB), [openSingletonWorkspace])
     const handleOpenAgentsWorkspace = useCallback(() => openSingletonWorkspace(AGENTS_TAB), [openSingletonWorkspace])
@@ -461,17 +535,19 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
             void window.devscope.openBrowserPreviewExternal(url)
             return
         }
-        setWorkspaceTabs((current) => current.some((tab) => tab.kind === 'browser')
-            ? current
-            : [...current, BROWSER_TAB])
-        setBrowserNavigationRequest({ id: browserNavigationSequenceRef.current++, url })
-        setActiveTabId('browser')
-        beginTabTransition('browser')
-    }, [beginTabTransition, projectPath])
+        openBrowserSurface(url)
+    }, [openBrowserSurface, projectPath])
 
     const handleBrowserNavigationRequestHandled = useCallback((requestId: number) => {
         setBrowserNavigationRequest((current) => current?.id === requestId ? null : current)
     }, [])
+
+    const handleBrowserSurfaceRequestHandled = useCallback((requestId: string) => {
+        if (browserSurfaceRequest?.requestId === requestId) {
+            pendingBrowserTabIdsRef.current.delete(browserSurfaceRequest.tabId)
+        }
+        onBrowserSurfaceRequestHandled(requestId)
+    }, [browserSurfaceRequest, onBrowserSurfaceRequestHandled])
 
     const handleOpenResourceTurn = useCallback((turnId: string) => {
         setWorkspaceTabs((current) => current.some((tab) => tab.kind === 'review')
@@ -535,15 +611,9 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
             selectTurn(reviewTurnId)
             return
         }
+        if (tab?.kind === 'browser') browserControllerRef.current?.activateTab(tab.browserTabId)
         if (tab?.kind === 'turn') selectTurn(tab.turnId)
     }, [beginTabTransition, reviewTurnId, selectTurn, workspaceTabs])
-
-    const handleAddTab = useCallback(() => {
-        const newTab = createNewTab()
-        setWorkspaceTabs((current) => [...current, newTab])
-        setActiveTabId(newTab.id)
-        beginTabTransition(newTab.id)
-    }, [beginTabTransition, createNewTab])
 
     const handleReorderTab = useCallback((fromTabId: string, toTabId: string) => {
         if (fromTabId === toTabId) return
@@ -559,32 +629,62 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     }, [])
 
     const handleCloseTab = useCallback((tabId: string) => {
-        if (workspaceTabs.length <= 1) {
-            onClose()
-            return
-        }
         const closingIndex = workspaceTabs.findIndex((tab) => tab.id === tabId)
         const closingTab = workspaceTabs[closingIndex]
+        if (!closingTab) return
+        if (closingTab.kind === 'browser') {
+            pendingBrowserTabIdsRef.current.delete(closingTab.browserTabId)
+            const nextBrowserState = browserControllerRef.current?.closeTab(closingTab.browserTabId)
+            if (nextBrowserState) {
+                setBrowserTabs(nextBrowserState.tabs)
+                setBrowserActiveTabId(nextBrowserState.activeTabId)
+            }
+        }
         const next = workspaceTabs.filter((tab) => tab.id !== tabId)
         setWorkspaceTabs(next)
         setTransitionLoadingTabId((current) => current === tabId ? null : current)
         setContentLoadingTabId((current) => current === tabId ? null : current)
-        if (closingTab?.kind === 'review') {
+        if (closingTab.kind === 'review') {
             setReviewTurnId(null)
             setFocusedDiffRequestId(null)
         }
-        if (closingTab?.kind === 'browser') {
-            setBrowserAudible(false)
-            setBrowserFaviconUrl(null)
-            setBrowserNavigationRequest(null)
+        if (closingTab.kind === 'browser') setBrowserNavigationRequest(null)
+        if (next.length === 0) {
+            persistAssistantInspectorWorkspaceState(browserWorkspaceKey, { version: 1, activeTabId: '', tabs: [] })
+            setActiveTabId('')
+            onClose()
+            return
         }
         if (activeTabId === tabId) {
             const fallback = next[Math.min(Math.max(closingIndex, 0), next.length - 1)] || next[next.length - 1]
             setActiveTabId(fallback.id)
+            if (fallback.kind === 'browser') browserControllerRef.current?.activateTab(fallback.browserTabId)
             if (fallback.kind === 'turn') selectTurn(fallback.turnId)
             if (fallback.kind === 'review' && reviewTurnId) selectTurn(reviewTurnId)
         }
-    }, [activeTabId, onClose, reviewTurnId, selectTurn, workspaceTabs])
+    }, [activeTabId, browserWorkspaceKey, onClose, reviewTurnId, selectTurn, workspaceTabs])
+
+    const handleBrowserControllerChange = useCallback((controller: AssistantBrowserWorkspaceController | null) => {
+        browserControllerRef.current = controller
+    }, [])
+
+    const addTabItems = useMemo<FileActionsMenuItem[]>(() => [
+        { id: 'browser', label: 'Browser', icon: <Globe2 size={14} />, onSelect: handleOpenBrowserWorkspace },
+        { id: 'terminal', label: 'Terminal', icon: <SquareTerminal size={14} />, onSelect: handleOpenTerminalWorkspace },
+        { id: 'explorer', label: 'Files', icon: <Files size={14} />, onSelect: handleOpenExplorerWorkspace },
+        { id: 'review', label: 'Diff', icon: <FileDiff size={14} />, onSelect: handleOpenReviewWorkspace },
+        { id: 'resources', label: 'Resources', icon: <Library size={14} />, onSelect: handleOpenResourcesWorkspace },
+        { id: 'agents', label: 'Agents', icon: <Bot size={14} />, onSelect: handleOpenAgentsWorkspace },
+        { id: 'control', label: 'Control', icon: <ShieldCheck size={14} />, onSelect: handleOpenControlWorkspace }
+    ], [
+        handleOpenAgentsWorkspace,
+        handleOpenBrowserWorkspace,
+        handleOpenControlWorkspace,
+        handleOpenExplorerWorkspace,
+        handleOpenResourcesWorkspace,
+        handleOpenReviewWorkspace,
+        handleOpenTerminalWorkspace
+    ])
 
     return (
         <AssistantInspectorSidebar
@@ -597,8 +697,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
             onSelectTab={handleSelectTab}
             onCloseTab={handleCloseTab}
             onReorderTab={handleReorderTab}
-            onAddTab={handleAddTab}
-            onClose={onClose}
+            addTabItems={addTabItems}
         >
             <>
                 {terminalOpen ? (
@@ -622,7 +721,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                         aria-hidden={activeWorkspaceTab?.kind !== 'browser'}
                         className={activeWorkspaceTab?.kind === 'browser'
                             ? 'flex min-h-0 flex-1'
-                            : 'pointer-events-none invisible absolute inset-x-0 bottom-0 top-[76px] flex'}
+                            : 'pointer-events-none invisible absolute inset-0 flex'}
                     >
                         <Suspense fallback={(
                             <div className="flex min-h-0 flex-1 items-center justify-center">
@@ -630,18 +729,20 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                             </div>
                         )}>
                             <AssistantBrowserWorkspace
-                                workspaceKey={sessionId || projectPath || 'detached'}
+                                workspaceKey={browserWorkspaceKey}
                                 threadId={threadId || 'thread:detached'}
                                 projectPath={projectPath}
                                 active={open && activeWorkspaceTab?.kind === 'browser'}
+                                selectedTabId={activeWorkspaceTab?.kind === 'browser' ? activeWorkspaceTab.browserTabId : null}
                                 controlState={controlState}
                                 navigationRequest={browserNavigationRequest}
                                 surfaceRequest={browserSurfaceRequest}
                                 onNavigationRequestHandled={handleBrowserNavigationRequestHandled}
-                                onSurfaceRequestHandled={onBrowserSurfaceRequestHandled}
+                                onSurfaceRequestHandled={handleBrowserSurfaceRequestHandled}
                                 onWorkspaceStateChange={handleBrowserWorkspaceStateChange}
-                                onAudibleChange={setBrowserAudible}
-                                onActiveFaviconChange={setBrowserFaviconUrl}
+                                onTabsChange={handleBrowserTabsChange}
+                                onControllerChange={handleBrowserControllerChange}
+                                onDeveloperToast={showDeveloperToast}
                             />
                         </Suspense>
                     </div>
@@ -696,24 +797,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                     </div>
                 ) : null}
 
-                {activeWorkspaceTab?.kind === 'terminal' || activeWorkspaceTab?.kind === 'browser' || activeWorkspaceTab?.kind === 'control' || activeWorkspaceTab?.kind === 'resources' || activeWorkspaceTab?.kind === 'agents' ? null : activeWorkspaceTab?.kind === 'new' ? (
-                    <AssistantInspectorNewTab
-                        reviewOpen={reviewOpen}
-                        browserOpen={browserOpen}
-                        controlOpen={controlOpen}
-                        explorerOpen={explorerOpen}
-                        terminalOpen={terminalOpen}
-                        resourcesOpen={resourcesOpen}
-                        subagentsOpen={agentsOpen}
-                        onSelectReview={handleOpenReviewWorkspace}
-                        onSelectBrowser={handleOpenBrowserWorkspace}
-                        onSelectControl={handleOpenControlWorkspace}
-                        onSelectExplorer={handleOpenExplorerWorkspace}
-                        onSelectTerminal={handleOpenTerminalWorkspace}
-                        onSelectResources={handleOpenResourcesWorkspace}
-                        onSelectSubagents={handleOpenAgentsWorkspace}
-                    />
-                ) : activeWorkspaceTab?.kind === 'explorer' ? (
+                {activeWorkspaceTab?.kind === 'terminal' || activeWorkspaceTab?.kind === 'browser' || activeWorkspaceTab?.kind === 'control' || activeWorkspaceTab?.kind === 'resources' || activeWorkspaceTab?.kind === 'agents' ? null : !activeWorkspaceTab ? null : activeWorkspaceTab?.kind === 'explorer' ? (
                     <Suspense fallback={(
                         <div className="flex min-h-0 flex-1 items-center justify-center">
                             <LoaderCircle size={18} className="animate-spin text-[var(--accent-primary)]/75" />
@@ -768,6 +852,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                         onOpenTurnInTab={handleOpenTurnInTab}
                     />
                 )}
+                <AssistantInspectorDeveloperToast toast={developerToast} onDismiss={dismissDeveloperToast} />
             </>
         </AssistantInspectorSidebar>
     )

@@ -13,7 +13,7 @@ export function deriveAssistantComposerViewState({
     settings
 }: AssistantComposerViewStateInput) {
     const iconTheme: 'light' | 'dark' = settings.theme === 'light' ? 'light' : 'dark'
-    const voiceBusy = controller.voiceInput.isRecording || controller.voiceInput.isTranscribing
+    const voiceBusy = controller.voiceInput.isStarting || controller.voiceInput.isRecording || controller.voiceInput.isTranscribing
     const composerStatusToneClass = capabilities.tone === 'warning'
         ? 'text-amber-200'
         : capabilities.tone === 'info'
@@ -24,20 +24,29 @@ export function deriveAssistantComposerViewState({
         : capabilities.tone === 'info'
             ? 'bg-sky-300/80'
             : 'bg-white/35'
-    const transientStatus = controller.voiceInput.isRecording
+    const transientStatus = controller.voiceInput.isStarting
         ? {
-            label: settings.assistantTranscriptionEngine === 'vosk' ? 'Recording locally...' : 'Listening...',
-            detail: 'Voice input is capturing a draft.',
-            toneClass: 'text-rose-200',
-            dotClass: 'animate-pulse bg-rose-400'
+            label: 'Opening microphone...',
+            detail: 'Zyra is waiting for microphone access.',
+            toneClass: 'text-sky-200',
+            dotClass: 'animate-pulse bg-sky-300'
         }
-        : controller.voiceInput.isTranscribing
+        : controller.voiceInput.isRecording
             ? {
-                label: 'Transcribing locally...',
-                detail: 'The draft updates when transcription completes.',
-                toneClass: 'text-sky-200',
-                dotClass: 'animate-pulse bg-sky-300'
+                label: settings.assistantTranscriptionEngine === 'codex' ? 'Recording voice note...' : 'Listening...',
+                detail: settings.assistantTranscriptionEngine === 'codex'
+                    ? 'Cancel the note or stop when it is ready to transcribe.'
+                    : 'Browser dictation is updating the draft.',
+                toneClass: 'text-rose-200',
+                dotClass: 'animate-pulse bg-rose-400'
             }
+            : controller.voiceInput.isTranscribing
+                ? {
+                    label: 'Transcribing with ChatGPT...',
+                    detail: 'The draft updates when transcription completes.',
+                    toneClass: 'text-sky-200',
+                    dotClass: 'animate-pulse bg-sky-300'
+                }
             : controller.voiceInput.speechError
                 ? {
                     label: controller.voiceInput.speechError,

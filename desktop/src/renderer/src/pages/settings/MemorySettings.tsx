@@ -1,8 +1,13 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
-import { ArrowLeft, BrainCircuit, Check, Copy, FileText, FolderOpen, RefreshCw, Sparkles } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Check, Copy, RefreshCw } from 'lucide-react'
 import type { ZyraMemoryOverview } from '@shared/contracts/memory-contracts'
-import { cn } from '@/lib/utils'
+import {
+    SettingsButton,
+    SettingsNotice,
+    SettingsPageContainer,
+    SettingsRow,
+    SettingsSection
+} from './settings-layout'
 
 type LoadState =
     | { status: 'loading'; overview: ZyraMemoryOverview | null; error: null }
@@ -25,15 +30,10 @@ export default function MemorySettings() {
         setSelectedId((current) => current || result.overview.memoryLayers[0]?.id || null)
     }
 
-    useEffect(() => {
-        void load()
-    }, [])
+    useEffect(() => { void load() }, [])
 
     const overview = state.overview
-    const selectedLayer = useMemo(() => {
-        if (!overview) return null
-        return overview.memoryLayers.find((layer) => layer.id === selectedId) || overview.memoryLayers[0] || null
-    }, [overview, selectedId])
+    const selectedLayer = useMemo(() => overview?.memoryLayers.find((layer) => layer.id === selectedId) || overview?.memoryLayers[0] || null, [overview, selectedId])
 
     const copyPath = async (path: string) => {
         await window.devscope.copyToClipboard(path)
@@ -41,163 +41,48 @@ export default function MemorySettings() {
         window.setTimeout(() => setCopiedPath((current) => current === path ? null : current), 1400)
     }
 
-    return (
-        <div className="animate-fadeIn">
-            <div className="mb-6 flex items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                    <div className="rounded-lg bg-amber-500/10 p-2">
-                        <BrainCircuit className="text-amber-300" size={24} />
-                    </div>
-                    <div>
-                        <h1 className="text-xl font-semibold text-sparkle-text">Zyra Memory</h1>
-                        <p className="text-sm text-sparkle-text-secondary">The local layers that shape Zyra before a chat starts.</p>
-                    </div>
-                </div>
-                <div className="flex items-center gap-2">
-                    <button
-                        type="button"
-                        onClick={() => void load()}
-                        className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-sparkle-card px-4 py-2 text-sm text-sparkle-text transition-all hover:border-white/20 hover:bg-white/[0.03]"
-                    >
-                        <RefreshCw size={16} className={cn(state.status === 'loading' && 'animate-spin')} />
-                        Refresh
-                    </button>
-                    <Link
-                        to="/settings"
-                        className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-white/10 bg-sparkle-card px-4 py-2 text-sm text-sparkle-text transition-all hover:border-white/20 hover:bg-white/[0.03] hover:text-[var(--accent-primary)]"
-                    >
-                        <ArrowLeft size={16} />
-                        Back
-                    </Link>
-                </div>
-            </div>
-
-            {state.status === 'error' ? (
-                <div className="rounded-xl border border-red-400/20 bg-red-500/10 p-4 text-sm text-red-100">
-                    {state.error}
-                </div>
-            ) : null}
-
-            {overview ? (
-                <div className="grid gap-4 xl:grid-cols-[minmax(320px,0.95fr)_minmax(0,1.35fr)]">
-                    <section className="space-y-4">
-                        <div className="rounded-xl border border-white/10 bg-sparkle-card p-5">
-                            <div className="grid gap-3 text-sm">
-                                <InfoRow icon={<FolderOpen size={15} />} label="Root" value={overview.rootPath} onCopy={() => void copyPath(overview.rootPath)} copied={copiedPath === overview.rootPath} />
-                                <InfoRow icon={<FileText size={15} />} label="Memory" value={overview.memoryDirectory} onCopy={() => void copyPath(overview.memoryDirectory)} copied={copiedPath === overview.memoryDirectory} />
-                                <InfoRow icon={<Sparkles size={15} />} label="Runtime" value={`${overview.defaultModel} / ${overview.defaultThinking}`} />
-                            </div>
-                        </div>
-
-                        <div className="overflow-hidden rounded-xl border border-white/10 bg-sparkle-card">
-                            <div className="border-b border-white/10 px-4 py-3">
-                                <h2 className="text-sm font-semibold text-sparkle-text">Layers</h2>
-                            </div>
-                            <div className="max-h-[520px] overflow-y-auto">
-                                {overview.memoryLayers.map((layer) => (
-                                    <button
-                                        key={layer.id}
-                                        type="button"
-                                        onClick={() => setSelectedId(layer.id)}
-                                        className={cn(
-                                            'block w-full border-b border-white/5 px-4 py-3 text-left transition-colors last:border-b-0',
-                                            selectedLayer?.id === layer.id
-                                                ? 'bg-[var(--accent-primary)]/10'
-                                                : 'hover:bg-white/[0.03]'
-                                        )}
-                                    >
-                                        <div className="flex items-center justify-between gap-3">
-                                            <span className="text-sm font-medium text-sparkle-text">{layer.title}</span>
-                                            <span className="text-[11px] text-sparkle-text-muted">{formatBytes(layer.size)}</span>
-                                        </div>
-                                        <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-sparkle-text-secondary">
-                                            {layer.summary || 'No stable summary yet.'}
-                                        </p>
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    </section>
-
-                    <section className="min-w-0 space-y-4">
-                        <div className="rounded-xl border border-white/10 bg-sparkle-card">
-                            <div className="flex items-center justify-between gap-3 border-b border-white/10 px-5 py-4">
-                                <div className="min-w-0">
-                                    <h2 className="truncate text-base font-semibold text-sparkle-text">
-                                        {selectedLayer?.title || 'No memory layer'}
-                                    </h2>
-                                    {selectedLayer ? (
-                                        <p className="mt-1 truncate text-xs text-sparkle-text-muted">
-                                            {new Date(selectedLayer.updatedAt).toLocaleString()}
-                                        </p>
-                                    ) : null}
-                                </div>
-                                {selectedLayer ? (
-                                    <button
-                                        type="button"
-                                        onClick={() => void copyPath(selectedLayer.filePath)}
-                                        className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-sparkle-text-secondary transition-colors hover:border-white/20 hover:text-sparkle-text"
-                                    >
-                                        {copiedPath === selectedLayer.filePath ? <Check size={14} /> : <Copy size={14} />}
-                                        Path
-                                    </button>
-                                ) : null}
-                            </div>
-                            <pre className="max-h-[520px] overflow-auto whitespace-pre-wrap p-5 font-mono text-[12px] leading-relaxed text-sparkle-text-secondary">
-                                {selectedLayer?.content || 'No memory files were found.'}
-                            </pre>
-                        </div>
-
-                        <div className="rounded-xl border border-white/10 bg-sparkle-card p-5">
-                            <h2 className="text-sm font-semibold text-sparkle-text">Recommended Prompts</h2>
-                            <div className="mt-3 grid gap-2">
-                                {overview.recommendedPrompts.length ? overview.recommendedPrompts.map((prompt) => (
-                                    <div key={prompt} className="rounded-lg border border-white/8 bg-white/[0.025] px-3 py-2 text-sm text-sparkle-text-secondary">
-                                        {prompt}
-                                    </div>
-                                )) : (
-                                    <p className="text-sm text-sparkle-text-muted">No recommended prompts saved yet.</p>
-                                )}
-                            </div>
-                        </div>
-                    </section>
-                </div>
-            ) : null}
-        </div>
+    const copyButton = (path: string, label: string) => (
+        <SettingsButton variant="ghost" onClick={() => void copyPath(path)} aria-label={`Copy ${label}`}>
+            {copiedPath === path ? <Check size={13} /> : <Copy size={13} />}
+            {copiedPath === path ? 'Copied' : 'Copy'}
+        </SettingsButton>
     )
-}
 
-function InfoRow({
-    icon,
-    label,
-    value,
-    onCopy,
-    copied = false
-}: {
-    icon: ReactNode
-    label: string
-    value: string
-    onCopy?: () => void
-    copied?: boolean
-}) {
     return (
-        <div className="grid grid-cols-[92px_minmax(0,1fr)_auto] items-center gap-3">
-            <span className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-[0.12em] text-sparkle-text-muted">
-                {icon}
-                {label}
-            </span>
-            <span className="truncate font-mono text-xs text-sparkle-text-secondary">{value}</span>
-            {onCopy ? (
-                <button
-                    type="button"
-                    onClick={onCopy}
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/10 text-sparkle-text-muted transition-colors hover:border-white/20 hover:text-sparkle-text"
-                    title={`Copy ${label.toLowerCase()} path`}
-                >
-                    {copied ? <Check size={14} /> : <Copy size={14} />}
-                </button>
-            ) : <span />}
-        </div>
+        <SettingsPageContainer>
+            <SettingsSection title="Memory" headerAction={<SettingsButton variant="ghost" onClick={() => void load()} disabled={state.status === 'loading'}><RefreshCw size={12} className={state.status === 'loading' ? 'animate-spin' : ''} />Refresh</SettingsButton>}>
+                {state.status === 'error' ? <SettingsNotice tone="error">{state.error}</SettingsNotice> : null}
+                <SettingsRow title="Zyra root" description="Local root used by the active Zyra installation." status={overview?.rootPath || 'Loading…'} statusTone={overview ? 'muted' : 'info'} control={overview ? copyButton(overview.rootPath, 'Zyra root') : null} />
+                <SettingsRow title="Memory directory" description="Folder containing the memory layers loaded before a chat starts." status={overview?.memoryDirectory || 'Loading…'} statusTone={overview ? 'muted' : 'info'} control={overview ? copyButton(overview.memoryDirectory, 'memory directory') : null} />
+                <SettingsRow title="Sessions directory" description="Local location for canonical session records." status={overview?.sessionsDirectory || 'Loading…'} statusTone={overview ? 'muted' : 'info'} control={overview ? copyButton(overview.sessionsDirectory, 'sessions directory') : null} />
+                <SettingsRow title="Runtime defaults" description="Default model and thinking level used by the local runtime." control={<span className="text-xs font-medium text-sparkle-text-secondary">{overview ? `${overview.defaultModel} · ${overview.defaultThinking}` : 'Loading…'}</span>} />
+            </SettingsSection>
+
+            <SettingsSection title="Layers">
+                {overview?.memoryLayers.length ? overview.memoryLayers.map((layer) => (
+                    <SettingsRow
+                        key={layer.id}
+                        title={layer.title}
+                        description={layer.summary || 'No stable summary yet.'}
+                        status={`${formatBytes(layer.size)} · updated ${new Date(layer.updatedAt).toLocaleString()}`}
+                        className={selectedLayer?.id === layer.id ? 'bg-[var(--settings-active)]' : undefined}
+                        control={<div className="flex gap-1"><SettingsButton variant="ghost" onClick={() => setSelectedId(layer.id)}>{selectedLayer?.id === layer.id ? 'Selected' : 'View'}</SettingsButton>{copyButton(layer.filePath, `${layer.title} path`)}</div>}
+                    />
+                )) : <SettingsNotice>{state.status === 'loading' ? 'Loading memory layers…' : 'No memory layers were found.'}</SettingsNotice>}
+            </SettingsSection>
+
+            {selectedLayer ? (
+                <SettingsSection title={selectedLayer.title}>
+                    <SettingsRow title="File content" description="Read-only view of the selected local memory layer.">
+                        <pre className="mt-3 max-h-[480px] overflow-auto whitespace-pre-wrap border-t border-[var(--settings-border)] py-4 font-mono text-[12px] leading-relaxed text-sparkle-text-secondary">{selectedLayer.content || 'This memory layer is empty.'}</pre>
+                    </SettingsRow>
+                </SettingsSection>
+            ) : null}
+
+            <SettingsSection title="Recommended prompts">
+                {overview?.recommendedPrompts.length ? overview.recommendedPrompts.map((prompt) => <SettingsRow key={prompt} title={prompt} description="Suggested prompt derived from the active memory setup." />) : <SettingsNotice>No recommended prompts are available.</SettingsNotice>}
+            </SettingsSection>
+        </SettingsPageContainer>
     )
 }
 

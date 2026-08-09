@@ -197,13 +197,13 @@ export function PreviewExpandedHeaderBar({
     return (
         <div
             ref={containerRef}
-            className="group/header relative z-30 flex h-9 min-h-9 items-stretch justify-between gap-2 overflow-visible border-b border-white/[0.06] bg-[#0a0f16]/98 px-0"
+            className="group/header relative z-30 flex h-9 min-h-9 items-stretch justify-between gap-2 overflow-visible border-b border-sparkle-border bg-sparkle-bg/98 px-0"
         >
             <div className="flex min-w-0 flex-1 items-stretch gap-2 overflow-hidden">
                 <button
                     type="button"
                     onClick={onToggleLeftPanel}
-                    className="ml-1 inline-flex h-full w-7 shrink-0 items-center justify-center rounded-md text-[#918aa0] transition-colors hover:bg-white/[0.035] hover:text-[#d7d0e3] focus:outline-none focus-visible:ring-1 focus-visible:ring-white/10"
+                    className="ml-1 inline-flex h-full w-7 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted transition-colors hover:bg-white/[0.035] hover:text-sparkle-text focus:outline-none focus-visible:ring-1 focus-visible:ring-white/10"
                     title={leftPanelOpen ? 'Hide file navigator' : 'Show file navigator'}
                     aria-label={leftPanelOpen ? 'Hide file navigator' : 'Show file navigator'}
                     aria-pressed={leftPanelOpen}
@@ -278,7 +278,7 @@ export function PreviewExpandedHeaderBar({
                             </HeaderIconButton>
 
                             {pythonRunModeMenuOpen ? (
-                                <div className="absolute right-0 top-7 z-40 w-44 rounded-lg border border-white/[0.08] bg-[#111927] p-1 shadow-2xl shadow-black/60">
+                                <div className="absolute right-0 top-7 z-40 w-44 rounded-lg border border-sparkle-border bg-sparkle-card p-1 shadow-2xl shadow-black/30">
                                     <button
                                         type="button"
                                         onClick={() => {
@@ -329,7 +329,7 @@ export function PreviewExpandedHeaderBar({
                     active={rightPanelOpen}
                     title={rightPanelOpen ? 'Hide right panel' : 'Show right panel'}
                     onClick={onToggleRightPanel}
-                    activeClassName="border-white/70 bg-white text-[#0a0f16] opacity-100"
+                    activeClassName="border-white/70 bg-white text-sparkle-bg opacity-100"
                 >
                     <PanelRight size={15} />
                 </HeaderIconButton>

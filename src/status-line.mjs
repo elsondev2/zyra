@@ -148,19 +148,29 @@ function formatCost(session) {
   const cached = costCache.get(manager);
   const lastEntry = entries.at(-1);
   const lastCost = lastEntry?.message?.usage?.cost?.total;
-  if (cached && cached.length === entries.length && cached.lastEntry === lastEntry && cached.lastCost === lastCost && cached.modelKey === modelKey) {
+  const aggregateCost = manager.getSessionUsage?.()?.cost?.total;
+  if (
+    cached
+    && cached.length === entries.length
+    && cached.lastEntry === lastEntry
+    && cached.lastCost === lastCost
+    && cached.aggregateCost === aggregateCost
+    && cached.modelKey === modelKey
+  ) {
     return cached.value;
   }
 
-  let total = 0;
-  for (const entry of entries) {
-    if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-    total += entry.message.usage?.cost?.total ?? 0;
+  let total = typeof aggregateCost === "number" && Number.isFinite(aggregateCost) ? aggregateCost : 0;
+  if (typeof aggregateCost !== "number" || !Number.isFinite(aggregateCost)) {
+    for (const entry of entries) {
+      if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+      total += entry.message.usage?.cost?.total ?? 0;
+    }
   }
 
   const subscription = session.model ? session.modelRegistry.isUsingOAuth(session.model) : false;
   const value = `$${total.toFixed(3)}${subscription ? " sub" : ""}`;
-  costCache.set(manager, { length: entries.length, lastEntry, lastCost, modelKey, value });
+  costCache.set(manager, { length: entries.length, lastEntry, lastCost, aggregateCost, modelKey, value });
   return value;
 }
 

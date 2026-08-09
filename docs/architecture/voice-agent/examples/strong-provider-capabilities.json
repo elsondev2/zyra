@@ -1,0 +1,147 @@
+{
+  "schema_version": 2,
+  "adapter_id": "example_strong_agent_adapter",
+  "adapter_version": "0.1.0",
+  "provider_version": "example-2026-08",
+  "auth_mode": "provider_account",
+  "adapter_role": "strong_agent",
+  "observed_at": "2026-08-02T12:00:00Z",
+  "expires_at": "2026-08-03T12:00:00Z",
+  "primary_agent": {
+    "private_task_sessions": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "thread/start + turn/start",
+      "evidence": [
+        "adapter_assertion",
+        "interoperability_test"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "direct_chat_turns": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "canonical chat turn/start",
+      "evidence": [
+        "adapter_assertion",
+        "interoperability_test"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": [
+        "Direct output still commits through the conversation gateway."
+      ]
+    },
+    "gateway_controlled_output": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "normalized turn and item event stream",
+      "evidence": [
+        "adapter_assertion",
+        "interoperability_test"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": [
+        "The adapter can quarantine output from stale foreground-route epochs."
+      ]
+    },
+    "structured_tool_events": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "normalized tool item events",
+      "evidence": [
+        "adapter_assertion"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": [
+        "Arguments and output require redaction before timeline projection."
+      ]
+    },
+    "text_input": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "turn/start",
+      "evidence": [
+        "adapter_assertion"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "image_input": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "turn/start image input",
+      "evidence": [
+        "interoperability_test"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "tools": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "provider task tools",
+      "evidence": [
+        "adapter_assertion"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "steering": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "turn/steer",
+      "evidence": [
+        "adapter_assertion"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "interrupt": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "turn/interrupt",
+      "evidence": [
+        "adapter_assertion"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "usage_events": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "account/rateLimits/read",
+      "evidence": [
+        "adapter_assertion"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": []
+    },
+    "checkpoint_resume": {
+      "support": "unknown",
+      "stability": "unknown",
+      "method": null,
+      "evidence": [],
+      "verified_at": null,
+      "notes": [
+        "Controller-level checkpoints remain authoritative."
+      ]
+    },
+    "private_output_stream": {
+      "support": "supported",
+      "stability": "experimental",
+      "method": "private turn event stream",
+      "evidence": [
+        "adapter_assertion"
+      ],
+      "verified_at": "2026-08-02T12:00:00Z",
+      "notes": [
+        "Private output remains noncanonical whenever Realtime owns the foreground route."
+      ]
+    }
+  },
+  "experimental_adapter": true,
+  "notes": [
+    "Synthetic strong-agent capability fixture for contract validation."
+  ]
+}

@@ -1,36 +1,74 @@
 /**
- * Zyra - minimal desktop title bar
+ * Zyra - contextual desktop title bar
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, Copy, Minus, PanelLeftClose, PanelLeftOpen, ShieldAlert, Square, X } from 'lucide-react'
+import { ChevronDown, Copy, Minus, PanelLeftClose, PanelLeftOpen, ShieldAlert, Square, X } from 'lucide-react'
 import { useAssistantStoreActions, useAssistantStoreSelector } from '@/lib/assistant/store'
+import { useAssistantTitleBarContent, useAssistantTitleBarEndRegion } from '@/lib/assistant/assistant-title-bar'
+import { useLoadingScreenActive } from '@/components/ui/LoadingState'
 import { useCommandPalette } from '@/lib/commandPalette'
+import { useSettings } from '@/lib/settings'
+import { TRANSIENT_MENU_DISMISS_EVENT } from '@/lib/transient-menu'
+import { findSettingsNavigationItem } from '@/pages/settings/settings-navigation'
+import {
+    ASSISTANT_LEFT_SIDEBAR_WIDTH_STORAGE_KEY,
+    resolveStoredAssistantLeftSidebarWidth
+} from '@/pages/assistant/assistant-pane-layout'
 import { cn } from '@/lib/utils'
 
-type MenuLabel = 'File' | 'Edit' | 'View' | 'Help'
 type AppNavEntry = { path: string; search: string; sessionId: string | null }
-
-const menuLabels: MenuLabel[] = ['File', 'Edit', 'View', 'Help']
+type AppMenuItem = {
+    id: string
+    label: string
+    shortcut?: string
+    danger?: boolean
+    action: () => void
+}
 
 function getAppNavEntryKey(entry: AppNavEntry) {
     return `${entry.path}${entry.search}::${entry.sessionId || ''}`
+}
+
+function getContextualTitleParts(pathname: string) {
+    if (pathname.startsWith('/settings')) {
+        return ['Settings', findSettingsNavigationItem(pathname).label]
+    }
+    if (pathname === '/assistant/instructor') return ['Instructor Voice Lab']
+    if (pathname.startsWith('/explorer')) return ['Explorer']
+    return []
 }
 
 export default function TitleBar() {
     const navigate = useNavigate()
     const location = useLocation()
     const commandPalette = useCommandPalette()
+    const { settings } = useSettings()
+    const loadingScreenActive = useLoadingScreenActive()
+    const assistantTitleBarContent = useAssistantTitleBarContent()
+    const assistantTitleBarEndRegion = useAssistantTitleBarEndRegion()
     const assistantActions = useAssistantStoreActions()
     const selectedSessionId = useAssistantStoreSelector((state) => state.snapshot.selectedSessionId)
-    const menuRootRef = useRef<HTMLDivElement | null>(null)
+    const appMenuRootRef = useRef<HTMLDivElement | null>(null)
+    const titleBarRootRef = useRef<HTMLDivElement | null>(null)
+    const titleBarControlsRef = useRef<HTMLDivElement | null>(null)
+    const assistantAppZoneRef = useRef<HTMLDivElement | null>(null)
+    const sidebarCollapsedRef = useRef(settings.sidebarCollapsed)
+    const sidebarWidthRef = useRef(resolveStoredAssistantLeftSidebarWidth(
+        localStorage.getItem(ASSISTANT_LEFT_SIDEBAR_WIDTH_STORAGE_KEY)
+    ))
     const pendingNavigationKeyRef = useRef<string | null>(null)
     const [isMaximized, setIsMaximized] = useState(false)
-    const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-    const [openMenu, setOpenMenu] = useState<MenuLabel | null>(null)
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(settings.sidebarCollapsed)
+    const [appMenuOpen, setAppMenuOpen] = useState(false)
     const [controlActive, setControlActive] = useState(false)
     const [appHistory, setAppHistory] = useState<{ entries: AppNavEntry[]; index: number }>({ entries: [], index: -1 })
+    const assistantWorkspaceActive = location.pathname.startsWith('/assistant') && location.pathname !== '/assistant/instructor'
+    const settingsPageActive = location.pathname.startsWith('/settings')
+    const sidebarWorkspaceActive = assistantWorkspaceActive || settingsPageActive
+    const contextualTitleParts = getContextualTitleParts(location.pathname)
+    const desktopWindowControlsAvailable = /\bElectron\//.test(navigator.userAgent)
 
     useEffect(() => {
         void window.devscope.agentControl.getState().then((result) => {
@@ -43,11 +81,38 @@ export default function TitleBar() {
         void window.devscope.window.isMaximized().then(setIsMaximized).catch(() => undefined)
     }, [])
 
+    useLayoutEffect(() => {
+        const root = titleBarRootRef.current
+        const controls = titleBarControlsRef.current
+        if (!root || !controls) return
+        const syncControlsWidth = () => {
+            root.style.setProperty('--zyra-titlebar-controls-width', `${Math.ceil(controls.getBoundingClientRect().width)}px`)
+        }
+        syncControlsWidth()
+        if (typeof ResizeObserver === 'undefined') return
+        const observer = new ResizeObserver(syncControlsWidth)
+        observer.observe(controls)
+        return () => observer.disconnect()
+    }, [])
+
+    useEffect(() => {
+        sidebarCollapsedRef.current = settings.sidebarCollapsed
+        setSidebarCollapsed(settings.sidebarCollapsed)
+    }, [settings.sidebarCollapsed])
+
     useEffect(() => {
         const handleSidebarState = (event: Event) => {
-            const detail = (event as CustomEvent<{ collapsed?: boolean }>).detail
+            const detail = (event as CustomEvent<{ collapsed?: boolean; width?: number }>).detail
             if (typeof detail?.collapsed === 'boolean') {
+                sidebarCollapsedRef.current = detail.collapsed
                 setSidebarCollapsed(detail.collapsed)
+            }
+            if (typeof detail?.width === 'number' && detail.width > 0) {
+                const nextWidth = Math.round(detail.width)
+                sidebarWidthRef.current = nextWidth
+                if (!sidebarCollapsedRef.current) {
+                    assistantAppZoneRef.current?.style.setProperty('width', `${nextWidth}px`)
+                }
             }
         }
 
@@ -59,7 +124,7 @@ export default function TitleBar() {
         const entry: AppNavEntry = {
             path: location.pathname,
             search: location.search,
-            sessionId: location.pathname.startsWith('/assistant') ? selectedSessionId : null
+            sessionId: assistantWorkspaceActive ? selectedSessionId : null
         }
         const key = getAppNavEntryKey(entry)
 
@@ -74,25 +139,30 @@ export default function TitleBar() {
             const entries = [...current.entries.slice(0, current.index + 1), entry]
             return { entries: entries.slice(-40), index: Math.min(entries.length - 1, 39) }
         })
-    }, [location.pathname, location.search, selectedSessionId])
+    }, [assistantWorkspaceActive, location.pathname, location.search, selectedSessionId])
 
     useEffect(() => {
-        if (!openMenu) return
+        if (!appMenuOpen) return
 
-        const handlePointerDown = (event: MouseEvent) => {
-            if (!menuRootRef.current?.contains(event.target as Node)) setOpenMenu(null)
+        const dismissAppMenu = () => setAppMenuOpen(false)
+        const handlePointerDown = (event: PointerEvent) => {
+            if (!appMenuRootRef.current?.contains(event.target as Node)) dismissAppMenu()
         }
         const handleEscape = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') setOpenMenu(null)
+            if (event.key === 'Escape') dismissAppMenu()
         }
 
-        document.addEventListener('mousedown', handlePointerDown)
+        document.addEventListener('pointerdown', handlePointerDown, true)
         window.addEventListener('keydown', handleEscape)
+        window.addEventListener('blur', dismissAppMenu)
+        window.addEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissAppMenu)
         return () => {
-            document.removeEventListener('mousedown', handlePointerDown)
+            document.removeEventListener('pointerdown', handlePointerDown, true)
             window.removeEventListener('keydown', handleEscape)
+            window.removeEventListener('blur', dismissAppMenu)
+            window.removeEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissAppMenu)
         }
-    }, [openMenu])
+    }, [appMenuOpen])
 
     const handleToggleSidebar = () => {
         window.dispatchEvent(new CustomEvent('zyra:toggle-assistant-sidebar'))
@@ -110,14 +180,12 @@ export default function TitleBar() {
 
     const handleClose = () => window.devscope.window.close()
 
-    const closeMenu = () => setOpenMenu(null)
-
     const applyNavEntry = (entry: AppNavEntry) => {
         const targetKey = getAppNavEntryKey(entry)
         const currentKey = getAppNavEntryKey({
             path: location.pathname,
             search: location.search,
-            sessionId: location.pathname.startsWith('/assistant') ? selectedSessionId : null
+            sessionId: assistantWorkspaceActive ? selectedSessionId : null
         })
         pendingNavigationKeyRef.current = currentKey === targetKey ? null : targetKey
         if (location.pathname !== entry.path || location.search !== entry.search) {
@@ -139,169 +207,175 @@ export default function TitleBar() {
     const canGoBack = appHistory.index > 0
     const canGoForward = appHistory.index >= 0 && appHistory.index < appHistory.entries.length - 1
 
-    const runMenuAction = (action: () => void) => {
-        action()
-        closeMenu()
-    }
+    useEffect(() => {
+        const handleHistoryShortcut = (event: KeyboardEvent) => {
+            if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+            if (event.key === 'ArrowLeft' && canGoBack) {
+                event.preventDefault()
+                navigateHistory(-1)
+            } else if (event.key === 'ArrowRight' && canGoForward) {
+                event.preventDefault()
+                navigateHistory(1)
+            }
+        }
+        window.addEventListener('keydown', handleHistoryShortcut)
+        return () => window.removeEventListener('keydown', handleHistoryShortcut)
+    })
 
     const handleNewChat = () => {
         navigate('/assistant')
         void assistantActions.createSession({ mode: 'work' })
     }
 
-    const runEditCommand = (command: 'cut' | 'copy' | 'paste' | 'selectAll') => {
-        if (command === 'selectAll') {
-            const active = document.activeElement
-            if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
-                active.select()
-                return
-            }
-        }
-        document.execCommand(command)
+    const runAppMenuAction = (action: () => void) => {
+        setAppMenuOpen(false)
+        action()
     }
 
-    const menuItems: Record<MenuLabel, Array<{ label: string; shortcut?: string; action: () => void; danger?: boolean }>> = {
-        File: [
-            { label: 'New chat', shortcut: 'Ctrl N', action: handleNewChat },
-            { label: 'Search', shortcut: 'Ctrl K', action: commandPalette.open },
-            { label: 'Settings', action: () => navigate('/settings') },
-            { label: 'Close window', shortcut: 'Alt F4', action: handleClose, danger: true }
+    const appMenuGroups: AppMenuItem[][] = [
+        [
+            { id: 'new-chat', label: 'New chat', shortcut: 'Ctrl N', action: handleNewChat },
+            { id: 'search', label: 'Search', shortcut: 'Ctrl K', action: commandPalette.open }
         ],
-        Edit: [
-            { label: 'Cut', shortcut: 'Ctrl X', action: () => runEditCommand('cut') },
-            { label: 'Copy', shortcut: 'Ctrl C', action: () => runEditCommand('copy') },
-            { label: 'Paste', shortcut: 'Ctrl V', action: () => runEditCommand('paste') },
-            { label: 'Select all', shortcut: 'Ctrl A', action: () => runEditCommand('selectAll') }
+        [
+            ...(sidebarWorkspaceActive ? [{ id: 'sidebar', label: sidebarActionLabel, action: handleToggleSidebar }] : []),
+            { id: 'settings', label: 'Settings', action: () => navigate('/settings') },
+            { id: 'reload', label: 'Reload UI', shortcut: 'Ctrl R', action: () => window.location.reload() }
         ],
-        View: [
-            { label: sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar', action: handleToggleSidebar },
-            { label: 'Command palette', shortcut: 'Ctrl K', action: commandPalette.open },
-            { label: 'Reload UI', shortcut: 'Ctrl R', action: () => window.location.reload() }
+        [
+            { id: 'voice-lab', label: 'Instructor Voice Lab', action: () => navigate('/assistant/instructor') },
+            { id: 'about', label: 'About Zyra', action: () => navigate('/settings/about') }
         ],
-        Help: [
-            { label: 'Instructor Voice Lab', action: () => navigate('/assistant/instructor') },
-            { label: 'Open settings', action: () => navigate('/settings') },
-            { label: 'Show command palette', shortcut: 'Ctrl K', action: commandPalette.open }
+        [
+            { id: 'close', label: 'Close window', shortcut: 'Alt F4', danger: true, action: handleClose }
         ]
-    }
+    ]
+
+    const expandedSidebar = sidebarWorkspaceActive && !sidebarCollapsed
 
     return (
         <div
-            className="fixed left-0 right-0 top-0 z-50 flex h-[34px] items-center bg-[#1b1829]/95 text-sparkle-text"
+            ref={titleBarRootRef}
+            className={cn('zyra-topbar-surface fixed left-0 right-0 top-0 z-50 flex h-[34px] items-center text-sparkle-text', settingsPageActive && 'zyra-settings-topbar')}
             style={{ WebkitAppRegion: 'drag' } as any}
         >
-            <div className="flex h-full min-w-0 items-center gap-3 px-2.5">
-                <button
-                    type="button"
-                    onClick={handleToggleSidebar}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[#918aa0] transition-colors hover:bg-white/[0.035] hover:text-[#d7d0e3] focus:outline-none focus-visible:ring-1 focus-visible:ring-white/10"
-                    style={{ WebkitAppRegion: 'no-drag' } as any}
-                    title={sidebarActionLabel}
-                    aria-label={sidebarActionLabel}
-                    aria-pressed={!sidebarCollapsed}
-                >
-                    <SidebarIcon size={15} strokeWidth={1.7} />
-                </button>
-                <div className="flex h-full items-center gap-0.5" style={{ WebkitAppRegion: 'no-drag' } as any}>
+            <div
+                ref={assistantAppZoneRef}
+                className={cn(
+                    'flex h-full shrink-0 items-center gap-1.5 px-2.5',
+                    sidebarWorkspaceActive && !(assistantWorkspaceActive && loadingScreenActive) && 'border-r border-[var(--surface-panel-divider)]'
+                )}
+                style={sidebarWorkspaceActive ? {
+                    width: loadingScreenActive && assistantWorkspaceActive
+                        ? '112px'
+                        : expandedSidebar
+                            ? `${sidebarWidthRef.current}px`
+                            : '112px'
+                } : undefined}
+            >
+                {sidebarWorkspaceActive ? (
                     <button
                         type="button"
-                        onClick={() => navigateHistory(-1)}
-                        disabled={!canGoBack}
-                        className={cn(titleNavButtonClass, !canGoBack && 'cursor-default opacity-35 hover:bg-transparent hover:text-[#918aa0]')}
-                        title="Back"
-                        aria-label="Back"
+                        onClick={handleToggleSidebar}
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-sparkle-text-secondary transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]/35"
+                        style={{ WebkitAppRegion: 'no-drag' } as any}
+                        title={sidebarActionLabel}
+                        aria-label={sidebarActionLabel}
+                        aria-pressed={!sidebarCollapsed}
                     >
-                        <ChevronLeft size={15} strokeWidth={1.8} />
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => navigateHistory(1)}
-                        disabled={!canGoForward}
-                        className={cn(titleNavButtonClass, !canGoForward && 'cursor-default opacity-35 hover:bg-transparent hover:text-[#918aa0]')}
-                        title="Forward"
-                        aria-label="Forward"
-                    >
-                        <ChevronRight size={15} strokeWidth={1.8} />
-                    </button>
-                </div>
-                <div ref={menuRootRef} className="hidden h-full items-center gap-1 sm:flex" style={{ WebkitAppRegion: 'no-drag' } as any}>
-                    {menuLabels.map((label) => {
-                        const active = openMenu === label
-                        return (
-                            <div key={label} className="relative h-full">
-                                <button
-                                    type="button"
-                                    onClick={() => setOpenMenu(active ? null : label)}
-                                    onMouseEnter={() => {
-                                        if (openMenu) setOpenMenu(label)
-                                    }}
-                                    className={cn(
-                                        'inline-flex h-full items-center rounded-md px-2 text-[12px] font-medium leading-none transition-colors focus:outline-none',
-                                        active ? 'bg-white/[0.055] text-[#eeeaf7]' : 'text-[#b9b2c8] hover:bg-white/[0.035] hover:text-[#eeeaf7]'
-                                    )}
-                                    aria-haspopup="menu"
-                                    aria-expanded={active}
-                                >
-                                    {label}
-                                </button>
-                                {active ? (
-                                    <div className="absolute left-0 top-full z-[190] mt-1 min-w-[184px] overflow-hidden rounded-xl border border-white/[0.08] bg-[#1b1829]/98 p-1 text-[13px] shadow-[0_18px_48px_rgba(0,0,0,0.38),inset_0_1px_0_rgba(255,255,255,0.035)] backdrop-blur-xl" role="menu">
-                                        {menuItems[label].map((item) => (
-                                            <button
-                                                key={item.label}
-                                                type="button"
-                                                onClick={() => runMenuAction(item.action)}
-                                                className={cn(
-                                                    'flex h-8 w-full items-center gap-3 rounded-lg px-2.5 text-left transition-colors hover:bg-white/[0.055]',
-                                                    item.danger ? 'text-red-200 hover:text-red-100' : 'text-[#c9c2d6] hover:text-[#f0edf9]'
-                                                )}
-                                                role="menuitem"
-                                            >
-                                                <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                                                {item.shortcut ? <span className="shrink-0 text-[11px] text-[#8d849b]/75">{item.shortcut}</span> : null}
-                                            </button>
-                                        ))}
-                                    </div>
-                                ) : null}
-                            </div>
-                        )
-                    })}
-                </div>
-            </div>
-
-            <div className="min-w-0 flex-1 self-stretch" />
-
-            <div className="flex h-full items-center" style={{ WebkitAppRegion: 'no-drag' } as any}>
-                {controlActive ? (
-                    <button type="button" onClick={() => void window.devscope.agentControl.emergencyStop()} className="mr-1 inline-flex h-6 items-center gap-1 rounded border border-red-300/20 bg-red-400/[0.08] px-2 text-[9px] text-red-100 hover:bg-red-400/[0.14]" title="Emergency stop all Browser and computer control">
-                        <ShieldAlert size={10} /> Stop control
+                        <SidebarIcon size={15} strokeWidth={1.7} />
                     </button>
                 ) : null}
-                <button
-                    onClick={handleMinimize}
-                    className={cn(windowControlClass, 'hover:bg-white/[0.055]')}
-                    aria-label="Minimize"
-                >
-                    <Minus size={14} />
-                </button>
-                <button
-                    onClick={handleMaximize}
-                    className={cn(windowControlClass, 'hover:bg-white/[0.055]')}
-                    aria-label={isMaximized ? 'Restore window' : 'Maximize window'}
-                >
-                    {isMaximized ? <Copy size={12} /> : <Square size={12} />}
-                </button>
-                <button
-                    onClick={handleClose}
-                    className={cn(windowControlClass, 'hover:bg-red-600 hover:text-white')}
-                    aria-label="Close"
-                >
-                    <X size={14} />
-                </button>
+                <div ref={appMenuRootRef} className="relative h-full" style={{ WebkitAppRegion: 'no-drag' } as any}>
+                    <button
+                        type="button"
+                        onClick={() => setAppMenuOpen((current) => !current)}
+                        className={cn(
+                            'inline-flex h-full items-center gap-1 rounded-md px-2 text-[12px] font-semibold leading-none transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]/35',
+                            appMenuOpen ? 'bg-[var(--surface-hover)] text-sparkle-text' : 'text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text'
+                        )}
+                        aria-haspopup="menu"
+                        aria-expanded={appMenuOpen}
+                    >
+                        <span>Zyra</span>
+                        <ChevronDown size={11} className={cn('text-sparkle-text-muted transition-transform', appMenuOpen && 'rotate-180')} />
+                    </button>
+                    {appMenuOpen ? (
+                        <div className="absolute left-0 top-full z-[190] mt-1 w-[208px] overflow-hidden rounded-xl border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1 text-[13px] shadow-[0_18px_48px_rgba(0,0,0,0.28)] backdrop-blur-xl" role="menu">
+                            {appMenuGroups.map((group, groupIndex) => (
+                                <div key={group[0]?.id || groupIndex} className={cn(groupIndex > 0 && 'mt-1 border-t border-[var(--surface-divider)] pt-1')}>
+                                    {group.map((item) => (
+                                        <button
+                                            key={item.id}
+                                            type="button"
+                                            onClick={() => runAppMenuAction(item.action)}
+                                            className={cn(
+                                                'flex h-8 w-full items-center gap-3 rounded-lg px-2.5 text-left transition-colors hover:bg-[var(--surface-hover)]',
+                                                item.danger ? 'text-red-300 hover:text-red-200' : 'text-sparkle-text-secondary hover:text-sparkle-text'
+                                            )}
+                                            role="menuitem"
+                                        >
+                                            <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                                            {item.shortcut ? <span className="shrink-0 text-[11px] text-sparkle-text-muted/75">{item.shortcut}</span> : null}
+                                        </button>
+                                    ))}
+                                </div>
+                            ))}
+                        </div>
+                    ) : null}
+                </div>
             </div>
+
+            <div
+                className="drag-region min-w-0 flex-1 self-stretch"
+                style={{
+                    paddingRight: desktopWindowControlsAvailable && assistantWorkspaceActive && !loadingScreenActive && !assistantTitleBarEndRegion?.open
+                        ? 'var(--zyra-titlebar-controls-width, 120px)'
+                        : undefined
+                }}
+            >
+                {assistantWorkspaceActive && !loadingScreenActive ? assistantTitleBarContent : null}
+                {!assistantWorkspaceActive && contextualTitleParts.length > 0 ? (
+                    <div className="flex h-full min-w-0 items-center gap-1.5 px-3 text-[12px] leading-none">
+                        {contextualTitleParts.map((part, index) => (
+                            <span key={part} className={cn('truncate', index === contextualTitleParts.length - 1 ? 'font-semibold text-sparkle-text/90' : 'font-medium text-sparkle-text-muted/70')}>
+                                {index > 0 ? <span className="mr-1.5 text-sparkle-text-muted/35">/</span> : null}
+                                {part}
+                            </span>
+                        ))}
+                    </div>
+                ) : null}
+            </div>
+
+            {assistantWorkspaceActive && !loadingScreenActive ? assistantTitleBarEndRegion?.content : null}
+
+            {desktopWindowControlsAvailable ? (
+                <div
+                    ref={titleBarControlsRef}
+                    className={cn(
+                        'flex h-full shrink-0 items-center',
+                        assistantWorkspaceActive && 'absolute right-0 top-0 z-[3]'
+                    )}
+                    style={{ WebkitAppRegion: 'no-drag' } as any}
+                >
+                    {controlActive ? (
+                        <button type="button" onClick={() => void window.devscope.agentControl.emergencyStop()} className="mr-1 inline-flex h-6 items-center gap-1 rounded border border-red-300/20 bg-red-400/[0.08] px-2 text-[9px] text-red-100 hover:bg-red-400/[0.14]" title="Emergency stop all Browser and computer control">
+                            <ShieldAlert size={10} /> Stop control
+                        </button>
+                    ) : null}
+                    <button onClick={handleMinimize} className={cn(windowControlClass, 'hover:bg-[var(--surface-hover)]')} aria-label="Minimize">
+                        <Minus size={14} />
+                    </button>
+                    <button onClick={handleMaximize} className={cn(windowControlClass, 'hover:bg-[var(--surface-hover)]')} aria-label={isMaximized ? 'Restore window' : 'Maximize window'}>
+                        {isMaximized ? <Copy size={12} /> : <Square size={12} />}
+                    </button>
+                    <button onClick={handleClose} className={cn(windowControlClass, 'hover:bg-red-600 hover:text-white')} aria-label="Close">
+                        <X size={14} />
+                    </button>
+                </div>
+            ) : null}
         </div>
     )
 }
 
-const titleNavButtonClass = 'inline-flex h-7 w-6 items-center justify-center rounded-md text-[#918aa0] transition-colors hover:bg-white/[0.035] hover:text-[#d7d0e3] focus:outline-none focus-visible:ring-1 focus-visible:ring-white/10'
-const windowControlClass = 'inline-flex h-[34px] w-10 items-center justify-center text-[#918aa0] transition-colors hover:text-[#d7d0e3]'
+const windowControlClass = 'inline-flex h-[34px] w-10 items-center justify-center text-sparkle-text-secondary/75 transition-colors hover:text-sparkle-text'

@@ -4,6 +4,7 @@ import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import {
   defaults,
   getProjectSessionsDir,
+  getZyraModelThinkingLevels,
   registerZyraRuntimeModels,
   resolveZyraStartupPreferences
 } from "../zyra-sdk.mjs";
@@ -13,6 +14,7 @@ import { ZyraAgentServerClient } from "./client.mjs";
 export async function createZyraTuiClientRuntime(options = {}) {
   const project = path.resolve(options.project || defaults.project);
   const preferences = resolveZyraStartupPreferences(project, options);
+  const requestedChatConfig = normalizeRemoteChatConfig({ thinking: options.thinking });
   const client = new ZyraAgentServerClient({
     root: defaults.root,
     clientId: `tui:${process.pid}:${randomUUID()}`,
@@ -38,17 +40,28 @@ export async function createZyraTuiClientRuntime(options = {}) {
     model: preferences.model,
     thinking: preferences.thinking,
     profile: preferences.profile || "default",
+    runtimeMode: options.permissionMode === "full-access" || preferences.profile === "yolo-fast" ? "full-access" : "approval-required",
+    webSearch: preferences.webSearch,
+    webFetch: preferences.webFetch,
     lastSequence: 0
   });
   const connected = asRecord(attached.connected) || {};
+  const connectedConfig = normalizeRemoteChatConfig(asRecord(connected.config) || connected);
   const canonicalChatId = String(attached.canonicalChatId || attached.sessionKey);
   const modelRegistry = ModelRegistry.create(AuthStorage.create());
   registerZyraRuntimeModels(modelRegistry);
-  const model = resolveModel(modelRegistry, String(connected.model || preferences.model));
+  const model = resolveModel(modelRegistry, String(connectedConfig.model || connected.model || preferences.model));
   const sessionFile = typeof connected.sessionFile === "string" ? connected.sessionFile : null;
   const state = {
-    messages: Array.isArray(connected.messages) ? connected.messages.filter(Boolean) : []
+    messages: dedupeRemoteMessages(Array.isArray(connected.messages) ? connected.messages.filter(Boolean) : [])
   };
+  const connectedUsage = asRecord(connected.usage);
+  const connectedCost = asRecord(connectedUsage?.cost);
+  let cumulativeCost = Number(connectedCost?.total);
+  if (!Number.isFinite(cumulativeCost)) cumulativeCost = sumRemoteMessageCost(state.messages);
+  const costAccountedMessageIds = new Set(state.messages
+    .filter((message) => message?.role === "assistant" && message.id)
+    .map((message) => message.id));
   let currentSessionName = asString(connected.sessionName);
   let currentProject = asString(connected.cwd) || asString(connected.project) || project;
   let historyEvents = [];
@@ -72,6 +85,7 @@ export async function createZyraTuiClientRuntime(options = {}) {
   const fleetListeners = new Set();
   const respondedApprovalRequestIds = new Set();
   const resolvedApprovalRequestIds = new Set();
+  const approvalAbortControllers = new Map();
   let approvalHandler = null;
   const activeTools = new Set(["read", "bash", "edit", "write", ...(preferences.webSearch ? ["web_search"] : []), ...(preferences.webFetch ? ["web_fetch"] : [])]);
   const steering = [];
@@ -82,18 +96,52 @@ export async function createZyraTuiClientRuntime(options = {}) {
   let currentPresence = asRecord(attached.presence);
   let remotelyAttached = true;
   let systemPrompt = "";
-  let thinkingLevel = preferences.thinking;
+  let thinkingLevel = requestedChatConfig.thinking || connectedConfig.thinking || connected.thinking || preferences.thinking;
+  const thinkingState = { value: thinkingLevel };
   let currentModel = model;
+  let currentProfile = connectedConfig.profile || connected.profile || preferences.profile || "default";
+  let currentPermissionMode = normalizeRemoteRuntimeMode(connectedConfig.runtimeMode || connected.runtimeMode || options.permissionMode || (preferences.profile === "yolo-fast" ? "full-access" : undefined));
+  let currentWebSearch = typeof connectedConfig.webSearch === "boolean" ? connectedConfig.webSearch : preferences.webSearch;
+  let currentWebFetch = typeof connectedConfig.webFetch === "boolean" ? connectedConfig.webFetch : preferences.webFetch;
+  let compacting = false;
+  let configSyncQueued = false;
   let latestFleet = asRecord(connected.fleet);
   let agentDefinitions = normalizeDefinitions(connected.agentDefinitions);
   let workflowDefinitions = normalizeDefinitions(connected.workflowDefinitions);
 
   const dispatch = (event, requestContext) => {
     if (!event || typeof event !== "object") return;
+    if (requestContext?.turnId && event.type !== "zyra_server_turn_completed") {
+      activeTurnId = requestContext.turnId;
+      currentPresence = {
+        ...(currentPresence || {}),
+        state: "running",
+        activeTurnId,
+      };
+    }
     if (event.type === "zyra_server_turn_completed") {
       if (!requestContext?.turnId || requestContext.turnId === activeTurnId) activeTurnId = null;
+      currentPresence = {
+        ...(currentPresence || {}),
+        state: "ready",
+        activeTurnId: null,
+      };
       return;
     }
+    if (event.type === "session_config") {
+      const config = normalizeRemoteChatConfig(event);
+      if (config.model) currentModel = resolveModel(modelRegistry, config.model);
+      if (config.thinking) {
+        thinkingLevel = config.thinking;
+        thinkingState.value = config.thinking;
+      }
+      if (config.profile) currentProfile = config.profile;
+      if (config.runtimeMode) currentPermissionMode = config.runtimeMode;
+      if (typeof config.webSearch === "boolean") currentWebSearch = config.webSearch;
+      if (typeof config.webFetch === "boolean") currentWebFetch = config.webFetch;
+    }
+    if (event.type === "compaction_start") compacting = true;
+    if (event.type === "compaction_end") compacting = false;
     if (event.type === "session_title") {
       currentSessionName = asString(event.title) || currentSessionName;
     }
@@ -103,7 +151,11 @@ export async function createZyraTuiClientRuntime(options = {}) {
     }
     if (event.type === "approval_resolved") {
       const requestId = asString(event.requestId);
-      if (requestId) resolvedApprovalRequestIds.add(requestId);
+      if (requestId) {
+        resolvedApprovalRequestIds.add(requestId);
+        approvalAbortControllers.get(requestId)?.abort();
+        approvalAbortControllers.delete(requestId);
+      }
     }
     if (event.type === "approval_requested") {
       const requestId = asString(event.requestId);
@@ -111,14 +163,22 @@ export async function createZyraTuiClientRuntime(options = {}) {
         respondedApprovalRequestIds.add(requestId);
         void Promise.resolve().then(async () => {
           if (resolvedApprovalRequestIds.has(requestId)) return;
+          const controller = new AbortController();
+          approvalAbortControllers.set(requestId, controller);
           let decision = "decline";
           try {
-            decision = await approvalHandler?.(event) || "decline";
+            decision = await approvalHandler?.(event, { signal: controller.signal }) || "decline";
           } catch {}
+          approvalAbortControllers.delete(requestId);
+          if (resolvedApprovalRequestIds.has(requestId) || controller.signal.aborted) return;
           if (!['acceptOnce', 'acceptForSession', 'decline'].includes(decision)) decision = "decline";
           await request("approval.respond", { requestId, decision }).catch(() => undefined);
         });
       }
+    }
+    if (event.type === "message_end" && event.message?.role === "assistant" && event.message.id && !costAccountedMessageIds.has(event.message.id)) {
+      cumulativeCost += Number(event.message.usage?.cost?.total) || 0;
+      costAccountedMessageIds.add(event.message.id);
     }
     updateMessages(state.messages, event);
     if (event.type === "fleet_snapshot" || String(event.type || "").startsWith("agent.") || String(event.type || "").startsWith("workflow.")) {
@@ -131,7 +191,10 @@ export async function createZyraTuiClientRuntime(options = {}) {
   const consumeServerEntry = (entry) => {
     const sequence = Number(entry?.sequence) || 0;
     if (sequence && sequence <= latestSequence) return;
-    if (sequence) latestSequence = sequence;
+    if (sequence) {
+      latestSequence = sequence;
+      currentPresence = { ...(currentPresence || {}), latestSequence: sequence };
+    }
     dispatch(entry?.event, entry?.requestContext);
   };
   const onServerEvent = (message) => {
@@ -201,8 +264,30 @@ export async function createZyraTuiClientRuntime(options = {}) {
     getSessionName: () => currentSessionName,
     getCwd: () => currentProject,
     getEntries: () => state.messages.map((message, index) => ({ type: "message", id: message.id || `remote-message:${index}`, message })),
+    getSessionUsage: () => ({ cost: { total: cumulativeCost } }),
     appendCustomEntry: () => undefined
   };
+
+  const remoteChatConfig = () => ({
+    model: `${currentModel.provider}/${currentModel.id}`,
+    thinking: thinkingLevel,
+    profile: currentProfile,
+    runtimeMode: currentPermissionMode,
+    webSearch: currentWebSearch,
+    webFetch: currentWebFetch,
+  });
+  const syncRemoteChatConfig = () => request("configure", remoteChatConfig());
+  const queueRemoteChatConfigSync = () => {
+    if (configSyncQueued || disposed) return;
+    configSyncQueued = true;
+    queueMicrotask(() => {
+      configSyncQueued = false;
+      if (!disposed) void syncRemoteChatConfig().catch(() => undefined);
+    });
+  };
+  if (requestedChatConfig.thinking && requestedChatConfig.thinking !== connectedConfig.thinking) {
+    await syncRemoteChatConfig();
+  }
 
   const session = {
     state,
@@ -211,6 +296,8 @@ export async function createZyraTuiClientRuntime(options = {}) {
     modelRegistry,
     get model() { return currentModel; },
     get thinkingLevel() { return thinkingLevel; },
+    get isStreaming() { return Boolean(activeTurnId); },
+    get isCompacting() { return compacting; },
     agent: {
       getSystemPrompt: () => systemPrompt,
       setSystemPrompt: (value) => { systemPrompt = String(value || ""); }
@@ -242,21 +329,23 @@ export async function createZyraTuiClientRuntime(options = {}) {
     abort: () => request("abort"),
     abortBash: () => undefined,
     async steer(prompt, images) {
-      steering.push({ prompt, images });
+      steering.push(String(prompt || ""));
       try { return await request("steer", { prompt, images }); }
       finally { steering.shift(); }
     },
     async followUp(prompt, images) {
-      followUp.push({ prompt, images });
+      followUp.push(String(prompt || ""));
       try { return await request("follow_up", { prompt, images }); }
       finally { followUp.shift(); }
     },
     compact: (instructions) => request("compact", { instructions }),
     reload: () => request("reload"),
     clearQueue() {
+      const queued = { steering: [...steering], followUp: [...followUp] };
       steering.length = 0;
       followUp.length = 0;
       void request("clear_queue").catch(() => undefined);
+      return queued;
     },
     getSteeringMessages: () => [...steering],
     getFollowUpMessages: () => [...followUp],
@@ -265,15 +354,25 @@ export async function createZyraTuiClientRuntime(options = {}) {
       activeTools.clear();
       for (const name of names || []) activeTools.add(String(name));
     },
-    getAvailableThinkingLevels: () => ["off", "minimal", "low", "medium", "high", "xhigh"],
-    setThinkingLevel(value) { thinkingLevel = String(value || "off"); },
-    async setModel(nextModel) { currentModel = nextModel; },
-    getContextUsage: () => undefined,
+    acceptsZyraThinkingLevels: true,
+    getAvailableThinkingLevels: () => getZyraModelThinkingLevels(currentModel),
+    setThinkingLevel(value) {
+      thinkingLevel = String(value || "off");
+      thinkingState.value = thinkingLevel;
+      queueRemoteChatConfigSync();
+    },
+    async setModel(nextModel) {
+      currentModel = nextModel;
+      queueRemoteChatConfigSync();
+    },
+    getContextUsage: () => getRemoteContextUsage(state.messages, currentModel),
     dispose() {
       if (disposed) return;
       disposed = true;
       client.off("session-event", onServerEvent);
       client.off("disconnect", onDisconnect);
+      for (const controller of approvalAbortControllers.values()) controller.abort();
+      approvalAbortControllers.clear();
       eventListeners.clear();
       fleetListeners.clear();
       void client.detach(canonicalChatId).catch(() => undefined).finally(() => client.close());
@@ -296,15 +395,23 @@ export async function createZyraTuiClientRuntime(options = {}) {
     get sessions() { return getProjectSessionsDir(currentProject); },
     theme: "dark",
     terminalTheme,
-    profile: preferences.profile || "default",
-    permissionMode: options.permissionMode === "full-access" || preferences.profile === "yolo-fast" ? "full-access" : "approval-required",
+    get profile() { return currentProfile; },
+    set profile(value) { currentProfile = String(value || "default"); queueRemoteChatConfigSync(); },
+    get permissionMode() { return currentPermissionMode; },
+    set permissionMode(value) { currentPermissionMode = normalizeRemoteRuntimeMode(value); queueRemoteChatConfigSync(); },
     surface: "tui-client",
     projectMemory: [],
     memoryStartup: null,
-    thinking: thinkingLevel,
-    thinkingState: { value: thinkingLevel },
-    webSearch: preferences.webSearch,
-    webFetch: preferences.webFetch,
+    get thinking() { return thinkingLevel; },
+    set thinking(value) {
+      thinkingLevel = String(value || "off");
+      thinkingState.value = thinkingLevel;
+    },
+    thinkingState,
+    get webSearch() { return currentWebSearch; },
+    set webSearch(value) { currentWebSearch = Boolean(value); queueRemoteChatConfigSync(); },
+    get webFetch() { return currentWebFetch; },
+    set webFetch(value) { currentWebFetch = Boolean(value); queueRemoteChatConfigSync(); },
     statusLine: preferences.statusLine,
     notifications: preferences.notifications,
     interruptMode: preferences.interruptMode,
@@ -437,9 +544,72 @@ function updateMessages(messages, event) {
   if (!["message_start", "message_update", "message_end"].includes(event.type) || !event.message) return;
   const incoming = event.message;
   const id = incoming.id;
-  const index = id ? messages.findIndex((message) => message?.id === id) : -1;
+  let index = id ? messages.findIndex((message) => message?.id === id) : -1;
+  if (index < 0 && event.type !== "message_start" && incoming.role) {
+    for (let candidate = messages.length - 1; candidate >= 0; candidate -= 1) {
+      if (messages[candidate]?.role === incoming.role) {
+        index = candidate;
+        break;
+      }
+    }
+  }
   if (index >= 0) messages[index] = { ...messages[index], ...incoming };
   else if (event.type !== "message_update" || incoming.role) messages.push(incoming);
+}
+
+function dedupeRemoteMessages(messages) {
+  const result = [];
+  const indexById = new Map();
+  for (const message of messages) {
+    const id = message?.id;
+    const existingIndex = id ? indexById.get(id) : undefined;
+    if (existingIndex !== undefined) {
+      result[existingIndex] = { ...result[existingIndex], ...message };
+      continue;
+    }
+    if (id) indexById.set(id, result.length);
+    result.push(message);
+  }
+  return result;
+}
+
+function normalizeRemoteRuntimeMode(value) {
+  return value === "full-access" ? "full-access" : "approval-required";
+}
+
+function normalizeRemoteChatConfig(value) {
+  const source = asRecord(value) || {};
+  const thinking = asString(source.thinking);
+  return {
+    model: asString(source.model),
+    thinking: ["off", "none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(thinking) ? thinking : null,
+    profile: asString(source.profile),
+    runtimeMode: source.runtimeMode === "full-access" || source.runtimeMode === "approval-required" ? source.runtimeMode : null,
+    webSearch: typeof source.webSearch === "boolean" ? source.webSearch : undefined,
+    webFetch: typeof source.webFetch === "boolean" ? source.webFetch : undefined,
+  };
+}
+
+function sumRemoteMessageCost(messages) {
+  return messages.reduce((total, message) => (
+    message?.role === "assistant" ? total + (Number(message.usage?.cost?.total) || 0) : total
+  ), 0);
+}
+
+function getRemoteContextUsage(messages, model) {
+  const contextWindow = Number(model?.contextWindow) || 0;
+  if (contextWindow <= 0) return undefined;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "assistant" || message.stopReason === "aborted" || message.stopReason === "error") continue;
+    const usage = asRecord(message.usage);
+    if (!usage) continue;
+    const tokens = Number(usage.totalTokens ?? usage.total)
+      || [usage.input, usage.output, usage.cacheRead, usage.cacheWrite].reduce((sum, value) => sum + (Number(value) || 0), 0);
+    if (tokens <= 0) continue;
+    return { tokens, contextWindow, percent: (tokens / contextWindow) * 100 };
+  }
+  return undefined;
 }
 
 function projectConnectedMessages(messages) {

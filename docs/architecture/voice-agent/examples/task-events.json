@@ -1,0 +1,245 @@
+[
+  {
+    "schema_version": 1,
+    "event_id": "event_task_proposed",
+    "sequence": 1,
+    "task_revision": 1,
+    "conversation_id": "chat_demo",
+    "task_id": "task_demo_voice_docs",
+    "context_version": 7,
+    "event_type": "task.proposed",
+    "actor": {
+      "role": "foreground",
+      "id": "foreground_demo"
+    },
+    "occurred_at": "2026-08-02T12:00:00Z",
+    "payload": {
+      "task": {
+        "schema_version": 1,
+        "task_id": "task_demo_voice_docs",
+        "conversation_id": "chat_demo",
+        "revision": 1,
+        "parent_task_id": null,
+        "supersedes_task_id": null,
+        "state": "proposed",
+        "title": "Document the voice-agent architecture",
+        "verbatim_request": "Document the complete architecture with diagrams and publishable contracts.",
+        "required_context_version": 7,
+        "context_acknowledgements": [],
+        "acceptance_criteria": [
+          {
+            "criterion_id": "criterion_architecture",
+            "description": "Cover model roles, controller, ledgers, routing, narration, continuity, permissions, recovery, usage, and evaluation.",
+            "status": "pending",
+            "evidence_refs": []
+          },
+          {
+            "criterion_id": "criterion_validation",
+            "description": "Validate schemas, Mermaid diagrams, links, and privacy before publication.",
+            "status": "pending",
+            "evidence_refs": []
+          }
+        ],
+        "constraint_ids": [
+          "constraint_public_only",
+          "constraint_no_runtime_changes"
+        ],
+        "decision_request_ids": [],
+        "approval_request_ids": [],
+        "attempt_ids": [],
+        "current_attempt_id": null,
+        "primary_agent_run_id": null,
+        "activity": null,
+        "artifacts": [],
+        "created_at": "2026-08-02T12:00:00Z",
+        "updated_at": "2026-08-02T12:00:00Z",
+        "terminal_at": null,
+        "failure": null
+      }
+    },
+    "transaction_id": "tx_task_proposed"
+  },
+  {
+    "schema_version": 1,
+    "event_id": "event_task_queued",
+    "sequence": 2,
+    "task_revision": 2,
+    "conversation_id": "chat_demo",
+    "task_id": "task_demo_voice_docs",
+    "context_version": 7,
+    "event_type": "task.queued",
+    "actor": {
+      "role": "controller",
+      "id": "task_controller"
+    },
+    "occurred_at": "2026-08-02T12:00:01Z",
+    "payload": {
+      "reason": "The request requires durable document writes and validation."
+    },
+    "transaction_id": "tx_task_queued"
+  },
+  {
+    "schema_version": 1,
+    "event_id": "event_task_started",
+    "sequence": 7,
+    "task_revision": 3,
+    "conversation_id": "chat_demo",
+    "task_id": "task_demo_voice_docs",
+    "context_version": 7,
+    "event_type": "task.started",
+    "actor": {
+      "role": "controller",
+      "id": "task_controller"
+    },
+    "attempt_id": "attempt_demo_01",
+    "agent_run_id": "agent_run_demo_01",
+    "idempotency_key": "task_demo_voice_docs:attempt_demo_01:start",
+    "occurred_at": "2026-08-02T12:01:00Z",
+    "payload": {
+      "attempt_id": "attempt_demo_01",
+      "agent_run_id": "agent_run_demo_01",
+      "selected_model": "strong-primary"
+    },
+    "transaction_id": "tx_attempt_start_ready"
+  },
+  {
+    "schema_version": 1,
+    "event_id": "event_task_context_acknowledged",
+    "sequence": 8,
+    "task_revision": 4,
+    "conversation_id": "chat_demo",
+    "task_id": "task_demo_voice_docs",
+    "context_version": 7,
+    "event_type": "task.context_updated",
+    "actor": {
+      "role": "controller",
+      "id": "task_controller"
+    },
+    "attempt_id": "attempt_demo_01",
+    "agent_run_id": "agent_run_demo_01",
+    "occurred_at": "2026-08-02T12:01:01Z",
+    "payload": {
+      "required_context_version": 7,
+      "change_ids": [
+        "constraint_public_only",
+        "constraint_no_runtime_changes"
+      ],
+      "acknowledgements": [
+        {
+          "owner_kind": "primary",
+          "owner_id": "agent_run_demo_01",
+          "context_version": 7,
+          "relevant_change_ids": [
+            "constraint_public_only",
+            "constraint_no_runtime_changes"
+          ],
+          "acknowledged_at": "2026-08-02T12:01:00Z"
+        }
+      ]
+    },
+    "transaction_id": "tx_context_ack"
+  },
+  {
+    "schema_version": 1,
+    "event_id": "event_task_progress",
+    "sequence": 9,
+    "task_revision": 5,
+    "conversation_id": "chat_demo",
+    "task_id": "task_demo_voice_docs",
+    "context_version": 7,
+    "event_type": "task.progressed",
+    "actor": {
+      "role": "primary",
+      "id": "agent_run_demo_01"
+    },
+    "attempt_id": "attempt_demo_01",
+    "agent_run_id": "agent_run_demo_01",
+    "occurred_at": "2026-08-02T12:15:00Z",
+    "payload": {
+      "kind": "editing",
+      "summary": "The architecture package and decision records are drafted.",
+      "percent": 75,
+      "speakable": false
+    },
+    "transaction_id": "tx_task_progress"
+  },
+  {
+    "schema_version": 1,
+    "event_id": "event_verification_started",
+    "sequence": 11,
+    "task_revision": 6,
+    "conversation_id": "chat_demo",
+    "task_id": "task_demo_voice_docs",
+    "context_version": 7,
+    "event_type": "task.verification_started",
+    "actor": {
+      "role": "primary",
+      "id": "agent_run_demo_01"
+    },
+    "attempt_id": "attempt_demo_01",
+    "agent_run_id": "agent_run_demo_01",
+    "occurred_at": "2026-08-02T12:25:00Z",
+    "payload": {
+      "completion_candidate_id": "completion_candidate_voice_docs",
+      "completion_candidate_ref": {
+        "kind": "completion_candidate",
+        "id": "completion_candidate_voice_docs"
+      },
+      "criterion_ids": [
+        "criterion_architecture",
+        "criterion_validation"
+      ],
+      "evidence_refs": [
+        {
+          "kind": "artifact",
+          "id": "docs_voice_architecture",
+          "uri": "docs/architecture/voice-agent/README.md"
+        },
+        {
+          "kind": "artifact",
+          "id": "contract_validation_output"
+        }
+      ]
+    },
+    "transaction_id": "tx_completion_handoff"
+  },
+  {
+    "schema_version": 1,
+    "event_id": "event_task_completed",
+    "sequence": 12,
+    "task_revision": 7,
+    "conversation_id": "chat_demo",
+    "task_id": "task_demo_voice_docs",
+    "context_version": 7,
+    "event_type": "task.completed",
+    "actor": {
+      "role": "controller",
+      "id": "task_controller"
+    },
+    "attempt_id": "attempt_demo_01",
+    "agent_run_id": "agent_run_demo_01",
+    "occurred_at": "2026-08-02T12:30:00Z",
+    "payload": {
+      "summary": "The complete architecture package passed validation.",
+      "criterion_ids": [
+        "criterion_architecture",
+        "criterion_validation"
+      ],
+      "evidence_refs": [
+        {
+          "kind": "artifact",
+          "id": "docs_voice_architecture",
+          "uri": "docs/architecture/voice-agent/README.md"
+        },
+        {
+          "kind": "artifact",
+          "id": "contract_validation_output"
+        }
+      ],
+      "remaining_gaps": [
+        "Runtime implementation remains future work."
+      ]
+    },
+    "transaction_id": "tx_task_completed"
+  }
+]

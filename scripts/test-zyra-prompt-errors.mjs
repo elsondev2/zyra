@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { runZyraPrintPrompt, runZyraPrompt } from "../src/zyra-sdk.mjs";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { runZyraPrintPrompt, runZyraPrompt, setProfile } from "../src/zyra-sdk.mjs";
 
 function createRuntime(finalMessage) {
   const entries = [];
@@ -17,6 +20,35 @@ function createRuntime(finalMessage) {
     },
   };
   return { project: process.cwd(), session };
+}
+
+function createClientRuntime(project) {
+  let systemPrompt = "";
+  return {
+    project,
+    session: {
+      state: { messages: [] },
+      agent: {
+        getSystemPrompt: () => systemPrompt,
+        setSystemPrompt: (value) => { systemPrompt = String(value || ""); },
+      },
+      sessionManager: {
+        getEntries: () => [],
+        getSessionId: () => undefined,
+        getSessionFile: () => undefined,
+      },
+    },
+    get systemPrompt() { return systemPrompt; },
+  };
+}
+
+const tempProject = mkdtempSync(path.join(os.tmpdir(), "zyra-client-runtime-"));
+try {
+  const clientRuntime = createClientRuntime(tempProject);
+  assert.equal(setProfile(clientRuntime, "default"), "default");
+  assert.match(clientRuntime.systemPrompt, /ZYRA_ACTIVE_PROFILE/);
+} finally {
+  rmSync(tempProject, { recursive: true, force: true });
 }
 
 const usageLimitMessage = {

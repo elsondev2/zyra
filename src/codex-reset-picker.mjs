@@ -52,7 +52,7 @@ export function createChoiceDialog(config, options = {}, mapResult = (value) => 
     };
   });
   const component = new ChoiceDialogComponent(config, theme, finish);
-  return { component, result };
+  return { component, result, cancel: () => finish(null) };
 }
 
 export class ChoiceDialogComponent {

@@ -140,9 +140,9 @@ export function ZyraLogoASCII({
         secondary: settings.accentColor.primary
     }
     const shimmerBackground = tone === 'neutral'
-        ? 'linear-gradient(100deg, rgba(255,255,255,0) 0%, rgba(230,226,242,0.08) 34%, rgba(250,249,255,0.98) 45%, rgba(255,255,255,1) 50%, rgba(250,249,255,0.98) 55%, rgba(230,226,242,0.08) 66%, rgba(255,255,255,0) 100%)'
+        ? 'linear-gradient(100deg, transparent 0%, var(--loading-shimmer-dim) 34%, var(--loading-shimmer-bright) 45%, var(--color-text) 50%, var(--loading-shimmer-bright) 55%, var(--loading-shimmer-dim) 66%, transparent 100%)'
         : `linear-gradient(90deg, ${themeColors.primary}55, ${themeColors.primary}, ${themeColors.secondary}, ${themeColors.primary}55)`
-    const solidColor = tone === 'neutral' ? 'rgba(98,92,118,0.34)' : themeColors.primary
+    const solidColor = tone === 'neutral' ? 'var(--loading-logo-base)' : themeColors.primary
     const logoTextClass = cn(
         'm-0 select-none whitespace-pre font-mono',
         size === 'lg' ? 'text-[18px] leading-[0.94] tracking-[-0.03em]' : 'text-[13px] leading-[1.05] tracking-[-0.03em]'

@@ -1,0 +1,38 @@
+[
+  {
+    "schema_version": 1,
+    "binding_id": "legacy_binding_user_01",
+    "migration_id": "migration_foreground_routes_01",
+    "conversation_id": "chat_legacy_demo",
+    "message_id": "message_legacy_user_01",
+    "role": "user",
+    "modality": "text",
+    "foreground_route_id": "foreground_route_legacy_chat_01",
+    "route_epoch": 1,
+    "canonical_commit_receipt_id": null,
+    "source_session_ref": "legacy-source-session.jsonl",
+    "source_sequence": 1,
+    "source_record_sha256": "8b3bf06bbd024eb42e9c0dbcb48c3f5e530f81043fa141dbb36df25803c7cc6b",
+    "migration_manifest_sha256": "d7191d3f61a238d87d121a174d912d4d8e9ce78bab0c24290959425c64b762ef",
+    "message_created_at": "2025-12-01T09:00:00Z",
+    "bound_at": "2026-08-02T13:00:00Z"
+  },
+  {
+    "schema_version": 1,
+    "binding_id": "legacy_binding_assistant_02",
+    "migration_id": "migration_foreground_routes_01",
+    "conversation_id": "chat_legacy_demo",
+    "message_id": "message_legacy_assistant_02",
+    "role": "assistant",
+    "modality": "text",
+    "foreground_route_id": "foreground_route_legacy_chat_01",
+    "route_epoch": 1,
+    "canonical_commit_receipt_id": "legacy_commit_receipt_assistant_02",
+    "source_session_ref": "legacy-source-session.jsonl",
+    "source_sequence": 2,
+    "source_record_sha256": "afd5a90778fc481c95360fa671ef3f61f7b8f7fe955dc2dee67acb81a6700a74",
+    "migration_manifest_sha256": "d7191d3f61a238d87d121a174d912d4d8e9ce78bab0c24290959425c64b762ef",
+    "message_created_at": "2025-12-01T09:00:05Z",
+    "bound_at": "2026-08-02T13:00:00Z"
+  }
+]
