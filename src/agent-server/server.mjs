@@ -22,7 +22,7 @@ const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const HANDSHAKE_TIMEOUT_MS = 5_000;
 const BRIDGE_CONNECT_TIMEOUT_MS = 120_000;
 const ACTIVE_FLEET_STATUSES = new Set(["queued", "starting", "running", "waiting", "paused", "recovering"]);
-const BRIDGE_REQUEST_PATTERN = /^(?:prompt|configure|abort|steer|follow_up|compact|clear_queue|reload|approval\.respond|agents\.[a-zA-Z0-9._-]+|workflows\.[a-zA-Z0-9._-]+)$/;
+const BRIDGE_REQUEST_PATTERN = /^(?:prompt|configure|abort|steer|follow_up|compact|clear_queue|reload|canonical_message\.(?:append|find)|approval\.respond|agents\.[a-zA-Z0-9._-]+|workflows\.[a-zA-Z0-9._-]+)$/;
 
 function hashAuthorityProof(value) {
   return createHash("sha256").update(String(value || "")).digest("base64url");
@@ -58,6 +58,7 @@ export class ZyraAgentServer extends EventEmitter {
     this.clients = new Map();
     this.sessions = new Map();
     this.utilityWorker = null;
+    this.canonicalMessageQueues = new Map();
     this.server = null;
     this.startedAt = null;
   }
@@ -219,6 +220,32 @@ export class ZyraAgentServer extends EventEmitter {
     if (method === "catalog.history") {
       return { history: await this.catalog.history(params.session, params) };
     }
+    if (method === "catalog.message.append" || method === "catalog.message.find") {
+      if (!client.canControl) {
+        throw new AgentServerProtocolError("Canonical message writes require verified Desktop authority.", "AGENT_SERVER_AUTH_FAILED");
+      }
+      const selector = String(params.session || params.conversationId || "").trim();
+      if (!selector) throw new AgentServerProtocolError("Canonical chat id is required.");
+      const canonicalChatId = this.catalog.resolveAlias(selector);
+      if (method === "catalog.message.append"
+        && String(params.message?.conversationId || "").trim() !== canonicalChatId) {
+        throw new AgentServerProtocolError("Canonical message conversation does not match its selected transcript.");
+      }
+      return this.withCanonicalMessageLock(canonicalChatId, async () => {
+        const activeSession = this.sessions.get(canonicalChatId);
+        const receipt = activeSession
+          ? method === "catalog.message.append"
+            ? await activeSession.appendCanonicalMessage(params.message)
+            : await activeSession.findCanonicalMessageReceipt(params.operationId)
+          : method === "catalog.message.append"
+            ? await this.catalog.appendCanonicalMessage(canonicalChatId, params.message)
+            : await this.catalog.findCanonicalMessageReceipt(canonicalChatId, params.operationId);
+        if (method === "catalog.message.append") {
+          this.broadcastCatalogChanged({ canonicalChatId, canonicalMessage: true });
+        }
+        return { receipt };
+      });
+    }
     if (method === "catalog.update") {
       const chat = await this.catalog.updateChat(params.session, {
         ...(params.title !== undefined ? { title: params.title } : {}),
@@ -262,6 +289,17 @@ export class ZyraAgentServer extends EventEmitter {
       return { stopped: true, sessionKey: session.sessionKey };
     }
     throw new AgentServerProtocolError(`Unsupported method: ${method}.`);
+  }
+
+  async withCanonicalMessageLock(canonicalChatId, operation) {
+    const previous = this.canonicalMessageQueues.get(canonicalChatId) || Promise.resolve();
+    const current = previous.catch(() => undefined).then(operation);
+    this.canonicalMessageQueues.set(canonicalChatId, current);
+    try {
+      return await current;
+    } finally {
+      if (this.canonicalMessageQueues.get(canonicalChatId) === current) this.canonicalMessageQueues.delete(canonicalChatId);
+    }
   }
 
   sessionPresence(sessionKeyValue) {
@@ -565,6 +603,19 @@ class ServerOwnedSession {
     }
     this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, presence: true });
     this.scheduleIdleStop();
+  }
+
+  async appendCanonicalMessage(input) {
+    if (this.activeRequestContext) {
+      throw new AgentServerProtocolError("Canonical Voice cannot append while the strong foreground turn is active.", "AGENT_SERVER_SESSION_BUSY");
+    }
+    const result = await this.worker.request("canonical_message.append", input);
+    return result.receipt || null;
+  }
+
+  async findCanonicalMessageReceipt(operationId) {
+    const result = await this.worker.request("canonical_message.find", { operationId });
+    return result.receipt || null;
   }
 
   async request(_client, typeValue, payload, requestContextValue) {

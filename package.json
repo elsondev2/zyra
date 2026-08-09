@@ -19,7 +19,7 @@
     "test:agent-server": "node scripts/test-zyra-chat-index.mjs && node scripts/test-zyra-agent-server.mjs && node scripts/test-zyra-agent-server-bridge.mjs && bun run --cwd desktop test:agent-server && bun run --cwd desktop test:assistant-project",
     "test:permissions": "node scripts/test-zyra-permission-gate.mjs",
     "test:voice-agent-contracts": "node scripts/validate-voice-agent-contracts.mjs",
-    "test:voice-core": "npm run test:voice-agent-contracts && bun run --cwd desktop test:assistant-voice-core",
+    "test:voice-core": "npm run test:voice-agent-contracts && node scripts/test-zyra-canonical-message-ledger.mjs && bun run --cwd desktop test:assistant-voice-core",
     "chat:migration-report": "node scripts/build-chat-metadata-migration-report.mjs",
     "chat:migration-apply": "node scripts/apply-chat-metadata-migration.mjs",
     "browser:live": "node scripts/automation/live-browser-control.mjs",

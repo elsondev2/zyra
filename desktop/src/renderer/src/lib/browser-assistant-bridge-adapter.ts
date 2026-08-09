@@ -207,6 +207,7 @@ export function createBrowserAssistantBridgeAdapter(): DevScopeApi['assistant'] 
         respondUserInput: remoteAssistantMethod('respondUserInput'),
         startRealtimeVoice: async () => ({ success: false as const, error: 'Realtime voice currently requires the Zyra desktop window.' }),
         sendRealtimeVoiceMessage: async () => ({ success: false as const, error: 'Realtime voice currently requires the Zyra desktop window.' }),
+        ingestRealtimeVoiceEvent: async () => ({ success: false as const, error: 'Realtime voice currently requires the Zyra desktop window.' }),
         stopRealtimeVoice: async () => ({ success: true as const }),
         onRealtimeVoiceEvent: () => () => {},
         getVoiceTranscriptionState: remoteAssistantMethod('getVoiceTranscriptionState'),

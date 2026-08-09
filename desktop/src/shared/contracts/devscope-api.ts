@@ -18,6 +18,7 @@ import type {
     AssistantGetReviewIndexInput,
     AssistantGetSessionTurnUsageInput,
     AssistantGetTurnDetailInput,
+    AssistantIngestRealtimeVoiceEventInput,
     AssistantModelInfo,
     AssistantPlaygroundResultPayload,
     AssistantPersistClipboardImageInput,
@@ -399,8 +400,16 @@ export interface DevScopeAssistantApi {
     interruptTurn: (turnId?: string, sessionId?: string) => Promise<DevScopeResult>
     respondApproval: (input: AssistantApprovalResponseInput) => Promise<DevScopeResult>
     respondUserInput: (input: AssistantUserInputResponseInput) => Promise<DevScopeResult>
-    startRealtimeVoice: (input: AssistantStartRealtimeVoiceInput) => Promise<DevScopeResult<{ threadId: string; sdp: string; realtimeVersion: string }>>
+    startRealtimeVoice: (input: AssistantStartRealtimeVoiceInput) => Promise<DevScopeResult<{
+        threadId: string
+        conversationId?: string
+        adapterSessionId?: string
+        realtimeSessionId?: string
+        sdp: string
+        realtimeVersion: string
+    }>>
     sendRealtimeVoiceMessage: (input: AssistantSendRealtimeVoiceMessageInput) => Promise<DevScopeResult<{ mode: 'text-turn' | 'vision-turn' }>>
+    ingestRealtimeVoiceEvent: (input: AssistantIngestRealtimeVoiceEventInput) => Promise<DevScopeResult>
     stopRealtimeVoice: () => Promise<DevScopeResult>
     onRealtimeVoiceEvent: (callback: (event: AssistantRealtimeVoiceEvent) => void) => () => void
     getVoiceTranscriptionState: () => Promise<DevScopeResult<{ state: AssistantVoiceTranscriptionState }>>

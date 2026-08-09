@@ -1,5 +1,6 @@
 import type {
     AssistantRealtimeVoiceEvent,
+    AssistantSendRealtimeVoiceMessageInput,
     HydrationReceipt,
     InstructorOutputModality,
     InstructorRealtimeVoice,
@@ -42,6 +43,7 @@ export interface CodexRealtimeTransport {
     }>
     appendContext(items: Array<{ role: 'developer' | 'user' | 'assistant'; text: string }>): Promise<void>
     requestSpeech(text: string): Promise<void>
+    sendMessage(input: AssistantSendRealtimeVoiceMessageInput): Promise<{ mode: 'text-turn' | 'vision-turn' }>
     stop(): Promise<void>
     on(event: 'event', listener: (payload: AssistantRealtimeVoiceEvent) => void): unknown
     off(event: 'event', listener: (payload: AssistantRealtimeVoiceEvent) => void): unknown
@@ -52,7 +54,7 @@ interface CodexAdapterSession {
     handle: RealtimeSessionHandle | null
     currentWatermarks: RealtimeHydrationSeed['sourceWatermarks']
     closed: boolean
-    missingTranscriptIdentityReported: boolean
+    webRtcTurnRoles: Map<string, 'user' | 'assistant'>
 }
 
 export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter {
@@ -94,7 +96,7 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
             handle: null,
             currentWatermarks: structuredClone(input.hydrationSeed.sourceWatermarks),
             closed: false,
-            missingTranscriptIdentityReported: false
+            webRtcTurnRoles: new Map()
         }
         this.sessions.set(adapterSessionId, session)
         this.currentAdapterSessionId = adapterSessionId
@@ -103,6 +105,10 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
             type: 'realtime.session.connecting'
         })
 
+        const abortRuntimeStart = () => {
+            void this.runtime.stop().catch(() => undefined)
+        }
+        input.signal.addEventListener('abort', abortRuntimeStart, { once: true })
         try {
             const result = await this.runtime.start({
                 cwd: input.projectCwd,
@@ -136,6 +142,8 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
             session.closed = true
             if (this.currentAdapterSessionId === adapterSessionId) this.currentAdapterSessionId = null
             throw error
+        } finally {
+            input.signal.removeEventListener('abort', abortRuntimeStart)
         }
     }
 
@@ -159,6 +167,36 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
             appliedThrough: structuredClone(next)
         })
         return receipt
+    }
+
+    async sendComposerMessage(
+        sessionId: string,
+        input: AssistantSendRealtimeVoiceMessageInput
+    ): Promise<{ mode: 'text-turn' | 'vision-turn' }> {
+        this.requireCurrentSession(sessionId)
+        return this.runtime.sendMessage(input)
+    }
+
+    ingestWebRtcEvent(sessionId: string, value: unknown): void {
+        const session = this.requireCurrentSession(sessionId)
+        const event = normalizeWebRtcTranscriptEvent(value, session.webRtcTurnRoles)
+        if (!event) {
+            if (isWebRtcTranscriptCompletion(value)) {
+                this.emit({
+                    ...eventBase(session, this.clock.now()),
+                    type: 'realtime.session.error',
+                    category: 'incompatible_protocol',
+                    message: 'Codex completed a realtime turn without the stable item identity and transcript required for canonical delivery.'
+                })
+            }
+            return
+        }
+        this.emit({
+            ...eventBase(session, this.clock.now()),
+            type: `realtime.${event.role}.transcript.${event.kind}`,
+            providerItemId: event.providerItemId,
+            ...(event.kind === 'completed' ? { text: event.text } : { delta: event.delta })
+        } as RealtimeDomainEvent)
     }
 
     async requestSpeech(sessionId: string, item: RealtimeSpeechItem): Promise<SpeechSubmissionReceipt> {
@@ -219,18 +257,10 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
         if (!session || session.closed || !session.handle) return
         if (event.threadId && event.threadId !== session.handle.realtimeProviderThreadId) return
         if (event.type === 'transcript.delta' || event.type === 'transcript.done') {
-            if (!event.providerItemId) {
-                if (!session.missingTranscriptIdentityReported) {
-                    session.missingTranscriptIdentityReported = true
-                    this.emit({
-                        ...eventBase(session, this.clock.now()),
-                        type: 'realtime.session.error',
-                        category: 'incompatible_protocol',
-                        message: 'Codex transcript event omitted the stable provider item identity required for canonical delivery.'
-                    })
-                }
-                return
-            }
+            // Flat app-server notifications may omit item identity. The
+            // production Desktop bridge supplies the identity-bearing WebRTC
+            // event instead; never guess or commit the flat notification.
+            if (!event.providerItemId) return
             const role = event.role === 'user' ? 'user' : 'assistant'
             const type = `realtime.${role}.transcript.${event.type === 'transcript.done' ? 'completed' : 'delta'}`
             this.emit({
@@ -239,6 +269,30 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
                 providerItemId: event.providerItemId,
                 ...(event.type === 'transcript.done' ? { text: event.text } : { delta: event.delta })
             } as RealtimeDomainEvent)
+            return
+        }
+        if (event.type === 'composer.response.delta') return
+        if (event.type === 'composer.response.done') {
+            if (event.error || !event.text.trim()) {
+                this.emit({
+                    ...eventBase(session, this.clock.now()),
+                    type: 'realtime.session.error',
+                    category: 'request_rejected',
+                    message: event.error || 'The private typed-input turn ended without a result for Voice to narrate.'
+                })
+                return
+            }
+            const adapterSessionId = session.handle.adapterSessionId
+            void this.runtime.requestSpeech(event.text.trim()).catch((error) => {
+                const current = this.sessions.get(adapterSessionId)
+                if (!current || current.closed || current !== session) return
+                this.emit({
+                    ...eventBase(session, this.clock.now()),
+                    type: 'realtime.session.error',
+                    category: 'request_rejected',
+                    message: error instanceof Error ? error.message : 'Voice could not narrate the typed-input result.'
+                })
+            })
             return
         }
         if (event.type === 'session.error') {
@@ -258,6 +312,78 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
     private emit(event: RealtimeDomainEvent): void {
         for (const listener of this.listeners) listener(event)
     }
+}
+
+type NormalizedWebRtcTranscriptEvent =
+    | { kind: 'delta'; role: 'user' | 'assistant'; providerItemId: string; delta: string }
+    | { kind: 'completed'; role: 'user' | 'assistant'; providerItemId: string; text: string }
+
+export function normalizeWebRtcTranscriptEvent(
+    value: unknown,
+    turnRoles = new Map<string, 'user' | 'assistant'>()
+): NormalizedWebRtcTranscriptEvent | null {
+    const payload = asRecord(value)
+    const type = asText(payload?.['type'])
+    if (!type) return null
+    const turn = asRecord(payload?.['turn'])
+    const item = asRecord(payload?.['item'])
+    const turnId = boundedProviderItemId(
+        asText(turn?.['id']) || asText(item?.['id']) || asText(payload?.['turn_id']) || asText(payload?.['item_id'])
+    )
+    const explicitRole = normalizeTranscriptRole(
+        asText(turn?.['role']) || asText(item?.['role']) || asText(payload?.['role'])
+    )
+    if (turnId && explicitRole) turnRoles.set(turnId, explicitRole)
+
+    if (type === 'turn.created' || type === 'conversation.item.created') return null
+    const role = explicitRole
+        || (turnId ? turnRoles.get(turnId) : undefined)
+        || (type.includes('input_audio_transcription') ? 'user' : type.includes('transcript') ? 'assistant' : undefined)
+    if (!turnId || !role) return null
+
+    const delta = typeof payload?.['delta'] === 'string' ? payload['delta'] : ''
+    if (type === 'turn.delta'
+        || type.endsWith('.transcript.delta')
+        || type.endsWith('.audio_transcript.delta')
+        || type.endsWith('.input_audio_transcription.delta')) {
+        return delta ? { kind: 'delta', role, providerItemId: turnId, delta } : null
+    }
+
+    if (type === 'turn.done'
+        || type.endsWith('.transcript.done')
+        || type.endsWith('.audio_transcript.done')
+        || type.endsWith('.input_audio_transcription.completed')) {
+        const text = String(turn?.['transcript'] ?? payload?.['transcript'] ?? payload?.['text'] ?? '').trim()
+        turnRoles.delete(turnId)
+        return text ? { kind: 'completed', role, providerItemId: turnId, text } : null
+    }
+    return null
+}
+
+function isWebRtcTranscriptCompletion(value: unknown): boolean {
+    const type = asText(asRecord(value)?.['type']) || ''
+    return type === 'turn.done'
+        || type.endsWith('.transcript.done')
+        || type.endsWith('.audio_transcript.done')
+        || type.endsWith('.input_audio_transcription.completed')
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' ? value as Record<string, unknown> : null
+}
+
+function asText(value: unknown): string | null {
+    return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function normalizeTranscriptRole(value: string | null): 'user' | 'assistant' | null {
+    if (value === 'user') return 'user'
+    if (value === 'assistant') return 'assistant'
+    return null
+}
+
+function boundedProviderItemId(value: string | null): string | null {
+    return value && value.length <= 512 ? value : null
 }
 
 function normalizeCodexErrorCategory(message: string): string {

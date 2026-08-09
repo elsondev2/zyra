@@ -70,6 +70,7 @@ export const ASSISTANT_IPC = {
     unsubscribeRealtimeVoice: 'devscope:assistant:realtimeVoice:unsubscribe',
     startRealtimeVoice: 'devscope:assistant:realtimeVoice:start',
     sendRealtimeVoiceMessage: 'devscope:assistant:realtimeVoice:sendMessage',
+    ingestRealtimeVoiceEvent: 'devscope:assistant:realtimeVoice:ingestWebRtcEvent',
     stopRealtimeVoice: 'devscope:assistant:realtimeVoice:stop',
     realtimeVoiceEvent: 'devscope:assistant:realtimeVoice:event',
     getVoiceTranscriptionState: 'devscope:assistant:getVoiceTranscriptionState',

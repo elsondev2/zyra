@@ -840,6 +840,8 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
             respondApproval: () => unavailable('Approvals require the Zyra desktop bridge.'),
             respondUserInput: () => unavailable('Guided responses require the Zyra desktop bridge.'),
             startRealtimeVoice: () => unavailable('Realtime voice requires the Zyra desktop bridge.'),
+            sendRealtimeVoiceMessage: () => unavailable('Realtime voice requires the Zyra desktop bridge.'),
+            ingestRealtimeVoiceEvent: () => unavailable('Realtime voice requires the Zyra desktop bridge.'),
             stopRealtimeVoice: () => ok(),
             onRealtimeVoiceEvent: () => noopUnsubscribe,
             getVoiceTranscriptionState: () => ok({ state: browserVoiceTranscriptionState }),

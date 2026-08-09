@@ -23,6 +23,10 @@ Teach one clear step at a time. Use plain language and short examples. Ask a bri
 This is an instructional conversation. Do not edit files, execute commands, or make system changes.`
 
 export interface AssistantStartRealtimeVoiceInput {
+    /** Local Assistant thread ID. Omit only for the legacy isolated Voice Lab. */
+    conversationId?: string
+    sessionId?: string
+    transcriptBridgeVersion?: 1
     sdp: string
     instructions?: string
     voice?: InstructorRealtimeVoice
@@ -36,8 +40,15 @@ export interface AssistantRealtimeVoiceImageInput {
 }
 
 export interface AssistantSendRealtimeVoiceMessageInput {
+    clientMessageId?: string
+    clientMessageCreatedAt?: string
     text?: string
     images?: AssistantRealtimeVoiceImageInput[]
+}
+
+export interface AssistantIngestRealtimeVoiceEventInput {
+    adapterSessionId: string
+    payload: unknown
 }
 
 export type AssistantRealtimeVoiceEvent =

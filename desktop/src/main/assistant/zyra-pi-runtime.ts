@@ -937,6 +937,28 @@ export class ZyraPiRuntime extends EventEmitter {
         return this.getAgentServerConnection(resolveZyraRoot()).readCanonicalChatHistory(session, project, options)
     }
 
+    async appendCanonicalMessage(
+        conversationId: string,
+        message: Record<string, unknown>
+    ): Promise<Record<string, unknown>> {
+        const normalizedConversationId = String(conversationId || '').trim()
+        if (!normalizedConversationId) throw new Error('Canonical conversation id is required.')
+        return this.getAgentServerConnection(resolveZyraRoot()).appendCanonicalMessage(normalizedConversationId, message)
+    }
+
+    async findCanonicalMessageReceipt(
+        conversationId: string,
+        operationId: string
+    ): Promise<Record<string, unknown> | null> {
+        const normalizedConversationId = String(conversationId || '').trim()
+        const normalizedOperationId = String(operationId || '').trim()
+        if (!normalizedConversationId || !normalizedOperationId) return null
+        return this.getAgentServerConnection(resolveZyraRoot()).findCanonicalMessageReceipt(
+            normalizedConversationId,
+            normalizedOperationId
+        )
+    }
+
     async updateCanonicalChat(
         threadId: string,
         patch: { title?: string; project?: string; cwd?: string; archived?: boolean }

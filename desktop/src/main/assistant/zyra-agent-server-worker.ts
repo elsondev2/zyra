@@ -147,6 +147,18 @@ export class DesktopAgentServerConnection {
         return asRecord(result['history']) as CanonicalAgentChatHistory | null
     }
 
+    async appendCanonicalMessage(session: string, message: Record<string, unknown>): Promise<Record<string, unknown>> {
+        const client = await this.getClient()
+        const result = await client.request('catalog.message.append', { session, message }, { timeoutMs: 15_000 })
+        return asRecord(result['receipt']) || {}
+    }
+
+    async findCanonicalMessageReceipt(session: string, operationId: string): Promise<Record<string, unknown> | null> {
+        const client = await this.getClient()
+        const result = await client.request('catalog.message.find', { session, operationId }, { timeoutMs: 15_000 })
+        return asRecord(result['receipt'])
+    }
+
     async updateCanonicalChat(
         session: string,
         patch: { title?: string; project?: string; cwd?: string; archived?: boolean }

@@ -14,6 +14,7 @@ import type {
     AssistantGetReviewIndexInput,
     AssistantGetSessionTurnUsageInput,
     AssistantGetTurnDetailInput,
+    AssistantIngestRealtimeVoiceEventInput,
     AssistantPersistClipboardImageInput,
     AssistantRedeemAccountResetInput,
     AssistantResolveClipboardAttachmentInput,
@@ -283,6 +284,13 @@ export function handleAssistantSendRealtimeVoiceMessage(
         imageCount: input?.images?.length || 0
     })
     return withAssistantResult(() => getAssistantService().sendRealtimeVoiceMessage(input, event.sender.id))
+}
+
+export function handleAssistantIngestRealtimeVoiceEvent(
+    event: Electron.IpcMainInvokeEvent,
+    input: AssistantIngestRealtimeVoiceEventInput
+) {
+    return withAssistantResult(() => getAssistantService().ingestRealtimeVoiceEvent(input, event.sender.id))
 }
 
 export function handleAssistantStopRealtimeVoice(event: Electron.IpcMainInvokeEvent) {

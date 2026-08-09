@@ -1,161 +1,128 @@
-# V1 Voice core merge handoff (Mike)
+# V1 canonical Voice merge handoff (Mike)
 
 **Branch:** `feat/v1-voice-core`
 
 **Worktree:** `C:\Users\elson\my_coding_play\zyra\.zyra-worktrees\v1-voice-core`
 
 **Shared baseline:** `f51e33e` (`work/overnight-baseline-20260809`)
-**Scope:** Product Phase One foundations only; no Assistant UI/browser integration.
 
 ## Outcome
 
-This branch establishes the provider-neutral, persistence-backed authority core needed before production Voice can attach to canonical Chat:
+This branch now integrates Product Phase One Voice into the normal Desktop Assistant conversation instead of leaving it as a standalone core or Voice Lab prototype.
 
-- append-only `ForegroundRoute` records with one active Chat/Voice response owner per conversation;
-- monotonic route epochs, non-authorizing owner claims, CAS transitions, and stale-claim rejection;
-- dedicated `controller.sqlite` file ownership, route/scope-binding tables, operation revisions, atomic file replacement, and reopen tests;
-- immutable provider-thread-to-canonical-conversation binding;
-- a conversation gateway for exactly-once canonical message operations and receipts;
-- a handoff quiescence barrier that blocks route changes while message commits are intended/dispatched;
-- provider-neutral realtime, continuity/hydration, capability, canonical-message, and primary-agent contracts;
-- deterministic realtime, continuity, canonical-ledger, and strong-primary fakes;
-- Chat → Voice, Voice → replacement Voice, Voice → Chat, preparation failure, unexpected transport close, and restart/reopen behavior;
-- canonical final transcript commits with deterministic message IDs and duplicate replay handling;
-- separation of direct strong Chat output from private strong task execution under Voice;
-- an experimental Codex V3 adapter behind the realtime seam;
-- installed-Codex schema probing, V3 `initialItems`, silent `appendText`, explicit `appendSpeech`, and client-managed handoff support;
-- the complete normative Voice architecture/ADR/schema package brought onto the current application baseline without importing the documentation worktree's old app snapshot.
+In an eligible root Assistant conversation, the title bar exposes **Start Voice**. Starting it:
+
+1. binds or resumes the selected canonical Pi conversation;
+2. loads legacy or current Pi JSONL history into the Assistant projection;
+3. hydrates bounded recent history, approvals, pending decisions, task references, route state, and watermarks into Codex Realtime V3;
+4. atomically hands foreground response ownership from Chat to the physical Voice session;
+5. commits completed user and assistant Voice turns exactly once into the same canonical Pi JSONL;
+6. projects those durable turns into the existing Assistant timeline;
+7. returns foreground ownership to a fresh Chat claim on Stop, navigation, provider failure, transcript failure, or restart.
+
+New empty threads and imported legacy threads use the same path. A first spoken user turn in a brand-new Pi session is forced durable before a response receipt is returned.
+
+The old isolated Voice Lab remains available through the compatibility path used when no canonical `conversationId` is supplied.
+
+## User-facing behavior
+
+- Start/Retry/End Voice control in the existing Assistant header.
+- Compact in-conversation Voice dock with connection state, microphone mute, current transcript status, typed input, and Stop.
+- Spoken and typed Voice turns appear in the normal Assistant timeline and survive reload/restart through Pi JSONL; typed input uses a private read-only turn whose result returns through Realtime speech rather than taking foreground authority.
+- Existing Chat sending is rejected while Voice owns foreground response authority.
+- Voice start is rejected for subagent threads or while a strong foreground turn is active.
+- Thread/session changes, new-chat actions, disconnect, archive/delete paths, and renderer teardown stop Voice cleanly.
+- Durable coding/system work and images intentionally return to Chat in this release; the realtime foreground has no write, shell, approval, or task-execution authority.
+- The browser bridge reports Voice as unavailable until browser productization supplies its own media/identity transport.
 
 ## Canonical sources and projections
 
-| Concern | Implemented authority/source | Current integration state |
+| Concern | Authority/source | Integration |
 |---|---|---|
-| Foreground response ownership | `ForegroundRoute` revisions in dedicated controller SQLite | Implemented and tested; not opened by `AssistantService` yet |
-| Provider-thread scope | Controller provider-thread/scope-binding tables | Implemented and immutable |
-| Canonical message intent/receipt | Controller operation revisions plus `ConversationGateway` | Implemented against a deterministic canonical writer; production Pi JSONL writer still required |
-| Realtime transport | `RealtimeForegroundAdapter` | Fake and Codex V3 adapters implemented |
-| Resume context | Bounded hashed hydration seed/delta DTOs | Fake deterministic source implemented; production continuity reducer still required |
-| Strong direct/private lanes | `PrimaryAgentAdapter` contract | Deterministic fake implemented; existing Pi/Codex runtime has not been moved behind it |
-| Renderer timeline | Existing canonical Assistant projection | Deliberately untouched |
+| Foreground response ownership | Append-only routes in `controller.sqlite` | Opened and closed by `AssistantService`; legacy routes migrate to epoch-1 Chat |
+| Provider-thread scope | Controller provider-thread/scope-binding tables | Immutable binding enforced |
+| Canonical messages | Server-owned Pi `SessionManager` JSONL | Production append/find writer with authoritative receipts and immediate first-user durability |
+| Exactly-once delivery | Controller operation revisions + `ConversationGateway` | Idempotent append, lost-response lookup, restart reconciliation, and handoff quiescence |
+| Realtime transport | `CodexRealtimeForegroundAdapter` | Realtime V3/WebRTC with bounded initial history and client-managed handoffs |
+| Transcript identity | Renderer WebRTC data channel | Stable turn/item IDs forwarded through verified IPC; identity-less terminal turns fail closed |
+| Resume continuity | `AssistantRealtimeContinuitySource` | Bounded canonical history plus approvals, pending inputs, tasks, route/context watermarks |
+| Desktop timeline | Existing Assistant event/projector/persistence path | Rebuildable projection of authoritative Pi receipts |
 
-The Desktop Assistant SQLite database remains a rebuildable UI projection. This branch does not treat it as controller or message authority.
+Desktop Assistant SQLite remains a UI projection. `controller.sqlite` owns routing/operation state, and Pi JSONL owns canonical conversation messages.
 
-## Important invariants covered
+## Important invariants
 
-1. Epoch 1 is Chat; Voice activates only as a new epoch after hydration.
-2. Every route has exactly one active revision followed by at most one terminal revision.
-3. Predecessor termination and successor activation commit in one SQL transaction with equal boundary timestamps.
-4. Chat claims belong to `strong_primary`; Voice claims belong to `realtime_foreground` and exact physical session generation.
-5. Route changes preserve attached task IDs and mutate no task/attempt/slot/lock/lease authority.
-6. Strong assistant output cannot commit while Voice owns the route.
-7. Realtime output cannot commit after its route or session generation is superseded.
-8. Provider threads cannot be rebound to another canonical conversation.
-9. Canonical message IDs and idempotency keys cannot alias different immutable payloads.
-10. An in-flight canonical commit blocks foreground handoff until receipted, cancelled, failed, or marked unknown.
-11. A post-write lost response reconciles by operation ID and commits exactly once.
-12. Failed Voice preparation and unexpected current-session closure install a fresh Chat claim when the output lane is quiescent.
-13. Capability reports fail closed when expired, future-dated, unsupported, or missing valid evidence.
+1. Epoch 1 is Chat; Voice activates only in a new epoch after continuity hydration.
+2. Chat authorizes `strong_primary`; Voice authorizes only the exact `realtime_foreground` physical session generation.
+3. Strong direct Chat output cannot start or commit while Voice owns the foreground.
+4. Stale realtime sessions and stale provider item events cannot commit.
+5. Provider threads cannot be rebound to another canonical conversation.
+6. Canonical operation/message/idempotency identities cannot alias different payloads.
+7. Route handoff waits for intended/dispatched canonical commits to quiesce.
+8. Post-write lost responses reconcile by operation ID; restart cancels undispatched intent and records receipt-less dispatched work as unknown.
+9. Provider termination and concurrent Stop/navigation cleanup share one serialized recovery path.
+10. Capability, evidence, transcript identity, event size, sender ownership, Desktop authority, and selected-conversation checks all fail closed.
 
-## Codex compatibility finding
+## Main integration files
 
-The installed `codex-cli 0.146.0` generated schema contains the V3 initial-item and WebRTC transport contracts plus realtime started/transcript notifications. The generated flat `thread/realtime/transcript/*` notifications do **not** contain stable provider item IDs.
+### Service, authority, and canonical writer
 
-The Codex adapter therefore reports transcript identity as `unknown` unless the host supplies a separately proven WebRTC data-channel identity bridge. The production capability gate keeps canonical Codex Voice disabled until that bridge is wired and tested. This is intentional fail-closed behavior, not a fake claim of readiness.
-
-## Files most relevant to integration
-
-### Shared contracts
-
-- `desktop/src/shared/assistant/contracts/foreground-route.ts`
-- `desktop/src/shared/assistant/contracts/canonical-message.ts`
-- `desktop/src/shared/assistant/contracts/provider-capabilities.ts`
-- `desktop/src/shared/assistant/contracts/realtime-foreground.ts`
-- `desktop/src/shared/assistant/contracts/primary-agent.ts`
-
-### Controller and gateway
-
-- `desktop/src/main/assistant/foreground/foreground-route-reducer.ts`
-- `desktop/src/main/assistant/foreground/foreground-controller-store.ts`
+- `desktop/src/main/assistant/service.ts`
 - `desktop/src/main/assistant/foreground/foreground-controller-persistence.ts`
 - `desktop/src/main/assistant/foreground/foreground-route-controller.ts`
-- `desktop/src/main/assistant/foreground/canonical-message-operation-reducer.ts`
 - `desktop/src/main/assistant/foreground/conversation-gateway.ts`
+- `desktop/src/main/assistant/foreground/pi-canonical-message-writer.ts`
+- `src/agent-server/canonical-message-ledger.mjs`
+- `src/agent-server/server.mjs`
+- `src/agent-server/catalog.mjs`
+- `src/zyra-ui-bridge.mjs`
 
 ### Realtime and continuity
 
 - `desktop/src/main/assistant/voice/canonical-voice-session-controller.ts`
 - `desktop/src/main/assistant/voice/canonical-voice-transcript-committer.ts`
-- `desktop/src/main/assistant/voice/realtime-hydration.ts`
+- `desktop/src/main/assistant/voice/assistant-realtime-continuity-source.ts`
 - `desktop/src/main/assistant/voice/codex-realtime-foreground-adapter.ts`
 - `desktop/src/main/assistant/voice/codex-realtime-capability-probe.ts`
-- `desktop/src/main/assistant/voice/codex-realtime-capabilities.ts`
 
-### Fakes and evidence
+### IPC and renderer
 
-- `desktop/src/main/assistant/voice/fake-realtime-foreground-adapter.ts`
-- `desktop/src/main/assistant/voice/fake-realtime-continuity-source.ts`
-- `desktop/src/main/assistant/foreground/fake-canonical-message-writer.ts`
-- `desktop/src/main/assistant/foreground/fake-primary-agent-adapter.ts`
-- `desktop/scripts/test-assistant-voice-core.ts`
-
-## Deliberately untouched collision areas
-
-To remain parallel-safe with Jake's browser-productization branch, this branch does not change:
-
-- `desktop/src/main/index.ts`
-- browser assistant bridge or DevScope relay files
-- preload browser relay files
-- renderer `browser-*` libraries
-- Assistant route/store/selection files
-- `desktop/vite.browser.config.ts`
-- `desktop/electron.vite.config.ts`
-
-## Required integration work
-
-The following remains for a later sequential integration branch:
-
-1. Open `ForegroundControllerPersistence.defaultPath(app.getPath('userData'))` in the server/main authority owner and close it cleanly.
-2. Migrate/hash-bind existing canonical messages to an epoch-1 migration Chat route without rewriting JSONL.
-3. Implement the production canonical Pi JSONL `CanonicalMessageWriter` with durable operation lookup.
-4. Put existing strong direct Chat and server-owned private task execution behind `PrimaryAgentAdapter`.
-5. Build the production continuity materializer from canonical messages, route heads, active task records, pending decisions/approvals, safety state, and watermarks.
-6. Wire the WebRTC data-channel turn/item ID bridge into the Codex adapter and rerun capability probing.
-7. Attach Start/Stop Voice to the existing canonical composer and timeline without a parallel transcript store.
-8. Route typed/image input under active Voice according to the production multimodal policy.
-9. Connect task promotion, bounded inspection, selective narration, approvals, and full restart reconciliation.
-10. Add production Desktop/browser/TUI E2E coverage after Jake's typed browser transport lands.
-
-Do not enable canonical Codex Voice merely because V3 signaling works; transcript identity, production writer, and continuity integration are still hard gates.
+- `desktop/src/shared/assistant/contracts/realtime-voice.ts`
+- `desktop/src/shared/assistant/contracts/ipc.ts`
+- `desktop/src/main/ipc/handlers/assistant-handlers.ts`
+- `desktop/src/preload/adapters/assistant-adapter.ts`
+- `desktop/src/renderer/src/pages/assistant/useInstructorVoiceSession.ts`
+- `desktop/src/renderer/src/pages/assistant/AssistantConversationHeader.tsx`
+- `desktop/src/renderer/src/pages/assistant/AssistantConversationPane.tsx`
+- `desktop/src/renderer/src/pages/assistant/AssistantCanonicalVoiceDock.tsx`
 
 ## Verification
 
-Passed on this branch:
+Passed after production integration:
 
-- `npm run test:voice-agent-contracts`
-  - 20 schemas
-  - 28 examples
-  - 7 task events
-  - 5 attempt-event records
-  - 125 rejection cases
-- `bun run --cwd desktop test:assistant-voice-core`
+- `npm run test:voice-core`
+  - 20 schemas, 28 examples, 7 task events, 5 attempt-event records, and 125 rejection cases
+  - canonical Pi ledger durability/reopen/conflict checks
+  - canonical Voice authority, idempotency, restart reconciliation, adapter, and transcript identity checks
+- `node scripts/test-zyra-agent-server.mjs`
+  - verified Desktop authority, canonical append/find, busy-turn rejection, and existing server flow
 - `bun run --cwd desktop test:assistant-realtime-voice`
 - `bun run --cwd desktop test:assistant-voice-transcription`
 - `bun run --cwd desktop typecheck`
-- installed Codex schema probe: `codex-cli 0.146.0`, required V3/WebRTC schema markers present, transcript identity bridge intentionally false
+- `bun run --cwd desktop build`
 - `git diff --check`
 
-`npm run check` reaches the repository privacy check and fails on the shared baseline's existing private path in `scripts/restart-zyra-dev-session.ps1:15`. This branch does not modify that file. The focused Voice suites and full Desktop typecheck pass.
+The production build succeeds. A live microphone exchange still requires interactive user permission and an installed Codex account, so it is not represented as an automated test.
 
-## Merge procedure
+## Merge notes
 
-Both agent branches should descend from `f51e33e`. Merge them into a separate integration branch; do not move `master` directly.
+This integration necessarily touches Assistant service/UI, IPC/preload, and browser fallback adapters that the earlier core-only handoff had reserved. Jake's browser-productization branch must therefore be merged on a separate integration branch with semantic conflict resolution rather than a blind merge.
 
 Recommended order:
 
-1. merge `feat/v1-voice-core`;
-2. merge/rebase Jake's browser-productization branch;
-3. resolve only shared package/docs index conflicts;
-4. run both branches' focused suites;
-5. implement server/UI integration as a third change after reviewing both handoffs.
-
-No production feature flag is enabled by this branch, so merging the foundation should preserve current Voice Lab and browser behavior.
+1. merge this branch at its final commit into the integration branch;
+2. merge/rebase Jake's browser branch;
+3. preserve this branch's Desktop canonical Voice authority and Jake's browser transport/productization behavior;
+4. keep `desktop/src/main/index.ts` ownership from the browser lane unless a reviewed Voice dependency requires otherwise;
+5. rerun the focused Voice and browser suites plus the Desktop build;
+6. advance `master` only after that integration branch is reviewed.

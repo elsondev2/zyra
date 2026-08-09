@@ -14,6 +14,7 @@ import type {
     AssistantGetHistoryPageInput,
     AssistantGetReviewIndexInput,
     AssistantGetTurnDetailInput,
+    AssistantIngestRealtimeVoiceEventInput,
     AssistantPersistClipboardImageInput,
     AssistantRealtimeVoiceEvent,
     AssistantRedeemAccountResetInput,
@@ -93,6 +94,8 @@ export function createAssistantAdapter() {
                 ipcRenderer.invoke(ASSISTANT_IPC.startRealtimeVoice, input),
             sendRealtimeVoiceMessage: (input: AssistantSendRealtimeVoiceMessageInput) =>
                 ipcRenderer.invoke(ASSISTANT_IPC.sendRealtimeVoiceMessage, input),
+            ingestRealtimeVoiceEvent: (input: AssistantIngestRealtimeVoiceEventInput) =>
+                ipcRenderer.invoke(ASSISTANT_IPC.ingestRealtimeVoiceEvent, input),
             stopRealtimeVoice: () => ipcRenderer.invoke(ASSISTANT_IPC.stopRealtimeVoice),
             onRealtimeVoiceEvent: (callback: (event: AssistantRealtimeVoiceEvent) => void) => {
                 const listener = (_event: Electron.IpcRendererEvent, payload: AssistantRealtimeVoiceEvent) => callback(payload)

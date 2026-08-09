@@ -30,6 +30,11 @@ type AudioMeter = {
     samples: Uint8Array<ArrayBuffer>
 }
 
+type CanonicalVoiceBinding = {
+    conversationId: string
+    sessionId: string
+}
+
 const ACTIVITY_UPDATE_INTERVAL_MS = 32
 
 function createAudioMeter(context: AudioContext, stream: MediaStream): AudioMeter {
@@ -74,6 +79,18 @@ function waitForIceGatheringComplete(peer: RTCPeerConnection, timeoutMs = 10_000
     })
 }
 
+function isCanonicalTranscriptBridgeEvent(payload: Record<string, unknown>): boolean {
+    const type = typeof payload.type === 'string' ? payload.type : ''
+    return type === 'turn.created'
+        || type === 'turn.delta'
+        || type === 'turn.done'
+        || type === 'conversation.item.created'
+        || type.endsWith('.transcript.delta')
+        || type.endsWith('.transcript.done')
+        || type.endsWith('.input_audio_transcription.delta')
+        || type.endsWith('.input_audio_transcription.completed')
+}
+
 function readDataChannelError(value: unknown): string | null {
     if (!value || typeof value !== 'object') return null
     const payload = value as Record<string, unknown>
@@ -90,7 +107,7 @@ function readDataChannelError(value: unknown): string | null {
     return null
 }
 
-export function useInstructorVoiceSession() {
+export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
     const peerRef = useRef<RTCPeerConnection | null>(null)
     const dataChannelRef = useRef<RTCDataChannel | null>(null)
     const mediaStreamRef = useRef<MediaStream | null>(null)
@@ -107,6 +124,8 @@ export function useInstructorVoiceSession() {
     const startPendingRef = useRef(false)
     const terminalHandledRef = useRef(false)
     const activeThreadIdRef = useRef<string | null>(null)
+    const adapterSessionIdRef = useRef<string | null>(null)
+    const bridgeQueueRef = useRef<Promise<void>>(Promise.resolve())
     const [status, setStatus] = useState<InstructorVoiceStatus>('idle')
     const [error, setError] = useState<string | null>(null)
     const [transcript, setTranscript] = useState<InstructorTranscriptEntry[]>([])
@@ -207,7 +226,10 @@ export function useInstructorVoiceSession() {
     }, [])
 
     const stopRemoteSilently = useCallback(() => {
-        void window.devscope.assistant.stopRealtimeVoice().catch(() => undefined)
+        void bridgeQueueRef.current
+            .catch(() => undefined)
+            .then(() => window.devscope.assistant.stopRealtimeVoice())
+            .catch(() => undefined)
     }, [])
 
     const endWithError = useCallback((message: string) => {
@@ -215,6 +237,7 @@ export function useInstructorVoiceSession() {
         terminalHandledRef.current = true
         generationRef.current += 1
         activeThreadIdRef.current = null
+        adapterSessionIdRef.current = null
         releaseLocalMedia()
         if (mountedRef.current) {
             setError(message)
@@ -282,6 +305,7 @@ export function useInstructorVoiceSession() {
                 terminalHandledRef.current = true
                 generationRef.current += 1
                 activeThreadIdRef.current = null
+                adapterSessionIdRef.current = null
                 releaseLocalMedia()
                 setStatus('idle')
             }
@@ -292,6 +316,7 @@ export function useInstructorVoiceSession() {
             terminalHandledRef.current = true
             generationRef.current += 1
             activeThreadIdRef.current = null
+            adapterSessionIdRef.current = null
             unsubscribe()
             releaseLocalMedia()
             stopRemoteSilently()
@@ -305,6 +330,8 @@ export function useInstructorVoiceSession() {
         terminalHandledRef.current = false
         const generation = ++generationRef.current
         activeThreadIdRef.current = null
+        adapterSessionIdRef.current = null
+        bridgeQueueRef.current = Promise.resolve()
         setError(null)
         setRealtimeVersion(null)
         setTranscript([])
@@ -385,6 +412,23 @@ export function useInstructorVoiceSession() {
                         markActiveIfReady()
                     }
                     setTranscript((current) => applyRealtimeTranscriptEvent(current, payload))
+                    const adapterSessionId = adapterSessionIdRef.current
+                    if (binding && adapterSessionId && isCanonicalTranscriptBridgeEvent(payload)) {
+                        // Invoke IPC immediately so any later navigation request is
+                        // ordered after this provider event in Electron. The aggregate
+                        // promise remains only as the local Stop/unmount drain barrier.
+                        const ingest = window.devscope.assistant.ingestRealtimeVoiceEvent({
+                            adapterSessionId,
+                            payload
+                        }).then((result) => {
+                            if (!result.success) throw new Error(result.error || 'Voice transcript bridge failed.')
+                        })
+                        const bridge = Promise.all([bridgeQueueRef.current, ingest]).then(() => undefined)
+                        bridgeQueueRef.current = bridge
+                        void bridge.catch((bridgeError) => failConnection(
+                            bridgeError instanceof Error ? bridgeError.message : 'Voice transcript bridge failed.'
+                        ))
+                    }
                 } catch {
                     // Ignore unrelated non-JSON realtime payloads.
                 }
@@ -437,6 +481,9 @@ export function useInstructorVoiceSession() {
             if (!offerSdp) throw new Error('The browser could not create a WebRTC offer.')
 
             const result = await window.devscope.assistant.startRealtimeVoice({
+                conversationId: binding?.conversationId,
+                sessionId: binding?.sessionId,
+                transcriptBridgeVersion: binding ? 1 : undefined,
                 sdp: offerSdp,
                 instructions: options.instructions,
                 voice: options.voice,
@@ -452,6 +499,8 @@ export function useInstructorVoiceSession() {
             }
 
             activeThreadIdRef.current = result.threadId
+            adapterSessionIdRef.current = result.adapterSessionId || null
+            readiness.sessionInitialized = true
             setRealtimeVersion(result.realtimeVersion)
             await peer.setRemoteDescription({ type: 'answer', sdp: result.sdp })
             if (!isCurrent()) return
@@ -469,7 +518,7 @@ export function useInstructorVoiceSession() {
         } finally {
             startPendingRef.current = false
         }
-    }, [attachOutputActivityMeter, beginActivityMeter, endWithError, releaseLocalMedia, stopRemoteSilently])
+    }, [attachOutputActivityMeter, beginActivityMeter, binding, endWithError, releaseLocalMedia, stopRemoteSilently])
 
     const toggleMicrophone = useCallback(() => {
         const stream = mediaStreamRef.current
@@ -484,7 +533,9 @@ export function useInstructorVoiceSession() {
             return { success: false as const, error: 'Wait for the voice session to finish connecting.' }
         }
 
-        const localEntryId = `local-composer-${crypto.randomUUID()}`
+        const clientMessageId = `voice-typed-${crypto.randomUUID()}`
+        const clientMessageCreatedAt = new Date().toISOString()
+        const localEntryId = `local-composer-${clientMessageId}`
         const imageCount = input.images?.length || 0
         setTranscript((current) => [...current, {
             id: localEntryId,
@@ -499,7 +550,11 @@ export function useInstructorVoiceSession() {
         }])
 
         try {
-            const result = await window.devscope.assistant.sendRealtimeVoiceMessage(input)
+            const result = await window.devscope.assistant.sendRealtimeVoiceMessage({
+                ...input,
+                clientMessageId,
+                clientMessageCreatedAt
+            })
             if (result.success) return { success: true as const }
             setTranscript((current) => current.filter((entry) => entry.id !== localEntryId))
             return { success: false as const, error: result.error || 'The voice message could not be sent.' }
@@ -518,12 +573,15 @@ export function useInstructorVoiceSession() {
         terminalHandledRef.current = true
         generationRef.current += 1
         activeThreadIdRef.current = null
+        adapterSessionIdRef.current = null
         setStatus('stopping')
         releaseLocalMedia()
 
         try {
+            const bridgeError = await bridgeQueueRef.current.then(() => null).catch((error) => error)
             const result = await window.devscope.assistant.stopRealtimeVoice()
             if (!result.success) throw new Error(result.error || 'Codex voice could not stop cleanly.')
+            if (bridgeError) throw bridgeError
             if (mountedRef.current) setStatus('idle')
         } catch (stopError) {
             if (!mountedRef.current) return

@@ -16,7 +16,10 @@ import {
     evaluateRealtimeAudioCapabilities,
     foregroundRouteClaim
 } from '../src/shared/assistant/contracts'
-import { createCanonicalMessageOperation } from '../src/main/assistant/foreground/canonical-message-operation-reducer'
+import {
+    createCanonicalMessageOperation,
+    dispatchCanonicalMessageOperation
+} from '../src/main/assistant/foreground/canonical-message-operation-reducer'
 import { ConversationGateway } from '../src/main/assistant/foreground/conversation-gateway'
 import { FakeCanonicalMessageWriter } from '../src/main/assistant/foreground/fake-canonical-message-writer'
 import { FakePrimaryAgentAdapter } from '../src/main/assistant/foreground/fake-primary-agent-adapter'
@@ -55,6 +58,7 @@ class DeterministicClock implements ForegroundClock {
 class ScriptedCodexTransport extends EventEmitter implements CodexRealtimeTransport {
     lastStart: Parameters<CodexRealtimeTransport['start']>[0] | null = null
     appendedContext: Array<{ role: 'developer' | 'user' | 'assistant'; text: string }> = []
+    requestedSpeech: string[] = []
 
     async start(input: Parameters<CodexRealtimeTransport['start']>[0]) {
         this.lastStart = structuredClone(input)
@@ -70,7 +74,8 @@ class ScriptedCodexTransport extends EventEmitter implements CodexRealtimeTransp
         this.appendedContext.push(...structuredClone(items))
     }
 
-    async requestSpeech(_text: string): Promise<void> {}
+    async requestSpeech(text: string): Promise<void> { this.requestedSpeech.push(text) }
+    async sendMessage(): Promise<{ mode: 'text-turn' }> { return { mode: 'text-turn' } }
     async stop(): Promise<void> {}
 }
 
@@ -345,6 +350,35 @@ const unblockedVoice = routes.activatePreparedVoice({
 })
 assert.equal(unblockedVoice.surface_mode, 'voice')
 
+// Restart reconciliation cancels undispatched intents and terminalizes missing dispatched receipts.
+const reconciliationChat = routes.initializeChat({ conversationId: 'chat_reconciliation', contextVersion: 0 })
+const reconciliationClaim = foregroundRouteClaim(reconciliationChat)
+for (const [operationId, status] of [['operation_restart_intended', 'intended'], ['operation_restart_dispatched', 'dispatched']] as const) {
+    const intended = createCanonicalMessageOperation({
+        operationId,
+        conversationId: 'chat_reconciliation',
+        canonicalMessageId: `message_${status}`,
+        idempotencyKey: `canonical-message:chat_reconciliation:${status}`,
+        routeClaim: reconciliationClaim,
+        adapterId: 'test_gateway',
+        protectedPayloadRef: `payload_${status}`,
+        payloadSha256: (status === 'intended' ? 'b' : 'c').repeat(64),
+        redactedSummary: `${status} restart operation`,
+        intentAt: clock.now()
+    })
+    store.prepareCanonicalMessageOperation(routeExpectation(reconciliationClaim), intended)
+    if (status === 'dispatched') {
+        store.commitCanonicalMessageOperationRevision(
+            intended.revision,
+            dispatchCanonicalMessageOperation(intended, clock.now())
+        )
+    }
+}
+await gateway.reconcilePendingOperations('chat_reconciliation')
+assert.equal(store.canonicalMessageOperation('operation_restart_intended')?.status, 'cancelled')
+assert.equal(store.canonicalMessageOperation('operation_restart_dispatched')?.status, 'outcome_unknown')
+assert.equal(store.pendingCanonicalMessageOperations(reconciliationChat.foreground_route_id).length, 0)
+
 // The strong adapter has separate direct-Chat and private-task output lanes.
 const primary = new FakePrimaryAgentAdapter(clock)
 const primaryEvents: PrimaryAgentDomainEvent[] = []
@@ -548,12 +582,45 @@ scriptedTransport.emit('event', {
 } satisfies AssistantRealtimeVoiceEvent)
 assert.ok(codexEvents.some((event) => event.type === 'realtime.assistant.transcript.completed'
     && event.providerItemId === 'codex_item_1'))
+const eventCountBeforeIdentitylessFlatNotification = codexEvents.length
 scriptedTransport.emit('event', {
     type: 'transcript.done',
     threadId: codexHandle.realtimeProviderThreadId,
     role: 'assistant',
     text: 'Missing identity.'
 } satisfies AssistantRealtimeVoiceEvent)
+assert.equal(codexEvents.length, eventCountBeforeIdentitylessFlatNotification)
+codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
+    type: 'turn.created',
+    turn: { id: 'webrtc_turn_1', role: 'assistant', transcript: '' }
+})
+codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
+    type: 'turn.delta',
+    turn_id: 'webrtc_turn_1',
+    delta: 'Identity-bearing '
+})
+codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
+    type: 'turn.done',
+    turn: { id: 'webrtc_turn_1', role: 'assistant', transcript: 'Identity-bearing result.' }
+})
+assert.ok(codexEvents.some((event) => event.type === 'realtime.assistant.transcript.delta'
+    && event.providerItemId === 'webrtc_turn_1'))
+assert.ok(codexEvents.some((event) => event.type === 'realtime.assistant.transcript.completed'
+    && event.providerItemId === 'webrtc_turn_1'
+    && event.text === 'Identity-bearing result.'))
+scriptedTransport.emit('event', {
+    type: 'composer.response.done',
+    threadId: codexHandle.realtimeProviderThreadId,
+    turnId: 'private_typed_turn_1',
+    text: 'Narrate this private read-only result.'
+} satisfies AssistantRealtimeVoiceEvent)
+assert.deepEqual(scriptedTransport.requestedSpeech, ['Narrate this private read-only result.'])
+assert.equal(codexEvents.some((event) => event.type === 'realtime.assistant.transcript.completed'
+    && event.providerItemId === 'composer:private_typed_turn_1'), false)
+codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
+    type: 'turn.done',
+    turn: { role: 'assistant', transcript: 'Identity is missing.' }
+})
 assert.ok(codexEvents.some((event) => event.type === 'realtime.session.error'
     && event.category === 'incompatible_protocol'))
 await codexAdapter.close(codexHandle.adapterSessionId, 'test_complete')

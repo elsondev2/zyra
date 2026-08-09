@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { normalizeAgentSurfaceTool } from "./agent-surface.mjs";
 import { AgentControlBridgeClient } from "./agent-control/bridge-client.mjs";
 import { startTemporaryBrowserRelay } from "./agent-control/temporary-browser-relay.mjs";
+import { appendCanonicalMessage, findCanonicalMessageReceipt } from "./agent-server/canonical-message-ledger.mjs";
 
 const root = path.resolve(process.env.ZYRA_ROOT ?? path.resolve(import.meta.dirname, ".."));
 const sdkPath = path.join(root, "src", "zyra-sdk.mjs");
@@ -627,6 +628,18 @@ async function handleAbort() {
   return {};
 }
 
+async function handleCanonicalMessageOperation(type, payload = {}) {
+  const sessionManager = runtime?.session?.sessionManager;
+  if (!sessionManager) throw new Error("Zyra canonical session is not connected.");
+  if (type === "canonical_message.append") {
+    return { receipt: appendCanonicalMessage(sessionManager, payload) };
+  }
+  if (type === "canonical_message.find") {
+    return { receipt: findCanonicalMessageReceipt(sessionManager, payload.operationId) };
+  }
+  throw new Error(`Unknown canonical message operation: ${type}.`);
+}
+
 async function handleSessionOperation(type, payload = {}) {
   if (!runtime?.session) throw new Error("Zyra bridge is not connected.");
   if (type === "steer") {
@@ -786,6 +799,10 @@ async function handleMessage(message) {
         throw new Error(`Unknown approval request: ${requestId || "missing"}`);
       }
       sendResponse(id, true, { result: {} });
+      return;
+    }
+    if (["canonical_message.append", "canonical_message.find"].includes(message?.type)) {
+      sendResponse(id, true, { result: await handleCanonicalMessageOperation(message.type, message.payload ?? {}) });
       return;
     }
     if (["steer", "follow_up", "compact", "clear_queue", "reload"].includes(message?.type)) {

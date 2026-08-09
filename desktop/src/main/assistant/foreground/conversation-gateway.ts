@@ -95,6 +95,34 @@ export class ConversationGateway {
         }
     }
 
+    async reconcilePendingOperations(conversationId: string): Promise<CanonicalMessageOperation[]> {
+        const route = this.requireActiveRoute(conversationId)
+        const pending = this.store.pendingCanonicalMessageOperations(route.foreground_route_id)
+        const reconciled: CanonicalMessageOperation[] = []
+        for (const operation of pending) {
+            if (operation.status === 'intended') {
+                reconciled.push(this.cancelPrepared(
+                    operation.operation_id,
+                    'Canonical message intent was abandoned before dispatch during restart recovery.'
+                ))
+                continue
+            }
+            const receipt = await this.writer.findReceipt(operation.operation_id)
+            if (receipt) {
+                validateRecoveredReceipt(receipt, operation)
+                reconciled.push(this.completeOperationWithReceipt(operation, receipt))
+                continue
+            }
+            const unknown = markCanonicalMessageOutcomeUnknown(
+                operation,
+                'No canonical ledger receipt was found during restart recovery.',
+                this.clock.now()
+            )
+            reconciled.push(this.store.commitCanonicalMessageOperationRevision(operation.revision, unknown))
+        }
+        return reconciled
+    }
+
     cancelPrepared(operationId: string, reason = 'Canonical message commit cancelled before dispatch.'): CanonicalMessageOperation {
         const operation = this.store.canonicalMessageOperation(operationId)
         if (!operation) throw new Error(`Unknown canonical-message operation ${operationId}.`)
@@ -129,6 +157,16 @@ export class ConversationGateway {
     ): CanonicalMessageCommitReceipt {
         const current = this.store.canonicalMessageOperation(operation.operation_id) || operation
         if (current.status === 'succeeded') return receipt
+        this.completeOperationWithReceipt(current, receipt)
+        return receipt
+    }
+
+    private completeOperationWithReceipt(
+        operation: CanonicalMessageOperation,
+        receipt: CanonicalMessageCommitReceipt
+    ): CanonicalMessageOperation {
+        const current = this.store.canonicalMessageOperation(operation.operation_id) || operation
+        if (current.status === 'succeeded') return current
         const operationReceipt: CanonicalMessageOperationReceipt = {
             receipt_id: receipt.receiptId,
             outcome: 'succeeded',
@@ -137,8 +175,7 @@ export class ConversationGateway {
             result_ref: null
         }
         const completed = completeCanonicalMessageOperation(current, operationReceipt, receipt.observedAt)
-        this.store.commitCanonicalMessageOperationRevision(current.revision, completed)
-        return receipt
+        return this.store.commitCanonicalMessageOperationRevision(current.revision, completed)
     }
 
     private requireActiveRoute(conversationId: string): ForegroundRoute {
@@ -194,6 +231,18 @@ function buildLedgerAppendInput(
         providerCompletedAt: input.providerCompletedAt,
         payloadSha256,
         routeClaim: input.routeClaim
+    }
+}
+
+function validateRecoveredReceipt(receipt: CanonicalMessageCommitReceipt, operation: CanonicalMessageOperation): void {
+    if (receipt.operationId !== operation.operation_id
+        || receipt.canonicalMessageId !== operation.canonical_message_id
+        || receipt.conversationId !== operation.conversation_id
+        || receipt.foregroundRouteId !== operation.foreground_route_id
+        || receipt.routeEpoch !== operation.foreground_route_epoch
+        || receipt.ownerClaimId !== operation.foreground_owner_claim_id
+        || receipt.contentSha256 !== operation.payload_sha256) {
+        throw new Error('Canonical ledger returned a mismatched recovery receipt.')
     }
 }
 

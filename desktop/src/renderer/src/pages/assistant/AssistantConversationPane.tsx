@@ -14,6 +14,7 @@ import { isAssistantThreadActivelyWorking } from '@/lib/assistant/selectors'
 import { cn } from '@/lib/utils'
 import { buildPromptImageInputs, buildPromptWithContextFiles } from './assistant-composer-utils'
 import { clearAssistantComposerSessionState } from './assistant-composer-session-state'
+import { AssistantCanonicalVoiceDock } from './AssistantCanonicalVoiceDock'
 import { AssistantChatOnboardingOverlay } from './AssistantChatOnboardingOverlay'
 import { AssistantConnectionRecoveryBanner } from './AssistantConnectionRecoveryBanner'
 import { AssistantConversationHeader } from './AssistantConversationHeader'
@@ -30,9 +31,11 @@ import {
 } from './assistant-pane-layout'
 import { getAssistantThreadDisplayTitle, getSessionDisplayTitle, isAssistantDraftSession, resolveSessionProjectPath } from './assistant-sessions-rail-utils'
 import { deriveAssistantConversationSurfaceMode } from './assistant-conversation-surface-mode'
+import { readInstructorVoicePreferences } from './instructor-voice-preferences'
 import { useAssistantConnectionRecovery } from './useAssistantConnectionRecovery'
 import { useAssistantQueuedComposer, type AssistantQueuedComposerSessionState } from './useAssistantQueuedComposer'
 import { useAssistantSessionTurnUsage } from './useAssistantSessionTurnUsage'
+import { useInstructorVoiceSession } from './useInstructorVoiceSession'
 import { useAssistantPageTimelineScroll } from './useAssistantPageTimelineScroll'
 
 const TIMELINE_SHOW_SCROLL_BUTTON_THRESHOLD_PX = 420
@@ -68,6 +71,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const visibilitySnapshot = useRendererVisibilitySnapshot()
     const composerPaneRef = useRef<HTMLDivElement | null>(null)
     const [zyraProfileOverride, setZyraProfileOverride] = useState<AssistantProductProfile | null>(null)
+    const [voicePreferences] = useState(readInstructorVoicePreferences)
     const synchronizedZyraProfile = controller.activeThread?.profile === 'builder'
         ? 'builder'
         : controller.activeThread?.profile === 'default'
@@ -113,6 +117,22 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
 
     const isThreadWorking = isAssistantThreadActivelyWorking(controller.activeThread)
     const selectedSessionId = controller.selectedSession?.id || null
+    const canonicalVoiceBinding = useMemo(() => (
+        selectedSessionId && controller.activeThread?.id
+            ? { conversationId: controller.activeThread.id, sessionId: selectedSessionId }
+            : undefined
+    ), [controller.activeThread?.id, selectedSessionId])
+    const voice = useInstructorVoiceSession(canonicalVoiceBinding)
+    const voiceVisible = voice.status !== 'idle'
+    const voiceThreadRef = useRef(controller.activeThread?.id || null)
+    useEffect(() => {
+        const nextThreadId = controller.activeThread?.id || null
+        const previousThreadId = voiceThreadRef.current
+        voiceThreadRef.current = nextThreadId
+        if (previousThreadId && previousThreadId !== nextThreadId && voice.status !== 'idle') {
+            void voice.stop()
+        }
+    }, [controller.activeThread?.id, voice.status, voice.stop])
     const selectedSessionIsDraft = Boolean(controller.selectedSession && isAssistantDraftSession(controller.selectedSession))
     const selectedSessionUsesNewChatSurface = Boolean(selectedSessionIsDraft && !controller.selectedSession?.pendingLabRequest)
     const pendingCreateSessionInput = controller.pendingCreateSessionInput
@@ -751,7 +771,16 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         props.onToggleRightSidebar()
     }, [props.onToggleRightSidebar])
 
-    const titleBarContent = useMemo(() => !composerIsCentered ? (
+    const handleToggleCanonicalVoice = useCallback(() => {
+        if (voice.status === 'idle' || voice.status === 'error') {
+            if (!canonicalVoiceBinding) return
+            void voice.start(voicePreferences)
+            return
+        }
+        void voice.stop()
+    }, [canonicalVoiceBinding, voice, voicePreferences])
+
+    const titleBarContent = useMemo(() => (
         <AssistantConversationHeader
             rightPanelOpen={props.rightPanelOpen}
             rightPanelMode={props.rightPanelMode}
@@ -768,6 +797,9 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
             selectedProjectPath={displayProjectPath || null}
             projectDirectoryLocked={projectDirectoryLocked}
             actionsDisabled={Boolean(headerActionPending) || controller.commandPending}
+            voiceStatus={voice.status}
+            voiceDisabled={!canonicalVoiceBinding || activeThreadIsSubagent || isThreadWorking || controller.commandPending}
+            onToggleVoice={handleToggleCanonicalVoice}
             onCreateThread={handleCreateThread}
             onRenameChat={handleOpenRenameChat}
             onCreateProjectChat={handleCreateHeaderProjectChat}
@@ -776,7 +808,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
             onDeleteChat={handleOpenDeleteChat}
             onToggleRightSidebar={handleToggleDetailsPanel}
         />
-    ) : null, [
+    ), [
         activeThreadIsSubagent,
         activeThreadLabel,
         composerIsCentered,
@@ -791,8 +823,11 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         handleCreateThread,
         handleOpenDeleteChat,
         handleOpenRenameChat,
+        handleToggleCanonicalVoice,
         handleToggleDetailsPanel,
         headerActionPending,
+        canonicalVoiceBinding,
+        isThreadWorking,
         latestProjectLabel,
         projectDirectoryLocked,
         props.rightPanelMode,
@@ -801,7 +836,8 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         selectedProjectTooltip,
         selectedSessionTitle,
         settings.assistantShowDiagnostics,
-        settings.assistantShowStatusDetails
+        settings.assistantShowStatusDetails,
+        voice.status
     ])
     usePublishAssistantTitleBarContent(titleBarContent)
 
@@ -871,6 +907,13 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                             onViewDiff={props.onViewDiff}
                         />
                     ) : null}
+                    {voiceVisible ? (
+                        <AssistantCanonicalVoiceDock
+                            voice={voice}
+                            preferences={voicePreferences}
+                            onStop={() => { void voice.stop() }}
+                        />
+                    ) : (
                     <AssistantConversationComposerPane
                         paneRef={composerPaneRef}
                         placement={composerIsCentered ? 'center' : 'bottom'}
@@ -921,6 +964,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         approvePendingPlaygroundLabRequest={handleApprovePendingPlaygroundLabRequest}
                         declinePendingPlaygroundLabRequest={handleDeclinePendingPlaygroundLabRequest}
                     />
+                    )}
                 </div>
             </div>
             {showPlaygroundRootOnboarding ? (

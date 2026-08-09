@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { app } from 'electron'
 import log from 'electron-log'
 import type {
     AssistantApprovePendingPlaygroundLabRequestInput,
@@ -16,30 +17,50 @@ import type {
     AssistantDomainEvent,
     AssistantGetHistoryPageInput,
     AssistantGetSessionTurnUsageInput,
+    AssistantIngestRealtimeVoiceEventInput,
     AssistantRedeemAccountResetInput,
     AssistantEventStreamPayload,
     AssistantActivity,
     AssistantMessage,
+    AssistantRealtimeVoiceEvent,
     AssistantRuntimeStatus,
     AssistantSendPromptOptions,
     AssistantSendRealtimeVoiceMessageInput,
     AssistantSession,
     AssistantStartRealtimeVoiceInput,
     AssistantThread,
+    CanonicalLedgerAppendInput,
+    CanonicalMessageCommitReceipt,
     FleetOperationInput,
-    FleetSnapshot
+    FleetSnapshot,
+    RealtimeDomainEvent
+} from '../../shared/assistant/contracts'
+import {
+    DEFAULT_INSTRUCTOR_OUTPUT_MODALITY,
+    DEFAULT_INSTRUCTOR_REALTIME_VOICE,
+    DEFAULT_INSTRUCTOR_VOICE_INSTRUCTIONS,
+    foregroundRouteClaim
 } from '../../shared/assistant/contracts'
 import { isAssistantToolLifecycleStartEvent } from '../../shared/assistant/tool-lifecycle'
 import { AssistantTextDeltaBuffer } from './assistant-text-delta-buffer'
 import { AssistantActivityDeltaBuffer } from './assistant-activity-delta-buffer'
 import { CodexRealtimeVoiceRuntime } from './codex-realtime-voice'
+import { ConversationGateway } from './foreground/conversation-gateway'
+import { ForegroundControllerPersistence } from './foreground/foreground-controller-persistence'
+import { ForegroundRouteController, routeExpectation } from './foreground/foreground-route-controller'
+import { PiCanonicalMessageWriter } from './foreground/pi-canonical-message-writer'
+import { AssistantRealtimeContinuitySource } from './voice/assistant-realtime-continuity-source'
+import { CanonicalVoiceSessionController } from './voice/canonical-voice-session-controller'
+import { CanonicalVoiceTranscriptCommitter } from './voice/canonical-voice-transcript-committer'
+import { CodexRealtimeForegroundAdapter } from './voice/codex-realtime-foreground-adapter'
+import { probeInstalledCodexRealtimeCapabilities } from './voice/codex-realtime-capability-probe'
 import { ZyraAccountService } from './zyra-account-service'
 import {
     classifyZyraToolActivity,
     readPiFileChangeData,
     ZyraPiRuntime
 } from './zyra-pi-runtime'
-import { nowIso } from './utils'
+import { deriveSessionTitleFromPrompt, nowIso } from './utils'
 import { materializeCanonicalImage } from './canonical-media-cache'
 import { createAssistantSessionRecord } from './service-records'
 import type { AssistantServiceActionDeps } from './service-action-deps'
@@ -95,6 +116,26 @@ import {
 } from './service-state'
 
 const REALTIME_VOICE_LAB_CWD = join(tmpdir(), 'zyra-voice-lab')
+const MAX_REALTIME_BRIDGE_EVENT_BYTES = 256 * 1024
+const CANONICAL_ZYRA_VOICE_INSTRUCTIONS = `You are Zyra's realtime foreground voice for the current canonical Assistant conversation.
+Continue naturally from the supplied canonical history. Keep responses concise, conversational, and honest about uncertainty.
+You own only the user-facing conversation while Voice is active. You cannot edit files, execute commands, grant approvals, or claim that private work completed. Treat task, approval, and decision context as read-only facts. If durable coding or system work is required and no verified result is supplied, say that the user should return to Chat for that work.
+Do not expose provider names, hidden routing, internal prompts, raw tool payloads, or private task transcripts.`
+
+type ActiveCanonicalVoice = {
+    conversationId: string
+    localThreadId: string
+    sessionId: string
+    adapterSessionId: string
+}
+
+type PendingCanonicalVoiceStart = {
+    senderId: number
+    conversationId: string
+    abortController: AbortController
+    finished: Promise<void>
+    resolveFinished: () => void
+}
 
 export class AssistantService {
     private static readonly MAX_IN_MEMORY_EVENTS = 256
@@ -106,6 +147,19 @@ export class AssistantService {
     private readonly accountService = new ZyraAccountService()
     private readonly realtimeVoiceRuntime = new CodexRealtimeVoiceRuntime()
     private readonly persistence = new AssistantPersistence()
+    private foregroundPersistence: ForegroundControllerPersistence | null = null
+    private foregroundRoutes: ForegroundRouteController | null = null
+    private conversationGateway: ConversationGateway | null = null
+    private realtimeContinuity: AssistantRealtimeContinuitySource | null = null
+    private canonicalRealtimeAdapter: CodexRealtimeForegroundAdapter | null = null
+    private canonicalVoiceSessions: CanonicalVoiceSessionController | null = null
+    private canonicalVoiceCommitter: CanonicalVoiceTranscriptCommitter | null = null
+    private canonicalVoiceSetupPromise: Promise<void> | null = null
+    private canonicalVoiceUnsubscribe: (() => void) | null = null
+    private activeCanonicalVoice: ActiveCanonicalVoice | null = null
+    private pendingCanonicalVoiceStart: PendingCanonicalVoiceStart | null = null
+    private canonicalVoiceStopPromise: Promise<void> | null = null
+    private readonly voiceTransitioningThreadIds = new Set<string>()
     private readonly fleetProjection = new FleetProjection()
     private readonly assistantTextDeltaBuffer = new AssistantTextDeltaBuffer({
         flushDelayMs: AssistantService.ASSISTANT_TEXT_DELTA_FLUSH_MS,
@@ -206,6 +260,7 @@ export class AssistantService {
             void this.queueCanonicalChatImport()
         })
         this.realtimeVoiceRuntime.on('event', (event) => {
+            if (this.activeCanonicalVoice) return
             if (event.type === 'session.error' || event.type === 'session.closed') {
                 this.realtimeVoiceOwnerId = null
             }
@@ -245,9 +300,8 @@ export class AssistantService {
     unsubscribeRealtimeVoice(senderId: number) {
         this.realtimeVoiceSubscribers.delete(senderId)
         if (this.realtimeVoiceOwnerId === senderId) {
-            this.realtimeVoiceOwnerId = null
-            void this.realtimeVoiceRuntime.stop().catch((error) => {
-                log.warn('[InstructorVoice] Failed to stop voice after its renderer disconnected', error)
+            void this.stopRealtimeVoice(senderId).catch((error) => {
+                log.warn('[AssistantVoice] Failed to stop Voice after its renderer disconnected', error)
             })
         }
         return { success: true as const }
@@ -329,18 +383,22 @@ export class AssistantService {
     }
 
     async disconnect(sessionId?: string) {
+        await this.stopCanonicalVoiceForNavigation()
         return disconnectAssistantSession(this.actionDeps, sessionId)
     }
 
     async createSession(input?: AssistantCreateSessionInput) {
+        await this.stopCanonicalVoiceForNavigation()
         return createAssistantSessionAction(this.actionDeps, input)
     }
 
     async selectSession(sessionId: string) {
+        if (this.activeCanonicalVoice?.sessionId !== sessionId) await this.stopCanonicalVoiceForNavigation()
         return selectAssistantSessionAction(this.actionDeps, sessionId)
     }
 
     async selectThread(sessionId: string, threadId: string) {
+        if (this.activeCanonicalVoice?.localThreadId !== threadId) await this.stopCanonicalVoiceForNavigation()
         return selectAssistantThreadAction(this.actionDeps, sessionId, threadId)
     }
 
@@ -394,11 +452,13 @@ export class AssistantService {
     }
 
     async archiveSession(sessionId: string, archived = true) {
+        if (archived && this.activeCanonicalVoice?.sessionId === sessionId) await this.stopCanonicalVoiceForNavigation()
         return archiveAssistantSessionAction(this.actionDeps, sessionId, archived)
     }
 
     async deleteSession(sessionId: string) {
         await this.ensureReady()
+        if (this.activeCanonicalVoice?.sessionId === sessionId) await this.stopCanonicalVoiceForNavigation()
         const threadIds = this.state.snapshot.sessions.find((session) => session.id === sessionId)?.threads.map((thread) => thread.id) || []
         const result = await deleteAssistantSessionAction(this.actionDeps, sessionId)
         for (const threadId of threadIds) {
@@ -417,12 +477,14 @@ export class AssistantService {
         await this.ensureReady()
         const sessionId = input.sessionId || this.state.snapshot.selectedSessionId
         if (!sessionId) throw new Error('Assistant session not found.')
+        if (this.activeCanonicalVoice?.sessionId === sessionId) await this.stopCanonicalVoiceForNavigation()
         // Deletion planning must see persisted history even when the renderer has only a page loaded.
         this.state.snapshot = await this.persistence.hydrateSelectedSession(this.state.snapshot, sessionId)
         return deleteAssistantMessageAction(this.actionDeps, input)
     }
 
     async setSessionProjectPath(sessionId: string, projectPath: string | null) {
+        if (this.activeCanonicalVoice?.sessionId === sessionId) await this.stopCanonicalVoiceForNavigation()
         return setAssistantSessionProjectPathAction(this.actionDeps, sessionId, projectPath)
     }
 
@@ -443,10 +505,24 @@ export class AssistantService {
     }
 
     async newThread(sessionId?: string) {
+        await this.stopCanonicalVoiceForNavigation()
         return createAssistantThreadAction(this.actionDeps, sessionId)
     }
 
     async sendPrompt(prompt: string, options?: AssistantSendPromptOptions) {
+        await this.ensureReady()
+        const session = options?.sessionId
+            ? requireSession(this.state.snapshot, options.sessionId)
+            : getSelectedSession(this.state.snapshot)
+        const thread = getActiveThread(session)
+        if (thread && this.isVoiceForeground(thread) && !this.activeCanonicalVoice) {
+            await this.recoverInactiveCanonicalVoice(thread)
+        }
+        if (thread && (this.voiceTransitioningThreadIds.has(thread.id)
+            || (thread.providerThreadId && this.voiceTransitioningThreadIds.has(thread.providerThreadId))
+            || this.isVoiceForeground(thread))) {
+            throw new Error('Voice is responding in this conversation. Stop Voice before sending work to the strong assistant.')
+        }
         return sendAssistantPromptAction(this.actionDeps, prompt, options)
     }
 
@@ -464,9 +540,28 @@ export class AssistantService {
 
     async startRealtimeVoice(input: AssistantStartRealtimeVoiceInput, senderId: number) {
         if (this.realtimeVoiceOwnerId !== null && this.realtimeVoiceOwnerId !== senderId) {
-            throw new Error('Voice Lab is already active in another Zyra window.')
+            throw new Error('Voice is already active in another Zyra window.')
+        }
+        if (input.conversationId) {
+            const transitionKey = input.conversationId
+            if (this.pendingCanonicalVoiceStart || this.voiceTransitioningThreadIds.has(transitionKey)) {
+                throw new Error('Voice is already changing mode for a conversation.')
+            }
+            const pending = createPendingCanonicalVoiceStart(senderId, transitionKey)
+            this.pendingCanonicalVoiceStart = pending
+            this.realtimeVoiceOwnerId = senderId
+            this.voiceTransitioningThreadIds.add(transitionKey)
+            try {
+                return await this.startCanonicalRealtimeVoice(input, senderId, pending.abortController.signal)
+            } finally {
+                this.voiceTransitioningThreadIds.delete(transitionKey)
+                if (this.pendingCanonicalVoiceStart === pending) this.pendingCanonicalVoiceStart = null
+                if (!this.activeCanonicalVoice && this.realtimeVoiceOwnerId === senderId) this.realtimeVoiceOwnerId = null
+                pending.resolveFinished()
+            }
         }
 
+        // Compatibility path for the existing isolated Voice Lab route.
         this.realtimeVoiceOwnerId = senderId
         try {
             await mkdir(REALTIME_VOICE_LAB_CWD, { recursive: true })
@@ -486,17 +581,71 @@ export class AssistantService {
 
     async sendRealtimeVoiceMessage(input: AssistantSendRealtimeVoiceMessageInput, senderId: number) {
         if (this.realtimeVoiceOwnerId !== senderId) {
-            throw new Error('Only the Zyra window running Voice Lab can send to this session.')
+            throw new Error('Only the Zyra window running Voice can send to this session.')
         }
-        const result = await this.realtimeVoiceRuntime.sendMessage(input)
+        const active = this.activeCanonicalVoice
+        if (!active) {
+            const result = await this.realtimeVoiceRuntime.sendMessage(input)
+            return { success: true as const, ...result }
+        }
+        if (input.images?.length) {
+            throw new Error('Stop Voice before sending images so the strong assistant can process them canonically.')
+        }
+        const text = String(input.text || '').trim()
+        if (!text) throw new Error('Type a message for the active Voice conversation.')
+        const clientMessageId = normalizeClientVoiceMessageId(input.clientMessageId)
+        const routes = this.requireForegroundRoutes()
+        const gateway = this.requireConversationGateway()
+        const route = routes.activeRoute(active.conversationId)
+        if (route.surface_mode !== 'voice') throw new Error('Voice no longer owns this conversation.')
+        const occurredAt = normalizeClientVoiceMessageCreatedAt(input.clientMessageCreatedAt, route.created_at)
+        const messageId = `voice_user_${createHash('sha256')
+            .update(`${active.conversationId}:${clientMessageId}`)
+            .digest('hex')
+            .slice(0, 40)}`
+        await gateway.commitMessage({
+            conversationId: active.conversationId,
+            messageId,
+            role: 'user',
+            producer: 'user',
+            modality: 'text',
+            text,
+            attachmentIds: [],
+            providerItemId: `typed:${clientMessageId}`,
+            providerCompletedAt: occurredAt,
+            routeClaim: foregroundRouteClaim(route),
+            idempotencyKey: `voice-typed:${active.conversationId}:${clientMessageId}`
+        })
+        const result = await this.requireCanonicalRealtimeAdapter().sendComposerMessage(
+            active.adapterSessionId,
+            { ...input, clientMessageId, text, images: undefined }
+        )
         return { success: true as const, ...result }
+    }
+
+    async ingestRealtimeVoiceEvent(input: AssistantIngestRealtimeVoiceEventInput, senderId: number) {
+        if (this.realtimeVoiceOwnerId !== senderId || !this.activeCanonicalVoice) {
+            throw new Error('This Zyra window does not own the canonical Voice session.')
+        }
+        if (input.adapterSessionId !== this.activeCanonicalVoice.adapterSessionId) {
+            throw new Error('The realtime event belongs to a stale Voice session.')
+        }
+        if (Buffer.byteLength(JSON.stringify(input.payload), 'utf8') > MAX_REALTIME_BRIDGE_EVENT_BYTES) {
+            throw new Error('The realtime event exceeds the canonical bridge limit.')
+        }
+        this.requireCanonicalRealtimeAdapter().ingestWebRtcEvent(input.adapterSessionId, input.payload)
+        return { success: true as const }
     }
 
     async stopRealtimeVoice(senderId: number) {
         if (this.realtimeVoiceOwnerId !== null && this.realtimeVoiceOwnerId !== senderId) {
-            throw new Error('Only the Zyra window that started Voice Lab can stop it.')
+            throw new Error('Only the Zyra window that started Voice can stop it.')
         }
-
+        await this.cancelPendingCanonicalVoiceStart()
+        if (this.activeCanonicalVoice) {
+            await this.stopCanonicalVoiceInternal('user_exit')
+            return { success: true as const }
+        }
         try {
             await this.realtimeVoiceRuntime.stop()
             return { success: true as const }
@@ -518,9 +667,16 @@ export class AssistantService {
         this.assistantTextDeltaBuffer.dispose()
         this.assistantActivityDeltaBuffer.dispose()
         this.realtimeVoiceOwnerId = null
+        this.pendingCanonicalVoiceStart?.abortController.abort(new Error('Assistant Voice disposed.'))
+        this.activeCanonicalVoice = null
+        this.canonicalVoiceCommitter?.dispose()
+        this.canonicalVoiceUnsubscribe?.()
+        this.canonicalVoiceSessions?.dispose()
+        this.canonicalRealtimeAdapter?.dispose()
         this.realtimeVoiceRuntime.dispose()
         this.runtime.dispose()
         void this.persistence.flush()
+        void this.readyPromise.finally(() => this.foregroundPersistence?.close())
     }
 
     private async initialize() {
@@ -531,6 +687,7 @@ export class AssistantService {
         }
         this.state.snapshot.fleetByThreadId ||= {}
         await this.importCanonicalChats()
+        await this.initializeCanonicalVoiceController()
         for (const session of this.state.snapshot.sessions) {
             for (const thread of session.threads) {
                 const fleet = await this.persistence.readFleet(thread.id)
@@ -542,6 +699,377 @@ export class AssistantService {
         void this.runtime.prewarm(false).catch((error) => {
             log.warn('[Assistant] Zyra runtime prewarm failed', error)
         })
+    }
+
+    private async initializeCanonicalVoiceController(): Promise<void> {
+        const filePath = ForegroundControllerPersistence.defaultPath(app.getPath('userData'))
+        const persistence = await ForegroundControllerPersistence.open(filePath)
+        const routes = new ForegroundRouteController(persistence)
+        const writer = new PiCanonicalMessageWriter(
+            this.runtime,
+            (operationId) => persistence.canonicalMessageOperation(operationId)?.conversation_id || null,
+            (input, receipt) => this.projectCanonicalVoiceMessage(input, receipt)
+        )
+        const gateway = new ConversationGateway(persistence, writer)
+        this.foregroundPersistence = persistence
+        this.foregroundRoutes = routes
+        this.conversationGateway = gateway
+        this.realtimeContinuity = new AssistantRealtimeContinuitySource(
+            (conversationId) => this.readCanonicalVoiceContinuity(conversationId)
+        )
+
+        for (const session of this.state.snapshot.sessions) {
+            for (const thread of session.threads) {
+                const conversationId = thread.providerThreadId
+                if (!conversationId) continue
+                const route = routes.initializeChat({
+                    conversationId,
+                    contextVersion: this.voiceContextVersion(thread),
+                    activationReason: 'migration',
+                    attachedTaskIds: this.attachedTaskIds(thread.id)
+                })
+                if (persistence.pendingCanonicalMessageOperations(route.foreground_route_id).length > 0) {
+                    try {
+                        await gateway.reconcilePendingOperations(conversationId)
+                    } catch (error) {
+                        log.error('[AssistantVoice] Canonical restart reconciliation failed', error)
+                        continue
+                    }
+                }
+                if (route.surface_mode === 'voice') {
+                    routes.recoverToChat({
+                        conversationId,
+                        expected: routeExpectation(foregroundRouteClaim(route)),
+                        contextVersion: Math.max(route.context_version, this.voiceContextVersion(thread)),
+                        attachedTaskIds: this.attachedTaskIds(thread.id)
+                    })
+                }
+            }
+        }
+    }
+
+    private async ensureCanonicalVoiceSetup(): Promise<void> {
+        if (this.canonicalVoiceSetupPromise) return this.canonicalVoiceSetupPromise
+        this.canonicalVoiceSetupPromise = (async () => {
+            const probe = probeInstalledCodexRealtimeCapabilities({ transcriptIdentityBridge: true })
+            const adapter = new CodexRealtimeForegroundAdapter(this.realtimeVoiceRuntime, probe.evidence)
+            const sessions = new CanonicalVoiceSessionController(
+                this.requireForegroundRoutes(),
+                this.requireRealtimeContinuity(),
+                adapter
+            )
+            const committer = new CanonicalVoiceTranscriptCommitter(
+                sessions,
+                this.requireForegroundRoutes(),
+                this.requireConversationGateway()
+            )
+            committer.onError((error, event) => {
+                log.error('[AssistantVoice] Canonical transcript commit failed', error)
+                broadcastAssistantRealtimeVoiceEvent(this.realtimeVoiceSubscribers, {
+                    type: 'session.error',
+                    threadId: event.realtimeProviderThreadId,
+                    message: `Voice stopped because its transcript could not be saved: ${error.message}`
+                })
+                void this.stopCanonicalVoiceInternal('canonical_commit_failed').catch(() => undefined)
+            })
+            this.canonicalVoiceUnsubscribe = sessions.subscribe((event) => this.handleCanonicalVoiceEvent(event))
+            this.canonicalRealtimeAdapter = adapter
+            this.canonicalVoiceSessions = sessions
+            this.canonicalVoiceCommitter = committer
+        })().catch((error) => {
+            this.canonicalVoiceSetupPromise = null
+            throw error
+        })
+        return this.canonicalVoiceSetupPromise
+    }
+
+    private async startCanonicalRealtimeVoice(
+        input: AssistantStartRealtimeVoiceInput,
+        senderId: number,
+        signal: AbortSignal
+    ) {
+        throwIfVoiceStartAborted(signal)
+        await this.ensureReady()
+        throwIfVoiceStartAborted(signal)
+        if (input.transcriptBridgeVersion !== 1) {
+            throw new Error('This Zyra window does not provide the canonical Voice transcript identity bridge.')
+        }
+        await this.ensureCanonicalVoiceSetup()
+        throwIfVoiceStartAborted(signal)
+        const record = findThreadRecord(this.state.snapshot, input.conversationId || '')
+        if (!record) throw new Error('Select a canonical Assistant conversation before starting Voice.')
+        if (input.sessionId && input.sessionId !== record.session.id) {
+            throw new Error('Voice start belongs to a stale Assistant selection.')
+        }
+        if (record.thread.source === 'subagent') throw new Error('Voice can start only on the root conversation.')
+        if (record.thread.latestTurn?.state === 'running' || record.thread.state === 'running' || record.thread.state === 'waiting') {
+            throw new Error('Wait for the current strong-assistant turn to finish before starting Voice.')
+        }
+        if (this.activeCanonicalVoice) await this.stopCanonicalVoiceInternal('replaced')
+        throwIfVoiceStartAborted(signal)
+
+        const runtimeThreadId = record.thread.providerThreadId || record.thread.id
+        if (!this.runtime.hasSession(runtimeThreadId)) {
+            await this.runtime.connect(record.thread, this.getSessionRuntimeCwd(record.session, record.thread))
+            throwIfVoiceStartAborted(signal)
+        }
+        const connected = findThreadRecord(this.state.snapshot, record.thread.id)
+        if (!connected?.thread.providerThreadId) {
+            throw new Error('Zyra could not bind this thread to its canonical Pi conversation.')
+        }
+        if (connected.thread.latestTurn?.state === 'running'
+            || connected.thread.state === 'running'
+            || connected.thread.state === 'waiting') {
+            throw new Error('Wait for the current strong-assistant turn to finish before starting Voice.')
+        }
+        await this.ensureCanonicalHistoryLoaded(connected.session, connected.thread)
+        throwIfVoiceStartAborted(signal)
+        const conversationId = connected.thread.providerThreadId
+        const routes = this.requireForegroundRoutes()
+        let current = routes.initializeChat({
+            conversationId,
+            contextVersion: this.voiceContextVersion(connected.thread),
+            activationReason: connected.thread.messageCount > 0 ? 'migration' : 'conversation_open',
+            attachedTaskIds: this.attachedTaskIds(connected.thread.id)
+        })
+        const contextVersion = Math.max(current.context_version, this.voiceContextVersion(connected.thread))
+        if (current.surface_mode === 'voice' && !this.canonicalVoiceSessions?.currentHandle(conversationId)) {
+            await this.recoverInactiveCanonicalVoice(connected.thread)
+            current = routes.activeRoute(conversationId)
+        }
+        if (current.surface_mode !== 'chat') throw new Error('The conversation already has an active Voice owner.')
+
+        this.realtimeVoiceOwnerId = senderId
+        try {
+            const activation = await this.requireCanonicalVoiceSessions().startVoice({
+                conversationId,
+                projectCwd: this.getSessionRuntimeCwd(connected.session, connected.thread),
+                offerSdp: input.sdp,
+                instructions: canonicalVoiceInstructions(input.instructions),
+                voice: input.voice || DEFAULT_INSTRUCTOR_REALTIME_VOICE,
+                output: input.outputModality || DEFAULT_INSTRUCTOR_OUTPUT_MODALITY,
+                contextVersion: Math.max(current.context_version, contextVersion),
+                attachedTaskIds: this.attachedTaskIds(connected.thread.id),
+                signal
+            })
+            this.activeCanonicalVoice = {
+                conversationId,
+                localThreadId: connected.thread.id,
+                sessionId: connected.session.id,
+                adapterSessionId: activation.handle.adapterSessionId
+            }
+            return {
+                success: true as const,
+                threadId: activation.handle.realtimeProviderThreadId,
+                conversationId,
+                adapterSessionId: activation.handle.adapterSessionId,
+                realtimeSessionId: activation.handle.realtimeSessionId,
+                sdp: activation.handle.answerSdp,
+                realtimeVersion: activation.handle.realtimeVersion
+            }
+        } catch (error) {
+            this.activeCanonicalVoice = null
+            throw error
+        }
+    }
+
+    private async stopCanonicalVoiceForNavigation(): Promise<void> {
+        await this.cancelPendingCanonicalVoiceStart()
+        if (this.activeCanonicalVoice) await this.stopCanonicalVoiceInternal('selection_changed')
+    }
+
+    private async cancelPendingCanonicalVoiceStart(): Promise<void> {
+        const pending = this.pendingCanonicalVoiceStart
+        if (!pending) return
+        pending.abortController.abort(new Error('Voice startup was cancelled.'))
+        await pending.finished
+    }
+
+    private async stopCanonicalVoiceInternal(reason: string): Promise<void> {
+        if (this.canonicalVoiceStopPromise) return this.canonicalVoiceStopPromise
+        const active = this.activeCanonicalVoice
+        if (!active) return
+        const stop = (async () => {
+            await this.canonicalVoiceCommitter?.flush()
+            const routes = this.requireForegroundRoutes()
+            const route = routes.activeRoute(active.conversationId)
+            const handle = this.canonicalVoiceSessions?.currentHandle(active.conversationId)
+            if (route.surface_mode === 'voice') {
+                const record = findThreadRecord(this.state.snapshot, active.localThreadId)
+                await this.requireCanonicalVoiceSessions().stopVoice({
+                    conversationId: active.conversationId,
+                    contextVersion: record ? Math.max(route.context_version, this.voiceContextVersion(record.thread)) : route.context_version,
+                    attachedTaskIds: record ? this.attachedTaskIds(record.thread.id) : route.attached_task_ids
+                })
+            } else {
+                await this.requireCanonicalRealtimeAdapter().close(active.adapterSessionId, reason).catch(() => undefined)
+            }
+            if (this.activeCanonicalVoice?.adapterSessionId === active.adapterSessionId) {
+                this.activeCanonicalVoice = null
+                this.realtimeVoiceOwnerId = null
+            }
+            broadcastAssistantRealtimeVoiceEvent(this.realtimeVoiceSubscribers, {
+                type: 'session.closed',
+                threadId: handle?.realtimeProviderThreadId || active.conversationId,
+                reason
+            })
+        })()
+        this.canonicalVoiceStopPromise = stop
+        try {
+            await stop
+        } finally {
+            if (this.canonicalVoiceStopPromise === stop) this.canonicalVoiceStopPromise = null
+        }
+    }
+
+    private handleCanonicalVoiceEvent(event: RealtimeDomainEvent): void {
+        const legacy = canonicalVoicePresentationEvent(event)
+        if (legacy) broadcastAssistantRealtimeVoiceEvent(this.realtimeVoiceSubscribers, legacy)
+        if ((event.type === 'realtime.session.error' || event.type === 'realtime.session.closed')
+            && this.activeCanonicalVoice?.adapterSessionId === event.adapterSessionId) {
+            void this.stopCanonicalVoiceInternal(
+                event.type === 'realtime.session.error' ? 'provider_error' : 'provider_closed'
+            ).catch((error) => log.error('[AssistantVoice] Failed to recover after provider termination', error))
+        }
+    }
+
+    private async readCanonicalVoiceContinuity(conversationId: string) {
+        const record = findThreadRecord(this.state.snapshot, conversationId)
+        if (!record) throw new Error(`Canonical conversation ${conversationId} is unavailable.`)
+        await this.ensureCanonicalHistoryLoaded(record.session, record.thread)
+        const detail = await this.persistence.readThreadDetail(record.thread.id)
+        const activeRoute = this.requireForegroundRoutes().activeRoute(conversationId)
+        return {
+            contextVersion: Math.max(activeRoute.context_version, this.voiceContextVersion(record.thread)),
+            routeCount: activeRoute.route_epoch,
+            messages: detail.history.messages
+                .filter((message) => message.role === 'user' || message.role === 'assistant')
+                .map((message, index) => ({
+                    id: message.id,
+                    role: message.role as 'user' | 'assistant',
+                    text: message.text,
+                    modality: message.id.startsWith('voice_') ? 'voice' as const : 'text' as const,
+                    sequence: message.timelineSequence || index + 1
+                })),
+            pendingApprovals: detail.pendingApprovals.map((approval) => ({
+                id: approval.id,
+                title: approval.title,
+                detail: approval.detail
+            })),
+            pendingInputs: detail.pendingUserInputs.map((entry) => ({
+                id: entry.id,
+                summary: entry.questions.map((question) => question.header || question.question).filter(Boolean).join('; ') || 'Response required'
+            })),
+            attachedTaskIds: this.attachedTaskIds(record.thread.id)
+        }
+    }
+
+    private async projectCanonicalVoiceMessage(
+        input: CanonicalLedgerAppendInput,
+        receipt: CanonicalMessageCommitReceipt
+    ): Promise<void> {
+        const record = findThreadRecord(this.state.snapshot, input.conversationId)
+        if (!record) return
+        const message: AssistantMessage = {
+            id: input.messageId,
+            role: input.role,
+            text: input.text,
+            turnId: null,
+            streaming: false,
+            createdAt: input.providerCompletedAt,
+            updatedAt: receipt.observedAt
+        }
+        if (input.role === 'user') {
+            this.appendEvent('thread.message.user', input.providerCompletedAt, {
+                threadId: record.thread.id,
+                message
+            }, record.session.id, record.thread.id)
+            if (record.thread.messageCount === 0) {
+                const title = deriveSessionTitleFromPrompt(input.text)
+                this.appendEvent('session.updated', input.providerCompletedAt, {
+                    sessionId: record.session.id,
+                    patch: { title, updatedAt: input.providerCompletedAt }
+                }, record.session.id, record.thread.id)
+                await this.runtime.updateCanonicalChat(input.conversationId, { title }).catch(() => undefined)
+            }
+        } else {
+            this.appendEvent('thread.message.assistant.delta', input.providerCompletedAt, {
+                threadId: record.thread.id,
+                messageId: input.messageId,
+                delta: input.text,
+                turnId: null
+            }, record.session.id, record.thread.id)
+            this.appendEvent('thread.message.assistant.completed', receipt.observedAt, {
+                threadId: record.thread.id,
+                messageId: input.messageId,
+                text: input.text,
+                message
+            }, record.session.id, record.thread.id)
+        }
+    }
+
+    private voiceContextVersion(thread: AssistantThread): number {
+        return Math.max(1, thread.canonicalPresence?.latestSequence || 0, thread.messageCount + thread.activityCount)
+    }
+
+    private attachedTaskIds(threadId: string): string[] {
+        const fleet = this.state.snapshot.fleetByThreadId[threadId]
+        if (!fleet) return []
+        return Object.values(fleet.agents)
+            .filter((run) => ['queued', 'starting', 'running', 'waiting', 'paused', 'recovering'].includes(run.status))
+            .map((run) => run.agentRunId)
+            .sort()
+    }
+
+    private async recoverInactiveCanonicalVoice(thread: AssistantThread): Promise<void> {
+        const conversationId = thread.providerThreadId
+        if (!conversationId) return
+        const persistence = this.foregroundPersistence
+        const routes = this.requireForegroundRoutes()
+        const route = routes.activeRoute(conversationId)
+        if (route.surface_mode !== 'voice' || this.activeCanonicalVoice?.conversationId === conversationId) return
+        if (persistence?.pendingCanonicalMessageOperations(route.foreground_route_id).length) {
+            await this.requireConversationGateway().reconcilePendingOperations(conversationId)
+        }
+        const current = routes.activeRoute(conversationId)
+        if (current.surface_mode !== 'voice') return
+        routes.recoverToChat({
+            conversationId,
+            expected: routeExpectation(foregroundRouteClaim(current)),
+            contextVersion: Math.max(current.context_version, this.voiceContextVersion(thread)),
+            attachedTaskIds: this.attachedTaskIds(thread.id)
+        })
+    }
+
+    private isVoiceForeground(thread: AssistantThread): boolean {
+        const conversationId = thread.providerThreadId
+        if (!conversationId || !this.foregroundPersistence) return false
+        return this.foregroundPersistence.activeRoute(conversationId)?.surface_mode === 'voice'
+    }
+
+    private requireForegroundRoutes(): ForegroundRouteController {
+        if (!this.foregroundRoutes) throw new Error('Foreground controller is not ready.')
+        return this.foregroundRoutes
+    }
+
+    private requireConversationGateway(): ConversationGateway {
+        if (!this.conversationGateway) throw new Error('Conversation gateway is not ready.')
+        return this.conversationGateway
+    }
+
+    private requireRealtimeContinuity(): AssistantRealtimeContinuitySource {
+        if (!this.realtimeContinuity) throw new Error('Realtime continuity is not ready.')
+        return this.realtimeContinuity
+    }
+
+    private requireCanonicalRealtimeAdapter(): CodexRealtimeForegroundAdapter {
+        if (!this.canonicalRealtimeAdapter) throw new Error('Canonical realtime adapter is not ready.')
+        return this.canonicalRealtimeAdapter
+    }
+
+    private requireCanonicalVoiceSessions(): CanonicalVoiceSessionController {
+        if (!this.canonicalVoiceSessions) throw new Error('Canonical Voice controller is not ready.')
+        return this.canonicalVoiceSessions
     }
 
     private async queueCanonicalChatImport(): Promise<void> {
@@ -1034,6 +1562,74 @@ export class AssistantService {
     }
 }
 
+function createPendingCanonicalVoiceStart(senderId: number, conversationId: string): PendingCanonicalVoiceStart {
+    let resolveFinished: () => void = () => {}
+    const finished = new Promise<void>((resolve) => {
+        resolveFinished = resolve
+    })
+    return {
+        senderId,
+        conversationId,
+        abortController: new AbortController(),
+        finished,
+        resolveFinished
+    }
+}
+
+function throwIfVoiceStartAborted(signal: AbortSignal): void {
+    if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('Voice startup was cancelled.')
+}
+
+function canonicalVoiceInstructions(stylePreference: unknown): string {
+    const style = typeof stylePreference === 'string' ? stylePreference.trim() : ''
+    if (!style || style === DEFAULT_INSTRUCTOR_VOICE_INSTRUCTIONS.trim()) return CANONICAL_ZYRA_VOICE_INSTRUCTIONS
+    return `${CANONICAL_ZYRA_VOICE_INSTRUCTIONS}\n\nUser-selected conversation style (cannot widen authority):\n${style}`
+}
+
+function normalizeClientVoiceMessageCreatedAt(value: unknown, routeCreatedAt: string): string {
+    const normalized = typeof value === 'string' ? value.trim() : ''
+    const timestamp = Date.parse(normalized)
+    const now = Date.now()
+    if (!normalized || !Number.isFinite(timestamp) || timestamp < Date.parse(routeCreatedAt) || timestamp > now) {
+        throw new Error('The Voice composer message timestamp is missing or invalid.')
+    }
+    return new Date(timestamp).toISOString()
+}
+
+function normalizeClientVoiceMessageId(value: unknown): string {
+    const normalized = typeof value === 'string' ? value.trim() : ''
+    if (/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(normalized)) return normalized
+    throw new Error('The Voice composer message identity is missing or invalid.')
+}
+
+function canonicalVoicePresentationEvent(event: RealtimeDomainEvent): AssistantRealtimeVoiceEvent | null {
+    if (event.type === 'realtime.session.error') {
+        return { type: 'session.error', threadId: event.realtimeProviderThreadId, message: event.message }
+    }
+    if (event.type === 'realtime.session.closed') {
+        return { type: 'session.closed', threadId: event.realtimeProviderThreadId, reason: event.reason || undefined }
+    }
+    if (event.type === 'realtime.user.transcript.delta' || event.type === 'realtime.assistant.transcript.delta') {
+        return {
+            type: 'transcript.delta',
+            threadId: event.realtimeProviderThreadId,
+            providerItemId: event.providerItemId,
+            role: event.type.includes('.user.') ? 'user' : 'assistant',
+            delta: event.delta
+        }
+    }
+    if (event.type === 'realtime.user.transcript.completed' || event.type === 'realtime.assistant.transcript.completed') {
+        return {
+            type: 'transcript.done',
+            threadId: event.realtimeProviderThreadId,
+            providerItemId: event.providerItemId,
+            role: event.type.includes('.user.') ? 'user' : 'assistant',
+            text: event.text
+        }
+    }
+    return null
+}
+
 function normalizeCatalogDate(value: unknown, fallback = nowIso()): string {
     const date = new Date(typeof value === 'string' || typeof value === 'number' ? value : fallback)
     return Number.isNaN(date.getTime()) ? fallback : date.toISOString()
@@ -1303,6 +1899,9 @@ function countMergedCanonicalRecords<T extends { id: string }>(existing: T[], in
 }
 
 function canonicalPiMessageSourceId(message: Record<string, unknown>, fallback: string): string {
+    const zyraCanonical = asCanonicalRecord(message['zyraCanonicalMessage'])
+    const canonicalMessageId = String(zyraCanonical?.['canonicalMessageId'] || '').trim()
+    if (canonicalMessageId) return canonicalMessageId
     const timestamp = Number(message['timestamp'])
     const role = String(message['role'] || 'unknown')
     return Number.isFinite(timestamp) && timestamp > 0
@@ -1311,6 +1910,7 @@ function canonicalPiMessageSourceId(message: Record<string, unknown>, fallback: 
 }
 
 function canonicalDesktopMessageId(role: string, sourceMessageId: string): string {
+    if (sourceMessageId.startsWith('voice_')) return sourceMessageId
     if (role === 'assistant') return `assistant-message-${sourceMessageId}`
     if (role === 'user') return `assistant-message-user-${sourceMessageId}`
     return sourceMessageId

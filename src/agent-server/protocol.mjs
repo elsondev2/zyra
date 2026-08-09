@@ -12,6 +12,8 @@ const METHOD_NAMES = new Set([
   "catalog.list",
   "catalog.history",
   "catalog.update",
+  "catalog.message.append",
+  "catalog.message.find",
   "session.attach",
   "session.request",
   "session.detach",

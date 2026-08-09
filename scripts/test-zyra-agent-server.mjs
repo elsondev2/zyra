@@ -16,6 +16,7 @@ class FakeWorker extends EventEmitter {
     this.activePrompt = null;
     this.controlResponses = [];
     this.requests = [];
+    this.canonicalReceipts = new Map();
     this.disposed = false;
   }
   isAlive() { return !this.disposed; }
@@ -24,6 +25,25 @@ class FakeWorker extends EventEmitter {
     if (type === "connect") return Promise.resolve({ threadId: "chat:test", providerThreadId: sessionPath, events: [] });
     if (type === "prompt") return new Promise((resolve) => { this.activePrompt = resolve; });
     if (type === "abort") return Promise.resolve({ aborted: true });
+    if (type === "canonical_message.append") {
+      const receipt = {
+        receiptId: "pi_entry_voice_test",
+        operationId: payload.operationId,
+        canonicalMessageId: payload.messageId,
+        conversationId: payload.conversationId,
+        canonicalSequence: 9,
+        foregroundRouteId: payload.routeClaim.foregroundRouteId,
+        routeEpoch: payload.routeClaim.routeEpoch,
+        ownerClaimId: payload.routeClaim.ownerClaimId,
+        contentSha256: payload.payloadSha256,
+        observedAt: new Date().toISOString()
+      };
+      this.canonicalReceipts.set(payload.operationId, receipt);
+      return Promise.resolve({ receipt });
+    }
+    if (type === "canonical_message.find") {
+      return Promise.resolve({ receipt: this.canonicalReceipts.get(payload.operationId) || null });
+    }
     if (type === "approval.respond") {
       this.emit("event", { type: "approval_resolved", requestId: payload.requestId, decision: payload.decision });
       return Promise.resolve({ ok: true });
@@ -121,6 +141,30 @@ try {
   assert.equal(updated.chat.title, "Editable shared title");
   assert.equal(updated.chat.sessionPath, sessionPath, "metadata edits must not move canonical transcript storage");
 
+  const canonicalMessage = {
+    operationId: "op_voice_server_1",
+    idempotencyKey: "voice:server:1",
+    conversationId: "chat:test",
+    messageId: "voice_user_server_1",
+    role: "user",
+    producer: "user",
+    modality: "voice",
+    text: "durable voice turn",
+    attachmentIds: [],
+    providerItemId: "voice_provider_server_1",
+    providerCompletedAt: new Date().toISOString(),
+    payloadSha256: "a".repeat(64),
+    routeClaim: { foregroundRouteId: "route_voice_server_2", routeEpoch: 2, ownerClaimId: "claim_voice_server_2" }
+  };
+  const canonicalAppend = await desktop.request("catalog.message.append", { session: "chat:test", message: canonicalMessage });
+  assert.equal(canonicalAppend.receipt.operationId, canonicalMessage.operationId);
+  const canonicalFind = await desktop.request("catalog.message.find", { session: "chat:test", operationId: canonicalMessage.operationId });
+  assert.deepEqual(canonicalFind.receipt, canonicalAppend.receipt);
+  await assert.rejects(
+    tui.request("catalog.message.append", { session: "chat:test", message: canonicalMessage }),
+    /verified Desktop authority/
+  );
+
   const tuiEvents = [];
   tui.on("session-event:chat:test", (event) => tuiEvents.push(event));
   const promptResult = desktop.request("session.request", {
@@ -132,6 +176,10 @@ try {
   assert.equal(runningCatalog.chats[0].presence.state, "running", "catalog presence must expose unopened work as running");
   assert.equal(runningCatalog.chats[0].presence.latestTurn?.id, "turn:test", "catalog presence must identify the active canonical turn");
   assert.equal(runningCatalog.chats[0].presence.latestTurn?.state, "running", "catalog presence must expose the active turn state");
+  await assert.rejects(
+    desktop.request("catalog.message.append", { session: "chat:test", message: { ...canonicalMessage, operationId: "op_voice_server_busy" } }),
+    /strong foreground turn is active/
+  );
   workers[0].emit("event", { type: "message_update", message: { role: "assistant", content: "still working" } });
   await waitUntil(() => tuiEvents.length === 1);
   workers[0].emit("event", { type: "approval_requested", requestId: "approval:test", requestType: "command", command: "npm test" });

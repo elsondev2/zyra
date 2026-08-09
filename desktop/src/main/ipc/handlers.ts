@@ -45,6 +45,7 @@ import {
     handleAssistantGetSnapshot,
     handleAssistantGetStatus,
     handleAssistantInterruptTurn,
+    handleAssistantIngestRealtimeVoiceEvent,
     handleAssistantListModels,
     handleAssistantNewThread,
     handleAssistantPersistClipboardImage,
@@ -307,6 +308,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     ipcMain.handle(ASSISTANT_IPC.unsubscribeRealtimeVoice, handleAssistantUnsubscribeRealtimeVoice)
     ipcMain.handle(ASSISTANT_IPC.startRealtimeVoice, handleAssistantStartRealtimeVoice)
     ipcMain.handle(ASSISTANT_IPC.sendRealtimeVoiceMessage, handleAssistantSendRealtimeVoiceMessage)
+    ipcMain.handle(ASSISTANT_IPC.ingestRealtimeVoiceEvent, handleAssistantIngestRealtimeVoiceEvent)
     ipcMain.handle(ASSISTANT_IPC.stopRealtimeVoice, handleAssistantStopRealtimeVoice)
     ipcMain.handle(ASSISTANT_IPC.getVoiceTranscriptionState, handleAssistantGetVoiceTranscriptionState)
     ipcMain.handle(ASSISTANT_IPC.transcribeVoice, handleAssistantTranscribeVoice)
