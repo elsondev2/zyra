@@ -48,6 +48,8 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
     reconnectPending?: boolean
     onStop?: () => Promise<void> | void
     onReconnect?: () => Promise<void> | void
+    onStartRealtimeVoice?: () => void
+    realtimeVoiceDisabled?: boolean
     onOverflowWheel?: (deltaY: number) => void
     onBlockedSend?: (message: string) => void
     onOpenAttachmentPreview?: (
@@ -197,6 +199,8 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
                         interactionMode={props.interactionMode}
                         projectPath={props.selectedProjectPath}
                         onReconnect={props.onReconnect}
+                        onStartRealtimeVoice={props.onStartRealtimeVoice}
+                        realtimeVoiceDisabled={props.realtimeVoiceDisabled}
                         onOverflowWheel={props.onOverflowWheel}
                         onBlockedSend={props.onBlockedSend}
                         onOpenAttachmentPreview={props.onOpenAttachmentPreview}

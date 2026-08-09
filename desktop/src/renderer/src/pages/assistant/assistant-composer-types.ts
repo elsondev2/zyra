@@ -51,6 +51,8 @@ export type AssistantComposerProps = {
     onSend: (prompt: string, contextFiles: ComposerContextFile[], options: AssistantComposerSendOptions) => Promise<boolean>
     onStop?: () => Promise<void> | void
     onReconnect?: () => Promise<void> | void
+    onStartRealtimeVoice?: () => void
+    realtimeVoiceDisabled?: boolean
     onOverflowWheel?: (deltaY: number) => void
     onBlockedSend?: (message: string) => void
     onCancelDirty?: () => void

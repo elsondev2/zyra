@@ -7,6 +7,40 @@ type AssistantComposerViewStateInput = {
     settings: Pick<Settings, 'assistantTranscriptionEngine' | 'theme'>
 }
 
+type AssistantComposerRealtimeVoicePrimaryActionInput = {
+    currentSubmitLabel: string
+    text: string
+    contextFilesLength: number
+    realtimeVoiceAvailable: boolean
+    composerAvailable: boolean
+    isConnected: boolean
+    canStop: boolean
+    showBusySendActions: boolean
+    dictationBusy: boolean
+}
+
+export function shouldShowComposerRealtimeVoicePrimaryAction({
+    currentSubmitLabel,
+    text,
+    contextFilesLength,
+    realtimeVoiceAvailable,
+    composerAvailable,
+    isConnected,
+    canStop,
+    showBusySendActions,
+    dictationBusy
+}: AssistantComposerRealtimeVoicePrimaryActionInput): boolean {
+    return currentSubmitLabel === 'Send'
+        && text.trim().length === 0
+        && contextFilesLength === 0
+        && realtimeVoiceAvailable
+        && composerAvailable
+        && isConnected
+        && !canStop
+        && !showBusySendActions
+        && !dictationBusy
+}
+
 export function deriveAssistantComposerViewState({
     capabilities,
     controller,

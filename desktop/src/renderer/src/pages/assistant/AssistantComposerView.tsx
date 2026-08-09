@@ -23,7 +23,7 @@ import {
 } from 'lucide-react'
 import AssistantAttachmentPreviewModal from './AssistantAttachmentPreviewModal'
 import { AssistantVoiceRecorderBar } from './AssistantVoiceRecorderBar'
-import { ComposerAttachmentsShelf, ComposerFooterControls, ComposerMentionMenu, ComposerSendButton, ComposerVoiceButton } from './AssistantComposerSections'
+import { ComposerAttachmentsShelf, ComposerFooterControls, ComposerMentionMenu, ComposerRealtimeVoiceButton, ComposerSendButton, ComposerVoiceButton } from './AssistantComposerSections'
 import { formatAssistantModelLabel } from './assistant-model-labels'
 import {
     renderInlineMentionOverlay,
@@ -31,7 +31,7 @@ import {
 } from './assistant-composer-inline-mentions'
 import type { AssistantComposerController } from './useAssistantComposerController'
 import { writeFullAccessConfirmSuppressed } from './assistant-safety-preferences'
-import { deriveAssistantComposerViewState } from './assistant-composer-view-state'
+import { deriveAssistantComposerViewState, shouldShowComposerRealtimeVoicePrimaryAction } from './assistant-composer-view-state'
 import {
     getContentTypeTag,
     getContextFileMeta,
@@ -39,7 +39,15 @@ import {
     toKbLabel
 } from './assistant-composer-utils'
 
-export function AssistantComposerView({ controller }: { controller: AssistantComposerController }) {
+export function AssistantComposerView({
+    controller,
+    realtimeVoiceDisabled = true,
+    onStartRealtimeVoice
+}: {
+    controller: AssistantComposerController
+    realtimeVoiceDisabled?: boolean
+    onStartRealtimeVoice?: () => void
+}) {
     const navigate = useNavigate()
     const { settings } = useSettings()
     const transcriptionEnabled = settings.assistantTranscriptionEnabled
@@ -66,6 +74,20 @@ export function AssistantComposerView({ controller }: { controller: AssistantCom
         ? 'Add plan step...'
         : capabilities.placeholder
     const sendActionDisabled = capabilities.sendDisabled || (voiceBusy && !capabilities.canStop)
+    const currentSubmitLabel = controller.isDirty && controller.dirtySubmitLabel
+        ? controller.dirtySubmitLabel
+        : controller.submitLabel
+    const showRealtimeVoicePrimaryAction = shouldShowComposerRealtimeVoicePrimaryAction({
+        currentSubmitLabel,
+        text: controller.text,
+        contextFilesLength: controller.contextFiles.length,
+        realtimeVoiceAvailable: Boolean(onStartRealtimeVoice) && !realtimeVoiceDisabled,
+        composerAvailable: !capabilities.inputDisabled && !capabilities.controlsLocked,
+        isConnected: controller.isConnected,
+        canStop: capabilities.canStop,
+        showBusySendActions,
+        dictationBusy: voiceBusy
+    })
     const showCodexRecorder = transcriptionEnabled
         && settings.assistantTranscriptionEngine === 'codex'
         && (controller.voiceInput.isRecording || controller.voiceInput.isTranscribing)
@@ -591,20 +613,22 @@ export function AssistantComposerView({ controller }: { controller: AssistantCom
                                             isConnected={controller.isConnected}
                                             isThinking={true}
                                             canSend={false}
-                                            label={controller.isDirty && controller.dirtySubmitLabel ? controller.dirtySubmitLabel : controller.submitLabel}
+                                            label={currentSubmitLabel}
                                             reconnectPending={controller.reconnectPending}
                                             onStop={controller.onStop}
                                             onReconnect={controller.onReconnect}
                                             onSend={() => void controller.handleSend()}
                                         />
                                     </>
+                                ) : showRealtimeVoicePrimaryAction ? (
+                                    <ComposerRealtimeVoiceButton onStart={() => onStartRealtimeVoice?.()} />
                                 ) : (
                                     <ComposerSendButton
                                         disabled={sendActionDisabled}
                                         isConnected={controller.isConnected}
                                         isThinking={controller.isThinking}
                                         canSend={canSend}
-                                        label={controller.isDirty && controller.dirtySubmitLabel ? controller.dirtySubmitLabel : controller.submitLabel}
+                                        label={currentSubmitLabel}
                                         reconnectPending={controller.reconnectPending}
                                         onStop={controller.onStop}
                                         onReconnect={controller.onReconnect}

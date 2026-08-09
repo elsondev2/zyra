@@ -2,7 +2,7 @@ import { memo, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
 import { cn } from '@/lib/utils'
-import { Check, ChevronDown, ChevronUp, Gauge, GitBranch, ListTodo, Loader2, Lock, LockOpen, MessageSquare, Mic, RotateCw, SendHorizontal, Square, Zap } from 'lucide-react'
+import { AudioLines, Check, ChevronDown, ChevronUp, Gauge, GitBranch, ListTodo, Loader2, Lock, LockOpen, MessageSquare, Mic, RotateCw, SendHorizontal, Square, Zap } from 'lucide-react'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import { formatAssistantModelLabel } from './assistant-model-labels'
 import { getContentTypeTag, getContextFileMeta, isPastedTextAttachment } from './assistant-composer-utils'
@@ -342,6 +342,18 @@ export const ComposerSendButton = memo(({
         </button>
     )
 })
+
+export const ComposerRealtimeVoiceButton = memo(({ onStart }: { onStart: () => void }) => (
+    <button
+        type="button"
+        onClick={onStart}
+        className="relative inline-flex h-[36px] w-[36px] items-center justify-center overflow-hidden rounded-full border border-[var(--accent-primary)] bg-[var(--accent-primary)] text-[var(--accent-contrast)] transition-all duration-150 hover:scale-[1.03] hover:bg-[color-mix(in_srgb,var(--accent-primary)_88%,var(--color-text))]"
+        title="Start Voice in this chat"
+        aria-label="Start Voice in this chat"
+    >
+        <AudioLines size={18} />
+    </button>
+))
 
 export const ComposerVoiceButton = memo(({
     supported,

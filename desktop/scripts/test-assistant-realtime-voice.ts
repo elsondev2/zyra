@@ -16,6 +16,7 @@ import { INSTRUCTOR_VOICE_VISUAL_THEMES } from '../src/renderer/src/pages/assist
 import {
     applyRealtimeTranscriptEvent
 } from '../src/renderer/src/pages/assistant/instructor-voice-transcript'
+import { shouldShowComposerRealtimeVoicePrimaryAction } from '../src/renderer/src/pages/assistant/assistant-composer-view-state'
 import {
     normalizeInstructorVoicePreferences,
     readInstructorVoicePreferences,
@@ -353,6 +354,48 @@ assert.deepEqual(
 if (originalLocalStorage) Object.defineProperty(globalThis, 'localStorage', originalLocalStorage)
 else Reflect.deleteProperty(globalThis, 'localStorage')
 
+const emptyRealtimeVoiceAction = {
+    currentSubmitLabel: 'Send',
+    text: '',
+    contextFilesLength: 0,
+    realtimeVoiceAvailable: true,
+    composerAvailable: true,
+    isConnected: true,
+    canStop: false,
+    showBusySendActions: false,
+    dictationBusy: false
+}
+assert.equal(
+    shouldShowComposerRealtimeVoicePrimaryAction(emptyRealtimeVoiceAction),
+    true,
+    'an empty connected composer should put realtime Voice in the primary Send slot'
+)
+assert.equal(
+    shouldShowComposerRealtimeVoicePrimaryAction({ ...emptyRealtimeVoiceAction, text: 'Send this' }),
+    false,
+    'sendable text should restore the Send action'
+)
+assert.equal(
+    shouldShowComposerRealtimeVoicePrimaryAction({ ...emptyRealtimeVoiceAction, contextFilesLength: 1 }),
+    false,
+    'an attachment-only message should restore the Send action'
+)
+assert.equal(
+    shouldShowComposerRealtimeVoicePrimaryAction({ ...emptyRealtimeVoiceAction, canStop: true }),
+    false,
+    'stopping an active assistant turn should take priority over starting realtime Voice'
+)
+assert.equal(
+    shouldShowComposerRealtimeVoicePrimaryAction({ ...emptyRealtimeVoiceAction, dictationBusy: true }),
+    false,
+    'realtime Voice should not start while composer dictation is active'
+)
+assert.equal(
+    shouldShowComposerRealtimeVoicePrimaryAction({ ...emptyRealtimeVoiceAction, realtimeVoiceAvailable: false }),
+    false,
+    'the unavailable realtime service should not replace Send with a dead action'
+)
+
 const voiceLabSource = readFileSync(
     new URL('../src/renderer/src/pages/assistant/InstructorVoiceLab.tsx', import.meta.url),
     'utf8'
@@ -377,6 +420,18 @@ const voiceSettingsStyles = readFileSync(
     new URL('../src/renderer/src/pages/assistant/InstructorVoiceSettings.css', import.meta.url),
     'utf8'
 )
+const composerViewSource = readFileSync(
+    new URL('../src/renderer/src/pages/assistant/AssistantComposerView.tsx', import.meta.url),
+    'utf8'
+)
+const conversationPaneSource = readFileSync(
+    new URL('../src/renderer/src/pages/assistant/AssistantConversationPane.tsx', import.meta.url),
+    'utf8'
+)
+const conversationHeaderSource = readFileSync(
+    new URL('../src/renderer/src/pages/assistant/AssistantConversationHeader.tsx', import.meta.url),
+    'utf8'
+)
 assert.match(voiceLabSource, /<InstructorVoiceConversation/)
 assert.doesNotMatch(voiceLabSource, /ConversationDrawer/)
 assert.match(voiceConversationSource, /userMessage \? 'is-user' : 'is-assistant'/)
@@ -391,5 +446,8 @@ assert.match(voiceOrbStyles, /--instructor-orb-volume-scale/)
 assert.match(voiceSettingsStyles, /grid-template-columns: minmax\(280px/)
 assert.match(voiceSettingsStyles, /instructor-voice-settings-instructions-pane/)
 assert.doesNotMatch(voiceSettingsStyles, /--sparkle-/)
+assert.match(composerViewSource, /showRealtimeVoicePrimaryAction[\s\S]{0,120}<ComposerRealtimeVoiceButton/u)
+assert.match(conversationPaneSource, /onStartRealtimeVoice=\{handleStartCanonicalVoice\}/u)
+assert.doesNotMatch(conversationHeaderSource, /onToggleVoice|Start Voice in this chat/u, 'realtime Voice activation should live in the empty composer instead of the title bar')
 
 console.log('Assistant realtime voice contract passed.')

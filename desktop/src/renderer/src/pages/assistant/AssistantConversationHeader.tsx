@@ -1,7 +1,6 @@
 import { memo, useState } from 'react'
-import { Archive, AudioLines, Bot, Check, Copy, Folder, LoaderCircle, MoreHorizontal, PanelRightClose, PanelRightOpen, Pencil, Radio, SquarePen, Trash2 } from 'lucide-react'
+import { Archive, Bot, Check, Copy, Folder, MoreHorizontal, PanelRightClose, PanelRightOpen, Pencil, Radio, SquarePen, Trash2 } from 'lucide-react'
 import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
-import { cn } from '@/lib/utils'
 
 export const AssistantConversationHeader = memo(function AssistantConversationHeader(props: {
     rightPanelOpen: boolean
@@ -23,9 +22,6 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
     latestProjectLabel: string
     projectDirectoryLocked: boolean
     actionsDisabled?: boolean
-    voiceStatus?: 'idle' | 'requesting-microphone' | 'connecting' | 'active' | 'stopping' | 'error'
-    voiceDisabled?: boolean
-    onToggleVoice?: () => void
     onCreateThread: () => void
     onRenameChat: () => void
     onCreateProjectChat: () => void
@@ -50,9 +46,6 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
         rightPanelMode,
         showRightSidebarToggle = false,
         actionsDisabled = false,
-        voiceStatus = 'idle',
-        voiceDisabled = false,
-        onToggleVoice,
         onCreateThread,
         onRenameChat,
         onCreateProjectChat,
@@ -185,29 +178,6 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
                     </span>
                 ) : null}
             </div>
-            {onToggleVoice ? (
-                <button
-                    type="button"
-                    onClick={onToggleVoice}
-                    disabled={voiceStatus === 'stopping'
-                        || ((voiceStatus === 'idle' || voiceStatus === 'error') && voiceDisabled)}
-                    className={cn(
-                        'ml-2 inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border px-2 text-[9px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40',
-                        voiceStatus === 'active' || voiceStatus === 'connecting' || voiceStatus === 'requesting-microphone'
-                            ? 'border-cyan-300/25 bg-cyan-300/10 text-cyan-100'
-                            : voiceStatus === 'error'
-                                ? 'border-rose-300/20 bg-rose-300/10 text-rose-200'
-                                : 'border-sparkle-border bg-sparkle-card text-sparkle-text-muted hover:bg-sparkle-accent hover:text-sparkle-text'
-                    )}
-                    title={voiceStatus === 'idle' || voiceStatus === 'error' ? 'Start Voice in this chat' : 'End Voice'}
-                    aria-label={voiceStatus === 'idle' || voiceStatus === 'error' ? 'Start Voice in this chat' : 'End Voice'}
-                >
-                    {voiceStatus === 'connecting' || voiceStatus === 'requesting-microphone'
-                        ? <LoaderCircle size={11} className="animate-spin" />
-                        : <AudioLines size={11} />}
-                    <span>{voiceStatus === 'active' ? 'Voice' : voiceStatus === 'idle' ? 'Start Voice' : voiceStatus === 'error' ? 'Retry Voice' : 'Voice'}</span>
-                </button>
-            ) : null}
             {showRightSidebarToggle ? (
                 <button
                     type="button"

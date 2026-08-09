@@ -771,16 +771,16 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         props.onToggleRightSidebar()
     }, [props.onToggleRightSidebar])
 
-    const handleToggleCanonicalVoice = useCallback(() => {
-        if (voice.status === 'idle' || voice.status === 'error') {
-            if (!canonicalVoiceBinding) return
-            void voice.start(voicePreferences)
-            return
-        }
-        void voice.stop()
-    }, [canonicalVoiceBinding, voice, voicePreferences])
+    const canonicalVoiceDisabled = !canonicalVoiceBinding
+        || activeThreadIsSubagent
+        || isThreadWorking
+        || controller.commandPending
+    const handleStartCanonicalVoice = useCallback(() => {
+        if (canonicalVoiceDisabled || (voice.status !== 'idle' && voice.status !== 'error')) return
+        void voice.start(voicePreferences)
+    }, [canonicalVoiceDisabled, voice.start, voice.status, voicePreferences])
 
-    const titleBarContent = useMemo(() => (
+    const titleBarContent = useMemo(() => !composerIsCentered ? (
         <AssistantConversationHeader
             rightPanelOpen={props.rightPanelOpen}
             rightPanelMode={props.rightPanelMode}
@@ -797,9 +797,6 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
             selectedProjectPath={displayProjectPath || null}
             projectDirectoryLocked={projectDirectoryLocked}
             actionsDisabled={Boolean(headerActionPending) || controller.commandPending}
-            voiceStatus={voice.status}
-            voiceDisabled={!canonicalVoiceBinding || activeThreadIsSubagent || isThreadWorking || controller.commandPending}
-            onToggleVoice={handleToggleCanonicalVoice}
             onCreateThread={handleCreateThread}
             onRenameChat={handleOpenRenameChat}
             onCreateProjectChat={handleCreateHeaderProjectChat}
@@ -808,7 +805,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
             onDeleteChat={handleOpenDeleteChat}
             onToggleRightSidebar={handleToggleDetailsPanel}
         />
-    ), [
+    ) : null, [
         activeThreadIsSubagent,
         activeThreadLabel,
         composerIsCentered,
@@ -823,11 +820,8 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         handleCreateThread,
         handleOpenDeleteChat,
         handleOpenRenameChat,
-        handleToggleCanonicalVoice,
         handleToggleDetailsPanel,
         headerActionPending,
-        canonicalVoiceBinding,
-        isThreadWorking,
         latestProjectLabel,
         projectDirectoryLocked,
         props.rightPanelMode,
@@ -836,8 +830,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         selectedProjectTooltip,
         selectedSessionTitle,
         settings.assistantShowDiagnostics,
-        settings.assistantShowStatusDetails,
-        voice.status
+        settings.assistantShowStatusDetails
     ])
     usePublishAssistantTitleBarContent(titleBarContent)
 
@@ -911,6 +904,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         <AssistantCanonicalVoiceDock
                             voice={voice}
                             preferences={voicePreferences}
+                            onRetry={handleStartCanonicalVoice}
                             onStop={() => { void voice.stop() }}
                         />
                     ) : (
@@ -952,6 +946,8 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         onOverflowWheel={handleComposerOverflowWheel}
                         onStop={handleStopTurn}
                         onReconnect={handleReconnectAssistant}
+                        onStartRealtimeVoice={handleStartCanonicalVoice}
+                        realtimeVoiceDisabled={canonicalVoiceDisabled}
                         onBlockedSend={(message) => props.onShowToast?.(message, 'info')}
                         onOpenAttachmentPreview={props.onOpenAttachmentPreview}
                         onAttachmentShelfBoundsChange={handleAttachmentShelfBoundsChange}

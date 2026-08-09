@@ -1,4 +1,4 @@
-import { AudioLines, LoaderCircle, Mic, MicOff, Send, X } from 'lucide-react'
+import { AudioLines, LoaderCircle, Mic, MicOff, RotateCcw, Send, X } from 'lucide-react'
 import { useCallback, useMemo, useState, type CSSProperties, type FormEvent } from 'react'
 import { cn } from '@/lib/utils'
 import type { InstructorVoicePreferences } from './instructor-voice-preferences'
@@ -9,10 +9,12 @@ type VoiceSession = ReturnType<typeof useInstructorVoiceSession>
 export function AssistantCanonicalVoiceDock({
     voice,
     preferences,
+    onRetry,
     onStop
 }: {
     voice: VoiceSession
     preferences: InstructorVoicePreferences
+    onRetry?: () => void
     onStop: () => void
 }) {
     const [text, setText] = useState('')
@@ -59,7 +61,7 @@ export function AssistantCanonicalVoiceDock({
                     </span>
                     <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5 text-[10px] font-semibold text-sparkle-text">
-                            <span>{active ? 'Voice is listening' : connecting ? 'Connecting Voice' : 'Voice stopped'}</span>
+                            <span>{active ? 'Voice is listening' : connecting ? 'Connecting Voice' : voice.status === 'error' ? 'Voice needs attention' : 'Voice stopped'}</span>
                             {active ? <span className="font-normal capitalize text-sparkle-text-muted">· {preferences.voice}</span> : null}
                         </div>
                         <p className={cn(
@@ -69,6 +71,18 @@ export function AssistantCanonicalVoiceDock({
                             {voice.error || sendError || latest?.text || 'Speech is saved into this chat as each turn completes.'}
                         </p>
                     </div>
+                    {voice.status === 'error' && onRetry ? (
+                        <button
+                            type="button"
+                            onClick={onRetry}
+                            className="inline-flex h-8 items-center gap-1.5 rounded-full bg-sparkle-accent px-3 text-[10px] font-semibold text-sparkle-text transition hover:brightness-110"
+                            aria-label="Retry Voice"
+                            title="Retry Voice"
+                        >
+                            <RotateCcw size={12} />
+                            Retry
+                        </button>
+                    ) : null}
                     {active ? (
                         <button
                             type="button"

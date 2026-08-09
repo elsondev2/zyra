@@ -7,7 +7,13 @@ export type { AssistantComposerProps, AssistantComposerSendOptions, ComposerCont
 
 function AssistantComposerImpl(props: AssistantComposerProps) {
     const controller = useAssistantComposerController(props)
-    return <AssistantComposerView controller={controller} />
+    return (
+        <AssistantComposerView
+            controller={controller}
+            realtimeVoiceDisabled={props.realtimeVoiceDisabled}
+            onStartRealtimeVoice={props.onStartRealtimeVoice}
+        />
+    )
 }
 
 export const AssistantComposer = memo(AssistantComposerImpl)
