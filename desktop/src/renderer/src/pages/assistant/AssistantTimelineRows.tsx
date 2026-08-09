@@ -555,11 +555,12 @@ export const TimelineMessage = memo(({
     const [copied, setCopied] = useState(false)
     const [nowIso, setNowIso] = useState(() => new Date().toISOString())
     const [previewAttachment, setPreviewAttachment] = useState<ComposerContextFile | null>(null)
+    const usesProviderNativeStreaming = message.modality === 'voice'
     const assistantTextPresentation = useAssistantVisibleText({
         streamId: message.id,
         channel: 'message',
-        text: message.text || '',
-        streaming: Boolean(message.streaming),
+        text: usesProviderNativeStreaming ? '' : message.text || '',
+        streaming: Boolean(message.streaming) && !usesProviderNativeStreaming,
         mode: assistantTextStreamingMode
     })
     const streamedMessageRef = useRef(Boolean(message.streaming))
@@ -651,7 +652,9 @@ export const TimelineMessage = memo(({
     ])
 
     if (isAssistant) {
-        const presentationActive = Boolean(message.streaming) || assistantTextPresentation.presenting
+        const presentationActive = !usesProviderNativeStreaming && (
+            Boolean(message.streaming) || assistantTextPresentation.presenting
+        )
         const assistantText = presentationActive ? (assistantTextPresentation.text || ' ') : (message.text || ' ')
         const renderedAssistantText = stripProposedPlanBlocks(assistantText) || (presentationActive ? ' ' : '')
         const assistantCopyValue = renderedAssistantText.trim() ? renderedAssistantText : copyValue

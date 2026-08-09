@@ -330,6 +330,18 @@ dataChannelTranscript = applyRealtimeTranscriptEvent(dataChannelTranscript, {
     delta: 'You have '
 })
 dataChannelTranscript = applyRealtimeTranscriptEvent(dataChannelTranscript, {
+    type: 'response.audio_transcript.delta',
+    item_id: 'assistant-item-1',
+    delta: 'You have '
+})
+assert.equal(dataChannelTranscript[0]?.text, 'You have ', 'a replayed provider delta should not duplicate visible words')
+dataChannelTranscript = applyRealtimeTranscriptEvent(dataChannelTranscript, {
+    type: 'response.audio_transcript.delta',
+    item_id: 'assistant-item-1',
+    delta: 'You have 120'
+})
+assert.equal(dataChannelTranscript[0]?.text, 'You have 120', 'a cumulative provider delta should replace its shorter prefix')
+dataChannelTranscript = applyRealtimeTranscriptEvent(dataChannelTranscript, {
     type: 'response.audio_transcript.done',
     item_id: 'assistant-item-1',
     transcript: 'You have 120 GB free.'
@@ -468,6 +480,18 @@ const canonicalVoiceDockSource = readFileSync(
     new URL('../src/renderer/src/pages/assistant/AssistantCanonicalVoiceDock.tsx', import.meta.url),
     'utf8'
 )
+const canonicalVoiceStageStyles = readFileSync(
+    new URL('../src/renderer/src/pages/assistant/AssistantCanonicalVoiceStage.css', import.meta.url),
+    'utf8'
+)
+const timelineRowsSource = readFileSync(
+    new URL('../src/renderer/src/pages/assistant/AssistantTimelineRows.tsx', import.meta.url),
+    'utf8'
+)
+const liveTranscriptSource = readFileSync(
+    new URL('../src/renderer/src/pages/assistant/InstructorVoiceLiveTranscript.tsx', import.meta.url),
+    'utf8'
+)
 assert.match(voiceLabSource, /<InstructorVoiceConversation/)
 assert.doesNotMatch(voiceLabSource, /ConversationDrawer/)
 assert.match(voiceConversationSource, /userMessage \? 'is-user' : 'is-assistant'/)
@@ -488,6 +512,10 @@ assert.match(conversationPaneSource, /messages=\{displayedTimelineMessages\}/u)
 assert.match(canonicalVoiceStageSource, /<InstructorVoiceOrb/u)
 assert.match(canonicalVoiceDockSource, /<InstructorVoiceComposer/u)
 assert.match(canonicalVoiceDockSource, /allowImages=\{false\}/u)
+assert.match(canonicalVoiceStageStyles, /bottom: 90px/u)
+assert.match(conversationPaneSource, /VOICE_TIMELINE_RESERVE_PX = 500/u)
+assert.match(timelineRowsSource, /usesProviderNativeStreaming = message\.modality === 'voice'/u)
+assert.doesNotMatch(liveTranscriptSource, /data-transcript-word|element\.animate/u, 'the orb caption should use one calm transition rather than per-word animation')
 assert.doesNotMatch(conversationHeaderSource, /onToggleVoice|Start Voice in this chat/u, 'realtime Voice activation should live in the empty composer instead of the title bar')
 
 console.log('Assistant realtime voice contract passed.')

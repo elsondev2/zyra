@@ -38,6 +38,19 @@ function readRealtimeTurn(value: unknown): RealtimeTurn | null {
     }
 }
 
+function appendTranscriptDelta(currentValue: string, deltaValue: string): string {
+    const current = currentValue
+    const delta = current ? deltaValue : deltaValue.trimStart()
+    if (!current) return delta
+    if (delta.startsWith(current)) return delta
+    if (current.endsWith(delta)) return current
+    const maxOverlap = Math.min(current.length, delta.length)
+    for (let size = maxOverlap; size > 0; size -= 1) {
+        if (current.slice(-size) === delta.slice(0, size)) return `${current}${delta.slice(size)}`
+    }
+    return `${current}${delta}`
+}
+
 function updateEntry(
     entries: InstructorTranscriptEntry[],
     id: string,
@@ -88,7 +101,7 @@ export function applyRealtimeTranscriptEvent(
         if (!turnId || !delta) return entries
         return updateEntry(entries, turnId, (entry) => entry.final ? entry : {
             ...entry,
-            text: entry.text ? `${entry.text}${delta}` : delta.trimStart()
+            text: appendTranscriptDelta(entry.text, delta)
         })
     }
 
@@ -136,7 +149,7 @@ export function applyRealtimeTranscriptEvent(
         return updateEntry(entries, itemId, (entry) => entry.final ? entry : {
             ...entry,
             role,
-            text: entry.text ? `${entry.text}${delta}` : delta.trimStart()
+            text: appendTranscriptDelta(entry.text, delta)
         })
     }
     if (type?.endsWith('.transcript.done')

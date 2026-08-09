@@ -28,7 +28,6 @@ export function AssistantCanonicalVoiceStage({
                 connecting && 'is-connecting',
                 voice.status === 'active' && 'is-active'
             )}
-            aria-hidden="true"
         >
             <InstructorVoiceOrb
                 voice={preferences.voice}

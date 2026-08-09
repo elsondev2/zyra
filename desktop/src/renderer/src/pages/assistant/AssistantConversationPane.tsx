@@ -44,6 +44,8 @@ const TIMELINE_HIDE_SCROLL_BUTTON_THRESHOLD_PX = 180
 const IMPLEMENT_MODE_TOAST_MS = 2600
 const NEW_CHAT_HANDOFF_VISUAL_MS = 360
 const NEW_CHAT_HANDOFF_SESSION_ID = 'assistant-session-new-chat-handoff'
+const VOICE_TIMELINE_RESERVE_PX = 500
+const VOICE_TIMELINE_TRANSITION_MS = 460
 function areQueuedComposerSessionStatesEqual(
     left: AssistantQueuedComposerSessionState[],
     right: AssistantQueuedComposerSessionState[]
@@ -101,6 +103,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const [implementationToastVisible, setImplementationToastVisible] = useState(false)
     const [newChatHandoffRevision, setNewChatHandoffRevision] = useState(0)
     const [composerInsetEnd, setComposerInsetEnd] = useState(0)
+    const [voiceTimelineInsetEnd, setVoiceTimelineInsetEnd] = useState(0)
     const [attachmentShelfTop, setAttachmentShelfTop] = useState<number | null>(null)
     const [renameTarget, setRenameTarget] = useState<AssistantSession | null>(null)
     const [renameDraft, setRenameDraft] = useState('')
@@ -110,6 +113,8 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const composerInsetTargetRef = useRef(0)
     const composerInsetFrameRef = useRef<number | null>(null)
     const composerInsetLastFrameAtRef = useRef(0)
+    const voiceTimelineInsetRef = useRef(0)
+    const voiceTimelineInsetFrameRef = useRef<number | null>(null)
     const handledComposerResumeRevisionRef = useRef(visibilitySnapshot.resumeRevision)
     const showScrollToBottomRef = useRef(false)
     const scrollButtonRafRef = useRef<number | null>(null)
@@ -126,6 +131,38 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const voice = useInstructorVoiceSession(canonicalVoiceBinding)
     const voiceVisible = voice.status !== 'idle'
     const voiceThreadRef = useRef(controller.activeThread?.id || null)
+    useEffect(() => {
+        if (voiceTimelineInsetFrameRef.current !== null) {
+            window.cancelAnimationFrame(voiceTimelineInsetFrameRef.current)
+            voiceTimelineInsetFrameRef.current = null
+        }
+        const from = voiceTimelineInsetRef.current
+        const target = voiceVisible ? VOICE_TIMELINE_RESERVE_PX : 0
+        if (from === target) return
+        const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+        if (reduceMotion) {
+            voiceTimelineInsetRef.current = target
+            setVoiceTimelineInsetEnd(target)
+            return
+        }
+        const startedAt = window.performance.now()
+        const animate = (now: number) => {
+            const progress = Math.min(1, (now - startedAt) / VOICE_TIMELINE_TRANSITION_MS)
+            const eased = 1 - Math.pow(1 - progress, 3)
+            const next = Math.round(from + (target - from) * eased)
+            voiceTimelineInsetRef.current = next
+            setVoiceTimelineInsetEnd(next)
+            if (progress < 1) voiceTimelineInsetFrameRef.current = window.requestAnimationFrame(animate)
+            else voiceTimelineInsetFrameRef.current = null
+        }
+        voiceTimelineInsetFrameRef.current = window.requestAnimationFrame(animate)
+        return () => {
+            if (voiceTimelineInsetFrameRef.current !== null) {
+                window.cancelAnimationFrame(voiceTimelineInsetFrameRef.current)
+                voiceTimelineInsetFrameRef.current = null
+            }
+        }
+    }, [voiceVisible])
     useEffect(() => {
         const nextThreadId = controller.activeThread?.id || null
         const previousThreadId = voiceThreadRef.current
@@ -527,6 +564,9 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
             if (composerInsetFrameRef.current !== null) {
                 window.cancelAnimationFrame(composerInsetFrameRef.current)
             }
+            if (voiceTimelineInsetFrameRef.current !== null) {
+                window.cancelAnimationFrame(voiceTimelineInsetFrameRef.current)
+            }
         }
     }, [])
 
@@ -913,7 +953,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                             assistantTextStreamingMode={settings.assistantTextStreamingMode}
                             assistantToolOutputDefaultMode={settings.assistantToolOutputDefaultMode}
                             bottomComposerOverlayActive={bottomComposerOverlayActive}
-                            contentInsetEndAdjustment={effectiveComposerInsetEnd}
+                            contentInsetEndAdjustment={Math.max(effectiveComposerInsetEnd, voiceTimelineInsetEnd)}
                             hasOlder={controller.history?.pageInfo.hasOlder || false}
                             loadingOlder={controller.history?.loadingOlder || false}
                             loadOlderError={controller.history?.loadOlderError || null}
