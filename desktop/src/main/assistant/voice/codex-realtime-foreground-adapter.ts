@@ -169,6 +169,13 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
         return receipt
     }
 
+    async appendTransientContext(sessionId: string, text: string): Promise<void> {
+        this.requireCurrentSession(sessionId)
+        const normalized = text.trim()
+        if (!normalized) return
+        await this.runtime.appendContext([{ role: 'developer', text: normalized.slice(0, 4000) }])
+    }
+
     async sendComposerMessage(
         sessionId: string,
         input: AssistantSendRealtimeVoiceMessageInput

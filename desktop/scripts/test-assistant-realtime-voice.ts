@@ -17,6 +17,7 @@ import {
     applyRealtimeTranscriptEvent
 } from '../src/renderer/src/pages/assistant/instructor-voice-transcript'
 import { shouldShowComposerRealtimeVoicePrimaryAction } from '../src/renderer/src/pages/assistant/assistant-composer-view-state'
+import { shouldDelegateVoiceInspection } from '../src/main/assistant/voice/voice-strong-routing'
 import {
     normalizeInstructorVoicePreferences,
     readInstructorVoicePreferences,
@@ -319,6 +320,33 @@ assert.equal(
     'the same words with a new turn id should remain visible as an intentional repeat'
 )
 
+let dataChannelTranscript = applyRealtimeTranscriptEvent([], {
+    type: 'conversation.item.created',
+    item: { id: 'assistant-item-1', role: 'assistant' }
+})
+dataChannelTranscript = applyRealtimeTranscriptEvent(dataChannelTranscript, {
+    type: 'response.audio_transcript.delta',
+    item_id: 'assistant-item-1',
+    delta: 'You have '
+})
+dataChannelTranscript = applyRealtimeTranscriptEvent(dataChannelTranscript, {
+    type: 'response.audio_transcript.done',
+    item_id: 'assistant-item-1',
+    transcript: 'You have 120 GB free.'
+})
+dataChannelTranscript = applyRealtimeTranscriptEvent(dataChannelTranscript, {
+    type: 'conversation.item.input_audio_transcription.completed',
+    item_id: 'user-item-1',
+    transcript: 'How much storage is free?'
+})
+assert.deepEqual(dataChannelTranscript.map(({ id, role, text, final }) => ({ id, role, text, final })), [
+    { id: 'assistant-item-1', role: 'assistant', text: 'You have 120 GB free.', final: true },
+    { id: 'user-item-1', role: 'user', text: 'How much storage is free?', final: true }
+])
+assert.equal(shouldDelegateVoiceInspection("What's the storage left on my PC if the storage is free?"), true)
+assert.equal(shouldDelegateVoiceInspection('What are you able to do here?'), false)
+assert.equal(shouldDelegateVoiceInspection('Checking on what?'), false)
+
 const preferenceStorage = new Map<string, string>()
 const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
 Object.defineProperty(globalThis, 'localStorage', {
@@ -432,6 +460,14 @@ const conversationHeaderSource = readFileSync(
     new URL('../src/renderer/src/pages/assistant/AssistantConversationHeader.tsx', import.meta.url),
     'utf8'
 )
+const canonicalVoiceStageSource = readFileSync(
+    new URL('../src/renderer/src/pages/assistant/AssistantCanonicalVoiceStage.tsx', import.meta.url),
+    'utf8'
+)
+const canonicalVoiceDockSource = readFileSync(
+    new URL('../src/renderer/src/pages/assistant/AssistantCanonicalVoiceDock.tsx', import.meta.url),
+    'utf8'
+)
 assert.match(voiceLabSource, /<InstructorVoiceConversation/)
 assert.doesNotMatch(voiceLabSource, /ConversationDrawer/)
 assert.match(voiceConversationSource, /userMessage \? 'is-user' : 'is-assistant'/)
@@ -448,6 +484,10 @@ assert.match(voiceSettingsStyles, /instructor-voice-settings-instructions-pane/)
 assert.doesNotMatch(voiceSettingsStyles, /--sparkle-/)
 assert.match(composerViewSource, /showRealtimeVoicePrimaryAction[\s\S]{0,120}<ComposerRealtimeVoiceButton/u)
 assert.match(conversationPaneSource, /onStartRealtimeVoice=\{handleStartCanonicalVoice\}/u)
+assert.match(conversationPaneSource, /messages=\{displayedTimelineMessages\}/u)
+assert.match(canonicalVoiceStageSource, /<InstructorVoiceOrb/u)
+assert.match(canonicalVoiceDockSource, /<InstructorVoiceComposer/u)
+assert.match(canonicalVoiceDockSource, /allowImages=\{false\}/u)
 assert.doesNotMatch(conversationHeaderSource, /onToggleVoice|Start Voice in this chat/u, 'realtime Voice activation should live in the empty composer instead of the title bar')
 
 console.log('Assistant realtime voice contract passed.')

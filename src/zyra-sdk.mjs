@@ -687,6 +687,9 @@ export async function createZyraSession(options = {}) {
     cwd,
     sessionManager,
     thinkingLevel: toPiThinkingLevel(thinking),
+    ...(options.tools ? { tools: options.tools } : {}),
+    ...(options.excludeTools ? { excludeTools: options.excludeTools } : {}),
+    ...(options.noTools ? { noTools: options.noTools } : {}),
     sessionStartEvent: { type: "session_start", reason: options.sessionMode === "continue" || options.session ? "resume" : "new" },
     customTools: [
       createManagedBashTool({

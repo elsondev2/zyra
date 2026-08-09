@@ -127,6 +127,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
     const adapterSessionIdRef = useRef<string | null>(null)
     const bridgeQueueRef = useRef<Promise<void>>(Promise.resolve())
     const [status, setStatus] = useState<InstructorVoiceStatus>('idle')
+    const [startedAt, setStartedAt] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [transcript, setTranscript] = useState<InstructorTranscriptEntry[]>([])
     const [realtimeVersion, setRealtimeVersion] = useState<string | null>(null)
@@ -332,6 +333,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
         activeThreadIdRef.current = null
         adapterSessionIdRef.current = null
         bridgeQueueRef.current = Promise.resolve()
+        setStartedAt(new Date().toISOString())
         setError(null)
         setRealtimeVersion(null)
         setTranscript([])
@@ -592,6 +594,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
 
     return {
         status,
+        startedAt,
         error,
         transcript,
         realtimeVersion,

@@ -132,6 +132,8 @@ async function handleConnect(payload) {
     model: payload.model,
     profile: requestedThreadId ? undefined : payload.profile,
     thinking: payload.thinking ?? "medium",
+    tools: Array.isArray(payload.tools) ? payload.tools : undefined,
+    excludeTools: Array.isArray(payload.excludeTools) ? payload.excludeTools : undefined,
     surface: payload.surface === "memory-worker" ? "memory-worker" : "agent-server",
     skipMemoryStartup: true,
     skipModelAvailability: true,
@@ -164,13 +166,15 @@ async function handleConnect(payload) {
   unsubscribeFleet = runtime.fleet?.subscribe?.(({ event, snapshot }) => {
     send({ type: "event", event: { ...summarizeFleetEvent(event), fleet: projectFleetSnapshot(snapshot) } });
   });
-  try {
-    temporaryBrowserRelay = await startTemporaryBrowserRelay({
-      controlClient: controlBridgeClient,
-      threadId: payload.localThreadId
-    });
-  } catch (error) {
-    process.stderr.write(`[temporary-browser-relay] ${error instanceof Error ? error.message : String(error)}\n`);
+  if (payload.surface !== "memory-worker") {
+    try {
+      temporaryBrowserRelay = await startTemporaryBrowserRelay({
+        controlClient: controlBridgeClient,
+        threadId: payload.localThreadId
+      });
+    } catch (error) {
+      process.stderr.write(`[temporary-browser-relay] ${error instanceof Error ? error.message : String(error)}\n`);
+    }
   }
   const described = sdk.describeRuntime(runtime);
   const threadId = String(
@@ -535,7 +539,7 @@ async function handlePrompt(payload) {
   const shouldGenerateTitle = !runtime.session.sessionManager?.getSessionName?.();
   const images = normalizePromptImages(payload.images);
   await sdk.runZyraPrompt(runtime, payload.prompt, { images });
-  if (shouldGenerateTitle) {
+  if (shouldGenerateTitle && payload.skipTitleGeneration !== true) {
     void generateAndPersistSessionTitle(String(payload.prompt || ""), payload.cwd || runtime.project).catch((error) => {
       process.stderr.write(`[session-title] ${error instanceof Error ? error.message : String(error)}\n`);
     });

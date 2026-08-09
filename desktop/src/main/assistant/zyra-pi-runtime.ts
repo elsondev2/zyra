@@ -47,6 +47,22 @@ type ActiveCompactionLifecycle = {
     turnId: string | null
 }
 
+export type PrivateVoiceTaskInput = {
+    taskId: string
+    localThreadId: string
+    cwd: string
+    prompt: string
+    model?: string
+    effort?: AssistantReasoningEffort
+    signal: AbortSignal
+}
+
+export type PrivateVoiceTaskResult = {
+    taskId: string
+    text: string
+    providerSessionId: string
+}
+
 type ZyraSessionContext = {
     localThreadId: string
     providerThreadId: string
@@ -903,6 +919,9 @@ export class ZyraPiRuntime extends EventEmitter {
     private modelCache: AssistantModelInfo[] = []
     private agentServerConnection: DesktopAgentServerConnection | null = null
     private unsubscribeCatalogChanged: (() => void) | null = null
+    private readonly privateVoiceThreadTargets = new Map<string, string>()
+    private readonly privateVoiceWorkers = new Map<string, ZyraPiWorker>()
+    private readonly privateApprovalWorkers = new Map<string, ZyraPiWorker>()
 
     async checkAvailability(): Promise<{ available: boolean; reason: string | null }> {
         const root = resolveZyraRoot()
@@ -1183,6 +1202,107 @@ export class ZyraPiRuntime extends EventEmitter {
         return { turnId, providerThreadId: context.providerThreadId }
     }
 
+    async runPrivateVoiceTask(input: PrivateVoiceTaskInput): Promise<PrivateVoiceTaskResult> {
+        if (input.signal.aborted) throw input.signal.reason || new Error('Private Voice task cancelled.')
+        if (this.privateVoiceWorkers.has(input.taskId)) throw new Error(`Private Voice task ${input.taskId} is already running.`)
+        const root = resolveZyraRoot()
+        const worker = new ZyraPiWorker(root, resolveBridgePath(root), input.cwd)
+        const privateThreadId = `voice-private:${input.taskId}`
+        const model = normalizeZyraModel(input.model) || 'openai-codex/gpt-5.6-sol'
+        const effort = input.effort || 'xhigh'
+        const context: ZyraSessionContext = {
+            localThreadId: privateThreadId,
+            providerThreadId: privateThreadId,
+            resumeProviderThreadId: null,
+            worker: worker as unknown as ZyraWorkerLike,
+            connected: true,
+            connectPromise: null,
+            cwd: input.cwd,
+            model,
+            thinking: effort,
+            runtimeMode: 'approval-required',
+            interactionMode: 'default',
+            profile: 'default',
+            activeTurnId: input.taskId,
+            completedTurnIds: new Set(),
+            assistantMessageSequence: 0,
+            activeAssistantItemId: null,
+            toolArgsByCallId: new Map(),
+            toolStartedAtByCallId: new Map(),
+            commandActivityIdByJobId: new Map(),
+            assistantTextByItemId: new Map(),
+            assistantCompletedItemIds: new Set(),
+            internalTextByItemId: new Map(),
+            internalCompletedItemIds: new Set(),
+            activeCompaction: null,
+            lastAssistantItemId: null,
+            lastUsage: null
+        }
+        this.privateVoiceThreadTargets.set(privateThreadId, input.localThreadId)
+        this.privateVoiceWorkers.set(input.taskId, worker)
+        const unsubscribe = worker.onEvent((eventValue) => {
+            const event = asRecord(eventValue)
+            const type = asString(event?.['type'])
+            const requestId = asString(event?.['requestId'])
+            if (type === 'approval_requested' && requestId) this.privateApprovalWorkers.set(requestId, worker)
+            if (type === 'approval_resolved' && requestId) this.privateApprovalWorkers.delete(requestId)
+            this.handleZyraEvent(context, eventValue)
+        })
+        const abort = () => {
+            void worker.request('abort').catch(() => undefined)
+        }
+        input.signal.addEventListener('abort', abort, { once: true })
+        try {
+            const connected = await worker.request('connect', {
+                cwd: input.cwd,
+                localThreadId: privateThreadId,
+                noSession: true,
+                model,
+                thinking: effort,
+                profile: 'default',
+                runtimeMode: 'approval-required',
+                surface: 'memory-worker',
+                tools: ['read', 'grep', 'find', 'ls', 'bash'],
+                excludeTools: ['edit', 'write']
+            })
+            context.providerThreadId = String(connected['threadId'] || connected['providerThreadId'] || privateThreadId)
+            await worker.request('prompt', {
+                prompt: input.prompt,
+                turnId: input.taskId,
+                model,
+                thinking: effort,
+                profile: 'default',
+                runtimeMode: 'approval-required',
+                skipTitleGeneration: true
+            })
+            if (input.signal.aborted) throw input.signal.reason || new Error('Private Voice task cancelled.')
+            const text = (
+                (context.lastAssistantItemId ? context.assistantTextByItemId.get(context.lastAssistantItemId) : null)
+                || [...context.assistantTextByItemId.values()].filter((value) => value.trim()).at(-1)
+                || ''
+            ).trim()
+            if (!text) throw new Error('The strong agent completed without a Voice-ready result.')
+            return {
+                taskId: input.taskId,
+                text,
+                providerSessionId: context.providerThreadId
+            }
+        } finally {
+            input.signal.removeEventListener('abort', abort)
+            unsubscribe()
+            worker.dispose()
+            this.privateVoiceWorkers.delete(input.taskId)
+            this.privateVoiceThreadTargets.delete(privateThreadId)
+            for (const [requestId, requestWorker] of this.privateApprovalWorkers) {
+                if (requestWorker === worker) this.privateApprovalWorkers.delete(requestId)
+            }
+        }
+    }
+
+    resolvePrivateVoiceTargetThread(threadId: string): string | null {
+        return this.privateVoiceThreadTargets.get(threadId) || null
+    }
+
     async requestFleetOperation(threadId: string, namespace: 'agents' | 'workflows', action: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
         const context = this.requireSession(threadId)
         await this.ensureConnected(context)
@@ -1217,6 +1337,11 @@ export class ZyraPiRuntime extends EventEmitter {
     }
 
     async respondApproval(threadId: string, requestId: string, decision: AssistantApprovalDecision): Promise<void> {
+        const privateWorker = this.privateApprovalWorkers.get(requestId)
+        if (privateWorker) {
+            await privateWorker.request('approval.respond', { requestId, decision })
+            return
+        }
         const context = this.requireSession(threadId)
         await this.ensureConnected(context)
         await context.worker.request('approval.respond', { requestId, decision })
@@ -1254,6 +1379,10 @@ export class ZyraPiRuntime extends EventEmitter {
     }
 
     dispose(): void {
+        for (const worker of this.privateVoiceWorkers.values()) worker.dispose()
+        this.privateVoiceWorkers.clear()
+        this.privateVoiceThreadTargets.clear()
+        this.privateApprovalWorkers.clear()
         for (const threadId of [...this.sessions.keys()]) {
             this.disconnect(threadId)
         }

@@ -19,6 +19,8 @@ export interface AssistantMessage {
     turnId: string | null
     streaming: boolean
     timelineSequence?: number
+    providerItemId?: string
+    modality?: 'text' | 'voice' | 'image' | 'multimodal'
     createdAt: string
     updatedAt: string
 }

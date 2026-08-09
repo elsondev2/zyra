@@ -41,6 +41,7 @@ export function InstructorVoiceComposer({
     microphoneMuted,
     accentColor,
     instructionsAvailable,
+    allowImages = true,
     onStart,
     onStop,
     onToggleMicrophone,
@@ -50,6 +51,7 @@ export function InstructorVoiceComposer({
     microphoneMuted: boolean
     accentColor: string
     instructionsAvailable: boolean
+    allowImages?: boolean
     onStart: () => void
     onStop: () => void
     onToggleMicrophone: () => void
@@ -64,7 +66,7 @@ export function InstructorVoiceComposer({
     const active = status === 'active'
     const connecting = status === 'connecting' || status === 'requesting-microphone'
     const stopping = status === 'stopping'
-    const hasContent = text.trim().length > 0 || images.length > 0
+    const hasContent = text.trim().length > 0 || (allowImages && images.length > 0)
 
     const attachFiles = useCallback(async (files: File[]) => {
         if (files.length === 0) return
@@ -119,7 +121,7 @@ export function InstructorVoiceComposer({
         setSendWhenActive(false)
         setSending(true)
         try {
-            const result = await onSend(text.trim(), images)
+            const result = await onSend(text.trim(), allowImages ? images : [])
             if (!result.success) {
                 setMessage(result.error)
                 return
@@ -131,7 +133,7 @@ export function InstructorVoiceComposer({
         } finally {
             setSending(false)
         }
-    }, [active, hasContent, images, instructionsAvailable, onSend, onStart, sending, stopping, text])
+    }, [active, allowImages, hasContent, images, instructionsAvailable, onSend, onStart, sending, stopping, text])
 
     useEffect(() => {
         if (active && sendWhenActive && hasContent && !sending) void submit()
@@ -148,6 +150,7 @@ export function InstructorVoiceComposer({
     }
 
     const handlePaste = (event: ClipboardEvent<HTMLInputElement>) => {
+        if (!allowImages) return
         const imageFiles = [...event.clipboardData.files].filter((file) => file.type.startsWith('image/'))
         if (imageFiles.length > 0) void attachFiles(imageFiles)
     }
@@ -170,7 +173,7 @@ export function InstructorVoiceComposer({
             className="instructor-voice-composer relative mx-auto w-full max-w-[760px]"
             style={{ '--voice-composer-accent': accentColor } as CSSProperties}
         >
-            {images.length > 0 ? (
+            {allowImages && images.length > 0 ? (
                 <div className="instructor-voice-composer-images mb-2 flex items-end gap-2 px-2" aria-label="Attached images">
                     {images.map((image) => (
                         <div key={image.id} className="group relative h-11 w-11 overflow-hidden rounded-lg border border-sparkle-border bg-sparkle-card shadow-sm">
@@ -195,26 +198,30 @@ export function InstructorVoiceComposer({
             ) : null}
 
             <div className="instructor-voice-composer-pill flex h-[52px] items-center gap-1.5 rounded-full border border-sparkle-border-secondary bg-sparkle-card-elevated px-2 shadow-[0_10px_30px_rgba(0,0,0,0.16)] transition-colors focus-within:border-sparkle-border">
-                <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp,image/gif"
-                    multiple
-                    className="hidden"
-                    onChange={handleFileChange}
-                    aria-hidden="true"
-                    tabIndex={-1}
-                />
-                <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={sending || stopping || images.length >= MAX_IMAGE_COUNT}
-                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sparkle-text-secondary transition-colors hover:bg-sparkle-accent hover:text-sparkle-text disabled:cursor-not-allowed disabled:opacity-35"
-                    aria-label="Attach images"
-                    title="Attach images"
-                >
-                    {images.length > 0 ? <ImagePlus size={17} /> : <Plus size={19} />}
-                </button>
+                {allowImages ? (
+                    <>
+                        <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp,image/gif"
+                            multiple
+                            className="hidden"
+                            onChange={handleFileChange}
+                            aria-hidden="true"
+                            tabIndex={-1}
+                        />
+                        <button
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={sending || stopping || images.length >= MAX_IMAGE_COUNT}
+                            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sparkle-text-secondary transition-colors hover:bg-sparkle-accent hover:text-sparkle-text disabled:cursor-not-allowed disabled:opacity-35"
+                            aria-label="Attach images"
+                            title="Attach images"
+                        >
+                            {images.length > 0 ? <ImagePlus size={17} /> : <Plus size={19} />}
+                        </button>
+                    </>
+                ) : null}
 
                 <input
                     value={text}

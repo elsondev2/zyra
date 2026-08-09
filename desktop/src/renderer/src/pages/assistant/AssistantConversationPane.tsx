@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { AssistantApprovalDecision, AssistantProposedPlan, AssistantSession, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
+import type { AssistantApprovalDecision, AssistantMessage, AssistantProposedPlan, AssistantSession, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
 import { isAssistantSessionProjectLocked } from '@shared/assistant/session-project'
 import { useSettings, type AssistantProductProfile } from '@/lib/settings'
 import {
@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 import { buildPromptImageInputs, buildPromptWithContextFiles } from './assistant-composer-utils'
 import { clearAssistantComposerSessionState } from './assistant-composer-session-state'
 import { AssistantCanonicalVoiceDock } from './AssistantCanonicalVoiceDock'
+import { AssistantCanonicalVoiceStage } from './AssistantCanonicalVoiceStage'
 import { AssistantChatOnboardingOverlay } from './AssistantChatOnboardingOverlay'
 import { AssistantConnectionRecoveryBanner } from './AssistantConnectionRecoveryBanner'
 import { AssistantConversationHeader } from './AssistantConversationHeader'
@@ -211,7 +212,38 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     }, [actions, controller.activeThread?.id, controller.history?.loadingOlder, controller.history?.pageInfo.hasOlder, settings.assistantHistoryPrefetch])
     const shouldShowWorkingIndicator = isThreadWorking
         && !controller.timelineMessages.some((message) => message.role === 'assistant' && message.streaming)
-    const lastTimelineMessage = controller.timelineMessages[controller.timelineMessages.length - 1] || null
+    const displayedTimelineMessages = useMemo((): AssistantMessage[] => {
+        if (!voiceVisible || voice.transcript.length === 0) return controller.timelineMessages
+        const committedProviderItems = new Set(controller.timelineMessages
+            .map((message) => message.providerItemId)
+            .filter((value): value is string => Boolean(value)))
+        const highestSequence = controller.timelineMessages.reduce(
+            (highest, message) => Math.max(highest, message.timelineSequence || 0),
+            0
+        )
+        const startedAtMs = Date.parse(voice.startedAt || new Date().toISOString())
+        const liveMessages = voice.transcript.flatMap((entry, index): AssistantMessage[] => {
+            if (!entry.text.trim()
+                || entry.id.startsWith('local-composer-')
+                || committedProviderItems.has(entry.id)) return []
+            const createdAt = new Date(startedAtMs + index).toISOString()
+            const updatedAt = new Date(startedAtMs + index + entry.text.length).toISOString()
+            return [{
+                id: `voice-live-${entry.id}`,
+                role: entry.role === 'user' ? 'user' : 'assistant',
+                text: entry.text,
+                turnId: `voice-live-turn-${entry.id}`,
+                streaming: !entry.final,
+                timelineSequence: highestSequence + index + 1,
+                providerItemId: entry.id,
+                modality: 'voice',
+                createdAt,
+                updatedAt
+            }]
+        })
+        return liveMessages.length > 0 ? [...controller.timelineMessages, ...liveMessages] : controller.timelineMessages
+    }, [controller.timelineMessages, voice.startedAt, voice.transcript, voiceVisible])
+    const lastTimelineMessage = displayedTimelineMessages[displayedTimelineMessages.length - 1] || null
     const latestTimelineActivity = controller.activityFeed[0] || null
     const selectedThreadHasHistoricalContent = hasAssistantPersistedThreadContent(controller.activeThread)
     const projectDirectoryLocked = isAssistantSessionProjectLocked(controller.selectedSession)
@@ -237,7 +269,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         sessionId: activeComposerSessionId,
         threadId: newChatHandoffActive ? null : controller.activeThread?.id || null,
         loading: controller.loading,
-        timelineMessageCount: controller.timelineMessages.length,
+        timelineMessageCount: displayedTimelineMessages.length,
         lastTimelineMessageId: lastTimelineMessage?.id || null,
         lastTimelineMessageUpdatedAt: lastTimelineMessage?.updatedAt || null,
         activityFeedCount: controller.activityFeed.length,
@@ -287,7 +319,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         pendingInputCount: effectivePendingUserInputs.length,
         hasPendingLabRequest: Boolean(controller.selectedSession?.pendingLabRequest)
     })
-    const composerIsCentered = conversationSurfaceMode === 'centered-composer'
+    const composerIsCentered = conversationSurfaceMode === 'centered-composer' && !voiceVisible
     const bottomComposerOverlayActive = !composerIsCentered
     const effectiveComposerInsetEnd = resolveAssistantStableComposerInsetEnd(
         composerInsetEnd,
@@ -861,7 +893,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                             loading={controller.loading}
                             timelineContentRef={timelineContentRef}
                             timelineScrollRef={timelineScrollRef}
-                            messages={controller.timelineMessages}
+                            messages={displayedTimelineMessages}
                             activities={controller.activityFeed}
                             proposedPlans={controller.activeThread?.proposedPlans || []}
                             sessionMode={selectedSessionMode}
@@ -899,6 +931,9 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                             onOpenEditedFile={props.onOpenEditedFile}
                             onViewDiff={props.onViewDiff}
                         />
+                    ) : null}
+                    {voiceVisible ? (
+                        <AssistantCanonicalVoiceStage voice={voice} preferences={voicePreferences} />
                     ) : null}
                     {voiceVisible ? (
                         <AssistantCanonicalVoiceDock

@@ -30,7 +30,7 @@ function readRealtimeTurn(value: unknown): RealtimeTurn | null {
     const turn = asRecord(value)
     const id = asNonEmptyString(turn?.id)
     const role = asNonEmptyString(turn?.role)
-    if (!id || !role) return null
+    if (!id || (role !== 'user' && role !== 'assistant')) return null
     return {
         id,
         role,
@@ -111,6 +111,46 @@ export function applyRealtimeTranscriptEvent(
             text,
             final: true
         }]
+    }
+
+    const item = asRecord(payload?.item)
+    const itemId = asNonEmptyString(item?.id)
+        || asNonEmptyString(payload?.item_id)
+        || asNonEmptyString(payload?.turn_id)
+    const explicitRole = asNonEmptyString(item?.role) || asNonEmptyString(payload?.role)
+    if (type === 'conversation.item.created' && itemId && (explicitRole === 'user' || explicitRole === 'assistant')) {
+        if (entries.some((entry) => entry.id === itemId)) return entries
+        return [...entries, { id: itemId, role: explicitRole, text: '', final: false }]
+    }
+    if (!itemId) return entries
+    const role = explicitRole === 'user' || type?.includes('input_audio_transcription')
+        ? 'user'
+        : 'assistant'
+    const delta = typeof payload?.delta === 'string' ? payload.delta : ''
+    if (type?.endsWith('.transcript.delta')
+        || type?.endsWith('.audio_transcript.delta')
+        || type?.endsWith('.input_audio_transcription.delta')) {
+        if (!delta) return entries
+        const existing = entries.find((entry) => entry.id === itemId)
+        if (!existing) return [...entries, { id: itemId, role, text: delta.trimStart(), final: false }]
+        return updateEntry(entries, itemId, (entry) => entry.final ? entry : {
+            ...entry,
+            role,
+            text: entry.text ? `${entry.text}${delta}` : delta.trimStart()
+        })
+    }
+    if (type?.endsWith('.transcript.done')
+        || type?.endsWith('.audio_transcript.done')
+        || type?.endsWith('.input_audio_transcription.completed')) {
+        const text = String(payload?.transcript ?? payload?.text ?? '').trim()
+        const existing = entries.find((entry) => entry.id === itemId)
+        if (!existing) return text ? [...entries, { id: itemId, role, text, final: true }] : entries
+        return updateEntry(entries, itemId, (entry) => ({
+            ...entry,
+            role,
+            text: text || entry.text,
+            final: true
+        }))
     }
 
     return entries
