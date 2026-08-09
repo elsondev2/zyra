@@ -2,7 +2,7 @@
 
 **Branch:** `feat/v1-voice-core`
 
-**Worktree:** `C:\Users\elson\my_coding_play\zyra\.zyra-worktrees\v1-voice-core`
+**Worktree:** `.zyra-worktrees/v1-voice-core`
 
 **Shared baseline:** `f51e33e` (`work/overnight-baseline-20260809`)
 

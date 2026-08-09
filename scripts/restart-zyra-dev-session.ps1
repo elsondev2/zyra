@@ -3,16 +3,16 @@
 Fully restarts the local Zyra dev stack, opens Desktop dev, and resumes the selected TUI chat.
 
 .EXAMPLE
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\restart-zyra-dev-session.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\restart-zyra-dev-session.ps1 -SessionId '<session-id>'
 
 .EXAMPLE
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\restart-zyra-dev-session.ps1 -DryRun
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\restart-zyra-dev-session.ps1 -SessionId '<session-id>' -DryRun
 #>
 [CmdletBinding()]
 param(
     [string]$RepoRoot = '',
-    [string]$SessionId = '019fc9fc-8662-7d04-b89a-75d67688370c',
-    [string]$ProjectPath = 'C:\Users\elson',
+    [string]$SessionId = '',
+    [string]$ProjectPath = $HOME,
     [switch]$DryRun
 )
 
@@ -122,6 +122,9 @@ if (-not (Test-Path -LiteralPath $cliPath -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $desktopPackage -PathType Leaf)) {
     throw "Desktop package was not found: $desktopPackage"
+}
+if (-not $SessionId) {
+    throw 'SessionId is required. Pass the local chat session to resume with -SessionId.'
 }
 if ($SessionId -notmatch '^[0-9a-fA-F-]{36}$') {
     throw "Invalid Zyra session ID: $SessionId"
