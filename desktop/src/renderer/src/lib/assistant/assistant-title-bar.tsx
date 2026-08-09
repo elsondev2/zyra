@@ -18,16 +18,20 @@ type AssistantTitleBarEndRegistration = AssistantTitleBarRegistration & {
     open: boolean
 }
 
-type AssistantTitleBarContextValue = {
+type AssistantTitleBarStateContextValue = {
     content: ReactNode
     endRegion: { content: ReactNode; open: boolean } | null
+}
+
+type AssistantTitleBarPublicationContextValue = {
     publish: (owner: symbol, content: ReactNode) => void
     clear: (owner: symbol) => void
     publishEnd: (owner: symbol, content: ReactNode, open: boolean) => void
     clearEnd: (owner: symbol) => void
 }
 
-const AssistantTitleBarContext = createContext<AssistantTitleBarContextValue | null>(null)
+const AssistantTitleBarStateContext = createContext<AssistantTitleBarStateContextValue | null>(null)
+const AssistantTitleBarPublicationContext = createContext<AssistantTitleBarPublicationContextValue | null>(null)
 
 export function AssistantTitleBarProvider({ children }: { children: ReactNode }) {
     const [registration, setRegistration] = useState<AssistantTitleBarRegistration | null>(null)
@@ -53,34 +57,38 @@ export function AssistantTitleBarProvider({ children }: { children: ReactNode })
         setEndRegistration((current) => current?.owner === owner ? null : current)
     }, [])
 
-    const value = useMemo<AssistantTitleBarContextValue>(() => ({
+    const state = useMemo<AssistantTitleBarStateContextValue>(() => ({
         content: registration?.content || null,
         endRegion: endRegistration
             ? { content: endRegistration.content, open: endRegistration.open }
-            : null,
+            : null
+    }), [endRegistration, registration])
+    const publication = useMemo<AssistantTitleBarPublicationContextValue>(() => ({
         publish,
         clear,
         publishEnd,
         clearEnd
-    }), [clear, clearEnd, endRegistration, publish, publishEnd, registration])
+    }), [clear, clearEnd, publish, publishEnd])
 
     return (
-        <AssistantTitleBarContext.Provider value={value}>
-            {children}
-        </AssistantTitleBarContext.Provider>
+        <AssistantTitleBarPublicationContext.Provider value={publication}>
+            <AssistantTitleBarStateContext.Provider value={state}>
+                {children}
+            </AssistantTitleBarStateContext.Provider>
+        </AssistantTitleBarPublicationContext.Provider>
     )
 }
 
 export function useAssistantTitleBarContent(): ReactNode {
-    return useContext(AssistantTitleBarContext)?.content || null
+    return useContext(AssistantTitleBarStateContext)?.content || null
 }
 
 export function useAssistantTitleBarEndRegion(): { content: ReactNode; open: boolean } | null {
-    return useContext(AssistantTitleBarContext)?.endRegion || null
+    return useContext(AssistantTitleBarStateContext)?.endRegion || null
 }
 
 export function usePublishAssistantTitleBarContent(content: ReactNode): void {
-    const context = useContext(AssistantTitleBarContext)
+    const context = useContext(AssistantTitleBarPublicationContext)
     const ownerRef = useRef(Symbol('assistant-title-bar'))
     const publish = context?.publish
     const clear = context?.clear
@@ -95,7 +103,7 @@ export function usePublishAssistantTitleBarContent(content: ReactNode): void {
 }
 
 export function usePublishAssistantTitleBarEndRegion(content: ReactNode, open: boolean): void {
-    const context = useContext(AssistantTitleBarContext)
+    const context = useContext(AssistantTitleBarPublicationContext)
     const ownerRef = useRef(Symbol('assistant-title-bar-end'))
     const publishEnd = context?.publishEnd
     const clearEnd = context?.clearEnd

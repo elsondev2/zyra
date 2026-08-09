@@ -54,4 +54,28 @@ const titleBarSource = readFileSync(new URL('../src/renderer/src/components/layo
 assert.equal(titleBarSource.includes('resolveStoredAssistantLeftSidebarWidth'), true, 'title bar and sidebar start with the same persisted width')
 assert.equal(titleBarSource.includes('useState(settings.sidebarCollapsed)'), true, 'title bar and sidebar start with the same collapsed state')
 
+const titleBarBridgeSource = readFileSync(new URL('../src/renderer/src/lib/assistant/assistant-title-bar.tsx', import.meta.url), 'utf8')
+assert.equal(
+    titleBarBridgeSource.includes('AssistantTitleBarPublicationContext'),
+    true,
+    'title-bar publishers must use a publication-only context so their own updates cannot trigger a render loop'
+)
+const contentPublisherSource = titleBarBridgeSource.slice(
+    titleBarBridgeSource.indexOf('export function usePublishAssistantTitleBarContent'),
+    titleBarBridgeSource.indexOf('export function usePublishAssistantTitleBarEndRegion')
+)
+assert.equal(
+    contentPublisherSource.includes('useContext(AssistantTitleBarPublicationContext)'),
+    true,
+    'the title-bar content publisher must not subscribe to published title-bar state'
+)
+const endRegionPublisherSource = titleBarBridgeSource.slice(
+    titleBarBridgeSource.indexOf('export function usePublishAssistantTitleBarEndRegion')
+)
+assert.equal(
+    endRegionPublisherSource.includes('useContext(AssistantTitleBarPublicationContext)'),
+    true,
+    'the title-bar end-region publisher must not subscribe to published title-bar state'
+)
+
 console.log('Assistant immediate shell startup: ok')
