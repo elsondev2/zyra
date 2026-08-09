@@ -22,7 +22,8 @@ Status words used below:
 - [Agent server](architecture/agent-server.md) — **Current.** Shared server authority, persistence, and client flow.
 - [Canonical chat integrity](architecture/canonical-chat-integrity.md) — **Current.** Cross-client identity, indexed history, metadata, recovery, and migration safety.
 - [Agent surfaces](architecture/agent-surface.md) — **Current.** Desktop/TUI semantic projection boundaries.
-- [Assistant browser](architecture/assistant-browser.md) — **Current.** Browser ownership and visual-control architecture.
+- [Assistant browser](architecture/assistant-browser.md) — **Current.** Integrated Electron Browser ownership and visual-control architecture.
+- [Local browser client](architecture/local-browser-client.md) — **Current.** Same-device Chrome runtime, transport, security, and capability boundary.
 - [Assistant resources](architecture/assistant-resources.md) — **Current.** Resource indexing and presentation ownership.
 - [Desktop theme contract](architecture/desktop-theme-contract.md) — **Current.** Shared shell surfaces, accessible palette resolution, specialized renderers, and validation.
 - [Voice-agent architecture](architecture/voice-agent/README.md) — **Draft.** Normative Phase One Chat/Voice authority, provider, continuity, and delivery contracts, plus optional Phase Two sequencing.
@@ -36,6 +37,7 @@ Status words used below:
 
 ## Handoffs
 
+- [V1 local browser client](handoffs/2026-08-09-jake-v1-local-browser.md) — **Current.** Jake’s same-device browser branch merge and validation record.
 - [Agent-platform integration](handoffs/agent-platform-integration.md) — **Historical.** Integration checkpoint merged into the main line.
 - [Browser/computer use](handoffs/browser-computer-use.md) — **Historical.** Builder transfer record.
 - [Chat performance](handoffs/chat-performance.md) — **Historical.** End-to-end performance implementation handoff.

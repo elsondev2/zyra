@@ -4,6 +4,8 @@ export const BROWSER_ASSISTANT_BRIDGE_PORT_CANDIDATES = Array.from(
     { length: 10 },
     (_value, index) => BROWSER_ASSISTANT_BRIDGE_PORT + index
 )
+export const BROWSER_CLIENT_HOST_PORT = 47_821
+export const BROWSER_CLIENT_HOST_ORIGIN = `http://${BROWSER_ASSISTANT_BRIDGE_HOST}:${BROWSER_CLIENT_HOST_PORT}`
 export const BROWSER_ASSISTANT_BRIDGE_HEADER = 'x-zyra-browser-client'
 export const BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE = 'assistant-v1'
 export const BROWSER_ASSISTANT_BRIDGE_CAPABILITY_HEADER = 'x-zyra-browser-capability'
@@ -12,8 +14,12 @@ export const BROWSER_ASSISTANT_BRIDGE_DESCRIPTOR_NAME = 'browser-assistant-bridg
 export const BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH = '/v1/assistant/invoke'
 export const BROWSER_ASSISTANT_BRIDGE_EVENTS_PATH = '/v1/assistant/events'
 export const BROWSER_DEVSCOPE_BRIDGE_INVOKE_PATH = '/v1/devscope/invoke'
+export const BROWSER_DEVSCOPE_BRIDGE_EVENTS_PATH = '/v1/devscope/events'
+export const BROWSER_FILE_BRIDGE_PATH = '/v1/files/content'
 export const BROWSER_DEVSCOPE_RELAY_REQUEST_CHANNEL = 'zyra:browser-devscope:request'
 export const BROWSER_DEVSCOPE_RELAY_RESPONSE_CHANNEL = 'zyra:browser-devscope:response'
+export const BROWSER_DEVSCOPE_RELAY_EVENT_CHANNEL = 'zyra:browser-devscope:event'
+export const BROWSER_DEVSCOPE_RELAY_READY_CHANNEL = 'zyra:browser-devscope:ready'
 export const BROWSER_ASSISTANT_BRIDGE_HEALTH_PATH = '/v1/health'
 
 export const BROWSER_ASSISTANT_BRIDGE_METHODS = [
@@ -84,6 +90,44 @@ export type BrowserDevscopeRelayResponse = {
     ok: boolean
     value?: unknown
     error?: string
+}
+
+export const BROWSER_DEVSCOPE_EVENT_NAMES = [
+    'agentControlCursor',
+    'agentControlState',
+    'gitCloneProgress',
+    'previewTerminal',
+    'pythonPreview'
+] as const
+
+export type BrowserDevscopeEventName = typeof BROWSER_DEVSCOPE_EVENT_NAMES[number]
+
+export type BrowserDevscopeRelayEvent = {
+    event: BrowserDevscopeEventName
+    payload: unknown
+}
+
+export type BrowserDevscopeStreamEvent = BrowserDevscopeRelayEvent & {
+    streamId: string
+    sequence: number
+}
+
+export function isBrowserDevscopeRelayEvent(value: unknown): value is BrowserDevscopeRelayEvent {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+    const candidate = value as Partial<BrowserDevscopeRelayEvent>
+    return typeof candidate.event === 'string'
+        && (BROWSER_DEVSCOPE_EVENT_NAMES as readonly string[]).includes(candidate.event)
+        && Object.prototype.hasOwnProperty.call(candidate, 'payload')
+}
+
+export function isBrowserDevscopeStreamEvent(value: unknown): value is BrowserDevscopeStreamEvent {
+    if (!isBrowserDevscopeRelayEvent(value)) return false
+    const candidate = value as Partial<BrowserDevscopeStreamEvent>
+    return typeof candidate.streamId === 'string'
+        && candidate.streamId.length > 0
+        && candidate.streamId.length <= 128
+        && Number.isSafeInteger(candidate.sequence)
+        && Number(candidate.sequence) > 0
 }
 
 export type BrowserAssistantBridgeInvokeRequest = {

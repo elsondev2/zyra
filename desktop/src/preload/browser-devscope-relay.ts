@@ -1,9 +1,13 @@
 import { ipcRenderer } from 'electron'
 import type { DevScopeApi } from '../shared/contracts/devscope-api'
 import {
+    BROWSER_DEVSCOPE_RELAY_EVENT_CHANNEL,
+    BROWSER_DEVSCOPE_RELAY_READY_CHANNEL,
     BROWSER_DEVSCOPE_RELAY_REQUEST_CHANNEL,
     BROWSER_DEVSCOPE_RELAY_RESPONSE_CHANNEL,
     isBrowserDevscopeBridgePath,
+    type BrowserDevscopeEventName,
+    type BrowserDevscopeRelayEvent,
     type BrowserDevscopeRelayRequest,
     type BrowserDevscopeRelayResponse
 } from '../shared/browser-assistant-bridge'
@@ -13,6 +17,25 @@ function sendResponse(response: BrowserDevscopeRelayResponse): void {
 }
 
 export function installBrowserDevscopeRelay(devscope: DevScopeApi): void {
+    const relayEvent = (event: BrowserDevscopeEventName, payload: unknown) => {
+        const message: BrowserDevscopeRelayEvent = { event, payload }
+        ipcRenderer.send(BROWSER_DEVSCOPE_RELAY_EVENT_CHANNEL, message)
+    }
+    const eventSubscriptions: Array<() => () => void> = [
+        () => devscope.agentControl.onCursorChange((payload) => relayEvent('agentControlCursor', payload)),
+        () => devscope.agentControl.onStateChange((payload) => relayEvent('agentControlState', payload)),
+        () => devscope.onGitCloneProgress((payload) => relayEvent('gitCloneProgress', payload)),
+        () => devscope.onPreviewTerminalEvent((payload) => relayEvent('previewTerminal', payload)),
+        () => devscope.onPythonPreviewEvent((payload) => relayEvent('pythonPreview', payload))
+    ]
+    for (const subscribe of eventSubscriptions) {
+        try {
+            subscribe()
+        } catch {
+            // Browser event forwarding is optional until the owning IPC handler is registered.
+        }
+    }
+
     ipcRenderer.on(BROWSER_DEVSCOPE_RELAY_REQUEST_CHANNEL, (_event, request: BrowserDevscopeRelayRequest) => {
         if (!request || typeof request.requestId !== 'string' || !isBrowserDevscopeBridgePath(request.path) || !Array.isArray(request.args)) {
             if (request && typeof request.requestId === 'string') {
@@ -49,4 +72,5 @@ export function installBrowserDevscopeRelay(devscope: DevScopeApi): void {
             })
         })
     })
+    ipcRenderer.send(BROWSER_DEVSCOPE_RELAY_READY_CHANNEL)
 }

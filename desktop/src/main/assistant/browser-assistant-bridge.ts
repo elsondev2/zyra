@@ -13,14 +13,17 @@ import {
     BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH,
     BROWSER_ASSISTANT_BRIDGE_PORT,
     BROWSER_ASSISTANT_BRIDGE_PORT_CANDIDATES,
+    BROWSER_DEVSCOPE_BRIDGE_EVENTS_PATH,
     BROWSER_DEVSCOPE_BRIDGE_INVOKE_PATH,
+    BROWSER_FILE_BRIDGE_PATH,
     isBrowserAssistantBridgeMethod,
     isBrowserDevscopeBridgePath,
     type BrowserAssistantBridgeDescriptor,
     type BrowserAssistantBridgeInvokeRequest,
     type BrowserAssistantBridgeInvokeResponse,
     type BrowserAssistantBridgeMethod,
-    type BrowserDevscopeBridgeInvokeRequest
+    type BrowserDevscopeBridgeInvokeRequest,
+    type BrowserDevscopeRelayEvent
 } from '../../shared/browser-assistant-bridge'
 import type {
     AssistantEventStreamPayload,
@@ -28,6 +31,8 @@ import type {
     AssistantTranscribeVoiceInput,
     AssistantVoiceTranscriptionState
 } from '../../shared/assistant/contracts'
+import { serveBrowserFileContent } from '../browser-file-content'
+import { BrowserDevscopeEventStream } from '../browser-devscope-event-stream'
 import type { AssistantService } from './service'
 
 const MAX_REQUEST_BYTES = 32 * 1024 * 1024
@@ -41,6 +46,7 @@ type BrowserAssistantBridgeDependencies = {
     capability: string
     descriptorPath?: string
     invokeDevscope: (path: string[], args: unknown[]) => Promise<unknown>
+    subscribeDevscopeEvents: (listener: (event: BrowserDevscopeRelayEvent) => void) => () => void
     onAssistantClientCountChanged?: (count: number) => void
     host?: string
     port?: number
@@ -53,8 +59,10 @@ type BrowserAssistantBridgeDependencies = {
 export class BrowserAssistantBridge {
     private server: Server | null = null
     private readonly eventResponses = new Set<ServerResponse>()
+    private readonly devscopeEventStream = new BrowserDevscopeEventStream()
     private heartbeatTimer: NodeJS.Timeout | null = null
     private unsubscribeAssistantEvents: (() => void) | null = null
+    private unsubscribeDevscopeEvents: (() => void) | null = null
 
     constructor(private readonly dependencies: BrowserAssistantBridgeDependencies) {}
 
@@ -74,12 +82,16 @@ export class BrowserAssistantBridge {
         this.unsubscribeAssistantEvents = this.dependencies.service.subscribeExternalEvents((payload) => {
             this.broadcastEvent(payload)
         })
+        this.unsubscribeDevscopeEvents = this.dependencies.subscribeDevscopeEvents((event) => {
+            this.devscopeEventStream.broadcast(event)
+        })
         this.heartbeatTimer = setInterval(() => {
             for (const response of [...this.eventResponses]) {
                 if (response.write(': heartbeat\n\n')) continue
                 this.removeEventResponse(response)
                 response.end()
             }
+            this.devscopeEventStream.heartbeat()
         }, EVENT_HEARTBEAT_MS)
         this.heartbeatTimer.unref?.()
 
@@ -122,6 +134,7 @@ export class BrowserAssistantBridge {
         await this.removeDescriptor()
         for (const response of [...this.eventResponses]) response.end()
         this.eventResponses.clear()
+        this.devscopeEventStream.stop()
         this.dependencies.onAssistantClientCountChanged?.(0)
         if (!server) return
         await new Promise<void>((resolve) => server.close(() => resolve()))
@@ -157,6 +170,8 @@ export class BrowserAssistantBridge {
     private cleanupSubscriptions(): void {
         this.unsubscribeAssistantEvents?.()
         this.unsubscribeAssistantEvents = null
+        this.unsubscribeDevscopeEvents?.()
+        this.unsubscribeDevscopeEvents = null
         if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
         this.heartbeatTimer = null
     }
@@ -217,12 +232,20 @@ export class BrowserAssistantBridge {
         }
 
         const requestUrl = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)
+        if ((request.method === 'GET' || request.method === 'HEAD') && requestUrl.pathname === BROWSER_FILE_BRIDGE_PATH) {
+            await serveBrowserFileContent(request, response, requestUrl)
+            return
+        }
         if (request.method === 'GET' && requestUrl.pathname === BROWSER_ASSISTANT_BRIDGE_HEALTH_PATH) {
             this.writeJson(response, 200, { ok: true, service: 'zyra-browser-assistant', version: 1 })
             return
         }
         if (request.method === 'GET' && requestUrl.pathname === BROWSER_ASSISTANT_BRIDGE_EVENTS_PATH) {
             this.openEventStream(request, response)
+            return
+        }
+        if (request.method === 'GET' && requestUrl.pathname === BROWSER_DEVSCOPE_BRIDGE_EVENTS_PATH) {
+            this.devscopeEventStream.open(request, response)
             return
         }
         if (request.method === 'POST' && requestUrl.pathname === BROWSER_DEVSCOPE_BRIDGE_INVOKE_PATH) {
