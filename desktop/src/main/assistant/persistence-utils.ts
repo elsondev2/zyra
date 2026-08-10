@@ -168,6 +168,8 @@ export function initializeAssistantPersistenceSchema(db: SqlDatabase): void {
             turn_id TEXT,
             streaming INTEGER NOT NULL,
             timeline_sequence INTEGER,
+            provider_item_id TEXT,
+            modality TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY(thread_id) REFERENCES assistant_threads(id) ON DELETE CASCADE
@@ -319,6 +321,8 @@ export function initializeAssistantPersistenceSchema(db: SqlDatabase): void {
     ensureTableColumn(db, 'assistant_threads', 'profile', 'TEXT')
     ensureTableColumn(db, 'assistant_threads', 'canonical_presence_json', 'TEXT')
     ensureTableColumn(db, 'assistant_messages', 'timeline_sequence', 'INTEGER')
+    ensureTableColumn(db, 'assistant_messages', 'provider_item_id', 'TEXT')
+    ensureTableColumn(db, 'assistant_messages', 'modality', 'TEXT')
     ensureTableColumn(db, 'assistant_activities', 'timeline_sequence', 'INTEGER')
     ensureTableColumn(db, 'assistant_proposed_plans', 'timeline_sequence', 'INTEGER')
     db.run(`

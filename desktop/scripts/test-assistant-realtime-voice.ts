@@ -21,11 +21,17 @@ import { shouldShowComposerRealtimeVoicePrimaryAction } from '../src/renderer/sr
 import { filterVoiceHydrationReplay } from '../src/renderer/src/pages/assistant/assistant-voice-hydration-replay'
 import { projectVoiceLiveTimelineMessages } from '../src/renderer/src/pages/assistant/assistant-voice-live-timeline'
 import {
+    buildRecoveredRealtimeUserTranscript,
+    readCompletedRealtimeUserTranscriptId,
+    readRealtimeInputSpeechBoundary
+} from '../src/renderer/src/pages/assistant/assistant-realtime-input-recovery'
+import {
     getAssistantTimelineMessageEntryId,
     getTimelineEntries
 } from '../src/renderer/src/pages/assistant/assistant-timeline-helpers'
 import { shouldDelegateVoiceInspection } from '../src/main/assistant/voice/voice-strong-routing'
 import { buildVoiceStrongTaskActivity } from '../src/main/assistant/voice/voice-strong-task-activity'
+import { normalizeWebRtcTranscriptEvent } from '../src/main/assistant/voice/codex-realtime-foreground-adapter'
 import {
     normalizeInstructorVoicePreferences,
     readInstructorVoicePreferences,
@@ -367,6 +373,32 @@ assert.equal(shouldDelegateVoiceInspection("What's the storage left on my PC if 
 assert.equal(shouldDelegateVoiceInspection('What are you able to do here?'), false)
 assert.equal(shouldDelegateVoiceInspection('Checking on what?'), false)
 assert.equal(shouldDelegateVoiceInspection('Run the build and fix the file if it fails'), true)
+assert.deepEqual(readRealtimeInputSpeechBoundary({
+    type: 'input_audio_buffer.speech_started',
+    item_id: 'user-speech-item'
+}), { kind: 'started', providerItemId: 'user-speech-item' })
+assert.deepEqual(readRealtimeInputSpeechBoundary({
+    type: 'input_audio_buffer.speech_stopped',
+    item_id: 'user-speech-item'
+}), { kind: 'stopped', providerItemId: 'user-speech-item' })
+assert.equal(readCompletedRealtimeUserTranscriptId({
+    type: 'conversation.item.input_audio_transcription.completed',
+    item_id: 'user-speech-item',
+    transcript: 'Recovered speech.'
+}), 'user-speech-item')
+const recoveredUserTranscript = buildRecoveredRealtimeUserTranscript('user-speech-item', ' Recovered speech. ')
+assert.deepEqual(recoveredUserTranscript, {
+    type: 'zyra.input_audio_transcription.completed',
+    item_id: 'user-speech-item',
+    role: 'user',
+    transcript: 'Recovered speech.'
+})
+assert.deepEqual(normalizeWebRtcTranscriptEvent(recoveredUserTranscript), {
+    kind: 'completed',
+    role: 'user',
+    providerItemId: 'user-speech-item',
+    text: 'Recovered speech.'
+}, 'a locally recovered speech segment must cross the same identity-bearing canonical commit boundary')
 
 const voiceTaskStartedAt = '2026-08-10T10:00:00.000Z'
 const runningVoiceTaskActivity = buildVoiceStrongTaskActivity({
@@ -478,6 +510,18 @@ assert.equal(projectVoiceLiveTimelineMessages({
     canonicalMessages: [...canonicalBeforeVoice, committedVoiceMessage],
     voiceStartedAt: '2026-08-10T10:00:00.000Z'
 }).messages.length, 0, 'the live row must disappear as soon as its canonical provider item is projected')
+const canonicalWithoutProviderIdentity: AssistantMessage = {
+    ...committedVoiceMessage,
+    id: 'persisted-voice-without-provider-identity',
+    providerItemId: undefined,
+    createdAt: '2026-08-10T10:00:08.000Z',
+    updatedAt: '2026-08-10T10:00:08.000Z'
+}
+assert.equal(projectVoiceLiveTimelineMessages({
+    transcript: [{ id: 'live-user-item', role: 'user', text: committedVoiceMessage.text, final: true }],
+    canonicalMessages: [...canonicalBeforeVoice, canonicalWithoutProviderIdentity],
+    voiceStartedAt: '2026-08-10T10:00:00.000Z'
+}).messages.length, 0, 'an exact finalized transcript must not duplicate a canonical Voice row when legacy hydration lost provider metadata')
 
 const preferenceStorage = new Map<string, string>()
 const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')

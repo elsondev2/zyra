@@ -164,8 +164,9 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
             }
         }
 
-        const activeUserMessage = userIndex >= 0 && rows[userIndex]?.kind === 'message'
-            ? rows[userIndex].message
+        const activeUserRow = userIndex >= 0 ? rows[userIndex] : null
+        const activeUserMessage = activeUserRow?.kind === 'message'
+            ? activeUserRow.message
             : null
         if (userIndex >= 0 && activeUserMessage && !isVoiceConversationMessage(activeUserMessage)) {
             let endIndex = rows.length - 1
@@ -253,7 +254,8 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
             break
         }
         if (userIndex < 0 || finalIndex - userIndex <= 1) continue
-        const userMessage = rows[userIndex]?.kind === 'message' ? rows[userIndex].message : null
+        const matchedUserRow = rows[userIndex]
+        const userMessage = matchedUserRow?.kind === 'message' ? matchedUserRow.message : null
         if (userMessage && isVoiceConversationMessage(userMessage)) continue
 
         const workRows = rows.slice(userIndex + 1, finalIndex)

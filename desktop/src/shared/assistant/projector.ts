@@ -364,10 +364,16 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
                     const completedText = typeof event.payload['text'] === 'string'
                         ? event.payload['text'] as string
                         : existing.text
+                    const completedMessage = event.payload['message'] as AssistantMessage | undefined
+                    const canonicalCompletion = completedMessage?.id === messageId ? completedMessage : null
                     writable.thread.messages = upsertMessage(writable.thread.messages, {
                         ...existing,
+                        ...(canonicalCompletion || {}),
+                        id: messageId,
                         text: completedText,
                         streaming: false,
+                        timelineSequence: canonicalCompletion?.timelineSequence ?? existing.timelineSequence,
+                        createdAt: canonicalCompletion?.createdAt || existing.createdAt,
                         updatedAt: event.occurredAt
                     })
                 }

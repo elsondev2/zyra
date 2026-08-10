@@ -137,6 +137,16 @@ type ActiveCanonicalVoice = {
     adapterSessionId: string
 }
 
+type CompletedRealtimeUserTranscriptEvent = Extract<RealtimeDomainEvent, { text: string }> & {
+    type: 'realtime.user.transcript.completed'
+}
+
+function isCompletedRealtimeUserTranscriptEvent(
+    event: RealtimeDomainEvent
+): event is CompletedRealtimeUserTranscriptEvent {
+    return event.type === 'realtime.user.transcript.completed'
+}
+
 type ActiveVoiceStrongTask = {
     taskId: string
     conversationId: string
@@ -178,7 +188,7 @@ export class AssistantService {
     private canonicalVoiceStopPromise: Promise<void> | null = null
     private readonly voiceTransitioningThreadIds = new Set<string>()
     private readonly activeVoiceStrongTasks = new Map<string, ActiveVoiceStrongTask>()
-    private readonly queuedVoiceStrongRequests = new Map<string, Array<Extract<RealtimeDomainEvent, { type: 'realtime.user.transcript.completed' }>>>()
+    private readonly queuedVoiceStrongRequests = new Map<string, CompletedRealtimeUserTranscriptEvent[]>()
     private readonly delegatedVoiceProviderItems = new Set<string>()
     private readonly fleetProjection = new FleetProjection()
     private readonly assistantTextDeltaBuffer = new AssistantTextDeltaBuffer({
@@ -954,7 +964,7 @@ export class AssistantService {
     private handleCanonicalVoiceEvent(event: RealtimeDomainEvent): void {
         const legacy = canonicalVoicePresentationEvent(event)
         if (legacy) broadcastAssistantRealtimeVoiceEvent(this.realtimeVoiceSubscribers, legacy)
-        if (event.type === 'realtime.user.transcript.completed' && shouldDelegateVoiceInspection(event.text)) {
+        if (isCompletedRealtimeUserTranscriptEvent(event) && shouldDelegateVoiceInspection(event.text)) {
             const sourceKey = `${event.adapterSessionId}:${event.providerItemId}`
             if (this.delegatedVoiceProviderItems.has(sourceKey)) return
             this.delegatedVoiceProviderItems.add(sourceKey)
@@ -976,7 +986,7 @@ export class AssistantService {
     }
 
     private async startVoiceStrongInspection(
-        event: Extract<RealtimeDomainEvent, { type: 'realtime.user.transcript.completed' }>
+        event: CompletedRealtimeUserTranscriptEvent
     ): Promise<void> {
         const active = this.activeCanonicalVoice
         if (!active

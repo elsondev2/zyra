@@ -145,7 +145,7 @@ function readThreadDetails(db: SqlDatabase, threadId: string): AssistantHydrated
     return {
         activePlan: parseJson(activePlanRow?.[0] ?? null, null),
         messages: readThreadRows<AssistantMessage>(db, 'assistant_messages', threadId, [
-            'id', 'role', 'text', 'turn_id', 'streaming', 'timeline_sequence', 'created_at', 'updated_at'
+            'id', 'role', 'text', 'turn_id', 'streaming', 'timeline_sequence', 'created_at', 'updated_at', 'provider_item_id', 'modality'
         ], (row) => ({
             id: String(row[0] || ''),
             role: String(row[1] || 'assistant') as AssistantMessage['role'],
@@ -154,7 +154,9 @@ function readThreadDetails(db: SqlDatabase, threadId: string): AssistantHydrated
             streaming: toNumber(row[4]) === 1,
             timelineSequence: typeof row[5] === 'number' ? row[5] : undefined,
             createdAt: String(row[6] || new Date(0).toISOString()),
-            updatedAt: String(row[7] || new Date(0).toISOString())
+            updatedAt: String(row[7] || new Date(0).toISOString()),
+            providerItemId: toNullableString(row[8]) || undefined,
+            modality: (toNullableString(row[9]) || undefined) as AssistantMessage['modality']
         })),
         proposedPlans: readThreadRows<AssistantProposedPlan>(db, 'assistant_proposed_plans', threadId, [
             'id', 'turn_id', 'plan_markdown', 'timeline_sequence', 'created_at', 'updated_at'

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import initSqlJs from 'sql.js/dist/sql-asm.js'
 import type { AssistantActivity, AssistantDomainEvent, AssistantMessage, AssistantSession, AssistantThread } from '../src/shared/assistant/contracts'
 import { initializeAssistantPersistenceSchema } from '../src/main/assistant/persistence-utils'
+import { readAssistantTimelineProjectionRows } from '../src/main/assistant/persistence-read'
 import { persistAssistantEvent, replaceAssistantSnapshot } from '../src/main/assistant/persistence-write'
 import { createDefaultSnapshot } from '../src/main/assistant/projector'
 import { applyAssistantDomainEvent } from '../src/shared/assistant/projector'
@@ -22,6 +23,8 @@ const currentMessage: AssistantMessage = {
     text: 'Keep this current response.',
     turnId: 'turn-current',
     streaming: false,
+    providerItemId: 'voice-provider-current',
+    modality: 'voice',
     createdAt: '2026-07-15T12:01:00.000Z',
     updatedAt: '2026-07-15T12:01:00.000Z'
 }
@@ -91,6 +94,54 @@ const SQL = await initSqlJs()
 const db = new SQL.Database()
 initializeAssistantPersistenceSchema(db)
 replaceAssistantSnapshot(db, snapshot)
+const persistedVoiceMessage = readAssistantTimelineProjectionRows(db, thread.id).messages.find((message) => message.id === currentMessage.id)
+assert.equal(persistedVoiceMessage?.providerItemId, currentMessage.providerItemId, 'Voice provider identity must survive Assistant SQLite hydration')
+assert.equal(persistedVoiceMessage?.modality, 'voice', 'Voice modality must survive Assistant SQLite hydration')
+
+const streamingVoiceMessageId = 'voice_assistant_projector_handoff'
+const streamingVoiceDeltaEvent: AssistantDomainEvent = {
+    sequence: 10,
+    eventId: 'event-voice-assistant-delta',
+    type: 'thread.message.assistant.delta',
+    occurredAt: '2026-07-15T12:02:00.000Z',
+    sessionId: session.id,
+    threadId: thread.id,
+    payload: {
+        threadId: thread.id,
+        messageId: streamingVoiceMessageId,
+        delta: 'Streaming Voice answer.',
+        turnId: null
+    }
+}
+const streamingVoiceCompletedEvent: AssistantDomainEvent = {
+    sequence: 11,
+    eventId: 'event-voice-assistant-completed',
+    type: 'thread.message.assistant.completed',
+    occurredAt: '2026-07-15T12:02:01.000Z',
+    sessionId: session.id,
+    threadId: thread.id,
+    payload: {
+        threadId: thread.id,
+        messageId: streamingVoiceMessageId,
+        text: 'Streaming Voice answer.',
+        message: {
+            id: streamingVoiceMessageId,
+            role: 'assistant',
+            text: 'Streaming Voice answer.',
+            turnId: null,
+            streaming: false,
+            providerItemId: 'voice-provider-projector-handoff',
+            modality: 'voice',
+            createdAt: streamingVoiceDeltaEvent.occurredAt,
+            updatedAt: '2026-07-15T12:02:01.000Z'
+        }
+    }
+}
+const projectedVoiceDelta = applyAssistantDomainEvent(snapshot, streamingVoiceDeltaEvent)
+const projectedVoiceCompletion = applyAssistantDomainEvent(projectedVoiceDelta, streamingVoiceCompletedEvent)
+const projectedVoiceMessage = projectedVoiceCompletion.sessions[0]?.threads[0]?.messages.find((message) => message.id === streamingVoiceMessageId)
+assert.equal(projectedVoiceMessage?.providerItemId, 'voice-provider-projector-handoff', 'the canonical completion must transfer provider identity onto its existing streaming row')
+assert.equal(projectedVoiceMessage?.modality, 'voice', 'the canonical completion must transfer Voice modality onto its existing streaming row')
 
 const partialThread: AssistantThread = {
     ...thread,

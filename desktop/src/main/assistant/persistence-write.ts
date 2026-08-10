@@ -447,8 +447,8 @@ function deleteAssistantTurns(db: SqlDatabase, turnIds: string[]): void {
 
 function upsertAssistantMessage(db: SqlDatabase, threadId: string, message: AssistantMessage): void {
     db.run(`
-        INSERT INTO assistant_messages (id, thread_id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO assistant_messages (id, thread_id, role, text, turn_id, streaming, timeline_sequence, provider_item_id, modality, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             thread_id = excluded.thread_id,
             role = excluded.role,
@@ -456,9 +456,23 @@ function upsertAssistantMessage(db: SqlDatabase, threadId: string, message: Assi
             turn_id = excluded.turn_id,
             streaming = excluded.streaming,
             timeline_sequence = excluded.timeline_sequence,
+            provider_item_id = COALESCE(excluded.provider_item_id, assistant_messages.provider_item_id),
+            modality = COALESCE(excluded.modality, assistant_messages.modality),
             created_at = excluded.created_at,
             updated_at = excluded.updated_at
-    `, [message.id, threadId, message.role, message.text, message.turnId, sqlBool(message.streaming), message.timelineSequence ?? null, message.createdAt, message.updatedAt])
+    `, [
+        message.id,
+        threadId,
+        message.role,
+        message.text,
+        message.turnId,
+        sqlBool(message.streaming),
+        message.timelineSequence ?? null,
+        message.providerItemId || null,
+        message.modality || null,
+        message.createdAt,
+        message.updatedAt
+    ])
 }
 
 function updateAssistantThreadMessageCount(db: SqlDatabase, threadId: string): void {

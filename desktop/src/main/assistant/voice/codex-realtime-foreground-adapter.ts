@@ -58,6 +58,7 @@ interface CodexAdapterSession {
     webRtcTurnRoles: Map<string, 'user' | 'assistant'>
     hydrationReplayBudget: Map<string, number>
     suppressedHydrationProviderItemIds: Set<string>
+    completedTranscriptProviderItemIds: Set<string>
 }
 
 export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter {
@@ -101,7 +102,8 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
             closed: false,
             webRtcTurnRoles: new Map(),
             hydrationReplayBudget: createHydrationReplayBudget(input.hydrationSeed.items),
-            suppressedHydrationProviderItemIds: new Set()
+            suppressedHydrationProviderItemIds: new Set(),
+            completedTranscriptProviderItemIds: new Set()
         }
         this.sessions.set(adapterSessionId, session)
         this.currentAdapterSessionId = adapterSessionId
@@ -194,6 +196,7 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
         const session = this.requireCurrentSession(sessionId)
         const event = normalizeWebRtcTranscriptEvent(value, session.webRtcTurnRoles)
         if (event && session.suppressedHydrationProviderItemIds.has(event.providerItemId)) return
+        if (event && session.completedTranscriptProviderItemIds.has(event.providerItemId)) return
         if (event?.kind === 'completed' && consumeHydrationReplay(
             session,
             event.role,
@@ -211,6 +214,7 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
             }
             return
         }
+        if (event.kind === 'completed') session.completedTranscriptProviderItemIds.add(event.providerItemId)
         this.emit({
             ...eventBase(session, this.clock.now()),
             type: `realtime.${event.role}.transcript.${event.kind}`,
@@ -278,6 +282,7 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
         if (event.threadId && event.threadId !== session.handle.realtimeProviderThreadId) return
         if (event.type === 'transcript.delta' || event.type === 'transcript.done') {
             if (event.providerItemId && session.suppressedHydrationProviderItemIds.has(event.providerItemId)) return
+            if (event.providerItemId && session.completedTranscriptProviderItemIds.has(event.providerItemId)) return
             if (event.type === 'transcript.done'
                 && event.providerItemId
                 && consumeHydrationReplay(
@@ -290,6 +295,7 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
             // production Desktop bridge supplies the identity-bearing WebRTC
             // event instead; never guess or commit the flat notification.
             if (!event.providerItemId) return
+            if (event.type === 'transcript.done') session.completedTranscriptProviderItemIds.add(event.providerItemId)
             const role = event.role === 'user' ? 'user' : 'assistant'
             const type = `realtime.${role}.transcript.${event.type === 'transcript.done' ? 'completed' : 'delta'}`
             this.emit({

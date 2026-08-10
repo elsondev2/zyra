@@ -640,6 +640,16 @@ scriptedTransport.emit('event', {
 } satisfies AssistantRealtimeVoiceEvent)
 assert.ok(codexEvents.some((event) => event.type === 'realtime.assistant.transcript.completed'
     && event.providerItemId === 'codex_item_1'))
+const eventCountBeforeDuplicateTranscriptSource = codexEvents.length
+codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
+    type: 'turn.done',
+    turn: { id: 'codex_item_1', role: 'assistant', transcript: 'Understood.' }
+})
+assert.equal(
+    codexEvents.length,
+    eventCountBeforeDuplicateTranscriptSource,
+    'app-server and WebRTC completion paths must converge on one provider item'
+)
 const eventCountBeforeIdentitylessFlatNotification = codexEvents.length
 scriptedTransport.emit('event', {
     type: 'transcript.done',

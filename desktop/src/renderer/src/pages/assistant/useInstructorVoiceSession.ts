@@ -10,6 +10,12 @@ import voiceReadyCueUrl from '../../assets/voice-cues/voice-ready.wav?url'
 import { shouldPlayInstructorAudio } from './instructor-voice-preferences'
 import { calculateInstructorVoiceActivity, smoothInstructorVoiceActivity } from './instructor-voice-activity'
 import { applyRealtimeTranscriptEvent, type InstructorTranscriptEntry } from './instructor-voice-transcript'
+import { createAssistantVoicePayload } from './assistant-voice-recorder'
+import {
+    buildRecoveredRealtimeUserTranscript,
+    readCompletedRealtimeUserTranscriptId,
+    readRealtimeInputSpeechBoundary
+} from './assistant-realtime-input-recovery'
 
 export type InstructorVoiceStatus = 'idle' | 'requesting-microphone' | 'connecting' | 'active' | 'stopping' | 'error'
 
@@ -38,6 +44,16 @@ type CanonicalVoiceBinding = {
 }
 
 const ACTIVITY_UPDATE_INTERVAL_MS = 48
+const REALTIME_INPUT_TRANSCRIPT_FALLBACK_DELAY_MS = 1_500
+const REALTIME_INPUT_CAPTURE_PREROLL_MS = 650
+
+type RealtimeInputCapture = {
+    providerItemId: string
+    chunks: Float32Array[]
+    resolved: boolean
+    recovered: boolean
+    fallbackTimer: number | null
+}
 
 function playVoiceCue(url: string): void {
     const cue = new Audio(url)
@@ -95,6 +111,8 @@ function isCanonicalTranscriptBridgeEvent(payload: Record<string, unknown>): boo
         || type === 'conversation.item.created'
         || type.endsWith('.transcript.delta')
         || type.endsWith('.transcript.done')
+        || type.endsWith('.audio_transcript.delta')
+        || type.endsWith('.audio_transcript.done')
         || type.endsWith('.input_audio_transcription.delta')
         || type.endsWith('.input_audio_transcription.completed')
 }
@@ -123,6 +141,13 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
     const meterContextRef = useRef<AudioContext | null>(null)
     const inputMeterRef = useRef<AudioMeter | null>(null)
     const outputMeterRef = useRef<AudioMeter | null>(null)
+    const inputCaptureProcessorRef = useRef<ScriptProcessorNode | null>(null)
+    const inputCaptureSinkRef = useRef<GainNode | null>(null)
+    const inputCaptureSampleRateRef = useRef(0)
+    const rollingInputChunksRef = useRef<Float32Array[]>([])
+    const rollingInputSampleCountRef = useRef(0)
+    const activeInputCaptureIdRef = useRef<string | null>(null)
+    const inputCapturesRef = useRef(new Map<string, RealtimeInputCapture>())
     const meterFrameRef = useRef<number | null>(null)
     const activityLevelRef = useRef(0)
     const activityUpdatesEnabledRef = useRef(false)
@@ -154,6 +179,21 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
             window.cancelAnimationFrame(meterFrameRef.current)
             meterFrameRef.current = null
         }
+        for (const capture of inputCapturesRef.current.values()) {
+            if (capture.fallbackTimer !== null) window.clearTimeout(capture.fallbackTimer)
+        }
+        inputCapturesRef.current.clear()
+        activeInputCaptureIdRef.current = null
+        rollingInputChunksRef.current = []
+        rollingInputSampleCountRef.current = 0
+        inputCaptureSampleRateRef.current = 0
+        if (inputCaptureProcessorRef.current) {
+            inputCaptureProcessorRef.current.onaudioprocess = null
+            inputCaptureProcessorRef.current.disconnect()
+            inputCaptureProcessorRef.current = null
+        }
+        inputCaptureSinkRef.current?.disconnect()
+        inputCaptureSinkRef.current = null
         inputMeterRef.current?.source.disconnect()
         inputMeterRef.current?.analyser.disconnect()
         outputMeterRef.current?.source.disconnect()
@@ -202,7 +242,31 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
         try {
             const context = new AudioContext()
             meterContextRef.current = context
-            inputMeterRef.current = createAudioMeter(context, stream)
+            const inputMeter = createAudioMeter(context, stream)
+            inputMeterRef.current = inputMeter
+            inputCaptureSampleRateRef.current = context.sampleRate
+            const processor = context.createScriptProcessor(2_048, 1, 1)
+            const silentSink = context.createGain()
+            silentSink.gain.value = 0
+            inputMeter.source.connect(processor)
+            processor.connect(silentSink)
+            silentSink.connect(context.destination)
+            processor.onaudioprocess = (event) => {
+                const chunk = event.inputBuffer.getChannelData(0).slice()
+                if (chunk.length === 0) return
+                rollingInputChunksRef.current.push(chunk)
+                rollingInputSampleCountRef.current += chunk.length
+                const maxPrerollSamples = Math.ceil(context.sampleRate * (REALTIME_INPUT_CAPTURE_PREROLL_MS / 1000))
+                while (rollingInputSampleCountRef.current > maxPrerollSamples && rollingInputChunksRef.current.length > 1) {
+                    const removed = rollingInputChunksRef.current.shift()
+                    rollingInputSampleCountRef.current -= removed?.length || 0
+                }
+                const activeCaptureId = activeInputCaptureIdRef.current
+                const activeCapture = activeCaptureId ? inputCapturesRef.current.get(activeCaptureId) : null
+                if (activeCapture && !activeCapture.resolved) activeCapture.chunks.push(chunk)
+            }
+            inputCaptureProcessorRef.current = processor
+            inputCaptureSinkRef.current = silentSink
             void context.resume().catch(() => undefined)
 
             const update = (timestamp: number) => {
@@ -397,6 +461,61 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
             const audio = new Audio()
             audio.autoplay = true
 
+            const queueCanonicalPayload = (payload: Record<string, unknown>) => {
+                const adapterSessionId = adapterSessionIdRef.current
+                if (!binding || !adapterSessionId || !isCanonicalTranscriptBridgeEvent(payload)) return
+                const ingest = window.devscope.assistant.ingestRealtimeVoiceEvent({
+                    adapterSessionId,
+                    payload
+                }).then((result) => {
+                    if (!result.success) throw new Error(result.error || 'Voice transcript bridge failed.')
+                })
+                const bridge = Promise.all([bridgeQueueRef.current, ingest]).then(() => undefined)
+                bridgeQueueRef.current = bridge
+                void bridge.catch((bridgeError) => failConnection(
+                    bridgeError instanceof Error ? bridgeError.message : 'Voice transcript bridge failed.'
+                ))
+            }
+
+            const recoverMissingInputTranscript = async (capture: RealtimeInputCapture) => {
+                if (!isCurrent() || capture.resolved) return
+                const payload = createAssistantVoicePayload(
+                    capture.chunks,
+                    inputCaptureSampleRateRef.current
+                )
+                if (!payload || payload.durationMs < 250) return
+                try {
+                    const result = await window.devscope.assistant.transcribeVoice(payload)
+                    if (!isCurrent() || capture.resolved) return
+                    if (!result.success) throw new Error(result.error || 'Voice transcription recovery failed.')
+                    const recoveredPayload = buildRecoveredRealtimeUserTranscript(
+                        capture.providerItemId,
+                        result.text
+                    )
+                    if (!recoveredPayload) return
+                    capture.resolved = true
+                    capture.recovered = true
+                    capture.chunks = []
+                    setTranscript((current) => applyRealtimeTranscriptEvent(current, recoveredPayload))
+                    queueCanonicalPayload(recoveredPayload)
+                } catch {
+                    if (!isCurrent() || capture.resolved) return
+                    setTranscript((current) => {
+                        const index = current.findIndex((entry) => entry.id === capture.providerItemId)
+                        const fallbackEntry: InstructorTranscriptEntry = {
+                            id: capture.providerItemId,
+                            role: 'user',
+                            text: 'Voice message · transcript unavailable',
+                            final: true
+                        }
+                        if (index < 0) return [...current, fallbackEntry]
+                        const next = current.slice()
+                        next[index] = fallbackEntry
+                        return next
+                    })
+                }
+            }
+
             const markActiveIfReady = (): boolean => {
                 if (!isCurrent()) return false
                 const ready = readiness.peerConnected
@@ -435,24 +554,62 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
                         readiness.sessionInitialized = true
                         markActiveIfReady()
                     }
-                    setTranscript((current) => applyRealtimeTranscriptEvent(current, payload))
-                    const adapterSessionId = adapterSessionIdRef.current
-                    if (binding && adapterSessionId && isCanonicalTranscriptBridgeEvent(payload)) {
-                        // Invoke IPC immediately so any later navigation request is
-                        // ordered after this provider event in Electron. The aggregate
-                        // promise remains only as the local Stop/unmount drain barrier.
-                        const ingest = window.devscope.assistant.ingestRealtimeVoiceEvent({
-                            adapterSessionId,
-                            payload
-                        }).then((result) => {
-                            if (!result.success) throw new Error(result.error || 'Voice transcript bridge failed.')
-                        })
-                        const bridge = Promise.all([bridgeQueueRef.current, ingest]).then(() => undefined)
-                        bridgeQueueRef.current = bridge
-                        void bridge.catch((bridgeError) => failConnection(
-                            bridgeError instanceof Error ? bridgeError.message : 'Voice transcript bridge failed.'
-                        ))
+                    const speechBoundary = readRealtimeInputSpeechBoundary(payload)
+                    if (speechBoundary?.kind === 'started') {
+                        const previous = inputCapturesRef.current.get(speechBoundary.providerItemId)
+                        if (previous?.fallbackTimer !== null && previous?.fallbackTimer !== undefined) {
+                            window.clearTimeout(previous.fallbackTimer)
+                        }
+                        const capture: RealtimeInputCapture = {
+                            providerItemId: speechBoundary.providerItemId,
+                            chunks: rollingInputChunksRef.current.map((chunk) => chunk.slice()),
+                            resolved: false,
+                            recovered: false,
+                            fallbackTimer: null
+                        }
+                        inputCapturesRef.current.set(capture.providerItemId, capture)
+                        activeInputCaptureIdRef.current = capture.providerItemId
+                        setTranscript((current) => current.some((entry) => entry.id === capture.providerItemId)
+                            ? current
+                            : [...current, {
+                                id: capture.providerItemId,
+                                role: 'user',
+                                text: '',
+                                final: false
+                            }])
+                    } else if (speechBoundary?.kind === 'stopped') {
+                        if (activeInputCaptureIdRef.current === speechBoundary.providerItemId) {
+                            activeInputCaptureIdRef.current = null
+                        }
+                        const capture = inputCapturesRef.current.get(speechBoundary.providerItemId)
+                        if (capture && !capture.resolved && capture.fallbackTimer === null) {
+                            capture.fallbackTimer = window.setTimeout(() => {
+                                capture.fallbackTimer = null
+                                void recoverMissingInputTranscript(capture)
+                            }, REALTIME_INPUT_TRANSCRIPT_FALLBACK_DELAY_MS)
+                        }
                     }
+                    const completedUserItemId = readCompletedRealtimeUserTranscriptId(payload)
+                    if (completedUserItemId) {
+                        const capture = inputCapturesRef.current.get(completedUserItemId)
+                        if (capture?.recovered) return
+                        if (capture) {
+                            capture.resolved = true
+                            capture.chunks = []
+                            if (capture.fallbackTimer !== null) {
+                                window.clearTimeout(capture.fallbackTimer)
+                                capture.fallbackTimer = null
+                            }
+                        }
+                        if (activeInputCaptureIdRef.current === completedUserItemId) {
+                            activeInputCaptureIdRef.current = null
+                        }
+                    }
+                    setTranscript((current) => applyRealtimeTranscriptEvent(current, payload))
+                    // Invoke IPC immediately so any later navigation request is
+                    // ordered after this provider event in Electron. The aggregate
+                    // promise remains only as the local Stop/unmount drain barrier.
+                    queueCanonicalPayload(payload)
                 } catch {
                     // Ignore unrelated non-JSON realtime payloads.
                 }

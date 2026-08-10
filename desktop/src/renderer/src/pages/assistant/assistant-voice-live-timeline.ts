@@ -11,6 +11,10 @@ export type VoiceLiveTimelineProjection = {
     anchors: Map<string, number>
 }
 
+function transcriptSignature(role: 'user' | 'assistant', text: string): string {
+    return `${role}\0${text.replace(/\s+/gu, ' ').trim()}`
+}
+
 export function projectVoiceLiveTimelineMessages(input: {
     transcript: InstructorTranscriptEntry[]
     canonicalMessages: AssistantMessage[]
@@ -23,15 +27,36 @@ export function projectVoiceLiveTimelineMessages(input: {
     const committedProviderItems = new Set(input.canonicalMessages
         .map((message) => message.providerItemId)
         .filter((value): value is string => Boolean(value)))
+    const voiceStartedAtMs = Date.parse(input.voiceStartedAt || '')
+    const missingIdentityCommitBudget = new Map<string, number>()
+    if (Number.isFinite(voiceStartedAtMs)) {
+        for (const message of input.canonicalMessages) {
+            const createdAt = Date.parse(message.createdAt)
+            if (message.providerItemId
+                || (message.role !== 'user' && message.role !== 'assistant')
+                || !Number.isFinite(createdAt)
+                || createdAt < voiceStartedAtMs) continue
+            const signature = transcriptSignature(message.role, message.text)
+            missingIdentityCommitBudget.set(signature, (missingIdentityCommitBudget.get(signature) || 0) + 1)
+        }
+    }
     const projectableTranscript = filterVoiceHydrationReplay(
         input.transcript,
         input.canonicalMessages,
         input.voiceStartedAt
-    ).filter((entry) => (
-        entry.text.trim()
-        && !entry.id.startsWith('local-composer-')
-        && !committedProviderItems.has(entry.id)
-    ))
+    ).filter((entry) => {
+        if (!entry.text.trim()
+            || entry.id.startsWith('local-composer-')
+            || committedProviderItems.has(entry.id)) return false
+        if (!entry.final) return true
+        const role = entry.role === 'user' ? 'user' : 'assistant'
+        const signature = transcriptSignature(role, entry.text)
+        const remaining = missingIdentityCommitBudget.get(signature) || 0
+        if (remaining === 0) return true
+        if (remaining === 1) missingIdentityCommitBudget.delete(signature)
+        else missingIdentityCommitBudget.set(signature, remaining - 1)
+        return false
+    })
 
     const canonicalEntries = [
         ...input.canonicalMessages,
