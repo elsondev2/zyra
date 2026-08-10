@@ -209,8 +209,13 @@ assert.equal(
 )
 assert.equal(
     shouldAutoReconnectAssistantThread({ threadState: 'ready', hasRecoverableIssue: false }),
-    true,
-    'a dropped live runtime should reconnect when its persisted thread is ready'
+    false,
+    'the recovery hook must not race the explicit background warmup when a thread becomes ready'
+)
+assert.equal(
+    shouldAutoReconnectAssistantThread({ threadState: 'ready', hasRecoverableIssue: true }),
+    false,
+    'historical error activity must not tear down a runtime that just became ready'
 )
 assert.equal(
     shouldAutoReconnectAssistantThread({ threadState: 'starting', hasRecoverableIssue: false }),
