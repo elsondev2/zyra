@@ -14,7 +14,7 @@ import { isAssistantThreadActivelyWorking } from '@/lib/assistant/selectors'
 import { cn } from '@/lib/utils'
 import { buildPromptImageInputs, buildPromptWithContextFiles } from './assistant-composer-utils'
 import { clearAssistantComposerSessionState } from './assistant-composer-session-state'
-import { filterVoiceHydrationReplay } from './assistant-voice-hydration-replay'
+import { projectVoiceLiveTimelineMessages } from './assistant-voice-live-timeline'
 import { AssistantCanonicalVoiceDock } from './AssistantCanonicalVoiceDock'
 import { AssistantCanonicalVoiceStage } from './AssistantCanonicalVoiceStage'
 import { AssistantChatOnboardingOverlay } from './AssistantChatOnboardingOverlay'
@@ -129,6 +129,10 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const voice = useInstructorVoiceSession(canonicalVoiceBinding)
     const voiceVisible = voice.status !== 'idle'
     const voiceThreadRef = useRef(controller.activeThread?.id || null)
+    const voiceTimelineAnchorsRef = useRef<{ key: string; anchors: Map<string, number> }>({
+        key: '',
+        anchors: new Map()
+    })
     useEffect(() => {
         const nextThreadId = controller.activeThread?.id || null
         const previousThreadId = voiceThreadRef.current
@@ -217,40 +221,31 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         && !controller.timelineMessages.some((message) => message.role === 'assistant' && message.streaming)
     const displayedTimelineMessages = useMemo((): AssistantMessage[] => {
         if (!voiceVisible || voice.transcript.length === 0) return controller.timelineMessages
-        const committedProviderItems = new Set(controller.timelineMessages
-            .map((message) => message.providerItemId)
-            .filter((value): value is string => Boolean(value)))
-        const highestSequence = controller.timelineMessages.reduce(
-            (highest, message) => Math.max(highest, message.timelineSequence || 0),
-            0
-        )
-        const startedAtMs = Date.parse(voice.startedAt || new Date().toISOString())
-        const projectableTranscript = filterVoiceHydrationReplay(
-            voice.transcript,
-            controller.timelineMessages,
-            voice.startedAt
-        )
-        const liveMessages = projectableTranscript.flatMap((entry, index): AssistantMessage[] => {
-            if (!entry.text.trim()
-                || entry.id.startsWith('local-composer-')
-                || committedProviderItems.has(entry.id)) return []
-            const createdAt = new Date(startedAtMs + index).toISOString()
-            const updatedAt = new Date(startedAtMs + index + entry.text.length).toISOString()
-            return [{
-                id: `voice-live-${entry.id}`,
-                role: entry.role === 'user' ? 'user' : 'assistant',
-                text: entry.text,
-                turnId: `voice-live-turn-${entry.id}`,
-                streaming: !entry.final,
-                timelineSequence: highestSequence + index + 1,
-                providerItemId: entry.id,
-                modality: 'voice',
-                createdAt,
-                updatedAt
-            }]
+        const anchorKey = `${controller.activeThread?.id || 'no-thread'}:${voice.startedAt || 'not-started'}`
+        if (voiceTimelineAnchorsRef.current.key !== anchorKey) {
+            voiceTimelineAnchorsRef.current = { key: anchorKey, anchors: new Map() }
+        }
+        const projection = projectVoiceLiveTimelineMessages({
+            transcript: voice.transcript,
+            canonicalMessages: controller.timelineMessages,
+            activities: controller.activityFeed,
+            proposedPlans: controller.activeThread?.proposedPlans || [],
+            voiceStartedAt: voice.startedAt,
+            previousAnchors: voiceTimelineAnchorsRef.current.anchors
         })
-        return liveMessages.length > 0 ? [...controller.timelineMessages, ...liveMessages] : controller.timelineMessages
-    }, [controller.timelineMessages, voice.startedAt, voice.transcript, voiceVisible])
+        voiceTimelineAnchorsRef.current.anchors = projection.anchors
+        return projection.messages.length > 0
+            ? [...controller.timelineMessages, ...projection.messages]
+            : controller.timelineMessages
+    }, [
+        controller.activeThread?.id,
+        controller.activeThread?.proposedPlans,
+        controller.activityFeed,
+        controller.timelineMessages,
+        voice.startedAt,
+        voice.transcript,
+        voiceVisible
+    ])
     const lastTimelineMessage = displayedTimelineMessages[displayedTimelineMessages.length - 1] || null
     const latestTimelineActivity = controller.activityFeed[0] || null
     const selectedThreadHasHistoricalContent = hasAssistantPersistedThreadContent(controller.activeThread)

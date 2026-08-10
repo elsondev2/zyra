@@ -1,6 +1,12 @@
 import { useMemo, useRef } from 'react'
 import type { AssistantActivity, AssistantMessage, AssistantProposedPlan } from '@shared/assistant/contracts'
-import { getTimelineEntries, shouldRenderActivity, shouldRenderMessage, type TimelineEntry } from './assistant-timeline-helpers'
+import {
+    getAssistantTimelineMessageEntryId,
+    getTimelineEntries,
+    shouldRenderActivity,
+    shouldRenderMessage,
+    type TimelineEntry
+} from './assistant-timeline-helpers'
 
 type TimelineEntriesCache = {
     messages: AssistantMessage[]
@@ -141,12 +147,12 @@ export function useAssistantTimelineEntries(
                     const messageEntryIndex = findLastMessageEntryIndex(cached.entries)
                     if (
                         messageEntryIndex >= 0
-                        && cached.entries[messageEntryIndex]?.id === nextLastMessage.id
+                        && cached.entries[messageEntryIndex]?.id === getAssistantTimelineMessageEntryId(nextLastMessage)
                         && shouldRenderMessage(nextLastMessage)
                     ) {
                         const nextEntries = [...cached.entries]
                         nextEntries[messageEntryIndex] = {
-                            id: nextLastMessage.id,
+                            id: getAssistantTimelineMessageEntryId(nextLastMessage),
                             createdAt: nextLastMessage.createdAt,
                             timelineSequence: nextLastMessage.timelineSequence,
                             type: 'message',
@@ -177,7 +183,7 @@ export function useAssistantTimelineEntries(
                     const nextEntries = [
                         ...cached.entries,
                         {
-                            id: appendedMessage.id,
+                            id: getAssistantTimelineMessageEntryId(appendedMessage),
                             createdAt: appendedMessage.createdAt,
                             timelineSequence: appendedMessage.timelineSequence,
                             type: 'message' as const,

@@ -681,6 +681,14 @@ function getTimelineEntryKindRank(entry: TimelineEntry): number {
             : ASSISTANT_TIMELINE_KIND_RANK.activity
 }
 
+export function getAssistantTimelineMessageEntryId(message: AssistantMessage): string {
+    const providerItemId = String(message.providerItemId || '').trim()
+    if (message.modality === 'voice' && providerItemId) {
+        return `voice-message:${message.role}:${providerItemId}`
+    }
+    return message.id
+}
+
 function getTimelineEntryRecordId(entry: TimelineEntry): string {
     if (entry.type === 'message') return entry.message.id
     if (entry.type === 'plan') return entry.plan.id
@@ -705,7 +713,7 @@ export function getTimelineEntries(
     const chronologicalActivities = [...renderedActivities].reverse()
     const sortedEntries: TimelineEntry[] = [
         ...renderedMessages.map((message) => ({
-            id: message.id,
+            id: getAssistantTimelineMessageEntryId(message),
             createdAt: message.createdAt,
             timelineSequence: message.timelineSequence,
             type: 'message' as const,

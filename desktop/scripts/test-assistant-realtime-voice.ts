@@ -19,6 +19,11 @@ import {
 } from '../src/renderer/src/pages/assistant/instructor-voice-transcript'
 import { shouldShowComposerRealtimeVoicePrimaryAction } from '../src/renderer/src/pages/assistant/assistant-composer-view-state'
 import { filterVoiceHydrationReplay } from '../src/renderer/src/pages/assistant/assistant-voice-hydration-replay'
+import { projectVoiceLiveTimelineMessages } from '../src/renderer/src/pages/assistant/assistant-voice-live-timeline'
+import {
+    getAssistantTimelineMessageEntryId,
+    getTimelineEntries
+} from '../src/renderer/src/pages/assistant/assistant-timeline-helpers'
 import { shouldDelegateVoiceInspection } from '../src/main/assistant/voice/voice-strong-routing'
 import {
     normalizeInstructorVoicePreferences,
@@ -378,6 +383,77 @@ assert.deepEqual(filterVoiceHydrationReplay([
 assert.deepEqual(filterVoiceHydrationReplay([
     { id: 'hydrated-partial', role: 'assistant', text: 'Earlier canonical', final: false }
 ], hydrationHistory, '2026-08-10T10:00:00.000Z'), [])
+
+const canonicalBeforeVoice: AssistantMessage[] = [{
+    id: 'canonical-before-voice',
+    role: 'assistant',
+    text: 'Previous event.',
+    turnId: null,
+    streaming: false,
+    timelineSequence: 20,
+    createdAt: '2026-08-10T10:00:05.000Z',
+    updatedAt: '2026-08-10T10:00:05.000Z'
+}]
+const liveProjection = projectVoiceLiveTimelineMessages({
+    transcript: [{ id: 'live-user-item', role: 'user', text: 'Streaming words', final: false }],
+    canonicalMessages: canonicalBeforeVoice,
+    activities: [{
+        id: 'canonical-activity-after-voice-start',
+        kind: 'command',
+        tone: 'neutral',
+        summary: 'Recent event',
+        timelineSequence: 21,
+        createdAt: '2026-08-10T10:00:06.000Z'
+    } as any],
+    voiceStartedAt: '2026-08-10T10:00:00.000Z',
+    nowMs: Date.parse('2026-08-10T10:00:02.000Z')
+})
+assert.equal(liveProjection.messages.length, 1)
+assert.equal(
+    Date.parse(liveProjection.messages[0]!.createdAt) > Date.parse('2026-08-10T10:00:06.000Z'),
+    true,
+    'a live Voice row must stay after the newest canonical event instead of sorting back to Voice startup'
+)
+assert.equal(
+    getTimelineEntries([...canonicalBeforeVoice, ...liveProjection.messages], [], []).at(-1)?.id,
+    getAssistantTimelineMessageEntryId(liveProjection.messages[0]!),
+    'timeline sorting must keep the streamed Voice row at the rail end'
+)
+const updatedLiveProjection = projectVoiceLiveTimelineMessages({
+    transcript: [{ id: 'live-user-item', role: 'user', text: 'Streaming words continue', final: false }],
+    canonicalMessages: canonicalBeforeVoice,
+    activities: [{
+        id: 'canonical-activity-after-voice-start',
+        kind: 'command',
+        tone: 'neutral',
+        summary: 'Recent event',
+        timelineSequence: 21,
+        createdAt: '2026-08-10T10:00:06.000Z'
+    } as any],
+    voiceStartedAt: '2026-08-10T10:00:00.000Z',
+    previousAnchors: liveProjection.anchors,
+    nowMs: Date.parse('2026-08-10T10:00:20.000Z')
+})
+assert.equal(
+    updatedLiveProjection.messages[0]?.createdAt,
+    liveProjection.messages[0]?.createdAt,
+    'streaming deltas must update one bottom-anchored row without moving it'
+)
+const committedVoiceMessage: AssistantMessage = {
+    ...liveProjection.messages[0]!,
+    id: 'canonical-voice-message',
+    streaming: false
+}
+assert.equal(
+    getAssistantTimelineMessageEntryId(liveProjection.messages[0]!),
+    getAssistantTimelineMessageEntryId(committedVoiceMessage),
+    'live and canonical Voice projections must share one virtual-row identity'
+)
+assert.equal(projectVoiceLiveTimelineMessages({
+    transcript: [{ id: 'live-user-item', role: 'user', text: 'Streaming words continue', final: true }],
+    canonicalMessages: [...canonicalBeforeVoice, committedVoiceMessage],
+    voiceStartedAt: '2026-08-10T10:00:00.000Z'
+}).messages.length, 0, 'the live row must disappear as soon as its canonical provider item is projected')
 
 const preferenceStorage = new Map<string, string>()
 const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
