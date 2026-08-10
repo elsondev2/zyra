@@ -217,6 +217,11 @@ assert.equal(
     false,
     'connection recovery must not disconnect a background warmup that is already in progress'
 )
+assert.equal(
+    shouldAutoReconnectAssistantThread({ threadState: 'starting', hasRecoverableIssue: true }),
+    false,
+    'an older recoverable activity must not cancel the current background warmup'
+)
 const warmingComposer = deriveAssistantComposerCapabilities({
     mode: 'standard',
     disabled: false,

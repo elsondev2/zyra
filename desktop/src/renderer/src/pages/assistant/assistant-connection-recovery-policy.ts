@@ -3,6 +3,7 @@ export function shouldAutoReconnectAssistantThread(input: {
     hasRecoverableIssue: boolean
 }): boolean {
     const { threadState, hasRecoverableIssue } = input
+    if (threadState === 'starting') return false
     if (hasRecoverableIssue || !threadState) return true
 
     return threadState === 'disconnected'
