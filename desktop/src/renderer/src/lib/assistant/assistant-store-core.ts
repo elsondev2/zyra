@@ -89,6 +89,7 @@ class AssistantStore {
     private modelRefreshPromise: Promise<DevScopeResult<{ models: AssistantModelInfo[] }>> | null = null
     private createSessionPromise: Promise<AssistantCreateSessionResult> | null = null
     private browserConnectionClaimPromise: Promise<void> | null = null
+    private readonly backgroundConnectionPromises = new Map<string, Promise<void>>()
     private pendingAssistantEvents: AssistantDomainEvent[] = []
     private pendingAssistantEventFlushFrame: number | null = null
     private pendingAssistantEventFlushTimeout: number | null = null
@@ -159,54 +160,32 @@ class AssistantStore {
                     }
                 })
 
-                let startupStatus = clientStatus
-                let startupError: string | null = null
                 const selectedSessionId = clientSnapshot.selectedSessionId
                 const selectedSession = clientSnapshot.sessions.find((session) => session.id === selectedSessionId) || null
-                const selectedThread = selectedSession?.threads.find((thread) => thread.id === selectedSession.activeThreadId) || null
+                const activeThreadId = selectedSession?.activeThreadId || null
+                const selectedThread = selectedSession?.threads.find((thread) => thread.id === activeThreadId) || null
                 const shouldRestoreConnection = Boolean(
                     selectedSessionId
-                    && selectedSession?.activeThreadId
+                    && activeThreadId
                     && shouldEagerlyConnectAssistantThread(selectedThread)
                     && clientStatus.available
                     && !clientStatus.connected
                     && shouldAutoReconnectAssistantOnStartup()
                 )
 
-                if (shouldRestoreConnection && selectedSessionId && selectedSession?.activeThreadId) {
-                    try {
-                        const selection = await window.devscope.assistant.selectThread({
-                            sessionId: selectedSessionId,
-                            threadId: selectedSession.activeThreadId
-                        })
-                        if (!selection.success) {
-                            startupError = selection.error
-                        } else {
-                            const result = await window.devscope.assistant.connect({ sessionId: selectedSessionId })
-                            if (result.success) {
-                                startupStatus = await window.devscope.assistant.getStatus()
-                            } else {
-                                startupError = result.error
-                            }
-                        }
-                    } catch (error) {
-                        startupError = error instanceof Error
-                            ? error.message
-                            : 'Failed to reconnect the selected assistant session.'
-                    }
-                }
-
                 this.setState({
-                    status: startupStatus,
+                    status: clientStatus,
                     hydrating: false,
                     hydrated: true,
                     modelsLoading: !hasKnownModels,
-                    error: startupError
+                    error: null
                 })
 
-                const activeThreadId = selectedSession?.activeThreadId || null
                 if (selectedSessionId && activeThreadId) {
                     void this.requestSessionHydration(selectedSessionId, activeThreadId)
+                    if (shouldRestoreConnection) {
+                        this.warmSessionConnection(selectedSessionId, activeThreadId, true)
+                    }
                 }
 
                 if (!hasKnownModels) {
@@ -270,6 +249,40 @@ class AssistantStore {
             this.setState({ error: message })
             return { success: false as const, error: message }
         }
+    }
+
+    private warmSessionConnection(sessionId: string, threadId: string, restoreThreadSelection = false): void {
+        const key = `${sessionId}:${threadId}`
+        if (this.backgroundConnectionPromises.has(key)) return
+        const pending = (async () => {
+            try {
+                if (restoreThreadSelection) {
+                    const selection = await window.devscope.assistant.selectThread({ sessionId, threadId })
+                    if (!selection.success) throw new Error(selection.error)
+                }
+                const result = await window.devscope.assistant.connect({ sessionId })
+                if (!result.success) throw new Error(result.error)
+                const status = await window.devscope.assistant.getStatus()
+                const selected = this.state.snapshot.sessions.find(
+                    (session) => session.id === this.state.snapshot.selectedSessionId
+                ) || null
+                if (selected?.id === sessionId && selected.activeThreadId === threadId) {
+                    this.setState({ status, error: null })
+                }
+            } catch (error) {
+                const selected = this.state.snapshot.sessions.find(
+                    (session) => session.id === this.state.snapshot.selectedSessionId
+                ) || null
+                if (selected?.id === sessionId && selected.activeThreadId === threadId) {
+                    this.setState({
+                        error: error instanceof Error ? error.message : 'Failed to connect the assistant session.'
+                    })
+                }
+            }
+        })().finally(() => {
+            this.backgroundConnectionPromises.delete(key)
+        })
+        this.backgroundConnectionPromises.set(key, pending)
     }
 
     async createSession(input?: AssistantCreateSessionInput): Promise<AssistantCreateSessionResult> {
@@ -370,7 +383,8 @@ class AssistantStore {
             hydratedThreadCache: this.hydratedThreadCache,
             setState: this.setState,
             getState: this.getState,
-            requestSessionHydration: (targetSessionId, targetThreadId) => this.requestSessionHydration(targetSessionId, targetThreadId)
+            requestSessionHydration: (targetSessionId, targetThreadId) => this.requestSessionHydration(targetSessionId, targetThreadId),
+            warmSessionConnection: (targetSessionId, targetThreadId) => this.warmSessionConnection(targetSessionId, targetThreadId)
         }, sessionId, options)
     }
 
@@ -511,19 +525,8 @@ class AssistantStore {
                 void this.requestSessionHydration(input.sessionId, input.threadId)
             }
             const targetThread = selectedSession.threads.find((thread) => thread.id === input.threadId) || null
-            if (!shouldEagerlyConnectAssistantThread(targetThread)) return result
-            const connection = await window.devscope.assistant.connect({ sessionId: input.sessionId })
-            if (!connection.success) {
-                this.setState({ error: connection.error })
-                return result
-            }
-            const status = await window.devscope.assistant.getStatus()
-            const activeSession = this.state.snapshot.sessions.find((session) => session.id === this.state.snapshot.selectedSessionId) || null
-            if (
-                this.state.snapshot.selectedSessionId === input.sessionId
-                && activeSession?.activeThreadId === input.threadId
-            ) {
-                this.setState({ status, error: null })
+            if (shouldEagerlyConnectAssistantThread(targetThread)) {
+                this.warmSessionConnection(input.sessionId, input.threadId)
             }
             return result
         } catch (error) {

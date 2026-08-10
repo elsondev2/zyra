@@ -11,7 +11,7 @@ import {
 } from "./protocol.mjs";
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
-const DEFAULT_ATTACH_TIMEOUT_MS = 20_000;
+const DEFAULT_ATTACH_TIMEOUT_MS = 65_000;
 
 export class ZyraAgentServerClient extends EventEmitter {
   constructor(options = {}) {

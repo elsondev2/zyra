@@ -979,7 +979,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         resetComposerStateToken={resetComposerStateToken}
                         selectedSessionMode={selectedSessionMode}
                         assistantAvailable={controller.available}
-                        assistantConnected={controller.connected || selectedSessionUsesNewChatSurface}
+                        assistantConnected={controller.connected || Boolean(activeComposerSessionId)}
                         selectedProjectPath={displayProjectPath || null}
                         availableModels={availableModels}
                         activeModel={activeComposerModel}

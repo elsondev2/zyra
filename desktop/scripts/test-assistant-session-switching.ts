@@ -154,6 +154,20 @@ function createContext() {
         },
         requestSessionHydration: async (sessionId: string, threadId: string | null) => {
             hydrationCalls.push({ sessionId, threadId })
+        },
+        warmSessionConnection: (sessionId: string, threadId: string) => {
+            connectionCalls.push(sessionId)
+            state = {
+                ...state,
+                status: {
+                    available: true,
+                    connected: true,
+                    selectedSessionId: sessionId,
+                    activeThreadId: threadId,
+                    state: 'idle',
+                    reason: null
+                }
+            }
         }
     }
 }

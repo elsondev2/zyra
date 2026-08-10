@@ -20,6 +20,7 @@ type AssistantStoreSessionSelectionContext = {
     getState: () => AssistantStoreState
     setState: SetAssistantStoreState
     requestSessionHydration: (sessionId: string, threadId: string | null) => Promise<void>
+    warmSessionConnection: (sessionId: string, threadId: string) => void
 }
 
 const SELECTION_PAINT_FALLBACK_MS = 80
@@ -142,27 +143,8 @@ export async function selectAssistantStoreSession(
             void context.requestSessionHydration(sessionId, targetThreadId)
         }
 
-        if (!shouldEagerlyConnectAssistantThread(targetThread)) return result
-
-        try {
-            const connectResult = await window.devscope.assistant.connect({ sessionId })
-            if (context.getState().selectionRequestId !== selectionRequestId) return result
-            if (!connectResult.success) {
-                context.setState({ error: connectResult.error })
-                return result
-            }
-            const status = await window.devscope.assistant.getStatus()
-            if (context.getState().selectionRequestId === selectionRequestId) {
-                context.setState({ status, error: null })
-            }
-        } catch (connectError) {
-            if (context.getState().selectionRequestId === selectionRequestId) {
-                context.setState({
-                    error: connectError instanceof Error
-                        ? connectError.message
-                        : 'Failed to reconnect the selected assistant session.'
-                })
-            }
+        if (targetThreadId && shouldEagerlyConnectAssistantThread(targetThread)) {
+            context.warmSessionConnection(sessionId, targetThreadId)
         }
         return result
     } catch (error) {

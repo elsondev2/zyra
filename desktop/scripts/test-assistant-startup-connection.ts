@@ -16,6 +16,7 @@ import { getAssistantThreadPhase } from '../src/renderer/src/lib/assistant/selec
 import { toAssistantThreadShell } from '../src/main/assistant/persistence-snapshot'
 import { TrailingAsyncReconciler } from '../src/main/assistant/trailing-async-reconciler'
 import { shouldAutoReconnectAssistantThread } from '../src/renderer/src/pages/assistant/assistant-connection-recovery-policy'
+import { deriveAssistantComposerCapabilities } from '../src/renderer/src/pages/assistant/assistant-composer-capabilities'
 import { getAssistantThreadLastMessageAt, resolveAssistantThreadStatusPill } from '../src/renderer/src/pages/assistant/assistant-sessions-rail-utils'
 import { mergeCanonicalPresenceLatestTurn, resolveCanonicalPresenceAttention, resolveCanonicalPresenceThreadState } from '../src/main/assistant/service-canonical-presence'
 
@@ -117,6 +118,8 @@ const connectCalls: Array<{ sessionId?: string } | undefined> = []
 const selectThreadCalls: Array<{ sessionId: string; threadId: string }> = []
 const disconnectCalls: Array<string | undefined> = []
 const createSessionCalls: Array<{ projectPath?: string; mode?: string } | undefined> = []
+let releaseStartupConnect!: () => void
+const startupConnectGate = new Promise<void>((resolve) => { releaseStartupConnect = resolve })
 
 ;(globalThis as typeof globalThis & { window: unknown }).window = {
     devscope: {
@@ -128,6 +131,7 @@ const createSessionCalls: Array<{ projectPath?: string; mode?: string } | undefi
             },
             connect: async (options?: { sessionId?: string }) => {
                 connectCalls.push(options)
+                if (connectCalls.length === 1) await startupConnectGate
                 return { success: true as const, threadId }
             },
             selectSession: async (targetSessionId: string) => ({
@@ -163,10 +167,18 @@ while (!assistantStore.getState().hydrated && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 5))
 }
 
+assert.equal(assistantStore.getState().hydrated, true, 'assistant store should paint before runtime reconnection finishes')
+while (connectCalls.length === 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
+}
+assert.equal(assistantStore.getState().status.connected, false, 'background warmup must not masquerade as a live connection')
+releaseStartupConnect()
+while (!assistantStore.getState().status.connected && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
+}
 const state = assistantStore.getState()
 assistantStore.release()
 
-assert.equal(state.hydrated, true, 'assistant store should finish bootstrap hydration')
 assert.deepEqual(
     selectThreadCalls,
     [{ sessionId, threadId }],
@@ -175,10 +187,10 @@ assert.deepEqual(
 assert.deepEqual(
     connectCalls,
     [{ sessionId }],
-    'cold bootstrap should connect the restored selected session exactly once'
+    'cold bootstrap should warm the restored selected session exactly once'
 )
 assert.deepEqual(disconnectCalls, [], 'cold bootstrap should not disconnect before its first connection attempt')
-assert.equal(state.status.connected, true, 'store status should be connected after startup restoration')
+assert.equal(state.status.connected, true, 'store status should become connected after background warmup')
 assert.equal(state.status.activeThreadId, threadId)
 const createResult = await assistantStore.createSession({ mode: 'work', projectPath: 'C:\\stale' })
 assert.equal(createResult.success, false, 'the regression sentinel should stop after proving a fresh session was requested')
@@ -200,6 +212,23 @@ assert.equal(
     true,
     'a dropped live runtime should reconnect when its persisted thread is ready'
 )
+assert.equal(
+    shouldAutoReconnectAssistantThread({ threadState: 'starting', hasRecoverableIssue: false }),
+    false,
+    'connection recovery must not disconnect a background warmup that is already in progress'
+)
+const warmingComposer = deriveAssistantComposerCapabilities({
+    mode: 'standard',
+    disabled: false,
+    isConnected: false,
+    isConnecting: true,
+    isSending: false,
+    isThinking: false,
+    allowEmptySubmit: false,
+    hasContent: true
+})
+assert.equal(warmingComposer.sendDisabled, false, 'the composer must remain sendable while its runtime warms in the background')
+assert.equal(warmingComposer.voiceDisabled, false, 'Voice must remain available while the strong runtime warms in the background')
 assert.equal(shouldAutoReconnectAssistantOnStartup(), true, 'startup reconnect should remain enabled by default')
 ;(globalThis as any).window.localStorage = {
     getItem: () => JSON.stringify({ assistantAutoReconnect: false })

@@ -7,7 +7,6 @@ export function shouldAutoReconnectAssistantThread(input: {
 
     return threadState === 'disconnected'
         || threadState === 'idle'
-        || threadState === 'starting'
         || threadState === 'ready'
         || threadState === 'running'
         || threadState === 'waiting'
