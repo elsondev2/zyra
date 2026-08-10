@@ -157,17 +157,23 @@ export class ZyraAgentServerClient extends EventEmitter {
 
   startServer() {
     const entry = path.join(this.root, "src", "agent-server", "main.mjs");
-    const child = spawn(process.execPath, [entry, "--channel", this.paths.channel], {
+    // Electron's Windows executable exits immediately when launched detached with
+    // ignored stdio, even with ELECTRON_RUN_AS_NODE. The normal Node executable
+    // keeps the shared agent server alive independently of the desktop window.
+    const executable = process.versions.electron
+      ? String(process.env.ZYRA_NODE_EXECUTABLE || "node")
+      : process.execPath;
+    const child = spawn(executable, [entry, "--channel", this.paths.channel], {
       cwd: this.root,
       detached: true,
       windowsHide: true,
       stdio: "ignore",
       env: {
         ...process.env,
-        ZYRA_ROOT: this.root,
-        ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {})
+        ZYRA_ROOT: this.root
       }
     });
+    child.once("error", (error) => this.emit("server-start-error", error));
     child.unref();
   }
 
