@@ -54,6 +54,10 @@ export type PrivateVoiceTaskInput = {
     prompt: string
     model?: string
     effort?: AssistantReasoningEffort
+    runtimeMode?: AssistantRuntimeMode
+    interactionMode?: AssistantInteractionMode
+    profile?: string
+    serviceTier?: 'fast'
     signal: AbortSignal
 }
 
@@ -84,6 +88,7 @@ type ZyraSessionContext = {
     toolArgsByCallId: Map<string, Record<string, unknown>>
     toolStartedAtByCallId: Map<string, string>
     commandActivityIdByJobId: Map<string, string>
+    runningManagedCommandJobIds: Set<string>
     assistantTextByItemId: Map<string, string>
     assistantCompletedItemIds: Set<string>
     internalTextByItemId: Map<string, string>
@@ -1079,6 +1084,7 @@ export class ZyraPiRuntime extends EventEmitter {
             toolArgsByCallId: new Map(),
             toolStartedAtByCallId: new Map(),
             commandActivityIdByJobId: new Map(),
+            runningManagedCommandJobIds: new Set(),
             assistantTextByItemId: new Map(),
             assistantCompletedItemIds: new Set(),
             internalTextByItemId: new Map(),
@@ -1209,7 +1215,10 @@ export class ZyraPiRuntime extends EventEmitter {
         const worker = new ZyraPiWorker(root, resolveBridgePath(root), input.cwd)
         const privateThreadId = `voice-private:${input.taskId}`
         const model = normalizeZyraModel(input.model) || 'openai-codex/gpt-5.6-sol'
-        const effort = input.effort || 'xhigh'
+        const effort = input.effort || 'high'
+        const runtimeMode = input.runtimeMode || 'approval-required'
+        const interactionMode = input.interactionMode || 'default'
+        const profile = input.profile || 'default'
         const context: ZyraSessionContext = {
             localThreadId: privateThreadId,
             providerThreadId: privateThreadId,
@@ -1220,9 +1229,9 @@ export class ZyraPiRuntime extends EventEmitter {
             cwd: input.cwd,
             model,
             thinking: effort,
-            runtimeMode: 'approval-required',
-            interactionMode: 'default',
-            profile: 'default',
+            runtimeMode,
+            interactionMode,
+            profile,
             activeTurnId: input.taskId,
             completedTurnIds: new Set(),
             assistantMessageSequence: 0,
@@ -1230,6 +1239,7 @@ export class ZyraPiRuntime extends EventEmitter {
             toolArgsByCallId: new Map(),
             toolStartedAtByCallId: new Map(),
             commandActivityIdByJobId: new Map(),
+            runningManagedCommandJobIds: new Set(),
             assistantTextByItemId: new Map(),
             assistantCompletedItemIds: new Set(),
             internalTextByItemId: new Map(),
@@ -1259,11 +1269,10 @@ export class ZyraPiRuntime extends EventEmitter {
                 noSession: true,
                 model,
                 thinking: effort,
-                profile: 'default',
-                runtimeMode: 'approval-required',
-                surface: 'memory-worker',
-                tools: ['read', 'grep', 'find', 'ls', 'bash'],
-                excludeTools: ['edit', 'write']
+                profile,
+                runtimeMode,
+                interactionMode,
+                surface: 'memory-worker'
             })
             context.providerThreadId = String(connected['threadId'] || connected['providerThreadId'] || privateThreadId)
             await worker.request('prompt', {
@@ -1271,11 +1280,34 @@ export class ZyraPiRuntime extends EventEmitter {
                 turnId: input.taskId,
                 model,
                 thinking: effort,
-                profile: 'default',
-                runtimeMode: 'approval-required',
+                profile,
+                runtimeMode,
+                interactionMode,
+                serviceTier: input.serviceTier,
                 skipTitleGeneration: true
             })
             if (input.signal.aborted) throw input.signal.reason || new Error('Private Voice task cancelled.')
+            if (context.runningManagedCommandJobIds.size > 0) {
+                const occurredAt = nowIso()
+                for (const jobId of context.runningManagedCommandJobIds) {
+                    this.emitRuntime({
+                        eventId: randomUUID(),
+                        type: 'activity',
+                        createdAt: occurredAt,
+                        threadId: context.localThreadId,
+                        providerThreadId: context.providerThreadId,
+                        turnId: input.taskId,
+                        payload: {
+                            activityId: context.commandActivityIdByJobId.get(jobId),
+                            kind: 'command',
+                            summary: 'Command stopped',
+                            tone: 'warning',
+                            data: { status: 'stopped', jobId, completedAt: occurredAt }
+                        }
+                    })
+                }
+                throw new Error('The agent returned before its command finished, so the unfinished command was stopped.')
+            }
             const text = (
                 (context.lastAssistantItemId ? context.assistantTextByItemId.get(context.lastAssistantItemId) : null)
                 || [...context.assistantTextByItemId.values()].filter((value) => value.trim()).at(-1)
@@ -2199,6 +2231,8 @@ export class ZyraPiRuntime extends EventEmitter {
         if (!isCommandCheckpoint && commandJobId) {
             context.commandActivityIdByJobId.set(commandJobId, activityId)
         }
+        if (commandJobId && lifecycleStatus === 'running') context.runningManagedCommandJobIds.add(commandJobId)
+        else if (commandJobId && lifecycleStatus) context.runningManagedCommandJobIds.delete(commandJobId)
         this.emitRuntime({
             eventId: randomUUID(),
             type: 'activity',

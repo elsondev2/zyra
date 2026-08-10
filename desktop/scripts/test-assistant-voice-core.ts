@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import initSqlJs from 'sql.js/dist/sql-asm.js'
@@ -39,7 +39,10 @@ import {
     CodexRealtimeForegroundAdapter,
     type CodexRealtimeTransport
 } from '../src/main/assistant/voice/codex-realtime-foreground-adapter'
-import { inspectCodexRealtimeSchemaMarkers } from '../src/main/assistant/voice/codex-realtime-capability-probe'
+import {
+    inspectCodexRealtimeSchemaMarkers,
+    probeInstalledCodexRealtimeCapabilitiesAsync
+} from '../src/main/assistant/voice/codex-realtime-capability-probe'
 import { createCodexRealtimeCapabilityReport } from '../src/main/assistant/voice/codex-realtime-capabilities'
 import { FakeRealtimeContinuitySource } from '../src/main/assistant/voice/fake-realtime-continuity-source'
 import { FakeRealtimeForegroundAdapter } from '../src/main/assistant/voice/fake-realtime-foreground-adapter'
@@ -517,6 +520,52 @@ assert.deepEqual(inspectCodexRealtimeSchemaMarkers('ThreadRealtimeInitialItem'),
     'webrtc',
     'v3'
 ])
+const probeDirectory = mkdtempSync(join(tmpdir(), 'zyra-voice-probe-test-'))
+const fakeCodexScript = join(probeDirectory, 'fake-codex.cjs')
+const fakeSchemaText = [
+    'ThreadRealtimeInitialItem',
+    'ThreadRealtimeStartTransport',
+    'thread/realtime/started',
+    'thread/realtime/transcript/done',
+    'webrtc',
+    'v3'
+].join(' ')
+writeFileSync(fakeCodexScript, `
+const fs = require('node:fs')
+const path = require('node:path')
+const args = process.argv.slice(2)
+if (args.includes('--version')) {
+  console.log('codex-test 1.0')
+} else {
+  const outputIndex = args.indexOf('--out')
+  const output = args[outputIndex + 1]
+  setTimeout(() => {
+    fs.mkdirSync(output, { recursive: true })
+    fs.writeFileSync(path.join(output, 'schema.json'), ${JSON.stringify(JSON.stringify(fakeSchemaText))})
+  }, 120)
+}
+`)
+const fakeCodexBinary = process.platform === 'win32'
+    ? join(probeDirectory, 'fake-codex.cmd')
+    : join(probeDirectory, 'fake-codex')
+if (process.platform === 'win32') {
+    writeFileSync(fakeCodexBinary, `@echo off\r\n"${process.execPath}" "${fakeCodexScript}" %*\r\n`)
+} else {
+    writeFileSync(fakeCodexBinary, `#!/bin/sh\n"${process.execPath}" "${fakeCodexScript}" "$@"\n`)
+    chmodSync(fakeCodexBinary, 0o755)
+}
+let eventLoopTicks = 0
+const probeTick = setInterval(() => { eventLoopTicks += 1 }, 10)
+const asyncProbe = await probeInstalledCodexRealtimeCapabilitiesAsync({
+    codexBinary: fakeCodexBinary,
+    transcriptIdentityBridge: true,
+    clock
+})
+clearInterval(probeTick)
+assert.equal(asyncProbe.report.realtime.session.support, 'supported')
+assert.ok(eventLoopTicks >= 3, 'the Codex capability probe must not block Electron\'s event loop')
+rmSync(probeDirectory, { recursive: true, force: true })
+
 const incompleteCodexReport = createCodexRealtimeCapabilityReport({
     providerVersion: 'codex-test',
     generatedSchemaVerified: true,
@@ -534,6 +583,12 @@ const codexEvents: RealtimeDomainEvent[] = []
 codexAdapter.subscribe((event) => codexEvents.push(event))
 const codexContinuity = new FakeRealtimeContinuitySource(clock)
 codexContinuity.initialize('chat_codex_adapter')
+codexContinuity.appendMessage({
+    conversationId: 'chat_codex_adapter',
+    messageId: 'earlier_assistant_message',
+    role: 'assistant',
+    text: 'Earlier canonical answer.'
+})
 const codexRoute = routes.initializeChat({ conversationId: 'chat_codex_adapter', contextVersion: 0 })
 const codexSeed = await codexContinuity.materialize('chat_codex_adapter', foregroundRouteClaim(codexRoute))
 const codexAbort = new AbortController()
@@ -551,7 +606,10 @@ const codexInput: RealtimeConnectInput = {
 const codexHandle = await codexAdapter.connect(codexInput)
 assert.equal(codexHandle.realtimeVersion, 'v3')
 assert.equal(scriptedTransport.lastStart?.clientManagedHandoffs, true)
-assert.deepEqual(scriptedTransport.lastStart?.initialItems, [])
+assert.deepEqual(scriptedTransport.lastStart?.initialItems, [{
+    role: 'assistant',
+    text: 'Earlier canonical answer.'
+}])
 const codexDelta = createRealtimeHydrationDelta({
     deltaId: 'codex_delta_1',
     basePacketId: codexSeed.packetId,
@@ -590,6 +648,16 @@ scriptedTransport.emit('event', {
     text: 'Missing identity.'
 } satisfies AssistantRealtimeVoiceEvent)
 assert.equal(codexEvents.length, eventCountBeforeIdentitylessFlatNotification)
+const eventCountBeforeHydrationReplay = codexEvents.length
+codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
+    type: 'turn.done',
+    turn: { id: 'hydrated_assistant_item', role: 'assistant', transcript: 'Earlier canonical answer.' }
+})
+assert.equal(
+    codexEvents.length,
+    eventCountBeforeHydrationReplay,
+    'hydrated startup history must not be emitted as a new canonical Voice message'
+)
 codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
     type: 'turn.created',
     turn: { id: 'webrtc_turn_1', role: 'assistant', transcript: '' }

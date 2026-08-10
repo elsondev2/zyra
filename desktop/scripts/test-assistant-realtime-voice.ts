@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import type { AssistantMessage } from '../src/shared/assistant/contracts'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import previewContent from '../src/renderer/src/assets/voice-previews/content.json'
@@ -17,6 +18,7 @@ import {
     applyRealtimeTranscriptEvent
 } from '../src/renderer/src/pages/assistant/instructor-voice-transcript'
 import { shouldShowComposerRealtimeVoicePrimaryAction } from '../src/renderer/src/pages/assistant/assistant-composer-view-state'
+import { filterVoiceHydrationReplay } from '../src/renderer/src/pages/assistant/assistant-voice-hydration-replay'
 import { shouldDelegateVoiceInspection } from '../src/main/assistant/voice/voice-strong-routing'
 import {
     normalizeInstructorVoicePreferences,
@@ -358,6 +360,24 @@ assert.deepEqual(dataChannelTranscript.map(({ id, role, text, final }) => ({ id,
 assert.equal(shouldDelegateVoiceInspection("What's the storage left on my PC if the storage is free?"), true)
 assert.equal(shouldDelegateVoiceInspection('What are you able to do here?'), false)
 assert.equal(shouldDelegateVoiceInspection('Checking on what?'), false)
+assert.equal(shouldDelegateVoiceInspection('Run the build and fix the file if it fails'), true)
+
+const hydrationHistory: AssistantMessage[] = [{
+    id: 'canonical-earlier-answer',
+    role: 'assistant',
+    text: 'Earlier canonical answer.',
+    turnId: null,
+    streaming: false,
+    createdAt: '2026-08-10T09:59:00.000Z',
+    updatedAt: '2026-08-10T09:59:00.000Z'
+}]
+assert.deepEqual(filterVoiceHydrationReplay([
+    { id: 'hydrated-item', role: 'assistant', text: 'Earlier canonical answer.', final: true },
+    { id: 'new-item', role: 'assistant', text: 'Fresh Voice answer.', final: true }
+], hydrationHistory, '2026-08-10T10:00:00.000Z').map((entry) => entry.id), ['new-item'])
+assert.deepEqual(filterVoiceHydrationReplay([
+    { id: 'hydrated-partial', role: 'assistant', text: 'Earlier canonical', final: false }
+], hydrationHistory, '2026-08-10T10:00:00.000Z'), [])
 
 const preferenceStorage = new Map<string, string>()
 const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
@@ -512,8 +532,11 @@ assert.match(conversationPaneSource, /messages=\{displayedTimelineMessages\}/u)
 assert.match(canonicalVoiceStageSource, /<InstructorVoiceOrb/u)
 assert.match(canonicalVoiceDockSource, /<InstructorVoiceComposer/u)
 assert.match(canonicalVoiceDockSource, /allowImages=\{false\}/u)
+assert.match(canonicalVoiceDockSource, /AssistantPendingApprovalPanel/u)
 assert.match(canonicalVoiceStageStyles, /bottom: 90px/u)
 assert.match(conversationPaneSource, /VOICE_TIMELINE_RESERVE_PX = 500/u)
+assert.match(conversationPaneSource, /VOICE_SCROLL_BUTTON_BOTTOM_PX = 78/u)
+assert.doesNotMatch(conversationPaneSource, /voiceTimelineInsetFrameRef/u, 'Voice startup must not relayout the virtual timeline on every animation frame')
 assert.match(timelineRowsSource, /usesProviderNativeStreaming = message\.modality === 'voice'/u)
 assert.doesNotMatch(liveTranscriptSource, /data-transcript-word|element\.animate/u, 'the orb caption should use one calm transition rather than per-word animation')
 assert.doesNotMatch(conversationHeaderSource, /onToggleVoice|Start Voice in this chat/u, 'realtime Voice activation should live in the empty composer instead of the title bar')

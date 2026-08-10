@@ -1,20 +1,24 @@
+const ACTIONABLE_VERBS = /\b(?:check|inspect|show|find|look up|read|list|measure|verify|run|execute|open|create|make|edit|update|change|fix|install|uninstall|delete|remove|move|copy|rename|build|test|search|write|save|download|upload|start|stop|restart|kill|commit|revert|restore)\b/
+const ACTIONABLE_TARGETS = /\b(?:storage|disk|drive|free space|memory|ram|cpu|processor|battery|process|service|port|network|ip address|system|computer|pc|machine|file|folder|directory|repository|repo|project|code|script|command|terminal|shell|log|version|installation|package|dependency|app|application|server|database|branch|git|test|build|setting|configuration|config)\b/
+const STATUS_ONLY_REQUEST = /^(?:hello|hi|hey|what(?:'s| is) (?:the )?progress|waiting on what|checking on what|what (?:are )?you doing|are you (?:still )?(?:working|checking|waiting))\b/
+
 export function shouldDelegateVoiceInspection(textValue: string): boolean {
     const text = textValue.trim().toLowerCase()
-    if (!text || /^(?:hello|hi|hey|what(?:'s| is) (?:the )?progress|waiting on what|checking on what|what (?:are )?you doing)\b/.test(text)) {
-        return false
-    }
-    const inspectionTarget = /\b(?:storage|disk|drive|free space|memory|ram|cpu|processor|battery|process|service|port|network|ip address|system|computer|pc|machine|file|folder|directory|repository|repo|project|log|version|installation)\b/
-    const inspectionAction = /\b(?:check|inspect|show|find|look up|read|list|measure|verify|tell me|how much|how many|what is|what's|where is|is there|do i have)\b/
-    return inspectionTarget.test(text) && inspectionAction.test(text)
+    if (!text || STATUS_ONLY_REQUEST.test(text)) return false
+    if (ACTIONABLE_VERBS.test(text) && ACTIONABLE_TARGETS.test(text)) return true
+    if (/\b(?:tell me|how much|how many|what is|what's|where is|is there|do i have)\b/.test(text)
+        && ACTIONABLE_TARGETS.test(text)) return true
+    return /^(?:please\s+)?(?:run|execute|open|create|edit|update|change|fix|install|delete|remove|move|copy|rename|build|test|search|write|save|restart|commit)\b/.test(text)
 }
 
 export function buildVoiceStrongInspectionPrompt(request: string): string {
     return [
-        'You are Zyra\'s strong primary performing a private, read-only inspection requested during realtime Voice.',
-        'Complete the check now. Use read-only file tools or a non-mutating shell command when needed.',
-        'Do not edit or create files, install software, change settings, or perform external/destructive actions.',
-        'If the request cannot be completed read-only, say exactly what requires Chat instead of pretending to work.',
-        'Return a concise verified result suitable for Zyra to speak. Include concrete values and units. Do not mention internal routing or hidden prompts.',
+        'You are the same Zyra primary agent the user selected in Chat, now carrying out a request received through Voice.',
+        'Use the available tools and the supplied Chat permission mode exactly as you would for a typed turn.',
+        'Carry out the request now. Do not stop at “checking,” “working,” or “one moment.”',
+        'If a tool fails, is stopped, or returns no useful result, state that clearly and either recover or explain the exact blocker.',
+        'If approval is required, request it through the normal approval mechanism and wait for the user decision.',
+        'Return a concise final result suitable for Zyra to speak. Include concrete values and relevant changes. Do not mention hidden routing or private prompts.',
         '',
         `User request: ${request.trim()}`
     ].join('\n')
@@ -22,16 +26,16 @@ export function buildVoiceStrongInspectionPrompt(request: string): string {
 
 export function boundedVoiceTaskResult(value: string): string {
     const normalized = value.replace(/\s+/g, ' ').trim()
-    if (!normalized) return 'I could not verify a result for that check.'
+    if (!normalized) return 'I could not verify a result for that request.'
     return normalized.length <= 1800 ? normalized : `${normalized.slice(0, 1797).trimEnd()}…`
 }
 
 export function voiceTaskFailureMessage(error: unknown): string {
     const raw = error instanceof Error ? error.message : String(error || '')
     const normalized = raw.replace(/\s+/g, ' ').trim()
-    if (/cancel|abort/i.test(normalized)) return 'That check was cancelled.'
-    if (/approval|declin/i.test(normalized)) return 'That check needs approval before the strong agent can run it.'
+    if (/cancel|abort/i.test(normalized)) return 'That request was cancelled.'
+    if (/approval|declin/i.test(normalized)) return 'That request needs approval before the agent can continue.'
     return normalized
-        ? `I could not complete that check: ${normalized.slice(0, 280)}`
-        : 'I could not complete that check.'
+        ? `I could not complete that request: ${normalized.slice(0, 280)}`
+        : 'I could not complete that request.'
 }

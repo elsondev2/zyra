@@ -5,6 +5,8 @@ import type {
     InstructorOutputModality,
     InstructorRealtimeVoice
 } from '@shared/assistant/contracts'
+import voiceEndedCueUrl from '../../assets/voice-cues/voice-ended.wav?url'
+import voiceReadyCueUrl from '../../assets/voice-cues/voice-ready.wav?url'
 import { shouldPlayInstructorAudio } from './instructor-voice-preferences'
 import { calculateInstructorVoiceActivity, smoothInstructorVoiceActivity } from './instructor-voice-activity'
 import { applyRealtimeTranscriptEvent, type InstructorTranscriptEntry } from './instructor-voice-transcript'
@@ -35,7 +37,13 @@ type CanonicalVoiceBinding = {
     sessionId: string
 }
 
-const ACTIVITY_UPDATE_INTERVAL_MS = 32
+const ACTIVITY_UPDATE_INTERVAL_MS = 48
+
+function playVoiceCue(url: string): void {
+    const cue = new Audio(url)
+    cue.volume = 0.22
+    void cue.play().catch(() => undefined)
+}
 
 function createAudioMeter(context: AudioContext, stream: MediaStream): AudioMeter {
     const analyser = context.createAnalyser()
@@ -117,12 +125,14 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
     const outputMeterRef = useRef<AudioMeter | null>(null)
     const meterFrameRef = useRef<number | null>(null)
     const activityLevelRef = useRef(0)
+    const activityUpdatesEnabledRef = useRef(false)
     const lastActivityUpdateRef = useRef(0)
     const connectionTimerRef = useRef<number | null>(null)
     const mountedRef = useRef(true)
     const generationRef = useRef(0)
     const startPendingRef = useRef(false)
     const terminalHandledRef = useRef(false)
+    const readyCuePlayedRef = useRef(false)
     const activeThreadIdRef = useRef<string | null>(null)
     const adapterSessionIdRef = useRef<string | null>(null)
     const bridgeQueueRef = useRef<Promise<void>>(Promise.resolve())
@@ -154,6 +164,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
         meterContextRef.current = null
         if (meterContext && meterContext.state !== 'closed') void meterContext.close().catch(() => undefined)
         activityLevelRef.current = 0
+        activityUpdatesEnabledRef.current = false
         lastActivityUpdateRef.current = 0
         if (mountedRef.current) setActivityLevel(0)
 
@@ -202,7 +213,8 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
                 )
                 const smoothed = smoothInstructorVoiceActivity(activityLevelRef.current, measured)
                 activityLevelRef.current = smoothed < 0.004 ? 0 : smoothed
-                if (timestamp - lastActivityUpdateRef.current >= ACTIVITY_UPDATE_INTERVAL_MS) {
+                if (activityUpdatesEnabledRef.current
+                    && timestamp - lastActivityUpdateRef.current >= ACTIVITY_UPDATE_INTERVAL_MS) {
                     lastActivityUpdateRef.current = timestamp
                     setActivityLevel(activityLevelRef.current)
                 }
@@ -235,6 +247,8 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
 
     const endWithError = useCallback((message: string) => {
         if (terminalHandledRef.current) return
+        if (readyCuePlayedRef.current) playVoiceCue(voiceEndedCueUrl)
+        readyCuePlayedRef.current = false
         terminalHandledRef.current = true
         generationRef.current += 1
         activeThreadIdRef.current = null
@@ -303,6 +317,8 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
                 return
             }
             if (event.type === 'session.closed') {
+                if (readyCuePlayedRef.current) playVoiceCue(voiceEndedCueUrl)
+                readyCuePlayedRef.current = false
                 terminalHandledRef.current = true
                 generationRef.current += 1
                 activeThreadIdRef.current = null
@@ -329,6 +345,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
 
         startPendingRef.current = true
         terminalHandledRef.current = false
+        readyCuePlayedRef.current = false
         const generation = ++generationRef.current
         activeThreadIdRef.current = null
         adapterSessionIdRef.current = null
@@ -391,7 +408,12 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
                         window.clearTimeout(connectionTimerRef.current)
                         connectionTimerRef.current = null
                     }
+                    activityUpdatesEnabledRef.current = true
                     setStatus('active')
+                    if (!readyCuePlayedRef.current) {
+                        readyCuePlayedRef.current = true
+                        playVoiceCue(voiceReadyCueUrl)
+                    }
                 }
                 return ready
             }
@@ -574,6 +596,8 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
 
         terminalHandledRef.current = true
         generationRef.current += 1
+        if (readyCuePlayedRef.current) playVoiceCue(voiceEndedCueUrl)
+        readyCuePlayedRef.current = false
         activeThreadIdRef.current = null
         adapterSessionIdRef.current = null
         setStatus('stopping')

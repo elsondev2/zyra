@@ -8,6 +8,7 @@ import type {
     RealtimeDomainEvent,
     RealtimeForegroundAdapter,
     RealtimeHydrationDelta,
+    RealtimeHydrationItem,
     RealtimeHydrationSeed,
     RealtimeProviderCapabilityReport,
     RealtimeSessionHandle,
@@ -55,6 +56,8 @@ interface CodexAdapterSession {
     currentWatermarks: RealtimeHydrationSeed['sourceWatermarks']
     closed: boolean
     webRtcTurnRoles: Map<string, 'user' | 'assistant'>
+    hydrationReplayBudget: Map<string, number>
+    suppressedHydrationProviderItemIds: Set<string>
 }
 
 export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter {
@@ -96,7 +99,9 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
             handle: null,
             currentWatermarks: structuredClone(input.hydrationSeed.sourceWatermarks),
             closed: false,
-            webRtcTurnRoles: new Map()
+            webRtcTurnRoles: new Map(),
+            hydrationReplayBudget: createHydrationReplayBudget(input.hydrationSeed.items),
+            suppressedHydrationProviderItemIds: new Set()
         }
         this.sessions.set(adapterSessionId, session)
         this.currentAdapterSessionId = adapterSessionId
@@ -151,6 +156,7 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
         validateRealtimeHydrationDelta(delta)
         const session = this.requireCurrentSession(sessionId)
         const next = applyRealtimeHydrationDelta(session.input.hydrationSeed, session.currentWatermarks, delta)
+        addHydrationReplayBudget(session.hydrationReplayBudget, delta.items)
         await this.runtime.appendContext(delta.items.map(({ role, text }) => ({ role, text })))
         session.currentWatermarks = next
         const appliedAt = this.clock.now()
@@ -187,6 +193,13 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
     ingestWebRtcEvent(sessionId: string, value: unknown): void {
         const session = this.requireCurrentSession(sessionId)
         const event = normalizeWebRtcTranscriptEvent(value, session.webRtcTurnRoles)
+        if (event && session.suppressedHydrationProviderItemIds.has(event.providerItemId)) return
+        if (event?.kind === 'completed' && consumeHydrationReplay(
+            session,
+            event.role,
+            event.text,
+            event.providerItemId
+        )) return
         if (!event) {
             if (isWebRtcTranscriptCompletion(value)) {
                 this.emit({
@@ -264,6 +277,15 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
         if (!session || session.closed || !session.handle) return
         if (event.threadId && event.threadId !== session.handle.realtimeProviderThreadId) return
         if (event.type === 'transcript.delta' || event.type === 'transcript.done') {
+            if (event.providerItemId && session.suppressedHydrationProviderItemIds.has(event.providerItemId)) return
+            if (event.type === 'transcript.done'
+                && event.providerItemId
+                && consumeHydrationReplay(
+                    session,
+                    event.role === 'user' ? 'user' : 'assistant',
+                    event.text,
+                    event.providerItemId
+                )) return
             // Flat app-server notifications may omit item identity. The
             // production Desktop bridge supplies the identity-bearing WebRTC
             // event instead; never guess or commit the flat notification.
@@ -319,6 +341,39 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
     private emit(event: RealtimeDomainEvent): void {
         for (const listener of this.listeners) listener(event)
     }
+}
+
+function createHydrationReplayBudget(items: RealtimeHydrationItem[]): Map<string, number> {
+    const budget = new Map<string, number>()
+    addHydrationReplayBudget(budget, items)
+    return budget
+}
+
+function addHydrationReplayBudget(budget: Map<string, number>, items: RealtimeHydrationItem[]): void {
+    for (const item of items) {
+        if (item.role !== 'user' && item.role !== 'assistant') continue
+        const key = hydrationReplayKey(item.role, item.text)
+        budget.set(key, (budget.get(key) || 0) + 1)
+    }
+}
+
+function consumeHydrationReplay(
+    session: CodexAdapterSession,
+    role: 'user' | 'assistant',
+    text: string,
+    providerItemId: string
+): boolean {
+    const key = hydrationReplayKey(role, text)
+    const remaining = session.hydrationReplayBudget.get(key) || 0
+    if (remaining <= 0) return false
+    if (remaining === 1) session.hydrationReplayBudget.delete(key)
+    else session.hydrationReplayBudget.set(key, remaining - 1)
+    session.suppressedHydrationProviderItemIds.add(providerItemId)
+    return true
+}
+
+function hydrationReplayKey(role: 'user' | 'assistant', text: string): string {
+    return `${role}\0${text.replace(/\s+/gu, ' ').trim()}`
 }
 
 type NormalizedWebRtcTranscriptEvent =
