@@ -103,6 +103,11 @@ export function isSubagentActivity(activity: AssistantActivity): boolean {
     return activity.kind.startsWith('subagent.') || readActivityString(activity.payload?.category) === 'subagent'
 }
 
+export function isVoiceStrongTaskActivity(activity: AssistantActivity): boolean {
+    return activity.kind === 'voice.strong-task'
+        || readActivityString(activity.payload?.category) === 'voice-strong-task'
+}
+
 export function isContextCompactionActivity(activity: AssistantActivity): boolean {
     return activity.kind === 'context.compaction'
         || readActivityString(activity.payload?.category) === 'context-compaction'
@@ -144,6 +149,7 @@ export function isIssueActivity(activity: AssistantActivity): boolean {
 
 function getActivityRenderGroupKind(activity: AssistantActivity): 'issue' | 'subagent' | 'tool' | null {
     if (isInternalAssistantActivity(activity)) return null
+    if (isVoiceStrongTaskActivity(activity)) return null
     if (isModelNoticeActivity(activity)) return null
     if (isContextCompactionActivity(activity)) return null
     if (isCommandCheckpointActivity(activity)) return null
@@ -1071,6 +1077,7 @@ export function estimateTimelineRowHeight(
 ): number {
     if (row.kind === 'working') return 48
     if (row.kind === 'activity') {
+        if (isVoiceStrongTaskActivity(row.activity)) return 36
         if (isCommandCheckpointActivity(row.activity)) return 34
         if (isInternalAssistantActivity(row.activity)) return 42
         if (isContextCompactionActivity(row.activity)) return 72

@@ -217,7 +217,8 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         prefetchedHistoryThreadIdsRef.current.add(threadId)
         void actions.loadOlderHistory(threadId)
     }, [actions, controller.activeThread?.id, controller.history?.loadingOlder, controller.history?.pageInfo.hasOlder, settings.assistantHistoryPrefetch])
-    const shouldShowWorkingIndicator = isThreadWorking
+    const timelineIsWorking = isThreadWorking && !voiceVisible
+    const shouldShowWorkingIndicator = timelineIsWorking
         && !controller.timelineMessages.some((message) => message.role === 'assistant' && message.streaming)
     const displayedTimelineMessages = useMemo((): AssistantMessage[] => {
         if (!voiceVisible || voice.transcript.length === 0) return controller.timelineMessages
@@ -905,7 +906,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                             projectTitle={displayProjectPath || null}
                             assistantMessageFilePath={assistantMessageFilePath}
                             windowKey={`${controller.selectedSession?.id || 'no-session'}:${controller.activeThread?.id || 'no-thread'}`}
-                            isWorking={isThreadWorking}
+                            isWorking={timelineIsWorking}
                             activeStatusLabel={activeStatusLabel}
                             isConnecting={isThreadConnecting}
                             activeWorkStartedAt={controller.activeThread?.latestTurn?.startedAt || null}

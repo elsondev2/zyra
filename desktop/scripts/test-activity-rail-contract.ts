@@ -18,6 +18,7 @@ import {
     TIMELINE_MINIMAP_MAX_MARKERS
 } from '../src/renderer/src/pages/assistant/AssistantTimelineCheckpointRail'
 import { TimelineTurnWorkSummary } from '../src/renderer/src/pages/assistant/AssistantTimelineWorkSummary'
+import { TimelineVoiceTaskStatus } from '../src/renderer/src/pages/assistant/AssistantTimelineVoiceTask'
 import { IssueLogRow } from '../src/renderer/src/pages/assistant/AssistantPageHelpers'
 import { sanitizeThoughtContent, TimelineCommandCheckpointGroup, TimelineContextCompactionMarker, TimelineMessage, TimelineThought, TimelineThoughtGroup, TimelineWorkTraceGroup } from '../src/renderer/src/pages/assistant/AssistantTimelineRows'
 import { COLLAPSED_TOOL_CALL_COUNT, TimelineToolCallList } from '../src/renderer/src/pages/assistant/AssistantTimelineToolCalls'
@@ -585,6 +586,65 @@ assert.equal(
     1,
     'legacy prompts without turn IDs remain eligible minimap checkpoints'
 )
+
+const voiceTurnId = 'shared-turn:voice-conversation'
+const simpleVoiceMessages: AssistantMessage[] = [
+    { ...message({ id: 'voice_user_simple', role: 'user', turnId: voiceTurnId, millisecond: 3000, text: 'How are you?' }), modality: 'voice' },
+    { ...message({ id: 'voice_assistant_progress', role: 'assistant', turnId: voiceTurnId, millisecond: 3100, text: 'I am doing well.' }), modality: 'voice' },
+    { ...message({ id: 'voice_assistant_final', role: 'assistant', turnId: voiceTurnId, millisecond: 3200, text: 'How can I help?' }), modality: 'voice' }
+]
+const simpleVoiceDisplayRows = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries(simpleVoiceMessages, []), false, null),
+    messages: simpleVoiceMessages,
+    latestAssistantMessageId: 'voice_assistant_final',
+    latestTurnStartedAt: iso(3000),
+    isWorking: false
+})
+assert.equal(
+    simpleVoiceDisplayRows.some((row) => row.kind === 'turn-work-summary'),
+    false,
+    'ordinary Voice back-and-forth must remain conversational even when more than one assistant transcript item lands in the turn'
+)
+
+const voiceTaskActivity: AssistantActivity = {
+    id: 'voice-strong-task:task-voice-action',
+    kind: 'voice.strong-task',
+    tone: 'tool',
+    summary: 'Primary agent finished',
+    detail: 'Verified result',
+    turnId: 'task-voice-action',
+    createdAt: iso(3050),
+    payload: {
+        status: 'completed',
+        source: 'voice',
+        sourceProviderItemId: 'provider-voice-action',
+        startedAt: iso(3050),
+        completedAt: iso(3650)
+    }
+}
+const actionableVoiceMessages: AssistantMessage[] = [
+    {
+        ...message({ id: 'voice_user_action', role: 'user', turnId: 'voice-action-turn', millisecond: 3000, text: 'Run the check.' }),
+        modality: 'voice',
+        providerItemId: 'provider-voice-action'
+    },
+    { ...message({ id: 'voice_assistant_action', role: 'assistant', turnId: 'voice-action-turn', millisecond: 3700, text: 'The check passed.' }), modality: 'voice' }
+]
+const actionableVoiceRows = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries(actionableVoiceMessages, [voiceTaskActivity]), false, null),
+    messages: actionableVoiceMessages,
+    latestAssistantMessageId: 'voice_assistant_action',
+    latestTurnStartedAt: iso(3000),
+    isWorking: false
+})
+assert.deepEqual(
+    actionableVoiceRows.map((row) => row.kind),
+    ['message', 'activity', 'message'],
+    'actionable Voice work uses its explicit primary-agent lifecycle row instead of the generic turn timer'
+)
+const voiceTaskMarkup = renderToStaticMarkup(createElement(TimelineVoiceTaskStatus, { activity: voiceTaskActivity }))
+assert.equal(voiceTaskMarkup.includes('Primary agent finished'), true)
+assert.equal(voiceTaskMarkup.includes('Worked for'), false, 'Voice task status must describe the owner and state instead of showing an ambiguous generic timer')
 
 const sameTimeEntries = getTimelineEntries(
     [message({ id: 'same-time-user', role: 'user', turnId: 'same-time', millisecond: 900, text: 'Keep source order.' })],

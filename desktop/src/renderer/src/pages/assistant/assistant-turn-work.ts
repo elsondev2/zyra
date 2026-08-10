@@ -8,6 +8,12 @@ import {
     type TimelineTurnWorkSummaryRow
 } from './assistant-timeline-helpers'
 
+function isVoiceConversationMessage(message: AssistantMessage): boolean {
+    return message.modality === 'voice'
+        || message.id.startsWith('voice_')
+        || message.id.startsWith('voice-live-')
+}
+
 function getRowTurnId(row: TimelineRenderRow): string | null {
     if (row.kind === 'message') return row.message.turnId
     if (row.kind === 'plan') return row.plan.turnId
@@ -158,7 +164,10 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
             }
         }
 
-        if (userIndex >= 0) {
+        const activeUserMessage = userIndex >= 0 && rows[userIndex]?.kind === 'message'
+            ? rows[userIndex].message
+            : null
+        if (userIndex >= 0 && activeUserMessage && !isVoiceConversationMessage(activeUserMessage)) {
             let endIndex = rows.length - 1
             for (let index = userIndex + 1; index < rows.length; index += 1) {
                 const candidate = rows[index]
@@ -244,6 +253,8 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
             break
         }
         if (userIndex < 0 || finalIndex - userIndex <= 1) continue
+        const userMessage = rows[userIndex]?.kind === 'message' ? rows[userIndex].message : null
+        if (userMessage && isVoiceConversationMessage(userMessage)) continue
 
         const workRows = rows.slice(userIndex + 1, finalIndex)
         if (workRows.length === 0 || workRows.some(rowMustStayVisible)) continue
@@ -278,6 +289,7 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
     for (let userIndex = 0; userIndex < rows.length; userIndex += 1) {
         const userRow = rows[userIndex]
         if (userRow.kind !== 'message' || userRow.message.role !== 'user') continue
+        if (isVoiceConversationMessage(userRow.message)) continue
         if (ranges.has(userIndex + 1)) continue
 
         let endIndex = rows.length

@@ -60,6 +60,7 @@ import {
     shouldDelegateVoiceInspection,
     voiceTaskFailureMessage
 } from './voice/voice-strong-routing'
+import { buildVoiceStrongTaskActivity } from './voice/voice-strong-task-activity'
 import { ZyraAccountService } from './zyra-account-service'
 import {
     classifyZyraToolActivity,
@@ -140,6 +141,8 @@ type ActiveVoiceStrongTask = {
     taskId: string
     conversationId: string
     localThreadId: string
+    sourceProviderItemId: string
+    startedAt: string
     abortController: AbortController
 }
 
@@ -1000,6 +1003,8 @@ export class AssistantService {
             taskId,
             conversationId: event.conversationId,
             localThreadId: record.thread.id,
+            sourceProviderItemId: event.providerItemId,
+            startedAt: nowIso(),
             abortController
         }
         this.activeVoiceStrongTasks.set(event.conversationId, task)
@@ -1071,16 +1076,15 @@ export class AssistantService {
         const occurredAt = nowIso()
         this.appendEvent('thread.activity.appended', occurredAt, {
             threadId: task.localThreadId,
-            activity: {
-                id: `voice-strong-task:${task.taskId}`,
-                kind: 'voice.strong-task',
-                tone: status === 'failed' ? 'error' : status === 'cancelled' ? 'warning' : 'tool',
+            activity: buildVoiceStrongTaskActivity({
+                taskId: task.taskId,
+                sourceProviderItemId: task.sourceProviderItemId,
+                startedAt: task.startedAt,
+                occurredAt,
+                status,
                 summary,
-                detail: detail.slice(0, 4000),
-                turnId: task.taskId,
-                createdAt: occurredAt,
-                payload: { status, taskId: task.taskId, source: 'voice' }
-            }
+                detail
+            })
         }, sessionId, task.localThreadId)
     }
 

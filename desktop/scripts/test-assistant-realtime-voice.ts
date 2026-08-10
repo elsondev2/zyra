@@ -25,6 +25,7 @@ import {
     getTimelineEntries
 } from '../src/renderer/src/pages/assistant/assistant-timeline-helpers'
 import { shouldDelegateVoiceInspection } from '../src/main/assistant/voice/voice-strong-routing'
+import { buildVoiceStrongTaskActivity } from '../src/main/assistant/voice/voice-strong-task-activity'
 import {
     normalizeInstructorVoicePreferences,
     readInstructorVoicePreferences,
@@ -366,6 +367,29 @@ assert.equal(shouldDelegateVoiceInspection("What's the storage left on my PC if 
 assert.equal(shouldDelegateVoiceInspection('What are you able to do here?'), false)
 assert.equal(shouldDelegateVoiceInspection('Checking on what?'), false)
 assert.equal(shouldDelegateVoiceInspection('Run the build and fix the file if it fails'), true)
+
+const voiceTaskStartedAt = '2026-08-10T10:00:00.000Z'
+const runningVoiceTaskActivity = buildVoiceStrongTaskActivity({
+    taskId: 'voice-task-stable-timeline',
+    sourceProviderItemId: 'provider-user-task',
+    startedAt: voiceTaskStartedAt,
+    occurredAt: voiceTaskStartedAt,
+    status: 'running',
+    summary: 'Primary agent working',
+    detail: 'Run the requested check.'
+})
+const completedVoiceTaskActivity = buildVoiceStrongTaskActivity({
+    taskId: 'voice-task-stable-timeline',
+    sourceProviderItemId: 'provider-user-task',
+    startedAt: voiceTaskStartedAt,
+    occurredAt: '2026-08-10T10:00:12.000Z',
+    status: 'completed',
+    summary: 'Primary agent finished',
+    detail: 'The requested check passed.'
+})
+assert.equal(completedVoiceTaskActivity.createdAt, runningVoiceTaskActivity.createdAt, 'Voice task completion must not move its timeline row into a later exchange')
+assert.equal(completedVoiceTaskActivity.payload?.sourceProviderItemId, 'provider-user-task', 'Voice task lifecycle must stay bound to the spoken request that created it')
+assert.equal(completedVoiceTaskActivity.payload?.completedAt, '2026-08-10T10:00:12.000Z')
 
 const hydrationHistory: AssistantMessage[] = [{
     id: 'canonical-earlier-answer',
