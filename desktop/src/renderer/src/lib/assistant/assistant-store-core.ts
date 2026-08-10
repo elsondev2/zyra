@@ -31,6 +31,10 @@ import { runAssistantStoreAction } from './assistant-store-action-runner'
 import { selectAssistantStoreSession } from './assistant-store-session-selection'
 import { preserveAssistantClientRoute } from './assistant-client-route'
 import {
+    isPristineAssistantSession,
+    shouldEagerlyConnectAssistantThread
+} from './assistant-new-chat-policy'
+import {
     applyAssistantHistoryPage,
     applyAssistantThreadDetail,
     formatAssistantHistoryLoadError,
@@ -47,20 +51,10 @@ const SNAPSHOT_REFRESH_RECOVERY_ERRORS = new Set([
     'Assistant session has no active thread.'
 ])
 
-function isEmptyAssistantThread(thread: AssistantThread) {
-    return !thread.latestTurn
-        && !thread.activePlan
-        && (thread.messageCount || 0) === 0
-        && thread.proposedPlans.length === 0
-        && thread.pendingApprovals.length === 0
-        && thread.pendingUserInputs.length === 0
-}
-
 type AssistantCreateSessionResult = DevScopeResult<{ sessionId: string; snapshot?: AssistantSnapshot }>
 
 function isReusableEmptySession(session: AssistantSession, input?: AssistantCreateSessionInput) {
-    if (session.archived || session.pendingLabRequest) return false
-    if (session.threads.length > 0 && !session.threads.every(isEmptyAssistantThread)) return false
+    if (!isPristineAssistantSession(session)) return false
     if (input?.mode && session.mode !== input.mode) return false
     if (input?.projectPath !== undefined && (session.projectPath || null) !== (input.projectPath || null)) return false
     if (input?.playgroundLabId !== undefined && (session.playgroundLabId || null) !== (input.playgroundLabId || null)) return false
@@ -169,9 +163,11 @@ class AssistantStore {
                 let startupError: string | null = null
                 const selectedSessionId = clientSnapshot.selectedSessionId
                 const selectedSession = clientSnapshot.sessions.find((session) => session.id === selectedSessionId) || null
+                const selectedThread = selectedSession?.threads.find((thread) => thread.id === selectedSession.activeThreadId) || null
                 const shouldRestoreConnection = Boolean(
                     selectedSessionId
                     && selectedSession?.activeThreadId
+                    && shouldEagerlyConnectAssistantThread(selectedThread)
                     && clientStatus.available
                     && !clientStatus.connected
                     && shouldAutoReconnectAssistantOnStartup()
@@ -289,7 +285,12 @@ class AssistantStore {
     }
 
     private async createSessionImpl(input?: AssistantCreateSessionInput): Promise<AssistantCreateSessionResult> {
-        const reusableEmptySession = this.state.snapshot.sessions.find((session) => isReusableEmptySession(session, input)) || null
+        const selectedSession = this.state.snapshot.sessions.find(
+            (session) => session.id === this.state.snapshot.selectedSessionId
+        ) || null
+        const reusableEmptySession = selectedSession && isReusableEmptySession(selectedSession, input)
+            ? selectedSession
+            : null
         if (reusableEmptySession) {
             this.setState((current) => ({
                 error: null,
@@ -509,6 +510,8 @@ class AssistantStore {
             } else {
                 void this.requestSessionHydration(input.sessionId, input.threadId)
             }
+            const targetThread = selectedSession.threads.find((thread) => thread.id === input.threadId) || null
+            if (!shouldEagerlyConnectAssistantThread(targetThread)) return result
             const connection = await window.devscope.assistant.connect({ sessionId: input.sessionId })
             if (!connection.success) {
                 this.setState({ error: connection.error })
@@ -704,7 +707,8 @@ class AssistantStore {
         const sessionId = this.state.snapshot.selectedSessionId
         const session = this.state.snapshot.sessions.find((entry) => entry.id === sessionId) || null
         const threadId = session?.activeThreadId || null
-        if (!sessionId || !threadId) return
+        const thread = session?.threads.find((candidate) => candidate.id === threadId) || null
+        if (!sessionId || !threadId || !shouldEagerlyConnectAssistantThread(thread)) return
 
         const claim = (async () => {
             try {

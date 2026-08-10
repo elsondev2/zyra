@@ -1048,7 +1048,21 @@ export class ZyraPiRuntime extends EventEmitter {
     }
 
     async connect(thread: AssistantThread, cwd: string): Promise<void> {
-        if (this.getSessionContext(thread.id) || (thread.providerThreadId && this.getSessionContext(thread.providerThreadId))) return
+        const existingContext = this.getSessionContext(thread.id)
+            || (thread.providerThreadId ? this.getSessionContext(thread.providerThreadId) : null)
+        if (existingContext) {
+            if (!existingContext.worker.isAlive()) {
+                this.disconnect(existingContext.localThreadId)
+            } else {
+                try {
+                    await this.ensureConnected(existingContext)
+                    return
+                } catch (error) {
+                    this.releaseSessionContext(existingContext)
+                    throw error
+                }
+            }
+        }
 
         const availability = await this.checkAvailability()
         if (!availability.available) {
@@ -1134,7 +1148,7 @@ export class ZyraPiRuntime extends EventEmitter {
             createdAt: nowIso(),
             threadId: thread.id,
             providerThreadId,
-            payload: { providerThreadId, cwd, state: 'ready' }
+            payload: { providerThreadId, cwd, state: 'starting' }
         })
         this.emitRuntime({
             eventId: randomUUID(),
@@ -1142,13 +1156,28 @@ export class ZyraPiRuntime extends EventEmitter {
             createdAt: nowIso(),
             threadId: thread.id,
             providerThreadId,
-            payload: { state: 'ready' }
+            payload: { state: 'starting' }
         })
-        await this.ensureConnected(context)
+        try {
+            await this.ensureConnected(context)
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Zyra session connection failed.'
+            this.releaseSessionContext(context)
+            this.emitRuntime({
+                eventId: randomUUID(),
+                type: 'session.state.changed',
+                createdAt: nowIso(),
+                threadId: context.localThreadId,
+                providerThreadId: context.providerThreadId,
+                payload: { state: 'error', error: message, message }
+            })
+            throw error
+        }
     }
 
     hasSession(threadId: string): boolean {
-        return Boolean(this.getSessionContext(threadId))
+        const context = this.getSessionContext(threadId)
+        return Boolean(context?.connected && context.worker.isAlive())
     }
 
     async sendPrompt(
@@ -1383,6 +1412,16 @@ export class ZyraPiRuntime extends EventEmitter {
         return
     }
 
+    private releaseSessionContext(context: ZyraSessionContext): void {
+        for (const threadId of new Set([context.localThreadId, context.providerThreadId])) {
+            if (this.sessions.get(threadId) !== context) continue
+            this.sessions.delete(threadId)
+            this.aliases.delete(threadId)
+        }
+        if (typeof context.unsubscribe === 'function') context.unsubscribe()
+        context.worker.dispose()
+    }
+
     disconnect(threadId: string): void {
         const context = this.getSessionContext(threadId)
         if (!context) return
@@ -1392,14 +1431,7 @@ export class ZyraPiRuntime extends EventEmitter {
                 'Root Browser control ended when its session disconnected.'
             )
         }
-        this.sessions.delete(context.localThreadId)
-        this.sessions.delete(context.providerThreadId)
-        this.aliases.delete(context.localThreadId)
-        this.aliases.delete(context.providerThreadId)
-        if (typeof context.unsubscribe === 'function') {
-            context.unsubscribe()
-        }
-        context.worker.dispose()
+        this.releaseSessionContext(context)
         this.emitRuntime({
             eventId: randomUUID(),
             type: 'session.state.changed',

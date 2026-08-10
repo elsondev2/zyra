@@ -20,7 +20,7 @@ import {
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const HANDSHAKE_TIMEOUT_MS = 5_000;
-const BRIDGE_CONNECT_TIMEOUT_MS = 120_000;
+const BRIDGE_CONNECT_TIMEOUT_MS = 15_000;
 const ACTIVE_FLEET_STATUSES = new Set(["queued", "starting", "running", "waiting", "paused", "recovering"]);
 const BRIDGE_REQUEST_PATTERN = /^(?:prompt|configure|abort|steer|follow_up|compact|clear_queue|reload|canonical_message\.(?:append|find)|approval\.respond|agents\.[a-zA-Z0-9._-]+|workflows\.[a-zA-Z0-9._-]+)$/;
 

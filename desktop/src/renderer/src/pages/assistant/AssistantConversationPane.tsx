@@ -262,6 +262,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         loading: controller.loading,
         connected: controller.connected,
         commandPending: newChatHandoffActive ? false : controller.commandPending,
+        deferUntilFirstPrompt: selectedSessionUsesNewChatSurface,
         threadLastError: controller.activeThread?.lastError || null,
         commandError: controller.commandError,
         activities: newChatHandoffActive ? [] : controller.activityFeed,
@@ -978,7 +979,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         resetComposerStateToken={resetComposerStateToken}
                         selectedSessionMode={selectedSessionMode}
                         assistantAvailable={controller.available}
-                        assistantConnected={controller.connected}
+                        assistantConnected={controller.connected || selectedSessionUsesNewChatSurface}
                         selectedProjectPath={displayProjectPath || null}
                         availableModels={availableModels}
                         activeModel={activeComposerModel}

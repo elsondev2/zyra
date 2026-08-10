@@ -36,6 +36,7 @@ export function useAssistantConnectionRecovery(input: {
     loading: boolean
     connected: boolean
     commandPending: boolean
+    deferUntilFirstPrompt?: boolean
     threadLastError?: string | null
     commandError?: string | null
     activities: AssistantActivity[]
@@ -49,6 +50,7 @@ export function useAssistantConnectionRecovery(input: {
         loading,
         connected,
         commandPending,
+        deferUntilFirstPrompt = false,
         threadLastError,
         commandError,
         activities,
@@ -172,7 +174,7 @@ export function useAssistantConnectionRecovery(input: {
     }, [cancelReconnectRun])
 
     useEffect(() => {
-        if (!selectedSessionId || !reconnectSessionKey) return
+        if (!selectedSessionId || !reconnectSessionKey || deferUntilFirstPrompt) return
         if (loading || commandPending || connected) return
         if (threadState === 'interrupted') return
         if (!shouldAutoReconnect) return
@@ -182,6 +184,7 @@ export function useAssistantConnectionRecovery(input: {
     }, [
         commandPending,
         connected,
+        deferUntilFirstPrompt,
         loading,
         shouldAutoReconnect,
         selectedSessionId,

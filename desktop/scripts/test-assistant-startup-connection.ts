@@ -5,6 +5,11 @@ import type {
     AssistantThread
 } from '../src/shared/assistant/contracts'
 import { deriveAssistantRuntimeStatus } from '../src/renderer/src/lib/assistant/assistant-store-runtime'
+import {
+    isPristineAssistantThread,
+    isUnstartedAssistantThread,
+    shouldEagerlyConnectAssistantThread
+} from '../src/renderer/src/lib/assistant/assistant-new-chat-policy'
 import { shouldAutoReconnectAssistantOnStartup } from '../src/renderer/src/lib/assistant/assistant-runtime-preferences'
 import { areAssistantSessionsRailSelectionsEqual } from '../src/renderer/src/lib/assistant/assistant-store-selection-helpers'
 import { getAssistantThreadPhase } from '../src/renderer/src/lib/assistant/selectors'
@@ -46,6 +51,18 @@ const thread: AssistantThread = {
     pendingUserInputs: []
 }
 
+const staleEmptyThread: AssistantThread = {
+    ...thread,
+    id: 'stale-empty-thread',
+    providerThreadId: 'stale-provider-thread',
+    cwd: 'C:\\stale',
+    messageCount: 0,
+    activityCount: 55,
+    latestTurn: null,
+    messages: [],
+    state: 'ready'
+}
+
 const snapshot: AssistantSnapshot = {
     snapshotSequence: 12,
     updatedAt: now,
@@ -64,6 +81,19 @@ const snapshot: AssistantSnapshot = {
         activeThreadId: threadId,
         threadIds: [threadId],
         threads: [thread]
+    }, {
+        id: 'stale-empty-session',
+        title: 'New Session',
+        mode: 'work',
+        projectPath: 'C:\\stale',
+        playgroundLabId: null,
+        pendingLabRequest: null,
+        archived: false,
+        createdAt: now,
+        updatedAt: now,
+        activeThreadId: staleEmptyThread.id,
+        threadIds: [staleEmptyThread.id],
+        threads: [staleEmptyThread]
     }],
     knownModels: [{ id: 'openai-codex/gpt-5.5', label: 'gpt-5.5' }]
 }
@@ -86,6 +116,7 @@ const connectedStatus: AssistantRuntimeStatus = {
 const connectCalls: Array<{ sessionId?: string } | undefined> = []
 const selectThreadCalls: Array<{ sessionId: string; threadId: string }> = []
 const disconnectCalls: Array<string | undefined> = []
+const createSessionCalls: Array<{ projectPath?: string; mode?: string } | undefined> = []
 
 ;(globalThis as typeof globalThis & { window: unknown }).window = {
     devscope: {
@@ -98,6 +129,15 @@ const disconnectCalls: Array<string | undefined> = []
             connect: async (options?: { sessionId?: string }) => {
                 connectCalls.push(options)
                 return { success: true as const, threadId }
+            },
+            selectSession: async (targetSessionId: string) => ({
+                success: true as const,
+                sessionId: targetSessionId,
+                snapshot: { ...snapshot, selectedSessionId: targetSessionId }
+            }),
+            createSession: async (input?: { projectPath?: string; mode?: string }) => {
+                createSessionCalls.push(input)
+                return { success: false as const, error: 'Intentional new-chat regression sentinel.' }
             },
             disconnect: async (targetSessionId?: string) => {
                 disconnectCalls.push(targetSessionId)
@@ -140,6 +180,16 @@ assert.deepEqual(
 assert.deepEqual(disconnectCalls, [], 'cold bootstrap should not disconnect before its first connection attempt')
 assert.equal(state.status.connected, true, 'store status should be connected after startup restoration')
 assert.equal(state.status.activeThreadId, threadId)
+const createResult = await assistantStore.createSession({ mode: 'work', projectPath: 'C:\\stale' })
+assert.equal(createResult.success, false, 'the regression sentinel should stop after proving a fresh session was requested')
+assert.equal(
+    createSessionCalls.length,
+    1,
+    'New chat must create a fresh session instead of reviving an old provider-bound empty session'
+)
+assert.equal(isUnstartedAssistantThread(staleEmptyThread), true, 'an empty old thread can still be composed into lazily')
+assert.equal(isPristineAssistantThread(staleEmptyThread), false, 'provider binding and prior activity make an old empty thread unsafe to reuse')
+assert.equal(shouldEagerlyConnectAssistantThread(staleEmptyThread), false, 'an untouched chat should not block its empty composer on runtime startup')
 assert.equal(
     deriveAssistantRuntimeStatus(snapshot, disconnectedStatus).connected,
     false,

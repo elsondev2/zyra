@@ -6,6 +6,7 @@ import {
     deriveAssistantRuntimeStatus,
     type AssistantStoreState
 } from './assistant-store-runtime'
+import { shouldEagerlyConnectAssistantThread } from './assistant-new-chat-policy'
 
 type SetAssistantStoreState = (
     nextState:
@@ -58,6 +59,7 @@ export async function selectAssistantStoreSession(
 
     const previousSessionId = context.state.snapshot.selectedSessionId
     const targetThreadId = selectedSession.activeThreadId || null
+    const targetThread = selectedSession.threads.find((thread) => thread.id === targetThreadId) || null
     const transitionKey = `${sessionId}:${targetThreadId || ''}`
     let selectionRequestId = 0
 
@@ -139,6 +141,8 @@ export async function selectAssistantStoreSession(
         } else {
             void context.requestSessionHydration(sessionId, targetThreadId)
         }
+
+        if (!shouldEagerlyConnectAssistantThread(targetThread)) return result
 
         try {
             const connectResult = await window.devscope.assistant.connect({ sessionId })
