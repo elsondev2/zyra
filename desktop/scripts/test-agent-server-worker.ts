@@ -141,6 +141,20 @@ try {
     assert.equal(reconnectWorker.latestSequence, latestSequence, 'transport reconnects must retain the replay watermark')
     reconnectWorker.dispose()
     reconnectConnection.close()
+
+    const retryProbe = new DesktopAgentServerConnection(root, { autoStart: false })
+    const recoveredClient = { close: () => undefined }
+    let clientCreationAttempts = 0
+    ;(retryProbe as any).createClient = async () => {
+        clientCreationAttempts += 1
+        if (clientCreationAttempts === 1) throw new Error('intentional startup race')
+        return recoveredClient
+    }
+    await assert.rejects((retryProbe as any).getClient(), /intentional startup race/)
+    assert.equal(await (retryProbe as any).getClient(), recoveredClient, 'a failed initial client connection must be retryable')
+    assert.equal(clientCreationAttempts, 2, 'the rejected client promise must not poison every later connection attempt')
+    retryProbe.close()
+
     process.stdout.write('desktop agent-server worker tests passed\n')
 } finally {
     connection.close()

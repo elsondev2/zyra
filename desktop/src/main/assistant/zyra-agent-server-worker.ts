@@ -280,7 +280,14 @@ export class DesktopAgentServerConnection {
 
     private async getClient(): Promise<AgentServerClient> {
         if (this.disposed) throw new Error('Zyra agent-server connection is closed.')
-        if (!this.clientPromise) this.clientPromise = this.createClient()
+        if (!this.clientPromise) {
+            const pending = this.createClient()
+            const tracked = pending.catch((error) => {
+                if (this.clientPromise === tracked) this.clientPromise = null
+                throw error
+            })
+            this.clientPromise = tracked
+        }
         return this.clientPromise
     }
 
