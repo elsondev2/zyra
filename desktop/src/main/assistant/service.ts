@@ -1692,24 +1692,12 @@ export class AssistantService {
                     `${activeTask.taskId}_approval_${event.requestId || 'request'}`,
                     approvalMessage
                 )).catch(() => undefined)
-            } else if (activeVoice && event.type === 'approval.resolved') {
-                void this.requireCanonicalRealtimeAdapter().appendTransientContext(
-                    activeVoice.adapterSessionId,
-                    `The approval for strong task ${activeTask?.taskId} was resolved. Do not invent progress; wait for a verified result.`
+            } else if (activeVoice && activeTask && event.type === 'approval.resolved') {
+                void this.submitVoiceTaskNarration(
+                    activeVoice,
+                    `${activeTask.taskId}_approval_resolved_${event.requestId || 'request'}`,
+                    'Approval received. The primary agent is continuing.'
                 ).catch(() => undefined)
-            } else if (activeVoice && activeTask && event.type === 'activity') {
-                const phase = String(event.payload.data?.['toolLifecyclePhase'] || '')
-                const status = String(event.payload.data?.['status'] || '')
-                const failed = event.payload.tone === 'error' || status === 'failed'
-                const stopped = status === 'stopped'
-                if (phase === 'start' || phase === 'end' || failed || stopped) {
-                    const lifecycle = failed ? 'failed' : stopped ? 'stopped' : phase === 'start' ? 'started' : 'finished'
-                    const detail = [event.payload.summary, event.payload.detail].filter(Boolean).join(': ').slice(0, 1200)
-                    void this.requireCanonicalRealtimeAdapter().appendTransientContext(
-                        activeVoice.adapterSessionId,
-                        `Strong task ${activeTask.taskId} tool ${lifecycle}: ${detail}. Report this exact state if the user asks; never claim progress beyond it.`
-                    ).catch(() => undefined)
-                }
             }
             const targetRecord = findThreadRecord(this.state.snapshot, privateVoiceTarget)
             this.handleRuntimeEvent({

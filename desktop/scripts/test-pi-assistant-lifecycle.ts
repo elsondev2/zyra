@@ -329,6 +329,7 @@ const context = {
     toolArgsByCallId: new Map<string, Record<string, unknown>>(),
     toolStartedAtByCallId: new Map<string, string>(),
     commandActivityIdByJobId: new Map<string, string>(),
+    runningManagedCommandJobIds: new Set<string>(),
     assistantTextByItemId: new Map<string, string>(),
     assistantCompletedItemIds: new Set<string>(),
     internalTextByItemId: new Map<string, string>(),
@@ -828,6 +829,11 @@ const observedManagedCommand = runtimeEvents.findLast((event) => (
 assert.equal(observedManagedCommand?.type === 'activity' ? observedManagedCommand.payload.data?.['status'] : null, 'completed')
 assert.equal(observedManagedCommand?.turnId, undefined, 'background completion must remain deliverable after the model turn ends')
 assert.equal(observedManagedCommand?.type === 'activity' ? observedManagedCommand.payload.data?.['durationMs'] : null, 20_000)
+assert.equal(
+    context.runningManagedCommandJobIds.has('cmd-5'),
+    false,
+    'an observed terminal job update must clear the private Voice task command barrier'
+)
 
 const observedRunningCommand = runtimeEvents.findLast((event) => (
     event.type === 'activity'

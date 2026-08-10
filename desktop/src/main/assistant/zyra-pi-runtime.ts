@@ -2116,6 +2116,8 @@ export class ZyraPiRuntime extends EventEmitter {
         const status = normalizeManagedCommandLifecycleStatus(event['status'])
         const jobId = asString(event['jobId'])
         if (!status || !jobId) return
+        if (status === 'running') context.runningManagedCommandJobIds.add(jobId)
+        else context.runningManagedCommandJobIds.delete(jobId)
         const toolCallId = asString(event['toolCallId'])
         const activityId = toolCallId
             ? `zyra-tool-${toolCallId}`

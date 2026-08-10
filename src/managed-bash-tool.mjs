@@ -12,6 +12,7 @@ const FINAL_OUTPUT_LINES = 2000;
 const STATUS_OUTPUT_CHARS = 24000;
 const FINAL_OUTPUT_CHARS = 50000;
 const LIVE_UPDATE_INTERVAL_MS = 500;
+const MAX_RETAINED_TERMINAL_JOBS = 64;
 
 const bashSchema = Type.Object({
   command: Type.Optional(Type.String({ description: "Bash command to execute. Required for action=run." })),
@@ -78,7 +79,9 @@ async function runAction({ state, operations, commandPrefix, cwd, toolCallId, in
   const command = String(input.command ?? "").trim();
   if (!command) throw new Error("bash command is required");
 
-  const job = startJob({ state, operations, commandPrefix, cwd, command, toolCallId, timeout: input.timeout, onUpdate });
+  pruneRetainedTerminalJobs(state);
+  const executionCommand = prepareManagedBashCommand(command);
+  const job = startJob({ state, operations, commandPrefix, cwd, command, executionCommand, toolCallId, timeout: input.timeout, onUpdate });
   const waitMs = secondsToMs(input.wait, DEFAULT_INITIAL_WAIT_MS);
   const abortResult = linkAbort(signal, job);
 
@@ -105,15 +108,15 @@ async function stopAction(state, input = {}) {
   const job = getJob(state, input.jobId);
   stopJob(job, "Command stopped");
   await job.done.catch(() => {});
-  state.jobs.delete(job.id);
+  job.autoPollDone = true;
   return toolResult(formatStoppedJob(job), { jobId: job.id, status: "stopped", outputLineCount: countOutputLines(job.output) });
 }
 
-function startJob({ state, operations, commandPrefix, cwd, command, toolCallId, timeout, onUpdate }) {
+function startJob({ state, operations, commandPrefix, cwd, command, executionCommand, toolCallId, timeout, onUpdate }) {
   const id = `cmd-${state.nextId++}`;
   const abortController = new AbortController();
   const startedAt = Date.now();
-  const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
+  const resolvedCommand = commandPrefix ? `${commandPrefix}\n${executionCommand}` : executionCommand;
   const job = {
     id,
     toolCallId,
@@ -299,8 +302,8 @@ function abortPromise(signal) {
   return new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
 }
 
-function finalJobResult(state, job) {
-  state.jobs.delete(job.id);
+function finalJobResult(_state, job) {
+  job.autoPollDone = true;
   const text = formatFinalJob(job);
   if (job.error || (job.exitCode !== 0 && job.exitCode !== null && job.exitCode !== undefined)) {
     throw new Error(text);
@@ -348,7 +351,7 @@ export async function waitForManagedBashAutoUpdate(state, options = {}) {
     if (job.autoPollDone) continue;
     if (job.completedAt) {
       updates.push(formatFinalJob(job));
-      state.jobs.delete(job.id);
+      job.autoPollDone = true;
       continue;
     }
     job.autoPolls += 1;
@@ -421,6 +424,37 @@ function formatOutputTail(output, options = {}) {
     ? `[Showing latest output${overflowLines > 0 ? `, skipped ${overflowLines} earlier line${overflowLines === 1 ? "" : "s"}` : ""}]\n`
     : "";
   return `${prefix}${visible.join("\n")}`;
+}
+
+export function prepareManagedBashCommand(commandValue, platform = process.platform) {
+  const command = String(commandValue ?? "");
+  if (platform !== "win32") return command;
+  if (/^\s*cmd(?:\.exe)?\b/i.test(command)) return `MSYS_NO_PATHCONV=1 ${command}`;
+  if (!/^\s*(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)\b/i.test(command)) return command;
+
+  let prepared = "";
+  let quote = null;
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index];
+    if (character === "\\" && quote !== "'") {
+      prepared += character;
+      if (index + 1 < command.length) prepared += command[index += 1];
+      continue;
+    }
+    if (character === "'" && quote !== '"') quote = quote === "'" ? null : "'";
+    else if (character === '"' && quote !== "'") quote = quote === '"' ? null : '"';
+    if (character === "$" && quote !== "'") prepared += "\\";
+    prepared += character;
+  }
+  return prepared;
+}
+
+function pruneRetainedTerminalJobs(state) {
+  const terminalJobs = [...state.jobs.values()]
+    .filter((job) => job.completedAt)
+    .sort((left, right) => Number(left.completedAt) - Number(right.completedAt));
+  const overflow = terminalJobs.length - MAX_RETAINED_TERMINAL_JOBS + 1;
+  for (let index = 0; index < overflow; index += 1) state.jobs.delete(terminalJobs[index].id);
 }
 
 function secondsToMs(value, fallbackMs) {

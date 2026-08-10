@@ -652,6 +652,10 @@ const timelineRowsSource = readFileSync(
     new URL('../src/renderer/src/pages/assistant/AssistantTimelineRows.tsx', import.meta.url),
     'utf8'
 )
+const assistantServiceSource = readFileSync(
+    new URL('../src/main/assistant/service.ts', import.meta.url),
+    'utf8'
+)
 const liveTranscriptSource = readFileSync(
     new URL('../src/renderer/src/pages/assistant/InstructorVoiceLiveTranscript.tsx', import.meta.url),
     'utf8'
@@ -682,6 +686,12 @@ assert.match(conversationPaneSource, /VOICE_TIMELINE_RESERVE_PX = 500/u)
 assert.match(conversationPaneSource, /VOICE_SCROLL_BUTTON_BOTTOM_PX = 78/u)
 assert.doesNotMatch(conversationPaneSource, /voiceTimelineInsetFrameRef/u, 'Voice startup must not relayout the virtual timeline on every animation frame')
 assert.match(timelineRowsSource, /usesProviderNativeStreaming = message\.modality === 'voice'/u)
+assert.match(assistantServiceSource, /Approval received\. The primary agent is continuing\./u)
+assert.doesNotMatch(
+    assistantServiceSource,
+    /Strong task \$\{activeTask\.taskId\} tool \$\{lifecycle\}/u,
+    'tool lifecycle events must stay visual instead of prompting unverified realtime narration'
+)
 assert.doesNotMatch(liveTranscriptSource, /data-transcript-word|element\.animate/u, 'the orb caption should use one calm transition rather than per-word animation')
 assert.doesNotMatch(conversationHeaderSource, /onToggleVoice|Start Voice in this chat/u, 'realtime Voice activation should live in the empty composer instead of the title bar')
 
