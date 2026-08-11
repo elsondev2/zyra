@@ -205,6 +205,9 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         if (runtimeMode) setSelectedRuntimeMode(runtimeMode)
     }, [normalizedSessionId, runtimeMode])
     useEffect(() => {
+        if (interactionMode) setSelectedInteractionMode(interactionMode)
+    }, [interactionMode, normalizedSessionId])
+    useEffect(() => {
         if (!activeEffort) return
         setSelectedEffort(coerceAssistantReasoningEffortForModel(activeEffort, activeModel || selectedModel))
     }, [activeEffort, activeModel, normalizedSessionId])

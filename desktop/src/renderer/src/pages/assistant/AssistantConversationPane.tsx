@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 import { buildPromptImageInputs, buildPromptWithContextFiles } from './assistant-composer-utils'
 import { clearAssistantComposerSessionState } from './assistant-composer-session-state'
 import { projectVoiceLiveTimelineMessages } from './assistant-voice-live-timeline'
+import { resolveAssistantComposerLaunchConfiguration } from './assistant-new-chat-composer-config'
 import { AssistantCanonicalVoiceDock } from './AssistantCanonicalVoiceDock'
 import { AssistantCanonicalVoiceStage } from './AssistantCanonicalVoiceStage'
 import { AssistantChatOnboardingOverlay } from './AssistantChatOnboardingOverlay'
@@ -333,9 +334,13 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const visibleComposerSessionId = newChatHandoffActive
         ? NEW_CHAT_HANDOFF_SESSION_ID
         : selectedSessionId
-    const activeComposerModel = selectedSessionIsDraft || newChatHandoffActive
-        ? undefined
-        : controller.activeThread?.model || availableModels[0]?.id || undefined
+    const activeComposerConfiguration = resolveAssistantComposerLaunchConfiguration({
+        useSettingsDefaults: selectedSessionIsDraft || newChatHandoffActive,
+        settings,
+        thread: controller.activeThread,
+        fallbackModel: availableModels[0]?.id,
+        interactionModeOverride
+    })
     const resetComposerStateToken = isCreatingFreshChat
         ? `${selectedSessionId || 'pending'}:${pendingCreateProjectPath || 'chat'}`
         : null
@@ -871,7 +876,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     ])
     usePublishAssistantTitleBarContent(titleBarContent)
 
-    const effectiveInteractionMode = interactionModeOverride || controller.activeThread?.interactionMode || 'default'
+    const effectiveInteractionMode = activeComposerConfiguration.interactionMode
 
     return (
         <section className="assistant-conversation-pane relative flex min-w-0 flex-1 flex-col overflow-x-hidden">
@@ -978,13 +983,13 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         assistantConnected={controller.connected || Boolean(activeComposerSessionId)}
                         selectedProjectPath={displayProjectPath || null}
                         availableModels={availableModels}
-                        activeModel={activeComposerModel}
-                        activeEffort={controller.activeThread?.thinking || controller.activeThread?.latestTurn?.effort || null}
+                        activeModel={activeComposerConfiguration.activeModel}
+                        activeEffort={activeComposerConfiguration.activeEffort}
                         modelsLoading={controller.modelsLoading}
                         latestTurnUsage={controller.activeThread?.latestTurn?.usage || null}
-                        runtimeMode={controller.activeThread?.runtimeMode || 'approval-required'}
+                        runtimeMode={activeComposerConfiguration.runtimeMode}
                         interactionMode={effectiveInteractionMode}
-                        activeProfile={controller.activeThread?.runtimeMode === 'full-access' ? 'yolo-fast' : 'safe-dev'}
+                        activeProfile={activeComposerConfiguration.activeProfile}
                         zyraProfile={activeZyraProfile}
                         onZyraProfileChange={setActiveZyraProfile}
                         activeStatusLabel={activeStatusLabel}

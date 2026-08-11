@@ -19,6 +19,7 @@ import { shouldAutoReconnectAssistantThread } from '../src/renderer/src/pages/as
 import { deriveAssistantComposerCapabilities } from '../src/renderer/src/pages/assistant/assistant-composer-capabilities'
 import { getAssistantThreadLastMessageAt, resolveAssistantThreadStatusPill } from '../src/renderer/src/pages/assistant/assistant-sessions-rail-utils'
 import { mergeCanonicalPresenceLatestTurn, resolveCanonicalPresenceAttention, resolveCanonicalPresenceThreadState } from '../src/main/assistant/service-canonical-presence'
+import { resolveAssistantComposerLaunchConfiguration } from '../src/renderer/src/pages/assistant/assistant-new-chat-composer-config'
 
 const now = '2026-07-10T08:00:00.000Z'
 const sessionId = 'startup-session'
@@ -51,6 +52,41 @@ const thread: AssistantThread = {
     pendingApprovals: [],
     pendingUserInputs: []
 }
+
+assert.deepEqual(resolveAssistantComposerLaunchConfiguration({
+    useSettingsDefaults: true,
+    settings: {
+        assistantDefaultModel: 'openai-codex/gpt-5.6-sol',
+        assistantDefaultRuntimeMode: 'full-access',
+        assistantDefaultInteractionMode: 'plan',
+        assistantDefaultEffort: 'xhigh'
+    },
+    thread,
+    fallbackModel: 'openai-codex/gpt-5.5'
+}), {
+    activeModel: 'openai-codex/gpt-5.6-sol',
+    activeEffort: 'xhigh',
+    runtimeMode: 'full-access',
+    interactionMode: 'plan',
+    activeProfile: 'yolo-fast'
+}, 'a pristine New Chat must use Settings defaults instead of its placeholder backend thread configuration')
+assert.deepEqual(resolveAssistantComposerLaunchConfiguration({
+    useSettingsDefaults: false,
+    settings: {
+        assistantDefaultModel: 'openai-codex/gpt-5.6-sol',
+        assistantDefaultRuntimeMode: 'full-access',
+        assistantDefaultInteractionMode: 'plan',
+        assistantDefaultEffort: 'xhigh'
+    },
+    thread,
+    fallbackModel: 'openai-codex/gpt-5.6-sol'
+}), {
+    activeModel: 'openai-codex/gpt-5.5',
+    activeEffort: null,
+    runtimeMode: 'approval-required',
+    interactionMode: 'default',
+    activeProfile: 'safe-dev'
+}, 'an established chat must continue to reflect its canonical runtime configuration')
 
 const staleEmptyThread: AssistantThread = {
     ...thread,
