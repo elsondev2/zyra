@@ -23,6 +23,7 @@ const SettingsShell = lazy(() => import('./pages/settings/SettingsShell'))
 const GeneralSettings = lazy(() => import('./pages/Settings'))
 const AppearanceSettings = lazy(() => import('./pages/settings/AppearanceSettings'))
 const VoiceSettings = lazy(() => import('./pages/settings/VoiceSettings'))
+const ConnectionsSettings = lazy(() => import('./pages/settings/ConnectionsSettings'))
 const BrowserControlSettings = lazy(() => import('./pages/settings/BrowserControlSettings'))
 const FilesEditorSettings = lazy(() => import('./pages/settings/FilesEditorSettings'))
 const TerminalRuntimeSettings = lazy(() => import('./pages/settings/TerminalRuntimeSettings'))
@@ -116,6 +117,7 @@ function MainContent() {
                         <Route path="account" element={<AccountSettings />} />
                         <Route path="assistant" element={<AssistantSettings />} />
                         <Route path="voice" element={<VoiceSettings />} />
+                        <Route path="connections" element={<ConnectionsSettings />} />
                         <Route path="browser-control" element={<BrowserControlSettings />} />
                         <Route path="files-editor" element={<FilesEditorSettings />} />
                         <Route path="terminal-runtime" element={<TerminalRuntimeSettings />} />

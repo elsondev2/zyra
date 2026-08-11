@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ExternalLink, ShieldCheck, Trash2 } from 'lucide-react'
-import { BROWSER_CLIENT_HOST_ORIGIN } from '@shared/browser-assistant-bridge'
+import { ShieldCheck, Trash2 } from 'lucide-react'
 import { isElectronRendererRuntime } from '@/lib/browser-file-url'
 import { useSettings } from '@/lib/settings'
 import {
@@ -28,22 +27,11 @@ export default function BrowserControlSettings() {
     const [approvalPreferences, setApprovalPreferences] = useState<BrowserControlApprovalPreference[]>(() => readBrowserControlApprovalPreferences())
     const [retainedWorkspaceCount, setRetainedWorkspaceCount] = useState(() => countPersistedAssistantBrowserWorkspaces())
     const [status, setStatus] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
-    const [clientError, setClientError] = useState<string | null>(null)
     const integratedBrowserAvailable = isElectronRendererRuntime()
 
     useEffect(() => onBrowserControlApprovalPreferencesChange(() => {
         setApprovalPreferences(readBrowserControlApprovalPreferences())
     }), [])
-
-    const openLocalBrowserClient = async () => {
-        setClientError(null)
-        try {
-            const result = await window.devscope.openBrowserPreviewExternal(BROWSER_CLIENT_HOST_ORIGIN)
-            if (!result.success) throw new Error(result.error || 'Could not open the local browser client.')
-        } catch (error) {
-            setClientError(error instanceof Error ? error.message : 'Could not open the local browser client.')
-        }
-    }
 
     const runMaintenance = async (action: 'cache' | 'cookies' | 'profile') => {
         if (action === 'cookies' && !window.confirm('Clear Browser cookies and signed-in sessions from Zyra’s Browser profile?')) return
@@ -71,17 +59,6 @@ export default function BrowserControlSettings() {
 
     return (
         <SettingsPageContainer>
-            <SettingsSection title="Local browser client">
-                <SettingsRow
-                    title="Zyra in your browser"
-                    description={`Use the same chats and projects at ${BROWSER_CLIENT_HOST_ORIGIN}.`}
-                    status={integratedBrowserAvailable ? 'This computer' : 'Connected'}
-                    statusTone={integratedBrowserAvailable ? 'info' : 'ready'}
-                    control={integratedBrowserAvailable ? <SettingsButton onClick={() => void openLocalBrowserClient()}><ExternalLink size={12} />Open</SettingsButton> : undefined}
-                />
-                {clientError ? <SettingsNotice tone="error">{clientError}</SettingsNotice> : null}
-            </SettingsSection>
-
             <SettingsSection title="Browser workspace">
                 {integratedBrowserAvailable ? (
                     <>

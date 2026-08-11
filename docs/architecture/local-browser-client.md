@@ -12,6 +12,8 @@ The V1 browser URL is:
 http://127.0.0.1:47821/
 ```
 
+The same link is available in **Settings → Connections**, with Open and Copy link actions.
+
 The browser client binds only to loopback. Closing a browser tab does not stop active agent work. Stopping Zyra Desktop stops the local browser host.
 
 ## Runtime Topology

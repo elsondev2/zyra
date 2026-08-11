@@ -15,7 +15,10 @@
         "src/renderer/src/lib/browser-file-url.ts",
         "src/renderer/src/components/ui/file-preview/utils.ts",
         "src/renderer/src/components/ui/markdown/paths.ts",
-        "src/renderer/src/pages/settings/BrowserControlSettings.tsx"
+        "src/renderer/src/pages/settings/AppearanceSettings.tsx",
+        "src/renderer/src/pages/settings/BrowserControlSettings.tsx",
+        "src/renderer/src/pages/settings/ConnectionsSettings.tsx",
+        "src/renderer/src/pages/settings/SettingsShell.tsx"
     ],
     "include": [],
     "references": []

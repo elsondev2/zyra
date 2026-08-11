@@ -1715,6 +1715,17 @@ body.zyra-reduce-motion .assistant-browser-viewport-frame {
   background-color: var(--settings-control);
 }
 
+[data-settings-search-target] {
+  scroll-margin-block: 5rem;
+}
+
+.zyra-settings-search-target,
+.zyra-settings-search-target:hover {
+  outline: none;
+  background-color: color-mix(in srgb, var(--accent-primary) 9%, var(--settings-section));
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent-primary) 72%, transparent);
+}
+
 .zyra-settings-section-body > * + * {
   border-top: 1px solid var(--settings-row-divider);
 }

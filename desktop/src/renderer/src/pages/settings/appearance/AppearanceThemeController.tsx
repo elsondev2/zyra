@@ -15,6 +15,7 @@ import {
 } from '@/lib/settings'
 import type { ThemeDefinition, ThemeTokens } from '@/lib/settings-theme-catalog'
 import { SettingsButton, SettingsSelect } from '../settings-layout'
+import { createSettingsRowTargetId } from '../settings-search'
 
 const TOKEN_LABELS: ReadonlyArray<{ key: keyof ThemeTokens; label: string }> = [
     { key: 'bg', label: 'Background' },
@@ -157,7 +158,11 @@ export function AppearanceThemeController({
 
     return (
         <div className="overflow-visible rounded-xl border border-[var(--settings-border)] bg-[var(--settings-section)] text-[var(--settings-text)] shadow-[inset_0_1px_0_var(--settings-section-highlight)]">
-            <div className="flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between">
+            <div
+                className="flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between"
+                data-settings-search-target={createSettingsRowTargetId('Theme', 'Theme preset')}
+                tabIndex={-1}
+            >
                 <div className="min-w-0">
                     <h3 className="truncate text-[13px] font-semibold text-[var(--settings-text)]">{modeTitle}</h3>
                     <p className="mt-0.5 truncate text-[11px] text-[var(--settings-text-muted)]">{modeDescription}</p>
@@ -180,7 +185,12 @@ export function AppearanceThemeController({
             </div>
 
             <div className="overflow-hidden border-t border-[var(--settings-border)]">
-                <table className="w-full table-fixed border-collapse" aria-label="Editable theme values">
+                <table
+                    className="w-full table-fixed border-collapse"
+                    aria-label="Editable theme values"
+                    data-settings-search-target={createSettingsRowTargetId('Theme', 'Theme colors')}
+                    tabIndex={-1}
+                >
                     <colgroup>
                         <col className="w-[42%]" />
                         <col />
@@ -192,7 +202,11 @@ export function AppearanceThemeController({
                         </tr>
                     </thead>
                     <tbody>
-                        <tr className="border-t border-[var(--settings-border)]">
+                        <tr
+                            className="border-t border-[var(--settings-border)]"
+                            data-settings-search-target={createSettingsRowTargetId('Theme', 'Accent preset')}
+                            tabIndex={-1}
+                        >
                             <th scope="row" className="px-4 py-2.5 text-left text-[12px] font-medium text-[var(--settings-text-secondary)]">Accent preset</th>
                             <td className="px-4 py-2.5 text-right">
                                 <SettingsSelect
@@ -209,7 +223,11 @@ export function AppearanceThemeController({
                                 </SettingsSelect>
                             </td>
                         </tr>
-                        <tr className="border-t border-[var(--settings-border)]">
+                        <tr
+                            className="border-t border-[var(--settings-border)]"
+                            data-settings-search-target={createSettingsRowTargetId('Theme', 'Accent primary')}
+                            tabIndex={-1}
+                        >
                             <th scope="row" className="px-4 py-2.5 text-left text-[12px] font-medium text-[var(--settings-text-secondary)]">Accent primary</th>
                             <td className="px-4 py-2.5">
                                 <EditableHexValue
@@ -219,7 +237,11 @@ export function AppearanceThemeController({
                                 />
                             </td>
                         </tr>
-                        <tr className="border-t border-[var(--settings-border)]">
+                        <tr
+                            className="border-t border-[var(--settings-border)]"
+                            data-settings-search-target={createSettingsRowTargetId('Theme', 'Accent secondary')}
+                            tabIndex={-1}
+                        >
                             <th scope="row" className="px-4 py-2.5 text-left text-[12px] font-medium text-[var(--settings-text-secondary)]">Accent secondary</th>
                             <td className="px-4 py-2.5">
                                 <EditableHexValue
@@ -229,7 +251,11 @@ export function AppearanceThemeController({
                                 />
                             </td>
                         </tr>
-                        <tr className="border-t border-[var(--settings-border)]">
+                        <tr
+                            className="border-t border-[var(--settings-border)]"
+                            data-settings-search-target={createSettingsRowTargetId('Theme', 'UI font')}
+                            tabIndex={-1}
+                        >
                             <th scope="row" className="px-4 py-2.5 text-left text-[12px] font-medium text-[var(--settings-text-secondary)]">UI font</th>
                             <td className="px-4 py-2.5 text-right">
                                 <SettingsSelect
@@ -249,7 +275,11 @@ export function AppearanceThemeController({
                                 </SettingsSelect>
                             </td>
                         </tr>
-                        <tr className="border-t border-[var(--settings-border)]">
+                        <tr
+                            className="border-t border-[var(--settings-border)]"
+                            data-settings-search-target={createSettingsRowTargetId('Theme', 'Code font')}
+                            tabIndex={-1}
+                        >
                             <th scope="row" className="px-4 py-2.5 text-left text-[12px] font-medium text-[var(--settings-text-secondary)]">Code font</th>
                             <td className="px-4 py-2.5 text-right">
                                 <SettingsSelect
@@ -270,7 +300,12 @@ export function AppearanceThemeController({
                             </td>
                         </tr>
                         {TOKEN_LABELS.map(({ key, label }) => (
-                            <tr key={key} className="border-t border-[var(--settings-border)]">
+                            <tr
+                                key={key}
+                                className="border-t border-[var(--settings-border)]"
+                                data-settings-search-target={createSettingsRowTargetId('Theme', label)}
+                                tabIndex={-1}
+                            >
                                 <th scope="row" className="px-4 py-2.5 text-left text-[12px] font-medium text-[var(--settings-text-secondary)]">{label}</th>
                                 <td className="px-4 py-2.5">
                                     <EditableHexValue

@@ -12,6 +12,7 @@ import {
     Info,
     KeyRound,
     LayoutGrid,
+    MonitorSmartphone,
     Palette,
     Settings2,
     TerminalSquare
@@ -62,6 +63,14 @@ export const SETTINGS_NAVIGATION_GROUPS: SettingsNavigationGroup[] = [
                 keywords: 'chatgpt openai pi account email plan oauth login usage limits quota reset credits banked',
                 to: '/settings/account',
                 icon: CircleUserRound
+            },
+            {
+                id: 'connections',
+                label: 'Connections',
+                description: 'Local browser access and trusted devices',
+                keywords: 'browser link url chrome host connect device phone computer pairing remote lan tailscale trusted revoke',
+                to: '/settings/connections',
+                icon: MonitorSmartphone
             }
         ]
     },

@@ -26,6 +26,7 @@ import {
     SettingsSegmented,
     SettingsSwitch
 } from './settings-layout'
+import { createSettingsRowTargetId, createSettingsSectionTargetId } from './settings-search'
 import { AppearanceFontManagerDialog } from './appearance/AppearanceFontManagerDialog'
 import { AppearanceThemeController } from './appearance/AppearanceThemeController'
 import {
@@ -166,7 +167,12 @@ export default function AppearanceSettings() {
                 <h1 className="text-[24px] font-medium tracking-[-0.025em] text-[var(--settings-text)]">Appearance</h1>
             </header>
 
-            <section className="space-y-4" aria-labelledby="appearance-theme-title">
+            <section
+                className="space-y-4"
+                aria-labelledby="appearance-theme-title"
+                data-settings-search-target={createSettingsSectionTargetId('Theme')}
+                tabIndex={-1}
+            >
                 <div className="flex min-h-7 items-center justify-between gap-4 px-0.5">
                     <h2 id="appearance-theme-title" className="text-[14px] font-semibold tracking-[-0.01em] text-[var(--settings-text)]">Theme</h2>
                     {paletteChanged ? (
@@ -177,7 +183,13 @@ export default function AppearanceSettings() {
                     ) : null}
                 </div>
 
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" role="radiogroup" aria-label="Appearance mode">
+                <div
+                    className="grid grid-cols-1 gap-3 sm:grid-cols-3"
+                    role="radiogroup"
+                    aria-label="Appearance mode"
+                    data-settings-search-target={createSettingsRowTargetId('Theme', 'Appearance mode')}
+                    tabIndex={-1}
+                >
                     <AppearanceSystemThemeCard
                         darkTheme={defaultDarkTheme}
                         lightTheme={lightTheme}

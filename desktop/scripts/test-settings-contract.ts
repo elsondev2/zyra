@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { loadSettings } from '../src/renderer/src/lib/settings'
+import { createSettingsRowTargetId, findSettingsSearchTargets } from '../src/renderer/src/pages/settings/settings-search'
 
 class MemoryStorage implements Storage {
     private readonly values = new Map<string, string>()
@@ -158,12 +159,19 @@ assert.match(settingsLayoutSource, /max-w-\[680px\]/, 'Settings content must sta
 assert.doesNotMatch(settingsLayoutSource, /\[var\(--accent-primary\)\]\/\d+/, 'Shared Settings controls cannot use unsupported Tailwind opacity on CSS variables')
 assert.match(settingsLayoutSource, /export function SettingsStatusPill/, 'Settings rows should share one compact inline status treatment')
 assert.doesNotMatch(settingsLayoutSource, /\{status \? <div className="pt-0\.5/, 'Settings status must not add a third text line below the description')
+assert.match(settingsLayoutSource, /data-settings-search-target=\{searchTargetId\}/, 'Settings sections must expose stable search targets')
+assert.match(settingsLayoutSource, /data-settings-search-target=\{searchTargetId \|\| undefined\}/, 'Settings rows must expose stable search targets')
+
+const appearanceFontTargets = findSettingsSearchTargets('appearance', 'font').map((target) => target.label)
+assert.deepEqual(appearanceFontTargets.slice(0, 2), ['UI font', 'Code font'], 'Settings search must return matching sub-options within a page')
+assert.equal(findSettingsSearchTargets('terminal-runtime', 'font size')[0]?.targetId, createSettingsRowTargetId('Terminal', 'Font size'), 'search results must identify the exact section-aware row target')
+assert.equal(findSettingsSearchTargets('connections', 'phone')[0]?.label, 'Other devices', 'Settings keywords must locate future-facing device controls')
 
 const settingsShellSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/SettingsShell.tsx'), 'utf8')
 assert.match(
     settingsShellSource,
-    /useLayoutEffect\(\(\) => \{[\s\S]{0,240}scrollContainer\.scrollTop = 0[\s\S]{0,160}\}, \[location\.pathname\]\)/,
-    'changing Settings pages must reset the shared content scroller before paint'
+    /useLayoutEffect\(\(\) => \{[\s\S]{0,120}if \(requestedSearchTarget\) return[\s\S]{0,240}scrollContainer\.scrollTop = 0[\s\S]{0,160}\}, \[location\.pathname, requestedSearchTarget\]\)/,
+    'changing Settings pages must reset the shared content scroller before paint unless an exact search target owns the scroll'
 )
 assert.match(settingsShellSource, /<section ref=\{contentScrollRef\}[^>]+overflow-y-auto/, 'the reset must target the real Settings content scroller')
 assert.match(settingsShellSource, /data-settings-sidebar-peek="true"/, 'collapsed Settings should expose the same left-edge peek target as chat')
@@ -172,10 +180,16 @@ assert.match(settingsShellSource, /schedulePreviewClose\(ASSISTANT_SIDEBAR_COLLA
 assert.match(settingsShellSource, /aria-label=\{previewPinned \? 'Unpin bubble sidebar' : 'Pin bubble sidebar'\}/, 'the Settings bubble should expose the shared pin control')
 assert.match(settingsShellSource, /aria-label="Expand sidebar"/, 'the Settings bubble should expose the shared expand control')
 assert.match(settingsShellSource, /mx-2 mt-auto shrink-0 border-t border-\[var\(--surface-divider\)\] pb-2\.5 pt-2/, 'Back to chats should use the same inset divider as Settings in the chat sidebar')
+assert.match(settingsShellSource, /groupSettingsSearchTargets\(searchMatchesByPage\[item\.id\]/, 'Settings search must render matched sub-options beneath their page')
+assert.match(settingsShellSource, /to=\{`\$\{item\.to\}\?setting=\$\{encodeURIComponent\(target\.targetId\)\}`\}/, 'sub-option results must navigate to an exact setting target')
+assert.match(settingsShellSource, /target\.scrollIntoView\(\{[\s\S]{0,140}block: 'center'/, 'an exact Settings result must scroll its target into view')
+assert.match(settingsShellSource, /target\.classList\.add\('zyra-settings-search-target'\)/, 'the selected setting must receive a visible arrival highlight')
 
 const assistantSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/AssistantSettings.tsx'), 'utf8')
 const accountSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/AccountSettings.tsx'), 'utf8')
 const accountResetCreditsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/AccountResetCreditsSection.tsx'), 'utf8')
+const connectionsSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/ConnectionsSettings.tsx'), 'utf8')
+const browserControlSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/BrowserControlSettings.tsx'), 'utf8')
 const settingsNavigationSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/settings-navigation.tsx'), 'utf8')
 const appSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/App.tsx'), 'utf8')
 assert.match(
@@ -235,6 +249,13 @@ assert.match(
 )
 assert.match(settingsNavigationSource, /label: 'Account'[\s\S]{0,220}to: '\/settings\/account'/, 'Account must be a real top-level Settings destination')
 assert.match(appSource, /<Route path="account" element=\{<AccountSettings \/>\}/, 'the Account navigation destination must render the real account page')
+assert.match(settingsNavigationSource, /label: 'Connections'[\s\S]{0,260}to: '\/settings\/connections'/, 'Connections must be a real top-level Settings destination')
+assert.match(appSource, /<Route path="connections" element=\{<ConnectionsSettings \/>\}/, 'the Connections destination must render the real connection page')
+assert.match(connectionsSettingsSource, /copyToClipboard\(BROWSER_CLIENT_HOST_ORIGIN\)/, 'Connections must expose a working local-browser Copy link action')
+assert.match(connectionsSettingsSource, /openBrowserPreviewExternal\(BROWSER_CLIENT_HOST_ORIGIN\)/, 'Connections must expose a working Desktop Open action')
+assert.match(connectionsSettingsSource, /title="Connection scope"[\s\S]{0,220}status="Local only"/, 'Connections must state the real loopback-only access boundary')
+assert.match(connectionsSettingsSource, /title="Trusted devices"[\s\S]{0,260}Connections from phones and other computers are currently disabled/, 'Connections must reserve the trusted-device surface without offering fake pairing controls')
+assert.doesNotMatch(browserControlSettingsSource, /BROWSER_CLIENT_HOST_ORIGIN|Local browser client|openLocalBrowserClient/, 'Browser & control must stay focused on integrated-browser state after the link moves to Connections')
 assert.doesNotMatch(assistantSettingsSource, /getAccountOverview|AccountResetCreditsSection/, 'Assistant settings must not fetch or render account data')
 assert.doesNotMatch(`${accountSettingsSource}\n${accountResetCreditsSource}`, /Zyra subscription|subscription account|subscription-backed/, 'Account UI must not imply that Zyra owns the user’s ChatGPT plan')
 assert.match(accountSettingsSource, /useState\(true\)[\s\S]{0,180}overviewError/, 'the Account page must enter its loading state before the first account request')

@@ -1,8 +1,11 @@
-import { useEffect } from 'react'
+import { createContext, useContext, useEffect } from 'react'
 import type { ButtonHTMLAttributes, HTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react'
 import { createPortal } from 'react-dom'
 import { Undo2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { createSettingsRowTargetId, createSettingsSectionTargetId } from './settings-search'
+
+const SettingsSearchSectionContext = createContext<string | null>(null)
 
 export function SettingsPageContainer({ children, className }: { children: ReactNode; className?: string }) {
     return (
@@ -18,13 +21,20 @@ export function SettingsSection({ title, headerAction, children, className }: {
     children: ReactNode
     className?: string
 }) {
+    const searchTargetId = createSettingsSectionTargetId(title)
     return (
-        <section className={cn('space-y-2.5', className)}>
+        <section
+            className={cn('space-y-2.5', className)}
+            data-settings-search-target={searchTargetId}
+            tabIndex={-1}
+        >
             <div className="flex min-h-7 items-center justify-between gap-4 px-1">
                 <h2 className="text-[15px] font-semibold tracking-[-0.015em] text-[var(--settings-text)]">{title}</h2>
                 <div className="flex min-h-7 items-center justify-end">{headerAction}</div>
             </div>
-            <div className="zyra-settings-section-body relative overflow-visible rounded-xl border border-[var(--settings-border)] bg-[var(--settings-section)] text-[var(--settings-text)] shadow-[inset_0_1px_0_var(--settings-section-highlight)]">{children}</div>
+            <SettingsSearchSectionContext.Provider value={title}>
+                <div className="zyra-settings-section-body relative overflow-visible rounded-xl border border-[var(--settings-border)] bg-[var(--settings-section)] text-[var(--settings-text)] shadow-[inset_0_1px_0_var(--settings-section-highlight)]">{children}</div>
+            </SettingsSearchSectionContext.Provider>
         </section>
     )
 }
@@ -63,8 +73,15 @@ export function SettingsRow({ title, description, status, statusTone = 'muted', 
     control?: ReactNode
     children?: ReactNode
 }) {
+    const sectionTitle = useContext(SettingsSearchSectionContext)
+    const searchTargetId = typeof title === 'string' ? createSettingsRowTargetId(sectionTitle, title) : null
     return (
-        <div {...props} className={cn('zyra-settings-row px-4 transition-colors duration-100 hover:bg-[var(--settings-row-hover)]', children ? 'pb-2.5 pt-3.5' : 'py-3.5', className)}>
+        <div
+            {...props}
+            data-settings-search-target={searchTargetId || undefined}
+            tabIndex={searchTargetId ? -1 : props.tabIndex}
+            className={cn('zyra-settings-row px-4 transition-colors duration-100 hover:bg-[var(--settings-row-hover)]', children ? 'pb-2.5 pt-3.5' : 'py-3.5', className)}
+        >
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-6">
                 <div className="min-w-0 space-y-1">
                     <div className="flex min-h-5 min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
