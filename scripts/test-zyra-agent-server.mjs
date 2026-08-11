@@ -128,6 +128,29 @@ try {
   assert.equal(archivedList.chats[0].archived, true);
   const restored = await desktop.request("catalog.update", { session: "chat:test", archived: false });
   assert.equal(restored.chat.archived, false);
+  const deleted = await desktop.request("catalog.update", { session: "chat:test", deleted: true });
+  assert.equal(deleted.chat.deleted, true);
+  assert.equal((await tui.request("catalog.list", { includeArchived: true })).chats.length, 0, "deleted chats must remain tombstoned during startup import");
+  const deletedList = await tui.request("catalog.list", { includeArchived: true, includeDeleted: true });
+  assert.equal(deletedList.chats.length, 1);
+  assert.equal(deletedList.chats[0].deleted, true);
+  const reopenedDeletedCatalog = new CanonicalChatCatalog({
+    stateDirectory,
+    channel,
+    loadSessionManager: async () => ({
+      list: async () => fakeSessions,
+      open: () => ({ getEntries: () => [] })
+    })
+  });
+  assert.equal((await reopenedDeletedCatalog.list({ includeArchived: true })).length, 0, "a deleted chat must stay hidden after the catalog process restarts");
+  assert.equal((await desktop.request("catalog.history", { session: "chat:test", project })).history, null, "deleted chats must fail closed for history hydration");
+  await assert.rejects(
+    desktop.attach({ project, cwd: project, session: "chat:test", localThreadId: "assistant-thread:deleted" }),
+    /deleted/i,
+    "a known tombstoned chat must not be revived by direct attachment"
+  );
+  const undeleted = await desktop.request("catalog.update", { session: "chat:test", deleted: false });
+  assert.equal(undeleted.chat.deleted, false);
 
   const desktopAttached = await desktop.attach({ project, cwd: project, session: "chat:test", localThreadId: "assistant-thread:desktop" });
   assert.equal(desktopAttached.canonicalChatId, "chat:test");

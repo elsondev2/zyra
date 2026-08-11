@@ -63,6 +63,8 @@ export type CanonicalAgentChat = {
     title: string
     archived: boolean
     archivedAt?: string | null
+    deleted?: boolean
+    deletedAt?: string | null
     createdAt: string
     modifiedAt: string
     messageCount: number
@@ -161,7 +163,7 @@ export class DesktopAgentServerConnection {
 
     async updateCanonicalChat(
         session: string,
-        patch: { title?: string; project?: string; cwd?: string; archived?: boolean }
+        patch: { title?: string; project?: string; cwd?: string; archived?: boolean; deleted?: boolean }
     ): Promise<CanonicalAgentChat | null> {
         const client = await this.getClient()
         const result = await client.request('catalog.update', { session, ...patch }, { timeoutMs: 5_000 })

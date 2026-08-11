@@ -251,23 +251,29 @@ export class ZyraAgentServer extends EventEmitter {
         ...(params.title !== undefined ? { title: params.title } : {}),
         ...(params.project !== undefined ? { project: params.project } : {}),
         ...(params.cwd !== undefined ? { cwd: params.cwd } : {}),
-        ...(params.archived !== undefined ? { archived: params.archived === true } : {})
+        ...(params.archived !== undefined ? { archived: params.archived === true } : {}),
+        ...(params.deleted !== undefined ? { deleted: params.deleted === true } : {})
       });
       const activeSession = this.sessions.get(chat.canonicalChatId);
-      if (activeSession) {
+      if (activeSession && chat.deleted) {
+        activeSession.dispose("Canonical chat was deleted.");
+        this.removeSession(activeSession);
+      } else if (activeSession) {
         activeSession.connectedResult = {
           ...(activeSession.connectedResult || {}),
           sessionName: chat.title,
           project: chat.project,
           cwd: chat.cwd,
-          archived: chat.archived
+          archived: chat.archived,
+          deleted: chat.deleted
         };
         activeSession.publish({
           type: "session_metadata",
           title: chat.title,
           project: chat.project,
           cwd: chat.cwd,
-          archived: chat.archived
+          archived: chat.archived,
+          deleted: chat.deleted
         });
       }
       this.broadcastCatalogChanged({ canonicalChatId: chat.canonicalChatId, metadata: true });
@@ -335,7 +341,13 @@ export class ZyraAgentServer extends EventEmitter {
 
   async attachSession(client, params) {
     const project = this.catalog.registerProject(params.project || params.cwd);
-    const requested = params.session ? await this.catalog.find(params.session, { project }) : null;
+    const requestedCandidate = params.session
+      ? await this.catalog.find(params.session, { project, includeDeleted: true })
+      : null;
+    if (requestedCandidate?.deleted) {
+      throw new AgentServerProtocolError("Canonical chat was deleted and cannot be reattached.", "AGENT_SERVER_SESSION_NOT_FOUND");
+    }
+    const requested = requestedCandidate;
     const requestedCanonicalId = requested?.canonicalChatId || this.catalog.resolveAlias(params.session || params.localThreadId || "");
     const sessionProject = requested?.project || project;
     const sessionCwd = requested?.cwd || requested?.project || params.cwd || project;

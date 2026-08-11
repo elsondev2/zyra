@@ -69,6 +69,7 @@ export class CanonicalChatCatalog {
       if (!current || Date.parse(chat.modifiedAt) > Date.parse(current.modifiedAt)) byId.set(chat.canonicalChatId, chat);
     }
     let chats = [...byId.values()].sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt));
+    if (options.includeDeleted !== true) chats = chats.filter((chat) => !chat.deleted);
     if (options.includeArchived !== true) chats = chats.filter((chat) => !chat.archived);
     const query = String(options.query || "").trim().toLowerCase();
     if (query) {
@@ -122,11 +123,15 @@ export class CanonicalChatCatalog {
     const direct = this.loadSessionManager
       ? null
       : this.index.get(normalized) || (path.isAbsolute(normalized) ? this.index.findByPath(normalized) : null);
-    if (direct) return applyMetadata(direct, this.record.metadata[direct.canonicalChatId], this.record);
+    if (direct) {
+      const chat = applyMetadata(direct, this.record.metadata[direct.canonicalChatId], this.record);
+      return chat.deleted && options.includeDeleted !== true ? null : chat;
+    }
     const chats = await this.list({
       ...options,
       allProjects: options.allProjects === true || path.isAbsolute(normalized),
       includeArchived: true,
+      includeDeleted: options.includeDeleted === true,
       limit: 2000
     });
     return chats.find((chat) => chat.canonicalChatId === normalized || pathKey(chat.sessionPath) === pathKey(normalized))
@@ -159,7 +164,7 @@ export class CanonicalChatCatalog {
 
   async updateChat(selector, patch = {}) {
     const canonicalChatId = this.resolveAlias(selector);
-    const chat = await this.find(canonicalChatId, { allProjects: true });
+    const chat = await this.find(canonicalChatId, { allProjects: true, includeDeleted: true });
     if (patch.project !== undefined) this.registerProject(patch.project);
     const existing = this.record.metadata[canonicalChatId] || {};
     const next = {
@@ -170,6 +175,10 @@ export class CanonicalChatCatalog {
       ...(patch.archived !== undefined ? {
         archived: patch.archived === true,
         archivedAt: patch.archived === true ? new Date().toISOString() : null
+      } : {}),
+      ...(patch.deleted !== undefined ? {
+        deleted: patch.deleted === true,
+        deletedAt: patch.deleted === true ? new Date().toISOString() : null
       } : {}),
       updatedAt: new Date().toISOString()
     };
@@ -225,6 +234,8 @@ function applyMetadata(chat, metadata = {}, record = {}) {
     cwd: metadata.cwd || metadata.project || chat.cwd || chat.project,
     archived: metadata.archived === true,
     archivedAt: metadata.archivedAt || null,
+    deleted: metadata.deleted === true,
+    deletedAt: metadata.deletedAt || null,
     aliases: Object.entries(record.aliases || {}).filter(([, id]) => id === canonicalChatId).map(([alias]) => alias).slice(0, 32),
     surfaces: [...new Set(record.surfaces?.[canonicalChatId] || [])]
   };

@@ -44,6 +44,7 @@ mock.module('electron', () => ({
 }))
 const { ZyraPiRuntime } = await import('../src/main/assistant/zyra-pi-runtime')
 const { ZyraAccountService } = await import('../src/main/assistant/zyra-account-service')
+const { deleteAssistantSessionAction } = await import('../src/main/assistant/service-session-actions')
 const {
     findDuplicateProjectedActivityIds,
     findDuplicateProjectedMessageIds,
@@ -884,6 +885,50 @@ const projectedSession: AssistantSession = {
     threadIds: [projectedThread.id],
     threads: [projectedThread]
 }
+const deletionFallbackSession: AssistantSession = {
+    ...projectedSession,
+    id: 'session-deletion-fallback',
+    activeThreadId: 'thread-deletion-fallback',
+    threadIds: ['thread-deletion-fallback'],
+    threads: [{ ...projectedThread, id: 'thread-deletion-fallback', providerThreadId: null }]
+}
+let deletionSnapshot: AssistantSnapshot = {
+    snapshotSequence: 0,
+    updatedAt: projectedThread.createdAt,
+    selectedSessionId: projectedSession.id,
+    playground: { rootPath: null, labs: [] },
+    sessions: [projectedSession, deletionFallbackSession],
+    knownModels: []
+}
+const deletionOrder: string[] = []
+await deleteAssistantSessionAction({
+    ensureReady: async () => undefined,
+    getSnapshot: () => deletionSnapshot,
+    runtime: {
+        updateCanonicalChat: async (threadId: string, patch: Record<string, unknown>) => {
+            deletionOrder.push(`canonical:${threadId}:${String(patch.deleted)}`)
+        },
+        disconnect: (threadId: string) => deletionOrder.push(`disconnect:${threadId}`)
+    },
+    appendEvent: (type: string, _occurredAt: string, payload: Record<string, unknown>) => {
+        deletionOrder.push(type)
+        if (type === 'session.deleted') {
+            deletionSnapshot = {
+                ...deletionSnapshot,
+                selectedSessionId: null,
+                sessions: deletionSnapshot.sessions.filter((entry) => entry.id !== payload.sessionId)
+            }
+        } else if (type === 'session.selected') {
+            deletionSnapshot = { ...deletionSnapshot, selectedSessionId: String(payload.sessionId) }
+        }
+    },
+    createSession: async () => ({ success: true as const, sessionId: 'unused' })
+} as never, projectedSession.id)
+assert.deepEqual(
+    deletionOrder.slice(0, 3),
+    ['canonical:provider-lifecycle:true', 'disconnect:provider-lifecycle', 'session.deleted'],
+    'Desktop deletion must persist a canonical tombstone before removing its local projection'
+)
 assert.deepEqual(
     getTitleGenerationModelCandidates('openai-codex/gpt-5.6-sol'),
     ['openai-codex/gpt-5.6-sol', 'openai-codex/gpt-5.4-mini'],
