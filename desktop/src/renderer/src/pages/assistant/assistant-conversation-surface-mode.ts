@@ -14,6 +14,26 @@ export type AssistantConversationSurfaceModeInput = {
     hasPendingLabRequest: boolean
 }
 
+export type AssistantComposerConnectionPresentationInput = {
+    connected: boolean
+    hasComposerSession: boolean
+    newChatHandoffActive: boolean
+    selectedSessionUsesNewChatSurface: boolean
+    connecting?: boolean
+    reconnectPending?: boolean
+}
+
+export function resolveAssistantComposerConnectionPresentation(
+    input: AssistantComposerConnectionPresentationInput
+): { connected: boolean; connecting: boolean; reconnectPending: boolean } {
+    const connectionDeferred = input.newChatHandoffActive || input.selectedSessionUsesNewChatSurface
+    return {
+        connected: input.connected || input.hasComposerSession || connectionDeferred,
+        connecting: connectionDeferred ? false : input.connecting === true,
+        reconnectPending: connectionDeferred ? false : input.reconnectPending === true
+    }
+}
+
 export function deriveAssistantConversationSurfaceMode(
     input: AssistantConversationSurfaceModeInput
 ): 'centered-composer' | 'conversation' {

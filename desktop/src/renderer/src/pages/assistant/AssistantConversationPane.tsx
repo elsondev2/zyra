@@ -33,7 +33,10 @@ import {
     resolveAssistantStableComposerInsetEnd
 } from './assistant-pane-layout'
 import { getAssistantThreadDisplayTitle, getSessionDisplayTitle, isAssistantDraftSession, resolveSessionProjectPath } from './assistant-sessions-rail-utils'
-import { deriveAssistantConversationSurfaceMode } from './assistant-conversation-surface-mode'
+import {
+    deriveAssistantConversationSurfaceMode,
+    resolveAssistantComposerConnectionPresentation
+} from './assistant-conversation-surface-mode'
 import { readInstructorVoicePreferences } from './instructor-voice-preferences'
 import { useAssistantConnectionRecovery } from './useAssistantConnectionRecovery'
 import { useAssistantQueuedComposer, type AssistantQueuedComposerSessionState } from './useAssistantQueuedComposer'
@@ -272,6 +275,14 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     )
     const isThreadConnecting = controller.phase.key === 'starting' || isReconnectPending
     const activeStatusLabel = isThreadConnecting ? 'Connecting...' : 'Working...'
+    const composerConnectionPresentation = resolveAssistantComposerConnectionPresentation({
+        connected: controller.connected,
+        hasComposerSession: Boolean(activeComposerSessionId),
+        newChatHandoffActive,
+        selectedSessionUsesNewChatSurface,
+        connecting: isThreadConnecting,
+        reconnectPending: connectionRecovery.reconnectPending
+    })
     const { timelineContentRef, timelineScrollRef, onScrollTimeline, onScrollToBottom } = useAssistantPageTimelineScroll({
         sessionId: activeComposerSessionId,
         threadId: newChatHandoffActive ? null : controller.activeThread?.id || null,
@@ -984,7 +995,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         resetComposerStateToken={resetComposerStateToken}
                         selectedSessionMode={selectedSessionMode}
                         assistantAvailable={controller.available}
-                        assistantConnected={controller.connected || Boolean(activeComposerSessionId)}
+                        assistantConnected={composerConnectionPresentation.connected}
                         selectedProjectPath={displayProjectPath || null}
                         availableModels={availableModels}
                         activeModel={activeComposerConfiguration.activeModel}
@@ -997,8 +1008,8 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         zyraProfile={activeZyraProfile}
                         onZyraProfileChange={setActiveZyraProfile}
                         activeStatusLabel={activeStatusLabel}
-                        isConnecting={isThreadConnecting}
-                        reconnectPending={connectionRecovery.reconnectPending}
+                        isConnecting={composerConnectionPresentation.connecting}
+                        reconnectPending={composerConnectionPresentation.reconnectPending}
                         onOverflowWheel={handleComposerOverflowWheel}
                         onStop={handleStopTurn}
                         onReconnect={handleReconnectAssistant}
