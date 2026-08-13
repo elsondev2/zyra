@@ -10,6 +10,7 @@ import { AssistantPendingUserInputPanel } from './AssistantPendingUserInputPanel
 import { deriveAssistantComposerDisabledReason } from './assistant-composer-capabilities'
 import { ASSISTANT_COMPOSER_OVERLAY_TOP_PADDING_PX } from './assistant-pane-layout'
 import type { AssistantComposerSendOptions, AssistantElementBounds, AssistantQueuedComposerMessage, ComposerContextFile } from './assistant-composer-types'
+import { useAssistantComposerPlacementMotion } from './useAssistantComposerPlacementMotion'
 
 export const AssistantConversationComposerPane = memo(function AssistantConversationComposerPane(props: {
     placement?: 'bottom' | 'center'
@@ -33,6 +34,10 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
     assistantAvailable: boolean
     assistantConnected: boolean
     selectedProjectPath: string | null
+    projectChoices?: Array<{ path: string; label: string }>
+    projectContextDisabled?: boolean
+    onSelectProject?: (projectPath: string | null) => Promise<void> | void
+    onChooseProjectFolder?: () => Promise<void> | void
     availableModels: Array<{ id: string; label: string; description?: string }>
     activeModel: string | undefined
     activeEffort?: AssistantReasoningEffort | null
@@ -72,6 +77,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
     declinePendingPlaygroundLabRequest: () => Promise<void>
 }) {
     const placement = props.placement || 'bottom'
+    useAssistantComposerPlacementMotion(props.paneRef, placement)
     const hasPendingPlaygroundLabRequest = Boolean(props.pendingPlaygroundLabRequest)
     const isWaitingForApproval = props.pendingApprovals.length > 0
     const pendingTerminalAccessRequest = getPendingTerminalAccessRequest(props.pendingUserInputs)
@@ -101,7 +107,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
         <div
             ref={props.paneRef}
             className={cn(
-                'w-full px-4 transition-[padding,transform,opacity] duration-300 ease-out',
+                'w-full px-4 will-change-transform',
                 placement === 'center'
                     ? '-translate-y-[7vh] pb-0 pt-0'
                     : 'pointer-events-none absolute inset-x-0 bottom-0 z-40 translate-y-0 pb-4'
@@ -155,21 +161,29 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
             {!isWaitingForApproval && !hasPendingPlaygroundLabRequest && !isWaitingForUserInput && !pendingTerminalAccessRequest ? (
                 <div
                     className={cn(
-                        'mx-auto w-full transition-[max-width] duration-300 ease-out',
+                        'mx-auto w-full transition-[max-width] duration-[460ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
                         placement === 'center' ? 'max-w-2xl' : 'max-w-[760px]'
                     )}
                     data-assistant-composer-hitbox="true"
                 >
-                    {placement === 'center' && props.newChatPrompt ? (
-                        <div className="pointer-events-none mb-5 px-2 text-center">
+                    <div
+                        aria-hidden={placement !== 'center'}
+                        className={cn(
+                            'pointer-events-none grid px-2 text-center transition-[grid-template-rows,margin,opacity,transform] duration-[360ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+                            placement === 'center'
+                                ? 'mb-5 grid-rows-[1fr] translate-y-0 opacity-100'
+                                : 'mb-0 grid-rows-[0fr] -translate-y-2 opacity-0'
+                        )}
+                    >
+                        <div className="min-h-0 overflow-hidden">
                             <p
                                 className="mx-auto max-w-[680px] text-[30px] font-medium leading-[1.08] tracking-[-0.035em] text-sparkle-text/90"
                                 style={{ fontFamily: 'var(--font-ui, "Bricolage Grotesque", "Hanken Grotesk", system-ui, sans-serif)' }}
                             >
-                                {props.newChatPrompt}
+                                {props.newChatPrompt || ''}
                             </p>
                         </div>
-                    ) : null}
+                    </div>
                     <AssistantComposer
                         sessionId={props.selectedSessionId}
                         resetStateToken={props.resetComposerStateToken}
@@ -198,6 +212,10 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
                         runtimeMode={props.runtimeMode}
                         interactionMode={props.interactionMode}
                         projectPath={props.selectedProjectPath}
+                        projectChoices={props.projectChoices}
+                        projectContextDisabled={props.projectContextDisabled}
+                        onSelectProject={props.onSelectProject}
+                        onChooseProjectFolder={props.onChooseProjectFolder}
                         onReconnect={props.onReconnect}
                         onStartRealtimeVoice={props.onStartRealtimeVoice}
                         realtimeVoiceDisabled={props.realtimeVoiceDisabled}

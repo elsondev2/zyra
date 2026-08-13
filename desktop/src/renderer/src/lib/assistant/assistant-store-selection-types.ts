@@ -52,6 +52,7 @@ export type AssistantPageSelection = {
 
 export type AssistantConversationSelection = {
     knownModels: AssistantModelInfo[]
+    sessions: AssistantSnapshot['sessions']
     available: boolean
     connected: boolean
     loading: boolean

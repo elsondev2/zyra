@@ -15,6 +15,8 @@ import {
     resolveSessionProjectPath
 } from '@/pages/assistant/assistant-sessions-rail-utils'
 import type { CommandPaletteResult as Result } from './command-palette-types'
+import { buildAssistantChatRoute } from '@/pages/assistant/assistant-chat-route'
+import { createAssistantChatAndNavigate } from '@/pages/assistant/create-assistant-chat-and-navigate'
 
 const MAX_RECENT_CHATS = 8
 
@@ -91,10 +93,7 @@ export function CommandPalette() {
                 badge: formatAssistantSidebarRelativeTime(lastActivityAt),
                 icon: <MessageSquare size={14} />,
                 group: 'Recent chats',
-                action: () => {
-                    navigate('/assistant')
-                    void assistantActions.selectSession(session.id, { force: true })
-                }
+                action: () => navigate(buildAssistantChatRoute(session.id, session.activeThreadId || null))
             }))
 
         const actions: Result[] = [
@@ -106,8 +105,7 @@ export function CommandPalette() {
                 icon: <SquarePen size={14} />,
                 group: 'Actions',
                 action: () => {
-                    navigate('/assistant')
-                    void assistantActions.createSession({ mode: 'work' })
+                    void createAssistantChatAndNavigate(assistantActions, navigate)
                 }
             },
             {

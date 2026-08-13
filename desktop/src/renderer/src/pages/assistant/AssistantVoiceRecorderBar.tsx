@@ -7,9 +7,8 @@ const BAR_GAP_PX = 2
 const BAR_MIN_HEIGHT_PX = 2
 const BAR_MAX_HEIGHT_PX = 18
 
-function VoiceWaveform({ levels, processing = false, className }: {
+function VoiceWaveform({ levels, className }: {
     levels: readonly number[]
-    processing?: boolean
     className?: string
 }) {
     return (
@@ -26,14 +25,10 @@ function VoiceWaveform({ levels, processing = false, className }: {
                 return (
                     <span
                         key={`${levels.length - index}-${index}`}
-                        className={cn(
-                            'shrink-0 rounded-[1px] bg-[var(--color-text-secondary)] opacity-80',
-                            processing && 'assistant-voice-wave-processing'
-                        )}
+                        className="shrink-0 rounded-[1px] bg-[var(--color-text-secondary)] opacity-80"
                         style={{
                             width: `${BAR_WIDTH_PX}px`,
-                            height: `${height}px`,
-                            animationDelay: processing ? `-${(index % 16) * 55}ms` : undefined
+                            height: `${height}px`
                         }}
                     />
                 )
@@ -83,7 +78,7 @@ export const AssistantVoiceRecorderBar = memo(function AssistantVoiceRecorderBar
 
     return (
         <div
-            className="flex h-8 min-w-0 flex-1 items-center gap-2"
+            className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-full bg-white/[0.025] px-1"
             aria-label={isTranscribing ? 'Voice note transcription' : 'Voice note recorder'}
             data-state={isTranscribing ? 'transcribing' : 'recording'}
         >
@@ -91,7 +86,7 @@ export const AssistantVoiceRecorderBar = memo(function AssistantVoiceRecorderBar
                 type="button"
                 onClick={onCancel}
                 disabled={Boolean(disabled && !isTranscribing)}
-                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted transition-colors hover:bg-white/[0.06] hover:text-sparkle-text disabled:cursor-not-allowed disabled:opacity-40"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sparkle-text-muted transition-[background-color,color,transform] duration-200 hover:scale-[1.04] hover:bg-white/[0.07] hover:text-sparkle-text active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transform-none motion-reduce:transition-none"
                 title={isTranscribing ? 'Cancel transcription' : 'Cancel voice note'}
                 aria-label={isTranscribing ? 'Cancel transcription' : 'Cancel voice note'}
             >
@@ -119,10 +114,7 @@ export const AssistantVoiceRecorderBar = memo(function AssistantVoiceRecorderBar
                     aria-live="polite"
                 >
                     <Loader2 size={13} className="shrink-0 animate-spin text-[var(--accent-primary)] motion-reduce:animate-none" />
-                    <span className="min-w-0 max-w-[58%] shrink truncate">Transcribing with ChatGPT…</span>
-                    <div className="ml-auto h-5 min-w-10 flex-1 overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_14%,black)]">
-                        <VoiceWaveform levels={waveformSamples} processing className="justify-end opacity-75" />
-                    </div>
+                    <span className="min-w-0 truncate">Transcribing with ChatGPT…</span>
                 </div>
             </div>
 
@@ -134,8 +126,8 @@ export const AssistantVoiceRecorderBar = memo(function AssistantVoiceRecorderBar
             </span>
 
             <div className={cn(
-                'shrink-0 overflow-hidden transition-[width,margin,opacity,transform] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transform-none motion-reduce:transition-none',
-                isTranscribing ? '-ml-2 w-0 scale-75 opacity-0' : 'ml-0 w-7 scale-100 opacity-100'
+                'shrink-0 transition-[width,margin,opacity,transform] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transform-none motion-reduce:transition-none',
+                isTranscribing ? '-ml-2 w-0 scale-75 opacity-0' : 'ml-0 w-8 scale-100 opacity-100'
             )}>
                 <button
                     type="button"
@@ -144,8 +136,8 @@ export const AssistantVoiceRecorderBar = memo(function AssistantVoiceRecorderBar
                     tabIndex={isTranscribing ? -1 : 0}
                     aria-hidden={isTranscribing}
                     className={cn(
-                        'inline-flex h-7 w-7 items-center justify-center rounded-md border border-[var(--accent-primary)] bg-[var(--accent-primary)] text-[var(--accent-contrast)] transition-colors',
-                        'hover:bg-[color-mix(in_srgb,var(--accent-primary)_88%,var(--color-text))] disabled:cursor-not-allowed disabled:opacity-45'
+                        'inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--accent-primary)] bg-[var(--accent-primary)] text-[var(--accent-contrast)] transition-colors duration-200',
+                        'hover:bg-[color-mix(in_srgb,var(--accent-primary)_88%,var(--color-text))] active:bg-[color-mix(in_srgb,var(--accent-primary)_80%,var(--color-text))] disabled:cursor-not-allowed disabled:opacity-45 motion-reduce:transition-none'
                     )}
                     title="Stop and transcribe voice note"
                     aria-label="Stop and transcribe voice note"

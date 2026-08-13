@@ -26,6 +26,8 @@ const preloadRelaySource = readFileSync(new URL('../src/preload/browser-devscope
 const mainRelaySource = readFileSync(new URL('../src/main/browser-devscope-relay.ts', import.meta.url), 'utf8')
 const liveDevscopeSource = readFileSync(new URL('../src/renderer/src/lib/browser-devscope-live-adapter.ts', import.meta.url), 'utf8')
 assert.equal(titleBarSource.includes('{desktopWindowControlsAvailable ? ('), true, 'browser clients must not render native window buttons')
+assert.equal(titleBarSource.includes("appMenuOpen ? 'text-sparkle-text' : 'text-sparkle-text-secondary hover:text-sparkle-text'"), true, 'the Zyra menu trigger should change only text/icon color rather than painting a button background')
+assert.equal(titleBarSource.includes("appMenuOpen ? 'bg-[var(--surface-hover)]"), false, 'the Zyra wordmark trigger must not retain a highlighted button surface')
 assert.equal(browserRuntimeSource.includes('onAssistantClientCountChanged: setActiveBrowserAssistantClientCount'), true, 'the live bridge must activate the browser Assistant selection lease')
 assert.equal(mainSource.includes("staticRoot: join(__dirname, '../renderer')"), true, 'packaged Desktop must serve its built renderer to the local browser')
 assert.equal(mainSource.includes('new BrowserClientRuntime'), true, 'Desktop must supervise the production browser runtime independently of renderer startup')

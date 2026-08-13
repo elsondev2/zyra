@@ -513,31 +513,6 @@ body:not(.light) .framework-badge {
   animation-delay: 0.4s;
 }
 
-@keyframes assistant-voice-wave-processing {
-  0%, 100% {
-    opacity: 0.38;
-    transform: scaleY(0.55);
-  }
-  50% {
-    opacity: 0.9;
-    transform: scaleY(1);
-  }
-}
-
-.assistant-voice-wave-processing {
-  animation: assistant-voice-wave-processing 880ms ease-in-out infinite;
-  transform-origin: center;
-  will-change: transform, opacity;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .assistant-voice-wave-processing {
-    animation: none;
-    opacity: 0.7;
-    transform: none;
-  }
-}
-
 @keyframes modalBackdropIn {
   from {
     opacity: 0;

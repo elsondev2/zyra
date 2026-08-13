@@ -228,6 +228,7 @@ export function areAssistantConversationSelectionsEqual(left: AssistantConversat
         && left.connected === right.connected
         && left.loading === right.loading
         && left.modelsLoading === right.modelsLoading
+        && left.sessions === right.sessions
         && left.commandPending === right.commandPending
         && areAssistantCreateSessionInputsEqual(left.pendingCreateSessionInput, right.pendingCreateSessionInput)
         && left.commandError === right.commandError

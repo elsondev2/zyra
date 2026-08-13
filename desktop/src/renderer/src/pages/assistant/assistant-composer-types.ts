@@ -82,6 +82,10 @@ export type AssistantComposerProps = {
     runtimeMode?: AssistantRuntimeMode
     interactionMode?: AssistantInteractionMode
     projectPath?: string | null
+    projectChoices?: Array<{ path: string; label: string }>
+    projectContextDisabled?: boolean
+    onSelectProject?: (projectPath: string | null) => Promise<void> | void
+    onChooseProjectFolder?: () => Promise<void> | void
     acceptBrowserAnnotations?: boolean
     compact?: boolean
     submitLabel?: string
