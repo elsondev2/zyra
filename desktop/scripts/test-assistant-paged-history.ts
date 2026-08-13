@@ -21,6 +21,8 @@ import { replaceAssistantSnapshot, upsertAssistantCanonicalTimelineProjection } 
 import { createDefaultSnapshot } from '../src/main/assistant/projector'
 import { toAssistantShellSnapshot } from '../src/main/assistant/persistence-snapshot'
 import {
+    applyAssistantRetainedHistory,
+    hasRenderableAssistantRetainedHistory,
     formatAssistantHistoryLoadError,
     hasAssistantPersistedThreadContent,
     shouldShowAssistantThreadHistoryLoader
@@ -160,6 +162,45 @@ const shell = toAssistantShellSnapshot(snapshot)
 assert.equal('messages' in shell.sessions[0]!.threads[0]!, false)
 assert.equal(JSON.stringify(shell).includes('Response 4'), false)
 assert.equal(shell.sessions[0]!.threads[0]!.messageCount, messages.length)
+
+const shellSnapshot = {
+    ...snapshot,
+    sessions: [{
+        ...snapshot.sessions[0]!,
+        threads: [{
+            ...snapshot.sessions[0]!.threads[0]!,
+            activePlan: null,
+            messages: [],
+            activities: [],
+            proposedPlans: [],
+            pendingApprovals: [],
+            pendingUserInputs: []
+        }]
+    }]
+}
+const retainedHistory = { ...readAssistantThreadDetail(db, thread.id).history, lastUsedAt: Date.now() }
+const restoredFromRetainedHistory = applyAssistantRetainedHistory(shellSnapshot, thread.id, retainedHistory)
+assert.equal(hasRenderableAssistantRetainedHistory(retainedHistory), true)
+assert.equal(
+    restoredFromRetainedHistory.sessions[0]!.threads[0]!.messages.length,
+    retainedHistory.messages.length,
+    'fresh retained history must rematerialize a shell-only thread instead of leaving a blank selected chat'
+)
+assert.equal(
+    restoredFromRetainedHistory.sessions[0]!.threads[0]!.activities.length,
+    retainedHistory.activities.length,
+    'retained activity rows must survive a shell refresh alongside chat messages'
+)
+assert.equal(
+    hasRenderableAssistantRetainedHistory({
+        ...retainedHistory,
+        messages: [],
+        activities: [],
+        proposedPlans: []
+    }),
+    false,
+    'an authoritative empty history remains cacheable without pretending it can restore timeline rows'
+)
 
 const metadataOnlyThread: AssistantThread = {
     ...thread,

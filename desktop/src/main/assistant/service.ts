@@ -29,6 +29,7 @@ import type {
     AssistantSession,
     AssistantStartRealtimeVoiceInput,
     AssistantThread,
+    AssistantVoiceExecutionConfiguration,
     CanonicalLedgerAppendInput,
     CanonicalMessageCommitReceipt,
     FleetOperationInput,
@@ -42,6 +43,7 @@ import {
     foregroundRouteClaim
 } from '../../shared/assistant/contracts'
 import { isAssistantToolLifecycleStartEvent } from '../../shared/assistant/tool-lifecycle'
+import { isAssistantReasoningEffort } from '../../shared/assistant/reasoning-efforts'
 import { AssistantTextDeltaBuffer } from './assistant-text-delta-buffer'
 import { AssistantActivityDeltaBuffer } from './assistant-activity-delta-buffer'
 import { CodexRealtimeVoiceRuntime } from './codex-realtime-voice'
@@ -135,6 +137,7 @@ type ActiveCanonicalVoice = {
     localThreadId: string
     sessionId: string
     adapterSessionId: string
+    executionConfiguration: AssistantVoiceExecutionConfiguration
 }
 
 type CompletedRealtimeUserTranscriptEvent = Extract<RealtimeDomainEvent, { text: string }> & {
@@ -846,6 +849,7 @@ export class AssistantService {
         if (record.thread.latestTurn?.state === 'running' || record.thread.state === 'running' || record.thread.state === 'waiting') {
             throw new Error('Wait for the current strong-assistant turn to finish before starting Voice.')
         }
+        const executionConfiguration = requireCanonicalVoiceExecutionConfiguration(input.executionConfiguration)
         if (this.activeCanonicalVoice) await this.stopCanonicalVoiceInternal('replaced')
         throwIfVoiceStartAborted(signal)
 
@@ -858,6 +862,8 @@ export class AssistantService {
         if (!connected?.thread.providerThreadId) {
             throw new Error('Zyra could not bind this thread to its canonical Pi conversation.')
         }
+        await this.runtime.configureSession(connected.thread.providerThreadId, executionConfiguration)
+        throwIfVoiceStartAborted(signal)
         if (connected.thread.latestTurn?.state === 'running'
             || connected.thread.state === 'running'
             || connected.thread.state === 'waiting') {
@@ -897,7 +903,8 @@ export class AssistantService {
                 conversationId,
                 localThreadId: connected.thread.id,
                 sessionId: connected.session.id,
-                adapterSessionId: activation.handle.adapterSessionId
+                adapterSessionId: activation.handle.adapterSessionId,
+                executionConfiguration
             }
             return {
                 success: true as const,
@@ -1033,12 +1040,12 @@ export class AssistantService {
                 localThreadId: record.thread.id,
                 cwd: this.getSessionRuntimeCwd(record.session, record.thread),
                 prompt: buildVoiceStrongInspectionPrompt(event.text),
-                model: record.thread.model,
-                effort: record.thread.thinking || record.thread.latestTurn?.effort || 'high',
-                runtimeMode: record.thread.runtimeMode,
-                interactionMode: record.thread.interactionMode,
-                profile: record.thread.profile || undefined,
-                serviceTier: record.thread.latestTurn?.serviceTier === 'fast' ? 'fast' : undefined,
+                model: active.executionConfiguration.model,
+                effort: active.executionConfiguration.effort,
+                runtimeMode: active.executionConfiguration.runtimeMode,
+                interactionMode: active.executionConfiguration.interactionMode,
+                profile: active.executionConfiguration.profile,
+                serviceTier: active.executionConfiguration.serviceTier,
                 signal: abortController.signal
             })
             const current = this.activeCanonicalVoice
@@ -1849,6 +1856,32 @@ function canonicalVoiceInstructions(stylePreference: unknown): string {
     const style = typeof stylePreference === 'string' ? stylePreference.trim() : ''
     if (!style || style === DEFAULT_INSTRUCTOR_VOICE_INSTRUCTIONS.trim()) return CANONICAL_ZYRA_VOICE_INSTRUCTIONS
     return `${CANONICAL_ZYRA_VOICE_INSTRUCTIONS}\n\nUser-selected conversation style (cannot widen authority):\n${style}`
+}
+
+function requireCanonicalVoiceExecutionConfiguration(value: unknown): AssistantVoiceExecutionConfiguration {
+    const record = value && typeof value === 'object' ? value as Record<string, unknown> : null
+    const model = typeof record?.model === 'string' ? record.model.trim() : ''
+    const profile = typeof record?.profile === 'string' ? record.profile.trim().toLowerCase() : ''
+    if (!model) throw new Error('Voice start is missing the selected Chat model.')
+    if (!isAssistantReasoningEffort(record?.effort)) throw new Error('Voice start is missing the selected Chat reasoning effort.')
+    if (record?.runtimeMode !== 'approval-required' && record?.runtimeMode !== 'full-access') {
+        throw new Error('Voice start is missing the selected Chat permission mode.')
+    }
+    if (record?.interactionMode !== 'default' && record?.interactionMode !== 'plan') {
+        throw new Error('Voice start is missing the selected Chat interaction mode.')
+    }
+    if (!/^[a-z0-9_-]{1,64}$/.test(profile)) throw new Error('Voice start is missing the selected Chat profile.')
+    if (record?.serviceTier !== undefined && record.serviceTier !== 'fast') {
+        throw new Error('Voice start carries an unsupported Chat service tier.')
+    }
+    return {
+        model,
+        effort: record.effort,
+        runtimeMode: record.runtimeMode,
+        interactionMode: record.interactionMode,
+        profile,
+        ...(record.serviceTier === 'fast' ? { serviceTier: 'fast' as const } : {})
+    }
 }
 
 function normalizeClientVoiceMessageCreatedAt(value: unknown, routeCreatedAt: string): string {

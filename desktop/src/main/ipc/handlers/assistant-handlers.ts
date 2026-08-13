@@ -270,7 +270,9 @@ export function handleAssistantStartRealtimeVoice(event: Electron.IpcMainInvokeE
         sdpLength: input?.sdp?.length || 0,
         instructionsLength: input?.instructions?.length || 0,
         voice: input?.voice,
-        outputModality: input?.outputModality
+        outputModality: input?.outputModality,
+        selectedModel: input?.executionConfiguration?.model,
+        selectedRuntimeMode: input?.executionConfiguration?.runtimeMode
     })
     return withAssistantResult(() => getAssistantService().startRealtimeVoice(input, event.sender.id))
 }

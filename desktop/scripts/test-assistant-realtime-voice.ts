@@ -628,6 +628,14 @@ const composerViewSource = readFileSync(
     new URL('../src/renderer/src/pages/assistant/AssistantComposerView.tsx', import.meta.url),
     'utf8'
 )
+const voiceSessionSource = readFileSync(
+    new URL('../src/renderer/src/pages/assistant/useInstructorVoiceSession.ts', import.meta.url),
+    'utf8'
+)
+const realtimeVoiceContractSource = readFileSync(
+    new URL('../src/shared/assistant/contracts/realtime-voice.ts', import.meta.url),
+    'utf8'
+)
 const conversationPaneSource = readFileSync(
     new URL('../src/renderer/src/pages/assistant/AssistantConversationPane.tsx', import.meta.url),
     'utf8'
@@ -656,6 +664,10 @@ const assistantServiceSource = readFileSync(
     new URL('../src/main/assistant/service.ts', import.meta.url),
     'utf8'
 )
+const zyraRuntimeSource = readFileSync(
+    new URL('../src/main/assistant/zyra-pi-runtime.ts', import.meta.url),
+    'utf8'
+)
 const liveTranscriptSource = readFileSync(
     new URL('../src/renderer/src/pages/assistant/InstructorVoiceLiveTranscript.tsx', import.meta.url),
     'utf8'
@@ -675,6 +687,21 @@ assert.match(voiceSettingsStyles, /grid-template-columns: minmax\(280px/)
 assert.match(voiceSettingsStyles, /instructor-voice-settings-instructions-pane/)
 assert.doesNotMatch(voiceSettingsStyles, /--sparkle-/)
 assert.match(composerViewSource, /showRealtimeVoicePrimaryAction[\s\S]{0,120}<ComposerRealtimeVoiceButton/u)
+assert.match(
+    composerViewSource,
+    /onStartRealtimeVoice\?\.\(\{[\s\S]{0,500}model: controller\.selectedModel[\s\S]{0,500}runtimeMode: controller\.selectedRuntimeMode[\s\S]{0,500}effort: controller\.selectedEffort[\s\S]{0,500}serviceTier: controller\.fastModeEnabled \? 'fast' : undefined/u,
+    'Voice activation must snapshot the configuration currently visible in the composer'
+)
+assert.match(
+    voiceSessionSource,
+    /executionConfiguration: options\.executionConfiguration/u,
+    'the current composer configuration must cross the renderer-to-main Voice start boundary'
+)
+assert.match(
+    realtimeVoiceContractSource,
+    /executionConfiguration\?: AssistantVoiceExecutionConfiguration/u,
+    'canonical Voice start must carry a typed primary-agent execution configuration'
+)
 assert.match(conversationPaneSource, /onStartRealtimeVoice=\{handleStartCanonicalVoice\}/u)
 assert.match(conversationPaneSource, /messages=\{displayedTimelineMessages\}/u)
 assert.match(canonicalVoiceStageSource, /<InstructorVoiceOrb/u)
@@ -687,6 +714,26 @@ assert.match(conversationPaneSource, /VOICE_SCROLL_BUTTON_BOTTOM_PX = 78/u)
 assert.doesNotMatch(conversationPaneSource, /voiceTimelineInsetFrameRef/u, 'Voice startup must not relayout the virtual timeline on every animation frame')
 assert.match(timelineRowsSource, /usesProviderNativeStreaming = message\.modality === 'voice'/u)
 assert.match(assistantServiceSource, /Approval received\. The primary agent is continuing\./u)
+assert.match(
+    assistantServiceSource,
+    /const executionConfiguration = requireCanonicalVoiceExecutionConfiguration\(input\.executionConfiguration\)/u,
+    'canonical Voice must fail closed when the selected Chat execution configuration is absent'
+)
+assert.match(
+    assistantServiceSource,
+    /model: active\.executionConfiguration\.model[\s\S]{0,500}runtimeMode: active\.executionConfiguration\.runtimeMode/u,
+    'delegated Voice work must use the immutable configuration captured at Voice activation'
+)
+assert.match(
+    assistantServiceSource,
+    /await this\.runtime\.configureSession\(connected\.thread\.providerThreadId, executionConfiguration\)/u,
+    'Voice activation must synchronize the visible Chat configuration before handing off authority'
+)
+assert.match(
+    zyraRuntimeSource,
+    /async configureSession\([\s\S]{0,1500}context\.worker\.request\('configure', \{[\s\S]{0,500}runtimeMode: configuration\.runtimeMode/u,
+    'the canonical runtime session must receive the selected model, effort, and permission mode'
+)
 assert.doesNotMatch(
     assistantServiceSource,
     /Strong task \$\{activeTask\.taskId\} tool \$\{lifecycle\}/u,

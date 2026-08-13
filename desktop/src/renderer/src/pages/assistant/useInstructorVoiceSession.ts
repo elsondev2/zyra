@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
     AssistantRealtimeVoiceEvent,
     AssistantSendRealtimeVoiceMessageInput,
+    AssistantVoiceExecutionConfiguration,
     InstructorOutputModality,
     InstructorRealtimeVoice
 } from '@shared/assistant/contracts'
@@ -30,6 +31,7 @@ type InstructorVoiceStartOptions = {
     instructions: string
     voice: InstructorRealtimeVoice
     outputModality: InstructorOutputModality
+    executionConfiguration?: AssistantVoiceExecutionConfiguration
 }
 
 type AudioMeter = {
@@ -665,6 +667,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
                 conversationId: binding?.conversationId,
                 sessionId: binding?.sessionId,
                 transcriptBridgeVersion: binding ? 1 : undefined,
+                executionConfiguration: options.executionConfiguration,
                 sdp: offerSdp,
                 instructions: options.instructions,
                 voice: options.voice,

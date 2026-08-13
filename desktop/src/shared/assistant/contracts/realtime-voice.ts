@@ -22,11 +22,22 @@ Teach one clear step at a time. Use plain language and short examples. Ask a bri
 
 This is an instructional conversation. Do not edit files, execute commands, or make system changes.`
 
+export interface AssistantVoiceExecutionConfiguration {
+    model: string
+    effort: import('./runtime').AssistantReasoningEffort
+    runtimeMode: import('./runtime').AssistantRuntimeMode
+    interactionMode: import('./runtime').AssistantInteractionMode
+    profile: string
+    serviceTier?: 'fast'
+}
+
 export interface AssistantStartRealtimeVoiceInput {
     /** Local Assistant thread ID. Omit only for the legacy isolated Voice Lab. */
     conversationId?: string
     sessionId?: string
     transcriptBridgeVersion?: 1
+    /** Exact visible Chat configuration to snapshot for delegated Voice work. */
+    executionConfiguration?: AssistantVoiceExecutionConfiguration
     sdp: string
     instructions?: string
     voice?: InstructorRealtimeVoice

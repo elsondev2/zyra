@@ -29,6 +29,7 @@ import {
     renderInlineMentionOverlay,
     reconcileInlineMentionTags,
 } from './assistant-composer-inline-mentions'
+import type { AssistantVoiceExecutionConfiguration } from '@shared/assistant/contracts'
 import type { AssistantComposerController } from './useAssistantComposerController'
 import { writeFullAccessConfirmSuppressed } from './assistant-safety-preferences'
 import { deriveAssistantComposerViewState, shouldShowComposerRealtimeVoicePrimaryAction } from './assistant-composer-view-state'
@@ -46,7 +47,7 @@ export function AssistantComposerView({
 }: {
     controller: AssistantComposerController
     realtimeVoiceDisabled?: boolean
-    onStartRealtimeVoice?: () => void
+    onStartRealtimeVoice?: (configuration: AssistantVoiceExecutionConfiguration) => void
 }) {
     const navigate = useNavigate()
     const { settings } = useSettings()
@@ -621,7 +622,14 @@ export function AssistantComposerView({
                                         />
                                     </>
                                 ) : showRealtimeVoicePrimaryAction ? (
-                                    <ComposerRealtimeVoiceButton onStart={() => onStartRealtimeVoice?.()} />
+                                    <ComposerRealtimeVoiceButton onStart={() => onStartRealtimeVoice?.({
+                                        model: controller.selectedModel,
+                                        runtimeMode: controller.selectedRuntimeMode,
+                                        effort: controller.selectedEffort,
+                                        interactionMode: controller.selectedInteractionMode,
+                                        profile: controller.zyraProfile || 'default',
+                                        serviceTier: controller.fastModeEnabled ? 'fast' : undefined
+                                    })} />
                                 ) : (
                                     <ComposerSendButton
                                         disabled={sendActionDisabled}

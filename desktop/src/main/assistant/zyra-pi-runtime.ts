@@ -1187,6 +1187,39 @@ export class ZyraPiRuntime extends EventEmitter {
         return Boolean(context?.connected && context.worker.isAlive())
     }
 
+    async configureSession(
+        threadId: string,
+        configuration: {
+            model: string
+            effort: AssistantReasoningEffort
+            runtimeMode: AssistantRuntimeMode
+            interactionMode: AssistantInteractionMode
+            profile: string
+        }
+    ): Promise<void> {
+        const context = this.requireSession(threadId)
+        const model = normalizeZyraModel(configuration.model)
+        if (!model) throw new Error('Assistant configuration requires a model.')
+        const profile = normalizeZyraProfile(configuration.profile)
+        const result = await context.worker.request('configure', {
+            model,
+            thinking: configuration.effort,
+            runtimeMode: configuration.runtimeMode,
+            interactionMode: configuration.interactionMode,
+            profile
+        })
+        const config = asRecord(result['config']) || result
+        context.model = normalizeZyraModel(asString(config['model']) || undefined) || model
+        context.thinking = isAssistantReasoningEffort(config['thinking']) ? config['thinking'] : configuration.effort
+        context.runtimeMode = config['runtimeMode'] === 'full-access'
+            ? 'full-access'
+            : config['runtimeMode'] === 'approval-required'
+                ? 'approval-required'
+                : configuration.runtimeMode
+        context.interactionMode = configuration.interactionMode
+        context.profile = normalizeZyraProfile(config['profile'] || profile)
+    }
+
     async sendPrompt(
         threadId: string,
         prompt: string,

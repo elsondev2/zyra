@@ -1,5 +1,5 @@
 import { memo, useCallback, type RefObject, type WheelEvent as ReactWheelEvent } from 'react'
-import type { AssistantApprovalDecision, AssistantPendingApproval, AssistantPendingUserInput, AssistantPlaygroundPendingLabRequest, AssistantReasoningEffort, AssistantTurnUsage } from '@shared/assistant/contracts'
+import type { AssistantApprovalDecision, AssistantPendingApproval, AssistantPendingUserInput, AssistantPlaygroundPendingLabRequest, AssistantReasoningEffort, AssistantTurnUsage, AssistantVoiceExecutionConfiguration } from '@shared/assistant/contracts'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import { cn } from '@/lib/utils'
 import { AssistantComposer } from './AssistantComposer'
@@ -48,7 +48,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
     reconnectPending?: boolean
     onStop?: () => Promise<void> | void
     onReconnect?: () => Promise<void> | void
-    onStartRealtimeVoice?: () => void
+    onStartRealtimeVoice?: (configuration: AssistantVoiceExecutionConfiguration) => void
     realtimeVoiceDisabled?: boolean
     onOverflowWheel?: (deltaY: number) => void
     onBlockedSend?: (message: string) => void

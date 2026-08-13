@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { AssistantApprovalDecision, AssistantMessage, AssistantProposedPlan, AssistantSession, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
+import type { AssistantApprovalDecision, AssistantMessage, AssistantProposedPlan, AssistantSession, AssistantSessionTurnUsageEntry, AssistantVoiceExecutionConfiguration } from '@shared/assistant/contracts'
 import { isAssistantSessionProjectLocked } from '@shared/assistant/session-project'
 import { useSettings, type AssistantProductProfile } from '@/lib/settings'
 import {
@@ -119,6 +119,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const scrollButtonRafRef = useRef<number | null>(null)
     const newChatHandoffUntilRef = useRef(0)
     const prefetchedHistoryThreadIdsRef = useRef(new Set<string>())
+    const voiceExecutionConfigurationRef = useRef<AssistantVoiceExecutionConfiguration | null>(null)
 
     const isThreadWorking = isAssistantThreadActivelyWorking(controller.activeThread)
     const selectedSessionId = controller.selectedSession?.id || null
@@ -817,9 +818,12 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         || activeThreadIsSubagent
         || isThreadWorking
         || controller.commandPending
-    const handleStartCanonicalVoice = useCallback(() => {
+    const handleStartCanonicalVoice = useCallback((executionConfiguration?: AssistantVoiceExecutionConfiguration) => {
         if (canonicalVoiceDisabled || (voice.status !== 'idle' && voice.status !== 'error')) return
-        void voice.start(voicePreferences)
+        const selectedConfiguration = executionConfiguration || voiceExecutionConfigurationRef.current
+        if (!selectedConfiguration) return
+        voiceExecutionConfigurationRef.current = selectedConfiguration
+        void voice.start({ ...voicePreferences, executionConfiguration: selectedConfiguration })
     }, [canonicalVoiceDisabled, voice.start, voice.status, voicePreferences])
 
     const titleBarContent = useMemo(() => !composerIsCentered ? (

@@ -36,8 +36,10 @@ import {
 } from './assistant-new-chat-policy'
 import {
     applyAssistantHistoryPage,
+    applyAssistantRetainedHistory,
     applyAssistantThreadDetail,
     formatAssistantHistoryLoadError,
+    hasRenderableAssistantRetainedHistory,
     isAssistantRetainedHistoryFresh,
     materializeAssistantShellSnapshot,
     pruneAssistantHistoryCache
@@ -881,7 +883,23 @@ class AssistantStore {
 
     private async requestSessionHydration(sessionId: string, threadId: string | null): Promise<void> {
         if (!sessionId || !threadId) return
-        if (isAssistantRetainedHistoryFresh(this.state.historyByThreadId[threadId])) return
+        const retainedHistory = this.state.historyByThreadId[threadId]
+        if (isAssistantRetainedHistoryFresh(retainedHistory)) {
+            const currentThread = this.state.snapshot.sessions
+                .flatMap((session) => session.threads)
+                .find((thread) => thread.id === threadId) || null
+            const retainedHasRows = hasRenderableAssistantRetainedHistory(retainedHistory)
+            const renderedHasRows = Boolean(
+                currentThread?.messages.length
+                || currentThread?.activities.length
+                || currentThread?.proposedPlans.length
+            )
+            if (!retainedHasRows || renderedHasRows) return
+            this.setState((current) => ({
+                snapshot: applyAssistantRetainedHistory(current.snapshot, threadId, retainedHistory!)
+            }))
+            return
+        }
 
         const hydrationKey = this.buildSelectionHydrationKey(sessionId, threadId)
         if (this.pendingSelectionHydrations.has(hydrationKey)) return
