@@ -930,6 +930,12 @@ const waitingCommandMarkup = renderToStaticMarkup(createElement(TimelineToolCall
     runningCommandCount: 1
 }))
 assert.equal(waitingCommandMarkup.includes('waiting for output...'), true)
+const minimizedWaitingCommandMarkup = renderToStaticMarkup(createElement(TimelineToolCallCard, {
+    activity: waitingCommand,
+    runningCommandCount: 1,
+    toolOutputDefaultMode: 'minimized'
+}))
+assert.equal(minimizedWaitingCommandMarkup.includes('data-state="closed"'), true, 'Minimized live tool output keeps running tools closed')
 assert.equal(
     waitingCommandMarkup.includes('>bash</p>'),
     false,

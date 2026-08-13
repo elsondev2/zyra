@@ -383,8 +383,7 @@ class AssistantStore {
             hydratedThreadCache: this.hydratedThreadCache,
             setState: this.setState,
             getState: this.getState,
-            requestSessionHydration: (targetSessionId, targetThreadId) => this.requestSessionHydration(targetSessionId, targetThreadId),
-            warmSessionConnection: (targetSessionId, targetThreadId) => this.warmSessionConnection(targetSessionId, targetThreadId)
+            requestSessionHydration: (targetSessionId, targetThreadId) => this.requestSessionHydration(targetSessionId, targetThreadId)
         }, sessionId, options)
     }
 
@@ -523,10 +522,6 @@ class AssistantStore {
                 }))
             } else {
                 void this.requestSessionHydration(input.sessionId, input.threadId)
-            }
-            const targetThread = selectedSession.threads.find((thread) => thread.id === input.threadId) || null
-            if (shouldEagerlyConnectAssistantThread(targetThread)) {
-                this.warmSessionConnection(input.sessionId, input.threadId)
             }
             return result
         } catch (error) {

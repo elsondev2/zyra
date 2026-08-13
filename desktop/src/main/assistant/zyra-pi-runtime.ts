@@ -953,6 +953,10 @@ export class ZyraPiRuntime extends EventEmitter {
         return this.getAgentServerConnection(resolveZyraRoot()).listCanonicalChats()
     }
 
+    async getCanonicalChat(session: string, project?: string): Promise<CanonicalAgentChat | null> {
+        return this.getAgentServerConnection(resolveZyraRoot()).getCanonicalChat(session, project)
+    }
+
     async readCanonicalChatHistory(
         session: string,
         project?: string,
@@ -1142,22 +1146,25 @@ export class ZyraPiRuntime extends EventEmitter {
                 profile: context.profile
             }
         })
+        const attachmentState = thread.providerThreadId ? thread.state : 'starting'
         this.emitRuntime({
             eventId: randomUUID(),
             type: 'thread.started',
             createdAt: nowIso(),
             threadId: thread.id,
             providerThreadId,
-            payload: { providerThreadId, cwd, state: 'starting' }
+            payload: { providerThreadId, cwd, state: attachmentState }
         })
-        this.emitRuntime({
-            eventId: randomUUID(),
-            type: 'session.state.changed',
-            createdAt: nowIso(),
-            threadId: thread.id,
-            providerThreadId,
-            payload: { state: 'starting' }
-        })
+        if (!thread.providerThreadId) {
+            this.emitRuntime({
+                eventId: randomUUID(),
+                type: 'session.state.changed',
+                createdAt: nowIso(),
+                threadId: thread.id,
+                providerThreadId,
+                payload: { state: 'starting' }
+            })
+        }
         try {
             await this.ensureConnected(context)
         } catch (error) {
@@ -1732,7 +1739,12 @@ export class ZyraPiRuntime extends EventEmitter {
             return
         }
         const observedTurnId = metadata?.turnId
-        if (observedTurnId && context.activeTurnId !== observedTurnId && !context.completedTurnIds.has(observedTurnId)) {
+        if (
+            observedTurnId
+            && metadata?.replay !== true
+            && context.activeTurnId !== observedTurnId
+            && !context.completedTurnIds.has(observedTurnId)
+        ) {
             context.activeTurnId = observedTurnId
             context.assistantMessageSequence = 0
             context.activeAssistantItemId = null
@@ -1760,15 +1772,15 @@ export class ZyraPiRuntime extends EventEmitter {
         }
         const turnId = observedTurnId || context.activeTurnId
 
-        if (type === 'zyra_server_turn_completed' && turnId) {
+        if ((type === 'zyra_server_turn_completed' || type === 'agent_end') && turnId) {
             if (context.completedTurnIds.has(turnId)) return
             markTurnCompleted(context, turnId)
-            const outcome = event['outcome'] === 'failed' ? 'failed' : 'completed'
+            const outcome = type === 'zyra_server_turn_completed' && event['outcome'] === 'failed' ? 'failed' : 'completed'
             this.completeAssistantText(context, turnId)
             this.emitRuntime({
                 eventId: randomUUID(),
                 type: 'turn.completed',
-                createdAt: nowIso(),
+                createdAt: asString(event['timestamp']) || nowIso(),
                 threadId: context.localThreadId,
                 providerThreadId: context.providerThreadId,
                 turnId,

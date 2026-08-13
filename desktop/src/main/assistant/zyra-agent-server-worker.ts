@@ -134,6 +134,12 @@ export class DesktopAgentServerConnection {
         return Array.isArray(result['chats']) ? result['chats'] as CanonicalAgentChat[] : []
     }
 
+    async getCanonicalChat(session: string, project?: string): Promise<CanonicalAgentChat | null> {
+        const client = await this.getClient()
+        const result = await client.request('catalog.get', { session, project, allProjects: true })
+        return asRecord(result['chat']) as CanonicalAgentChat | null
+    }
+
     async readCanonicalChatHistory(
         session: string,
         project?: string,

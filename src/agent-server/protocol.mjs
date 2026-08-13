@@ -10,6 +10,7 @@ const METHOD_NAMES = new Set([
   "runtime.generateText",
   "catalog.registerProject",
   "catalog.list",
+  "catalog.get",
   "catalog.history",
   "catalog.update",
   "catalog.message.append",

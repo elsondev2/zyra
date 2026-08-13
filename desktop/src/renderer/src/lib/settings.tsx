@@ -166,7 +166,7 @@ export const ACCENT_COLORS: AccentColor[] = [
 ]
 
 export interface Settings {
-    settingsSchemaVersion: 3
+    settingsSchemaVersion: 4
     theme: Theme
     appearanceThemeMode: AppearanceThemeMode
     appearanceDarkTheme: DarkTheme
@@ -244,7 +244,7 @@ export interface Settings {
 }
 
 const DEFAULT_SETTINGS: Settings = {
-    settingsSchemaVersion: 3,
+    settingsSchemaVersion: 4,
     theme: 'dark',
     appearanceThemeMode: 'system',
     appearanceDarkTheme: 'dark',
@@ -306,7 +306,7 @@ const DEFAULT_SETTINGS: Settings = {
     commitAIProvider: 'groq',
     assistantUsageDisplayMode: 'remaining',
     assistantTextStreamingMode: 'stream',
-    assistantToolOutputDefaultMode: 'expanded',
+    assistantToolOutputDefaultMode: 'minimized',
     assistantDefaultModel: '',
     assistantDefaultPromptTemplate: '',
     assistantProductProfile: 'default',
@@ -521,7 +521,7 @@ export function loadSettings(): Settings {
                 || localStorage.getItem('zyra-ui:active-profile:v1')
 
             return {
-                settingsSchemaVersion: 3,
+                settingsSchemaVersion: 4,
                 theme,
                 appearanceThemeMode,
                 appearanceDarkTheme,
@@ -614,7 +614,13 @@ export function loadSettings(): Settings {
                 commitAIProvider: candidate.commitAIProvider === 'gemini' || candidate.commitAIProvider === 'codex' ? candidate.commitAIProvider : 'groq',
                 assistantUsageDisplayMode: candidate.assistantUsageDisplayMode === 'used' ? 'used' : 'remaining',
                 assistantTextStreamingMode: candidate.assistantTextStreamingMode === 'chunks' ? 'chunks' : 'stream',
-                assistantToolOutputDefaultMode: candidate.assistantToolOutputDefaultMode === 'minimized' ? 'minimized' : 'expanded',
+                assistantToolOutputDefaultMode: parsed.assistantToolOutputDefaultMode === 'expanded'
+                    || (
+                        parsed.assistantToolOutputDefaultMode === undefined
+                        && (parsed.settingsSchemaVersion === undefined || Number(parsed.settingsSchemaVersion) < 4)
+                    )
+                    ? 'expanded'
+                    : 'minimized',
                 assistantDefaultModel: sanitizeString(candidate.assistantDefaultModel, 256),
                 assistantDefaultPromptTemplate: sanitizeString(candidate.assistantDefaultPromptTemplate, 32_000, false),
                 assistantProductProfile: parsed.assistantProductProfile === 'builder'

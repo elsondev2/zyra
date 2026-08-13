@@ -158,6 +158,9 @@ try {
   assert.equal(tuiAttached.canonicalChatId, "chat:test");
   assert.equal(workers.length, 1, "desktop and TUI must share one server worker");
   const attachedList = await desktop.request("catalog.list", {});
+  const attachedSingle = await desktop.request("catalog.get", { session: "chat:test", project });
+  assert.equal(attachedSingle.chat.canonicalChatId, "chat:test", "single-chat lookup resolves the canonical shell without attaching another runtime");
+  assert.equal(attachedSingle.chat.presence.state, "ready");
   assert.equal(attachedList.chats[0].presence.clients.length, 2);
   assert.deepEqual(new Set(attachedList.chats[0].presence.clients.map((entry) => entry.surface)), new Set(["desktop", "tui"]));
   const updated = await desktop.request("catalog.update", { session: "chat:test", title: "Editable shared title", project });
@@ -221,6 +224,11 @@ try {
   assert.equal((await tui.request("catalog.list", {})).chats[0].presence.attention, null, "catalog presence must clear resolved approval attention");
   desktop.close();
   assert.equal(server.state().sessions[0].activeRequests, 1, "closing Desktop must not stop active work");
+  workers[0].emit("event", { type: "agent_end" });
+  await waitUntil(() => server.state().sessions[0].latestTurn?.state === "completed");
+  const agentEndCatalog = await tui.request("catalog.list", {});
+  assert.equal(agentEndCatalog.chats[0].presence.state, "ready", "agent_end must settle the canonical turn before the prompt request unwinds");
+  assert.equal(agentEndCatalog.chats[0].presence.activeTurnId, null, "settled presence cannot advertise a live turn id");
   workers[0].finishPrompt({ completed: true });
   await waitUntil(() => server.state().sessions[0].activeRequests === 0);
   await promptResult;
@@ -240,13 +248,15 @@ try {
   const reconnect = client("desktop:reconnect", "desktop", ["desktop-control"]);
   await reconnect.connect();
   const replay = await reconnect.attach({ project, cwd: project, session: "chat:test", localThreadId: "assistant-thread:reconnect", lastSequence: 0 });
-  assert.equal(replay.replay.length, 5, "reconnect must replay metadata, provider events, approvals, and durable turn completion");
+  assert.equal(replay.replay.length, 5, "reconnect must replay metadata, provider events, approvals, and the authoritative agent completion");
   assert.equal(replay.replay[0].event.type, "session_metadata");
   assert.equal(replay.replay[1].event.message.content, "still working");
   assert.equal(replay.replay[1].requestContext.turnId, "turn:test");
   assert.equal(replay.replay[2].event.type, "approval_requested");
   assert.equal(replay.replay[3].event.type, "approval_resolved");
-  assert.equal(replay.replay[4].event.type, "zyra_server_turn_completed");
+  assert.equal(replay.replay[4].event.type, "agent_end");
+  assert.equal(replay.replay.filter((entry) => entry.event.type === "agent_end").length, 1, "agent_end is the durable provider completion boundary");
+  assert.equal(replay.replay.filter((entry) => entry.event.type === "zyra_server_turn_completed").length, 0, "prompt resolution cannot append a duplicate synthetic completion after agent_end");
 
   const tuiRuntime = await createZyraTuiClientRuntime({
     project,

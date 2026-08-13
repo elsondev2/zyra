@@ -565,6 +565,76 @@ const finalCompletedIndex = runtimeEvents.indexOf(completions[1]!)
 assert.ok(planningCompletedIndex < toolIndex, 'tool activity must follow the planning response')
 assert.ok(toolIndex < finalCompletedIndex, 'final completion must follow tool activity')
 
+const replayGuardRuntime = new ZyraPiRuntime()
+const replayGuardEvents: AssistantRuntimeEvent[] = []
+replayGuardRuntime.on('runtime', (event: AssistantRuntimeEvent) => replayGuardEvents.push(event))
+const replayGuardContext = {
+    ...context,
+    activeTurnId: null,
+    completedTurnIds: new Set<string>(['turn-already-completed']),
+    assistantMessageSequence: 0,
+    activeAssistantItemId: null,
+    assistantTextByItemId: new Map<string, string>(),
+    assistantCompletedItemIds: new Set<string>(),
+    internalTextByItemId: new Map<string, string>(),
+    internalCompletedItemIds: new Set<string>(),
+    lastAssistantItemId: null
+}
+const replayGuardHandler = replayGuardRuntime as unknown as {
+    handleZyraEvent: (
+        targetContext: typeof replayGuardContext,
+        eventValue: unknown,
+        eventMetadata?: { turnId?: string; localThreadId?: string; replay?: boolean }
+    ) => void
+}
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'agent_end'
+}, { turnId: 'turn-historical-replay', replay: true })
+assert.equal(
+    replayGuardEvents.filter((event) => event.type === 'turn.completed' && event.turnId === 'turn-historical-replay').length,
+    1,
+    'a replayed agent_end repairs a historical turn from the durable provider boundary'
+)
+replayGuardEvents.length = 0
+replayGuardContext.completedTurnIds.clear()
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'message_end',
+    message: { id: 'replayed-final', role: 'assistant', content: [{ type: 'text', text: 'Historical final response' }] }
+}, { turnId: 'turn-historical-replay', replay: true })
+assert.equal(
+    replayGuardEvents.some((event) => event.type === 'turn.started'),
+    false,
+    'historical replay correlation cannot reactivate a settled turn when a chat is opened'
+)
+assert.equal(replayGuardContext.activeTurnId, null, 'replay must leave the runtime idle')
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'message_start',
+    message: { id: 'live-external', role: 'assistant', content: [] }
+}, { turnId: 'turn-live-external', replay: false })
+assert.equal(
+    replayGuardEvents.some((event) => event.type === 'turn.started' && event.turnId === 'turn-live-external'),
+    true,
+    'a live externally-started canonical turn must still become active'
+)
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'agent_end'
+}, { turnId: 'turn-live-external', replay: false })
+assert.equal(
+    replayGuardEvents.filter((event) => event.type === 'turn.completed' && event.turnId === 'turn-live-external').length,
+    1,
+    'Pi agent_end is the authoritative final-response boundary for a live turn'
+)
+assert.equal(replayGuardContext.activeTurnId, null, 'authoritative completion clears the active turn')
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'zyra_server_turn_completed',
+    outcome: 'completed'
+}, { turnId: 'turn-live-external', replay: false })
+assert.equal(
+    replayGuardEvents.filter((event) => event.type === 'turn.completed' && event.turnId === 'turn-live-external').length,
+    1,
+    'the later synthetic server completion cannot duplicate agent_end completion'
+)
+
 const completedToolEvent = runtimeEvents.findLast((event) => event.type === 'activity' && event.itemId === 'tool-search')
 const completedToolData = completedToolEvent?.type === 'activity'
     ? completedToolEvent.payload.data as Record<string, unknown>

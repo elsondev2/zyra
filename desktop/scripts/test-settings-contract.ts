@@ -62,7 +62,8 @@ assert.equal(sanitized.assistantDefaultPromptTemplate, '')
 assert.deepEqual(sanitized.projectIconOverrides, { 'C:/project': 'C:/icon.png' })
 assert.equal('scrollMode' in sanitized, false)
 assert.equal('betaSettingsEnabled' in sanitized, false)
-assert.equal(sanitized.settingsSchemaVersion, 3)
+assert.equal(sanitized.settingsSchemaVersion, 4)
+assert.equal(sanitized.assistantToolOutputDefaultMode, 'expanded', 'existing installs preserve their prior live tool output behavior during schema migration')
 assert.equal(sanitized.assistantHistoryPrefetch, false, 'older settings must not force an immediate second history page')
 
 storage.clear()
@@ -78,6 +79,14 @@ storage.setItem('devscope-settings', JSON.stringify({
     assistantHistoryPrefetch: true
 }))
 assert.equal(loadSettings().assistantHistoryPrefetch, true, 'an explicit schema 3 prefetch choice remains supported')
+
+storage.clear()
+storage.setItem('devscope-settings', JSON.stringify({ settingsSchemaVersion: 4 }))
+assert.equal(loadSettings().assistantToolOutputDefaultMode, 'minimized', 'new installs keep live tool responses closed by default')
+
+storage.clear()
+storage.setItem('devscope-settings', JSON.stringify({ settingsSchemaVersion: 4, assistantToolOutputDefaultMode: 'expanded' }))
+assert.equal(loadSettings().assistantToolOutputDefaultMode, 'expanded', 'the persisted setting can explicitly enable live tool expansion')
 
 storage.clear()
 storage.setItem('devscope-settings', JSON.stringify({ assistantTranscriptionEngine: 'vosk' }))

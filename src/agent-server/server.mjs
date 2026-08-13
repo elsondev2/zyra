@@ -217,6 +217,10 @@ export class ZyraAgentServer extends EventEmitter {
       const chats = await this.catalog.list(params);
       return { chats: chats.map((chat) => ({ ...chat, presence: this.sessionPresence(chat.canonicalChatId) })) };
     }
+    if (method === "catalog.get") {
+      const chat = await this.catalog.find(params.session, params);
+      return { chat: chat ? { ...chat, presence: this.sessionPresence(chat.canonicalChatId) } : null };
+    }
     if (method === "catalog.history") {
       return { history: await this.catalog.history(params.session, params) };
     }
@@ -319,9 +323,11 @@ export class ZyraAgentServer extends EventEmitter {
       attention: null,
       latestTurn: null
     };
+    const activeTurnId = session.activeRequestContext?.turnId || null;
+    const turnRunning = Boolean(activeTurnId && session.latestTurn?.id === activeTurnId && session.latestTurn.state === "running");
     return {
-      state: session.activeRequestContext ? "running" : session.hasBackgroundWork() ? "background" : "ready",
-      activeTurnId: session.activeRequestContext?.turnId || null,
+      state: turnRunning ? "running" : session.hasBackgroundWork() ? "background" : "ready",
+      activeTurnId: turnRunning ? activeTurnId : null,
       clients: [...session.clients].map((client) => ({ clientId: client.clientId, surface: client.surface })),
       backgroundWorkActive: session.hasBackgroundWork(),
       attention: session.pendingApprovalRequestIds.size > 0 ? "approval" : null,
@@ -406,7 +412,7 @@ export class ZyraAgentServer extends EventEmitter {
       connected: session.connectedResult,
       replay: session.replay(lastSequence),
       latestSequence: session.sequence,
-      activeRequestContext: session.activeRequestContext,
+      activeRequestContext: session.latestTurn?.state === "running" ? session.activeRequestContext : null,
       presence: this.sessionPresence(session.sessionKey)
     };
   }
@@ -658,10 +664,12 @@ class ServerOwnedSession {
     }
     try {
       const result = await this.worker.request(type, payload);
-      if (type === "prompt") this.publish({ type: "zyra_server_turn_completed", outcome: "completed" });
+      if (type === "prompt" && !this.isTurnTerminal(requestContext.turnId)) {
+        this.publish({ type: "zyra_server_turn_completed", outcome: "completed" });
+      }
       return result;
     } catch (error) {
-      if (type === "prompt") {
+      if (type === "prompt" && !this.isTurnTerminal(requestContext.turnId)) {
         this.publish({
           type: "zyra_server_turn_completed",
           outcome: "failed",
@@ -726,6 +734,16 @@ class ServerOwnedSession {
     this.scheduleIdleStop();
   }
 
+  isTurnTerminal(turnIdValue) {
+    const turnId = String(turnIdValue || "").trim();
+    return Boolean(
+      turnId
+      && this.latestTurn?.id === turnId
+      && this.latestTurn.completedAt
+      && this.latestTurn.state !== "running"
+    );
+  }
+
   rebuildLatestTurnSummary() {
     this.latestTurn = null;
     for (const entry of this.events) {
@@ -745,7 +763,7 @@ class ServerOwnedSession {
   }
 
   updateLatestTurnSummary(event, requestContext, occurredAt) {
-    const turnId = String(requestContext?.turnId || "").trim();
+    const turnId = String(requestContext?.turnId || event?.turnId || "").trim();
     if (turnId && this.latestTurn?.id !== turnId) {
       this.latestTurn = {
         id: turnId,
@@ -759,7 +777,7 @@ class ServerOwnedSession {
     if (event?.type === "message_end" && event.message?.role === "assistant" && event.message.id && this.latestTurn) {
       this.latestTurn = { ...this.latestTurn, assistantMessageId: String(event.message.id) };
     }
-    if (event?.type !== "zyra_server_turn_completed") return;
+    if (event?.type !== "zyra_server_turn_completed" && event?.type !== "agent_end") return;
     const completedTurnId = turnId || this.latestTurn?.id;
     if (!completedTurnId) return;
     const base = this.latestTurn?.id === completedTurnId
@@ -770,7 +788,7 @@ class ServerOwnedSession {
           startedAt: occurredAt,
           assistantMessageId: null
         };
-    const outcome = String(event.outcome || "completed");
+    const outcome = event?.type === "agent_end" ? "completed" : String(event.outcome || "completed");
     this.latestTurn = {
       ...base,
       state: outcome === "failed" ? "error" : outcome === "interrupted" ? "interrupted" : "completed",

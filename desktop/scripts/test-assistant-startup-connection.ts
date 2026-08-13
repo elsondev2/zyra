@@ -12,7 +12,7 @@ import {
 } from '../src/renderer/src/lib/assistant/assistant-new-chat-policy'
 import { shouldAutoReconnectAssistantOnStartup } from '../src/renderer/src/lib/assistant/assistant-runtime-preferences'
 import { areAssistantSessionsRailSelectionsEqual } from '../src/renderer/src/lib/assistant/assistant-store-selection-helpers'
-import { getAssistantThreadPhase } from '../src/renderer/src/lib/assistant/selectors'
+import { getAssistantThreadPhase, isAssistantThreadActivelyWorking } from '../src/renderer/src/lib/assistant/selectors'
 import { toAssistantThreadShell } from '../src/main/assistant/persistence-snapshot'
 import { TrailingAsyncReconciler } from '../src/main/assistant/trailing-async-reconciler'
 import { shouldAutoReconnectAssistantThread } from '../src/renderer/src/pages/assistant/assistant-connection-recovery-policy'
@@ -282,6 +282,11 @@ assert.equal(shouldAutoReconnectAssistantOnStartup(), true, 'startup reconnect s
 assert.equal(shouldAutoReconnectAssistantOnStartup(), false, 'the persisted connection setting should disable startup reconnect')
 
 assert.equal(
+    shouldAutoReconnectAssistantThread({ threadState: 'idle', hasRecoverableIssue: false }),
+    false,
+    'opening an idle historical chat must not start a second eager reconnect path'
+)
+assert.equal(
     shouldAutoReconnectAssistantThread({ threadState: 'stopped', hasRecoverableIssue: false }),
     false,
     'an intentional in-session disconnect should remain stopped'
@@ -302,6 +307,45 @@ assert.equal(
     getAssistantThreadPhase({ ...thread, state: 'starting', canonicalPresence: readyPresence }).key,
     'ready',
     'the renderer should trust canonical ready presence instead of showing Connecting forever'
+)
+assert.equal(
+    isAssistantThreadActivelyWorking({ ...thread, state: 'starting', canonicalPresence: undefined }),
+    false,
+    'runtime attachment is connection progress, not an active assistant turn'
+)
+assert.equal(
+    getAssistantThreadPhase({
+        ...thread,
+        state: 'running',
+        latestTurn: {
+            id: 'settled-turn',
+            state: 'completed',
+            requestedAt: now,
+            startedAt: now,
+            completedAt: now,
+            assistantMessageId: 'assistant-final'
+        },
+        canonicalPresence: readyPresence
+    }).key,
+    'ready',
+    'canonical ready presence must clear a stale running shell after the final response'
+)
+assert.equal(
+    isAssistantThreadActivelyWorking({
+        ...thread,
+        state: 'running',
+        latestTurn: {
+            id: 'settled-turn',
+            state: 'completed',
+            requestedAt: now,
+            startedAt: now,
+            completedAt: now,
+            assistantMessageId: 'assistant-final'
+        },
+        canonicalPresence: readyPresence
+    }),
+    false,
+    'a completed response with canonical ready presence cannot remain Working'
 )
 assert.equal(
     getAssistantThreadPhase({
@@ -370,6 +414,11 @@ assert.equal(
     getAssistantThreadLastMessageAt({ ...thread, latestTurn: completedLatestTurn }),
     completedAt,
     'sidebar recency must use canonical turn completion when history is not hydrated'
+)
+assert.equal(
+    getAssistantThreadLastMessageAt({ ...thread, updatedAt: '2026-07-11T08:00:00.000Z' }),
+    thread.createdAt,
+    'runtime attachment timestamps must not make an old chat look newly active'
 )
 assert.deepEqual(
     resolveCanonicalPresenceAttention({

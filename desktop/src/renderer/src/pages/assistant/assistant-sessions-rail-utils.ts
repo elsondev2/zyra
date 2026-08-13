@@ -282,7 +282,6 @@ export function getAssistantThreadLastMessageAt(thread: AssistantThread | null):
         || thread.latestTurn?.completedAt
         || thread.latestTurn?.startedAt
         || thread.latestTurn?.requestedAt
-        || thread.updatedAt
         || thread.createdAt
 }
 

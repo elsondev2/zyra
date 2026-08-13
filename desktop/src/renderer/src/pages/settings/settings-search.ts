@@ -94,9 +94,9 @@ export const SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly SettingsS
             'Busy send behavior': 'queue next interrupt active turn',
             'Default prompt': 'template instructions new chat'
         }),
-        ...rows('Output and history', ['Assistant output', 'Live tool output', 'Reconnect on startup', 'Prefetch earlier history', 'Cross-surface status', 'Canonical diagnostics'], {
+        ...rows('Output and history', ['Assistant output', 'Open live tool output', 'Reconnect on startup', 'Prefetch earlier history', 'Cross-surface status', 'Canonical diagnostics'], {
             'Assistant output': 'stream chunks token text response',
-            'Live tool output': 'expanded minimized command terminal',
+            'Open live tool output': 'expanded minimized collapsed closed command terminal animation',
             'Reconnect on startup': 'connect selected chat launch',
             'Prefetch earlier history': 'older messages pagination',
             'Cross-surface status': 'desktop browser active status',

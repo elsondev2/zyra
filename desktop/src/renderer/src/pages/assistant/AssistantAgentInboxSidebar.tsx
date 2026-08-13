@@ -70,8 +70,8 @@ function getStatusThread(session: AssistantSession): AssistantThread | null {
     return session.threads.find((thread) => thread.id === session.activeThreadId) || getPrimarySessionThread(session)
 }
 
-function resolveRowStatus(thread: AssistantThread | null, active: boolean, activeThreadId: string | null): RowStatus {
-    const pill = resolveAssistantThreadStatusPill(thread, active && thread?.id === activeThreadId)
+function resolveRowStatus(thread: AssistantThread | null, isSelectedThread: boolean): RowStatus {
+    const pill = resolveAssistantThreadStatusPill(thread, isSelectedThread)
     switch (pill?.label) {
         case 'Pending': return 'approval'
         case 'Input needed': return 'input'
@@ -88,7 +88,7 @@ function resolveRowStatus(thread: AssistantThread | null, active: boolean, activ
 function isEffectivelySettled(item: Omit<SidebarItem, 'settled'>, overrides: SettlementOverrides): boolean {
     const override = overrides[item.session.id]
     if (override?.activityAt === item.activityAt) return override.state === 'settled'
-    if (item.active || item.status !== 'ready') return false
+    if (item.status !== 'ready') return false
     const activity = getSortableTimestamp(item.activityAt)
     return activity > 0 && Date.now() - activity >= AUTO_SETTLE_AFTER_MS
 }
@@ -213,7 +213,7 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
             const active = session.id === props.activeSessionId
             const activityAt = getSessionLastActivityAt(session)
             const base = { session, thread, active, activityAt, projectPath: resolveSessionProjectPath(session), project: projectByPath.get(resolveSessionProjectPath(session))! }
-            const status = resolveRowStatus(thread, active, props.activeThreadId)
+            const status = resolveRowStatus(thread, active && thread?.id === props.activeThreadId)
             const unsettled = { ...base, status }
             return { ...unsettled, settled: isEffectivelySettled(unsettled, settlementOverrides) }
         }), [props.activeSessionId, props.activeThreadId, projectByPath, scope, settlementOverrides, visibleSessions])

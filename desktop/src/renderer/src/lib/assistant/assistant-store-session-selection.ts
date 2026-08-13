@@ -6,7 +6,6 @@ import {
     deriveAssistantRuntimeStatus,
     type AssistantStoreState
 } from './assistant-store-runtime'
-import { shouldEagerlyConnectAssistantThread } from './assistant-new-chat-policy'
 
 type SetAssistantStoreState = (
     nextState:
@@ -20,7 +19,6 @@ type AssistantStoreSessionSelectionContext = {
     getState: () => AssistantStoreState
     setState: SetAssistantStoreState
     requestSessionHydration: (sessionId: string, threadId: string | null) => Promise<void>
-    warmSessionConnection: (sessionId: string, threadId: string) => void
 }
 
 const SELECTION_PAINT_FALLBACK_MS = 80
@@ -143,9 +141,6 @@ export async function selectAssistantStoreSession(
             void context.requestSessionHydration(sessionId, targetThreadId)
         }
 
-        if (targetThreadId && shouldEagerlyConnectAssistantThread(targetThread)) {
-            context.warmSessionConnection(sessionId, targetThreadId)
-        }
         return result
     } catch (error) {
         const message = error instanceof Error ? error.message : 'Assistant command failed.'

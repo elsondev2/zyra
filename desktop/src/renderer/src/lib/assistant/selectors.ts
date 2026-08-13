@@ -114,7 +114,14 @@ export function getAssistantThreadPhase(thread: AssistantThread | null): {
     if (canonicalPresence?.state === 'background') {
         return { key: 'background', label: 'Background work' }
     }
-    if (canonicalPresence?.state === 'ready' && thread.state === 'starting') {
+    if (
+        canonicalPresence?.state === 'ready'
+        && (
+            thread.state === 'starting'
+            || (thread.state === 'running' && thread.latestTurn?.state !== 'running')
+            || thread.state === 'waiting'
+        )
+    ) {
         return { key: 'ready', label: 'Idle' }
     }
     if (canonicalPresence?.state === 'detached') {
@@ -152,7 +159,11 @@ export function getAssistantThreadPhaseLabel(thread: AssistantThread | null): st
 
 export function isAssistantThreadActivelyWorking(thread: AssistantThread | null): boolean {
     const phase = getAssistantThreadPhase(thread)
-    return phase.key === 'starting' || phase.key === 'running' || phase.key === 'waiting' || phase.key === 'background'
+    if (phase.key === 'background') return true
+    if (phase.key !== 'running' && phase.key !== 'waiting') return false
+    return thread?.canonicalPresence?.state === 'running'
+        || thread?.canonicalPresence?.state === 'background'
+        || thread?.latestTurn?.state === 'running'
 }
 
 export function getAssistantSessionSubtitle(session: AssistantSession): string {

@@ -424,12 +424,16 @@ export class AssistantService {
 
     async selectSession(sessionId: string) {
         if (this.activeCanonicalVoice?.sessionId !== sessionId) await this.stopCanonicalVoiceForNavigation()
-        return selectAssistantSessionAction(this.actionDeps, sessionId)
+        const result = await selectAssistantSessionAction(this.actionDeps, sessionId)
+        await this.refreshSelectedCanonicalPresence(sessionId)
+        return result
     }
 
     async selectThread(sessionId: string, threadId: string) {
         if (this.activeCanonicalVoice?.localThreadId !== threadId) await this.stopCanonicalVoiceForNavigation()
-        return selectAssistantThreadAction(this.actionDeps, sessionId, threadId)
+        const result = await selectAssistantThreadAction(this.actionDeps, sessionId, threadId)
+        await this.refreshSelectedCanonicalPresence(sessionId)
+        return result
     }
 
     async getThreadDetailBootstrap(threadId: string) {
@@ -1256,6 +1260,51 @@ export class AssistantService {
     private requireCanonicalVoiceSessions(): CanonicalVoiceSessionController {
         if (!this.canonicalVoiceSessions) throw new Error('Canonical Voice controller is not ready.')
         return this.canonicalVoiceSessions
+    }
+
+    private async refreshSelectedCanonicalPresence(sessionId: string): Promise<void> {
+        const session = this.state.snapshot.sessions.find((entry) => entry.id === sessionId) || null
+        const thread = getActiveThread(session)
+        if (!session || !thread?.providerThreadId) return
+
+        try {
+            const chat = await this.runtime.getCanonicalChat(
+                thread.providerThreadId,
+                session.projectPath || thread.cwd || undefined
+            )
+            if (!chat?.presence) return
+            const occurredAt = nowIso()
+            const latestTurn = mergeCanonicalPresenceLatestTurn(thread.latestTurn, chat.presence)
+            const attention = resolveCanonicalPresenceAttention({
+                currentHasPendingApprovals: thread.hasPendingApprovals,
+                currentHasPendingUserInputs: thread.hasPendingUserInputs,
+                hasLocalPendingApproval: thread.pendingApprovals.some((entry) => entry.status === 'pending'),
+                hasLocalPendingInput: thread.pendingUserInputs.some((entry) => entry.status === 'pending'),
+                presence: chat.presence
+            })
+            this.appendEvent('thread.updated', occurredAt, {
+                threadId: thread.id,
+                patch: {
+                    canonicalPresence: {
+                        ...chat.presence,
+                        latestSequence: Math.max(
+                            thread.canonicalPresence?.latestSequence || 0,
+                            chat.presence.latestSequence || 0
+                        )
+                    },
+                    latestTurn,
+                    state: resolveCanonicalPresenceThreadState({
+                        currentState: thread.state,
+                        previousPresence: thread.canonicalPresence,
+                        presence: chat.presence
+                    }),
+                    hasPendingApprovals: attention.hasPendingApprovals,
+                    hasPendingUserInputs: attention.hasPendingUserInputs
+                }
+            }, session.id, thread.id)
+        } catch (error) {
+            log.warn('[Assistant] Failed to refresh selected canonical presence', error)
+        }
     }
 
     private async queueCanonicalChatImport(): Promise<void> {
