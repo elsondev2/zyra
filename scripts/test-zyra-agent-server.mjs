@@ -8,19 +8,46 @@ import { ZyraAgentServerClient } from "../src/agent-server/client.mjs";
 import { ZyraAgentServer } from "../src/agent-server/server.mjs";
 import { AgentEventJournal } from "../src/agent-server/event-journal.mjs";
 import { createZyraTuiClientRuntime } from "../src/agent-server/tui-runtime.mjs";
+import { syncZyraThinkingLevel } from "../src/zyra-sdk.mjs";
 
 class FakeWorker extends EventEmitter {
   constructor() {
     super();
     this.activePrompt = null;
     this.controlResponses = [];
+    this.requests = [];
+    this.canonicalReceipts = new Map();
     this.disposed = false;
   }
   isAlive() { return !this.disposed; }
-  request(type) {
+  request(type, payload = {}) {
+    this.requests.push({ type, payload });
     if (type === "connect") return Promise.resolve({ threadId: "chat:test", providerThreadId: sessionPath, events: [] });
     if (type === "prompt") return new Promise((resolve) => { this.activePrompt = resolve; });
     if (type === "abort") return Promise.resolve({ aborted: true });
+    if (type === "canonical_message.append") {
+      const receipt = {
+        receiptId: "pi_entry_voice_test",
+        operationId: payload.operationId,
+        canonicalMessageId: payload.messageId,
+        conversationId: payload.conversationId,
+        canonicalSequence: 9,
+        foregroundRouteId: payload.routeClaim.foregroundRouteId,
+        routeEpoch: payload.routeClaim.routeEpoch,
+        ownerClaimId: payload.routeClaim.ownerClaimId,
+        contentSha256: payload.payloadSha256,
+        observedAt: new Date().toISOString()
+      };
+      this.canonicalReceipts.set(payload.operationId, receipt);
+      return Promise.resolve({ receipt });
+    }
+    if (type === "canonical_message.find") {
+      return Promise.resolve({ receipt: this.canonicalReceipts.get(payload.operationId) || null });
+    }
+    if (type === "approval.respond") {
+      this.emit("event", { type: "approval_resolved", requestId: payload.requestId, decision: payload.decision });
+      return Promise.resolve({ ok: true });
+    }
     return Promise.resolve({ ok: true });
   }
   finishPrompt(result) {
@@ -56,7 +83,18 @@ const catalog = new CanonicalChatCatalog({
 });
 const durableJournal = new AgentEventJournal(path.join(stateDirectory, "journal-test"), "chat:journal");
 durableJournal.append({ sequence: 1, occurredAt: new Date().toISOString(), event: { type: "message_end" } });
-assert.equal(new AgentEventJournal(path.join(stateDirectory, "journal-test"), "chat:journal").replay(0).length, 1);
+durableJournal.append({
+  sequence: 2,
+  occurredAt: new Date().toISOString(),
+  event: {
+    type: "message_update",
+    message: { id: "assistant:streaming", role: "assistant", content: "transient snapshot" },
+    assistantMessageEvent: { type: "text_delta", delta: "snapshot" }
+  }
+});
+const reopenedDurableJournal = new AgentEventJournal(path.join(stateDirectory, "journal-test"), "chat:journal");
+assert.equal(reopenedDurableJournal.replay(0).length, 1, "token-level message updates must stay live-only instead of synchronously hitting the durable journal");
+assert.equal(reopenedDurableJournal.latestSequence(), 1, "transient stream updates must not advance durable replay state");
 
 const workers = [];
 const server = new ZyraAgentServer({
@@ -90,6 +128,29 @@ try {
   assert.equal(archivedList.chats[0].archived, true);
   const restored = await desktop.request("catalog.update", { session: "chat:test", archived: false });
   assert.equal(restored.chat.archived, false);
+  const deleted = await desktop.request("catalog.update", { session: "chat:test", deleted: true });
+  assert.equal(deleted.chat.deleted, true);
+  assert.equal((await tui.request("catalog.list", { includeArchived: true })).chats.length, 0, "deleted chats must remain tombstoned during startup import");
+  const deletedList = await tui.request("catalog.list", { includeArchived: true, includeDeleted: true });
+  assert.equal(deletedList.chats.length, 1);
+  assert.equal(deletedList.chats[0].deleted, true);
+  const reopenedDeletedCatalog = new CanonicalChatCatalog({
+    stateDirectory,
+    channel,
+    loadSessionManager: async () => ({
+      list: async () => fakeSessions,
+      open: () => ({ getEntries: () => [] })
+    })
+  });
+  assert.equal((await reopenedDeletedCatalog.list({ includeArchived: true })).length, 0, "a deleted chat must stay hidden after the catalog process restarts");
+  assert.equal((await desktop.request("catalog.history", { session: "chat:test", project })).history, null, "deleted chats must fail closed for history hydration");
+  await assert.rejects(
+    desktop.attach({ project, cwd: project, session: "chat:test", localThreadId: "assistant-thread:deleted" }),
+    /deleted/i,
+    "a known tombstoned chat must not be revived by direct attachment"
+  );
+  const undeleted = await desktop.request("catalog.update", { session: "chat:test", deleted: false });
+  assert.equal(undeleted.chat.deleted, false);
 
   const desktopAttached = await desktop.attach({ project, cwd: project, session: "chat:test", localThreadId: "assistant-thread:desktop" });
   assert.equal(desktopAttached.canonicalChatId, "chat:test");
@@ -97,11 +158,38 @@ try {
   assert.equal(tuiAttached.canonicalChatId, "chat:test");
   assert.equal(workers.length, 1, "desktop and TUI must share one server worker");
   const attachedList = await desktop.request("catalog.list", {});
+  const attachedSingle = await desktop.request("catalog.get", { session: "chat:test", project });
+  assert.equal(attachedSingle.chat.canonicalChatId, "chat:test", "single-chat lookup resolves the canonical shell without attaching another runtime");
+  assert.equal(attachedSingle.chat.presence.state, "ready");
   assert.equal(attachedList.chats[0].presence.clients.length, 2);
   assert.deepEqual(new Set(attachedList.chats[0].presence.clients.map((entry) => entry.surface)), new Set(["desktop", "tui"]));
   const updated = await desktop.request("catalog.update", { session: "chat:test", title: "Editable shared title", project });
   assert.equal(updated.chat.title, "Editable shared title");
   assert.equal(updated.chat.sessionPath, sessionPath, "metadata edits must not move canonical transcript storage");
+
+  const canonicalMessage = {
+    operationId: "op_voice_server_1",
+    idempotencyKey: "voice:server:1",
+    conversationId: "chat:test",
+    messageId: "voice_user_server_1",
+    role: "user",
+    producer: "user",
+    modality: "voice",
+    text: "durable voice turn",
+    attachmentIds: [],
+    providerItemId: "voice_provider_server_1",
+    providerCompletedAt: new Date().toISOString(),
+    payloadSha256: "a".repeat(64),
+    routeClaim: { foregroundRouteId: "route_voice_server_2", routeEpoch: 2, ownerClaimId: "claim_voice_server_2" }
+  };
+  const canonicalAppend = await desktop.request("catalog.message.append", { session: "chat:test", message: canonicalMessage });
+  assert.equal(canonicalAppend.receipt.operationId, canonicalMessage.operationId);
+  const canonicalFind = await desktop.request("catalog.message.find", { session: "chat:test", operationId: canonicalMessage.operationId });
+  assert.deepEqual(canonicalFind.receipt, canonicalAppend.receipt);
+  await assert.rejects(
+    tui.request("catalog.message.append", { session: "chat:test", message: canonicalMessage }),
+    /verified Desktop authority/
+  );
 
   const tuiEvents = [];
   tui.on("session-event:chat:test", (event) => tuiEvents.push(event));
@@ -110,13 +198,44 @@ try {
     requestContext: { turnId: "turn:test", localThreadId: "assistant-thread:desktop" }
   }).catch((error) => ({ disconnected: error.code === "AGENT_SERVER_DISCONNECTED" }));
   await waitUntil(() => workers[0].activePrompt !== null);
+  const runningCatalog = await tui.request("catalog.list", {});
+  assert.equal(runningCatalog.chats[0].presence.state, "running", "catalog presence must expose unopened work as running");
+  assert.equal(runningCatalog.chats[0].presence.latestTurn?.id, "turn:test", "catalog presence must identify the active canonical turn");
+  assert.equal(runningCatalog.chats[0].presence.latestTurn?.state, "running", "catalog presence must expose the active turn state");
+  await assert.rejects(
+    desktop.request("catalog.message.append", { session: "chat:test", message: { ...canonicalMessage, operationId: "op_voice_server_busy" } }),
+    /strong foreground turn is active/
+  );
   workers[0].emit("event", { type: "message_update", message: { role: "assistant", content: "still working" } });
   await waitUntil(() => tuiEvents.length === 1);
+  workers[0].emit("event", { type: "approval_requested", requestId: "approval:test", requestType: "command", command: "npm test" });
+  await waitUntil(() => tuiEvents.some((entry) => entry.event?.type === "approval_requested"));
+  assert.equal((await tui.request("catalog.list", {})).chats[0].presence.attention, "approval", "catalog presence must expose approval attention before Desktop opens the thread");
+  await tui.request("session.request", {
+    sessionKey: "chat:test",
+    type: "approval.respond",
+    payload: { requestId: "approval:test", decision: "acceptOnce" }
+  });
+  assert.deepEqual(workers[0].requests.at(-1), {
+    type: "approval.respond",
+    payload: { requestId: "approval:test", decision: "acceptOnce" }
+  }, "an attached surface should resolve a canonical approval while the prompt remains active");
+  await waitUntil(() => tuiEvents.some((entry) => entry.event?.type === "approval_resolved"));
+  assert.equal((await tui.request("catalog.list", {})).chats[0].presence.attention, null, "catalog presence must clear resolved approval attention");
   desktop.close();
   assert.equal(server.state().sessions[0].activeRequests, 1, "closing Desktop must not stop active work");
+  workers[0].emit("event", { type: "agent_end" });
+  await waitUntil(() => server.state().sessions[0].latestTurn?.state === "completed");
+  const agentEndCatalog = await tui.request("catalog.list", {});
+  assert.equal(agentEndCatalog.chats[0].presence.state, "ready", "agent_end must settle the canonical turn before the prompt request unwinds");
+  assert.equal(agentEndCatalog.chats[0].presence.activeTurnId, null, "settled presence cannot advertise a live turn id");
   workers[0].finishPrompt({ completed: true });
   await waitUntil(() => server.state().sessions[0].activeRequests === 0);
   await promptResult;
+  const completedCatalog = await tui.request("catalog.list", {});
+  assert.equal(completedCatalog.chats[0].presence.state, "ready", "catalog presence must return to ready after canonical work completes");
+  assert.equal(completedCatalog.chats[0].presence.latestTurn?.id, "turn:test", "catalog presence must retain the completed turn identity");
+  assert.equal(completedCatalog.chats[0].presence.latestTurn?.state, "completed", "catalog presence must expose completion without opening the thread");
 
   const spoofedAuthority = client("tui:spoofed-authority", "tui", ["desktop-control"]);
   await spoofedAuthority.connect();
@@ -129,23 +248,103 @@ try {
   const reconnect = client("desktop:reconnect", "desktop", ["desktop-control"]);
   await reconnect.connect();
   const replay = await reconnect.attach({ project, cwd: project, session: "chat:test", localThreadId: "assistant-thread:reconnect", lastSequence: 0 });
-  assert.equal(replay.replay.length, 3, "reconnect must replay metadata, provider events, and durable turn completion");
+  assert.equal(replay.replay.length, 5, "reconnect must replay metadata, provider events, approvals, and the authoritative agent completion");
   assert.equal(replay.replay[0].event.type, "session_metadata");
   assert.equal(replay.replay[1].event.message.content, "still working");
   assert.equal(replay.replay[1].requestContext.turnId, "turn:test");
-  assert.equal(replay.replay[2].event.type, "zyra_server_turn_completed");
+  assert.equal(replay.replay[2].event.type, "approval_requested");
+  assert.equal(replay.replay[3].event.type, "approval_resolved");
+  assert.equal(replay.replay[4].event.type, "agent_end");
+  assert.equal(replay.replay.filter((entry) => entry.event.type === "agent_end").length, 1, "agent_end is the durable provider completion boundary");
+  assert.equal(replay.replay.filter((entry) => entry.event.type === "zyra_server_turn_completed").length, 0, "prompt resolution cannot append a duplicate synthetic completion after agent_end");
 
   const tuiRuntime = await createZyraTuiClientRuntime({
     project,
     session: "chat:test",
+    model: "openai-codex/gpt-5.6-sol",
+    thinking: "max",
     agentServer: { stateDirectory, channel, autoStart: false }
   });
   assert.equal(tuiRuntime.session.sessionManager.getSessionName(), "Editable shared title");
+  assert.equal(tuiRuntime.session.thinkingLevel, "max", "an explicit resumed-chat max setting must outrank the first client's stale config")
+  assert.equal(tuiRuntime.session.getAvailableThinkingLevels().includes("max"), true)
+  assert.equal(
+    workers[0].requests.some((entry) => entry.type === "configure" && entry.payload.thinking === "max"),
+    true,
+    "a later TUI attachment must synchronize its explicit max setting to the shared worker"
+  );
   assert.equal(tuiRuntime.history.events()[0].message.content[0].text, "hello");
   const remoteEvents = [];
   tuiRuntime.session.subscribe((event) => remoteEvents.push(event));
+
+  let approvalResolutionSignal;
+  let resolveApprovalDialog;
+  tuiRuntime.agentServer.setApprovalHandler((_request, options) => {
+    approvalResolutionSignal = options.signal;
+    return new Promise((resolve) => {
+      resolveApprovalDialog = resolve;
+      options.signal.addEventListener("abort", () => resolve("decline"), { once: true });
+    });
+  });
+  const externalPrompt = reconnect.request("session.request", {
+    sessionKey: "chat:test", type: "prompt", payload: { prompt: "external work" },
+    requestContext: { turnId: "turn:external", localThreadId: "assistant-thread:external" }
+  });
+  await waitUntil(() => workers[0].activePrompt !== null);
+  workers[0].emit("event", { type: "approval_requested", requestId: "approval:external", requestType: "command", command: "bun test" });
+  await waitUntil(() => approvalResolutionSignal);
+  assert.equal(tuiRuntime.session.isStreaming, true, "remote TUI running state must follow another surface's active turn");
+  await reconnect.request("session.request", {
+    sessionKey: "chat:test", type: "approval.respond",
+    payload: { requestId: "approval:external", decision: "acceptOnce" }
+  });
+  await waitUntil(() => approvalResolutionSignal.aborted);
+  assert.equal(approvalResolutionSignal.aborted, true, "an external approval resolution must cancel the mounted TUI prompt");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(
+    workers[0].requests.filter((entry) => entry.type === "approval.respond" && entry.payload.requestId === "approval:external").length,
+    1,
+    "the cancelled TUI dialog must not submit a second approval decision"
+  );
+  workers[0].emit("event", {
+    type: "message_end",
+    message: {
+      id: "assistant:external",
+      role: "assistant",
+      content: "external complete",
+      usage: { input: 900, output: 100, cacheRead: 0, cacheWrite: 0, totalTokens: 1000, cost: { total: 0.05 } }
+    }
+  });
+  workers[0].finishPrompt({});
+  await externalPrompt;
+  await waitUntil(() => !tuiRuntime.session.isStreaming);
+  assert.equal(tuiRuntime.session.getContextUsage().tokens, 1000, "remote context status must use canonical model usage");
+  assert.equal(tuiRuntime.session.sessionManager.getEntries().at(-1).message.usage.cost.total, 0.05, "remote cost status must retain usage cost");
+  assert.equal(tuiRuntime.session.sessionManager.getSessionUsage().cost.total, 0.05, "remote status must expose cumulative canonical cost");
+  resolveApprovalDialog?.("decline");
+
+  tuiRuntime.session.setThinkingLevel("high");
+  await waitUntil(() => workers[0].requests.some((entry) => entry.type === "configure" && entry.payload.thinking === "high"));
+  const maxConfigureCount = workers[0].requests.filter((entry) => entry.type === "configure" && entry.payload.thinking === "max").length;
+  assert.equal(syncZyraThinkingLevel(tuiRuntime, "max"), "max");
+  await waitUntil(() => workers[0].requests.filter((entry) => entry.type === "configure" && entry.payload.thinking === "max").length > maxConfigureCount);
+  assert.equal(tuiRuntime.session.thinkingLevel, "max", "remote synchronization must not down-convert max to xhigh");
+  const pendingSteer = tuiRuntime.session.steer("redirect from TUI");
+  const pendingFollowUp = tuiRuntime.session.followUp("continue after this turn");
+  assert.deepEqual(tuiRuntime.session.getSteeringMessages(), ["redirect from TUI"]);
+  assert.deepEqual(tuiRuntime.session.getFollowUpMessages(), ["continue after this turn"]);
+  assert.deepEqual(tuiRuntime.session.clearQueue(), {
+    steering: ["redirect from TUI"],
+    followUp: ["continue after this turn"]
+  }, "remote clearQueue must return queued text for Stop/Escape restoration");
+  await Promise.all([pendingSteer, pendingFollowUp]);
   const remotePrompt = tuiRuntime.session.prompt("continue from TUI");
   await waitUntil(() => workers[0].activePrompt !== null);
+  assert.equal(
+    workers[0].requests.findLast((entry) => entry.type === "prompt")?.payload.thinking,
+    "max",
+    "the actual resumed-chat prompt must request max instead of xhigh"
+  );
   workers[0].emit("event", { type: "message_end", message: { id: "assistant:tui", role: "assistant", content: "shared" } });
   workers[0].finishPrompt({});
   await remotePrompt;

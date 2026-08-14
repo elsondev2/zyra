@@ -1,5 +1,7 @@
 import { memo, useCallback, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAssistantSessionsRailStore } from '@/lib/assistant/store'
+import { useSettings } from '@/lib/settings'
 import type { AssistantToastInput } from './AssistantPageHelpers'
 import { AssistantChatSessionsRail } from './AssistantChatSessionsRail'
 import type {
@@ -9,6 +11,7 @@ import type {
     AssistantRailSortMode
 } from './useAssistantPageSidebarState'
 import { isAssistantDraftSession } from './assistant-sessions-rail-utils'
+import { buildAssistantChatRoute } from './assistant-chat-route'
 
 export const ConnectedAssistantSessionsRail = memo(function ConnectedAssistantSessionsRail(props: {
     collapsed: boolean
@@ -29,6 +32,8 @@ export const ConnectedAssistantSessionsRail = memo(function ConnectedAssistantSe
 }) {
     const { collapsed, width, maxWidth, previewPinned, onWidthChange, onPreviewPinnedChange, onShowToast } = props
     const railController = useAssistantSessionsRailStore()
+    const navigate = useNavigate()
+    const { settings } = useSettings()
     const creatingChatRef = useRef(false)
     const creatingProjectChatRef = useRef(false)
     const handleCreateChat = useCallback(async () => {
@@ -44,6 +49,15 @@ export const ConnectedAssistantSessionsRail = memo(function ConnectedAssistantSe
             creatingChatRef.current = false
         }
     }, [railController])
+
+    const handleSelectSession = useCallback((sessionId: string) => {
+        const session = railController.snapshot.sessions.find((entry) => entry.id === sessionId) || null
+        navigate(buildAssistantChatRoute(sessionId, session?.activeThreadId || null))
+    }, [navigate, railController.snapshot.sessions])
+
+    const handleSelectThread = useCallback((input: { sessionId: string; threadId: string }) => {
+        navigate(buildAssistantChatRoute(input.sessionId, input.threadId))
+    }, [navigate])
 
     const handleCreateProjectChat = useCallback(async (projectPath?: string) => {
         if (creatingProjectChatRef.current) return
@@ -73,14 +87,16 @@ export const ConnectedAssistantSessionsRail = memo(function ConnectedAssistantSe
             width={width}
             maxWidth={maxWidth}
             previewPinned={previewPinned}
+            agentInboxEnabled={settings.assistantAgentInboxSidebarEnabled}
+            projectIconOverrides={settings.projectIconOverrides}
             sessions={railController.snapshot.sessions}
             activeSessionId={railController.activeSessionId}
             activeThreadId={railController.activeThreadId}
             commandPending={railController.commandPending}
             onCreateChat={handleCreateChat}
             onCreateProjectChat={handleCreateProjectChat}
-            onSelectSession={railController.selectSession}
-            onSelectThread={railController.selectThread}
+            onSelectSession={handleSelectSession}
+            onSelectThread={handleSelectThread}
             onRenameSession={railController.renameSession}
             onArchiveSession={railController.archiveSession}
             onDeleteSession={railController.deleteSessionResult}

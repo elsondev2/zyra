@@ -18,6 +18,7 @@ import {
     TIMELINE_MINIMAP_MAX_MARKERS
 } from '../src/renderer/src/pages/assistant/AssistantTimelineCheckpointRail'
 import { TimelineTurnWorkSummary } from '../src/renderer/src/pages/assistant/AssistantTimelineWorkSummary'
+import { TimelineVoiceTaskStatus } from '../src/renderer/src/pages/assistant/AssistantTimelineVoiceTask'
 import { IssueLogRow } from '../src/renderer/src/pages/assistant/AssistantPageHelpers'
 import { sanitizeThoughtContent, TimelineCommandCheckpointGroup, TimelineContextCompactionMarker, TimelineMessage, TimelineThought, TimelineThoughtGroup, TimelineWorkTraceGroup } from '../src/renderer/src/pages/assistant/AssistantTimelineRows'
 import { COLLAPSED_TOOL_CALL_COUNT, TimelineToolCallList } from '../src/renderer/src/pages/assistant/AssistantTimelineToolCalls'
@@ -266,6 +267,37 @@ assert.deepEqual(
 const workSummary = collapsedTurnRows[1]
 assert.equal(workSummary?.kind === 'turn-work-summary' ? workSummary.rows.length : 0, 5)
 
+const aliasedCompletedCompaction: AssistantActivity = {
+    ...completedCompactionActivity,
+    id: 'context-compaction-app-server-turn-alias',
+    turnId: 'app-server-turn-alias',
+    createdAt: iso(450),
+    payload: {
+        ...completedCompactionActivity.payload,
+        startedAt: iso(425),
+        completedAt: iso(450)
+    }
+}
+const collapsedRowsWithTurnAlias = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries(messages, [...activities, aliasedCompletedCompaction]), false, null),
+    messages,
+    latestAssistantMessageId: 'final',
+    latestTurnStartedAt: iso(0),
+    isWorking: false
+})
+assert.deepEqual(
+    collapsedRowsWithTurnAlias.map((row) => row.kind),
+    ['message', 'turn-work-summary', 'message'],
+    'a live app-server compaction ID inside one canonical user/final boundary cannot expose the completed work'
+)
+assert.equal(
+    collapsedRowsWithTurnAlias[1]?.kind === 'turn-work-summary'
+        ? collapsedRowsWithTurnAlias[1].rows.some((row) => row.id === aliasedCompletedCompaction.id)
+        : false,
+    true,
+    'the aliased lifecycle row remains available inside the completed work disclosure'
+)
+
 const pendingNextUser: AssistantMessage = {
     ...message({ id: 'pending-next-user', role: 'user', turnId: 'pending-next-turn', millisecond: 800, text: 'Start the next task.' }),
     turnId: null
@@ -289,6 +321,59 @@ assert.equal(
     summariesAfterSendingNextMessage[1]?.kind === 'turn-work-summary' ? summariesAfterSendingNextMessage[1].turnId : 'unexpected',
     null,
     'an optimistic user message waits for its own turn ID instead of borrowing the previous turn ID'
+)
+
+const freshTurnId = 'turn-after-stale-running-ledger'
+const freshTurnStartedAt = iso(900)
+const freshUser = message({
+    id: 'fresh-user-after-stale-running-ledger',
+    role: 'user',
+    turnId: freshTurnId,
+    millisecond: 900,
+    text: 'Run one more independent task.'
+})
+const staleRunningUsage: AssistantSessionTurnUsageEntry = {
+    id: turnId,
+    sessionId: 'session-activity-rail',
+    threadId: 'thread-activity-rail',
+    model: 'openai-codex/gpt-5.5',
+    state: 'running',
+    requestedAt: iso(0),
+    startedAt: iso(0),
+    completedAt: null,
+    assistantMessageId: 'final',
+    effort: 'high',
+    serviceTier: null,
+    usage: null,
+    updatedAt: iso(800)
+}
+const rowsWithStaleRunningLedger = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries([...messages, freshUser], activities), true, freshTurnStartedAt),
+    messages: [...messages, freshUser],
+    turnUsageById: new Map([[turnId, staleRunningUsage]]),
+    latestAssistantMessageId: null,
+    latestTurnStartedAt: freshTurnStartedAt,
+    isWorking: true
+})
+const summaryAfterStaleRunningLedger = rowsWithStaleRunningLedger.find((row) => (
+    row.kind === 'turn-work-summary' && row.running
+))
+assert.equal(
+    summaryAfterStaleRunningLedger?.kind === 'turn-work-summary' ? summaryAfterStaleRunningLedger.turnId : null,
+    freshTurnId,
+    'the newest visible prompt must outrank a stale running turn ledger entry'
+)
+assert.equal(
+    summaryAfterStaleRunningLedger?.kind === 'turn-work-summary' ? summaryAfterStaleRunningLedger.startedAt : null,
+    freshTurnStartedAt,
+    'a new prompt timer must not inherit the stale turn start time'
+)
+assert.equal(
+    rowsWithStaleRunningLedger.some((row) => (
+        row.kind === 'turn-work-summary' && !row.running && row.turnId === turnId
+    )),
+    true,
+    'completed work remains collapsed while the independent next turn is running'
 )
 const workSummaryMarkup = renderToStaticMarkup(createElement(TimelineTurnWorkSummary, {
     startedAt: iso(0),
@@ -362,6 +447,101 @@ assert.equal(interruptedMarkup.includes('Worked for'), true)
 assert.equal(interruptedMarkup.includes('Interrupted'), true)
 assert.equal(interruptedMarkup.includes('data-state="closed"'), true)
 
+const projectedInterruptedTurnId = 'shared-turn:canonical-chat:stopped-user-message'
+const projectedInterruptedUser = message({
+    id: 'projected-interrupted-user',
+    role: 'user',
+    turnId: projectedInterruptedTurnId,
+    millisecond: 1820,
+    text: 'Research the release.',
+    timelineSequence: 1
+})
+const projectedInterruptedProgress = message({
+    id: 'projected-interrupted-progress',
+    role: 'assistant',
+    turnId: projectedInterruptedTurnId,
+    millisecond: 1840,
+    text: 'I am checking the announcement.',
+    timelineSequence: 2
+})
+const projectedInterruptedPartialFinal = message({
+    id: 'projected-interrupted-partial-final',
+    role: 'assistant',
+    turnId: projectedInterruptedTurnId,
+    millisecond: 1880,
+    text: 'The release exists. I am opening the remaining sources now.',
+    timelineSequence: 4
+})
+const projectedInterruptedToolBefore = activity({
+    id: 'projected-interrupted-tool-before',
+    turnId: projectedInterruptedTurnId,
+    millisecond: 1860,
+    timelineSequence: 3
+})
+const projectedInterruptedToolAfter = activity({
+    id: 'projected-interrupted-tool-after',
+    turnId: projectedInterruptedTurnId,
+    millisecond: 1900,
+    timelineSequence: 5
+})
+const projectedInterruptedTerminal: AssistantActivity = {
+    id: 'shared-error:projected-interrupted-terminal',
+    kind: 'error',
+    tone: 'warning',
+    summary: 'Assistant interrupted',
+    detail: 'Request was aborted',
+    turnId: projectedInterruptedTurnId,
+    timelineSequence: 6,
+    createdAt: iso(1920),
+    payload: { stopReason: 'aborted', status: 'cancelled', completedAt: iso(1920) }
+}
+const projectedNextUser = message({
+    id: 'projected-next-user',
+    role: 'user',
+    turnId: 'shared-turn:canonical-chat:next-user-message',
+    millisecond: 2000,
+    text: 'Use a different source.',
+    timelineSequence: 7
+})
+const projectedInterruptedMessages = [
+    projectedInterruptedUser,
+    projectedInterruptedProgress,
+    projectedInterruptedPartialFinal,
+    projectedNextUser
+]
+const projectedInterruptedRows = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries(projectedInterruptedMessages, [
+        projectedInterruptedToolBefore,
+        projectedInterruptedToolAfter,
+        projectedInterruptedTerminal
+    ]), false, null),
+    messages: projectedInterruptedMessages,
+    latestAssistantMessageId: null,
+    latestTurnStartedAt: null,
+    isWorking: false
+})
+assert.deepEqual(
+    projectedInterruptedRows.map((row) => row.kind),
+    ['message', 'turn-work-summary', 'message'],
+    'an externally stopped TUI turn must collapse every partial response, tool, and terminal notice before the next prompt'
+)
+const projectedInterruptedSummary = projectedInterruptedRows[1]
+assert.equal(projectedInterruptedSummary?.kind === 'turn-work-summary' ? projectedInterruptedSummary.outcome : null, 'interrupted')
+assert.equal(
+    projectedInterruptedSummary?.kind === 'turn-work-summary'
+        ? projectedInterruptedSummary.rows.some((row) => row.id === projectedInterruptedToolAfter.id)
+        : false,
+    true,
+    'tools emitted after the last partial assistant narration must remain inside the stopped work disclosure'
+)
+assert.equal(
+    projectedInterruptedSummary?.kind === 'turn-work-summary'
+        ? projectedInterruptedSummary.rows.some((row) => row.id === projectedInterruptedTerminal.id)
+        : false,
+    true,
+    'the interruption notice must collapse with the stopped work instead of remaining exposed in the timeline'
+)
+
 const orphanTurnId = 'turn-no-final-response'
 const orphanPrompt = message({ id: 'orphan-user', role: 'user', turnId: orphanTurnId, millisecond: 2000, text: 'Do work without a final response.' })
 const orphanTool = activity({ id: 'orphan-tool', turnId: orphanTurnId, millisecond: 2200 })
@@ -380,13 +560,14 @@ const historyStoreSource = readFileSync(new URL('../src/renderer/src/lib/assista
 const historyStateSource = readFileSync(new URL('../src/renderer/src/lib/assistant/assistant-history-state.ts', import.meta.url), 'utf8')
 assert.equal(timelineSource.includes('<AssistantVirtualTimeline'), true, 'the timeline delegates mounting and measurement to the virtual list owner')
 assert.equal(virtualTimelineSource.includes('<LegendList'), true, 'long histories render through LegendList rather than renderer-only slicing')
-assert.equal(virtualTimelineSource.includes('maintainVisibleContentPosition={{ data: true }}'), true, 'database-page prepends preserve the measured visible anchor')
+assert.equal(virtualTimelineSource.includes('maintainVisibleContentPosition={{ data: true, size: false }}'), true, 'database-page prepends preserve the measured visible anchor without correcting ordinary row resizes under the pointer')
 assert.equal(virtualTimelineSource.includes('itemLayout: !disclosureLayoutActive'), true, 'user disclosures suspend item-layout end-follow while their row height animates')
 assert.equal(virtualTimelineSource.includes('layout: !disclosureLayoutActive'), true, 'viewport layout follow cannot compete with an active disclosure anchor')
 assert.equal(virtualTimelineSource.includes("addEventListener('pointerdown', handleTimelinePointerDown"), true, 'timeline controls suspend layout follow before their React click changes row height')
 assert.equal(virtualTimelineSource.includes('ASSISTANT_TIMELINE_DISCLOSURE_TOGGLE_EVENT'), true, 'automatic work collapse uses the same bounded disclosure window')
-assert.equal(virtualTimelineSource.includes('completionFollowActiveRef'), true, 'turn completion owns a bounded end-follow window through work collapse and Markdown handoff')
-assert.equal(virtualTimelineSource.includes('if (!scrollElement || !followingEndRef.current'), true, 'completion follow only activates when the viewer was already following the response end')
+assert.equal(virtualTimelineSource.includes('completionFollowTimerRef'), true, 'turn completion owns one bounded post-layout end correction through work collapse and Markdown handoff')
+assert.equal(virtualTimelineSource.includes("scrollModeRef.current !== 'following-end'"), true, 'completion follow only activates when the viewer was already following the response end')
+assert.equal(virtualTimelineSource.includes('COMPLETION_END_FOLLOW_DELAYS_MS'), false, 'turn completion cannot replay a viewport correction ladder')
 assert.equal(historyStoreSource.includes('getHistoryPage({'), true, 'earlier history comes from the main-process SQLite page contract')
 assert.equal(historyStateSource.includes('5 * 60_000'), true, 'recent thread detail is retained for a bounded five-minute idle window')
 assert.equal(timelineSource.includes('compactLiveNarration: true'), true, 'the staged preview remains mounted so it can retain the last settled narration')
@@ -500,6 +681,65 @@ assert.equal(
     1,
     'legacy prompts without turn IDs remain eligible minimap checkpoints'
 )
+
+const voiceTurnId = 'shared-turn:voice-conversation'
+const simpleVoiceMessages: AssistantMessage[] = [
+    { ...message({ id: 'voice_user_simple', role: 'user', turnId: voiceTurnId, millisecond: 3000, text: 'How are you?' }), modality: 'voice' },
+    { ...message({ id: 'voice_assistant_progress', role: 'assistant', turnId: voiceTurnId, millisecond: 3100, text: 'I am doing well.' }), modality: 'voice' },
+    { ...message({ id: 'voice_assistant_final', role: 'assistant', turnId: voiceTurnId, millisecond: 3200, text: 'How can I help?' }), modality: 'voice' }
+]
+const simpleVoiceDisplayRows = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries(simpleVoiceMessages, []), false, null),
+    messages: simpleVoiceMessages,
+    latestAssistantMessageId: 'voice_assistant_final',
+    latestTurnStartedAt: iso(3000),
+    isWorking: false
+})
+assert.equal(
+    simpleVoiceDisplayRows.some((row) => row.kind === 'turn-work-summary'),
+    false,
+    'ordinary Voice back-and-forth must remain conversational even when more than one assistant transcript item lands in the turn'
+)
+
+const voiceTaskActivity: AssistantActivity = {
+    id: 'voice-strong-task:task-voice-action',
+    kind: 'voice.strong-task',
+    tone: 'tool',
+    summary: 'Primary agent finished',
+    detail: 'Verified result',
+    turnId: 'task-voice-action',
+    createdAt: iso(3050),
+    payload: {
+        status: 'completed',
+        source: 'voice',
+        sourceProviderItemId: 'provider-voice-action',
+        startedAt: iso(3050),
+        completedAt: iso(3650)
+    }
+}
+const actionableVoiceMessages: AssistantMessage[] = [
+    {
+        ...message({ id: 'voice_user_action', role: 'user', turnId: 'voice-action-turn', millisecond: 3000, text: 'Run the check.' }),
+        modality: 'voice',
+        providerItemId: 'provider-voice-action'
+    },
+    { ...message({ id: 'voice_assistant_action', role: 'assistant', turnId: 'voice-action-turn', millisecond: 3700, text: 'The check passed.' }), modality: 'voice' }
+]
+const actionableVoiceRows = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries(actionableVoiceMessages, [voiceTaskActivity]), false, null),
+    messages: actionableVoiceMessages,
+    latestAssistantMessageId: 'voice_assistant_action',
+    latestTurnStartedAt: iso(3000),
+    isWorking: false
+})
+assert.deepEqual(
+    actionableVoiceRows.map((row) => row.kind),
+    ['message', 'activity', 'message'],
+    'actionable Voice work uses its explicit primary-agent lifecycle row instead of the generic turn timer'
+)
+const voiceTaskMarkup = renderToStaticMarkup(createElement(TimelineVoiceTaskStatus, { activity: voiceTaskActivity }))
+assert.equal(voiceTaskMarkup.includes('Primary agent finished'), true)
+assert.equal(voiceTaskMarkup.includes('Worked for'), false, 'Voice task status must describe the owner and state instead of showing an ambiguous generic timer')
 
 const sameTimeEntries = getTimelineEntries(
     [message({ id: 'same-time-user', role: 'user', turnId: 'same-time', millisecond: 900, text: 'Keep source order.' })],
@@ -785,6 +1025,12 @@ const waitingCommandMarkup = renderToStaticMarkup(createElement(TimelineToolCall
     runningCommandCount: 1
 }))
 assert.equal(waitingCommandMarkup.includes('waiting for output...'), true)
+const minimizedWaitingCommandMarkup = renderToStaticMarkup(createElement(TimelineToolCallCard, {
+    activity: waitingCommand,
+    runningCommandCount: 1,
+    toolOutputDefaultMode: 'minimized'
+}))
+assert.equal(minimizedWaitingCommandMarkup.includes('data-state="closed"'), true, 'Minimized live tool output keeps running tools closed')
 assert.equal(
     waitingCommandMarkup.includes('>bash</p>'),
     false,

@@ -37,13 +37,13 @@ export function getDiffCounts(file: WorkingChangeItem, mode: DiffMode) {
 export function getStatusBadge(status?: WorkingChangeItem['gitStatus']) {
     switch (status) {
         case 'modified':
-            return { label: 'M', className: 'bg-[#E2C08D]/20 text-[#E2C08D]' }
+            return { label: 'M', className: 'bg-amber-500/20 text-amber-300' }
         case 'untracked':
-            return { label: 'U', className: 'bg-[#73C991]/20 text-[#73C991]' }
+            return { label: 'U', className: 'bg-emerald-500/20 text-emerald-300' }
         case 'added':
-            return { label: 'A', className: 'bg-[#73C991]/20 text-[#73C991]' }
+            return { label: 'A', className: 'bg-emerald-500/20 text-emerald-300' }
         case 'deleted':
-            return { label: 'D', className: 'bg-[#FF6B6B]/20 text-[#FF6B6B]' }
+            return { label: 'D', className: 'bg-red-500/20 text-red-300' }
         case 'renamed':
             return { label: 'R', className: 'bg-blue-500/20 text-blue-300' }
         case 'ignored':

@@ -1,7 +1,28 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { createManagedBashState, createManagedBashTool } from "../src/managed-bash-tool.mjs";
+import {
+  createManagedBashState,
+  createManagedBashTool,
+  prepareManagedBashCommand,
+  waitForManagedBashAutoUpdate,
+} from "../src/managed-bash-tool.mjs";
 import { createZyraSession } from "../src/zyra-sdk.mjs";
+
+assert.equal(
+  prepareManagedBashCommand('powershell -NoProfile -Command "Write-Output $_.Free"', 'win32'),
+  'powershell -NoProfile -Command "Write-Output \\$_.Free"',
+  "PowerShell variables inside double quotes must survive the outer Bash shell",
+);
+assert.equal(
+  prepareManagedBashCommand("powershell -NoProfile -Command 'Write-Output $_.Free'", 'win32'),
+  "powershell -NoProfile -Command 'Write-Output $_.Free'",
+  "PowerShell variables already protected by single quotes must remain unchanged",
+);
+assert.equal(
+  prepareManagedBashCommand('cmd.exe /c fsutil volume diskfree C:', 'win32'),
+  'MSYS_NO_PATHCONV=1 cmd.exe /c fsutil volume diskfree C:',
+  "cmd.exe switches must not be converted into MSYS paths",
+);
 
 const state = createManagedBashState();
 const tool = createManagedBashTool({ cwd: process.cwd(), state });
@@ -51,11 +72,15 @@ assert.equal(observedTerminal?.toolCallId, "observer-background");
 assert.equal(observedTerminal?.jobId, observedRun.details.jobId);
 assert.match(observedTerminal?.output || "", /observer done/);
 assert.equal(typeof observedTerminal?.completedAt, "string");
-await observedTool.execute(
-  "observer-cleanup",
+await waitFor(() => observedState.jobs.get(observedRun.details.jobId)?.completedAt, 3000);
+const observedAutoUpdate = await waitForManagedBashAutoUpdate(observedState, { waitMs: 0 });
+assert.match(observedAutoUpdate, /observer done/);
+const observedStatusAfterAutoUpdate = await observedTool.execute(
+  "observer-status-after-auto-update",
   { action: "status", jobId: observedRun.details.jobId, wait: 0 },
   new AbortController().signal,
 );
+assert.equal(observedStatusAfterAutoUpdate.details.status, "completed", "terminal jobs must remain queryable after automatic completion delivery");
 unsubscribeObserved();
 
 const runtime = await createZyraSession({

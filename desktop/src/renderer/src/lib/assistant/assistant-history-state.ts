@@ -22,6 +22,14 @@ export function isAssistantRetainedHistoryFresh(history: AssistantRetainedHistor
     return Boolean(history && now - history.lastUsedAt <= DETAIL_IDLE_TTL_MS)
 }
 
+export function hasRenderableAssistantRetainedHistory(history: AssistantRetainedHistory | undefined): boolean {
+    return Boolean(history && (
+        history.messages.length
+        || history.activities.length
+        || history.proposedPlans.length
+    ))
+}
+
 export function hasAssistantPersistedThreadContent(thread: AssistantThread | null | undefined): boolean {
     if (!thread) return false
     return (thread.messageCount || 0) > 0
@@ -129,6 +137,19 @@ export function applyAssistantThreadDetail(
         }
     })
     return { snapshot: nextSnapshot, history: mergedHistory }
+}
+
+export function applyAssistantRetainedHistory(
+    snapshot: AssistantSnapshot,
+    threadId: string,
+    history: AssistantRetainedHistory
+): AssistantSnapshot {
+    return patchThread(snapshot, threadId, (thread) => ({
+        ...thread,
+        messages: mergeById('message', thread.messages, history.messages),
+        activities: mergeById('activity', thread.activities, history.activities),
+        proposedPlans: mergeById('plan', thread.proposedPlans, history.proposedPlans)
+    }))
 }
 
 export function applyAssistantHistoryPage(

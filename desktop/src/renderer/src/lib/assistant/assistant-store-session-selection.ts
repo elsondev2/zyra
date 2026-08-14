@@ -58,6 +58,7 @@ export async function selectAssistantStoreSession(
 
     const previousSessionId = context.state.snapshot.selectedSessionId
     const targetThreadId = selectedSession.activeThreadId || null
+    const targetThread = selectedSession.threads.find((thread) => thread.id === targetThreadId) || null
     const transitionKey = `${sessionId}:${targetThreadId || ''}`
     let selectionRequestId = 0
 
@@ -140,26 +141,6 @@ export async function selectAssistantStoreSession(
             void context.requestSessionHydration(sessionId, targetThreadId)
         }
 
-        try {
-            const connectResult = await window.devscope.assistant.connect({ sessionId })
-            if (context.getState().selectionRequestId !== selectionRequestId) return result
-            if (!connectResult.success) {
-                context.setState({ error: connectResult.error })
-                return result
-            }
-            const status = await window.devscope.assistant.getStatus()
-            if (context.getState().selectionRequestId === selectionRequestId) {
-                context.setState({ status, error: null })
-            }
-        } catch (connectError) {
-            if (context.getState().selectionRequestId === selectionRequestId) {
-                context.setState({
-                    error: connectError instanceof Error
-                        ? connectError.message
-                        : 'Failed to reconnect the selected assistant session.'
-                })
-            }
-        }
         return result
     } catch (error) {
         const message = error instanceof Error ? error.message : 'Assistant command failed.'

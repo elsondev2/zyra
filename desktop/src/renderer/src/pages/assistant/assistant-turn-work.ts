@@ -1,4 +1,4 @@
-import type { AssistantMessage, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
+import type { AssistantActivity, AssistantMessage, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
 import {
     getContextCompactionStatus,
     isContextCompactionActivity,
@@ -7,6 +7,12 @@ import {
     type TimelineRenderRow,
     type TimelineTurnWorkSummaryRow
 } from './assistant-timeline-helpers'
+
+function isVoiceConversationMessage(message: AssistantMessage): boolean {
+    return message.modality === 'voice'
+        || message.id.startsWith('voice_')
+        || message.id.startsWith('voice-live-')
+}
 
 function getRowTurnId(row: TimelineRenderRow): string | null {
     if (row.kind === 'message') return row.message.turnId
@@ -18,6 +24,49 @@ function getRowTurnId(row: TimelineRenderRow): string | null {
         || row.kind === 'command-checkpoint-group'
         || row.kind === 'work-trace-group'
     ) return row.activities[0]?.turnId || null
+    return null
+}
+
+type ProjectedTerminalOutcome = 'interrupted' | 'failed'
+
+function getProjectedActivityTerminalOutcome(activity: AssistantActivity): ProjectedTerminalOutcome | null {
+    const stopReason = String(activity.payload?.stopReason || '').trim().toLowerCase()
+    const status = String(activity.payload?.status || '').trim().toLowerCase()
+    if (
+        stopReason === 'aborted'
+        || stopReason === 'cancelled'
+        || stopReason === 'canceled'
+        || stopReason === 'interrupted'
+        || stopReason === 'stopped'
+        || status === 'cancelled'
+        || status === 'canceled'
+        || status === 'aborted'
+        || status === 'interrupted'
+        || status === 'stopped'
+    ) return 'interrupted'
+    if (
+        activity.kind === 'error'
+        && (activity.tone === 'error' || stopReason === 'error' || status === 'failed' || status === 'error')
+    ) return 'failed'
+    return null
+}
+
+function getProjectedTurnTerminalOutcome(rows: TimelineRenderRow[], turnId: string): ProjectedTerminalOutcome | null {
+    for (let rowIndex = rows.length - 1; rowIndex >= 0; rowIndex -= 1) {
+        const row = rows[rowIndex]
+        if (getRowTurnId(row) !== turnId) continue
+        const activities = row.kind === 'activity'
+            ? [row.activity]
+            : 'activities' in row
+                ? row.activities
+                : []
+        for (let activityIndex = activities.length - 1; activityIndex >= 0; activityIndex -= 1) {
+            const activity = activities[activityIndex]
+            if (!activity) continue
+            const outcome = getProjectedActivityTerminalOutcome(activity)
+            if (outcome) return outcome
+        }
+    }
     return null
 }
 
@@ -116,7 +165,11 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
         ? latestUserRow.message.turnId
         : null
     const latestBoundaryTurnId = [...rows.slice(latestUserIndex + 1)].reverse().map(getRowTurnId).find(Boolean) || null
-    const activeTurnId = isWorking ? runningTurnId || latestUserTurnId || latestBoundaryTurnId : null
+    const activeTurnId = isWorking
+        ? latestUserIndex >= 0
+            ? latestUserTurnId || latestBoundaryTurnId
+            : latestBoundaryTurnId || runningTurnId
+        : null
     const activeFinalMessageId = activeTurnId ? finalByTurn.get(activeTurnId) || null : null
     const settledFinalIndex = activeFinalMessageId
         ? rows.findIndex((row) => (
@@ -154,7 +207,11 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
             }
         }
 
-        if (userIndex >= 0) {
+        const activeUserRow = userIndex >= 0 ? rows[userIndex] : null
+        const activeUserMessage = activeUserRow?.kind === 'message'
+            ? activeUserRow.message
+            : null
+        if (userIndex >= 0 && activeUserMessage && !isVoiceConversationMessage(activeUserMessage)) {
             let endIndex = rows.length - 1
             for (let index = userIndex + 1; index < rows.length; index += 1) {
                 const candidate = rows[index]
@@ -192,8 +249,8 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
                 && index !== latestNarrationIndex
                 && rowMustStayVisible(row)
             ))
-            const startedAt = runningTurnId
-                ? turnUsageById?.get(runningTurnId)?.startedAt || turnUsageById?.get(runningTurnId)?.requestedAt
+            const startedAt = activeTurnId
+                ? turnUsageById?.get(activeTurnId)?.startedAt || turnUsageById?.get(activeTurnId)?.requestedAt
                 : null
 
             activeRange = activeEndIndex >= userIndex + 1 ? {
@@ -223,37 +280,31 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
         if (finalByTurn.get(turnId) !== finalRow.message.id) continue
 
         const usage = turnUsageById?.get(turnId)
+        const projectedTerminalOutcome = getProjectedTurnTerminalOutcome(rows, turnId)
         const isLatestFinal = finalRow.message.id === latestAssistantMessageId
         const turnCompleted = usage?.state === 'completed'
         const safeHistoricalFallback = turnId !== activeTurnId
             && !finalRow.message.streaming
             && usage?.state !== 'error'
             && usage?.state !== 'interrupted'
+            && !projectedTerminalOutcome
         if (!isLatestFinal && !turnCompleted && !safeHistoricalFallback) continue
-        if (usage?.state === 'error' || usage?.state === 'interrupted') continue
+        if (usage?.state === 'error' || usage?.state === 'interrupted' || projectedTerminalOutcome) continue
 
         let userIndex = -1
         for (let index = finalIndex - 1; index >= 0; index -= 1) {
             const candidate = rows[index]
-            if (
-                candidate.kind === 'message'
-                && candidate.message.role === 'user'
-                && (candidate.message.turnId === turnId || !candidate.message.turnId)
-            ) {
-                userIndex = index
-                break
-            }
+            if (candidate.kind !== 'message' || candidate.message.role !== 'user') continue
+            if (candidate.message.turnId === turnId || !candidate.message.turnId) userIndex = index
+            break
         }
         if (userIndex < 0 || finalIndex - userIndex <= 1) continue
+        const matchedUserRow = rows[userIndex]
+        const userMessage = matchedUserRow?.kind === 'message' ? matchedUserRow.message : null
+        if (userMessage && isVoiceConversationMessage(userMessage)) continue
 
         const workRows = rows.slice(userIndex + 1, finalIndex)
-        if (
-            workRows.length === 0
-            || workRows.some((row) => {
-                const rowTurnId = getRowTurnId(row)
-                return (rowTurnId !== turnId && rowTurnId !== null) || rowMustStayVisible(row)
-            })
-        ) continue
+        if (workRows.length === 0 || workRows.some(rowMustStayVisible)) continue
 
         const startedAt = usage?.startedAt
             || usage?.requestedAt
@@ -285,6 +336,7 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
     for (let userIndex = 0; userIndex < rows.length; userIndex += 1) {
         const userRow = rows[userIndex]
         if (userRow.kind !== 'message' || userRow.message.role !== 'user') continue
+        if (isVoiceConversationMessage(userRow.message)) continue
         if (ranges.has(userIndex + 1)) continue
 
         let endIndex = rows.length
@@ -300,21 +352,17 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
         if (turnRows.length === 0) continue
         const turnId = inferLegacyUserTurnId(userRow.message, turnRows, turnUsageById)
         if (!turnId) continue
-        const legacyBoundary = !userRow.message.turnId
-        if (!legacyBoundary && turnRows.some((row) => {
-            const rowTurnId = getRowTurnId(row)
-            return rowTurnId !== turnId && rowTurnId !== null
-        })) continue
 
         const usage = turnUsageById?.get(turnId)
-        const terminalIncomplete = usage?.state === 'interrupted' || usage?.state === 'error'
+        const projectedTerminalOutcome = getProjectedTurnTerminalOutcome(turnRows, turnId)
+        const terminalIncomplete = usage?.state === 'interrupted' || usage?.state === 'error' || Boolean(projectedTerminalOutcome)
         if (finalByTurn.has(turnId) && !terminalIncomplete) continue
         if (usage?.state === 'running' || (isWorking && turnId === activeTurnId)) continue
         const outcome = usage?.state === 'interrupted'
             ? 'interrupted'
             : usage?.state === 'error'
                 ? 'failed'
-                : 'no-response'
+                : projectedTerminalOutcome || 'no-response'
         const workRows = turnRows.filter((row) => row.kind !== 'working' && !rowMustStayVisible(row))
         const visibleRows = turnRows.filter((row) => row.kind !== 'working' && rowMustStayVisible(row))
         if (workRows.length === 0) continue

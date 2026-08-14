@@ -1,5 +1,5 @@
 import { memo, useEffect, useId, useMemo, useRef, useState } from 'react'
-import { Check, ChevronDown, Copy, Gauge, Loader2, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, Copy, Gauge, Loader2, RotateCcw, Trash2 } from 'lucide-react'
 import type { AssistantActivity, AssistantMessage, AssistantProposedPlan, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
 import type { ComposerContextFile } from './assistant-composer-types'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
@@ -551,14 +551,16 @@ export const TimelineMessage = memo(({
         [message.role, message.text]
     )
     const [resolvedClipboardAttachmentPaths, setResolvedClipboardAttachmentPaths] = useState<Record<string, string>>({})
+    const [clipboardAttachmentRecovery, setClipboardAttachmentRecovery] = useState<Record<string, 'loading' | 'error'>>({})
     const [copied, setCopied] = useState(false)
     const [nowIso, setNowIso] = useState(() => new Date().toISOString())
     const [previewAttachment, setPreviewAttachment] = useState<ComposerContextFile | null>(null)
+    const usesProviderNativeStreaming = message.modality === 'voice'
     const assistantTextPresentation = useAssistantVisibleText({
         streamId: message.id,
         channel: 'message',
-        text: message.text || '',
-        streaming: Boolean(message.streaming),
+        text: usesProviderNativeStreaming ? '' : message.text || '',
+        streaming: Boolean(message.streaming) && !usesProviderNativeStreaming,
         mode: assistantTextStreamingMode
     })
     const streamedMessageRef = useRef(Boolean(message.streaming))
@@ -592,6 +594,7 @@ export const TimelineMessage = memo(({
 
         if (clipboardAttachments.length === 0) {
             setResolvedClipboardAttachmentPaths({})
+            setClipboardAttachmentRecovery({})
             return () => {
                 cancelled = true
             }
@@ -603,15 +606,18 @@ export const TimelineMessage = memo(({
                     const result = await window.devscope.assistant.resolveClipboardAttachment({
                         reference: attachment.path || ''
                     })
-                    if (!result.success || !result.path) return null
-                    return [attachment.id, result.path] as const
+                    if (!result.success || !result.path) return { id: attachment.id, path: null }
+                    return { id: attachment.id, path: result.path }
                 })
             )
 
             if (cancelled) return
 
             setResolvedClipboardAttachmentPaths(
-                Object.fromEntries(resolvedEntries.filter((entry): entry is readonly [string, string] => Boolean(entry)))
+                Object.fromEntries(resolvedEntries.filter((entry) => Boolean(entry.path)).map((entry) => [entry.id, entry.path as string]))
+            )
+            setClipboardAttachmentRecovery(
+                Object.fromEntries(resolvedEntries.filter((entry) => !entry.path).map((entry) => [entry.id, 'error' as const]))
             )
         })()
 
@@ -646,7 +652,9 @@ export const TimelineMessage = memo(({
     ])
 
     if (isAssistant) {
-        const presentationActive = Boolean(message.streaming) || assistantTextPresentation.presenting
+        const presentationActive = !usesProviderNativeStreaming && (
+            Boolean(message.streaming) || assistantTextPresentation.presenting
+        )
         const assistantText = presentationActive ? (assistantTextPresentation.text || ' ') : (message.text || ' ')
         const renderedAssistantText = stripProposedPlanBlocks(assistantText) || (presentationActive ? ' ' : '')
         const assistantCopyValue = renderedAssistantText.trim() ? renderedAssistantText : copyValue
@@ -762,6 +770,10 @@ export const TimelineMessage = memo(({
                                     ? (resolvedClipboardAttachmentPaths[attachment.id] || null)
                                     : attachment.path
                                 const renderImage = isImage && canRenderAttachmentImage(resolvedAttachmentPath)
+                                const unresolvedClipboardImage = isImage
+                                    && isClipboardAttachmentReference(attachment.path)
+                                    && !resolvedAttachmentPath
+                                const attachmentRecoveryState = clipboardAttachmentRecovery[attachment.id]
                                 const previewTarget = resolvedAttachmentPath ? getAttachmentPreviewTarget(attachment.name, resolvedAttachmentPath) : null
                                 const canPreviewInlineText = Boolean(
                                     attachment.content
@@ -796,6 +808,39 @@ export const TimelineMessage = memo(({
                                                 void onOpenFilePath?.(resolvedAttachmentPath)
                                             } : undefined}
                                         />
+                                    ) : unresolvedClipboardImage ? (
+                                        <div key={attachment.id} className="flex w-[116px] flex-col gap-1.5">
+                                            <AssistantFileAttachmentCard
+                                                widthClassName="w-[116px]"
+                                                name={attachment.displayName}
+                                                contentType={attachment.type}
+                                                category="image"
+                                                pathLabel="Cached image unavailable"
+                                            />
+                                            <button
+                                                type="button"
+                                                disabled={attachmentRecoveryState === 'loading'}
+                                                onClick={async () => {
+                                                    setClipboardAttachmentRecovery((current) => ({ ...current, [attachment.id]: 'loading' }))
+                                                    const result = await window.devscope.assistant.resolveClipboardAttachment({ reference: attachment.path || '' })
+                                                    if (result.success && result.path) {
+                                                        setResolvedClipboardAttachmentPaths((current) => ({ ...current, [attachment.id]: result.path as string }))
+                                                        setClipboardAttachmentRecovery((current) => {
+                                                            const next = { ...current }
+                                                            delete next[attachment.id]
+                                                            return next
+                                                        })
+                                                        return
+                                                    }
+                                                    setClipboardAttachmentRecovery((current) => ({ ...current, [attachment.id]: 'error' }))
+                                                    onLinkNotice?.(result.success ? 'The cached attachment is still unavailable.' : result.error, 'error')
+                                                }}
+                                                className="inline-flex items-center justify-center gap-1 rounded-md border border-amber-400/20 bg-amber-500/[0.08] px-2 py-1 text-[10px] font-medium text-amber-100 transition-colors hover:bg-amber-500/[0.14] disabled:cursor-wait disabled:opacity-60"
+                                            >
+                                                {attachmentRecoveryState === 'loading' ? <Loader2 size={10} className="animate-spin" /> : <RotateCcw size={10} />}
+                                                {attachmentRecoveryState === 'loading' ? 'Recovering' : 'Retry attachment'}
+                                            </button>
+                                        </div>
                                     ) : attachment.isClipboard && attachment.type !== 'IMAGE' ? (
                                         <AssistantPastedTextCard
                                             key={attachment.id}

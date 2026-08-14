@@ -1,6 +1,6 @@
 import { app } from 'electron'
-import { access, mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { access, copyFile, mkdir, writeFile } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 
 type PersistedAttachmentSource = 'paste' | 'manual'
 
@@ -34,6 +34,18 @@ export async function persistAssistantClipboardImage(input: {
     const bytes = decodeDataUrl(input.dataUrl)
     await writeFile(storagePath, bytes)
     return storagePath
+}
+
+export async function stageAssistantClipboardImageFile(input: {
+    sourcePath: string
+    fileName?: string
+}): Promise<string> {
+    const assistantDir = getAssistantClipboardAttachmentsDir()
+    await mkdir(assistantDir, { recursive: true })
+    const fileName = sanitizeFileName(input.fileName || '', 'paste')
+    const storagePath = join(assistantDir, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${fileName}`)
+    await copyFile(input.sourcePath, storagePath)
+    return `clipboard://${basename(storagePath)}`
 }
 
 function getAssistantClipboardAttachmentsDir(): string {

@@ -2,25 +2,18 @@ import { memo, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
 import { cn } from '@/lib/utils'
-import { Check, ChevronDown, ChevronUp, Gauge, GitBranch, ListTodo, Loader2, Lock, LockOpen, MessageSquare, Mic, RotateCw, SendHorizontal, Square, Zap } from 'lucide-react'
+import { AudioLines, Check, ChevronDown, ChevronUp, Gauge, GitBranch, ListTodo, Loader2, Lock, LockOpen, MessageSquare, Mic, RotateCw, SendHorizontal, Square, Zap } from 'lucide-react'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import { formatAssistantModelLabel } from './assistant-model-labels'
 import { getContentTypeTag, getContextFileMeta, isPastedTextAttachment } from './assistant-composer-utils'
+import { parseAssistantBrowserAnnotation } from './assistant-browser-annotation-composer'
 import type { ComposerContextFile } from './assistant-composer-types'
 import type { MentionCandidate } from './assistant-composer-mentions'
 import { buildEffortSliderTicks } from './assistant-composer-controller-constants'
+import { readFullAccessConfirmSuppressed } from './assistant-safety-preferences'
 import { AssistantFileAttachmentCard, AssistantPastedTextCard } from './AssistantAttachmentCards'
 import { AssistantAttachmentImageCard } from './AssistantAttachmentImageCard'
-
-const FULL_ACCESS_CONFIRM_SUPPRESSED_KEY = 'zyra-ui:full-access-confirm-suppressed:v1'
-
-function readFullAccessConfirmSuppressed() {
-    try {
-        return window.localStorage.getItem(FULL_ACCESS_CONFIRM_SUPPRESSED_KEY) === 'true'
-    } catch {
-        return false
-    }
-}
+import { AssistantBrowserAnnotationCard } from './AssistantBrowserAnnotationCard'
 
 function getEffortTone(effort: string): { textClass: string; rowClass: string } {
     if (effort === 'off' || effort === 'none') {
@@ -158,6 +151,7 @@ export const ComposerAttachmentsShelf = memo(function ComposerAttachmentsShelf({
                 const contentType = getContentTypeTag(file)
                 const isRemoving = removingAttachmentIds.includes(file.id)
                 const isEntering = Boolean(file.animateIn)
+                const browserAnnotation = parseAssistantBrowserAnnotation(file.content)
                 const isImageAttachment = meta.category === 'image' && Boolean(file.previewDataUrl)
                 const isPastedText = isPastedTextAttachment(file)
                 const cardWidthClass = isPastedText ? 'w-[92px]' : 'w-[116px]'
@@ -178,7 +172,15 @@ export const ComposerAttachmentsShelf = memo(function ComposerAttachmentsShelf({
                         data-composer-attachment-layout-id={file.id}
                         className="shrink-0 will-change-transform"
                     >
-                        {isImageAttachment ? (
+                        {browserAnnotation && file.previewDataUrl ? (
+                            <AssistantBrowserAnnotationCard
+                                annotation={browserAnnotation}
+                                previewDataUrl={file.previewDataUrl}
+                                onOpen={() => onPreview(file)}
+                                onRemove={() => onRemove(file.id)}
+                                removing={isRemoving || isEntering}
+                            />
+                        ) : isImageAttachment ? (
                             <AssistantAttachmentImageCard
                                 name={meta.name}
                                 src={file.previewDataUrl || ''}
@@ -312,14 +314,14 @@ export const ComposerSendButton = memo(({
                 'relative inline-flex h-[36px] items-center justify-center overflow-hidden rounded-full border transition-all duration-150',
                 label === 'Send' || canReconnect ? 'w-[36px]' : 'gap-1.5 px-3.5',
                 canStop
-                    ? 'border-white/10 bg-[#2246a8] text-white hover:scale-[1.03] hover:border-white/20 hover:bg-[#2955ca]'
+                    ? 'border-[var(--accent-primary)] bg-[var(--accent-primary)] text-[var(--accent-contrast)] hover:scale-[1.03] hover:bg-[color-mix(in_srgb,var(--accent-primary)_88%,var(--color-text))]'
                     : canReconnect
                         ? 'border-white/10 bg-white/[0.045] text-sparkle-text-secondary hover:scale-[1.03] hover:border-white/20 hover:bg-white/[0.075] hover:text-sparkle-text'
                     : isEmptyState
                         ? 'border-transparent bg-white/[0.02] text-sparkle-text-muted/80 hover:border-transparent hover:bg-white/[0.03]'
                         : isDisabled
                         ? 'border-transparent bg-white/[0.015] text-sparkle-text-muted/45 opacity-70'
-                        : 'border-white/10 bg-[#2246a8] text-white hover:scale-[1.03] hover:border-white/20 hover:bg-[#2955ca]'
+                        : 'border-[var(--accent-primary)] bg-[var(--accent-primary)] text-[var(--accent-contrast)] hover:scale-[1.03] hover:bg-[color-mix(in_srgb,var(--accent-primary)_88%,var(--color-text))]'
             )}
         >
             {canStop ? <span className="absolute inset-0 animate-shimmer opacity-60" aria-hidden="true" /> : null}
@@ -341,13 +343,27 @@ export const ComposerSendButton = memo(({
     )
 })
 
+export const ComposerRealtimeVoiceButton = memo(({ onStart }: { onStart: () => void }) => (
+    <button
+        type="button"
+        onClick={onStart}
+        className="relative inline-flex h-[36px] w-[36px] items-center justify-center overflow-hidden rounded-full border border-[var(--accent-primary)] bg-[var(--accent-primary)] text-[var(--accent-contrast)] transition-all duration-150 hover:scale-[1.03] hover:bg-[color-mix(in_srgb,var(--accent-primary)_88%,var(--color-text))]"
+        title="Start Voice in this chat"
+        aria-label="Start Voice in this chat"
+    >
+        <AudioLines size={18} />
+    </button>
+))
+
 export const ComposerVoiceButton = memo(({
     supported,
+    isStarting,
     isRecording,
     disabled,
     onToggle
 }: {
     supported: boolean
+    isStarting: boolean
     isRecording: boolean
     disabled: boolean
     onToggle: () => void
@@ -367,9 +383,11 @@ export const ComposerVoiceButton = memo(({
                         ? 'border-transparent bg-white/[0.02] text-sparkle-text-muted/45'
                         : 'border-transparent bg-white/[0.03] text-sparkle-text-secondary hover:bg-white/[0.06] hover:text-sparkle-text'
             )}
-            title={isRecording ? 'Stop recording' : 'Start voice input'}
+            title={isStarting ? 'Opening microphone' : isRecording ? 'Stop recording' : 'Start voice input'}
         >
-            {isRecording ? (
+            {isStarting ? (
+                <Loader2 size={16} className="animate-spin motion-reduce:animate-none" />
+            ) : isRecording ? (
                 <>
                     <span className="pointer-events-none absolute inset-0 rounded-full border border-rose-300/28 animate-subtle-recording-ripple" aria-hidden="true" />
                     <span className="pointer-events-none absolute inset-0 rounded-full border border-rose-300/16 animate-subtle-recording-ripple-delayed" aria-hidden="true" />
@@ -381,17 +399,6 @@ export const ComposerVoiceButton = memo(({
         </button>
     )
 })
-
-function syncScrollAffordanceState(element: HTMLDivElement | null, setCanScrollUp: Dispatch<SetStateAction<boolean>>, setCanScrollDown: Dispatch<SetStateAction<boolean>>) {
-    if (!element) {
-        setCanScrollUp(false)
-        setCanScrollDown(false)
-        return
-    }
-    const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight)
-    setCanScrollUp(element.scrollTop > 2)
-    setCanScrollDown(maxScrollTop - element.scrollTop > 2)
-}
 
 function ZyraLoadingTextShimmer({ active, className, text }: { active: boolean; className?: string; text: string }) {
     return (
@@ -417,10 +424,6 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
     modelQuery,
     setModelQuery,
     setActiveModelIndex,
-    modelCanScrollUp,
-    modelCanScrollDown,
-    setModelCanScrollUp,
-    setModelCanScrollDown,
     modelListRef,
     filteredModelOptions,
     activeModelIndex,
@@ -457,10 +460,6 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
     modelQuery: string
     setModelQuery: Dispatch<SetStateAction<string>>
     setActiveModelIndex: Dispatch<SetStateAction<number>>
-    modelCanScrollUp: boolean
-    modelCanScrollDown: boolean
-    setModelCanScrollUp: Dispatch<SetStateAction<boolean>>
-    setModelCanScrollDown: Dispatch<SetStateAction<boolean>>
     modelListRef: RefObject<HTMLDivElement | null>
     filteredModelOptions: Array<{ id: string; label: string; description?: string }>
     activeModelIndex: number
@@ -503,14 +502,14 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
     const effortSliderPercent = effortSliderMax > 0 ? (selectedEffortIndex / effortSliderMax) * 100 : 0
     const effortSliderTicks = buildEffortSliderTicks(EFFORT_OPTIONS.length)
     const effortSliderColor = selectedEffort === 'off' || selectedEffort === 'none'
-        ? '#94a3b8'
+        ? 'var(--color-text-muted)'
         : selectedEffort === 'minimal' || selectedEffort === 'low'
-        ? '#86efac'
+        ? 'var(--status-success)'
         : selectedEffort === 'medium'
-            ? '#93c5fd'
+            ? 'var(--accent-primary)'
             : selectedEffort === 'high'
-                ? '#c4b5fd'
-                : '#f0abfc'
+                ? 'var(--accent-secondary)'
+                : 'var(--status-warning)'
     const traitsMenuOpensDown = placement === 'center'
 
     const menuPanelClass = 'overflow-hidden rounded-[10px] border border-sparkle-border bg-sparkle-card p-1 text-[13px] text-sparkle-text shadow-[0_18px_48px_rgba(0,0,0,0.38)]'
@@ -523,28 +522,14 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
         ? 'absolute left-[234px] top-[106px] w-[216px] max-[780px]:left-0 max-[780px]:top-[calc(100%+6px)] max-[780px]:w-[min(216px,calc(100vw-32px))]'
         : 'absolute bottom-0 left-[234px] w-[216px] max-[780px]:bottom-[calc(100%+6px)] max-[780px]:left-0 max-[780px]:w-[min(216px,calc(100vw-32px))]'
     const submenuMotionClass = 'transition-[opacity,transform] duration-[120ms] ease-out'
-    const connectionPillState = isConnected
+    const connectionPillState = isConnected || reconnectPending || isConnecting
         ? null
-        : reconnectPending
-            ? {
-                label: 'Reconnecting',
-                title: 'Reconnecting chat',
-                className: 'border-sky-400/25 bg-sky-500/[0.10] text-sky-100',
-                spinning: true
-            }
-            : isConnecting
-                ? {
-                    label: 'Connecting',
-                    title: 'Connecting chat',
-                    className: 'border-sky-400/25 bg-sky-500/[0.10] text-sky-100',
-                    spinning: true
-                }
-                : {
-                    label: 'Disconnected',
-                    title: 'Reconnect chat',
-                    className: 'border-amber-400/25 bg-amber-500/[0.10] text-amber-100 hover:bg-amber-500/[0.14]',
-                    spinning: false
-                }
+        : {
+            label: 'Disconnected',
+            title: 'Reconnect chat',
+            className: 'border-amber-400/25 bg-amber-500/[0.10] text-amber-100 hover:bg-amber-500/[0.14]',
+            spinning: false
+        }
 
     const cancelSubmenuClose = () => {
         if (submenuCloseTimerRef.current !== null) {
@@ -689,10 +674,8 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                                     <div className="px-2.5 py-1.5 text-[12px] text-sparkle-text-muted">Models</div>
                                     <div
                                         ref={modelListRef}
-                                        className="relative max-h-[min(196px,calc(100vh-136px))] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#3b3c40_transparent]"
-                                        onScroll={(event) => syncScrollAffordanceState(event.currentTarget, setModelCanScrollUp, setModelCanScrollDown)}
+                                        className="assistant-chat-scrollbar relative max-h-[min(196px,calc(100vh-136px))] overflow-y-auto"
                                     >
-                                        {modelCanScrollUp ? <div className="pointer-events-none sticky top-0 z-10 h-5 bg-gradient-to-b from-sparkle-card to-transparent" /> : null}
                                         {filteredModelOptions.length === 0 ? (
                                             <div className="px-2.5 py-2.5 text-[12px] text-sparkle-text-secondary">No models found.</div>
                                         ) : filteredModelOptions.map((model, index) => {
@@ -721,7 +704,6 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                                                 </button>
                                             )
                                         })}
-                                        {modelCanScrollDown ? <div className="pointer-events-none sticky bottom-0 z-10 h-5 bg-gradient-to-t from-sparkle-card to-transparent" /> : null}
                                     </div>
                             </div>
 
@@ -785,7 +767,7 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                             text={selectedModelText}
                         />
                         <span className={cn('shrink-0', selectedEffortTone.textClass)}>{selectedEffortText}</span>
-                        <ChevronDown size={12} className="-mr-0.5 ml-0.5 shrink-0 text-[#9a9a9f]" />
+                        <ChevronDown size={12} className="-mr-0.5 ml-0.5 shrink-0 text-sparkle-text-muted" />
                     </span>
                 </button>
             </div>

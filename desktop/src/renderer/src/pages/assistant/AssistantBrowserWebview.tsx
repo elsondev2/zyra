@@ -1,5 +1,6 @@
 import { createElement, forwardRef, memo, useCallback, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
-import type { DevScopeBrowserPreviewConfig } from '@shared/contracts/devscope-api'
+import type { DevScopeBrowserGuestTargetInput, DevScopeBrowserPreviewConfig } from '@shared/contracts/devscope-api'
+import { dismissTransientMenus } from '@/lib/transient-menu'
 import { normalizeAssistantBrowserFaviconUrl, type AssistantBrowserTabState } from './assistant-browser-workspace-state'
 
 export type AssistantBrowserWebviewHandle = {
@@ -8,6 +9,8 @@ export type AssistantBrowserWebviewHandle = {
     goForward: () => void
     reload: () => void
     stop: () => void
+    getDeveloperTarget: () => DevScopeBrowserGuestTargetInput
+    getViewportSize: () => { width: number; height: number }
 }
 
 type BrowserWebviewElement = HTMLElement & {
@@ -79,7 +82,20 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
             onStateChangeRef.current(tab.id, { status: 'loading', error: null })
             webview.reload()
         },
-        stop: () => webview?.stop()
+        stop: () => webview?.stop(),
+        getDeveloperTarget: () => {
+            if (!webview) throw new Error('Browser view is not ready yet.')
+            const guestWebContentsId = webview.getWebContentsId()
+            if (!Number.isInteger(guestWebContentsId) || guestWebContentsId <= 0) {
+                throw new Error('Browser guest is not attached yet.')
+            }
+            return { guestWebContentsId, tabId: tab.id }
+        },
+        getViewportSize: () => {
+            if (!webview) return { width: 1, height: 1 }
+            const rect = webview.getBoundingClientRect()
+            return { width: Math.max(1, Math.round(rect.width)), height: Math.max(1, Math.round(rect.height)) }
+        }
     }), [tab.id, webview])
 
     useLayoutEffect(() => {
@@ -221,7 +237,9 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
             bindControlTarget()
         }
         const handleAttach = () => bindControlTarget()
+        const handleGuestFocus = () => dismissTransientMenus()
 
+        webview.addEventListener('focus', handleGuestFocus)
         webview.addEventListener('did-attach', handleAttach)
         webview.addEventListener('did-start-navigation', handleStartNavigation)
         webview.addEventListener('did-stop-loading', handleStop)
@@ -239,6 +257,7 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
             disposed = true
             window.clearTimeout(audibleSyncTimer)
             window.clearTimeout(controlBindRetryTimer)
+            webview.removeEventListener('focus', handleGuestFocus)
             webview.removeEventListener('did-attach', handleAttach)
             webview.removeEventListener('did-start-navigation', handleStartNavigation)
             webview.removeEventListener('did-stop-loading', handleStop)
@@ -291,7 +310,7 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
             left: placement === 'secondary' ? '50%' : 0,
             right: placement === 'primary' ? '50%' : 0,
             width: placement === 'full' ? '100%' : '50%',
-            visibility: visible ? 'visible' : 'hidden',
+            visibility: 'visible',
             pointerEvents: visible ? 'auto' : 'none',
             zIndex: visible ? 1 : 0
         },

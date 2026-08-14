@@ -32,6 +32,10 @@ export function toAssistantThreadShell(thread: AssistantThread): AssistantThread
         runtimeMode: thread.runtimeMode,
         interactionMode: thread.interactionMode,
         state: thread.state,
+        canonicalPresence: thread.canonicalPresence ? {
+            ...thread.canonicalPresence,
+            clients: thread.canonicalPresence.clients.map((client) => ({ ...client }))
+        } : undefined,
         lastError: thread.lastError,
         createdAt: thread.createdAt,
         updatedAt: thread.updatedAt,

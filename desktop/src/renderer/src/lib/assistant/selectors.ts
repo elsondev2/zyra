@@ -87,6 +87,9 @@ export type AssistantThreadPhaseKey =
     | 'ready'
     | 'running'
     | 'waiting'
+    | 'background'
+    | 'detached'
+    | 'stale'
     | 'waiting-approval'
     | 'waiting-input'
     | 'error'
@@ -97,11 +100,35 @@ export function getAssistantThreadPhase(thread: AssistantThread | null): {
     label: string
 } {
     if (!thread) return { key: 'idle', label: 'No active thread' }
-    if (getAssistantPendingApprovals(thread).length > 0) {
+    if (thread.hasPendingApprovals || getAssistantPendingApprovals(thread).length > 0) {
         return { key: 'waiting-approval', label: 'Waiting for approval' }
     }
-    if (getAssistantPendingUserInputs(thread).length > 0) {
+    if (thread.hasPendingUserInputs || getAssistantPendingUserInputs(thread).length > 0) {
         return { key: 'waiting-input', label: 'Waiting for input' }
+    }
+
+    const canonicalPresence = thread.canonicalPresence
+    if (canonicalPresence?.state === 'running') {
+        return { key: 'running', label: 'Running' }
+    }
+    if (canonicalPresence?.state === 'background') {
+        return { key: 'background', label: 'Background work' }
+    }
+    if (
+        canonicalPresence?.state === 'ready'
+        && (
+            thread.state === 'starting'
+            || (thread.state === 'running' && thread.latestTurn?.state !== 'running')
+            || thread.state === 'waiting'
+        )
+    ) {
+        return { key: 'ready', label: 'Idle' }
+    }
+    if (canonicalPresence?.state === 'detached') {
+        if (thread.state === 'starting' || thread.state === 'running' || thread.state === 'waiting' || thread.latestTurn?.state === 'running') {
+            return { key: 'stale', label: 'Stale runtime state' }
+        }
+        return { key: 'detached', label: 'Detached' }
     }
 
     switch (thread.state) {
@@ -132,7 +159,11 @@ export function getAssistantThreadPhaseLabel(thread: AssistantThread | null): st
 
 export function isAssistantThreadActivelyWorking(thread: AssistantThread | null): boolean {
     const phase = getAssistantThreadPhase(thread)
-    return phase.key === 'starting' || phase.key === 'running' || phase.key === 'waiting'
+    if (phase.key === 'background') return true
+    if (phase.key !== 'running' && phase.key !== 'waiting') return false
+    return thread?.canonicalPresence?.state === 'running'
+        || thread?.canonicalPresence?.state === 'background'
+        || thread?.latestTurn?.state === 'running'
 }
 
 export function getAssistantSessionSubtitle(session: AssistantSession): string {
@@ -160,7 +191,7 @@ export function isAssistantSessionBackgroundActive(session: AssistantSession, ac
     const activeThread = getActiveAssistantThread(session)
     const phase = getAssistantThreadPhase(activeThread)
 
-    if (phase.key === 'starting' || phase.key === 'running' || phase.key === 'waiting' || phase.key === 'waiting-approval' || phase.key === 'waiting-input') {
+    if (phase.key === 'starting' || phase.key === 'running' || phase.key === 'waiting' || phase.key === 'background' || phase.key === 'waiting-approval' || phase.key === 'waiting-input') {
         return true
     }
 

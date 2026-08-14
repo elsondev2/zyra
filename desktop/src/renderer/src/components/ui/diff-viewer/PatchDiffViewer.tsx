@@ -38,7 +38,7 @@ function buildDiffViewerUnsafeCss(
     const surfaceRaised = isDark
         ? 'color-mix(in lab, var(--color-card, #131c2c) 92%, var(--color-bg, #0c121f))'
         : 'color-mix(in lab, var(--color-card, #ffffff) 97%, var(--color-bg, #eef2f7))'
-    const headerSurface = '#07090d'
+    const headerSurface = surfaceRaised
     const surfaceMuted = isDark
         ? 'color-mix(in lab, var(--color-card, #131c2c) 74%, var(--color-bg, #0c121f))'
         : 'color-mix(in lab, var(--color-card, #ffffff) 88%, var(--color-bg, #eef2f7))'
@@ -56,15 +56,15 @@ function buildDiffViewerUnsafeCss(
         : 'color-mix(in lab, var(--color-card, #ffffff) 88%, var(--accent-primary, #60a5fa))'
     const text = isDark ? 'var(--color-text, #e2e8f0)' : 'var(--color-text, #0f172a)'
     const mutedText = isDark ? 'var(--color-text-secondary, #8fa2b8)' : 'var(--color-text-secondary, #64748b)'
-    const borderDefault = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(15, 23, 42, 0.08)'
-    const borderSubtle = isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(15, 23, 42, 0.05)'
+    const borderDefault = `color-mix(in srgb, ${text} 10%, transparent)`
+    const borderSubtle = `color-mix(in srgb, ${text} 6%, transparent)`
 
     return `
 :host {
   -webkit-font-smoothing: auto;
   text-rendering: optimizeLegibility;
-  --diffs-font-family: 'JetBrains Mono', Consolas, Monaco, 'Courier New', monospace;
-  --diffs-header-font-family: 'Hanken Grotesk Variable', 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', 'Segoe UI', system-ui, sans-serif;
+  --diffs-font-family: var(--font-code, 'JetBrains Mono', Consolas, Monaco, 'Courier New', monospace);
+  --diffs-header-font-family: var(--font-ui, 'Hanken Grotesk Variable', 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', 'Segoe UI', system-ui, sans-serif);
   --diffs-font-size: 12px;
   --diffs-line-height: 20px;
   --diffs-gap-inline: 12px;
@@ -79,8 +79,8 @@ function buildDiffViewerUnsafeCss(
   --diffs-bg-context-number-override: ${numberSurface};
   --diffs-bg-separator-override: ${surfaceSeparator};
   --diffs-fg-number-override: ${mutedText};
-  --diffs-addition-color-override: #73c991;
-  --diffs-deletion-color-override: #ff6b6b;
+  --diffs-addition-color-override: var(--status-success, #73c991);
+  --diffs-deletion-color-override: var(--status-danger, #ff6b6b);
   --diffs-modified-color-override: var(--accent-primary, #60a5fa);
   --diffs-selection-color-override: var(--accent-primary, #60a5fa);
   --diffs-bg-selection-override: color-mix(in lab, ${surface} 82%, var(--accent-primary, #60a5fa));

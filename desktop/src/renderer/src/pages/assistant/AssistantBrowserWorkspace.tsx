@@ -2,30 +2,48 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
     ArrowLeft,
     ArrowRight,
-    Columns2,
+    Camera,
+    Circle,
+    Code2,
+    Crosshair,
+    Ellipsis,
     ExternalLink,
     FolderX,
     Globe2,
     LoaderCircle,
-    MousePointer2,
+    Minus,
+    MonitorSmartphone,
     Plus,
     RefreshCw,
+    RotateCcw,
     Search,
     Server,
     ShieldAlert,
     ShieldCheck,
     Square,
-    Trash2,
-    Volume2,
-    X
+    Trash2
 } from 'lucide-react'
-import type { DevScopeBrowserPreviewConfig, DevScopeProcessInfo } from '@shared/contracts/devscope-api'
+import type {
+    DevScopeBrowserAnnotationTheme,
+    DevScopeBrowserColorScheme,
+    DevScopeBrowserPreviewConfig,
+    DevScopeProcessInfo
+} from '@shared/contracts/devscope-api'
 import type { ControlStateSnapshot, ControlWorkspaceSnapshot } from '@shared/agent-control/contracts'
 import type { BrowserSurfaceOpenRequest } from '@shared/agent-control/protocol'
+import { TRANSIENT_MENU_DISMISS_EVENT } from '@/lib/transient-menu'
 import { cn } from '@/lib/utils'
-import { AssistantBrowserAgentCursor } from './AssistantBrowserAgentCursor'
+import { AssistantBrowserDeviceToolbar } from './AssistantBrowserDeviceToolbar'
 import { AssistantBrowserPageIcon } from './AssistantBrowserPageIcon'
+import { AssistantBrowserViewportFrame } from './AssistantBrowserViewportFrame'
 import { AssistantBrowserWebview, type AssistantBrowserWebviewHandle } from './AssistantBrowserWebview'
+import type { AssistantInspectorDeveloperToastInput } from './AssistantInspectorDeveloperToast'
+import { publishAssistantBrowserAnnotationAttachment } from './assistant-browser-annotation-composer'
+import {
+    readActiveAssistantBrowserRecordingTabId,
+    startAssistantBrowserRecording,
+    stopAssistantBrowserRecording
+} from './assistant-browser-recording'
 import {
     findRememberedBrowserControlApproval,
     rememberBrowserControlApproval
@@ -38,8 +56,8 @@ import {
     closeAssistantBrowserTab,
     loadAssistantBrowserWorkspaceState,
     normalizeAssistantBrowserNavigation,
+    normalizeAssistantBrowserZoom,
     persistAssistantBrowserWorkspaceState,
-    setAssistantBrowserLayout,
     updateAssistantBrowserTab,
     type AssistantBrowserTabState,
     type AssistantBrowserWorkspaceState
@@ -74,37 +92,70 @@ function tabSequenceSeed(state: AssistantBrowserWorkspaceState): number {
     }, 1)
 }
 
+const BROWSER_CHROME_BUTTON_CLASS = 'inline-flex size-7 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted/70 transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text disabled:pointer-events-none disabled:opacity-25'
+
+function readBrowserAnnotationTheme(): DevScopeBrowserAnnotationTheme {
+    const root = getComputedStyle(document.documentElement)
+    const read = (property: string, fallback: string) => root.getPropertyValue(property).trim() || fallback
+    const colorScheme = document.documentElement.classList.contains('light')
+        || (!document.documentElement.classList.contains('dark') && window.matchMedia('(prefers-color-scheme: light)').matches)
+        ? 'light'
+        : 'dark'
+    return {
+        colorScheme,
+        background: read('--color-bg', colorScheme === 'light' ? '#ffffff' : '#111318'),
+        foreground: read('--color-text', colorScheme === 'light' ? '#202124' : '#f4f5f7'),
+        popover: read('--color-card', colorScheme === 'light' ? '#ffffff' : '#181b21'),
+        mutedForeground: read('--color-text-muted', colorScheme === 'light' ? '#667085' : '#9ba3b0'),
+        border: read('--surface-divider', colorScheme === 'light' ? 'rgba(0,0,0,.12)' : 'rgba(255,255,255,.12)'),
+        primary: read('--accent-primary', '#7c3aed'),
+        primaryForeground: read('--accent-contrast', '#ffffff'),
+        fontFamily: root.fontFamily || 'system-ui, sans-serif'
+    }
+}
+
+export type AssistantBrowserWorkspaceController = {
+    createTab: (url?: string) => string
+    closeTab: (tabId: string) => AssistantBrowserWorkspaceState
+    activateTab: (tabId: string) => void
+}
+
 export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace({
     workspaceKey,
     threadId,
     projectPath,
     active,
+    selectedTabId,
     controlState,
     navigationRequest,
     surfaceRequest,
     onNavigationRequestHandled,
     onSurfaceRequestHandled,
     onWorkspaceStateChange,
-    onAudibleChange,
-    onActiveFaviconChange
+    onTabsChange,
+    onControllerChange,
+    onDeveloperToast
 }: {
     workspaceKey: string
     threadId: string
     projectPath: string | null
     active: boolean
+    selectedTabId: string | null
     controlState: ControlStateSnapshot | null
     navigationRequest: { id: number; url: string } | null
     surfaceRequest: BrowserSurfaceOpenRequest | null
     onNavigationRequestHandled: (requestId: number) => void
     onSurfaceRequestHandled: (requestId: string) => void
     onWorkspaceStateChange: (state: ControlWorkspaceSnapshot['browser']) => void
-    onAudibleChange: (audible: boolean) => void
-    onActiveFaviconChange: (faviconUrl: string | null) => void
+    onTabsChange: (state: AssistantBrowserWorkspaceState) => void
+    onControllerChange: (controller: AssistantBrowserWorkspaceController | null) => void
+    onDeveloperToast: (toast: AssistantInspectorDeveloperToastInput) => void
 }) {
     const normalizedProjectPath = String(projectPath || '').trim()
-    const [workspaceState, setWorkspaceState] = useState<AssistantBrowserWorkspaceState>(() => (
-        loadAssistantBrowserWorkspaceState(workspaceKey)
-    ))
+    const [workspaceState, setWorkspaceState] = useState<AssistantBrowserWorkspaceState>(() => ({
+        ...loadAssistantBrowserWorkspaceState(workspaceKey),
+        splitTabId: null
+    }))
     const [viewportRects, setViewportRects] = useState<Record<string, { x: number; y: number; width: number; height: number }>>({})
     const [config, setConfig] = useState<DevScopeBrowserPreviewConfig | null>(null)
     const [configLoading, setConfigLoading] = useState(Boolean(normalizedProjectPath))
@@ -115,6 +166,8 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const [clearProfileArmed, setClearProfileArmed] = useState(false)
     const [clearingProfile, setClearingProfile] = useState(false)
     const [profileNotice, setProfileNotice] = useState<{ tone: 'info' | 'error'; message: string } | null>(null)
+    const [annotationTabId, setAnnotationTabId] = useState<string | null>(null)
+    const [recordingTabId, setRecordingTabId] = useState<string | null>(() => readActiveAssistantBrowserRecordingTabId())
     const [localServers, setLocalServers] = useState<LocalServerSuggestion[]>([])
     const [serversLoading, setServersLoading] = useState(false)
     const [serversError, setServersError] = useState<string | null>(null)
@@ -138,17 +191,14 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const tabSequenceRef = useRef(tabSequenceSeed(workspaceState))
     const addressFocusedRef = useRef(false)
     const profileMenuRef = useRef<HTMLDivElement | null>(null)
+    const annotationTabIdRef = useRef<string | null>(annotationTabId)
 
     workspaceStateRef.current = workspaceState
+    annotationTabIdRef.current = annotationTabId
     controlTargetsByTabRef.current = controlTargetsByTab
     onSurfaceRequestHandledRef.current = onSurfaceRequestHandled
     const activeTab = workspaceState.tabs.find((tab) => tab.id === workspaceState.activeTabId)
         || workspaceState.tabs[0]
-    const splitTab = workspaceState.splitTabId
-        ? workspaceState.tabs.find((tab) => tab.id === workspaceState.splitTabId) || null
-        : null
-    const visibleTabs = [activeTab, splitTab].filter((tab): tab is AssistantBrowserTabState => Boolean(tab))
-    const hasAudibleTab = workspaceState.tabs.some((tab) => tab.audible)
     const activeControlTargetId = activeTab ? controlTargetsByTab[activeTab.id] : undefined
     const activeControlGrant = controlState?.grants.find((grant) => grant.targetId === activeControlTargetId && grant.state === 'active') || null
     const activePendingGrant = controlState?.pendingGrants.find((grant) => grant.targetId === activeControlTargetId) || null
@@ -170,6 +220,20 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         const nextState = updater(workspaceStateRef.current)
         if (nextState !== workspaceStateRef.current) commitWorkspaceState(nextState)
     }, [commitWorkspaceState])
+
+    const cancelAnnotation = useCallback(() => {
+        const tabId = annotationTabIdRef.current
+        annotationTabIdRef.current = null
+        setAnnotationTabId(null)
+        if (!tabId) return
+        const handle = webviewRefs.current.get(tabId)
+        if (!handle) return
+        try {
+            void window.devscope.cancelBrowserPreviewAnnotation(handle.getDeveloperTarget()).catch(() => undefined)
+        } catch {
+            // A closing or navigating guest is already tearing its isolated annotation world down.
+        }
+    }, [])
 
     const failSurfaceRequest = useCallback((request: BrowserSurfaceOpenRequest, error: string) => {
         pendingSurfaceRequestsRef.current.delete(request.requestId)
@@ -247,25 +311,25 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     }, [])
 
     useEffect(() => {
-        onAudibleChange(hasAudibleTab)
-    }, [hasAudibleTab, onAudibleChange])
-
-    useEffect(() => () => onAudibleChange(false), [onAudibleChange])
+        onTabsChange(workspaceState)
+    }, [onTabsChange, workspaceState])
 
     useEffect(() => {
-        onActiveFaviconChange(activeTab?.faviconUrl || null)
-    }, [activeTab?.faviconUrl, onActiveFaviconChange])
-
-    useEffect(() => () => onActiveFaviconChange(null), [onActiveFaviconChange])
+        if (!selectedTabId || workspaceStateRef.current.activeTabId === selectedTabId) return
+        mutateWorkspaceState((current) => {
+            const withSelectedTab = current.tabs.some((tab) => tab.id === selectedTabId)
+                ? current
+                : addAssistantBrowserTab(current, selectedTabId)
+            return activateAssistantBrowserTab(withSelectedTab, selectedTabId)
+        })
+    }, [mutateWorkspaceState, selectedTabId])
 
     useEffect(() => {
-        const visibleTabIds = active
-            ? [activeTab?.id, splitTab?.id].filter((tabId): tabId is string => Boolean(tabId))
-            : []
+        const visibleTabIds = active && activeTab ? [activeTab.id] : []
         onWorkspaceStateChange({
             open: true,
             activeTabId: activeTab?.id || null,
-            splitTabId: splitTab?.id || null,
+            splitTabId: null,
             visibleTabIds,
             tabs: workspaceState.tabs.map((tab) => {
                 const targetId = controlTargetsByTab[tab.id] || null
@@ -278,22 +342,27 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                     title: tab.title || null,
                     origin: target?.kind === 'zyra-browser' ? target.origin : null,
                     status: tab.status,
-                    position: active && tab.id === activeTab?.id
-                        ? 'primary'
-                        : active && tab.id === splitTab?.id
-                            ? 'secondary'
-                            : null,
+                    position: active && tab.id === activeTab?.id ? 'primary' : null,
                     visible: visibleTabIds.includes(tab.id),
                     viewportRect: viewportRects[tab.id] || null
                 }
             })
         })
-    }, [active, activeTab?.id, controlState?.targets, controlTargetsByTab, onWorkspaceStateChange, splitTab?.id, viewportRects, workspaceState.tabs])
+    }, [active, activeTab?.id, controlState?.targets, controlTargetsByTab, onWorkspaceStateChange, viewportRects, workspaceState.tabs])
 
     useEffect(() => {
         if (!addressFocusedRef.current) setAddressValue(activeTab?.url || '')
         setAddressError(null)
-    }, [activeTab?.id, activeTab?.url])
+        const activeAnnotationTabId = annotationTabIdRef.current
+        if (activeAnnotationTabId && activeAnnotationTabId !== activeTab?.id) cancelAnnotation()
+    }, [activeTab?.id, activeTab?.url, cancelAnnotation])
+
+    useEffect(() => {
+        if (active) return
+        cancelAnnotation()
+    }, [active, cancelAnnotation])
+
+    useEffect(() => () => cancelAnnotation(), [cancelAnnotation])
 
     useEffect(() => {
         if (!normalizedProjectPath) {
@@ -336,14 +405,28 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
 
     useEffect(() => {
         if (!profileMenuOpen) return
-        const handlePointerDown = (event: PointerEvent) => {
-            const target = event.target
-            if (target instanceof Node && profileMenuRef.current?.contains(target)) return
+        const dismissProfileMenu = () => {
             setProfileMenuOpen(false)
             setClearProfileArmed(false)
         }
-        document.addEventListener('pointerdown', handlePointerDown)
-        return () => document.removeEventListener('pointerdown', handlePointerDown)
+        const handlePointerDown = (event: PointerEvent) => {
+            const target = event.target
+            if (target instanceof Node && profileMenuRef.current?.contains(target)) return
+            dismissProfileMenu()
+        }
+        const handleEscape = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') dismissProfileMenu()
+        }
+        document.addEventListener('pointerdown', handlePointerDown, true)
+        window.addEventListener('keydown', handleEscape)
+        window.addEventListener('blur', dismissProfileMenu)
+        window.addEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissProfileMenu)
+        return () => {
+            document.removeEventListener('pointerdown', handlePointerDown, true)
+            window.removeEventListener('keydown', handleEscape)
+            window.removeEventListener('blur', dismissProfileMenu)
+            window.removeEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissProfileMenu)
+        }
     }, [profileMenuOpen])
 
     const refreshLocalServers = useCallback(async () => {
@@ -372,11 +455,17 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
 
 
     const handleWebviewStateChange = useCallback((tabId: string, patch: Partial<Omit<AssistantBrowserTabState, 'id'>>) => {
+        const previous = workspaceStateRef.current.tabs.find((tab) => tab.id === tabId)
         mutateWorkspaceState((current) => updateAssistantBrowserTab(current, tabId, patch))
+        if (annotationTabIdRef.current === tabId && (
+            (patch.url !== undefined && patch.url !== previous?.url)
+            || (patch.status === 'loading' && previous?.status !== 'loading')
+            || patch.status === 'error'
+        )) cancelAnnotation()
         if (tabId === workspaceStateRef.current.activeTabId && patch.url && !addressFocusedRef.current) {
             setAddressValue(patch.url)
         }
-    }, [mutateWorkspaceState])
+    }, [cancelAnnotation, mutateWorkspaceState])
 
     const navigateActiveTab = useCallback(async (rawInput: string) => {
         const target = normalizeAssistantBrowserNavigation(rawInput)
@@ -386,6 +475,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         }
         const tabId = workspaceStateRef.current.activeTabId
         const handle = webviewRefs.current.get(tabId)
+        if (annotationTabIdRef.current === tabId) cancelAnnotation()
         setAddressValue(target.url)
         setAddressError(null)
         mutateWorkspaceState((current) => updateAssistantBrowserTab(current, tabId, {
@@ -407,13 +497,14 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                 error: error instanceof Error ? error.message : 'The page could not be loaded.'
             }))
         }
-    }, [mutateWorkspaceState])
+    }, [cancelAnnotation, mutateWorkspaceState])
 
     const createTab = useCallback((url = '') => {
         const tabId = `browser:${tabSequenceRef.current++}`
         mutateWorkspaceState((current) => addAssistantBrowserTab(current, tabId, url))
         setAddressValue(url)
         setAddressError(null)
+        return tabId
     }, [mutateWorkspaceState])
 
     useEffect(() => {
@@ -428,29 +519,50 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         })
     }, [config, navigateActiveTab, navigationRequest, onNavigationRequestHandled])
 
-    const closeTab = useCallback((tabId: string) => {
+    const closeTab = useCallback((tabId: string): AssistantBrowserWorkspaceState => {
+        if (!workspaceStateRef.current.tabs.some((tab) => tab.id === tabId)) return workspaceStateRef.current
+        const closingHandle = webviewRefs.current.get(tabId)
+        if (annotationTabIdRef.current === tabId) cancelAnnotation()
+        if (closingHandle && recordingTabId === tabId) {
+            try {
+                const target = closingHandle.getDeveloperTarget()
+                setRecordingTabId(null)
+                void stopAssistantBrowserRecording(target).then((artifact) => {
+                    onDeveloperToast({ message: 'Browser recording saved before the tab closed.', artifact })
+                }).catch((error: unknown) => {
+                    onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not save the closing Browser recording.' })
+                })
+            } catch (error) {
+                setRecordingTabId(readActiveAssistantBrowserRecordingTabId())
+                onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not stop the closing Browser recording.' })
+            }
+        }
         webviewRefs.current.delete(tabId)
         webviewRefCallbacks.current.delete(tabId)
         pendingNavigationRef.current.delete(tabId)
         const replacementTabId = `browser:${tabSequenceRef.current++}`
-        mutateWorkspaceState((current) => closeAssistantBrowserTab(current, tabId, replacementTabId))
-    }, [mutateWorkspaceState])
+        let nextState = workspaceStateRef.current
+        mutateWorkspaceState((current) => {
+            nextState = closeAssistantBrowserTab(current, tabId, replacementTabId)
+            return nextState
+        })
+        return nextState
+    }, [cancelAnnotation, mutateWorkspaceState, onDeveloperToast, recordingTabId])
 
     const activateTab = useCallback((tabId: string) => {
         mutateWorkspaceState((current) => activateAssistantBrowserTab(current, tabId))
     }, [mutateWorkspaceState])
 
-    const toggleSplit = useCallback(() => {
-        mutateWorkspaceState((current) => {
-            if (current.splitTabId) return setAssistantBrowserLayout(current, current.activeTabId, null)
-            const existingSecondary = current.tabs.find((tab) => tab.id !== current.activeTabId)
-            if (existingSecondary) return setAssistantBrowserLayout(current, current.activeTabId, existingSecondary.id)
-            if (current.tabs.length >= ASSISTANT_BROWSER_TAB_LIMIT) return current
-            const secondaryTabId = `browser:${tabSequenceRef.current++}`
-            const withSecondary = addAssistantBrowserTab(current, secondaryTabId)
-            return setAssistantBrowserLayout(withSecondary, current.activeTabId, secondaryTabId)
-        })
-    }, [mutateWorkspaceState])
+    const controller = useMemo<AssistantBrowserWorkspaceController>(() => ({
+        createTab,
+        closeTab,
+        activateTab
+    }), [activateTab, closeTab, createTab])
+
+    useEffect(() => {
+        onControllerChange(controller)
+        return () => onControllerChange(null)
+    }, [controller, onControllerChange])
 
     const getWebviewRefCallback = useCallback((tabId: string) => {
         const existing = webviewRefCallbacks.current.get(tabId)
@@ -567,9 +679,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         mutateWorkspaceState((current) => {
             let next = current
             for (const tabId of requestedTabIds) next = addAssistantBrowserTab(next, tabId)
-            if (mode === 'layout') return setAssistantBrowserLayout(next, surfaceRequest.tabId, surfaceRequest.secondaryTabId || null)
-            if (mode === 'reveal') return activateAssistantBrowserTab(next, surfaceRequest.tabId)
-            return setAssistantBrowserLayout(next, surfaceRequest.tabId, next.splitTabId)
+            return activateAssistantBrowserTab({ ...next, splitTabId: null }, surfaceRequest.tabId)
         })
         if (knownTargetId) {
             void complete(true).finally(() => onSurfaceRequestHandledRef.current(surfaceRequest.requestId))
@@ -577,6 +687,179 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             pendingSurfaceRequestsRef.current.set(surfaceRequest.requestId, surfaceRequest)
         }
     }, [closeTab, configError, controlTargetsByTab, failSurfaceRequest, mutateWorkspaceState, normalizedProjectPath, surfaceRequest, threadId])
+
+    const getActiveDeveloperTarget = useCallback(() => {
+        const tabId = workspaceStateRef.current.activeTabId
+        const handle = webviewRefs.current.get(tabId)
+        if (!handle) throw new Error('Browser view is not ready yet.')
+        return { tabId, handle, target: handle.getDeveloperTarget() }
+    }, [])
+
+    const updateActiveViewport = useCallback((viewport: AssistantBrowserTabState['viewport']) => {
+        const tabId = workspaceStateRef.current.activeTabId
+        mutateWorkspaceState((current) => updateAssistantBrowserTab(current, tabId, { viewport }))
+    }, [mutateWorkspaceState])
+
+    const updateActiveZoom = useCallback(async (requested: number) => {
+        try {
+            const { tabId, target } = getActiveDeveloperTarget()
+            const factor = normalizeAssistantBrowserZoom(requested)
+            const result = await window.devscope.setBrowserPreviewZoom({ ...target, factor })
+            if (!result.success) throw new Error(result.error || 'Could not change Browser zoom.')
+            mutateWorkspaceState((current) => updateAssistantBrowserTab(current, tabId, { zoomFactor: result.factor }))
+        } catch (error) {
+            onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not change Browser zoom.' })
+        }
+    }, [getActiveDeveloperTarget, mutateWorkspaceState, onDeveloperToast])
+
+    const updateActiveColorScheme = useCallback(async (colorScheme: DevScopeBrowserColorScheme) => {
+        try {
+            const { tabId, target } = getActiveDeveloperTarget()
+            const result = await window.devscope.setBrowserPreviewColorScheme({ ...target, colorScheme })
+            if (!result.success) throw new Error(result.error || 'Could not emulate the Browser color scheme.')
+            mutateWorkspaceState((current) => updateAssistantBrowserTab(current, tabId, { colorScheme }))
+            onDeveloperToast({ message: colorScheme === 'system' ? 'Page appearance follows the system.' : `Page appearance is ${colorScheme}.` })
+            setProfileMenuOpen(false)
+        } catch (error) {
+            onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not emulate the Browser color scheme.' })
+        }
+    }, [getActiveDeveloperTarget, mutateWorkspaceState, onDeveloperToast])
+
+    useEffect(() => {
+        if (!activeTab || !controlTargetsByTab[activeTab.id]) return
+        const handle = webviewRefs.current.get(activeTab.id)
+        if (!handle) return
+        let cancelled = false
+        try {
+            const target = handle.getDeveloperTarget()
+            void Promise.all([
+                window.devscope.setBrowserPreviewZoom({ ...target, factor: activeTab.zoomFactor }),
+                window.devscope.setBrowserPreviewColorScheme({ ...target, colorScheme: activeTab.colorScheme })
+            ]).then((results) => {
+                if (cancelled) return
+                const failure = results.find((result) => !result.success)
+                if (failure && !failure.success) onDeveloperToast({ tone: 'error', message: failure.error })
+            })
+        } catch {
+            // The bound target can arrive one layout pass before the webview handle.
+        }
+        return () => {
+            cancelled = true
+        }
+    }, [activeTab?.colorScheme, activeTab?.id, activeTab?.zoomFactor, controlTargetsByTab, onDeveloperToast])
+
+    const hardReloadActiveTab = useCallback(async () => {
+        try {
+            const { tabId, target } = getActiveDeveloperTarget()
+            if (annotationTabIdRef.current === tabId) cancelAnnotation()
+            const result = await window.devscope.hardReloadBrowserPreview(target)
+            if (!result.success) throw new Error(result.error || 'Could not hard reload the Browser tab.')
+            mutateWorkspaceState((current) => updateAssistantBrowserTab(current, tabId, { status: 'loading', error: null }))
+            onDeveloperToast({ message: 'Hard reload started with cache bypassed.' })
+            setProfileMenuOpen(false)
+        } catch (error) {
+            onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not hard reload the Browser tab.' })
+        }
+    }, [cancelAnnotation, getActiveDeveloperTarget, mutateWorkspaceState, onDeveloperToast])
+
+    const openActiveDevTools = useCallback(async () => {
+        try {
+            const { tabId, target } = getActiveDeveloperTarget()
+            if (annotationTabIdRef.current === tabId) cancelAnnotation()
+            const result = await window.devscope.openBrowserPreviewDevTools(target)
+            if (!result.success) throw new Error(result.error || 'Could not open Browser DevTools.')
+            setProfileMenuOpen(false)
+        } catch (error) {
+            onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not open Browser DevTools.' })
+        }
+    }, [cancelAnnotation, getActiveDeveloperTarget, onDeveloperToast])
+
+    const captureActiveScreenshot = useCallback(async () => {
+        try {
+            const { target } = getActiveDeveloperTarget()
+            const result = await window.devscope.captureBrowserPreviewScreenshot(target)
+            if (!result.success) throw new Error(result.error || 'Could not capture the Browser tab.')
+            onDeveloperToast({ message: '', artifact: result.artifact })
+        } catch (error) {
+            onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not capture the Browser tab.' })
+        }
+    }, [getActiveDeveloperTarget, onDeveloperToast])
+
+    const toggleAnnotation = useCallback(async () => {
+        if (annotationTabIdRef.current) {
+            cancelAnnotation()
+            return
+        }
+        let tabId: string | null = null
+        try {
+            const activeDeveloper = getActiveDeveloperTarget()
+            tabId = activeDeveloper.tabId
+            annotationTabIdRef.current = tabId
+            setAnnotationTabId(tabId)
+            const result = await window.devscope.startBrowserPreviewAnnotation({
+                ...activeDeveloper.target,
+                theme: readBrowserAnnotationTheme()
+            })
+            if (!result.success) throw new Error(result.error || 'Could not annotate the Browser tab.')
+            if (result.annotation && result.artifact) {
+                const staged = await window.devscope.stageBrowserPreviewArtifactForAssistant(result.artifact.artifactId)
+                if (!staged.success) throw new Error(staged.error || 'Could not attach the Browser annotation to chat.')
+                publishAssistantBrowserAnnotationAttachment({
+                    sessionId: workspaceKey,
+                    reference: staged.reference,
+                    annotation: result.annotation,
+                    artifact: result.artifact
+                })
+            }
+        } catch (error) {
+            if (tabId && annotationTabIdRef.current !== tabId) return
+            onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not annotate the Browser tab.' })
+        } finally {
+            if (tabId && annotationTabIdRef.current === tabId) {
+                annotationTabIdRef.current = null
+                setAnnotationTabId(null)
+            }
+        }
+    }, [cancelAnnotation, getActiveDeveloperTarget, onDeveloperToast, workspaceKey])
+
+    const toggleActiveRecording = useCallback(async () => {
+        try {
+            const { tabId, target, handle } = getActiveDeveloperTarget()
+            if (annotationTabIdRef.current === tabId) cancelAnnotation()
+            if (recordingTabId) {
+                if (recordingTabId !== tabId) throw new Error('Another Browser tab is already recording.')
+                const artifact = await stopAssistantBrowserRecording(target)
+                setRecordingTabId(null)
+                onDeveloperToast({ message: 'Browser recording saved.', artifact })
+                return
+            }
+            await startAssistantBrowserRecording(target, handle.getViewportSize())
+            setRecordingTabId(tabId)
+            onDeveloperToast({ message: 'Recording this Browser tab.' })
+        } catch (error) {
+            setRecordingTabId(readActiveAssistantBrowserRecordingTabId())
+            onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not change Browser recording state.' })
+        }
+    }, [cancelAnnotation, getActiveDeveloperTarget, onDeveloperToast, recordingTabId])
+
+    const clearBrowserCache = useCallback(async () => {
+        const result = await window.devscope.clearBrowserPreviewCache()
+        onDeveloperToast(result.success
+            ? { message: 'Integrated Browser cache cleared.' }
+            : { tone: 'error', message: result.error || 'Could not clear the Browser cache.' })
+        if (result.success) setProfileMenuOpen(false)
+    }, [onDeveloperToast])
+
+    const clearBrowserCookies = useCallback(async () => {
+        const result = await window.devscope.clearBrowserPreviewCookies()
+        onDeveloperToast(result.success
+            ? { message: 'Integrated Browser cookies and authentication cleared.' }
+            : { tone: 'error', message: result.error || 'Could not clear Browser cookies.' })
+        if (result.success) {
+            for (const handle of webviewRefs.current.values()) handle.reload()
+            setProfileMenuOpen(false)
+        }
+    }, [onDeveloperToast])
 
     const openExternal = useCallback(async () => {
         if (!activeTab?.url) return
@@ -623,21 +906,22 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         try {
             const result = await window.devscope.clearBrowserPreviewData()
             if (!result.success) {
-                setProfileNotice({ tone: 'error', message: result.error || 'Could not clear local Browser data.' })
+                onDeveloperToast({ tone: 'error', message: result.error || 'Could not clear local Browser data.' })
                 return
             }
             for (const handle of webviewRefs.current.values()) handle.reload()
             setClearProfileArmed(false)
-            setProfileNotice({ tone: 'info', message: 'Local Browser cookies and site data were cleared.' })
+            setProfileMenuOpen(false)
+            onDeveloperToast({ message: 'Local Browser cookies and site data were cleared.' })
         } catch (error: unknown) {
-            setProfileNotice({
+            onDeveloperToast({
                 tone: 'error',
                 message: error instanceof Error ? error.message : 'Could not clear local Browser data.'
             })
         } finally {
             setClearingProfile(false)
         }
-    }, [clearProfileArmed])
+    }, [clearProfileArmed, onDeveloperToast])
 
     if (!normalizedProjectPath) {
         return (
@@ -668,69 +952,16 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     }
 
     return (
-        <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[color-mix(in_srgb,var(--color-bg)_96%,black)]" aria-label="Browser workspace">
-            <div className="flex h-7 shrink-0 items-end gap-px overflow-x-auto border-b border-white/[0.07] bg-[color-mix(in_srgb,var(--color-bg)_92%,black)] px-1 pt-1 [scrollbar-width:none]">
-                {workspaceState.tabs.map((tab) => {
-                    const tabActive = tab.id === activeTab?.id
-                    const tabSecondary = tab.id === splitTab?.id
-                    const tabTargetId = controlTargetsByTab[tab.id]
-                    const tabGrant = tabTargetId
-                        ? controlState?.grants.find((grant) => grant.targetId === tabTargetId && grant.state === 'active')
-                        : undefined
-                    const tabCursor = tabTargetId
-                        ? controlState?.cursors.find((cursor) => cursor.targetId === tabTargetId && cursor.visible)
-                        : undefined
-                    const tabControlled = Boolean(tabGrant)
-                    const tabControlActive = Boolean(tabCursor && tabCursor.phase !== 'idle')
-                    const tabControllerLabel = (tabCursor?.principal || tabGrant?.principal)?.type === 'agent' ? 'Agent' : 'Zyra'
-                    const tabNeedsAttention = Boolean(tabTargetId && controlState?.pendingGrants.some((grant) => grant.targetId === tabTargetId))
-                    return (
-                        <div
-                            key={tab.id}
-                            data-browser-control-owned={tabControlled ? '' : undefined}
-                            className={cn(
-                                'group/tab relative flex h-6 min-w-[92px] max-w-[150px] items-center gap-1 border-x border-t px-1.5 transition-[border-color,background-color,box-shadow,color] motion-reduce:transition-none',
-                                tabActive ? 'border-white/[0.09] bg-[color-mix(in_srgb,var(--color-bg)_96%,black)] text-sparkle-text' : 'border-transparent bg-white/[0.018] text-sparkle-text-muted hover:bg-white/[0.04] hover:text-sparkle-text-secondary',
-                                tabSecondary && 'border-violet-300/30 bg-violet-400/[0.06] text-violet-100',
-                                tabControlled && 'border-cyan-300/45 bg-cyan-400/[0.07] text-cyan-50 shadow-[inset_0_0_0_1px_rgba(103,232,249,0.12),0_0_12px_rgba(34,211,238,0.22)]',
-                                tabNeedsAttention && 'border-amber-300/35 bg-amber-400/[0.08] text-amber-100'
-                            )}
-                        >
-                            {tabControlled ? <span className="pointer-events-none absolute inset-0 border border-cyan-200/15 motion-safe:animate-pulse" aria-hidden="true" /> : null}
-                            <button type="button" onClick={() => activateTab(tab.id)} className="relative flex min-w-0 flex-1 items-center gap-1 text-left" title={tab.title || tab.url || 'New tab'}>
-                                {tab.status === 'loading' ? <LoaderCircle size={9} className="shrink-0 animate-spin text-[var(--accent-primary)]" /> : <AssistantBrowserPageIcon faviconUrl={tab.faviconUrl} size={9} />}
-                                <span className="min-w-0 flex-1 truncate text-[9px]">{tab.title || 'New tab'}</span>
-                            </button>
-                            {tab.audible ? <Volume2 size={10} className="relative shrink-0 text-[var(--accent-primary)]" aria-label="This tab is playing audio" /> : null}
-                            {tabControlled ? (
-                                <span
-                                    className={cn(
-                                        'relative inline-flex size-3.5 shrink-0 items-center justify-center rounded-full border border-cyan-200/25 bg-cyan-300/15 text-cyan-100 shadow-sm shadow-cyan-950/50',
-                                        tabControlActive && 'scale-110 bg-cyan-300/25 motion-safe:animate-pulse'
-                                    )}
-                                    title={`${tabControllerLabel} controls this tab${tabCursor ? ` · ${tabCursor.phase}` : ''}`}
-                                    aria-label={`${tabControllerLabel} controls this Browser tab`}
-                                >
-                                    <MousePointer2 size={9} strokeWidth={2.3} className="fill-cyan-200 text-slate-950" />
-                                </span>
-                            ) : null}
-                            {tabNeedsAttention ? <ShieldAlert size={10} className="relative shrink-0 text-amber-300 motion-safe:animate-pulse" aria-label="This tab needs control approval" /> : null}
-                            <button type="button" onClick={() => closeTab(tab.id)} className="relative inline-flex size-4 shrink-0 items-center justify-center opacity-0 hover:bg-white/[0.06] hover:text-sparkle-text group-hover/tab:opacity-100" title={`Close ${tab.title || 'tab'}`}><X size={9} /></button>
-                        </div>
-                    )
-                })}
-                <button type="button" onClick={() => createTab()} disabled={workspaceState.tabs.length >= ASSISTANT_BROWSER_TAB_LIMIT} className="mb-0.5 inline-flex size-5 shrink-0 items-center justify-center text-sparkle-text-muted hover:bg-white/[0.05] hover:text-sparkle-text disabled:opacity-30" title="New browser tab"><Plus size={11} /></button>
-            </div>
-
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-sparkle-bg" aria-label="Browser workspace">
             <form
-                className="relative z-30 flex h-8 shrink-0 items-center gap-1 border-b border-white/[0.07] bg-[color-mix(in_srgb,var(--color-bg)_94%,black)] px-1.5"
+                className="relative z-30 flex h-10 shrink-0 items-center gap-1 border-b border-[var(--surface-divider)] bg-sparkle-bg px-2"
                 onSubmit={(event) => {
                     event.preventDefault()
                     void navigateActiveTab(addressValue)
                 }}
             >
-                <button type="button" onClick={() => activeTab && webviewRefs.current.get(activeTab.id)?.goBack()} disabled={!activeTab?.canGoBack} className="inline-flex size-5 items-center justify-center text-sparkle-text-muted hover:bg-white/[0.05] hover:text-sparkle-text disabled:opacity-25" title="Back"><ArrowLeft size={11} /></button>
-                <button type="button" onClick={() => activeTab && webviewRefs.current.get(activeTab.id)?.goForward()} disabled={!activeTab?.canGoForward} className="inline-flex size-5 items-center justify-center text-sparkle-text-muted hover:bg-white/[0.05] hover:text-sparkle-text disabled:opacity-25" title="Forward"><ArrowRight size={11} /></button>
+                <button type="button" onClick={() => activeTab && webviewRefs.current.get(activeTab.id)?.goBack()} disabled={!activeTab?.canGoBack} className={BROWSER_CHROME_BUTTON_CLASS} title="Back"><ArrowLeft size={14} /></button>
+                <button type="button" onClick={() => activeTab && webviewRefs.current.get(activeTab.id)?.goForward()} disabled={!activeTab?.canGoForward} className={BROWSER_CHROME_BUTTON_CLASS} title="Forward"><ArrowRight size={14} /></button>
                 <button
                     type="button"
                     onClick={() => {
@@ -740,13 +971,16 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                         else handle?.reload()
                     }}
                     disabled={!activeTab?.url}
-                    className="inline-flex size-5 items-center justify-center text-sparkle-text-muted hover:bg-white/[0.05] hover:text-sparkle-text disabled:opacity-25"
+                    className={BROWSER_CHROME_BUTTON_CLASS}
                     title={activeTab?.status === 'loading' ? 'Stop loading' : 'Reload'}
                 >
-                    {activeTab?.status === 'loading' ? <Square size={9} fill="currentColor" /> : <RefreshCw size={10} />}
+                    {activeTab?.status === 'loading' ? <Square size={10} fill="currentColor" /> : <RefreshCw size={13} />}
                 </button>
-                <div className={cn('flex h-5 min-w-0 flex-1 items-center gap-1 border bg-white/[0.025] px-1.5', addressError ? 'border-red-400/35' : 'border-white/[0.08] focus-within:border-[var(--accent-primary)]/35')}>
-                    {activeTab?.url ? <AssistantBrowserPageIcon faviconUrl={activeTab.faviconUrl} size={9} /> : <Search size={9} className="shrink-0 text-sparkle-text-muted/45" />}
+                <div className={cn(
+                    'group/address flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md border border-transparent bg-transparent px-2 transition-colors hover:bg-[var(--surface-hover)] focus-within:border-[var(--surface-divider)] focus-within:bg-[var(--color-bg)]',
+                    addressError && 'border-red-400/35'
+                )}>
+                    {activeTab?.url ? <AssistantBrowserPageIcon faviconUrl={activeTab.faviconUrl} size={12} /> : <Search size={12} className="shrink-0 text-sparkle-text-muted/45" />}
                     <input
                         value={addressValue}
                         onChange={(event) => {
@@ -768,22 +1002,23 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                                 event.currentTarget.blur()
                             }
                         }}
-                        className="min-w-0 flex-1 bg-transparent text-[9px] text-sparkle-text-secondary outline-none placeholder:text-sparkle-text-muted/40"
+                        className="min-w-0 flex-1 bg-transparent text-[11px] text-sparkle-text-secondary outline-none placeholder:text-sparkle-text-muted/40"
                         placeholder="Search or enter address"
                         spellCheck={false}
                         aria-label="Browser address"
                     />
                 </div>
-                <button type="button" onClick={() => void openExternal()} disabled={!activeTab?.url} className="inline-flex size-5 items-center justify-center text-sparkle-text-muted hover:bg-white/[0.05] hover:text-sparkle-text disabled:opacity-25" title="Open in default browser"><ExternalLink size={10} /></button>
                 <button
                     type="button"
-                    onClick={toggleSplit}
-                    className={cn('inline-flex size-5 items-center justify-center text-sparkle-text-muted hover:bg-white/[0.05] hover:text-sparkle-text', splitTab && 'bg-violet-400/[0.09] text-violet-200')}
-                    title={splitTab ? 'Close side-by-side Browser view' : 'Show two Browser tabs side by side'}
-                    aria-pressed={Boolean(splitTab)}
+                    onClick={() => void toggleAnnotation()}
+                    disabled={!activeTab?.url}
+                    className={cn(BROWSER_CHROME_BUTTON_CLASS, annotationTabId === activeTab?.id && 'bg-[var(--surface-hover)] text-[var(--accent-primary)]')}
+                    title={annotationTabId === activeTab?.id ? 'Cancel annotation' : 'Annotate page'}
+                    aria-pressed={annotationTabId === activeTab?.id}
                 >
-                    <Columns2 size={10} />
+                    <Crosshair size={13} />
                 </button>
+                <button type="button" onClick={() => void captureActiveScreenshot()} disabled={!activeTab?.url} className={BROWSER_CHROME_BUTTON_CLASS} title="Capture screenshot"><Camera size={13} /></button>
                 {activePendingGrant ? (
                     <div className="flex h-5 items-center gap-1 border border-sky-300/25 bg-sky-400/[0.08] px-1 text-[8px] text-sky-100" title="An agent is waiting for your approval to control this exact tab.">
                         <ShieldAlert size={9} />
@@ -808,96 +1043,107 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                             setProfileNotice(null)
                         }}
                         className={cn(
-                            'inline-flex size-5 items-center justify-center text-sparkle-text-muted hover:bg-white/[0.05] hover:text-sparkle-text',
-                            profileMenuOpen && 'bg-white/[0.05] text-emerald-200/80'
+                            BROWSER_CHROME_BUTTON_CLASS,
+                            profileMenuOpen && 'bg-[var(--surface-hover)] text-emerald-300/80'
                         )}
-                        title="Local Zyra Browser profile"
+                        title="Browser developer tools"
+                        aria-label="Browser developer tools"
                         aria-expanded={profileMenuOpen}
                     >
-                        <ShieldCheck size={10} />
+                        <Ellipsis size={14} />
                     </button>
                     {profileMenuOpen ? (
-                        <div className="absolute right-0 top-6 z-[380] w-64 border border-white/[0.10] bg-[#111927] p-2.5 text-left shadow-xl shadow-black/35">
-                            <div className="flex items-start gap-2">
-                                <ShieldCheck size={13} className="mt-0.5 shrink-0 text-emerald-300/75" />
-                                <div>
-                                    <p className="text-[10px] font-semibold text-sparkle-text-secondary">Local Zyra profile</p>
-                                    <p className="mt-1 text-[9px] leading-4 text-sparkle-text-muted/70">
-                                        Cookies and site logins stay on this device and are shared across Zyra threads, chats, and projects. They are never used for Resources previews.
-                                    </p>
-                                </div>
+                        <div className="absolute right-0 top-8 z-[380] w-56 rounded-lg border border-[var(--surface-divider)] bg-sparkle-card p-1 text-left shadow-xl shadow-black/25">
+                            <button type="button" onClick={() => void hardReloadActiveTab()} disabled={!activeTab?.url} className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-[10px] text-sparkle-text-secondary hover:bg-[var(--surface-hover)] disabled:opacity-35"><RefreshCw size={12} /><span>Hard reload</span></button>
+                            <button type="button" onClick={() => void openActiveDevTools()} disabled={!activeTab?.url} className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-[10px] text-sparkle-text-secondary hover:bg-[var(--surface-hover)] disabled:opacity-35"><Code2 size={12} /><span>Open DevTools</span></button>
+                            <button type="button" onClick={() => {
+                                if (!activeTab) return
+                                updateActiveViewport(activeTab.viewport.mode === 'fill'
+                                    ? { mode: 'freeform', width: 1280, height: 800, presetId: null, aspectRatio: null }
+                                    : { mode: 'fill' })
+                                setProfileMenuOpen(false)
+                            }} disabled={!activeTab} className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-[10px] text-sparkle-text-secondary hover:bg-[var(--surface-hover)] disabled:opacity-35"><MonitorSmartphone size={12} /><span>{activeTab?.viewport.mode === 'fill' ? 'Show device toolbar' : 'Hide device toolbar'}</span></button>
+                            <div className="my-1 h-px bg-[var(--surface-divider)]" />
+                            <div className="flex h-7 items-center gap-1 px-2 text-[10px] text-sparkle-text-secondary">
+                                <span className="mr-auto">Appearance</span>
+                                {(['system', 'light', 'dark'] as const).map((scheme) => (
+                                    <button key={scheme} type="button" onClick={() => void updateActiveColorScheme(scheme)} className={cn('rounded px-1.5 py-1 text-[8px] capitalize text-sparkle-text-muted hover:bg-[var(--surface-hover)] hover:text-sparkle-text', activeTab?.colorScheme === scheme && 'bg-[var(--surface-hover)] text-[var(--accent-primary)]')}>{scheme}</button>
+                                ))}
                             </div>
-                            {profileNotice ? (
-                                <p className={cn('mt-2 border px-2 py-1.5 text-[9px] leading-4', profileNotice.tone === 'error' ? 'border-red-400/20 bg-red-500/[0.06] text-red-200/80' : 'border-sky-300/15 bg-sky-500/[0.05] text-sky-100/70')}>
-                                    {profileNotice.message}
-                                </p>
-                            ) : null}
-                            <button
-                                type="button"
-                                onClick={() => void clearLocalBrowserProfile()}
-                                disabled={clearingProfile}
-                                className={cn(
-                                    'mt-2 inline-flex h-6 w-full items-center justify-center gap-1.5 border text-[9px] font-medium transition-colors disabled:opacity-45',
-                                    clearProfileArmed
-                                        ? 'border-red-400/25 bg-red-500/[0.08] text-red-200 hover:bg-red-500/[0.13]'
-                                        : 'border-white/[0.08] bg-white/[0.025] text-sparkle-text-muted hover:bg-white/[0.05] hover:text-sparkle-text-secondary'
-                                )}
-                            >
-                                {clearingProfile ? <LoaderCircle size={10} className="animate-spin" /> : <Trash2 size={10} />}
-                                {clearingProfile ? 'Clearing' : clearProfileArmed ? 'Clear now' : 'Clear local browsing data'}
+                            <div className="flex h-8 items-center px-2 text-[10px] text-sparkle-text-secondary">
+                                <span className="mr-auto">Zoom</span>
+                                <button type="button" onClick={() => void updateActiveZoom((activeTab?.zoomFactor || 1) - 0.1)} disabled={(activeTab?.zoomFactor || 1) <= 0.25} className="inline-flex size-6 items-center justify-center rounded border border-[var(--surface-divider)] text-sparkle-text-muted hover:bg-[var(--surface-hover)] disabled:opacity-30" aria-label="Zoom out"><Minus size={10} /></button>
+                                <button type="button" onClick={() => void updateActiveZoom(1)} className="h-6 min-w-11 text-[9px] tabular-nums text-sparkle-text-muted hover:text-sparkle-text" aria-label="Reset zoom">{Math.round((activeTab?.zoomFactor || 1) * 100)}%</button>
+                                <button type="button" onClick={() => void updateActiveZoom((activeTab?.zoomFactor || 1) + 0.1)} disabled={(activeTab?.zoomFactor || 1) >= 2} className="inline-flex size-6 items-center justify-center rounded border border-[var(--surface-divider)] text-sparkle-text-muted hover:bg-[var(--surface-hover)] disabled:opacity-30" aria-label="Zoom in"><Plus size={10} /></button>
+                                <button type="button" onClick={() => void updateActiveZoom(1)} className="ml-1 inline-flex size-6 items-center justify-center rounded text-sparkle-text-muted hover:bg-[var(--surface-hover)]" aria-label="Reset zoom"><RotateCcw size={10} /></button>
+                            </div>
+                            <div className="my-1 h-px bg-[var(--surface-divider)]" />
+                            <button type="button" onClick={() => void toggleActiveRecording()} disabled={!activeTab?.url || Boolean(recordingTabId && recordingTabId !== activeTab?.id)} className={cn('flex h-7 w-full items-center gap-2 rounded-md px-2 text-[10px] text-sparkle-text-secondary hover:bg-[var(--surface-hover)] disabled:opacity-35', recordingTabId === activeTab?.id && 'text-red-300')}><Circle size={11} fill={recordingTabId === activeTab?.id ? 'currentColor' : 'none'} /><span>{recordingTabId === activeTab?.id ? 'Stop and save recording' : 'Record Browser tab'}</span></button>
+                            <button type="button" onClick={() => void openExternal()} disabled={!activeTab?.url} className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-[10px] text-sparkle-text-secondary hover:bg-[var(--surface-hover)] disabled:opacity-35"><ExternalLink size={12} /><span>Open in default browser</span></button>
+                            <div className="my-1 h-px bg-[var(--surface-divider)]" />
+                            <button type="button" onClick={() => void clearBrowserCookies()} className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-[10px] text-sparkle-text-secondary hover:bg-[var(--surface-hover)]"><ShieldCheck size={12} /><span>Clear cookies</span></button>
+                            <button type="button" onClick={() => void clearBrowserCache()} className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-[10px] text-sparkle-text-secondary hover:bg-[var(--surface-hover)]"><Trash2 size={12} /><span>Clear cache</span></button>
+                            <button type="button" onClick={() => void clearLocalBrowserProfile()} disabled={clearingProfile} title="Clear the shared Local Zyra profile used by Browser tabs across chats and projects" className={cn('flex h-7 w-full items-center gap-2 rounded-md px-2 text-[10px] hover:bg-[var(--surface-hover)] disabled:opacity-35', clearProfileArmed ? 'text-red-300' : 'text-sparkle-text-secondary')}>
+                                {clearingProfile ? <LoaderCircle size={11} className="animate-spin" /> : <Trash2 size={11} />}
+                                <span>{clearingProfile ? 'Clearing local data' : clearProfileArmed ? 'Confirm clear all site data' : 'Clear all local browsing data'}</span>
                             </button>
+                            {profileNotice ? <p className="px-2 py-1 text-[8px] leading-3 text-sparkle-text-muted/60">{profileNotice.message}</p> : null}
                         </div>
                     ) : null}
                 </div>
             </form>
 
             {addressError ? <div className="shrink-0 border-b border-red-500/15 bg-red-500/[0.06] px-2 py-1 text-[9px] text-red-300">{addressError}</div> : null}
+            {activeTab?.viewport.mode !== 'fill' ? (
+                <AssistantBrowserDeviceToolbar
+                    viewport={activeTab.viewport}
+                    onViewportChange={updateActiveViewport}
+                    onClose={() => updateActiveViewport({ mode: 'fill' })}
+                />
+            ) : null}
 
             <div className="relative min-h-0 flex-1 overflow-hidden bg-white">
                 {workspaceState.tabs.map((tab) => {
-                    const primary = tab.id === activeTab?.id
-                    const secondary = tab.id === splitTab?.id
-                    const visible = active && (primary || secondary)
-                    return (
-                        <AssistantBrowserWebview
-                            key={tab.id}
-                            ref={getWebviewRefCallback(tab.id)}
-                            tab={tab}
-                            threadId={threadId}
-                            config={config}
-                            visible={visible}
-                            placement={splitTab ? primary ? 'primary' : secondary ? 'secondary' : 'full' : 'full'}
-                            onStateChange={handleWebviewStateChange}
-                            onControlTargetChange={handleControlTargetChange}
-                            onViewportRectChange={handleViewportRectChange}
-                        />
-                    )
-                })}
-                {active && splitTab ? <div className="pointer-events-none absolute inset-y-0 left-1/2 z-[24] w-px bg-violet-300/45 shadow-[0_0_10px_rgba(196,181,253,0.28)]" aria-hidden="true" /> : null}
-                {active ? visibleTabs.map((tab) => {
+                    const visible = active && tab.id === activeTab?.id
                     const targetId = controlTargetsByTab[tab.id]
                     const grant = targetId ? controlState?.grants.find((entry) => entry.targetId === targetId && entry.state === 'active') : null
                     const cursor = targetId ? controlState?.cursors.find((entry) => entry.targetId === targetId) || null : null
-                    const secondary = tab.id === splitTab?.id
                     return (
-                        <div
-                            key={`control:${tab.id}`}
-                            className={cn('pointer-events-none absolute inset-y-0 z-[25] overflow-hidden', splitTab ? secondary ? 'left-1/2 right-0' : 'left-0 right-1/2' : 'inset-x-0')}
+                        <AssistantBrowserViewportFrame
+                            key={tab.id}
+                            viewport={tab.viewport}
+                            zoomFactor={tab.zoomFactor}
+                            visible={visible}
+                            controlled={Boolean(grant)}
+                            cursor={cursor}
+                            onViewportChange={(viewport) => {
+                                mutateWorkspaceState((current) => updateAssistantBrowserTab(current, tab.id, { viewport }))
+                            }}
                         >
-                            {grant ? <div className="absolute inset-0 border border-cyan-300/35 shadow-[inset_0_0_20px_rgba(34,211,238,0.08)]" aria-label="Zyra-controlled Browser surface" /> : null}
-                            <AssistantBrowserAgentCursor cursor={cursor} />
-                        </div>
+                            <AssistantBrowserWebview
+                                ref={getWebviewRefCallback(tab.id)}
+                                tab={tab}
+                                threadId={threadId}
+                                config={config}
+                                visible={visible}
+                                placement="full"
+                                onStateChange={handleWebviewStateChange}
+                                onControlTargetChange={handleControlTargetChange}
+                                onViewportRectChange={handleViewportRectChange}
+                            />
+                        </AssistantBrowserViewportFrame>
                     )
-                }) : null}
+                })}
+
 
                 {activePendingGrant ? (
                     <div
-                        className={cn('absolute bottom-0 left-0 top-0 z-[45] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]', splitTab ? 'right-1/2' : 'right-0')}
+                        className="absolute inset-0 z-[45] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-[2px]"
                         role="dialog"
                         aria-modal="true"
                         aria-label="Browser control permission requested"
                     >
-                        <section className="w-full max-w-[320px] rounded-xl border border-amber-200/25 bg-[#111927]/[0.98] p-3.5 shadow-2xl shadow-black/55">
+                        <section className="w-full max-w-[320px] rounded-xl border border-amber-200/25 bg-sparkle-card/98 p-3.5 shadow-2xl shadow-black/35">
                             <div className="flex items-start gap-2.5">
                                 <span className="mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-amber-200/20 bg-amber-300/[0.08] text-amber-200"><ShieldAlert size={14} /></span>
                                 <div className="min-w-0">
@@ -928,7 +1174,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                 ) : null}
 
                 {activeTab?.status === 'idle' && !activeTab.url ? (
-                    <div className={cn('absolute inset-y-0 left-0 z-10 flex items-center justify-center overflow-y-auto bg-[color-mix(in_srgb,var(--color-bg)_96%,black)] p-5 text-center', splitTab ? 'right-1/2' : 'right-0')}>
+                    <div className="absolute inset-0 z-10 flex items-center justify-center overflow-y-auto bg-sparkle-bg p-5 text-center">
                         <div className="w-full max-w-[310px]">
                             <Globe2 size={20} className="mx-auto text-[var(--accent-primary)]/65" />
                             <h3 className="mt-3 text-[12px] font-semibold text-sparkle-text-secondary">Preview your project</h3>
@@ -969,12 +1215,12 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                 ) : null}
 
                 {activeTab?.status === 'error' && activeTab.error ? (
-                    <div className={cn('pointer-events-none absolute left-0 top-0 z-20 border-b border-red-500/15 bg-[color-mix(in_srgb,var(--color-bg)_94%,black)] px-2 py-1 text-[9px] text-red-300 shadow-sm', splitTab ? 'right-1/2' : 'right-0')}>
+                    <div className="pointer-events-none absolute inset-x-0 top-0 z-20 border-b border-red-500/15 bg-sparkle-bg px-2 py-1 text-[9px] text-red-300 shadow-sm">
                         {activeTab.error}
                     </div>
                 ) : null}
 
-                {activeTab?.status === 'loading' ? <div className={cn('pointer-events-none absolute left-0 top-0 z-30 h-px overflow-hidden bg-[var(--accent-primary)]/15 after:block after:h-full after:w-1/3 after:animate-[browser-loading-slide_1.1s_ease-in-out_infinite] after:bg-[var(--accent-primary)]', splitTab ? 'right-1/2' : 'right-0')} /> : null}
+                {activeTab?.status === 'loading' ? <div className="pointer-events-none absolute inset-x-0 top-0 z-30 h-px overflow-hidden bg-[var(--accent-primary)]/15 after:block after:h-full after:w-1/3 after:animate-[browser-loading-slide_1.1s_ease-in-out_infinite] after:bg-[var(--accent-primary)]" /> : null}
             </div>
         </section>
     )

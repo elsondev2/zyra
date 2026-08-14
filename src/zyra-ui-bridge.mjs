@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { normalizeAgentSurfaceTool } from "./agent-surface.mjs";
 import { AgentControlBridgeClient } from "./agent-control/bridge-client.mjs";
 import { startTemporaryBrowserRelay } from "./agent-control/temporary-browser-relay.mjs";
+import { appendCanonicalMessage, findCanonicalMessageReceipt } from "./agent-server/canonical-message-ledger.mjs";
 
 const root = path.resolve(process.env.ZYRA_ROOT ?? path.resolve(import.meta.dirname, ".."));
 const sdkPath = path.join(root, "src", "zyra-sdk.mjs");
@@ -15,6 +16,9 @@ let unsubscribe;
 let unsubscribeManagedBash;
 let unsubscribeFleet;
 let temporaryBrowserRelay;
+let activePermissionMode = "approval-required";
+const ZYRA_CHAT_CONFIG_CUSTOM_TYPE = "zyra.chat-config.v1";
+const pendingPermissionRequests = new Map();
 const controlBridgeClient = new AgentControlBridgeClient({ send: (message) => send(message) });
 
 function stringifyProtocol(value) {
@@ -27,6 +31,47 @@ function send(message) {
 
 function sendResponse(id, ok, payload = {}) {
   send({ type: "response", id, ok, ...payload });
+}
+
+function requestToolPermission(request = {}) {
+  if (activePermissionMode === "full-access") return Promise.resolve("acceptOnce");
+  const requestId = randomUUID();
+  send({
+    type: "event",
+    event: {
+      type: "approval_requested",
+      requestId,
+      requestType: request.requestType || "command",
+      title: request.title,
+      detail: request.detail,
+      command: request.command,
+      paths: request.paths,
+      toolName: request.toolName,
+      grantLabel: request.grantLabel,
+    },
+  });
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolvePermissionRequest(requestId, "decline", "Approval timed out."), 10 * 60 * 1000);
+    timer.unref?.();
+    pendingPermissionRequests.set(requestId, { resolve, timer });
+  });
+}
+
+function resolvePermissionRequest(requestId, decision, reason) {
+  const pending = pendingPermissionRequests.get(String(requestId || ""));
+  if (!pending) return false;
+  pendingPermissionRequests.delete(String(requestId));
+  clearTimeout(pending.timer);
+  const normalizedDecision = ["acceptOnce", "acceptForSession", "decline"].includes(decision) ? decision : "decline";
+  send({ type: "event", event: { type: "approval_resolved", requestId: String(requestId), decision: normalizedDecision, reason } });
+  pending.resolve(normalizedDecision);
+  return true;
+}
+
+function declinePendingPermissions(reason = "Zyra bridge disconnected.") {
+  for (const requestId of [...pendingPermissionRequests.keys()]) {
+    resolvePermissionRequest(requestId, "decline", reason);
+  }
 }
 
 function stopTemporaryBrowserRelay() {
@@ -51,6 +96,7 @@ async function loadSdk() {
 }
 
 function disposeRuntime() {
+  declinePendingPermissions();
   stopTemporaryBrowserRelay();
   if (typeof unsubscribe === "function") {
     unsubscribe();
@@ -76,6 +122,7 @@ function isMissingLocalChatError(error) {
 
 async function handleConnect(payload) {
   disposeRuntime();
+  activePermissionMode = normalizeRuntimeMode(payload.runtimeMode);
   const sdk = await loadSdk();
   const requestedThreadId = payload.threadId || payload.providerThreadId || undefined;
   const createRuntime = (overrides = {}) => sdk.createZyraSession({
@@ -83,13 +130,17 @@ async function handleConnect(payload) {
     session: requestedThreadId,
     noSession: Boolean(payload.noSession),
     model: payload.model,
-    profile: payload.profile,
+    profile: requestedThreadId ? undefined : payload.profile,
     thinking: payload.thinking ?? "medium",
+    tools: Array.isArray(payload.tools) ? payload.tools : undefined,
+    excludeTools: Array.isArray(payload.excludeTools) ? payload.excludeTools : undefined,
     surface: payload.surface === "memory-worker" ? "memory-worker" : "agent-server",
     skipMemoryStartup: true,
     skipModelAvailability: true,
     rootThreadId: payload.localThreadId || undefined,
     controlBridgeClient,
+    permissionRequest: requestToolPermission,
+    getPermissionMode: () => activePermissionMode,
     ...overrides,
   });
   try {
@@ -100,6 +151,9 @@ async function handleConnect(payload) {
     }
     runtime = await createRuntime({ session: undefined, noSession: Boolean(payload.noSession) });
   }
+  const storedChatConfig = readStoredChatConfig(runtime.session.sessionManager);
+  await applyChatConfig(sdk, storedChatConfig || normalizeChatConfig(payload), { emit: false });
+  const chatConfig = currentChatConfig(sdk);
   unsubscribe = runtime.session.subscribe((event) => {
     const normalized = normalizeEvent(event);
     if (normalized) send({ type: "event", event: normalized });
@@ -112,13 +166,15 @@ async function handleConnect(payload) {
   unsubscribeFleet = runtime.fleet?.subscribe?.(({ event, snapshot }) => {
     send({ type: "event", event: { ...summarizeFleetEvent(event), fleet: projectFleetSnapshot(snapshot) } });
   });
-  try {
-    temporaryBrowserRelay = await startTemporaryBrowserRelay({
-      controlClient: controlBridgeClient,
-      threadId: payload.localThreadId
-    });
-  } catch (error) {
-    process.stderr.write(`[temporary-browser-relay] ${error instanceof Error ? error.message : String(error)}\n`);
+  if (payload.surface !== "memory-worker") {
+    try {
+      temporaryBrowserRelay = await startTemporaryBrowserRelay({
+        controlClient: controlBridgeClient,
+        threadId: payload.localThreadId
+      });
+    } catch (error) {
+      process.stderr.write(`[temporary-browser-relay] ${error instanceof Error ? error.message : String(error)}\n`);
+    }
   }
   const described = sdk.describeRuntime(runtime);
   const threadId = String(
@@ -131,8 +187,14 @@ async function handleConnect(payload) {
   return {
     threadId,
     providerThreadId: threadId,
-    model: String(described.model || payload.model || "openai-codex/gpt-5.6-sol"),
-    profile: String(described.profile || payload.profile || "default"),
+    model: chatConfig.model || String(described.model || payload.model || "openai-codex/gpt-5.6-sol"),
+    thinking: chatConfig.thinking,
+    profile: chatConfig.profile || String(described.profile || payload.profile || "default"),
+    runtimeMode: chatConfig.runtimeMode,
+    webSearch: chatConfig.webSearch,
+    webFetch: chatConfig.webFetch,
+    config: chatConfig,
+    usage: described.usage,
     fleet: projectFleetSnapshot(runtime.fleet?.snapshot?.()),
     agentDefinitions: cloneJsonValue(runtime.fleet?.listDefinitions?.()),
     workflowDefinitions: cloneJsonValue(runtime.workflows?.listDefinitions?.()),
@@ -151,9 +213,11 @@ function normalizeEvent(event) {
   if (!type) return null;
 
   if (type === "message_update" || type === "message_end" || type === "message_start") {
+    const message = normalizeMessage(event.message);
     return {
       type,
-      message: normalizeMessage(event.message),
+      message,
+      timestamp: Number.isFinite(message?.timestamp) ? new Date(message.timestamp).toISOString() : undefined,
       assistantMessageEvent: normalizeAssistantMessageEvent(event.assistantMessageEvent),
     };
   }
@@ -222,14 +286,35 @@ function normalizeEvent(event) {
 
 function normalizeMessage(message) {
   if (!message || typeof message !== "object") return null;
+  const timestamp = normalizeMessageTimestamp(message.timestamp);
+  const role = stringValue(message.role);
   return {
-    id: stringValue(message.id) || stringValue(message.messageId) || stringValue(message.entryId) || stringValue(message.uuid),
-    role: stringValue(message.role),
+    id: stringValue(message.id)
+      || stringValue(message.messageId)
+      || stringValue(message.entryId)
+      || stringValue(message.uuid)
+      || stablePiMessageId(role, timestamp),
+    role,
     content: normalizeContent(message.content),
     usage: normalizeUsage(message.usage),
     stopReason: stringValue(message.stopReason),
     errorMessage: stringValue(message.errorMessage),
+    timestamp,
   };
+}
+
+function normalizeMessageTimestamp(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function stablePiMessageId(role, timestamp) {
+  if (!Number.isFinite(timestamp)) return undefined;
+  return `pi-message:${role || "unknown"}:${Math.trunc(timestamp)}`;
 }
 
 function normalizeAssistantMessageEvent(event) {
@@ -291,12 +376,23 @@ function normalizeContent(content) {
 
 function normalizeUsage(usage) {
   if (!usage || typeof usage !== "object") return undefined;
+  const totalTokens = numberValue(usage.totalTokens ?? usage.total);
+  const cost = usage.cost && typeof usage.cost === "object" ? {
+    input: numberValue(usage.cost.input),
+    output: numberValue(usage.cost.output),
+    cacheRead: numberValue(usage.cost.cacheRead),
+    cacheWrite: numberValue(usage.cost.cacheWrite),
+    total: numberValue(usage.cost.total),
+  } : undefined;
   return {
     input: numberValue(usage.input),
     output: numberValue(usage.output),
     cacheRead: numberValue(usage.cacheRead),
+    cacheWrite: numberValue(usage.cacheWrite),
     reasoning: numberValue(usage.reasoning ?? usage.reasoningTokens),
-    total: numberValue(usage.total),
+    total: totalTokens,
+    totalTokens,
+    cost,
   };
 }
 
@@ -339,30 +435,111 @@ function normalizePromptImages(value) {
   return images.length > 0 ? images : undefined;
 }
 
+const VALID_THINKING_LEVELS = new Set(["off", "none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+function normalizeRuntimeMode(value) {
+  return value === "full-access" ? "full-access" : "approval-required";
+}
+
+function normalizeChatConfig(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const model = String(source.model || "").trim();
+  const thinkingValue = String(source.thinking || "").trim().toLowerCase();
+  const profileValue = String(source.profile || "").trim().toLowerCase();
+  return {
+    ...(model ? { model } : {}),
+    ...(VALID_THINKING_LEVELS.has(thinkingValue) ? { thinking: thinkingValue } : {}),
+    ...(/^[a-z0-9_-]{1,64}$/.test(profileValue) ? { profile: profileValue } : {}),
+    ...(source.runtimeMode === "full-access" || source.runtimeMode === "approval-required"
+      ? { runtimeMode: normalizeRuntimeMode(source.runtimeMode) }
+      : {}),
+    ...(typeof source.webSearch === "boolean" ? { webSearch: source.webSearch } : {}),
+    ...(typeof source.webFetch === "boolean" ? { webFetch: source.webFetch } : {}),
+  };
+}
+
+function readStoredChatConfig(sessionManager) {
+  const entries = typeof sessionManager?.getEntries === "function" ? sessionManager.getEntries() : [];
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry?.type === "custom" && entry.customType === ZYRA_CHAT_CONFIG_CUSTOM_TYPE) {
+      return normalizeChatConfig(entry.data);
+    }
+  }
+  return null;
+}
+
+function currentChatConfig(sdk) {
+  const model = runtime?.session?.model;
+  return normalizeChatConfig({
+    model: model?.provider && model?.id ? `${model.provider}/${model.id}` : undefined,
+    thinking: sdk.getZyraThinkingLevel(runtime),
+    profile: runtime?.profile,
+    runtimeMode: activePermissionMode,
+    webSearch: runtime?.webSearch,
+    webFetch: runtime?.webFetch,
+  });
+}
+
+function sameChatConfig(left, right) {
+  return left?.model === right?.model
+    && left?.thinking === right?.thinking
+    && left?.profile === right?.profile
+    && left?.runtimeMode === right?.runtimeMode
+    && left?.webSearch === right?.webSearch
+    && left?.webFetch === right?.webFetch;
+}
+
+async function applyChatConfig(sdk, value, options = {}) {
+  if (!runtime) throw new Error("Zyra bridge is not connected.");
+  const requested = normalizeChatConfig(value);
+  const current = currentChatConfig(sdk);
+  if (requested.model && requested.model !== current.model) {
+    await sdk.setModel(runtime, requested.model, { skipAvailabilityCheck: true });
+  }
+  if (requested.thinking && requested.thinking !== current.thinking) {
+    sdk.setThinking(runtime, requested.thinking);
+  }
+  if (requested.profile && requested.profile !== current.profile) {
+    await sdk.setProfile(runtime, requested.profile);
+  }
+  if (requested.runtimeMode) activePermissionMode = requested.runtimeMode;
+  if (
+    (typeof requested.webSearch === "boolean" && requested.webSearch !== current.webSearch)
+    || (typeof requested.webFetch === "boolean" && requested.webFetch !== current.webFetch)
+  ) {
+    sdk.setWebTools(runtime, {
+      webSearch: typeof requested.webSearch === "boolean" ? requested.webSearch : runtime.webSearch,
+      webFetch: typeof requested.webFetch === "boolean" ? requested.webFetch : runtime.webFetch,
+    });
+  }
+
+  const next = currentChatConfig(sdk);
+  const configurationChanged = !sameChatConfig(current, next);
+  const sessionManager = runtime.session.sessionManager;
+  const stored = readStoredChatConfig(sessionManager);
+  if (!sameChatConfig(stored, next) && typeof sessionManager?.appendCustomEntry === "function" && sessionManager.getSessionFile?.()) {
+    sessionManager.appendCustomEntry(ZYRA_CHAT_CONFIG_CUSTOM_TYPE, { ...next, savedAt: new Date().toISOString() });
+  }
+  if (options.emit !== false && configurationChanged) send({ type: "event", event: { type: "session_config", ...next } });
+  return next;
+}
+
+async function handleConfigure(payload) {
+  const sdk = await loadSdk();
+  return { config: await applyChatConfig(sdk, payload) };
+}
+
 async function handlePrompt(payload) {
   if (!runtime) {
     throw new Error("Zyra bridge is not connected.");
   }
   const sdk = await loadSdk();
+  await applyChatConfig(sdk, payload);
   const shouldGenerateTitle = !runtime.session.sessionManager?.getSessionName?.();
-  if (payload.model) {
-    await sdk.setModel(runtime, payload.model);
-  }
-  if (payload.thinking) {
-    sdk.setThinking(runtime, payload.thinking);
-  }
-  if (payload.profile) {
-    await sdk.setProfile(runtime, payload.profile);
-  }
-  if (typeof payload.webSearch === "boolean" || typeof payload.webFetch === "boolean") {
-    sdk.setWebTools(runtime, {
-      webSearch: typeof payload.webSearch === "boolean" ? payload.webSearch : runtime.webSearch,
-      webFetch: typeof payload.webFetch === "boolean" ? payload.webFetch : runtime.webFetch,
-    });
-  }
   const images = normalizePromptImages(payload.images);
   await sdk.runZyraPrompt(runtime, payload.prompt, { images });
-  if (shouldGenerateTitle) {
+  if (shouldGenerateTitle && payload.skipTitleGeneration !== true) {
     void generateAndPersistSessionTitle(String(payload.prompt || ""), payload.cwd || runtime.project).catch((error) => {
       process.stderr.write(`[session-title] ${error instanceof Error ? error.message : String(error)}\n`);
     });
@@ -453,6 +630,18 @@ async function handleAbort() {
     runtime?.session?.abort?.(),
   ]);
   return {};
+}
+
+async function handleCanonicalMessageOperation(type, payload = {}) {
+  const sessionManager = runtime?.session?.sessionManager;
+  if (!sessionManager) throw new Error("Zyra canonical session is not connected.");
+  if (type === "canonical_message.append") {
+    return { receipt: appendCanonicalMessage(sessionManager, payload) };
+  }
+  if (type === "canonical_message.find") {
+    return { receipt: findCanonicalMessageReceipt(sessionManager, payload.operationId) };
+  }
+  throw new Error(`Unknown canonical message operation: ${type}.`);
 }
 
 async function handleSessionOperation(type, payload = {}) {
@@ -588,6 +777,10 @@ async function handleMessage(message) {
       sendResponse(id, true, { result: await handlePrompt(message.payload ?? {}) });
       return;
     }
+    if (message?.type === "configure") {
+      sendResponse(id, true, { result: await handleConfigure(message.payload ?? {}) });
+      return;
+    }
     if (message?.type === "generate_text") {
       sendResponse(id, true, { result: await handleGenerateText(message.payload ?? {}) });
       return;
@@ -602,6 +795,18 @@ async function handleMessage(message) {
     }
     if (message?.type === "abort") {
       sendResponse(id, true, { result: await handleAbort() });
+      return;
+    }
+    if (message?.type === "approval.respond") {
+      const requestId = String(message.payload?.requestId || "");
+      if (!resolvePermissionRequest(requestId, message.payload?.decision)) {
+        throw new Error(`Unknown approval request: ${requestId || "missing"}`);
+      }
+      sendResponse(id, true, { result: {} });
+      return;
+    }
+    if (["canonical_message.append", "canonical_message.find"].includes(message?.type)) {
+      sendResponse(id, true, { result: await handleCanonicalMessageOperation(message.type, message.payload ?? {}) });
       return;
     }
     if (["steer", "follow_up", "compact", "clear_queue", "reload"].includes(message?.type)) {

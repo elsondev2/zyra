@@ -1,4 +1,4 @@
-import type { AssistantInteractionMode, AssistantModelInfo, AssistantReasoningEffort, AssistantRuntimeMode, AssistantTurnUsage } from '@shared/assistant/contracts'
+import type { AssistantInteractionMode, AssistantModelInfo, AssistantReasoningEffort, AssistantRuntimeMode, AssistantTurnUsage, AssistantVoiceExecutionConfiguration } from '@shared/assistant/contracts'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import type { AssistantBusyMessageMode } from '@/lib/settings'
 
@@ -51,6 +51,8 @@ export type AssistantComposerProps = {
     onSend: (prompt: string, contextFiles: ComposerContextFile[], options: AssistantComposerSendOptions) => Promise<boolean>
     onStop?: () => Promise<void> | void
     onReconnect?: () => Promise<void> | void
+    onStartRealtimeVoice?: (configuration: AssistantVoiceExecutionConfiguration) => void
+    realtimeVoiceDisabled?: boolean
     onOverflowWheel?: (deltaY: number) => void
     onBlockedSend?: (message: string) => void
     onCancelDirty?: () => void
@@ -69,6 +71,7 @@ export type AssistantComposerProps = {
     isConnected: boolean
     isConnecting?: boolean
     activeModel?: string
+    activeEffort?: AssistantReasoningEffort | null
     modelOptions?: AssistantModelInfo[]
     modelsLoading?: boolean
     modelsError?: string | null
@@ -79,6 +82,7 @@ export type AssistantComposerProps = {
     runtimeMode?: AssistantRuntimeMode
     interactionMode?: AssistantInteractionMode
     projectPath?: string | null
+    acceptBrowserAnnotations?: boolean
     compact?: boolean
     submitLabel?: string
     dirtySubmitLabel?: string

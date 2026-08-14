@@ -23,14 +23,23 @@ import { applyAssistantDomainEvents, createDefaultAssistantSnapshot } from '@sha
 import { isAssistantToolLifecycleStartEvent } from '@shared/assistant/tool-lifecycle'
 import { collapseAssistantDeltaEvents, isAssistantStreamingPresentationEvent } from './event-batching'
 import { assistantStreamPresentation } from './assistant-stream-presentation'
+import { rendererVisibility } from '../renderer-visibility'
 import { applyCachedSessionSelection, cacheHydratedThreads, hasCachedSessionSelection, type CachedHydratedThreadState } from './session-hydration-cache'
 import { deriveAssistantRuntimeStatus, INITIAL_ASSISTANT_RUNTIME_STATUS, type AssistantStoreState } from './assistant-store-runtime'
+import { shouldAutoReconnectAssistantOnStartup } from './assistant-runtime-preferences'
 import { runAssistantStoreAction } from './assistant-store-action-runner'
 import { selectAssistantStoreSession } from './assistant-store-session-selection'
+import { preserveAssistantClientRoute } from './assistant-client-route'
+import {
+    isPristineAssistantSession,
+    shouldEagerlyConnectAssistantThread
+} from './assistant-new-chat-policy'
 import {
     applyAssistantHistoryPage,
+    applyAssistantRetainedHistory,
     applyAssistantThreadDetail,
     formatAssistantHistoryLoadError,
+    hasRenderableAssistantRetainedHistory,
     isAssistantRetainedHistoryFresh,
     materializeAssistantShellSnapshot,
     pruneAssistantHistoryCache
@@ -44,20 +53,10 @@ const SNAPSHOT_REFRESH_RECOVERY_ERRORS = new Set([
     'Assistant session has no active thread.'
 ])
 
-function isEmptyAssistantThread(thread: AssistantThread) {
-    return !thread.latestTurn
-        && !thread.activePlan
-        && (thread.messageCount || 0) === 0
-        && thread.proposedPlans.length === 0
-        && thread.pendingApprovals.length === 0
-        && thread.pendingUserInputs.length === 0
-}
-
 type AssistantCreateSessionResult = DevScopeResult<{ sessionId: string; snapshot?: AssistantSnapshot }>
 
 function isReusableEmptySession(session: AssistantSession, input?: AssistantCreateSessionInput) {
-    if (session.archived || session.pendingLabRequest) return false
-    if (session.threads.length > 0 && !session.threads.every(isEmptyAssistantThread)) return false
+    if (!isPristineAssistantSession(session)) return false
     if (input?.mode && session.mode !== input.mode) return false
     if (input?.projectPath !== undefined && (session.projectPath || null) !== (input.projectPath || null)) return false
     if (input?.playgroundLabId !== undefined && (session.playgroundLabId || null) !== (input.playgroundLabId || null)) return false
@@ -86,10 +85,13 @@ class AssistantStore {
     private readonly listeners = new Set<() => void>()
     private readonly hydratedThreadCache = new Map<string, CachedHydratedThreadState>()
     private eventUnsubscribe: (() => void) | null = null
+    private visibilityUnsubscribe: (() => void) | null = null
     private retainCount = 0
     private hydratePromise: Promise<void> | null = null
     private modelRefreshPromise: Promise<DevScopeResult<{ models: AssistantModelInfo[] }>> | null = null
     private createSessionPromise: Promise<AssistantCreateSessionResult> | null = null
+    private browserConnectionClaimPromise: Promise<void> | null = null
+    private readonly backgroundConnectionPromises = new Map<string, Promise<void>>()
     private pendingAssistantEvents: AssistantDomainEvent[] = []
     private pendingAssistantEventFlushFrame: number | null = null
     private pendingAssistantEventFlushTimeout: number | null = null
@@ -110,6 +112,7 @@ class AssistantStore {
         if (this.retainCount === 1) {
             void this.hydrate()
             this.ensureEventStream()
+            this.ensureVisibilityReconciliation()
         }
     }
 
@@ -118,6 +121,10 @@ class AssistantStore {
         if (this.retainCount === 0 && this.eventUnsubscribe) {
             this.eventUnsubscribe()
             this.eventUnsubscribe = null
+        }
+        if (this.retainCount === 0 && this.visibilityUnsubscribe) {
+            this.visibilityUnsubscribe()
+            this.visibilityUnsubscribe = null
         }
         if (this.retainCount === 0) {
             this.clearPendingAssistantEvents()
@@ -137,51 +144,50 @@ class AssistantStore {
                 const bootstrap = await window.devscope.assistant.bootstrap()
                 const bootstrapSnapshot = materializeAssistantShellSnapshot(bootstrap.snapshot)
                 const hasKnownModels = bootstrapSnapshot.knownModels.length > 0
+                let clientSnapshot = bootstrapSnapshot
+                let clientStatus = bootstrap.status
+
+                this.setState((current) => {
+                    clientSnapshot = preserveAssistantClientRoute(
+                        current.snapshot,
+                        bootstrapSnapshot,
+                        current.selectionRequestSessionId
+                    )
+                    clientStatus = deriveAssistantRuntimeStatus(clientSnapshot, bootstrap.status)
+                    return {
+                        snapshot: clientSnapshot,
+                        status: clientStatus,
+                        modelsLoading: !hasKnownModels,
+                        error: null
+                    }
+                })
+
+                const selectedSessionId = clientSnapshot.selectedSessionId
+                const selectedSession = clientSnapshot.sessions.find((session) => session.id === selectedSessionId) || null
+                const activeThreadId = selectedSession?.activeThreadId || null
+                const selectedThread = selectedSession?.threads.find((thread) => thread.id === activeThreadId) || null
+                const shouldRestoreConnection = Boolean(
+                    selectedSessionId
+                    && activeThreadId
+                    && shouldEagerlyConnectAssistantThread(selectedThread)
+                    && clientStatus.available
+                    && !clientStatus.connected
+                    && shouldAutoReconnectAssistantOnStartup()
+                )
 
                 this.setState({
-                    snapshot: bootstrapSnapshot,
-                    status: bootstrap.status,
+                    status: clientStatus,
+                    hydrating: false,
+                    hydrated: true,
                     modelsLoading: !hasKnownModels,
                     error: null
                 })
 
-                let startupStatus = bootstrap.status
-                let startupError: string | null = null
-                const selectedSessionId = bootstrapSnapshot.selectedSessionId
-                const selectedSession = bootstrapSnapshot.sessions.find((session) => session.id === selectedSessionId) || null
-                const shouldRestoreConnection = Boolean(
-                    selectedSessionId
-                    && selectedSession?.activeThreadId
-                    && bootstrap.status.available
-                    && !bootstrap.status.connected
-                )
-
-                if (shouldRestoreConnection && selectedSessionId) {
-                    try {
-                        const result = await window.devscope.assistant.connect({ sessionId: selectedSessionId })
-                        if (result.success) {
-                            startupStatus = await window.devscope.assistant.getStatus()
-                        } else {
-                            startupError = result.error
-                        }
-                    } catch (error) {
-                        startupError = error instanceof Error
-                            ? error.message
-                            : 'Failed to reconnect the selected assistant session.'
-                    }
-                }
-
-                this.setState({
-                    status: startupStatus,
-                    hydrating: false,
-                    hydrated: true,
-                    modelsLoading: !hasKnownModels,
-                    error: startupError
-                })
-
-                const activeThreadId = selectedSession?.activeThreadId || null
                 if (selectedSessionId && activeThreadId) {
                     void this.requestSessionHydration(selectedSessionId, activeThreadId)
+                    if (shouldRestoreConnection) {
+                        this.warmSessionConnection(selectedSessionId, activeThreadId, true)
+                    }
                 }
 
                 if (!hasKnownModels) {
@@ -247,6 +253,40 @@ class AssistantStore {
         }
     }
 
+    private warmSessionConnection(sessionId: string, threadId: string, restoreThreadSelection = false): void {
+        const key = `${sessionId}:${threadId}`
+        if (this.backgroundConnectionPromises.has(key)) return
+        const pending = (async () => {
+            try {
+                if (restoreThreadSelection) {
+                    const selection = await window.devscope.assistant.selectThread({ sessionId, threadId })
+                    if (!selection.success) throw new Error(selection.error)
+                }
+                const result = await window.devscope.assistant.connect({ sessionId })
+                if (!result.success) throw new Error(result.error)
+                const status = await window.devscope.assistant.getStatus()
+                const selected = this.state.snapshot.sessions.find(
+                    (session) => session.id === this.state.snapshot.selectedSessionId
+                ) || null
+                if (selected?.id === sessionId && selected.activeThreadId === threadId) {
+                    this.setState({ status, error: null })
+                }
+            } catch (error) {
+                const selected = this.state.snapshot.sessions.find(
+                    (session) => session.id === this.state.snapshot.selectedSessionId
+                ) || null
+                if (selected?.id === sessionId && selected.activeThreadId === threadId) {
+                    this.setState({
+                        error: error instanceof Error ? error.message : 'Failed to connect the assistant session.'
+                    })
+                }
+            }
+        })().finally(() => {
+            this.backgroundConnectionPromises.delete(key)
+        })
+        this.backgroundConnectionPromises.set(key, pending)
+    }
+
     async createSession(input?: AssistantCreateSessionInput): Promise<AssistantCreateSessionResult> {
         if (this.createSessionPromise) return this.createSessionPromise
 
@@ -260,7 +300,12 @@ class AssistantStore {
     }
 
     private async createSessionImpl(input?: AssistantCreateSessionInput): Promise<AssistantCreateSessionResult> {
-        const reusableEmptySession = this.state.snapshot.sessions.find((session) => isReusableEmptySession(session, input)) || null
+        const selectedSession = this.state.snapshot.sessions.find(
+            (session) => session.id === this.state.snapshot.selectedSessionId
+        ) || null
+        const reusableEmptySession = selectedSession && isReusableEmptySession(selectedSession, input)
+            ? selectedSession
+            : null
         if (reusableEmptySession) {
             this.setState((current) => ({
                 error: null,
@@ -300,7 +345,7 @@ class AssistantStore {
             }
             const sessionExists = this.state.snapshot.sessions.some((session) => session.id === result.sessionId)
             if (!sessionExists) {
-                const hydrateResult = await this.refreshSessionShellSnapshot(result.sessionId)
+                const hydrateResult = await this.refreshSessionShellSnapshot(result.sessionId, false)
                 if (!hydrateResult.success) {
                     this.setState((current) => ({
                         error: hydrateResult.error,
@@ -622,6 +667,14 @@ class AssistantStore {
         )
     }
 
+    private ensureVisibilityReconciliation() {
+        if (this.visibilityUnsubscribe) return
+        this.visibilityUnsubscribe = rendererVisibility.subscribe(() => {
+            if (!rendererVisibility.getSnapshot().visible) return
+            this.flushPendingAssistantEvents()
+        })
+    }
+
     private ensureEventStream() {
         if (this.eventUnsubscribe) return
         this.eventUnsubscribe = window.devscope.assistant.onEvent((payload) => {
@@ -630,6 +683,10 @@ class AssistantStore {
                 : payload.event
                     ? [payload.event]
                     : []
+            if (events.length === 0) {
+                void this.claimBrowserRoutedConnection()
+                return
+            }
 
             for (const event of events) {
                 const currentSequence = this.getExpectedSnapshotSequence()
@@ -643,6 +700,49 @@ class AssistantStore {
                 this.queueAssistantEvent(event)
             }
         })
+    }
+
+    private async claimBrowserRoutedConnection(): Promise<void> {
+        if (this.browserConnectionClaimPromise) return this.browserConnectionClaimPromise
+        const sessionId = this.state.snapshot.selectedSessionId
+        const session = this.state.snapshot.sessions.find((entry) => entry.id === sessionId) || null
+        const threadId = session?.activeThreadId || null
+        const thread = session?.threads.find((candidate) => candidate.id === threadId) || null
+        if (!sessionId || !threadId || !shouldEagerlyConnectAssistantThread(thread)) return
+
+        const claim = (async () => {
+            try {
+                let status = await window.devscope.assistant.getStatus()
+                if (
+                    status.selectedSessionId !== sessionId
+                    || status.activeThreadId !== threadId
+                ) {
+                    const selection = await window.devscope.assistant.selectThread({ sessionId, threadId })
+                    if (!selection.success) return
+                    status = await window.devscope.assistant.getStatus()
+                }
+                if (!status.connected) {
+                    const connection = await window.devscope.assistant.connect({ sessionId })
+                    if (!connection.success) return
+                    status = await window.devscope.assistant.getStatus()
+                }
+                const currentSession = this.state.snapshot.sessions.find((entry) => entry.id === this.state.snapshot.selectedSessionId) || null
+                if (
+                    this.state.snapshot.selectedSessionId === sessionId
+                    && currentSession?.activeThreadId === threadId
+                ) {
+                    this.setState({ status, error: null })
+                }
+            } catch {
+                // Normal connection recovery remains available in the composer.
+            }
+        })()
+        this.browserConnectionClaimPromise = claim
+        try {
+            await claim
+        } finally {
+            if (this.browserConnectionClaimPromise === claim) this.browserConnectionClaimPromise = null
+        }
     }
 
     private getExpectedSnapshotSequence() {
@@ -739,15 +839,12 @@ class AssistantStore {
         const previousSelectedSessionId = this.state.snapshot.selectedSessionId
         let nextSelectedSessionId = previousSelectedSessionId
         this.setState((current) => {
-            let snapshot = applyAssistantDomainEvents(current.snapshot, queuedEvents)
-            const requestedSessionId = current.selectionRequestSessionId
-            if (
-                requestedSessionId
-                && snapshot.selectedSessionId !== requestedSessionId
-                && snapshot.sessions.some((session) => session.id === requestedSessionId)
-            ) {
-                snapshot = { ...snapshot, selectedSessionId: requestedSessionId }
-            }
+            const projectedSnapshot = applyAssistantDomainEvents(current.snapshot, queuedEvents)
+            const snapshot = preserveAssistantClientRoute(
+                current.snapshot,
+                projectedSnapshot,
+                current.selectionRequestSessionId
+            )
             nextSelectedSessionId = snapshot.selectedSessionId
             return {
                 snapshot,
@@ -786,7 +883,23 @@ class AssistantStore {
 
     private async requestSessionHydration(sessionId: string, threadId: string | null): Promise<void> {
         if (!sessionId || !threadId) return
-        if (isAssistantRetainedHistoryFresh(this.state.historyByThreadId[threadId])) return
+        const retainedHistory = this.state.historyByThreadId[threadId]
+        if (isAssistantRetainedHistoryFresh(retainedHistory)) {
+            const currentThread = this.state.snapshot.sessions
+                .flatMap((session) => session.threads)
+                .find((thread) => thread.id === threadId) || null
+            const retainedHasRows = hasRenderableAssistantRetainedHistory(retainedHistory)
+            const renderedHasRows = Boolean(
+                currentThread?.messages.length
+                || currentThread?.activities.length
+                || currentThread?.proposedPlans.length
+            )
+            if (!retainedHasRows || renderedHasRows) return
+            this.setState((current) => ({
+                snapshot: applyAssistantRetainedHistory(current.snapshot, threadId, retainedHistory!)
+            }))
+            return
+        }
 
         const hydrationKey = this.buildSelectionHydrationKey(sessionId, threadId)
         if (this.pendingSelectionHydrations.has(hydrationKey)) return
@@ -841,14 +954,20 @@ class AssistantStore {
         }))
     }
 
-    private async refreshSessionShellSnapshot(sessionId: string) {
+    private async refreshSessionShellSnapshot(sessionId: string, preserveClientRoute = true) {
         try {
             const shellSnapshot = await window.devscope.assistant.getSnapshot()
-            const snapshot = materializeAssistantShellSnapshot(shellSnapshot)
-            this.setState((current) => ({
-                snapshot,
-                status: deriveAssistantRuntimeStatus(snapshot, current.status)
-            }))
+            const materializedSnapshot = materializeAssistantShellSnapshot(shellSnapshot)
+            let snapshot = materializedSnapshot
+            this.setState((current) => {
+                snapshot = preserveClientRoute
+                    ? preserveAssistantClientRoute(current.snapshot, materializedSnapshot, current.selectionRequestSessionId)
+                    : materializedSnapshot
+                return {
+                    snapshot,
+                    status: deriveAssistantRuntimeStatus(snapshot, current.status)
+                }
+            })
             const session = snapshot.sessions.find((entry) => entry.id === sessionId) || null
             if (session?.activeThreadId) void this.requestSessionHydration(sessionId, session.activeThreadId)
             return { success: true as const, sessionId, snapshot }

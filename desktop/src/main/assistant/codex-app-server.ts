@@ -390,7 +390,8 @@ export class CodexAppServerRuntime extends EventEmitter {
         if (!pending) throw new Error(`Unknown approval request: ${requestId}`)
 
         context.pendingApprovals.delete(requestId)
-        this.writeMessage(context, { id: pending.jsonRpcId, result: { decision } })
+        const providerDecision = decision === 'acceptOnce' ? 'accept' : decision
+        this.writeMessage(context, { id: pending.jsonRpcId, result: { decision: providerDecision } })
         this.emitRuntime({
             eventId: randomUUID(),
             type: 'approval.resolved',

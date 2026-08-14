@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { mock } from 'bun:test'
 import type {
     AssistantDomainEvent,
+    AssistantModelInfo,
     AssistantRuntimeEvent,
     AssistantSession,
     AssistantSnapshot,
@@ -12,7 +14,6 @@ import { handleAssistantRuntimeEvent, normalizeRuntimeActivityPayload } from '..
 import { getAssistantModelNoticePresentation } from '../src/main/assistant/assistant-failure-presentation'
 import { getTitleGenerationModelCandidates, queueGeneratedSessionTitle, shouldGenerateSessionTitleForPrompt } from '../src/main/assistant/session-title-generation'
 import { getAssistantCanonicalThreadId, matchesAssistantThreadId } from '../src/main/assistant/thread-identity'
-import { ZyraPiRuntime } from '../src/main/assistant/zyra-pi-runtime'
 import { buildEffortSliderTicks, EFFORT_LABELS } from '../src/renderer/src/pages/assistant/assistant-composer-controller-constants'
 import { getAssistantRecoveryIssue } from '../src/renderer/src/pages/assistant/assistant-runtime-recovery'
 import { piEditFixture, piWriteExistingFixture, piWriteFailureFixture } from './fixtures/file-change-lifecycle-fixtures'
@@ -20,6 +21,293 @@ import {
     coerceAssistantReasoningEffortForModel,
     getAssistantModelReasoningEfforts
 } from '../src/shared/assistant/reasoning-efforts'
+
+const electronNoop = (): undefined => undefined
+mock.module('electron', () => ({
+    app: {
+        getPath: () => process.env.TEMP || process.cwd(),
+        isReady: () => true,
+        on: electronNoop,
+        once: electronNoop
+    },
+    BrowserWindow: class {
+        static getAllWindows(): never[] { return [] }
+        static fromWebContents(): null { return null }
+    },
+    screen: {
+        getAllDisplays: () => [],
+        getPrimaryDisplay: () => ({ bounds: { x: 0, y: 0, width: 1920, height: 1080 } })
+    },
+    nativeImage: { createFromBuffer: () => ({ isEmpty: () => true }) },
+    webContents: { fromId: () => null },
+    safeStorage: { isEncryptionAvailable: () => false }
+}))
+const { ZyraPiRuntime } = await import('../src/main/assistant/zyra-pi-runtime')
+const { ZyraAccountService } = await import('../src/main/assistant/zyra-account-service')
+const { deleteAssistantSessionAction } = await import('../src/main/assistant/service-session-actions')
+const {
+    findDuplicateProjectedActivityIds,
+    findDuplicateProjectedMessageIds,
+    findSupersededCanonicalActivityIds,
+    findSupersededCanonicalMessageIds,
+    projectCanonicalTimeline
+} = await import('../src/main/assistant/service')
+
+let accountResetRedeemed = false
+const availableResetExpiresAt = '2099-08-20T12:00:00.000Z'
+const accountServiceHarness = new ZyraAccountService(async () => ({
+    buildChatGptAccountStatus: async () => ({
+        provider: 'openai-codex',
+        status: { configured: true, source: 'stored' },
+        email: 'person@example.com',
+        emailVerified: true,
+        plan: 'pro',
+        accountId: 'account-123',
+        tokenExpiresAt: '2026-08-05T12:00:00.000Z',
+        usage: {
+            source: 'Pi auth storage',
+            account: 'person@example.com',
+            plan: 'pro',
+            updatedAt: '2026-08-04T12:00:00.000Z',
+            availableResetCount: accountResetRedeemed ? 0 : 1,
+            limitWindows: [{
+                id: 'codex:primary_window',
+                label: 'Primary',
+                usedPercent: 40,
+                resetAt: '2026-08-04T17:00:00.000Z',
+                windowSeconds: 18_000
+            }]
+        },
+        updatedAt: '2026-08-04T12:00:00.000Z'
+    }),
+    fetchCodexResetCredits: async () => ({
+        availableCount: accountResetRedeemed ? 0 : 1,
+        credits: [{
+            id: 'reset-1',
+            title: 'Codex rate-limit reset',
+            status: accountResetRedeemed ? 'redeemed' : 'available',
+            expiresAt: availableResetExpiresAt
+        }]
+    }),
+    redeemCodexResetCredit: async (creditId: string) => {
+        assert.equal(creditId, 'reset-1')
+        accountResetRedeemed = true
+        return {
+            code: 'ok',
+            windowsReset: 2,
+            redeemedAt: '2026-08-04T12:01:00.000Z',
+            credit: { id: creditId, title: 'Codex rate-limit reset', status: 'redeemed', expiresAt: availableResetExpiresAt }
+        }
+    },
+    isCodexResetCreditAvailable: (credit: unknown) => {
+        const value = credit as { status?: string; expiresAt?: string }
+        return value.status === 'available' && new Date(value.expiresAt || 0).getTime() > Date.now()
+    }
+}))
+const accountOverview = await accountServiceHarness.getOverview()
+assert.equal(accountOverview.source, 'Pi auth storage', 'Desktop account settings must identify Pi as the ChatGPT account source')
+assert.equal(accountOverview.account?.email, 'person@example.com')
+assert.equal(accountOverview.rateLimits?.primary?.remainingPercent, 60, 'Desktop account settings must map the real /codexusage limit window')
+assert.equal(accountOverview.availableResetCount, 1)
+assert.equal(accountOverview.resetCredits[0]?.available, true)
+await assert.rejects(
+    () => accountServiceHarness.redeemAccountReset({ creditId: 'reset-1', confirmed: false as true }),
+    /Confirm the banked reset/,
+    'a reset must never be spent without the explicit confirmation contract'
+)
+const resetResult = await accountServiceHarness.redeemAccountReset({ creditId: 'reset-1', confirmed: true })
+assert.equal(resetResult.redemption.windowsReset, 2)
+assert.equal(resetResult.overview?.availableResetCount, 0)
+assert.equal(resetResult.overview?.resetCredits[0]?.available, false)
+
+const canonicalUserTimestamp = 1_785_800_000_000
+const canonicalAssistantTimestamp = canonicalUserTimestamp + 100
+const canonicalProjection = projectCanonicalTimeline([
+    {
+        type: 'message',
+        id: 'legacy-user-id',
+        timestamp: new Date(canonicalUserTimestamp).toISOString(),
+        message: { role: 'user', timestamp: canonicalUserTimestamp, content: [{ type: 'text', text: 'same prompt' }] }
+    },
+    {
+        type: 'message',
+        id: 'legacy-assistant-id',
+        timestamp: new Date(canonicalAssistantTimestamp).toISOString(),
+        message: {
+            role: 'assistant',
+            timestamp: canonicalAssistantTimestamp,
+            content: [
+                { type: 'thinking', thinking: 'same thought' },
+                { type: 'text', text: 'same response' }
+            ]
+        }
+    }
+], 'canonical:test', 'test-key', new Date(canonicalUserTimestamp).toISOString(), 0)
+assert.deepEqual(
+    canonicalProjection.messages.map((message) => message.id),
+    [
+        `assistant-message-user-pi-message:user:${canonicalUserTimestamp}`,
+        `assistant-message-pi-message:assistant:${canonicalAssistantTimestamp}`
+    ],
+    'canonical history and live bridge events must project the same stable message IDs'
+)
+
+const canonicalAbortedProjection = projectCanonicalTimeline([
+    {
+        type: 'message',
+        id: 'aborted-user-entry',
+        timestamp: new Date(canonicalUserTimestamp).toISOString(),
+        message: { role: 'user', timestamp: canonicalUserTimestamp, content: [{ type: 'text', text: 'Start research' }] }
+    },
+    {
+        type: 'message',
+        id: 'aborted-progress-entry',
+        timestamp: new Date(canonicalAssistantTimestamp).toISOString(),
+        message: {
+            role: 'assistant',
+            timestamp: canonicalAssistantTimestamp,
+            content: [{ type: 'text', text: 'Research is still running.' }],
+            stopReason: 'toolUse'
+        }
+    },
+    {
+        type: 'message',
+        id: 'aborted-terminal-entry',
+        timestamp: new Date(canonicalAssistantTimestamp + 100).toISOString(),
+        message: {
+            role: 'assistant',
+            timestamp: canonicalAssistantTimestamp + 100,
+            content: [{ type: 'thinking', thinking: '' }],
+            stopReason: 'aborted',
+            errorMessage: 'Request was aborted'
+        }
+    }
+], 'canonical:aborted', 'aborted-key', new Date(canonicalUserTimestamp).toISOString(), 0)
+const canonicalInterruptedActivity = canonicalAbortedProjection.activities.find((activity) => activity.id === `shared-error:pi-message:assistant:${canonicalAssistantTimestamp + 100}`)
+assert.equal(canonicalInterruptedActivity?.tone, 'warning', 'a canonical TUI abort must project as an intentional interruption rather than an Assistant error')
+assert.equal(canonicalInterruptedActivity?.summary, 'Assistant interrupted')
+assert.equal(canonicalInterruptedActivity?.payload?.['status'], 'cancelled')
+assert.equal(canonicalInterruptedActivity?.payload?.['stopReason'], 'aborted')
+
+const canonicalEditPatch = [
+    '--- C:/fixture/src/review-index.ts',
+    '+++ C:/fixture/src/review-index.ts',
+    '@@ -1 +1 @@',
+    '-old review',
+    '+new review'
+].join('\n')
+const canonicalFileChangeProjection = projectCanonicalTimeline([
+    {
+        type: 'message',
+        timestamp: new Date(canonicalUserTimestamp).toISOString(),
+        message: { role: 'user', timestamp: canonicalUserTimestamp, content: [{ type: 'text', text: 'Update review' }] }
+    },
+    {
+        type: 'message',
+        timestamp: new Date(canonicalAssistantTimestamp).toISOString(),
+        message: {
+            role: 'assistant',
+            timestamp: canonicalAssistantTimestamp,
+            content: [{
+                type: 'toolCall',
+                id: 'canonical-edit-call',
+                name: 'edit',
+                arguments: {
+                    path: 'C:/fixture/src/review-index.ts',
+                    edits: [{ oldText: 'old review', newText: 'new review' }]
+                }
+            }]
+        }
+    },
+    {
+        type: 'message',
+        timestamp: new Date(canonicalAssistantTimestamp + 1).toISOString(),
+        message: {
+            role: 'toolResult',
+            timestamp: canonicalAssistantTimestamp + 1,
+            toolCallId: 'canonical-edit-call',
+            toolName: 'edit',
+            isError: false,
+            content: [{ type: 'text', text: 'Successfully replaced 1 block.' }],
+            details: { diff: canonicalEditPatch, patch: canonicalEditPatch }
+        }
+    }
+], 'canonical:file-change', 'file-change-key', new Date(canonicalUserTimestamp).toISOString(), 0, 'C:/fixture')
+const canonicalFileChange = canonicalFileChangeProjection.activities.find((activity) => activity.id === 'zyra-tool-canonical-edit-call')
+assert.equal(canonicalFileChange?.kind, 'file-change', 'historical TUI edit calls must become Review file changes')
+assert.equal(canonicalFileChange?.summary, 'Edited file')
+assert.equal(canonicalFileChange?.payload?.['status'], 'completed')
+assert.equal(canonicalFileChange?.payload?.['source'], 'provider-result')
+assert.equal(canonicalFileChange?.payload?.['authoritative'], true)
+assert.equal(canonicalFileChange?.payload?.['patch'], canonicalEditPatch)
+assert.deepEqual(canonicalFileChange?.payload?.['paths'], ['C:/fixture/src/review-index.ts'])
+assert.deepEqual(
+    canonicalFileChange?.payload?.['changes'],
+    [{ path: 'C:/fixture/src/review-index.ts', kind: 'update', diff: canonicalEditPatch, isNew: false }],
+    'canonical provider patches must retain the indexed file path and status'
+)
+
+const replayedAssistantMessage: AssistantThread['messages'][number] = {
+    ...canonicalProjection.messages[1],
+    id: 'assistant-message-zyra-assistant-turn:test-2',
+    createdAt: new Date(canonicalAssistantTimestamp + 120_000).toISOString(),
+    updatedAt: new Date(canonicalAssistantTimestamp + 120_000).toISOString()
+}
+assert.deepEqual(
+    new Set(findSupersededCanonicalMessageIds([
+        { ...canonicalProjection.messages[1], id: 'legacy-assistant-id' },
+        replayedAssistantMessage
+    ], canonicalProjection.messages, canonicalProjection.legacyMessageIds)),
+    new Set(['legacy-assistant-id', replayedAssistantMessage.id]),
+    'canonical import must remove both legacy IDs and reconnect replay copies'
+)
+assert.deepEqual(
+    findDuplicateProjectedMessageIds([canonicalProjection.messages[1], replayedAssistantMessage]),
+    [replayedAssistantMessage.id],
+    'legacy cleanup must prefer a timestamp-stable Pi message over a fallback replay ID'
+)
+const replayedThought: AssistantThread['activities'][number] = {
+    ...canonicalProjection.activities.find((activity) => activity.detail === 'same thought')!,
+    id: 'assistant-internal-zyra-assistant-turn:test-2',
+    createdAt: new Date(canonicalAssistantTimestamp + 120_000).toISOString()
+}
+assert.deepEqual(
+    findSupersededCanonicalActivityIds([replayedThought], canonicalProjection.activities, canonicalProjection.legacyActivityIds),
+    [replayedThought.id],
+    'canonical import must remove replayed internal activity copies'
+)
+const firstCanonicalGreeting: AssistantThread['messages'][number] = {
+    ...canonicalProjection.messages[0],
+    id: '11111111',
+    text: 'hi',
+    createdAt: new Date(canonicalUserTimestamp - 30 * 60_000).toISOString()
+}
+const secondCanonicalGreeting: AssistantThread['messages'][number] = {
+    ...firstCanonicalGreeting,
+    id: '22222222',
+    createdAt: new Date(canonicalUserTimestamp).toISOString()
+}
+const replayedGreeting: AssistantThread['messages'][number] = {
+    ...secondCanonicalGreeting,
+    id: 'assistant-message-user-turn:replayed-hi',
+    turnId: 'turn:replayed-hi',
+    createdAt: new Date(canonicalUserTimestamp + 120_000).toISOString()
+}
+assert.deepEqual(
+    findDuplicateProjectedMessageIds([firstCanonicalGreeting, secondCanonicalGreeting, replayedGreeting]),
+    [replayedGreeting.id],
+    'legacy cleanup must preserve distinct repeated prompts while removing the nearby replay copy'
+)
+const repeatedThought = {
+    ...replayedThought,
+    id: 'assistant-internal-zyra-assistant-turn:test-3',
+    createdAt: new Date(canonicalAssistantTimestamp + 180_000).toISOString()
+}
+assert.deepEqual(
+    findDuplicateProjectedActivityIds([replayedThought, repeatedThought]),
+    [repeatedThought.id],
+    'legacy cleanup must collapse same-turn internal replay activities'
+)
 
 const turnId = 'turn-lifecycle'
 const planningText = 'I will inspect the harness and run its checks.'
@@ -39,6 +327,17 @@ assert.deepEqual(
     ['low', 'medium', 'high', 'xhigh'],
     'desktop ChatGPT model effort options must begin at low'
 )
+const staleGpt56ModelCapabilities: AssistantModelInfo = {
+    id: 'openai-codex/gpt-5.6-sol',
+    label: 'GPT-5.6 Sol',
+    supportedEfforts: ['low', 'medium', 'high', 'xhigh']
+}
+assert.deepEqual(
+    getAssistantModelReasoningEfforts(staleGpt56ModelCapabilities),
+    ['low', 'medium', 'high', 'xhigh', 'max'],
+    'GPT-5.6 max must survive model metadata from a Pi adapter that only advertises xhigh'
+)
+assert.equal(coerceAssistantReasoningEffortForModel('max', staleGpt56ModelCapabilities), 'max')
 assert.equal(coerceAssistantReasoningEffortForModel('max', 'openai-codex/gpt-5.6-terra'), 'max')
 assert.equal(coerceAssistantReasoningEffortForModel('max', 'openai-codex/gpt-5.5'), 'xhigh')
 assert.equal(coerceAssistantReasoningEffortForModel('minimal', 'openai-codex/gpt-5.6-sol'), 'low')
@@ -56,12 +355,19 @@ runtime.on('runtime', (event: AssistantRuntimeEvent) => runtimeEvents.push(event
 const context = {
     localThreadId: 'thread-lifecycle',
     providerThreadId: 'provider-lifecycle',
+    model: 'openai-codex/gpt-5.5',
+    thinking: 'medium' as const,
+    runtimeMode: 'approval-required' as const,
+    interactionMode: 'default' as const,
+    profile: 'default',
     activeTurnId: turnId,
+    completedTurnIds: new Set<string>(),
     assistantMessageSequence: 0,
     activeAssistantItemId: null,
     toolArgsByCallId: new Map<string, Record<string, unknown>>(),
     toolStartedAtByCallId: new Map<string, string>(),
     commandActivityIdByJobId: new Map<string, string>(),
+    runningManagedCommandJobIds: new Set<string>(),
     assistantTextByItemId: new Map<string, string>(),
     assistantCompletedItemIds: new Set<string>(),
     internalTextByItemId: new Map<string, string>(),
@@ -70,12 +376,50 @@ const context = {
     lastUsage: null
 }
 
-const handleEvent = (event: unknown): void => {
+const handleEvent = (
+    event: unknown,
+    metadata?: { turnId?: string; localThreadId?: string; replay?: boolean }
+): void => {
     const handleZyraEvent = runtime as unknown as {
-        handleZyraEvent: (targetContext: typeof context, eventValue: unknown) => void
+        handleZyraEvent: (
+            targetContext: typeof context,
+            eventValue: unknown,
+            eventMetadata?: { turnId?: string; localThreadId?: string; replay?: boolean }
+        ) => void
     }
-    handleZyraEvent.handleZyraEvent(context, event)
+    handleZyraEvent.handleZyraEvent(context, event, metadata)
 }
+
+handleEvent({
+    type: 'session_config',
+    model: 'openai-codex/gpt-5.5',
+    thinking: 'high',
+    profile: 'builder',
+    runtimeMode: 'full-access'
+})
+const synchronizedConfigEvent = runtimeEvents.findLast((event) => event.type === 'session.config.updated')
+assert.equal(synchronizedConfigEvent?.type === 'session.config.updated' ? synchronizedConfigEvent.payload.model : null, 'openai-codex/gpt-5.5')
+assert.equal(synchronizedConfigEvent?.type === 'session.config.updated' ? synchronizedConfigEvent.payload.thinking : null, 'high')
+assert.equal(synchronizedConfigEvent?.type === 'session.config.updated' ? synchronizedConfigEvent.payload.runtimeMode : null, 'full-access')
+
+const externalPrompt = 'Inspect the shared server from the TUI.'
+handleEvent({
+    type: 'message_start',
+    message: { role: 'user', content: [{ type: 'text', text: externalPrompt }] }
+}, { turnId, localThreadId: 'tui-thread:external' })
+const externalUserMessageEvent = runtimeEvents.findLast((event) => event.type === 'user.message.received')
+assert.equal(externalUserMessageEvent?.type === 'user.message.received' ? externalUserMessageEvent.payload.text : null, externalPrompt)
+assert.equal(externalUserMessageEvent?.type === 'user.message.received' ? externalUserMessageEvent.payload.messageId : null, `assistant-message-user-${turnId}`)
+const externalUserEventCount = runtimeEvents.filter((event) => event.type === 'user.message.received').length
+handleEvent({
+    type: 'message_start',
+    message: { role: 'user', content: [{ type: 'text', text: 'Desktop already projected this prompt.' }] }
+}, { turnId, localThreadId: context.localThreadId })
+assert.equal(
+    runtimeEvents.filter((event) => event.type === 'user.message.received').length,
+    externalUserEventCount,
+    'the server echo for a Desktop-originated prompt must not create a duplicate user bubble'
+)
 
 const emitAssistantMessage = (type: 'message_start' | 'message_update' | 'message_end', text: string, delta = text): void => {
     handleEvent({
@@ -186,7 +530,14 @@ assert.match(bridgeSource, /requestedThreadId = payload\.threadId \|\| payload\.
 assert.match(bridgeSource, /type === ["']generate_text["']/, 'title generation must use the Pi bridge instead of launching a detached Codex app-server')
 assert.match(bridgeSource, /normalizeAgentSurfaceTool/, 'Pi tool events must cross the desktop bridge through the shared agent-surface normalizer')
 const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-pi-runtime.ts', import.meta.url), 'utf8')
+const accountServiceSource = readFileSync(new URL('../src/main/assistant/zyra-account-service.ts', import.meta.url), 'utf8')
+const chatGptAccountSource = readFileSync(new URL('../../src/chatgpt-account.mjs', import.meta.url), 'utf8')
 assert.match(runtimeSource, /threadId: requestedThreadId[\s\S]*noSession: false/, 'desktop chats must create persistent Pi threads that the TUI can resolve')
+assert.doesNotMatch(runtimeSource, /CodexAppServerRuntime|codex-app-server/, 'the Pi runtime must not launch the retired Codex CLI for account data')
+assert.match(accountServiceSource, /chatgpt-account\.mjs/, 'Desktop account settings must use the Electron-safe ChatGPT account module')
+assert.doesNotMatch(accountServiceSource, /zyra-sdk\.mjs/, 'Desktop account settings must not import the full Pi SDK into Electron')
+assert.doesNotMatch(chatGptAccountSource, /getCodexCliUsageAuth|Codex CLI auth|sign in with the Codex CLI|\.codex[\\/]auth/, '/codexusage must never fall back to the retired Codex CLI credentials')
+assert.doesNotMatch(chatGptAccountSource, /Zyra auth storage|Zyra subscription login/, 'the account source must not be presented as a Zyra-owned subscription')
 
 const separationRuntime = new ZyraPiRuntime()
 const separationEvents: AssistantRuntimeEvent[] = []
@@ -250,6 +601,99 @@ const toolIndex = runtimeEvents.findIndex((event) => event.type === 'activity' &
 const finalCompletedIndex = runtimeEvents.indexOf(completions[1]!)
 assert.ok(planningCompletedIndex < toolIndex, 'tool activity must follow the planning response')
 assert.ok(toolIndex < finalCompletedIndex, 'final completion must follow tool activity')
+
+const replayGuardRuntime = new ZyraPiRuntime()
+const replayGuardEvents: AssistantRuntimeEvent[] = []
+replayGuardRuntime.on('runtime', (event: AssistantRuntimeEvent) => replayGuardEvents.push(event))
+const replayGuardContext = {
+    ...context,
+    activeTurnId: null,
+    completedTurnIds: new Set<string>(['turn-already-completed']),
+    assistantMessageSequence: 0,
+    activeAssistantItemId: null,
+    assistantTextByItemId: new Map<string, string>(),
+    assistantCompletedItemIds: new Set<string>(),
+    internalTextByItemId: new Map<string, string>(),
+    internalCompletedItemIds: new Set<string>(),
+    lastAssistantItemId: null
+}
+const replayGuardHandler = replayGuardRuntime as unknown as {
+    handleZyraEvent: (
+        targetContext: typeof replayGuardContext,
+        eventValue: unknown,
+        eventMetadata?: { turnId?: string; localThreadId?: string; replay?: boolean }
+    ) => void
+}
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'agent_end'
+}, { turnId: 'turn-historical-replay', replay: true })
+assert.equal(
+    replayGuardEvents.filter((event) => event.type === 'turn.completed' && event.turnId === 'turn-historical-replay').length,
+    1,
+    'a replayed agent_end repairs a historical turn from the durable provider boundary'
+)
+replayGuardEvents.length = 0
+replayGuardContext.completedTurnIds.clear()
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'message_end',
+    message: { id: 'replayed-final', role: 'assistant', content: [{ type: 'text', text: 'Historical final response' }] }
+}, { turnId: 'turn-historical-replay', replay: true })
+assert.equal(
+    replayGuardEvents.some((event) => event.type === 'turn.started'),
+    false,
+    'historical replay correlation cannot reactivate a settled turn when a chat is opened'
+)
+assert.equal(replayGuardContext.activeTurnId, null, 'replay must leave the runtime idle')
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'message_start',
+    message: { id: 'live-external', role: 'assistant', content: [] }
+}, { turnId: 'turn-live-external', replay: false })
+assert.equal(
+    replayGuardEvents.some((event) => event.type === 'turn.started' && event.turnId === 'turn-live-external'),
+    true,
+    'a live externally-started canonical turn must still become active'
+)
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'agent_end'
+}, { turnId: 'turn-live-external', replay: false })
+assert.equal(
+    replayGuardEvents.filter((event) => event.type === 'turn.completed' && event.turnId === 'turn-live-external').length,
+    1,
+    'Pi agent_end is the authoritative final-response boundary for a live turn'
+)
+assert.equal(replayGuardContext.activeTurnId, null, 'authoritative completion clears the active turn')
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'zyra_server_turn_completed',
+    outcome: 'completed'
+}, { turnId: 'turn-live-external', replay: false })
+assert.equal(
+    replayGuardEvents.filter((event) => event.type === 'turn.completed' && event.turnId === 'turn-live-external').length,
+    1,
+    'the later synthetic server completion cannot duplicate agent_end completion'
+)
+
+replayGuardEvents.length = 0
+replayGuardContext.completedTurnIds.clear()
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'message_end',
+    message: {
+        id: 'live-aborted-response',
+        role: 'assistant',
+        content: [{ type: 'thinking', thinking: '' }],
+        stopReason: 'aborted',
+        errorMessage: 'Request was aborted'
+    }
+}, { turnId: 'turn-live-aborted', replay: false })
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'agent_end'
+}, { turnId: 'turn-live-aborted', replay: false })
+const liveAbortedCompletion = replayGuardEvents.find((event) => event.type === 'turn.completed' && event.turnId === 'turn-live-aborted')
+assert.equal(
+    liveAbortedCompletion?.type === 'turn.completed' ? liveAbortedCompletion.payload.outcome : null,
+    'interrupted',
+    'agent_end must preserve the aborted assistant response as an interrupted TUI turn'
+)
+assert.equal(replayGuardContext.activeTurnId, null)
 
 const completedToolEvent = runtimeEvents.findLast((event) => event.type === 'activity' && event.itemId === 'tool-search')
 const completedToolData = completedToolEvent?.type === 'activity'
@@ -516,6 +960,11 @@ const observedManagedCommand = runtimeEvents.findLast((event) => (
 assert.equal(observedManagedCommand?.type === 'activity' ? observedManagedCommand.payload.data?.['status'] : null, 'completed')
 assert.equal(observedManagedCommand?.turnId, undefined, 'background completion must remain deliverable after the model turn ends')
 assert.equal(observedManagedCommand?.type === 'activity' ? observedManagedCommand.payload.data?.['durationMs'] : null, 20_000)
+assert.equal(
+    context.runningManagedCommandJobIds.has('cmd-5'),
+    false,
+    'an observed terminal job update must clear the private Voice task command barrier'
+)
 
 const observedRunningCommand = runtimeEvents.findLast((event) => (
     event.type === 'activity'
@@ -566,6 +1015,50 @@ const projectedSession: AssistantSession = {
     threadIds: [projectedThread.id],
     threads: [projectedThread]
 }
+const deletionFallbackSession: AssistantSession = {
+    ...projectedSession,
+    id: 'session-deletion-fallback',
+    activeThreadId: 'thread-deletion-fallback',
+    threadIds: ['thread-deletion-fallback'],
+    threads: [{ ...projectedThread, id: 'thread-deletion-fallback', providerThreadId: null }]
+}
+let deletionSnapshot: AssistantSnapshot = {
+    snapshotSequence: 0,
+    updatedAt: projectedThread.createdAt,
+    selectedSessionId: projectedSession.id,
+    playground: { rootPath: null, labs: [] },
+    sessions: [projectedSession, deletionFallbackSession],
+    knownModels: []
+}
+const deletionOrder: string[] = []
+await deleteAssistantSessionAction({
+    ensureReady: async () => undefined,
+    getSnapshot: () => deletionSnapshot,
+    runtime: {
+        updateCanonicalChat: async (threadId: string, patch: Record<string, unknown>) => {
+            deletionOrder.push(`canonical:${threadId}:${String(patch.deleted)}`)
+        },
+        disconnect: (threadId: string) => deletionOrder.push(`disconnect:${threadId}`)
+    },
+    appendEvent: (type: string, _occurredAt: string, payload: Record<string, unknown>) => {
+        deletionOrder.push(type)
+        if (type === 'session.deleted') {
+            deletionSnapshot = {
+                ...deletionSnapshot,
+                selectedSessionId: null,
+                sessions: deletionSnapshot.sessions.filter((entry) => entry.id !== payload.sessionId)
+            }
+        } else if (type === 'session.selected') {
+            deletionSnapshot = { ...deletionSnapshot, selectedSessionId: String(payload.sessionId) }
+        }
+    },
+    createSession: async () => ({ success: true as const, sessionId: 'unused' })
+} as never, projectedSession.id)
+assert.deepEqual(
+    deletionOrder.slice(0, 3),
+    ['canonical:provider-lifecycle:true', 'disconnect:provider-lifecycle', 'session.deleted'],
+    'Desktop deletion must persist a canonical tombstone before removing its local projection'
+)
 assert.deepEqual(
     getTitleGenerationModelCandidates('openai-codex/gpt-5.6-sol'),
     ['openai-codex/gpt-5.6-sol', 'openai-codex/gpt-5.4-mini'],
@@ -691,6 +1184,59 @@ const projectedDeps = {
     },
     updateLatestTurnAssistantMessage: () => {}
 }
+const stalePreviousTurnStartedAt = '2026-07-10T15:00:00.000Z'
+projectedDeps.appendEvent('thread.latest-turn.updated', stalePreviousTurnStartedAt, {
+    threadId: projectedThread.id,
+    latestTurn: {
+        id: 'previous-app-server-turn',
+        state: 'completed',
+        requestedAt: stalePreviousTurnStartedAt,
+        startedAt: stalePreviousTurnStartedAt,
+        completedAt: '2026-07-10T15:05:00.000Z',
+        assistantMessageId: 'previous-assistant-message',
+        effort: 'medium',
+        serviceTier: null,
+        usage: null
+    }
+}, projectedSession.id, projectedThread.id)
+const externalTurnStartedAt = '2026-07-10T16:00:30.000Z'
+handleAssistantRuntimeEvent({
+    eventId: 'external-app-server-turn-started',
+    type: 'turn.started',
+    createdAt: externalTurnStartedAt,
+    threadId: projectedThread.id,
+    providerThreadId: projectedThread.providerThreadId || undefined,
+    turnId,
+    payload: {
+        model: projectedThread.model,
+        interactionMode: 'default',
+        effort: 'high'
+    }
+}, projectedDeps)
+const externallyStartedTurn = findProjectedRecord(projectedThread.id)?.thread.latestTurn
+assert.equal(externallyStartedTurn?.id, turnId, 'a new app-server turn must replace the previous Desktop latest-turn identity')
+assert.equal(externallyStartedTurn?.startedAt, externalTurnStartedAt, 'a new app-server timer must start from its own event time')
+assert.equal(externallyStartedTurn?.completedAt, null)
+assert.equal(externallyStartedTurn?.assistantMessageId, null)
+assert.equal(externallyStartedTurn?.state, 'running')
+if (synchronizedConfigEvent?.type === 'session.config.updated') {
+    handleAssistantRuntimeEvent(synchronizedConfigEvent, projectedDeps)
+}
+assert.equal(findProjectedRecord(context.localThreadId)?.thread.model, 'openai-codex/gpt-5.5')
+assert.equal(findProjectedRecord(context.localThreadId)?.thread.thinking, 'high')
+assert.equal(findProjectedRecord(context.localThreadId)?.thread.profile, 'builder')
+assert.equal(findProjectedRecord(context.localThreadId)?.thread.runtimeMode, 'full-access')
+if (externalUserMessageEvent?.type === 'user.message.received') {
+    handleAssistantRuntimeEvent(externalUserMessageEvent, projectedDeps)
+    handleAssistantRuntimeEvent(externalUserMessageEvent, projectedDeps)
+}
+const projectedExternalUserMessages = findProjectedRecord(context.localThreadId)?.thread.messages.filter((message) => (
+    message.id === `assistant-message-user-${turnId}`
+)) || []
+assert.equal(projectedExternalUserMessages.length, 1, 'external user-message replay must remain idempotent')
+assert.equal(projectedExternalUserMessages[0]?.text, externalPrompt)
+assert.equal(projectedExternalUserMessages[0]?.turnId, turnId)
+
 if (runningCompactionEvent?.type === 'activity' && completedCompactionEvent?.type === 'activity') {
     handleAssistantRuntimeEvent(runningCompactionEvent, projectedDeps)
     handleAssistantRuntimeEvent(completedCompactionEvent, projectedDeps)
@@ -712,6 +1258,55 @@ assert.equal(completedProjectedCommands.length, 1, 'same-ID observer updates mus
 assert.equal(completedProjectedCommands[0]?.payload?.['status'], 'completed')
 assert.equal(completedProjectedCommands[0]?.payload?.['output'], 'observer done', 'terminal observer output must replace the stale still-running wrapper')
 assert.equal(completedProjectedCommands[0]?.timelineSequence, runningTimelineSequence, 'same-ID updates must preserve timeline position')
+
+handleAssistantRuntimeEvent({
+    eventId: 'external-app-server-turn-completed',
+    type: 'turn.completed',
+    createdAt: '2026-07-10T16:00:45.000Z',
+    threadId: projectedThread.id,
+    providerThreadId: projectedThread.providerThreadId || undefined,
+    turnId,
+    payload: { outcome: 'completed' }
+}, projectedDeps)
+const externallyCompletedTurn = findProjectedRecord(projectedThread.id)?.thread.latestTurn
+assert.equal(externallyCompletedTurn?.id, turnId)
+assert.equal(externallyCompletedTurn?.startedAt, externalTurnStartedAt, 'completion must preserve the matching turn start time')
+assert.equal(externallyCompletedTurn?.completedAt, '2026-07-10T16:00:45.000Z')
+assert.equal(externallyCompletedTurn?.state, 'completed')
+
+const nextExternalTurnId = 'turn-after-external-completion'
+const nextExternalTurnStartedAt = '2026-07-10T16:00:50.000Z'
+handleAssistantRuntimeEvent({
+    eventId: 'next-external-app-server-turn-started',
+    type: 'turn.started',
+    createdAt: nextExternalTurnStartedAt,
+    threadId: projectedThread.id,
+    providerThreadId: projectedThread.providerThreadId || undefined,
+    turnId: nextExternalTurnId,
+    payload: {
+        model: projectedThread.model,
+        interactionMode: 'default'
+    }
+}, projectedDeps)
+const nextExternallyStartedTurn = findProjectedRecord(projectedThread.id)?.thread.latestTurn
+assert.equal(nextExternallyStartedTurn?.id, nextExternalTurnId, 'consecutive app-server turns must receive distinct ledger rows')
+assert.equal(nextExternallyStartedTurn?.startedAt, nextExternalTurnStartedAt)
+assert.equal(nextExternallyStartedTurn?.assistantMessageId, null)
+assert.equal(nextExternallyStartedTurn?.usage, null)
+
+handleAssistantRuntimeEvent({
+    eventId: 'stale-external-app-server-turn-completed',
+    type: 'turn.completed',
+    createdAt: '2026-07-10T16:00:46.000Z',
+    threadId: projectedThread.id,
+    providerThreadId: projectedThread.providerThreadId || undefined,
+    turnId,
+    payload: { outcome: 'completed' }
+}, projectedDeps)
+const turnAfterStaleCompletion = findProjectedRecord(projectedThread.id)?.thread.latestTurn
+assert.equal(turnAfterStaleCompletion?.id, nextExternalTurnId, 'an older completion must not overwrite the newer running turn')
+assert.equal(turnAfterStaleCompletion?.state, 'running')
+assert.equal(turnAfterStaleCompletion?.startedAt, nextExternalTurnStartedAt)
 
 handleAssistantRuntimeEvent({
     eventId: 'usage-limit-turn',
@@ -915,6 +1510,7 @@ const failedTurnContext = {
     interactionMode: 'default' as const,
     profile: 'default',
     activeTurnId: failedTurnId,
+    completedTurnIds: new Set<string>(),
     assistantMessageSequence: 0,
     activeAssistantItemId: null,
     toolArgsByCallId: new Map<string, Record<string, unknown>>(),
@@ -955,7 +1551,8 @@ const transportFailureContext = {
         isAlive: () => true
     },
     connected: true,
-    activeTurnId: transportFailureTurnId
+    activeTurnId: transportFailureTurnId,
+    completedTurnIds: new Set<string>()
 }
 const transportFailureRunner = transportFailureRuntime as unknown as {
     runPromptTurn: (targetContext: typeof transportFailureContext, targetTurnId: string, prompt: string) => Promise<void>

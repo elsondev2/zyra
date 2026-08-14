@@ -1,0 +1,167 @@
+export const BROWSER_ASSISTANT_BRIDGE_HOST = '127.0.0.1'
+export const BROWSER_ASSISTANT_BRIDGE_PORT = 47_831
+export const BROWSER_ASSISTANT_BRIDGE_PORT_CANDIDATES = Array.from(
+    { length: 10 },
+    (_value, index) => BROWSER_ASSISTANT_BRIDGE_PORT + index
+)
+export const BROWSER_CLIENT_HOST_PORT = 47_821
+export const BROWSER_CLIENT_HOST_ORIGIN = `http://${BROWSER_ASSISTANT_BRIDGE_HOST}:${BROWSER_CLIENT_HOST_PORT}`
+export const BROWSER_ASSISTANT_BRIDGE_HEADER = 'x-zyra-browser-client'
+export const BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE = 'assistant-v1'
+export const BROWSER_ASSISTANT_BRIDGE_CAPABILITY_HEADER = 'x-zyra-browser-capability'
+export const BROWSER_ASSISTANT_BRIDGE_PROXY_PREFIX = '/__zyra_browser_assistant'
+export const BROWSER_ASSISTANT_BRIDGE_DESCRIPTOR_NAME = 'browser-assistant-bridge.json'
+export const BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH = '/v1/assistant/invoke'
+export const BROWSER_ASSISTANT_BRIDGE_EVENTS_PATH = '/v1/assistant/events'
+export const BROWSER_DEVSCOPE_BRIDGE_INVOKE_PATH = '/v1/devscope/invoke'
+export const BROWSER_DEVSCOPE_BRIDGE_EVENTS_PATH = '/v1/devscope/events'
+export const BROWSER_FILE_BRIDGE_PATH = '/v1/files/content'
+export const BROWSER_DEVSCOPE_RELAY_REQUEST_CHANNEL = 'zyra:browser-devscope:request'
+export const BROWSER_DEVSCOPE_RELAY_RESPONSE_CHANNEL = 'zyra:browser-devscope:response'
+export const BROWSER_DEVSCOPE_RELAY_EVENT_CHANNEL = 'zyra:browser-devscope:event'
+export const BROWSER_DEVSCOPE_RELAY_READY_CHANNEL = 'zyra:browser-devscope:ready'
+export const BROWSER_ASSISTANT_BRIDGE_HEALTH_PATH = '/v1/health'
+
+export const BROWSER_ASSISTANT_BRIDGE_METHODS = [
+    'bootstrap',
+    'getSnapshot',
+    'getFleetSnapshot',
+    'agentAction',
+    'workflowAction',
+    'getStatus',
+    'getAccountOverview',
+    'redeemAccountReset',
+    'getSessionTurnUsage',
+    'listModels',
+    'connect',
+    'disconnect',
+    'createSession',
+    'selectSession',
+    'selectThread',
+    'getThreadDetailBootstrap',
+    'getHistoryPage',
+    'getReviewIndex',
+    'getTurnDetail',
+    'searchTurns',
+    'renameSession',
+    'archiveSession',
+    'deleteSession',
+    'deleteMessage',
+    'clearLogs',
+    'setSessionProjectPath',
+    'setPlaygroundRoot',
+    'createPlaygroundLab',
+    'deletePlaygroundLab',
+    'attachSessionToPlaygroundLab',
+    'approvePendingPlaygroundLabRequest',
+    'declinePendingPlaygroundLabRequest',
+    'persistClipboardImage',
+    'resolveClipboardAttachment',
+    'newThread',
+    'sendPrompt',
+    'interruptTurn',
+    'respondApproval',
+    'respondUserInput',
+    'getVoiceTranscriptionState',
+    'transcribeVoice'
+] as const
+
+export type BrowserAssistantBridgeMethod = typeof BROWSER_ASSISTANT_BRIDGE_METHODS[number]
+
+export type BrowserAssistantBridgeDescriptor = {
+    host: typeof BROWSER_ASSISTANT_BRIDGE_HOST
+    port: number
+    capability: string
+    pid: number
+    createdAt: string
+}
+
+export type BrowserDevscopeBridgeInvokeRequest = {
+    path: string[]
+    args: unknown[]
+}
+
+export type BrowserDevscopeRelayRequest = BrowserDevscopeBridgeInvokeRequest & {
+    requestId: string
+}
+
+export type BrowserDevscopeRelayResponse = {
+    requestId: string
+    ok: boolean
+    value?: unknown
+    error?: string
+}
+
+export const BROWSER_DEVSCOPE_EVENT_NAMES = [
+    'agentControlCursor',
+    'agentControlState',
+    'gitCloneProgress',
+    'previewTerminal',
+    'pythonPreview'
+] as const
+
+export type BrowserDevscopeEventName = typeof BROWSER_DEVSCOPE_EVENT_NAMES[number]
+
+export type BrowserDevscopeRelayEvent = {
+    event: BrowserDevscopeEventName
+    payload: unknown
+}
+
+export type BrowserDevscopeStreamEvent = BrowserDevscopeRelayEvent & {
+    streamId: string
+    sequence: number
+}
+
+export function isBrowserDevscopeRelayEvent(value: unknown): value is BrowserDevscopeRelayEvent {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+    const candidate = value as Partial<BrowserDevscopeRelayEvent>
+    return typeof candidate.event === 'string'
+        && (BROWSER_DEVSCOPE_EVENT_NAMES as readonly string[]).includes(candidate.event)
+        && Object.prototype.hasOwnProperty.call(candidate, 'payload')
+}
+
+export function isBrowserDevscopeStreamEvent(value: unknown): value is BrowserDevscopeStreamEvent {
+    if (!isBrowserDevscopeRelayEvent(value)) return false
+    const candidate = value as Partial<BrowserDevscopeStreamEvent>
+    return typeof candidate.streamId === 'string'
+        && candidate.streamId.length > 0
+        && candidate.streamId.length <= 128
+        && Number.isSafeInteger(candidate.sequence)
+        && Number(candidate.sequence) > 0
+}
+
+export type BrowserAssistantBridgeInvokeRequest = {
+    method: BrowserAssistantBridgeMethod
+    args: unknown[]
+}
+
+export type BrowserAssistantBridgeInvokeResponse =
+    | { ok: true; value: unknown }
+    | { ok: false; error: string }
+
+export function isBrowserAssistantBridgeMethod(value: unknown): value is BrowserAssistantBridgeMethod {
+    return typeof value === 'string'
+        && (BROWSER_ASSISTANT_BRIDGE_METHODS as readonly string[]).includes(value)
+}
+
+const FORBIDDEN_BROWSER_DEVSCOPE_PATH_SEGMENTS = new Set([
+    'constructor',
+    'prototype',
+    'toString',
+    'valueOf',
+    'apply',
+    'bind',
+    'call'
+])
+
+export function isBrowserDevscopeBridgePath(value: unknown): value is string[] {
+    if (!Array.isArray(value) || value.length < 1 || value.length > 2) return false
+    if (!value.every((segment) => (
+        typeof segment === 'string'
+        && /^[A-Za-z][A-Za-z0-9]*$/.test(segment)
+        && !FORBIDDEN_BROWSER_DEVSCOPE_PATH_SEGMENTS.has(segment)
+    ))) return false
+    if (value[0] === 'window' || value[0] === 'assistant') return false
+    const method = value[value.length - 1]
+    return method !== 'getPathForFile' && !method.startsWith('on')
+}

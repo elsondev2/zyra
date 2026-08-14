@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "conversation_id": "chat_demo",
+  "version": 7,
+  "parent_version": 6,
+  "scope": {
+    "kind": "task_subtree",
+    "target_id": "task_demo_voice_docs"
+  },
+  "actor": {
+    "role": "user",
+    "id": "user_local"
+  },
+  "changes": [
+    {
+      "change_id": "constraint_public_only",
+      "kind": "constraint.added",
+      "content": {
+        "text": "Use only public, synthetic, or clean-room evidence in published documentation."
+      },
+      "propagate_to_descendants": true,
+      "source_refs": [
+        {
+          "kind": "message",
+          "id": "message_user_07",
+          "excerpt": "Make it open for everyone."
+        }
+      ]
+    },
+    {
+      "change_id": "constraint_no_runtime_changes",
+      "kind": "constraint.added",
+      "content": {
+        "text": "This task publishes documentation only and does not change runtime behavior."
+      },
+      "propagate_to_descendants": true,
+      "source_refs": []
+    }
+  ],
+  "created_at": "2026-08-02T12:00:00Z"
+}

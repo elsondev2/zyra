@@ -5,12 +5,10 @@ import type {
     AssistantDeclinePendingPlaygroundLabRequestInput,
     AssistantDeleteMessageInput,
     AssistantDomainEvent,
-    AssistantAccountIdentity,
     AssistantApprovalDecision,
     AssistantInteractionMode,
     AssistantModelInfo,
     AssistantPlaygroundState,
-    AssistantRateLimitSnapshot,
     AssistantReasoningEffort,
     AssistantRuntimeEvent,
     AssistantRuntimeMode,
@@ -24,15 +22,6 @@ import type { PreparedAssistantPromptImage } from './prompt-images'
 export interface AssistantRuntimeBridge {
     checkAvailability(): Promise<{ available: boolean; reason: string | null }>
     listModels(forceRefresh?: boolean): Promise<AssistantModelInfo[]>
-    getAccount(): Promise<{
-        account: AssistantAccountIdentity | null
-        authMode: 'apikey' | 'chatgpt' | 'chatgptAuthTokens' | null
-        requiresOpenaiAuth: boolean
-    }>
-    getAccountRateLimits(): Promise<{
-        rateLimits: AssistantRateLimitSnapshot | null
-        rateLimitsByLimitId: Record<string, AssistantRateLimitSnapshot>
-    }>
     connect(thread: AssistantThread, cwd: string): Promise<void>
     hasSession(threadId: string): boolean
     generateText(
@@ -41,7 +30,7 @@ export interface AssistantRuntimeBridge {
     ): Promise<{ success: boolean; text?: string; model?: string; error?: string }>
     updateCanonicalChat(
         threadId: string,
-        patch: { title?: string; project?: string; cwd?: string; archived?: boolean }
+        patch: { title?: string; project?: string; cwd?: string; archived?: boolean; deleted?: boolean }
     ): Promise<void>
     sendPrompt(
         threadId: string,

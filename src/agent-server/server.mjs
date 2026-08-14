@@ -20,9 +20,9 @@ import {
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const HANDSHAKE_TIMEOUT_MS = 5_000;
-const BRIDGE_CONNECT_TIMEOUT_MS = 120_000;
+const BRIDGE_CONNECT_TIMEOUT_MS = 60_000;
 const ACTIVE_FLEET_STATUSES = new Set(["queued", "starting", "running", "waiting", "paused", "recovering"]);
-const BRIDGE_REQUEST_PATTERN = /^(?:prompt|abort|steer|follow_up|compact|clear_queue|reload|agents\.[a-zA-Z0-9._-]+|workflows\.[a-zA-Z0-9._-]+)$/;
+const BRIDGE_REQUEST_PATTERN = /^(?:prompt|configure|abort|steer|follow_up|compact|clear_queue|reload|canonical_message\.(?:append|find)|approval\.respond|agents\.[a-zA-Z0-9._-]+|workflows\.[a-zA-Z0-9._-]+)$/;
 
 function hashAuthorityProof(value) {
   return createHash("sha256").update(String(value || "")).digest("base64url");
@@ -58,6 +58,7 @@ export class ZyraAgentServer extends EventEmitter {
     this.clients = new Map();
     this.sessions = new Map();
     this.utilityWorker = null;
+    this.canonicalMessageQueues = new Map();
     this.server = null;
     this.startedAt = null;
   }
@@ -216,31 +217,67 @@ export class ZyraAgentServer extends EventEmitter {
       const chats = await this.catalog.list(params);
       return { chats: chats.map((chat) => ({ ...chat, presence: this.sessionPresence(chat.canonicalChatId) })) };
     }
+    if (method === "catalog.get") {
+      const chat = await this.catalog.find(params.session, params);
+      return { chat: chat ? { ...chat, presence: this.sessionPresence(chat.canonicalChatId) } : null };
+    }
     if (method === "catalog.history") {
       return { history: await this.catalog.history(params.session, params) };
+    }
+    if (method === "catalog.message.append" || method === "catalog.message.find") {
+      if (!client.canControl) {
+        throw new AgentServerProtocolError("Canonical message writes require verified Desktop authority.", "AGENT_SERVER_AUTH_FAILED");
+      }
+      const selector = String(params.session || params.conversationId || "").trim();
+      if (!selector) throw new AgentServerProtocolError("Canonical chat id is required.");
+      const canonicalChatId = this.catalog.resolveAlias(selector);
+      if (method === "catalog.message.append"
+        && String(params.message?.conversationId || "").trim() !== canonicalChatId) {
+        throw new AgentServerProtocolError("Canonical message conversation does not match its selected transcript.");
+      }
+      return this.withCanonicalMessageLock(canonicalChatId, async () => {
+        const activeSession = this.sessions.get(canonicalChatId);
+        const receipt = activeSession
+          ? method === "catalog.message.append"
+            ? await activeSession.appendCanonicalMessage(params.message)
+            : await activeSession.findCanonicalMessageReceipt(params.operationId)
+          : method === "catalog.message.append"
+            ? await this.catalog.appendCanonicalMessage(canonicalChatId, params.message)
+            : await this.catalog.findCanonicalMessageReceipt(canonicalChatId, params.operationId);
+        if (method === "catalog.message.append") {
+          this.broadcastCatalogChanged({ canonicalChatId, canonicalMessage: true });
+        }
+        return { receipt };
+      });
     }
     if (method === "catalog.update") {
       const chat = await this.catalog.updateChat(params.session, {
         ...(params.title !== undefined ? { title: params.title } : {}),
         ...(params.project !== undefined ? { project: params.project } : {}),
         ...(params.cwd !== undefined ? { cwd: params.cwd } : {}),
-        ...(params.archived !== undefined ? { archived: params.archived === true } : {})
+        ...(params.archived !== undefined ? { archived: params.archived === true } : {}),
+        ...(params.deleted !== undefined ? { deleted: params.deleted === true } : {})
       });
       const activeSession = this.sessions.get(chat.canonicalChatId);
-      if (activeSession) {
+      if (activeSession && chat.deleted) {
+        activeSession.dispose("Canonical chat was deleted.");
+        this.removeSession(activeSession);
+      } else if (activeSession) {
         activeSession.connectedResult = {
           ...(activeSession.connectedResult || {}),
           sessionName: chat.title,
           project: chat.project,
           cwd: chat.cwd,
-          archived: chat.archived
+          archived: chat.archived,
+          deleted: chat.deleted
         };
         activeSession.publish({
           type: "session_metadata",
           title: chat.title,
           project: chat.project,
           cwd: chat.cwd,
-          archived: chat.archived
+          archived: chat.archived,
+          deleted: chat.deleted
         });
       }
       this.broadcastCatalogChanged({ canonicalChatId: chat.canonicalChatId, metadata: true });
@@ -264,15 +301,37 @@ export class ZyraAgentServer extends EventEmitter {
     throw new AgentServerProtocolError(`Unsupported method: ${method}.`);
   }
 
+  async withCanonicalMessageLock(canonicalChatId, operation) {
+    const previous = this.canonicalMessageQueues.get(canonicalChatId) || Promise.resolve();
+    const current = previous.catch(() => undefined).then(operation);
+    this.canonicalMessageQueues.set(canonicalChatId, current);
+    try {
+      return await current;
+    } finally {
+      if (this.canonicalMessageQueues.get(canonicalChatId) === current) this.canonicalMessageQueues.delete(canonicalChatId);
+    }
+  }
+
   sessionPresence(sessionKeyValue) {
     const sessionKey = String(sessionKeyValue || "").trim();
     const session = this.sessions.get(sessionKey);
-    if (!session) return { state: "detached", activeTurnId: null, clients: [], backgroundWorkActive: false };
+    if (!session) return {
+      state: "detached",
+      activeTurnId: null,
+      clients: [],
+      backgroundWorkActive: false,
+      attention: null,
+      latestTurn: null
+    };
+    const activeTurnId = session.activeRequestContext?.turnId || null;
+    const turnRunning = Boolean(activeTurnId && session.latestTurn?.id === activeTurnId && session.latestTurn.state === "running");
     return {
-      state: session.activeRequestContext ? "running" : session.hasBackgroundWork() ? "background" : "ready",
-      activeTurnId: session.activeRequestContext?.turnId || null,
+      state: turnRunning ? "running" : session.hasBackgroundWork() ? "background" : "ready",
+      activeTurnId: turnRunning ? activeTurnId : null,
       clients: [...session.clients].map((client) => ({ clientId: client.clientId, surface: client.surface })),
       backgroundWorkActive: session.hasBackgroundWork(),
+      attention: session.pendingApprovalRequestIds.size > 0 ? "approval" : null,
+      latestTurn: session.latestTurn ? { ...session.latestTurn } : null,
       latestSequence: session.sequence
     };
   }
@@ -288,7 +347,13 @@ export class ZyraAgentServer extends EventEmitter {
 
   async attachSession(client, params) {
     const project = this.catalog.registerProject(params.project || params.cwd);
-    const requested = params.session ? await this.catalog.find(params.session, { project }) : null;
+    const requestedCandidate = params.session
+      ? await this.catalog.find(params.session, { project, includeDeleted: true })
+      : null;
+    if (requestedCandidate?.deleted) {
+      throw new AgentServerProtocolError("Canonical chat was deleted and cannot be reattached.", "AGENT_SERVER_SESSION_NOT_FOUND");
+    }
+    const requested = requestedCandidate;
     const requestedCanonicalId = requested?.canonicalChatId || this.catalog.resolveAlias(params.session || params.localThreadId || "");
     const sessionProject = requested?.project || project;
     const sessionCwd = requested?.cwd || requested?.project || params.cwd || project;
@@ -347,7 +412,7 @@ export class ZyraAgentServer extends EventEmitter {
       connected: session.connectedResult,
       replay: session.replay(lastSequence),
       latestSequence: session.sequence,
-      activeRequestContext: session.activeRequestContext,
+      activeRequestContext: session.latestTurn?.state === "running" ? session.activeRequestContext : null,
       presence: this.sessionPresence(session.sessionKey)
     };
   }
@@ -474,6 +539,8 @@ class ServerOwnedSession {
     this.journal = null;
     this.activeRequests = 0;
     this.activeRequestContext = null;
+    this.latestTurn = null;
+    this.pendingApprovalRequestIds = new Set();
     this.backgroundFleetActive = false;
     this.managedJobIds = new Set();
     this.connectPromise = null;
@@ -528,6 +595,7 @@ class ServerOwnedSession {
     if (this.events.length > MAX_AGENT_SERVER_REPLAY_EVENTS) {
       this.events.splice(0, this.events.length - MAX_AGENT_SERVER_REPLAY_EVENTS);
     }
+    this.rebuildLatestTurnSummary();
   }
 
   attach(client) {
@@ -555,6 +623,19 @@ class ServerOwnedSession {
     this.scheduleIdleStop();
   }
 
+  async appendCanonicalMessage(input) {
+    if (this.activeRequestContext) {
+      throw new AgentServerProtocolError("Canonical Voice cannot append while the strong foreground turn is active.", "AGENT_SERVER_SESSION_BUSY");
+    }
+    const result = await this.worker.request("canonical_message.append", input);
+    return result.receipt || null;
+  }
+
+  async findCanonicalMessageReceipt(operationId) {
+    const result = await this.worker.request("canonical_message.find", { operationId });
+    return result.receipt || null;
+  }
+
   async request(_client, typeValue, payload, requestContextValue) {
     const type = String(typeValue || "");
     if (!BRIDGE_REQUEST_PATTERN.test(type)) throw new AgentServerProtocolError(`Bridge request type is not allowed: ${type || "missing"}.`);
@@ -570,14 +651,25 @@ class ServerOwnedSession {
     this.activeRequests += 1;
     if (type === "prompt") {
       this.activeRequestContext = requestContext;
+      const startedAt = new Date().toISOString();
+      this.latestTurn = {
+        id: requestContext.turnId,
+        state: "running",
+        requestedAt: startedAt,
+        startedAt,
+        completedAt: null,
+        assistantMessageId: null
+      };
       this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, presence: true });
     }
     try {
       const result = await this.worker.request(type, payload);
-      if (type === "prompt") this.publish({ type: "zyra_server_turn_completed", outcome: "completed" });
+      if (type === "prompt" && !this.isTurnTerminal(requestContext.turnId)) {
+        this.publish({ type: "zyra_server_turn_completed", outcome: "completed" });
+      }
       return result;
     } catch (error) {
-      if (type === "prompt") {
+      if (type === "prompt" && !this.isTurnTerminal(requestContext.turnId)) {
         this.publish({
           type: "zyra_server_turn_completed",
           outcome: "failed",
@@ -596,7 +688,22 @@ class ServerOwnedSession {
   }
 
   publish(event) {
+    const occurredAt = new Date().toISOString();
+    const previousAttention = this.pendingApprovalRequestIds.size > 0;
+    const previousBackgroundWork = this.hasBackgroundWork();
     this.updateBackgroundWork(event);
+    this.updateRuntimeSummary(event, this.activeRequestContext, occurredAt);
+    if (event?.type === "session_config") {
+      const config = {
+        model: event.model,
+        thinking: event.thinking,
+        profile: event.profile,
+        runtimeMode: event.runtimeMode,
+        webSearch: event.webSearch,
+        webFetch: event.webFetch
+      };
+      this.connectedResult = { ...(this.connectedResult || {}), ...config, config };
+    }
     if (event?.type === "session_title" && event.title) {
       void this.server.catalog.updateChat(this.sessionKey, { title: event.title }).then(() => {
         this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, title: true });
@@ -604,7 +711,7 @@ class ServerOwnedSession {
     }
     const entry = {
       sequence: ++this.sequence,
-      occurredAt: new Date().toISOString(),
+      occurredAt,
       event,
       ...(this.activeRequestContext ? { requestContext: this.activeRequestContext } : {})
     };
@@ -618,7 +725,75 @@ class ServerOwnedSession {
     for (const client of this.clients) {
       this.server.send(client, { type: "session.event", sessionKey: this.sessionKey, ...entry });
     }
+    if (
+      previousAttention !== (this.pendingApprovalRequestIds.size > 0)
+      || previousBackgroundWork !== this.hasBackgroundWork()
+    ) {
+      this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, presence: true });
+    }
     this.scheduleIdleStop();
+  }
+
+  isTurnTerminal(turnIdValue) {
+    const turnId = String(turnIdValue || "").trim();
+    return Boolean(
+      turnId
+      && this.latestTurn?.id === turnId
+      && this.latestTurn.completedAt
+      && this.latestTurn.state !== "running"
+    );
+  }
+
+  rebuildLatestTurnSummary() {
+    this.latestTurn = null;
+    for (const entry of this.events) {
+      this.updateLatestTurnSummary(entry.event, entry.requestContext, entry.occurredAt);
+    }
+  }
+
+  updateRuntimeSummary(event, requestContext, occurredAt) {
+    if (event?.type === "approval_requested" && event.requestId) {
+      this.pendingApprovalRequestIds.add(String(event.requestId));
+    }
+    if (event?.type === "approval_resolved" && event.requestId) {
+      this.pendingApprovalRequestIds.delete(String(event.requestId));
+    }
+    this.updateLatestTurnSummary(event, requestContext, occurredAt);
+    if (event?.type === "zyra_server_turn_completed") this.pendingApprovalRequestIds.clear();
+  }
+
+  updateLatestTurnSummary(event, requestContext, occurredAt) {
+    const turnId = String(requestContext?.turnId || event?.turnId || "").trim();
+    if (turnId && this.latestTurn?.id !== turnId) {
+      this.latestTurn = {
+        id: turnId,
+        state: "running",
+        requestedAt: occurredAt,
+        startedAt: occurredAt,
+        completedAt: null,
+        assistantMessageId: null
+      };
+    }
+    if (event?.type === "message_end" && event.message?.role === "assistant" && event.message.id && this.latestTurn) {
+      this.latestTurn = { ...this.latestTurn, assistantMessageId: String(event.message.id) };
+    }
+    if (event?.type !== "zyra_server_turn_completed" && event?.type !== "agent_end") return;
+    const completedTurnId = turnId || this.latestTurn?.id;
+    if (!completedTurnId) return;
+    const base = this.latestTurn?.id === completedTurnId
+      ? this.latestTurn
+      : {
+          id: completedTurnId,
+          requestedAt: occurredAt,
+          startedAt: occurredAt,
+          assistantMessageId: null
+        };
+    const outcome = event?.type === "agent_end" ? "completed" : String(event.outcome || "completed");
+    this.latestTurn = {
+      ...base,
+      state: outcome === "failed" ? "error" : outcome === "interrupted" ? "interrupted" : "completed",
+      completedAt: occurredAt
+    };
   }
 
   updateBackgroundWork(event) {
@@ -649,6 +824,8 @@ class ServerOwnedSession {
       clients: [...this.clients].map((client) => ({ clientId: client.clientId, surface: client.surface })),
       activeRequests: this.activeRequests,
       activeRequestContext: this.activeRequestContext,
+      latestTurn: this.latestTurn ? { ...this.latestTurn } : null,
+      attention: this.pendingApprovalRequestIds.size > 0 ? "approval" : null,
       backgroundWorkActive: this.hasBackgroundWork(),
       latestSequence: this.sequence,
       alive: this.worker.isAlive()

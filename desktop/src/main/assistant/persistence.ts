@@ -5,9 +5,11 @@ import { join } from 'node:path'
 import log from 'electron-log'
 import initSqlJs, { type Database as SqlDatabase } from 'sql.js/dist/sql-asm.js'
 import type {
+    AssistantActivity,
     AssistantDomainEvent,
     AssistantGetHistoryPageInput,
     AssistantHistoryPage,
+    AssistantMessage,
     AssistantReviewIndex,
     AssistantSearchTurnsResult,
     AssistantSessionTurnUsageEntry,
@@ -26,7 +28,8 @@ import {
     readAssistantFirstUserMessageText,
     readAssistantLatestUserMessageText,
     readAssistantPersistenceRecord,
-    readAssistantSessionTurnUsage
+    readAssistantSessionTurnUsage,
+    readAssistantTimelineProjectionRows
 } from './persistence-read'
 import {
     initializeAssistantPersistenceSchema,
@@ -38,6 +41,7 @@ import {
     persistAssistantEvent,
     persistAssistantSnapshotMeta,
     replaceAssistantSnapshot,
+    upsertAssistantCanonicalTimelineProjection,
     upsertAssistantMeta
 } from './persistence-write'
 import {
@@ -161,6 +165,13 @@ export class AssistantPersistence {
         return this.enqueue(() => readAssistantThreadDetail(this.requireDb(), threadId))
     }
 
+    async readTimelineProjectionRows(threadId: string) {
+        await this.ensureInitialized()
+        this.clearPendingEventTimer()
+        await this.processPendingEvents()
+        return this.enqueue(() => readAssistantTimelineProjectionRows(this.requireDb(), threadId))
+    }
+
     async readHistoryPage(input: AssistantGetHistoryPageInput): Promise<AssistantHistoryPage> {
         await this.ensureInitialized()
         this.clearPendingEventTimer()
@@ -173,6 +184,22 @@ export class AssistantPersistence {
         this.clearPendingEventTimer()
         await this.processPendingEvents()
         return this.enqueue(() => readAssistantReviewIndex(this.requireDb(), threadId))
+    }
+
+    async projectCanonicalReviewTimeline(input: {
+        threadId: string
+        messages: AssistantMessage[]
+        activities: AssistantActivity[]
+        removedMessageIds?: string[]
+        removedActivityIds?: string[]
+    }): Promise<void> {
+        await this.ensureInitialized()
+        this.clearPendingEventTimer()
+        await this.processPendingEvents()
+        await this.enqueue(() => {
+            upsertAssistantCanonicalTimelineProjection(this.requireDb(), input)
+            this.scheduleFlush()
+        })
     }
 
     async searchTurns(threadId: string, query: string, limit?: number): Promise<AssistantSearchTurnsResult> {

@@ -193,7 +193,7 @@ export function FolderBrowseHeader({
                         <div
                             aria-hidden={!breadcrumbMenuOpen}
                             className={cn(
-                                'absolute left-0 top-[calc(100%+0.45rem)] z-50 w-[min(360px,80vw)] origin-top overflow-hidden rounded-xl bg-[#18181c] shadow-2xl shadow-black/40 ring-1 ring-white/10',
+                                'absolute left-0 top-[calc(100%+0.45rem)] z-50 w-[min(360px,80vw)] origin-top overflow-hidden rounded-xl border border-sparkle-border bg-sparkle-card shadow-2xl shadow-black/25',
                                 'transition-[opacity,transform,visibility] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none',
                                 breadcrumbMenuOpen
                                     ? 'visible translate-y-0 scale-100 opacity-100'

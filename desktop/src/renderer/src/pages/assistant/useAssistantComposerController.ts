@@ -27,7 +27,11 @@ import {
 import { useAssistantComposerProjectData } from './useAssistantComposerProjectData'
 import { useAssistantSpeechInput } from './useAssistantSpeechInput'
 import { useAssistantComposerControllerEffects } from './useAssistantComposerControllerEffects'
-import { mergeAssistantComposerPreferences, type AssistantComposerPreferenceEffort } from './assistant-composer-preferences'
+import type { AssistantComposerPreferenceEffort } from './assistant-composer-preferences'
+import {
+    serializeAssistantBrowserAnnotation,
+    subscribeAssistantBrowserAnnotationAttachments
+} from './assistant-browser-annotation-composer'
 import { coerceAssistantReasoningEffortForModel, getAssistantModelReasoningEfforts } from '@shared/assistant/reasoning-efforts'
 import {
     type AssistantComposerSessionState
@@ -67,6 +71,7 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         isConnected,
         isConnecting = false,
         activeModel,
+        activeEffort,
         modelOptions,
         modelsLoading = false,
         modelsError = null,
@@ -77,6 +82,7 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         runtimeMode,
         interactionMode,
         projectPath,
+        acceptBrowserAnnotations = true,
         compact = false,
         submitLabel = 'Send',
         dirtySubmitLabel,
@@ -130,8 +136,6 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
     const [mentionCanScrollDown, setMentionCanScrollDown] = useState(false)
     const [mentionChangedStateByPath, setMentionChangedStateByPath] = useState<Record<string, 'staged' | 'unstaged' | 'both'>>({})
     const [mentionRecentModifiedAtByPath, setMentionRecentModifiedAtByPath] = useState<Record<string, number>>({})
-    const [modelCanScrollUp, setModelCanScrollUp] = useState(false)
-    const [modelCanScrollDown, setModelCanScrollDown] = useState(false)
     const [branchRefreshToken, setBranchRefreshToken] = useState(0)
     const [isSwitchingBranch, setIsSwitchingBranch] = useState(false)
     const [branchActionError, setBranchActionError] = useState<string | null>(null)
@@ -194,6 +198,20 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
     )
     const effortOptionsSignature = effortOptions.join('\n')
     useEffect(() => {
+        const canonicalModel = normalizeComposerDefaultModel(activeModel)
+        if (canonicalModel) setSelectedModel(canonicalModel)
+    }, [activeModel, normalizedSessionId])
+    useEffect(() => {
+        if (runtimeMode) setSelectedRuntimeMode(runtimeMode)
+    }, [normalizedSessionId, runtimeMode])
+    useEffect(() => {
+        if (interactionMode) setSelectedInteractionMode(interactionMode)
+    }, [interactionMode, normalizedSessionId])
+    useEffect(() => {
+        if (!activeEffort) return
+        setSelectedEffort(coerceAssistantReasoningEffortForModel(activeEffort, activeModel || selectedModel))
+    }, [activeEffort, activeModel, normalizedSessionId])
+    useEffect(() => {
         setSelectedEffort((current) => coerceAssistantReasoningEffortForModel(current, selectedModelOption))
     }, [effortOptionsSignature, selectedModel])
     const availableModelIdSignature = useMemo(() => availableModelOptions.map((model) => model.id).join('\n'), [availableModelOptions])
@@ -206,15 +224,6 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
             return normalizedCurrent && availableModelIds.has(normalizedCurrent) ? normalizedCurrent : preferredAvailableModelId
         })
     }, [availableModelIdSignature, availableModelOptions, preferredAvailableModelId])
-    useEffect(() => {
-        mergeAssistantComposerPreferences({
-            model: normalizeComposerDefaultModel(selectedModel) || undefined,
-            runtimeMode: selectedRuntimeMode,
-            interactionMode: selectedInteractionMode,
-            effort: selectedEffort,
-            fastModeEnabled
-        })
-    }, [fastModeEnabled, selectedEffort, selectedInteractionMode, selectedModel, selectedRuntimeMode])
     const { currentComposerState, isDirty } = useAssistantComposerDirtyState({
         text, selectedModel, selectedRuntimeMode, selectedInteractionMode, selectedEffort, fastModeEnabled,
         contextFiles, persistedComposerState: persistedSessionStateRef.current
@@ -222,6 +231,29 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
     latestTextRef.current = text
     latestInlineMentionTagsRef.current = inlineMentionTags
     latestContextFilesRef.current = contextFiles
+
+    useEffect(() => {
+        if (!acceptBrowserAnnotations || !normalizedSessionId) return
+        return subscribeAssistantBrowserAnnotationAttachments(normalizedSessionId, ({ annotation, artifact, reference }) => {
+            setContextFiles((current) => {
+                if (current.some((file) => file.id === annotation.id)) return current
+                return [...current, {
+                    id: annotation.id,
+                    path: reference,
+                    name: `preview-annotation-${annotation.id.replace(/[^a-z0-9_-]/gi, '-').slice(0, 80)}.png`,
+                    content: serializeAssistantBrowserAnnotation(annotation),
+                    mimeType: artifact.mimeType,
+                    kind: 'image',
+                    sizeBytes: artifact.sizeBytes,
+                    previewText: annotation.comment || 'Browser annotation',
+                    previewDataUrl: artifact.thumbnailDataUrl,
+                    source: 'paste',
+                    animateIn: true
+                }]
+            })
+            window.requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }))
+        })
+    }, [acceptBrowserAnnotations, normalizedSessionId])
 
     const persistComposerSessionStateImmediately = (nextState: AssistantComposerSessionState) =>
         persistAssistantComposerSessionStateImmediately({ sessionId: normalizedSessionId, nextState, persistedSessionStateRef, persistTimeoutRef })
@@ -244,8 +276,6 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         mentionCandidatesLength: mentionCandidates.length,
         activeMentionIndex,
         showModelDropdown,
-        modelQuery,
-        modelsError,
         modelsLoading,
         filteredModelOptionsLength: filteredModelOptions.length,
         activeModelIndex,
@@ -293,8 +323,6 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         setShowBranchDropdown,
         setMentionCanScrollUp,
         setMentionCanScrollDown,
-        setModelCanScrollUp,
-        setModelCanScrollDown,
         setIsCompactFooter
     })
 
@@ -396,10 +424,19 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
             }))
         }
     })
-    const voiceInput = useAssistantSpeechInput({ text, setText, setComposerCursor, textareaRef, disabled, isConnected, engine: settings.assistantTranscriptionEngine })
+    const voiceInput = useAssistantSpeechInput({
+        text,
+        setText,
+        setComposerCursor,
+        textareaRef,
+        disabled,
+        isConnected,
+        engine: settings.assistantTranscriptionEngine,
+        scopeKey: `${normalizedSessionId || 'new'}:${resetStateToken || ''}`
+    })
     const capabilities = useAssistantComposerCapabilitiesState({
         disabled, disabledReason, isConnected, isConnecting, isSending, isThinking, allowEmptySubmit, text,
-        contextFilesLength: contextFiles.length, voiceBusy: voiceInput.isRecording || voiceInput.isTranscribing, hasStopHandler: Boolean(onStop)
+        contextFilesLength: contextFiles.length, voiceBusy: voiceInput.isStarting || voiceInput.isRecording || voiceInput.isTranscribing, hasStopHandler: Boolean(onStop)
     })
     const handleCancelDirty = () => {
         resetAssistantComposerDirtyState({
@@ -517,10 +554,6 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         mentionCanScrollDown,
         setMentionCanScrollUp,
         setMentionCanScrollDown,
-        modelCanScrollUp,
-        modelCanScrollDown,
-        setModelCanScrollUp,
-        setModelCanScrollDown,
         selectedEffort,
         setSelectedEffort,
         effortOptions,

@@ -32,8 +32,8 @@ export function useProjectStatsModal(
 
     const statChips = useMemo<StatChip[]>(() => ([
         { key: 'projects', label: 'projects', value: totalProjects, icon: Code, color: 'var(--accent-primary)' },
-        { key: 'frameworks', label: 'frameworks', value: frameworkCount, icon: FileCode, color: '#22c55e' },
-        { key: 'types', label: 'types', value: typeCount, icon: GitBranch, color: '#f59e0b' }
+        { key: 'frameworks', label: 'frameworks', value: frameworkCount, icon: FileCode, color: 'var(--status-success)' },
+        { key: 'types', label: 'types', value: typeCount, icon: GitBranch, color: 'var(--status-warning)' }
     ]), [totalProjects, frameworkCount, typeCount])
 
     const modalProjects = useMemo(() => {

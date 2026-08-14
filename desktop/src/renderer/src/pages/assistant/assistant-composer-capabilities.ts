@@ -208,14 +208,14 @@ export function deriveAssistantComposerCapabilities(
             inputDisabled: false,
             attachDisabled: attachmentsLocked,
             controlsLocked,
-            voiceDisabled: true,
+            voiceDisabled: false,
             canSend,
             canStop: false,
-            sendDisabled: true,
+            sendDisabled: !canSend,
             showBusySendActions: false,
             placeholder: DEFAULT_ASSISTANT_COMPOSER_PLACEHOLDER,
-            statusLabel: 'Connecting...',
-            detailLabel: 'Drafting stays available while the assistant session reconnects.',
+            statusLabel: 'Getting ready',
+            detailLabel: 'You can send now. Zyra will begin as soon as the session is ready.',
             tone: 'info'
         }
     }
@@ -242,7 +242,7 @@ export function deriveAssistantComposerCapabilities(
             inputDisabled: false,
             attachDisabled: attachmentsLocked,
             controlsLocked,
-            voiceDisabled: true,
+            voiceDisabled: false,
             canSend,
             canStop,
             sendDisabled: !(canStop || canSend),

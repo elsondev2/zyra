@@ -2,7 +2,7 @@
  * Loading state with timer and skeleton
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react'
 import { cn } from '@/lib/utils'
 import { ZyraLogoASCII } from './ZyraLogo'
 
@@ -11,20 +11,36 @@ interface LoadingStateProps {
     detail?: string
     className?: string
     minHeightClassName?: string
+    affectsAppChrome?: boolean
 }
 
 let activeLoadingContentCount = 0
+const loadingScreenListeners = new Set<() => void>()
+
+function getLoadingScreenActive() {
+    return activeLoadingContentCount > 0
+}
+
+function subscribeLoadingScreenState(listener: () => void) {
+    loadingScreenListeners.add(listener)
+    return () => loadingScreenListeners.delete(listener)
+}
+
+export function useLoadingScreenActive() {
+    return useSyncExternalStore(subscribeLoadingScreenState, getLoadingScreenActive, () => false)
+}
 
 function emitLoadingScreenState(active: boolean) {
+    const wasActive = getLoadingScreenActive()
     if (active) {
         activeLoadingContentCount += 1
     } else {
         activeLoadingContentCount = Math.max(0, activeLoadingContentCount - 1)
     }
 
-    window.dispatchEvent(new CustomEvent('zyra:loading-screen-state', {
-        detail: { active: activeLoadingContentCount > 0 }
-    }))
+    const isActive = getLoadingScreenActive()
+    if (wasActive === isActive) return
+    for (const listener of loadingScreenListeners) listener()
 }
 
 function useElapsedTime() {
@@ -47,18 +63,19 @@ function formatTime(ms: number) {
     return `${seconds}.${tenths}s`
 }
 
-function LoadingContent({ label }: { label: string }) {
+function LoadingContent({ label, affectsAppChrome = false }: { label: string; affectsAppChrome?: boolean }) {
     const elapsed = useElapsedTime()
 
-    useEffect(() => {
+    useLayoutEffect(() => {
+        if (!affectsAppChrome) return
         emitLoadingScreenState(true)
         return () => emitLoadingScreenState(false)
-    }, [])
+    }, [affectsAppChrome])
 
     return (
         <div className="flex -translate-y-[5vh] flex-col items-center justify-center text-center" role="status" aria-label={label}>
             <ZyraLogoASCII shimmer size="lg" tone="neutral" variant="loading" className="opacity-100" />
-            <div className="mt-5 rounded-full border border-white/[0.07] bg-white/[0.035] px-2.5 py-1 font-mono text-[11px] leading-none tabular-nums text-sparkle-text-muted/80">
+            <div className="mt-5 rounded-full border border-[color-mix(in_srgb,var(--color-text)_7%,transparent)] bg-[color-mix(in_srgb,var(--color-text)_4%,transparent)] px-2.5 py-1 font-mono text-[11px] leading-none tabular-nums text-sparkle-text-muted/80">
                 {formatTime(elapsed)}
             </div>
         </div>
@@ -69,11 +86,12 @@ export function LoadingSpinner({
     message = 'Loading...',
     detail,
     className,
-    minHeightClassName = 'min-h-[calc(100vh-34px)]'
+    minHeightClassName = 'min-h-[calc(100vh-34px)]',
+    affectsAppChrome = false
 }: LoadingStateProps) {
     return (
         <div className={cn('flex items-center justify-center px-4 py-0', minHeightClassName, className)}>
-            <LoadingContent label={detail || message} />
+            <LoadingContent label={detail || message} affectsAppChrome={affectsAppChrome} />
         </div>
     )
 }
@@ -81,11 +99,12 @@ export function LoadingSpinner({
 export function LoadingOverlay({
     message = 'Loading...',
     detail,
-    className
+    className,
+    affectsAppChrome = false
 }: LoadingStateProps) {
     return (
         <div className={cn('pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4', className)}>
-            <LoadingContent label={detail || message} />
+            <LoadingContent label={detail || message} affectsAppChrome={affectsAppChrome} />
         </div>
     )
 }

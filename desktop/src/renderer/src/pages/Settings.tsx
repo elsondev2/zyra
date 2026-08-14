@@ -1,28 +1,63 @@
-import { ArrowLeft, Wrench } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { useSettings } from '@/lib/settings'
+import {
+    SettingsButton,
+    SettingsPageContainer,
+    SettingsRow,
+    SettingsSection,
+    SettingsSwitch
+} from './settings/settings-layout'
 
-export default function Settings() {
-    const navigate = useNavigate()
+export default function GeneralSettings() {
+    const { settings, updateSettings, clearCache } = useSettings()
+    const [startupStatus, setStartupStatus] = useState<string | null>(null)
+
+    useEffect(() => {
+        let mounted = true
+        void window.devscope.getStartupSettings().then((result) => {
+            if (!mounted || !result.success) return
+            const payload = result as typeof result & {
+                settings?: { openAtLogin?: boolean; openAsHidden?: boolean }
+                openAtLogin?: boolean
+                openAsHidden?: boolean
+            }
+            const startup = payload.settings ?? payload
+            updateSettings({ startWithWindows: startup.openAtLogin === true, startMinimized: startup.openAsHidden === true })
+        }).catch(() => {})
+        return () => { mounted = false }
+    }, [updateSettings])
+
+    const setStartup = async (openAtLogin: boolean, openAsHidden: boolean) => {
+        try {
+            const result = await window.devscope.setStartupSettings({ openAtLogin, openAsHidden })
+            if (!result.success) throw new Error(result.error || 'Startup update failed.')
+            updateSettings({ startWithWindows: openAtLogin, startMinimized: openAsHidden })
+            setStartupStatus('Saved')
+        } catch (error) {
+            setStartupStatus(error instanceof Error ? error.message : 'Startup update failed.')
+        }
+        window.setTimeout(() => setStartupStatus(null), 3000)
+    }
 
     return (
-        <div className="flex min-h-[calc(100vh-82px)] items-center justify-center animate-fadeIn">
-            <section className="w-full max-w-md rounded-2xl border border-white/10 bg-sparkle-card/80 p-7 text-center shadow-[0_24px_80px_rgba(0,0,0,0.24)]">
-                <div className="mx-auto mb-5 flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.035] text-sparkle-text-secondary">
-                    <Wrench size={20} strokeWidth={1.7} />
-                </div>
-                <h1 className="text-xl font-semibold text-sparkle-text">Settings coming soon</h1>
-                <p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-sparkle-text-secondary">
-                    For now, Zyra is focused on the chat shell.
-                </p>
-                <button
-                    type="button"
-                    onClick={() => navigate('/assistant')}
-                    className="mx-auto mt-6 inline-flex h-9 items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.035] px-4 text-sm font-medium text-sparkle-text-secondary transition-colors hover:bg-white/[0.06] hover:text-sparkle-text"
-                >
-                    <ArrowLeft size={15} strokeWidth={1.8} />
-                    Back to chat
-                </button>
-            </section>
-        </div>
+        <SettingsPageContainer>
+            <SettingsSection title="Desktop">
+                <SettingsRow
+                    title="Open at login"
+                    description="Launch Zyra automatically when Windows starts."
+                    status={startupStatus === 'Saved' ? 'Saved' : startupStatus ? 'Not saved' : null}
+                    statusTone={startupStatus === 'Saved' ? 'ready' : 'danger'}
+                    statusTitle={startupStatus && startupStatus !== 'Saved' ? startupStatus : undefined}
+                    control={<SettingsSwitch checked={settings.startWithWindows} onCheckedChange={(checked) => void setStartup(checked, checked ? settings.startMinimized : false)} label="Open Zyra at login" />}
+                />
+                {settings.startWithWindows ? <SettingsRow title="Start hidden" description="Keep the window in the tray when Zyra opens at login." control={<SettingsSwitch checked={settings.startMinimized} onCheckedChange={(checked) => void setStartup(true, checked)} label="Start Zyra hidden" />} /> : null}
+                <SettingsRow title="Chat rail" description="Keep the conversation sidebar collapsed across restarts." control={<SettingsSwitch checked={settings.sidebarCollapsed} onCheckedChange={(sidebarCollapsed) => updateSettings({ sidebarCollapsed })} label="Collapse chat rail" />} />
+                <SettingsRow title="Agent Inbox sidebar" description="Use one flat chat list in creation order. Active work renders as rich cards; settled chats collapse to compact rows. Switch back any time." control={<SettingsSwitch checked={settings.assistantAgentInboxSidebarEnabled} onCheckedChange={(assistantAgentInboxSidebarEnabled) => updateSettings({ assistantAgentInboxSidebarEnabled })} label="Use Agent Inbox sidebar" />} />
+            </SettingsSection>
+
+            <SettingsSection title="Local maintenance">
+                <SettingsRow title="Cached UI data" description="Clear non-setting renderer caches. Canonical transcripts, retained workspaces, settings, and project files are preserved." control={<SettingsButton onClick={clearCache}>Clear cache</SettingsButton>} />
+            </SettingsSection>
+        </SettingsPageContainer>
     )
 }

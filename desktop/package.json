@@ -14,28 +14,44 @@
         "preview": "electron-vite preview",
         "preview:browser": "vite preview --config vite.browser.config.ts --host 127.0.0.1",
         "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+        "typecheck:browser-runtime": "tsc --noEmit -p tsconfig.browser-runtime.json",
         "test:activity-rail": "bun scripts/test-activity-rail-contract.ts",
+        "test:settings": "bun scripts/test-settings-contract.ts",
+        "test:themes": "bun scripts/test-theme-contract.ts",
         "test:agent-surface": "bun scripts/test-agent-surface-contract.ts",
-    "test:agent-server": "bun scripts/test-agent-server-worker.ts",
+        "test:agent-server": "bun scripts/test-agent-server-worker.ts",
         "test:assistant-fleet": "bun scripts/test-assistant-fleet-contract.tsx",
+        "test:assistant-inspector-workspaces": "bun scripts/test-assistant-inspector-workspace-state.ts",
         "test:agent-control": "bun scripts/test-agent-control-contract.ts && bun scripts/test-agent-control-policy.ts && bun scripts/test-agent-control-revisions.ts && bun scripts/test-browser-plan-executor.ts && bun scripts/test-zyra-browser-visual-control.ts && bun scripts/test-assistant-control-approval-preferences.ts && bun scripts/test-agent-control-bridge.ts && bun scripts/test-agent-control-audit.ts && bun scripts/test-agent-control-pairing.ts",
         "smoke:browser-visual": "node scripts/maint/run-zyra-browser-visual-smoke.mjs",
+        "test:browser-annotation": "bun scripts/test-browser-annotation-composer.ts && node scripts/maint/run-browser-annotation-test.mjs",
+        "test:browser-assistant-bridge": "bun scripts/test-browser-assistant-bridge.ts",
+        "test:browser-client-host": "bun scripts/test-browser-client-host.ts",
+        "test:browser-devscope-live": "bun scripts/test-browser-devscope-live-adapter.ts",
         "test:assistant-diff": "bun scripts/test-assistant-diff-contract.ts",
         "test:assistant-history": "bun scripts/test-assistant-history-persistence.ts && bun scripts/test-assistant-paged-history.ts",
-        "test:assistant-project": "bun scripts/test-assistant-project-lock.ts",
+        "test:assistant-canonical-review": "bun scripts/test-assistant-canonical-review.ts",
+        "test:assistant-project": "bun scripts/test-assistant-project-lock.ts && bun scripts/test-project-icon-resolver.ts",
         "test:assistant-images": "bun scripts/test-assistant-image-pipeline.ts",
+        "test:assistant-account-runtime": "node scripts/test-assistant-account-electron-runtime.mjs",
         "test:assistant-markdown": "bun scripts/test-assistant-markdown-cache.tsx",
         "test:assistant-realtime-voice": "bun scripts/test-assistant-realtime-voice.ts",
+        "test:assistant-voice-core": "bun scripts/test-assistant-voice-core.ts",
+        "test:assistant-voice-transcription": "bun scripts/test-assistant-voice-transcription.ts",
         "test:markdown-links": "bun scripts/test-markdown-link-contract.ts",
         "test:markdown-renderer": "bun scripts/test-markdown-renderer-features.tsx",
         "test:assistant-performance": "bun scripts/test-assistant-history-performance.ts",
+        "test:assistant-timeline-scroll": "bun scripts/test-assistant-timeline-scroll.ts",
         "test:file-change-lifecycle": "bun scripts/test-file-change-lifecycle.ts",
         "test:file-preview-navigation": "bun scripts/test-file-preview-navigation.ts",
         "test:file-preview-performance": "bun scripts/test-file-preview-performance.ts",
         "test:pi-assistant-lifecycle": "bun scripts/test-pi-assistant-lifecycle.ts",
-        "test:assistant-startup": "bun scripts/test-assistant-startup-connection.ts",
+        "test:assistant-startup": "bun scripts/test-assistant-startup-connection.ts && bun scripts/test-assistant-shell-startup.tsx",
         "test:assistant-streaming": "bun scripts/test-assistant-message-content.ts && bun scripts/test-assistant-streaming.ts",
         "test:assistant-switching": "bun scripts/test-assistant-session-switching.ts",
+        "test:assistant-routing": "bun scripts/test-assistant-chat-routing.ts",
+        "test:assistant-new-chat": "bun scripts/test-assistant-new-chat-surface.ts",
+        "test:assistant-client-selection": "bun scripts/test-assistant-client-local-selection.ts",
         "maint:loc": "node scripts/maint/check-loc.mjs",
         "maint:loc:strict": "node scripts/maint/check-loc.mjs --strict",
         "postinstall": "echo Zyra: skipping native terminal rebuild",
@@ -51,6 +67,8 @@
     },
     "dependencies": {
         "@chenglou/pretext": "^0.0.5",
+        "@dicebear/core": "^10.4.0",
+        "@dicebear/styles": "^10.3.0",
         "@dnd-kit/core": "^6.3.1",
         "@dnd-kit/modifiers": "^9.0.0",
         "@dnd-kit/sortable": "^10.0.0",
@@ -68,6 +86,7 @@
         "mermaid": "^11.12.3",
         "monaco-editor": "^0.55.1",
         "node-pty": "^1.1.0",
+        "ogl": "^1.0.11",
         "react": "^19.2.0",
         "react-dom": "^19.2.0",
         "react-markdown": "^10.1.0",
@@ -121,12 +140,16 @@
             {
                 "from": "../native/zyra-computer-use/publish",
                 "to": "zyra-computer-use",
-                "filter": ["**/*"]
+                "filter": [
+                    "**/*"
+                ]
             },
             {
                 "from": "../extensions/zyra-browser-control/dist/unpacked",
                 "to": "zyra-browser-control-extension",
-                "filter": ["**/*"]
+                "filter": [
+                    "**/*"
+                ]
             }
         ],
         "publish": [

@@ -1,6 +1,7 @@
 import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
+import { browserAssistantBridgeProxyPlugin } from './scripts/maint/browser-assistant-bridge-proxy'
 
 const projectRoot = resolve(__dirname)
 const rendererRoot = resolve(__dirname, 'src/renderer')
@@ -45,7 +46,7 @@ export default defineConfig({
                 }
             }
         },
-        plugins: [react()],
+        plugins: [react(), browserAssistantBridgeProxyPlugin()],
         resolve: {
             alias: {
                 '@': resolve(__dirname, 'src/renderer/src'),
@@ -58,6 +59,7 @@ export default defineConfig({
         },
         server: {
             port: 5174,
+            hmr: { clientPort: 5174 },
             fs: {
                 allow: [
                     projectRoot

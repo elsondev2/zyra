@@ -1,7 +1,11 @@
 import { buildRenderableFileChangePatch } from '@shared/assistant/contracts/file-change'
 import { parseAgentSurfaceDescriptor } from '@shared/assistant/contracts'
 import type { AssistantActivity, AssistantMessage, AssistantProposedPlan } from '@shared/assistant/contracts'
-import { ASSISTANT_TIMELINE_KIND_RANK, compareAssistantTimelineOrderKeys } from '@shared/assistant/timeline-order'
+import {
+    ASSISTANT_TIMELINE_KIND_RANK,
+    compareAssistantTimelineStrings,
+    normalizeAssistantTimelineSequence
+} from '@shared/assistant/timeline-order'
 import {
     getSerializedAttachmentDisplayName,
     isSerializedClipboardAttachment,
@@ -63,7 +67,7 @@ export type ParsedUserAttachment = {
     isClipboard: boolean
 }
 
-function shouldRenderActivity(activity: AssistantActivity): boolean {
+export function shouldRenderActivity(activity: AssistantActivity): boolean {
     return isInternalAssistantActivity(activity)
         || activity.tone === 'tool'
         || activity.tone === 'warning'
@@ -97,6 +101,11 @@ export function shouldRenderMessage(message: AssistantMessage): boolean {
 
 export function isSubagentActivity(activity: AssistantActivity): boolean {
     return activity.kind.startsWith('subagent.') || readActivityString(activity.payload?.category) === 'subagent'
+}
+
+export function isVoiceStrongTaskActivity(activity: AssistantActivity): boolean {
+    return activity.kind === 'voice.strong-task'
+        || readActivityString(activity.payload?.category) === 'voice-strong-task'
 }
 
 export function isContextCompactionActivity(activity: AssistantActivity): boolean {
@@ -140,6 +149,7 @@ export function isIssueActivity(activity: AssistantActivity): boolean {
 
 function getActivityRenderGroupKind(activity: AssistantActivity): 'issue' | 'subagent' | 'tool' | null {
     if (isInternalAssistantActivity(activity)) return null
+    if (isVoiceStrongTaskActivity(activity)) return null
     if (isModelNoticeActivity(activity)) return null
     if (isContextCompactionActivity(activity)) return null
     if (isCommandCheckpointActivity(activity)) return null
@@ -216,16 +226,24 @@ export function findRelatedCommandActivityId(
 
     const jobId = getCommandJobId(checkpoint)
     if (!jobId) return null
-    const candidates = activities
-        .filter((activity) => activity.id !== checkpoint.id)
-        .filter((activity) => !isCommandCheckpointActivity(activity))
-        .filter((activity) => getCommandJobId(activity) === jobId)
-        .filter((activity) => activity.createdAt.localeCompare(checkpoint.createdAt) <= 0)
-    const sameTurnCandidates = checkpoint.turnId
-        ? candidates.filter((activity) => activity.turnId === checkpoint.turnId)
-        : candidates
-    return [...(sameTurnCandidates.length ? sameTurnCandidates : candidates)]
-        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.id || null
+    let latestCandidate: AssistantActivity | null = null
+    let latestSameTurnCandidate: AssistantActivity | null = null
+    for (const activity of activities) {
+        if (activity.id === checkpoint.id || isCommandCheckpointActivity(activity)) continue
+        if (getCommandJobId(activity) !== jobId) continue
+        if (activity.createdAt.localeCompare(checkpoint.createdAt) > 0) continue
+        if (!latestCandidate || activity.createdAt.localeCompare(latestCandidate.createdAt) > 0) {
+            latestCandidate = activity
+        }
+        if (
+            checkpoint.turnId
+            && activity.turnId === checkpoint.turnId
+            && (!latestSameTurnCandidate || activity.createdAt.localeCompare(latestSameTurnCandidate.createdAt) > 0)
+        ) {
+            latestSameTurnCandidate = activity
+        }
+    }
+    return latestSameTurnCandidate?.id || latestCandidate?.id || null
 }
 
 function readActivityText(value: unknown, seen = new WeakSet<object>(), depth = 0): string {
@@ -661,6 +679,36 @@ export function formatWorkingTimer(startIso: string, endIso: string): string | n
     return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`
 }
 
+function getTimelineEntryKindRank(entry: TimelineEntry): number {
+    return entry.type === 'message'
+        ? ASSISTANT_TIMELINE_KIND_RANK.message
+        : entry.type === 'plan'
+            ? ASSISTANT_TIMELINE_KIND_RANK.plan
+            : ASSISTANT_TIMELINE_KIND_RANK.activity
+}
+
+export function getAssistantTimelineMessageEntryId(message: AssistantMessage): string {
+    const providerItemId = String(message.providerItemId || '').trim()
+    if (message.modality === 'voice' && providerItemId) {
+        return `voice-message:${message.role}:${providerItemId}`
+    }
+    return message.id
+}
+
+function getTimelineEntryRecordId(entry: TimelineEntry): string {
+    if (entry.type === 'message') return entry.message.id
+    if (entry.type === 'plan') return entry.plan.id
+    if (entry.type === 'activity') return entry.activity.id
+    return entry.activities[0]?.id || entry.id
+}
+
+function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry): number {
+    return compareAssistantTimelineStrings(left.createdAt, right.createdAt)
+        || normalizeAssistantTimelineSequence(left.timelineSequence) - normalizeAssistantTimelineSequence(right.timelineSequence)
+        || getTimelineEntryKindRank(left) - getTimelineEntryKindRank(right)
+        || compareAssistantTimelineStrings(getTimelineEntryRecordId(left), getTimelineEntryRecordId(right))
+}
+
 export function getTimelineEntries(
     messages: AssistantMessage[],
     activities: AssistantActivity[],
@@ -671,7 +719,7 @@ export function getTimelineEntries(
     const chronologicalActivities = [...renderedActivities].reverse()
     const sortedEntries: TimelineEntry[] = [
         ...renderedMessages.map((message) => ({
-            id: message.id,
+            id: getAssistantTimelineMessageEntryId(message),
             createdAt: message.createdAt,
             timelineSequence: message.timelineSequence,
             type: 'message' as const,
@@ -698,20 +746,7 @@ export function getTimelineEntries(
                 canImplement: !hasLaterMessage
             }
         })
-    ].sort((left, right) => compareAssistantTimelineOrderKeys(
-        {
-            createdAt: left.createdAt,
-            timelineSequence: left.timelineSequence ?? null,
-            kindRank: left.type === 'message' ? ASSISTANT_TIMELINE_KIND_RANK.message : left.type === 'plan' ? ASSISTANT_TIMELINE_KIND_RANK.plan : ASSISTANT_TIMELINE_KIND_RANK.activity,
-            id: left.type === 'plan' ? left.plan.id : left.type === 'message' ? left.message.id : left.activity.id
-        },
-        {
-            createdAt: right.createdAt,
-            timelineSequence: right.timelineSequence ?? null,
-            kindRank: right.type === 'message' ? ASSISTANT_TIMELINE_KIND_RANK.message : right.type === 'plan' ? ASSISTANT_TIMELINE_KIND_RANK.plan : ASSISTANT_TIMELINE_KIND_RANK.activity,
-            id: right.type === 'plan' ? right.plan.id : right.type === 'message' ? right.message.id : right.activity.id
-        }
-    ))
+    ].sort(compareTimelineEntries)
 
     return groupAdjacentTimelineActivities(sortedEntries)
 }
@@ -1042,6 +1077,7 @@ export function estimateTimelineRowHeight(
 ): number {
     if (row.kind === 'working') return 48
     if (row.kind === 'activity') {
+        if (isVoiceStrongTaskActivity(row.activity)) return 36
         if (isCommandCheckpointActivity(row.activity)) return 34
         if (isInternalAssistantActivity(row.activity)) return 42
         if (isContextCompactionActivity(row.activity)) return 72

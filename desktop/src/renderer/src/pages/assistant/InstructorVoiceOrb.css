@@ -1,0 +1,68 @@
+.instructor-voice-orb {
+    --instructor-orb-volume-scale: 1;
+    --instructor-orb-layout-scale: 1;
+    position: relative;
+    flex: 0 0 auto;
+}
+
+.instructor-voice-orb-full {
+    width: clamp(230px, 36vw, 330px);
+    height: clamp(230px, 36vw, 330px);
+}
+
+.instructor-voice-orb-compact {
+    width: 160px;
+    height: 160px;
+}
+
+.instructor-voice-orb-animated-layout {
+    transition:
+        width 680ms cubic-bezier(0.22, 1, 0.36, 1),
+        height 680ms cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: width, height;
+}
+
+.instructor-voice-orb-render-surface {
+    position: absolute;
+    inset: 0;
+}
+
+.instructor-voice-orb-animated-layout .instructor-voice-orb-render-surface {
+    left: 50%;
+    top: 50%;
+    right: auto;
+    bottom: auto;
+    transform: translate(-50%, -50%) scale(var(--instructor-orb-layout-scale));
+    transform-origin: center;
+    transition: transform 680ms cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform;
+}
+
+.instructor-voice-orb-volume {
+    width: 100%;
+    height: 100%;
+    transform: scale(var(--instructor-orb-volume-scale));
+    transform-origin: center;
+    transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform;
+}
+
+@media (max-width: 420px) {
+    .instructor-voice-orb-compact {
+        width: 140px;
+        height: 140px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .instructor-voice-orb-animated-layout,
+    .instructor-voice-orb-animated-layout .instructor-voice-orb-render-surface,
+    .instructor-voice-orb-volume {
+        transition: none;
+        will-change: auto;
+    }
+
+    .instructor-voice-orb-volume {
+        transform: none;
+    }
+}

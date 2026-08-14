@@ -37,6 +37,14 @@ function saveRecentProjects(entries: Record<string, RecentProjectEntry>): void {
     }
 }
 
+export function clearRecentProjects(): void {
+    try {
+        localStorage.removeItem(STORAGE_KEY)
+    } catch {
+        // Ignore storage cleanup errors.
+    }
+}
+
 export function getRecentProjects(): Record<string, RecentProjectEntry> {
     try {
         const raw = localStorage.getItem(STORAGE_KEY)

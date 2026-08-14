@@ -72,6 +72,7 @@ export const AssistantPendingUserInputPanel = memo(function AssistantPendingUser
         runtimeMode: props.runtimeMode,
         interactionMode: props.interactionMode,
         projectPath: props.selectedProjectPath,
+        acceptBrowserAnnotations: false,
         submitLabel: 'Continue'
     })
 

@@ -167,19 +167,9 @@ export function resolveAssistantThreadStatusPill(
     thread: AssistantThread | null,
     isActiveThread: boolean,
     recencyTierByThreadId?: ReadonlyMap<string, number>,
-    context?: AssistantSidebarStatusContext
+    _context?: AssistantSidebarStatusContext
 ): SessionStatusPill | null {
     if (!thread) return null
-    if (context?.connecting) {
-        return {
-            label: 'Connecting',
-            colorClass: 'text-sky-400',
-            dotClass: 'bg-sky-400',
-            badgeClass: 'bg-sky-500/[0.12] text-sky-100',
-            pulse: true,
-            showLabel: true
-        }
-    }
 
     const phase = getAssistantThreadPhase(thread)
     const latestTurn = thread.latestTurn
@@ -204,6 +194,24 @@ export function resolveAssistantThreadStatusPill(
                 pulse: true,
                 showLabel: true
             }
+        case 'background':
+            return {
+                label: 'Background',
+                colorClass: 'text-violet-300',
+                dotClass: 'bg-violet-400',
+                badgeClass: 'bg-violet-500/[0.12] text-violet-100',
+                pulse: true,
+                showLabel: true
+            }
+        case 'stale':
+            return {
+                label: 'Stale',
+                colorClass: 'text-amber-300',
+                dotClass: 'bg-amber-400',
+                badgeClass: 'bg-amber-500/[0.12] text-amber-100',
+                pulse: false,
+                showLabel: true
+            }
         case 'waiting-approval':
             return {
                 label: 'Pending',
@@ -222,6 +230,7 @@ export function resolveAssistantThreadStatusPill(
             }
         case 'ready':
         case 'idle':
+        case 'detached':
             if (
                 !isActiveThread
                 && latestTurn?.state === 'completed'
@@ -238,14 +247,21 @@ export function resolveAssistantThreadStatusPill(
             return resolveAssistantThreadRecencyPill(thread, isActiveThread, recencyTierByThreadId)
         case 'error':
             return {
-                label: 'Error',
+                label: 'Failed',
                 colorClass: 'text-red-300',
                 dotClass: 'bg-red-400',
                 badgeClass: 'bg-red-500/[0.12] text-red-100',
-                pulse: false
+                pulse: false,
+                showLabel: true
             }
         case 'stopped':
-            return resolveAssistantThreadRecencyPill(thread, isActiveThread, recencyTierByThreadId)
+            return {
+                label: 'Stopped',
+                colorClass: 'text-sparkle-text-muted',
+                dotClass: 'bg-sparkle-text-muted/55',
+                pulse: false,
+                showLabel: false
+            }
         default:
             return resolveAssistantThreadRecencyPill(thread, isActiveThread, recencyTierByThreadId)
     }
@@ -262,7 +278,11 @@ export function getAssistantThreadLastMessageAt(thread: AssistantThread | null):
         return getSortableTimestamp(messageAt) > getSortableTimestamp(latest) ? messageAt : latest
     }, null)
 
-    return latestMessageAt || thread.createdAt
+    return latestMessageAt
+        || thread.latestTurn?.completedAt
+        || thread.latestTurn?.startedAt
+        || thread.latestTurn?.requestedAt
+        || thread.createdAt
 }
 
 export function getSessionLastActivityAt(session: AssistantSession): string {
@@ -282,7 +302,7 @@ export function isRelevantAssistantSession(session: AssistantSession, activeSess
     const primaryThread = getPrimarySessionThread(session)
     if (primaryThread) {
         const phase = getAssistantThreadPhase(primaryThread)
-        if (phase.key !== 'ready' && phase.key !== 'idle' && phase.key !== 'stopped') return true
+        if (phase.key !== 'ready' && phase.key !== 'idle' && phase.key !== 'detached' && phase.key !== 'stopped') return true
         if (
             primaryThread.latestTurn?.state === 'completed'
             && primaryThread.lastSeenCompletedTurnId !== primaryThread.latestTurn.id
@@ -447,7 +467,10 @@ export function getSortableTimestamp(value: string): number {
     return Number.isFinite(timestamp) ? timestamp : 0
 }
 
-function resolveProjectPresentation(projectPath: string): Pick<SessionProjectGroup, 'projectIconPath' | 'projectType' | 'framework'> {
+function resolveProjectPresentation(
+    projectPath: string,
+    projectIconOverrides: Record<string, string> = {}
+): Pick<SessionProjectGroup, 'projectIconPath' | 'projectType' | 'framework'> {
     if (!projectPath) {
         return {
             projectIconPath: null,
@@ -456,6 +479,10 @@ function resolveProjectPresentation(projectPath: string): Pick<SessionProjectGro
         }
     }
 
+    const normalizedProjectPath = normalizeProjectPath(projectPath)
+    const manualIconPath = Object.entries(projectIconOverrides).find(([candidatePath]) => (
+        normalizeProjectPath(candidatePath).toLowerCase() === normalizedProjectPath.toLowerCase()
+    ))?.[1] || null
     const cached = getCachedProjectDetails(projectPath) as {
         projectIconPath?: string | null
         type?: string
@@ -465,7 +492,7 @@ function resolveProjectPresentation(projectPath: string): Pick<SessionProjectGro
     const firstFramework = Array.isArray(cached?.frameworks) ? cached.frameworks.find((value): value is string => typeof value === 'string' && value.trim().length > 0) : null
 
     return {
-        projectIconPath: typeof cached?.projectIconPath === 'string' ? cached.projectIconPath : null,
+        projectIconPath: manualIconPath || (typeof cached?.projectIconPath === 'string' ? cached.projectIconPath : null),
         projectType: typeof cached?.type === 'string' && cached.type.trim().length > 0 ? cached.type : null,
         framework: firstFramework || null
     }
@@ -555,11 +582,14 @@ export async function hydrateProjectMetadataForPaths(projectPaths: string[]): Pr
     return hydratedCount
 }
 
-export function groupSessionsByProject(sessions: AssistantSession[]): SessionProjectGroup[] {
+export function groupSessionsByProject(
+    sessions: AssistantSession[],
+    projectIconOverrides: Record<string, string> = {}
+): SessionProjectGroup[] {
     const groups = new Map<string, SessionProjectGroup>()
     for (const session of sessions) {
         const normalizedPath = resolveSessionProjectPath(session)
-        const projectPresentation = resolveProjectPresentation(normalizedPath)
+        const projectPresentation = resolveProjectPresentation(normalizedPath, projectIconOverrides)
         const key = getProjectKey(normalizedPath)
         const sessionUpdatedAt = getSessionLastActivityAt(session)
         const existing = groups.get(key)

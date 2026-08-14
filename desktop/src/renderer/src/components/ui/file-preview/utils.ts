@@ -11,6 +11,7 @@ import {
     TEXT_EXTENSIONS,
     VIDEO_EXTENSIONS
 } from './constants'
+import { projectLocalFileUrl } from '@/lib/browser-file-url'
 import type { PreviewFile, PreviewFileType, PreviewMediaItem, PreviewMediaSource, PreviewMediaType } from './types'
 
 const HEX_COLOR_REGEX = /#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/g
@@ -129,8 +130,9 @@ export function extractColorValues(content: string, maxItems: number): string[] 
 
 export function getFileUrl(filePath: string): string {
     if (filePath.toLowerCase().startsWith('data:image/')) return filePath
-    if (filePath.startsWith('zyra://')) return filePath
-    if (filePath.startsWith('devscope://')) return `zyra://${filePath.slice('devscope://'.length)}`
+    if (filePath.startsWith('zyra://') || filePath.startsWith('devscope://') || filePath.startsWith('file://')) {
+        return projectLocalFileUrl(filePath)
+    }
 
     const normalized = filePath.replace(/\\/g, '/')
     const isUncPath = normalized.startsWith('//')
@@ -139,7 +141,7 @@ export function getFileUrl(filePath: string): string {
         : normalized.startsWith('/') ? normalized.slice(1) : normalized
     const encoded = encodeURI(trimmed).replace(/#/g, '%23').replace(/\?/g, '%3F')
 
-    return isUncPath ? `zyra://${encoded}` : `zyra:///${encoded}`
+    return projectLocalFileUrl(isUncPath ? `zyra://${encoded}` : `zyra:///${encoded}`)
 }
 
 export function formatPreviewBytes(bytes?: number | null): string | null {

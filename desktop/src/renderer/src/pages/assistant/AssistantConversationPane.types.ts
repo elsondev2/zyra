@@ -7,14 +7,11 @@ export type AssistantConversationPaneProps = {
     rightPanelMode: 'none' | 'details' | 'plan' | 'review'
     showRightSidebarToggle?: boolean
     deletingMessageId: string | null
-    leftSidebarCollapsed: boolean
-    pinnedBubbleHeaderInset: number
     fallbackSessionMode: 'work' | 'playground'
     playgroundRootMissing: boolean
     playgroundTerminalAccess: boolean
     playgroundTerminalAccessRequestMuted: boolean
     autoStartDetachedPlaygroundChat: boolean
-    onToggleLeftSidebar: () => void
     onChoosePlaygroundRoot: () => Promise<void> | void
     onPlaygroundTerminalAccessChange: (enabled: boolean) => void
     onPlaygroundTerminalAccessRequestMutedChange: (muted: boolean) => void

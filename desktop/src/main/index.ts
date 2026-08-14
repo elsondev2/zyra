@@ -3,13 +3,16 @@
  * Main Process Entry Point
  */
 
-import { app, BrowserWindow, Menu, shell, ipcMain, nativeTheme, protocol, globalShortcut, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, Menu, shell, ipcMain, nativeTheme, protocol, globalShortcut, session, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { join } from 'path'
 import { existsSync, statSync } from 'fs'
 import { electronApp, is } from './utils'
 import log from 'electron-log'
 import { registerIpcHandlers } from './ipc'
-import { disposeAssistantService } from './assistant'
+import { disposeAssistantService, getAssistantService } from './assistant'
+import { persistAssistantClipboardImage, resolveAssistantClipboardAttachment } from './assistant/clipboard-attachments'
+import { getCodexVoiceTranscriptionState, transcribeVoiceWithCodex } from './assistant/codex-voice-transcription'
+import { BrowserClientRuntime } from './browser-client-runtime'
 import { disposeUpdater, initializeUpdater, registerUpdateWindow } from './update/manager'
 import { registerFileProtocol } from './file-protocol'
 import { isSafeBrowserNavigationUrl, isZyraBrowserPartition } from './ipc/handlers/browser-preview-handlers'
@@ -70,6 +73,7 @@ console.warn = log.warn
 
 let mainWindow: BrowserWindow | null = null
 let quickPreviewWindow: BrowserWindow | null = null
+let browserClientRuntime: BrowserClientRuntime | null = null
 let hasRegisteredIpcHandlers = false
 const FILE_PROTOCOL = 'zyra'
 const QUICK_PREVIEW_ROUTE = '/quick-open'
@@ -274,6 +278,26 @@ function buildExternalExplorerRoute(folderPath: string): string {
     return `/explorer/${encodeURIComponent(folderPath)}?${EXTERNAL_EXPLORER_LAUNCH_QUERY}`
 }
 
+function configureMainRendererMediaPermissions(): void {
+    const isTrustedMainRenderer = (webContents: Electron.WebContents | null) => (
+        Boolean(webContents && mainWindow && !mainWindow.isDestroyed() && webContents.id === mainWindow.webContents.id)
+    )
+
+    session.defaultSession.setPermissionCheckHandler((webContents, permission, _origin, details) => (
+        permission === 'media'
+        && details.isMainFrame
+        && details.mediaType === 'audio'
+        && isTrustedMainRenderer(webContents)
+    ))
+    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+        const mediaTypes = permission === 'media' && 'mediaTypes' in details && Array.isArray(details.mediaTypes)
+            ? details.mediaTypes
+            : []
+        const audioOnly = mediaTypes.length > 0 && mediaTypes.every((mediaType) => mediaType === 'audio')
+        callback(permission === 'media' && details.isMainFrame && audioOnly && isTrustedMainRenderer(webContents))
+    })
+}
+
 function createWindow(showOnReady = true, initialRoute = '/'): BrowserWindow {
     const iconPath = getAppIconPath()
     const window = new BrowserWindow({
@@ -291,6 +315,9 @@ function createWindow(showOnReady = true, initialRoute = '/'): BrowserWindow {
             contextIsolation: true,
             nodeIntegration: false,
             webviewTag: true,
+            // Pause renderer presentation while hidden; visibility reconciliation
+            // snaps transient queues to current Assistant state on restore.
+            backgroundThrottling: true,
             devTools: true
         }
     })
@@ -445,7 +472,32 @@ app.on('second-instance', (_event, argv) => {
 app.whenReady().then(() => {
     electronApp.setAppUserModelId(runtimeIdentity.appUserModelId)
     void initializeUpdater()
+    const rendererUrl = process.env['ELECTRON_RENDERER_URL']
+    try {
+        const runtime = new BrowserClientRuntime({
+            service: getAssistantService(),
+            getDevscopeTarget: () => mainWindow?.webContents || null,
+            userDataPath: app.getPath('userData'),
+            staticRoot: join(__dirname, '../renderer'),
+            ...(is.dev && rendererUrl ? { rendererUrl } : {}),
+            persistClipboardImage: persistAssistantClipboardImage,
+            resolveClipboardAttachment: resolveAssistantClipboardAttachment,
+            getVoiceTranscriptionState: getCodexVoiceTranscriptionState,
+            transcribeVoice: transcribeVoiceWithCodex
+        })
+        browserClientRuntime = runtime
+        void runtime.start().then((address) => {
+            if (browserClientRuntime === runtime) log.info('[BrowserClientHost] ready', address.origin)
+        }).catch((error) => {
+            log.warn('[BrowserClientHost] failed to start', error)
+            if (browserClientRuntime === runtime) browserClientRuntime = null
+        })
+    } catch (error) {
+        log.warn('[BrowserClientHost] could not initialize', error)
+        browserClientRuntime = null
+    }
     registerFileProtocol(FILE_PROTOCOL)
+    configureMainRendererMediaPermissions()
     nativeTheme.on('updated', syncOpenWindowIcons)
     globalShortcut.register('CommandOrControl+Alt+Escape', () => {
         void getAgentControlBroker().emergencyStop('Global emergency-stop shortcut pressed.')
@@ -486,16 +538,20 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
+    if (process.platform === 'darwin') return
+
+    void browserClientRuntime?.stop()
+    browserClientRuntime = null
     disposeAssistantService()
     disposeUpdater()
     void disposeAgentControlBroker()
-    if (process.platform !== 'darwin') {
-        app.quit()
-    }
+    app.quit()
 })
 
 app.on('before-quit', () => {
     globalShortcut.unregisterAll()
+    void browserClientRuntime?.stop()
+    browserClientRuntime = null
     disposeAssistantService()
     disposeUpdater()
     void disposeAgentControlBroker()

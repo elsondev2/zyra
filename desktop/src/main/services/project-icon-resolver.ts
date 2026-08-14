@@ -1,5 +1,5 @@
-import { access, readFile, readdir } from 'fs/promises'
-import { basename, dirname, join, resolve, isAbsolute } from 'path'
+import { access, readFile, readdir, realpath } from 'fs/promises'
+import { basename, dirname, join, resolve, isAbsolute, relative } from 'path'
 
 const COMMON_ICON_FILES = [
     'favicon.ico',
@@ -61,6 +61,19 @@ async function readJsonFile(path: string): Promise<any | null> {
     }
 }
 
+async function isPathConfinedToProject(projectPath: string, candidatePath: string): Promise<boolean> {
+    try {
+        const [realProjectPath, realCandidatePath] = await Promise.all([
+            realpath(projectPath),
+            realpath(candidatePath)
+        ])
+        const relativePath = relative(realProjectPath, realCandidatePath)
+        return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath))
+    } catch {
+        return false
+    }
+}
+
 async function resolveExistingAssetPath(projectPath: string, baseDir: string, assetPath: string): Promise<string | null> {
     if (!isLocalAssetReference(assetPath)) return null
 
@@ -79,7 +92,7 @@ async function resolveExistingAssetPath(projectPath: string, baseDir: string, as
     }
 
     for (const candidate of candidates) {
-        if (await pathExists(candidate)) {
+        if (await pathExists(candidate) && await isPathConfinedToProject(projectPath, candidate)) {
             return candidate
         }
     }

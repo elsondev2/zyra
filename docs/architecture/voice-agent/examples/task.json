@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "task_id": "task_demo_voice_docs",
+  "conversation_id": "chat_demo",
+  "revision": 7,
+  "parent_task_id": null,
+  "supersedes_task_id": null,
+  "state": "completed",
+  "title": "Document the voice-agent architecture",
+  "verbatim_request": "Document the complete architecture with diagrams and publishable contracts.",
+  "required_context_version": 7,
+  "context_acknowledgements": [
+    {
+      "owner_kind": "primary",
+      "owner_id": "agent_run_demo_01",
+      "context_version": 7,
+      "relevant_change_ids": [
+        "constraint_public_only",
+        "constraint_no_runtime_changes"
+      ],
+      "acknowledged_at": "2026-08-02T12:01:00Z"
+    }
+  ],
+  "acceptance_criteria": [
+    {
+      "criterion_id": "criterion_architecture",
+      "description": "Cover model roles, controller, ledgers, routing, narration, continuity, permissions, recovery, usage, and evaluation.",
+      "status": "passed",
+      "evidence_refs": [
+        {
+          "kind": "artifact",
+          "id": "docs_voice_architecture",
+          "uri": "docs/architecture/voice-agent/README.md"
+        }
+      ]
+    },
+    {
+      "criterion_id": "criterion_validation",
+      "description": "Validate schemas, Mermaid diagrams, links, and privacy before publication.",
+      "status": "passed",
+      "evidence_refs": [
+        {
+          "kind": "artifact",
+          "id": "contract_validation_output"
+        }
+      ]
+    }
+  ],
+  "constraint_ids": [
+    "constraint_public_only",
+    "constraint_no_runtime_changes"
+  ],
+  "decision_request_ids": [],
+  "approval_request_ids": [],
+  "attempt_ids": [
+    "attempt_demo_01"
+  ],
+  "current_attempt_id": null,
+  "primary_agent_run_id": "agent_run_demo_01",
+  "activity": {
+    "kind": "editing",
+    "summary": "The architecture package and decision records are drafted.",
+    "updated_at": "2026-08-02T12:15:00Z"
+  },
+  "artifacts": [],
+  "created_at": "2026-08-02T12:00:00Z",
+  "updated_at": "2026-08-02T12:30:00Z",
+  "terminal_at": "2026-08-02T12:30:00Z",
+  "failure": null
+}

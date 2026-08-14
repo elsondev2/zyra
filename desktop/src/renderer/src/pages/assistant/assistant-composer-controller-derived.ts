@@ -7,7 +7,7 @@ import { getProfileLabel, readLegacyComposerSessionState } from './assistant-com
 import { deriveAssistantComposerCapabilities } from './assistant-composer-capabilities'
 import type { AssistantComposerDisabledReason, ComposerContextFile } from './assistant-composer-types'
 import { getMentionQuery, normalizeMentionLookupPath, type InlineMentionTag } from './assistant-composer-inline-mentions'
-import { readAssistantComposerPreferences, type AssistantComposerPreferenceEffort } from './assistant-composer-preferences'
+import type { AssistantComposerPreferenceEffort } from './assistant-composer-preferences'
 import {
     areAssistantComposerSessionStatesEqual,
     readAssistantComposerSessionState,
@@ -126,7 +126,6 @@ export function useAssistantComposerSessionDefaults(input: {
         sessionId
     } = input
 
-    const storedComposerPreferences = useMemo(() => readAssistantComposerPreferences(), [])
     const legacyComposerSessionState = useMemo(() => readLegacyComposerSessionState(), [])
     const globalDefaultComposerState = useMemo<AssistantComposerSessionState>(() => ({
         draft: settings.assistantDefaultPromptTemplate || undefined,
@@ -145,9 +144,8 @@ export function useAssistantComposerSessionDefaults(input: {
     ])
     const fallbackComposerState = useMemo<AssistantComposerSessionState>(() => ({
         ...globalDefaultComposerState,
-        ...legacyComposerSessionState,
-        ...storedComposerPreferences
-    }), [globalDefaultComposerState, legacyComposerSessionState, storedComposerPreferences])
+        ...legacyComposerSessionState
+    }), [globalDefaultComposerState, legacyComposerSessionState])
 
     const baseRuntimeMode: AssistantRuntimeMode =
         fallbackComposerState.runtimeMode

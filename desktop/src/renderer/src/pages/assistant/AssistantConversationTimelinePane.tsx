@@ -35,6 +35,7 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
     assistantToolOutputDefaultMode: AssistantToolOutputDefaultMode
     bottomComposerOverlayActive?: boolean
     contentInsetEndAdjustment?: number
+    scrollButtonBottomOverride?: number
     hasOlder?: boolean
     loadingOlder?: boolean
     loadOlderError?: string | null
@@ -144,7 +145,7 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
                     <div
                         className="pointer-events-none absolute inset-x-0 z-30 flex justify-center px-4 transition-[bottom,opacity,transform] duration-200"
                         style={{
-                            bottom: `${resolveAssistantScrollButtonBottom(
+                            bottom: `${props.scrollButtonBottomOverride ?? resolveAssistantScrollButtonBottom(
                                 props.contentInsetEndAdjustment || 0,
                                 props.elevateScrollToBottom === true
                             )}px`

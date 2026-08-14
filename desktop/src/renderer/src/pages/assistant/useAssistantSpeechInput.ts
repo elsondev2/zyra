@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react'
 import type { AssistantTranscriptionEngine } from '@/lib/settings'
+import {
+    ASSISTANT_VOICE_MAX_DURATION_MS,
+    ASSISTANT_VOICE_MAX_WAVEFORM_SAMPLES,
+    createAssistantVoicePayload,
+    describeAssistantMicrophoneError,
+    formatAssistantVoiceDuration,
+    normalizeAssistantVoiceWaveformLevel
+} from './assistant-voice-recorder'
 
 type AssistantSpeechErrorKind =
     | 'permission'
@@ -9,25 +17,17 @@ type AssistantSpeechErrorKind =
     | 'no-speech'
     | 'unknown'
 
-type BrowserSpeechRecognitionAlternative = {
-    transcript: string
-}
-
+type BrowserSpeechRecognitionAlternative = { transcript: string }
 type BrowserSpeechRecognitionResult = {
     isFinal: boolean
     length: number
     [index: number]: BrowserSpeechRecognitionAlternative
 }
-
 type BrowserSpeechRecognitionEvent = {
     resultIndex: number
     results: ArrayLike<BrowserSpeechRecognitionResult>
 }
-
-type BrowserSpeechRecognitionErrorEvent = {
-    error: string
-}
-
+type BrowserSpeechRecognitionErrorEvent = { error: string }
 type BrowserSpeechRecognition = {
     continuous: boolean
     interimResults: boolean
@@ -40,18 +40,39 @@ type BrowserSpeechRecognition = {
     stop: () => void
     abort: () => void
 }
-
 type BrowserSpeechRecognitionCtor = new () => BrowserSpeechRecognition
-
 type SpeechRecognitionWindow = Window & {
     SpeechRecognition?: BrowserSpeechRecognitionCtor
     webkitSpeechRecognition?: BrowserSpeechRecognitionCtor
+    webkitAudioContext?: typeof AudioContext
 }
+
+type RecorderRuntime = {
+    audioContext: AudioContext
+    sourceNode: MediaStreamAudioSourceNode
+    processorNode: ScriptProcessorNode
+    silentGainNode: GainNode
+    stream: MediaStream
+    chunks: Float32Array[]
+    capturedSampleCount: number
+    sampleRateHz: number
+    startedAt: number
+}
+
+const RECORDER_BUFFER_SIZE = 4096
+const WAVEFORM_EMIT_INTERVAL_MS = 45
+const DURATION_UPDATE_INTERVAL_MS = 100
 
 const getSpeechRecognitionCtor = () => {
     if (typeof window === 'undefined') return null
     const recognitionWindow = window as SpeechRecognitionWindow
     return recognitionWindow.SpeechRecognition || recognitionWindow.webkitSpeechRecognition || null
+}
+
+const getAudioContextCtor = () => {
+    if (typeof window === 'undefined') return null
+    const audioWindow = window as SpeechRecognitionWindow
+    return window.AudioContext || audioWindow.webkitAudioContext || null
 }
 
 const appendSpeechToDraft = (baseText: string, spokenText: string) => {
@@ -61,7 +82,7 @@ const appendSpeechToDraft = (baseText: string, spokenText: string) => {
     return /\s$/.test(baseText) ? `${baseText}${normalizedSpokenText}` : `${baseText} ${normalizedSpokenText}`
 }
 
-const normalizeSpeechError = (error: string): { kind: AssistantSpeechErrorKind; message: string | null } => {
+const normalizeBrowserSpeechError = (error: string): { kind: AssistantSpeechErrorKind; message: string | null } => {
     switch (error) {
         case 'not-allowed':
         case 'service-not-allowed':
@@ -69,78 +90,23 @@ const normalizeSpeechError = (error: string): { kind: AssistantSpeechErrorKind; 
         case 'audio-capture':
             return { kind: 'capture', message: 'No microphone was found.' }
         case 'network':
-            return { kind: 'network', message: 'Voice input needs the runtime speech service. Check your connection and try again.' }
+            return { kind: 'network', message: 'Browser dictation could not reach its speech service.' }
         case 'no-speech':
             return { kind: 'no-speech', message: null }
         default:
-            return { kind: 'unknown', message: 'Voice input failed.' }
+            return { kind: 'unknown', message: 'Browser dictation failed.' }
     }
 }
 
-const mergeFloat32Chunks = (chunks: Float32Array[]) => {
-    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
-    const merged = new Float32Array(totalLength)
-    let offset = 0
-    for (const chunk of chunks) {
-        merged.set(chunk, offset)
-        offset += chunk.length
-    }
-    return merged
-}
-
-const downsampleBuffer = (buffer: Float32Array, sampleRate: number, targetSampleRate: number) => {
-    if (targetSampleRate === sampleRate) return buffer
-    const sampleRateRatio = sampleRate / targetSampleRate
-    const newLength = Math.round(buffer.length / sampleRateRatio)
-    const result = new Float32Array(newLength)
-    let offsetResult = 0
-    let offsetBuffer = 0
-    while (offsetResult < result.length) {
-        const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio)
-        let accum = 0
-        let count = 0
-        for (let index = offsetBuffer; index < nextOffsetBuffer && index < buffer.length; index += 1) {
-            accum += buffer[index]
-            count += 1
-        }
-        result[offsetResult] = count > 0 ? accum / count : 0
-        offsetResult += 1
-        offsetBuffer = nextOffsetBuffer
-    }
-    return result
-}
-
-const encodeWav = (samples: Float32Array, sampleRate: number) => {
-    const buffer = new ArrayBuffer(44 + samples.length * 2)
-    const view = new DataView(buffer)
-    const writeString = (offset: number, value: string) => {
-        for (let index = 0; index < value.length; index += 1) {
-            view.setUint8(offset + index, value.charCodeAt(index))
-        }
-    }
-
-    writeString(0, 'RIFF')
-    view.setUint32(4, 36 + samples.length * 2, true)
-    writeString(8, 'WAVE')
-    writeString(12, 'fmt ')
-    view.setUint32(16, 16, true)
-    view.setUint16(20, 1, true)
-    view.setUint16(22, 1, true)
-    view.setUint32(24, sampleRate, true)
-    view.setUint32(28, sampleRate * 2, true)
-    view.setUint16(32, 2, true)
-    view.setUint16(34, 16, true)
-    writeString(36, 'data')
-    view.setUint32(40, samples.length * 2, true)
-
-    let offset = 44
-    for (let index = 0; index < samples.length; index += 1) {
-        const clamped = Math.max(-1, Math.min(1, samples[index]))
-        view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true)
-        offset += 2
-    }
-
-    return buffer
+const microphoneErrorKind = (error: unknown): AssistantSpeechErrorKind => {
+    const name = error instanceof DOMException
+        ? error.name
+        : typeof error === 'object' && error !== null && 'name' in error
+            ? String((error as { name?: unknown }).name || '')
+            : ''
+    if (name === 'NotAllowedError' || name === 'SecurityError') return 'permission'
+    if (name === 'NotFoundError' || name === 'DevicesNotFoundError') return 'capture'
+    return 'runtime'
 }
 
 export function useAssistantSpeechInput({
@@ -150,7 +116,8 @@ export function useAssistantSpeechInput({
     textareaRef,
     disabled,
     isConnected,
-    engine
+    engine,
+    scopeKey
 }: {
     text: string
     setText: Dispatch<SetStateAction<string>>
@@ -159,24 +126,29 @@ export function useAssistantSpeechInput({
     disabled: boolean
     isConnected: boolean
     engine: AssistantTranscriptionEngine
+    scopeKey: string
 }) {
     const speechRecognitionCtor = useMemo(() => getSpeechRecognitionCtor(), [])
+    const audioContextCtor = useMemo(() => getAudioContextCtor(), [])
     const recognitionRef = useRef<BrowserSpeechRecognition | null>(null)
+    const recorderRuntimeRef = useRef<RecorderRuntime | null>(null)
+    const recorderTimerRef = useRef<number | null>(null)
+    const waveformLevelsRef = useRef<number[]>([])
+    const waveformLastEmitAtRef = useRef(0)
     const textAtStartRef = useRef('')
     const finalTranscriptRef = useRef('')
-    const localAudioContextRef = useRef<AudioContext | null>(null)
-    const localMediaStreamRef = useRef<MediaStream | null>(null)
-    const localSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
-    const localProcessorRef = useRef<ScriptProcessorNode | null>(null)
-    const localGainRef = useRef<GainNode | null>(null)
-    const localChunksRef = useRef<Float32Array[]>([])
-    const localSampleRateRef = useRef(44100)
-    const localLiveIntervalRef = useRef<number | null>(null)
-    const localLastTranscribedSampleCountRef = useRef(0)
-    const localTranscriptionSequenceRef = useRef(0)
-    const localLiveTranscriptionInFlightRef = useRef(false)
+    const requestIdRef = useRef(0)
+    const mountedRef = useRef(true)
+    const startingRef = useRef(false)
+    const autoSubmitRef = useRef(false)
+    const availableRef = useRef({ disabled, isConnected, engine, scopeKey })
+    availableRef.current = { disabled, isConnected, engine, scopeKey }
+
+    const [isStarting, setIsStarting] = useState(false)
     const [isRecording, setIsRecording] = useState(false)
     const [isTranscribing, setIsTranscribing] = useState(false)
+    const [durationMs, setDurationMs] = useState(0)
+    const [waveformLevels, setWaveformLevels] = useState<number[]>([])
     const [speechError, setSpeechError] = useState<string | null>(null)
     const [speechErrorKind, setSpeechErrorKind] = useState<AssistantSpeechErrorKind | null>(null)
 
@@ -184,9 +156,51 @@ export function useAssistantSpeechInput({
         if (engine === 'browser') return Boolean(speechRecognitionCtor)
         return typeof navigator !== 'undefined'
             && Boolean(navigator.mediaDevices?.getUserMedia)
-            && typeof window !== 'undefined'
-            && Boolean(window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext)
-    }, [engine, speechRecognitionCtor])
+            && Boolean(audioContextCtor)
+            && typeof window.devscope?.assistant?.transcribeVoice === 'function'
+    }, [audioContextCtor, engine, speechRecognitionCtor])
+
+    const durationLabel = useMemo(() => formatAssistantVoiceDuration(durationMs), [durationMs])
+
+    const clearRecorderTimer = useCallback(() => {
+        if (recorderTimerRef.current !== null) {
+            window.clearInterval(recorderTimerRef.current)
+            recorderTimerRef.current = null
+        }
+    }, [])
+
+    const resetRecorderPresentation = useCallback(() => {
+        waveformLevelsRef.current = []
+        waveformLastEmitAtRef.current = 0
+        autoSubmitRef.current = false
+        setDurationMs(0)
+        setWaveformLevels([])
+    }, [])
+
+    const teardownRecorder = useCallback(async (resetPresentation: boolean) => {
+        const runtime = recorderRuntimeRef.current
+        recorderRuntimeRef.current = null
+        clearRecorderTimer()
+        if (mountedRef.current) setIsRecording(false)
+
+        if (!runtime) {
+            if (resetPresentation) resetRecorderPresentation()
+            return null
+        }
+
+        runtime.processorNode.onaudioprocess = null
+        try { runtime.sourceNode.disconnect() } catch {}
+        try { runtime.processorNode.disconnect() } catch {}
+        try { runtime.silentGainNode.disconnect() } catch {}
+        runtime.stream.getTracks().forEach((track) => track.stop())
+        await runtime.audioContext.close().catch(() => undefined)
+        if (resetPresentation) resetRecorderPresentation()
+
+        return {
+            chunks: runtime.chunks,
+            sampleRateHz: runtime.sampleRateHz
+        }
+    }, [clearRecorderTimer, resetRecorderPresentation])
 
     const syncTextareaToEnd = useCallback((nextText: string) => {
         window.requestAnimationFrame(() => {
@@ -205,90 +219,25 @@ export function useAssistantSpeechInput({
         syncTextareaToEnd(nextText)
     }, [setText, syncTextareaToEnd])
 
-    const cleanupLocalRecording = useCallback(async () => {
-        if (localLiveIntervalRef.current != null) {
-            window.clearInterval(localLiveIntervalRef.current)
-            localLiveIntervalRef.current = null
-        }
-        try {
-            localProcessorRef.current?.disconnect()
-            localSourceRef.current?.disconnect()
-            localGainRef.current?.disconnect()
-        } catch {}
-
-        localMediaStreamRef.current?.getTracks().forEach((track) => track.stop())
-
-        if (localAudioContextRef.current) {
-            await localAudioContextRef.current.close().catch(() => undefined)
-        }
-
-        localProcessorRef.current = null
-        localSourceRef.current = null
-        localGainRef.current = null
-        localMediaStreamRef.current = null
-        localAudioContextRef.current = null
-    }, [])
-
-    const transcribeLocalSnapshot = useCallback(async (chunks: Float32Array[], sampleRate: number, options?: { final?: boolean }) => {
-        if (!chunks.length) return
-        const requestId = ++localTranscriptionSequenceRef.current
-        if (!options?.final) {
-            localLiveTranscriptionInFlightRef.current = true
-        } else {
-            setIsTranscribing(true)
-        }
-
-        try {
-            const merged = mergeFloat32Chunks(chunks)
-            const downsampled = downsampleBuffer(merged, sampleRate, 16000)
-            const audioBuffer = encodeWav(downsampled, 16000)
-            const result = await window.devscope.assistant.transcribeAudioWithLocalModel({ audioBuffer })
-            if (!result.success) {
-                throw new Error(result.error || 'Local transcription failed.')
-            }
-            if (requestId === localTranscriptionSequenceRef.current && result.text.trim()) {
-                applyTranscript(result.text)
-            }
-        } catch (error) {
-            if (options?.final || requestId === localTranscriptionSequenceRef.current) {
-                setSpeechError(error instanceof Error ? error.message : 'Local transcription failed.')
-            }
-        } finally {
-            if (!options?.final) {
-                localLiveTranscriptionInFlightRef.current = false
-            } else {
-                setIsTranscribing(false)
-            }
-        }
-    }, [applyTranscript])
-
     const stopBrowserRecording = useCallback(() => {
         recognitionRef.current?.stop()
         setIsRecording(false)
     }, [])
 
-    const stopLocalRecording = useCallback(async () => {
-        setIsRecording(false)
-        const contextSampleRate = localSampleRateRef.current || 44100
-        const chunksSnapshot = localChunksRef.current.slice()
-        localChunksRef.current = []
-        localLastTranscribedSampleCountRef.current = 0
-        await cleanupLocalRecording()
-
-        if (!chunksSnapshot.length) return
-        await transcribeLocalSnapshot(chunksSnapshot, contextSampleRate, { final: true })
-    }, [cleanupLocalRecording, transcribeLocalSnapshot])
-
-    const stopRecording = useCallback(async () => {
-        if (engine === 'browser') {
-            stopBrowserRecording()
-            return
+    const cancelBrowserRecording = useCallback(() => {
+        const recognition = recognitionRef.current
+        recognitionRef.current = null
+        if (recognition) {
+            recognition.onresult = null
+            recognition.onerror = null
+            recognition.onend = null
+            recognition.abort()
         }
-        await stopLocalRecording()
-    }, [engine, stopBrowserRecording, stopLocalRecording])
+        if (mountedRef.current) setIsRecording(false)
+    }, [])
 
     const startBrowserRecording = useCallback(() => {
-        if (!speechRecognitionCtor || disabled || !isConnected || isRecording || isTranscribing) return
+        if (!speechRecognitionCtor || disabled || !isConnected || isRecording || isTranscribing || isStarting) return
         setSpeechError(null)
         setSpeechErrorKind(null)
         finalTranscriptRef.current = ''
@@ -299,7 +248,6 @@ export function useAssistantSpeechInput({
         recognition.interimResults = true
         recognition.maxAlternatives = 1
         recognition.lang = 'en-US'
-
         recognition.onresult = (event) => {
             let interimTranscript = ''
             for (let index = event.resultIndex; index < event.results.length; index += 1) {
@@ -313,16 +261,13 @@ export function useAssistantSpeechInput({
                     interimTranscript = transcript
                 }
             }
-            const nextTranscript = [finalTranscriptRef.current.trim(), interimTranscript.trim()].filter(Boolean).join(' ').trim()
-            applyTranscript(nextTranscript)
+            applyTranscript([finalTranscriptRef.current.trim(), interimTranscript.trim()].filter(Boolean).join(' ').trim())
         }
-
         recognition.onerror = (event) => {
-            const normalizedError = normalizeSpeechError(String(event.error || ''))
-            setSpeechErrorKind(normalizedError.kind)
-            if (normalizedError.message) setSpeechError(normalizedError.message)
+            const normalized = normalizeBrowserSpeechError(String(event.error || ''))
+            setSpeechErrorKind(normalized.kind)
+            if (normalized.message) setSpeechError(normalized.message)
         }
-
         recognition.onend = () => {
             recognitionRef.current = null
             setIsRecording(false)
@@ -336,109 +281,250 @@ export function useAssistantSpeechInput({
             recognitionRef.current = null
             setIsRecording(false)
             setSpeechErrorKind('runtime')
-            setSpeechError('Voice input is unavailable in this runtime.')
+            setSpeechError('Browser dictation is unavailable in this runtime.')
         }
-    }, [applyTranscript, disabled, isConnected, isRecording, isTranscribing, speechRecognitionCtor, text])
+    }, [applyTranscript, disabled, isConnected, isRecording, isStarting, isTranscribing, speechRecognitionCtor, text])
 
-    const startLocalRecording = useCallback(async () => {
-        if (disabled || !isConnected || isRecording || isTranscribing) return
+    const startCodexRecording = useCallback(async () => {
+        if (!audioContextCtor || disabled || !isConnected || isRecording || isTranscribing || startingRef.current) return
         if (!navigator.mediaDevices?.getUserMedia) {
             setSpeechErrorKind('runtime')
             setSpeechError('Microphone capture is unavailable in this runtime.')
             return
         }
 
+        startingRef.current = true
+        setIsStarting(true)
         setSpeechError(null)
         setSpeechErrorKind(null)
+        resetRecorderPresentation()
         textAtStartRef.current = text
-        localChunksRef.current = []
-        localLastTranscribedSampleCountRef.current = 0
+        requestIdRef.current += 1
+        const recordingScopeKey = scopeKey
 
-        const AudioContextCtor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-        if (!AudioContextCtor) {
-            setSpeechErrorKind('runtime')
-            setSpeechError('Audio capture is unavailable in this runtime.')
-            return
-        }
-
+        let stream: MediaStream | null = null
+        let audioContext: AudioContext | null = null
+        let sourceNode: MediaStreamAudioSourceNode | null = null
+        let processorNode: ScriptProcessorNode | null = null
+        let silentGainNode: GainNode | null = null
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-            const audioContext = new AudioContextCtor()
-            const source = audioContext.createMediaStreamSource(stream)
-            const processor = audioContext.createScriptProcessor(4096, 1, 1)
-            const gainNode = audioContext.createGain()
-            gainNode.gain.value = 0
-
-            processor.onaudioprocess = (event) => {
-                const channelData = event.inputBuffer.getChannelData(0)
-                localChunksRef.current.push(new Float32Array(channelData))
+            stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    channelCount: 1,
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
+            })
+            const latest = availableRef.current
+            if (!mountedRef.current
+                || latest.disabled
+                || !latest.isConnected
+                || latest.engine !== 'codex'
+                || latest.scopeKey !== recordingScopeKey) {
+                stream.getTracks().forEach((track) => track.stop())
+                return
             }
 
-            source.connect(processor)
-            processor.connect(gainNode)
-            gainNode.connect(audioContext.destination)
+            audioContext = new audioContextCtor()
+            await audioContext.resume()
+            sourceNode = audioContext.createMediaStreamSource(stream)
+            processorNode = audioContext.createScriptProcessor(RECORDER_BUFFER_SIZE, 1, 1)
+            silentGainNode = audioContext.createGain()
+            silentGainNode.gain.value = 0
 
-            localMediaStreamRef.current = stream
-            localAudioContextRef.current = audioContext
-            localSampleRateRef.current = audioContext.sampleRate
-            localSourceRef.current = source
-            localProcessorRef.current = processor
-            localGainRef.current = gainNode
+            const runtime: RecorderRuntime = {
+                audioContext,
+                sourceNode,
+                processorNode,
+                silentGainNode,
+                stream,
+                chunks: [],
+                capturedSampleCount: 0,
+                sampleRateHz: audioContext.sampleRate,
+                startedAt: performance.now()
+            }
+            processorNode.onaudioprocess = (event) => {
+                const input = event.inputBuffer
+                const channelCount = Math.max(1, input.numberOfChannels)
+                const mono = new Float32Array(input.length)
+                for (let channelIndex = 0; channelIndex < input.numberOfChannels; channelIndex += 1) {
+                    const channel = input.getChannelData(channelIndex)
+                    for (let sampleIndex = 0; sampleIndex < input.length; sampleIndex += 1) {
+                        mono[sampleIndex] += (channel[sampleIndex] ?? 0) / channelCount
+                    }
+                }
+                const maximumSampleCount = Math.ceil(runtime.sampleRateHz * ASSISTANT_VOICE_MAX_DURATION_MS / 1000)
+                const remainingSampleCount = Math.max(0, maximumSampleCount - runtime.capturedSampleCount)
+                if (remainingSampleCount === 0) return
+                const captured = remainingSampleCount < mono.length ? mono.slice(0, remainingSampleCount) : mono
+                runtime.chunks.push(captured)
+                runtime.capturedSampleCount += captured.length
+
+                let sumSquares = 0
+                for (const sample of captured) sumSquares += sample * sample
+                const rawRms = Math.sqrt(sumSquares / Math.max(1, captured.length))
+                const waveformLevel = normalizeAssistantVoiceWaveformLevel(rawRms)
+                const now = performance.now()
+                if (now - waveformLastEmitAtRef.current >= WAVEFORM_EMIT_INTERVAL_MS) {
+                    waveformLastEmitAtRef.current = now
+                    const next = [...waveformLevelsRef.current, waveformLevel].slice(-ASSISTANT_VOICE_MAX_WAVEFORM_SAMPLES)
+                    waveformLevelsRef.current = next
+                    setWaveformLevels(next)
+                }
+            }
+
+            sourceNode.connect(processorNode)
+            processorNode.connect(silentGainNode)
+            silentGainNode.connect(audioContext.destination)
+            recorderRuntimeRef.current = runtime
             setIsRecording(true)
-            localLiveIntervalRef.current = window.setInterval(() => {
-                const sampleCount = localChunksRef.current.reduce((sum, chunk) => sum + chunk.length, 0)
-                const minimumNewSamples = Math.round(localSampleRateRef.current * 1.2)
-                if (sampleCount < minimumNewSamples) return
-                if (sampleCount - localLastTranscribedSampleCountRef.current < minimumNewSamples) return
-                if (localLiveTranscriptionInFlightRef.current) return
-                localLastTranscribedSampleCountRef.current = sampleCount
-                void transcribeLocalSnapshot(localChunksRef.current.slice(), localSampleRateRef.current)
-            }, 1400)
+            recorderTimerRef.current = window.setInterval(() => {
+                const activeRuntime = recorderRuntimeRef.current
+                if (!activeRuntime) return
+                setDurationMs(Math.min(
+                    ASSISTANT_VOICE_MAX_DURATION_MS,
+                    Math.max(0, performance.now() - activeRuntime.startedAt)
+                ))
+            }, DURATION_UPDATE_INTERVAL_MS)
         } catch (error) {
-            await cleanupLocalRecording()
-            setSpeechErrorKind('runtime')
-            setSpeechError(error instanceof Error ? error.message : 'Failed to start local recording.')
+            try { processorNode?.disconnect() } catch {}
+            try { sourceNode?.disconnect() } catch {}
+            try { silentGainNode?.disconnect() } catch {}
+            stream?.getTracks().forEach((track) => track.stop())
+            await audioContext?.close().catch(() => undefined)
+            if (mountedRef.current) {
+                setSpeechErrorKind(microphoneErrorKind(error))
+                setSpeechError(describeAssistantMicrophoneError(error))
+                resetRecorderPresentation()
+            }
+        } finally {
+            startingRef.current = false
+            if (mountedRef.current) setIsStarting(false)
         }
-    }, [cleanupLocalRecording, disabled, isConnected, isRecording, isTranscribing, text, transcribeLocalSnapshot])
+    }, [audioContextCtor, disabled, isConnected, isRecording, isTranscribing, resetRecorderPresentation, scopeKey, text])
+
+    const submitCodexRecording = useCallback(async () => {
+        if (!recorderRuntimeRef.current || isTranscribing) return
+        const requestId = requestIdRef.current + 1
+        requestIdRef.current = requestId
+        setSpeechError(null)
+        setSpeechErrorKind(null)
+        setIsTranscribing(true)
+
+        try {
+            const recording = await teardownRecorder(false)
+            if (!recording || requestIdRef.current !== requestId) return
+            const payload = createAssistantVoicePayload(recording.chunks, recording.sampleRateHz)
+            if (!payload) throw new Error('No audio was captured. Try recording again.')
+            const result = await window.devscope.assistant.transcribeVoice(payload)
+            if (requestIdRef.current !== requestId) return
+            if (!result.success) throw new Error(result.error || 'Voice transcription failed.')
+            if (!result.text.trim()) throw new Error('ChatGPT returned an empty transcription.')
+            applyTranscript(result.text)
+        } catch (error) {
+            if (requestIdRef.current === requestId) {
+                setSpeechErrorKind('runtime')
+                setSpeechError(error instanceof Error ? error.message : 'Voice transcription failed.')
+            }
+        } finally {
+            if (requestIdRef.current === requestId) {
+                setIsTranscribing(false)
+                resetRecorderPresentation()
+            }
+        }
+    }, [applyTranscript, isTranscribing, resetRecorderPresentation, teardownRecorder])
+
+    const cancelCodexRecording = useCallback(() => {
+        requestIdRef.current += 1
+        setIsTranscribing(false)
+        void teardownRecorder(true)
+    }, [teardownRecorder])
+
+    const startRecording = useCallback(() => {
+        if (engine === 'browser') {
+            startBrowserRecording()
+        } else {
+            void startCodexRecording()
+        }
+    }, [engine, startBrowserRecording, startCodexRecording])
+
+    const submitRecording = useCallback(() => {
+        if (engine === 'browser') {
+            stopBrowserRecording()
+        } else {
+            void submitCodexRecording()
+        }
+    }, [engine, stopBrowserRecording, submitCodexRecording])
+
+    const cancelRecording = useCallback(() => {
+        if (engine === 'browser') {
+            cancelBrowserRecording()
+        } else {
+            cancelCodexRecording()
+        }
+    }, [cancelBrowserRecording, cancelCodexRecording, engine])
 
     const toggleRecording = useCallback(() => {
         if (isRecording) {
-            void stopRecording()
-            return
+            submitRecording()
+        } else {
+            startRecording()
         }
-        if (engine === 'browser') {
-            startBrowserRecording()
-            return
-        }
-        void startLocalRecording()
-    }, [engine, isRecording, startBrowserRecording, startLocalRecording, stopRecording])
+    }, [isRecording, startRecording, submitRecording])
+
+    useEffect(() => {
+        if (engine !== 'codex' || !isRecording || durationMs < ASSISTANT_VOICE_MAX_DURATION_MS || autoSubmitRef.current) return
+        autoSubmitRef.current = true
+        submitRecording()
+    }, [durationMs, engine, isRecording, submitRecording])
 
     useEffect(() => {
         if (!(disabled || !isConnected)) return
-        if (engine === 'browser') {
-            recognitionRef.current?.abort()
-            recognitionRef.current = null
-            setIsRecording(false)
-            return
-        }
-        if (isRecording) {
-            void stopLocalRecording()
-        }
-    }, [disabled, engine, isConnected, isRecording, stopLocalRecording])
+        requestIdRef.current += 1
+        cancelBrowserRecording()
+        cancelCodexRecording()
+    }, [cancelBrowserRecording, cancelCodexRecording, disabled, isConnected])
 
-    useEffect(() => () => {
-        recognitionRef.current?.abort()
-        recognitionRef.current = null
-        void cleanupLocalRecording()
-    }, [cleanupLocalRecording])
+    useEffect(() => {
+        requestIdRef.current += 1
+        cancelBrowserRecording()
+        cancelCodexRecording()
+        setSpeechError(null)
+        setSpeechErrorKind(null)
+    }, [cancelBrowserRecording, cancelCodexRecording, engine, scopeKey])
+
+    useEffect(() => {
+        mountedRef.current = true
+        return () => {
+            mountedRef.current = false
+            requestIdRef.current += 1
+            const recognition = recognitionRef.current
+            recognitionRef.current = null
+            if (recognition) {
+                recognition.onresult = null
+                recognition.onerror = null
+                recognition.onend = null
+                recognition.abort()
+            }
+            void teardownRecorder(false)
+        }
+    }, [teardownRecorder])
 
     return {
         isSupported,
+        isStarting,
         isRecording,
         isTranscribing,
+        durationMs,
+        durationLabel,
+        waveformLevels,
         speechError,
         speechErrorKind,
+        startRecording,
+        submitRecording,
+        cancelRecording,
         toggleRecording,
-        stopRecording
+        stopRecording: submitRecording
     }
 }

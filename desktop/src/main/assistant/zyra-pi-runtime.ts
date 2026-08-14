@@ -6,15 +6,14 @@ import { createInterface, type Interface as ReadlineInterface } from 'node:readl
 import { isAbsolute, join, resolve } from 'node:path'
 import log from 'electron-log'
 import type {
-    AssistantAccountIdentity,
     AssistantApprovalDecision,
     AssistantInteractionMode,
     AssistantModelInfo,
-    AssistantRateLimitSnapshot,
     AssistantReasoningEffort,
     AssistantRuntimeEvent,
     AssistantRuntimeMode,
     AssistantThread,
+    AssistantTurnOutcome,
     AssistantTurnUsage,
     FleetSnapshot
 } from '../../shared/assistant/contracts'
@@ -49,6 +48,32 @@ type ActiveCompactionLifecycle = {
     turnId: string | null
 }
 
+type TerminalAssistantMessageOutcome = {
+    turnId: string
+    outcome: 'interrupted' | 'failed'
+    errorMessage: string | null
+}
+
+export type PrivateVoiceTaskInput = {
+    taskId: string
+    localThreadId: string
+    cwd: string
+    prompt: string
+    model?: string
+    effort?: AssistantReasoningEffort
+    runtimeMode?: AssistantRuntimeMode
+    interactionMode?: AssistantInteractionMode
+    profile?: string
+    serviceTier?: 'fast'
+    signal: AbortSignal
+}
+
+export type PrivateVoiceTaskResult = {
+    taskId: string
+    text: string
+    providerSessionId: string
+}
+
 type ZyraSessionContext = {
     localThreadId: string
     providerThreadId: string
@@ -65,11 +90,13 @@ type ZyraSessionContext = {
     profile: string
     activeTurnId: string | null
     completedTurnIds: Set<string>
+    terminalAssistantMessageOutcome: TerminalAssistantMessageOutcome | null
     assistantMessageSequence: number
     activeAssistantItemId: string | null
     toolArgsByCallId: Map<string, Record<string, unknown>>
     toolStartedAtByCallId: Map<string, string>
     commandActivityIdByJobId: Map<string, string>
+    runningManagedCommandJobIds: Set<string>
     assistantTextByItemId: Map<string, string>
     assistantCompletedItemIds: Set<string>
     internalTextByItemId: Map<string, string>
@@ -108,6 +135,38 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asString(value: unknown): string | null {
     return typeof value === 'string' && value.trim() ? value : null
+}
+
+function readTerminalAssistantMessageOutcome(message: Record<string, unknown> | null): Omit<TerminalAssistantMessageOutcome, 'turnId'> | null {
+    const stopReason = String(message?.['stopReason'] || '').trim().toLowerCase()
+    const errorMessage = asString(message?.['errorMessage'])
+    if (
+        stopReason === 'aborted'
+        || stopReason === 'cancelled'
+        || stopReason === 'canceled'
+        || stopReason === 'interrupted'
+        || stopReason === 'stopped'
+    ) return { outcome: 'interrupted', errorMessage }
+    if (stopReason === 'error' || errorMessage) return { outcome: 'failed', errorMessage }
+    return null
+}
+
+function resolveZyraTerminalOutcome(
+    type: string,
+    event: Record<string, unknown>,
+    messageOutcome: TerminalAssistantMessageOutcome | null
+): AssistantTurnOutcome {
+    if (messageOutcome) return messageOutcome.outcome
+    if (type === 'agent_end') return 'completed'
+    const outcome = String(event['outcome'] || '').trim().toLowerCase()
+    if (outcome === 'interrupted' || outcome === 'cancelled' || outcome === 'canceled') return 'interrupted'
+    if (outcome === 'failed') {
+        const errorMessage = asString(event['errorMessage']) || ''
+        return /\b(?:abort(?:ed)?|cancel(?:led|ed)?|interrupt(?:ed)?|stopp?ed)\b/i.test(errorMessage)
+            ? 'interrupted'
+            : 'failed'
+    }
+    return 'completed'
 }
 
 function nowIso(): string {
@@ -195,7 +254,7 @@ function readUsage(value: unknown): AssistantTurnUsage | null {
         outputTokens: numberValue('output'),
         cachedInputTokens: numberValue('cacheRead'),
         reasoningOutputTokens: numberValue('reasoning') ?? numberValue('reasoningTokens'),
-        totalTokens: numberValue('total')
+        totalTokens: numberValue('totalTokens') ?? numberValue('total')
     }
 }
 
@@ -430,7 +489,7 @@ function buildArgumentPreviewPatch(toolName: string, args: Record<string, unknow
     ].join('\n')
 }
 
-function readPiFileChangeData(input: {
+export function readPiFileChangeData(input: {
     cwd: string
     toolName: string
     args: Record<string, unknown> | null
@@ -471,11 +530,14 @@ function readPiFileChangeData(input: {
             ? resultPatch || resultDiff
             : undefined
     const writeExisting = Boolean(path && /\bwrite\b/.test(normalizedTool) && existsSync(isAbsolute(path) ? path : resolve(cwd, path)))
-    const kind = /\b(delete|remove)\b/.test(normalizedTool)
+    const effectivePatch = resultPatch || resultDiff || explicitPatch || previewPatch
+    const patchCreatesFile = Boolean(effectivePatch && /^---\s+(?:\/dev\/null|null)\s*$/m.test(effectivePatch))
+    const patchDeletesFile = Boolean(effectivePatch && /^\+\+\+\s+(?:\/dev\/null|null)\s*$/m.test(effectivePatch))
+    const kind = /\b(delete|remove)\b/.test(normalizedTool) || patchDeletesFile
         ? 'delete'
         : /\b(move|rename)\b/.test(normalizedTool)
             ? 'move'
-            : /\b(write|create)\b/.test(normalizedTool) && !writeExisting
+            : patchCreatesFile || /\b(write|create)\b/.test(normalizedTool) && !writeExisting
                 ? 'add'
                 : 'update'
     const changes = Array.isArray(details?.['changes'])
@@ -507,7 +569,7 @@ function readPiFileChangeData(input: {
     }
 }
 
-function classifyZyraToolActivity(input: {
+export function classifyZyraToolActivity(input: {
     toolName: string
     args: Record<string, unknown> | null
     result: Record<string, unknown> | null
@@ -902,6 +964,9 @@ export class ZyraPiRuntime extends EventEmitter {
     private modelCache: AssistantModelInfo[] = []
     private agentServerConnection: DesktopAgentServerConnection | null = null
     private unsubscribeCatalogChanged: (() => void) | null = null
+    private readonly privateVoiceThreadTargets = new Map<string, string>()
+    private readonly privateVoiceWorkers = new Map<string, ZyraPiWorker>()
+    private readonly privateApprovalWorkers = new Map<string, ZyraPiWorker>()
 
     async checkAvailability(): Promise<{ available: boolean; reason: string | null }> {
         const root = resolveZyraRoot()
@@ -928,6 +993,10 @@ export class ZyraPiRuntime extends EventEmitter {
         return this.getAgentServerConnection(resolveZyraRoot()).listCanonicalChats()
     }
 
+    async getCanonicalChat(session: string, project?: string): Promise<CanonicalAgentChat | null> {
+        return this.getAgentServerConnection(resolveZyraRoot()).getCanonicalChat(session, project)
+    }
+
     async readCanonicalChatHistory(
         session: string,
         project?: string,
@@ -936,9 +1005,31 @@ export class ZyraPiRuntime extends EventEmitter {
         return this.getAgentServerConnection(resolveZyraRoot()).readCanonicalChatHistory(session, project, options)
     }
 
+    async appendCanonicalMessage(
+        conversationId: string,
+        message: Record<string, unknown>
+    ): Promise<Record<string, unknown>> {
+        const normalizedConversationId = String(conversationId || '').trim()
+        if (!normalizedConversationId) throw new Error('Canonical conversation id is required.')
+        return this.getAgentServerConnection(resolveZyraRoot()).appendCanonicalMessage(normalizedConversationId, message)
+    }
+
+    async findCanonicalMessageReceipt(
+        conversationId: string,
+        operationId: string
+    ): Promise<Record<string, unknown> | null> {
+        const normalizedConversationId = String(conversationId || '').trim()
+        const normalizedOperationId = String(operationId || '').trim()
+        if (!normalizedConversationId || !normalizedOperationId) return null
+        return this.getAgentServerConnection(resolveZyraRoot()).findCanonicalMessageReceipt(
+            normalizedConversationId,
+            normalizedOperationId
+        )
+    }
+
     async updateCanonicalChat(
         threadId: string,
-        patch: { title?: string; project?: string; cwd?: string; archived?: boolean }
+        patch: { title?: string; project?: string; cwd?: string; archived?: boolean; deleted?: boolean }
     ): Promise<void> {
         const normalizedThreadId = String(threadId || '').trim()
         if (!normalizedThreadId) return
@@ -1000,26 +1091,22 @@ export class ZyraPiRuntime extends EventEmitter {
         }
     }
 
-    async getAccount(): Promise<{ account: AssistantAccountIdentity | null; authMode: 'apikey' | 'chatgpt' | 'chatgptAuthTokens' | null; requiresOpenaiAuth: boolean }> {
-        return {
-            account: null,
-            authMode: null,
-            requiresOpenaiAuth: false
-        }
-    }
-
-    async getAccountRateLimits(): Promise<{
-        rateLimits: AssistantRateLimitSnapshot | null
-        rateLimitsByLimitId: Record<string, AssistantRateLimitSnapshot>
-    }> {
-        return {
-            rateLimits: null,
-            rateLimitsByLimitId: {}
-        }
-    }
-
     async connect(thread: AssistantThread, cwd: string): Promise<void> {
-        if (this.getSessionContext(thread.id) || (thread.providerThreadId && this.getSessionContext(thread.providerThreadId))) return
+        const existingContext = this.getSessionContext(thread.id)
+            || (thread.providerThreadId ? this.getSessionContext(thread.providerThreadId) : null)
+        if (existingContext) {
+            if (!existingContext.worker.isAlive()) {
+                this.disconnect(existingContext.localThreadId)
+            } else {
+                try {
+                    await this.ensureConnected(existingContext)
+                    return
+                } catch (error) {
+                    this.releaseSessionContext(existingContext)
+                    throw error
+                }
+            }
+        }
 
         const availability = await this.checkAvailability()
         if (!availability.available) {
@@ -1027,7 +1114,10 @@ export class ZyraPiRuntime extends EventEmitter {
         }
 
         const root = resolveZyraRoot()
-        const worker = this.getAgentServerConnection(root).createWorker(cwd)
+        const worker = this.getAgentServerConnection(root).createWorker(
+            cwd,
+            thread.canonicalPresence?.latestSequence || 0
+        )
         const providerThreadId = getAssistantCanonicalThreadId(thread)
         const model = normalizeZyraModel(thread.model) || 'openai-codex/gpt-5.5'
         const context: ZyraSessionContext = {
@@ -1039,17 +1129,21 @@ export class ZyraPiRuntime extends EventEmitter {
             connectPromise: null,
             cwd,
             model,
-            thinking: 'medium',
+            thinking: isAssistantReasoningEffort(thread.thinking)
+                ? thread.thinking
+                : (isAssistantReasoningEffort(thread.latestTurn?.effort) ? thread.latestTurn.effort : 'medium'),
             runtimeMode: thread.runtimeMode,
             interactionMode: thread.interactionMode,
-            profile: 'default',
+            profile: normalizeZyraProfile(thread.profile),
             activeTurnId: null,
             completedTurnIds: new Set(),
+            terminalAssistantMessageOutcome: null,
             assistantMessageSequence: 0,
             activeAssistantItemId: null,
             toolArgsByCallId: new Map(),
             toolStartedAtByCallId: new Map(),
             commandActivityIdByJobId: new Map(),
+            runningManagedCommandJobIds: new Set(),
             assistantTextByItemId: new Map(),
             assistantCompletedItemIds: new Set(),
             internalTextByItemId: new Map(),
@@ -1093,27 +1187,78 @@ export class ZyraPiRuntime extends EventEmitter {
                 profile: context.profile
             }
         })
+        const attachmentState = thread.providerThreadId ? thread.state : 'starting'
         this.emitRuntime({
             eventId: randomUUID(),
             type: 'thread.started',
             createdAt: nowIso(),
             threadId: thread.id,
             providerThreadId,
-            payload: { providerThreadId, cwd, state: 'ready' }
+            payload: { providerThreadId, cwd, state: attachmentState }
         })
-        this.emitRuntime({
-            eventId: randomUUID(),
-            type: 'session.state.changed',
-            createdAt: nowIso(),
-            threadId: thread.id,
-            providerThreadId,
-            payload: { state: 'ready' }
-        })
-        await this.ensureConnected(context)
+        if (!thread.providerThreadId) {
+            this.emitRuntime({
+                eventId: randomUUID(),
+                type: 'session.state.changed',
+                createdAt: nowIso(),
+                threadId: thread.id,
+                providerThreadId,
+                payload: { state: 'starting' }
+            })
+        }
+        try {
+            await this.ensureConnected(context)
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Zyra session connection failed.'
+            this.releaseSessionContext(context)
+            this.emitRuntime({
+                eventId: randomUUID(),
+                type: 'session.state.changed',
+                createdAt: nowIso(),
+                threadId: context.localThreadId,
+                providerThreadId: context.providerThreadId,
+                payload: { state: 'error', error: message, message }
+            })
+            throw error
+        }
     }
 
     hasSession(threadId: string): boolean {
-        return Boolean(this.getSessionContext(threadId))
+        const context = this.getSessionContext(threadId)
+        return Boolean(context?.connected && context.worker.isAlive())
+    }
+
+    async configureSession(
+        threadId: string,
+        configuration: {
+            model: string
+            effort: AssistantReasoningEffort
+            runtimeMode: AssistantRuntimeMode
+            interactionMode: AssistantInteractionMode
+            profile: string
+        }
+    ): Promise<void> {
+        const context = this.requireSession(threadId)
+        const model = normalizeZyraModel(configuration.model)
+        if (!model) throw new Error('Assistant configuration requires a model.')
+        const profile = normalizeZyraProfile(configuration.profile)
+        const result = await context.worker.request('configure', {
+            model,
+            thinking: configuration.effort,
+            runtimeMode: configuration.runtimeMode,
+            interactionMode: configuration.interactionMode,
+            profile
+        })
+        const config = asRecord(result['config']) || result
+        context.model = normalizeZyraModel(asString(config['model']) || undefined) || model
+        context.thinking = isAssistantReasoningEffort(config['thinking']) ? config['thinking'] : configuration.effort
+        context.runtimeMode = config['runtimeMode'] === 'full-access'
+            ? 'full-access'
+            : config['runtimeMode'] === 'approval-required'
+                ? 'approval-required'
+                : configuration.runtimeMode
+        context.interactionMode = configuration.interactionMode
+        context.profile = normalizeZyraProfile(config['profile'] || profile)
     }
 
     async sendPrompt(
@@ -1137,6 +1282,7 @@ export class ZyraPiRuntime extends EventEmitter {
         const turnId = randomUUID()
         context.activeTurnId = turnId
         context.completedTurnIds.delete(turnId)
+        context.terminalAssistantMessageOutcome = null
         context.assistantMessageSequence = 0
         context.activeAssistantItemId = null
         context.toolArgsByCallId.clear()
@@ -1173,6 +1319,134 @@ export class ZyraPiRuntime extends EventEmitter {
         return { turnId, providerThreadId: context.providerThreadId }
     }
 
+    async runPrivateVoiceTask(input: PrivateVoiceTaskInput): Promise<PrivateVoiceTaskResult> {
+        if (input.signal.aborted) throw input.signal.reason || new Error('Private Voice task cancelled.')
+        if (this.privateVoiceWorkers.has(input.taskId)) throw new Error(`Private Voice task ${input.taskId} is already running.`)
+        const root = resolveZyraRoot()
+        const worker = new ZyraPiWorker(root, resolveBridgePath(root), input.cwd)
+        const privateThreadId = `voice-private:${input.taskId}`
+        const model = normalizeZyraModel(input.model) || 'openai-codex/gpt-5.6-sol'
+        const effort = input.effort || 'high'
+        const runtimeMode = input.runtimeMode || 'approval-required'
+        const interactionMode = input.interactionMode || 'default'
+        const profile = input.profile || 'default'
+        const context: ZyraSessionContext = {
+            localThreadId: privateThreadId,
+            providerThreadId: privateThreadId,
+            resumeProviderThreadId: null,
+            worker: worker as unknown as ZyraWorkerLike,
+            connected: true,
+            connectPromise: null,
+            cwd: input.cwd,
+            model,
+            thinking: effort,
+            runtimeMode,
+            interactionMode,
+            profile,
+            activeTurnId: input.taskId,
+            completedTurnIds: new Set(),
+            terminalAssistantMessageOutcome: null,
+            assistantMessageSequence: 0,
+            activeAssistantItemId: null,
+            toolArgsByCallId: new Map(),
+            toolStartedAtByCallId: new Map(),
+            commandActivityIdByJobId: new Map(),
+            runningManagedCommandJobIds: new Set(),
+            assistantTextByItemId: new Map(),
+            assistantCompletedItemIds: new Set(),
+            internalTextByItemId: new Map(),
+            internalCompletedItemIds: new Set(),
+            activeCompaction: null,
+            lastAssistantItemId: null,
+            lastUsage: null
+        }
+        this.privateVoiceThreadTargets.set(privateThreadId, input.localThreadId)
+        this.privateVoiceWorkers.set(input.taskId, worker)
+        const unsubscribe = worker.onEvent((eventValue) => {
+            const event = asRecord(eventValue)
+            const type = asString(event?.['type'])
+            const requestId = asString(event?.['requestId'])
+            if (type === 'approval_requested' && requestId) this.privateApprovalWorkers.set(requestId, worker)
+            if (type === 'approval_resolved' && requestId) this.privateApprovalWorkers.delete(requestId)
+            this.handleZyraEvent(context, eventValue)
+        })
+        const abort = () => {
+            void worker.request('abort').catch(() => undefined)
+        }
+        input.signal.addEventListener('abort', abort, { once: true })
+        try {
+            const connected = await worker.request('connect', {
+                cwd: input.cwd,
+                localThreadId: privateThreadId,
+                noSession: true,
+                model,
+                thinking: effort,
+                profile,
+                runtimeMode,
+                interactionMode,
+                surface: 'memory-worker'
+            })
+            context.providerThreadId = String(connected['threadId'] || connected['providerThreadId'] || privateThreadId)
+            await worker.request('prompt', {
+                prompt: input.prompt,
+                turnId: input.taskId,
+                model,
+                thinking: effort,
+                profile,
+                runtimeMode,
+                interactionMode,
+                serviceTier: input.serviceTier,
+                skipTitleGeneration: true
+            })
+            if (input.signal.aborted) throw input.signal.reason || new Error('Private Voice task cancelled.')
+            if (context.runningManagedCommandJobIds.size > 0) {
+                const occurredAt = nowIso()
+                for (const jobId of context.runningManagedCommandJobIds) {
+                    this.emitRuntime({
+                        eventId: randomUUID(),
+                        type: 'activity',
+                        createdAt: occurredAt,
+                        threadId: context.localThreadId,
+                        providerThreadId: context.providerThreadId,
+                        turnId: input.taskId,
+                        payload: {
+                            activityId: context.commandActivityIdByJobId.get(jobId),
+                            kind: 'command',
+                            summary: 'Command stopped',
+                            tone: 'warning',
+                            data: { status: 'stopped', jobId, completedAt: occurredAt }
+                        }
+                    })
+                }
+                throw new Error('The agent returned before its command finished, so the unfinished command was stopped.')
+            }
+            const text = (
+                (context.lastAssistantItemId ? context.assistantTextByItemId.get(context.lastAssistantItemId) : null)
+                || [...context.assistantTextByItemId.values()].filter((value) => value.trim()).at(-1)
+                || ''
+            ).trim()
+            if (!text) throw new Error('The strong agent completed without a Voice-ready result.')
+            return {
+                taskId: input.taskId,
+                text,
+                providerSessionId: context.providerThreadId
+            }
+        } finally {
+            input.signal.removeEventListener('abort', abort)
+            unsubscribe()
+            worker.dispose()
+            this.privateVoiceWorkers.delete(input.taskId)
+            this.privateVoiceThreadTargets.delete(privateThreadId)
+            for (const [requestId, requestWorker] of this.privateApprovalWorkers) {
+                if (requestWorker === worker) this.privateApprovalWorkers.delete(requestId)
+            }
+        }
+    }
+
+    resolvePrivateVoiceTargetThread(threadId: string): string | null {
+        return this.privateVoiceThreadTargets.get(threadId) || null
+    }
+
     async requestFleetOperation(threadId: string, namespace: 'agents' | 'workflows', action: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
         const context = this.requireSession(threadId)
         await this.ensureConnected(context)
@@ -1206,12 +1480,29 @@ export class ZyraPiRuntime extends EventEmitter {
         return
     }
 
-    async respondApproval(_threadId: string, _requestId: string, _decision: AssistantApprovalDecision): Promise<void> {
-        return
+    async respondApproval(threadId: string, requestId: string, decision: AssistantApprovalDecision): Promise<void> {
+        const privateWorker = this.privateApprovalWorkers.get(requestId)
+        if (privateWorker) {
+            await privateWorker.request('approval.respond', { requestId, decision })
+            return
+        }
+        const context = this.requireSession(threadId)
+        await this.ensureConnected(context)
+        await context.worker.request('approval.respond', { requestId, decision })
     }
 
     async respondUserInput(_threadId: string, _requestId: string, _answers: Record<string, string | string[]>): Promise<void> {
         return
+    }
+
+    private releaseSessionContext(context: ZyraSessionContext): void {
+        for (const threadId of new Set([context.localThreadId, context.providerThreadId])) {
+            if (this.sessions.get(threadId) !== context) continue
+            this.sessions.delete(threadId)
+            this.aliases.delete(threadId)
+        }
+        if (typeof context.unsubscribe === 'function') context.unsubscribe()
+        context.worker.dispose()
     }
 
     disconnect(threadId: string): void {
@@ -1223,14 +1514,7 @@ export class ZyraPiRuntime extends EventEmitter {
                 'Root Browser control ended when its session disconnected.'
             )
         }
-        this.sessions.delete(context.localThreadId)
-        this.sessions.delete(context.providerThreadId)
-        this.aliases.delete(context.localThreadId)
-        this.aliases.delete(context.providerThreadId)
-        if (typeof context.unsubscribe === 'function') {
-            context.unsubscribe()
-        }
-        context.worker.dispose()
+        this.releaseSessionContext(context)
         this.emitRuntime({
             eventId: randomUUID(),
             type: 'session.state.changed',
@@ -1242,6 +1526,10 @@ export class ZyraPiRuntime extends EventEmitter {
     }
 
     dispose(): void {
+        for (const worker of this.privateVoiceWorkers.values()) worker.dispose()
+        this.privateVoiceWorkers.clear()
+        this.privateVoiceThreadTargets.clear()
+        this.privateApprovalWorkers.clear()
         for (const threadId of [...this.sessions.keys()]) {
             this.disconnect(threadId)
         }
@@ -1334,6 +1622,7 @@ export class ZyraPiRuntime extends EventEmitter {
                 model: context.model,
                 thinking: context.thinking,
                 profile: context.profile,
+                runtimeMode: context.runtimeMode,
                 images: options?.images
             })
             if (context.activeTurnId !== turnId) return
@@ -1424,17 +1713,26 @@ export class ZyraPiRuntime extends EventEmitter {
                 noSession: false,
                 model: context.model,
                 thinking: context.thinking,
-                profile: context.profile
+                profile: context.profile,
+                runtimeMode: context.runtimeMode
             })
             const previousProviderThreadId = context.providerThreadId
             const providerThreadId = String(result['threadId'] || result['providerThreadId'] || context.resumeProviderThreadId || context.providerThreadId || randomUUID())
             const model = String(result['model'] || context.model)
+            const thinking = isAssistantReasoningEffort(result['thinking']) ? result['thinking'] : context.thinking
             const profile = normalizeZyraProfile(result['profile'] || context.profile)
+            const runtimeMode: AssistantRuntimeMode = result['runtimeMode'] === 'full-access'
+                ? 'full-access'
+                : result['runtimeMode'] === 'approval-required'
+                    ? 'approval-required'
+                    : context.runtimeMode
             const agentServerActiveTurnId = asString(result['agentServerActiveTurnId'])
             context.providerThreadId = providerThreadId
             context.resumeProviderThreadId = providerThreadId
             context.model = model
+            context.thinking = thinking
             context.profile = profile
+            context.runtimeMode = runtimeMode
             context.connected = true
             if (agentServerActiveTurnId && !context.activeTurnId) context.activeTurnId = agentServerActiveTurnId
             const connectedFleet = asRecord(result['fleet']) as unknown as FleetSnapshot | null
@@ -1462,6 +1760,19 @@ export class ZyraPiRuntime extends EventEmitter {
             }
             this.emitRuntime({
                 eventId: randomUUID(),
+                type: 'session.config.updated',
+                createdAt: nowIso(),
+                threadId: context.localThreadId,
+                providerThreadId,
+                payload: {
+                    model,
+                    thinking,
+                    profile,
+                    runtimeMode
+                }
+            })
+            this.emitRuntime({
+                eventId: randomUUID(),
                 type: 'thread.started',
                 createdAt: nowIso(),
                 threadId: context.localThreadId,
@@ -1484,9 +1795,34 @@ export class ZyraPiRuntime extends EventEmitter {
         if (!event) return
         const type = asString(event['type'])
         if (!type) return
+        if (type === 'session_config') {
+            const model = asString(event['model']) || context.model
+            const thinking = isAssistantReasoningEffort(event['thinking']) ? event['thinking'] : context.thinking
+            const profile = normalizeZyraProfile(event['profile'] || context.profile)
+            const runtimeMode: AssistantRuntimeMode = event['runtimeMode'] === 'full-access' ? 'full-access' : 'approval-required'
+            context.model = model
+            context.thinking = thinking
+            context.profile = profile
+            context.runtimeMode = runtimeMode
+            this.emitRuntime({
+                eventId: randomUUID(),
+                type: 'session.config.updated',
+                createdAt: nowIso(),
+                threadId: context.localThreadId,
+                providerThreadId: context.providerThreadId,
+                payload: { model, thinking, profile, runtimeMode }
+            })
+            return
+        }
         const observedTurnId = metadata?.turnId
-        if (observedTurnId && context.activeTurnId !== observedTurnId && !context.completedTurnIds.has(observedTurnId)) {
+        if (
+            observedTurnId
+            && metadata?.replay !== true
+            && context.activeTurnId !== observedTurnId
+            && !context.completedTurnIds.has(observedTurnId)
+        ) {
             context.activeTurnId = observedTurnId
+            context.terminalAssistantMessageOutcome = null
             context.assistantMessageSequence = 0
             context.activeAssistantItemId = null
             context.toolArgsByCallId.clear()
@@ -1513,24 +1849,31 @@ export class ZyraPiRuntime extends EventEmitter {
         }
         const turnId = observedTurnId || context.activeTurnId
 
-        if (type === 'zyra_server_turn_completed' && turnId) {
+        if ((type === 'zyra_server_turn_completed' || type === 'agent_end') && turnId) {
             if (context.completedTurnIds.has(turnId)) return
+            const terminalMessageOutcome = context.terminalAssistantMessageOutcome?.turnId === turnId
+                ? context.terminalAssistantMessageOutcome
+                : null
+            const outcome = resolveZyraTerminalOutcome(type, event, terminalMessageOutcome)
             markTurnCompleted(context, turnId)
-            const outcome = event['outcome'] === 'failed' ? 'failed' : 'completed'
             this.completeAssistantText(context, turnId)
             this.emitRuntime({
                 eventId: randomUUID(),
                 type: 'turn.completed',
-                createdAt: nowIso(),
+                createdAt: asString(event['timestamp']) || nowIso(),
                 threadId: context.localThreadId,
                 providerThreadId: context.providerThreadId,
                 turnId,
+                sourceSequence: metadata?.sequence,
                 payload: {
                     outcome,
-                    ...(outcome === 'failed' ? { errorMessage: asString(event['errorMessage']) || 'Zyra prompt failed.' } : {}),
+                    ...(outcome === 'failed' ? {
+                        errorMessage: terminalMessageOutcome?.errorMessage || asString(event['errorMessage']) || 'Zyra prompt failed.'
+                    } : {}),
                     usage: context.lastUsage
                 }
             })
+            if (terminalMessageOutcome) context.terminalAssistantMessageOutcome = null
             if (context.activeTurnId === turnId) {
                 getAgentControlBroker().revokePrincipal(
                     { type: 'root', threadId: context.localThreadId, turnId },
@@ -1564,9 +1907,79 @@ export class ZyraPiRuntime extends EventEmitter {
             return
         }
 
+        if (type === 'approval_requested') {
+            const requestId = asString(event['requestId'])
+            if (!requestId) return
+            const requestTypeValue = asString(event['requestType'])
+            const requestType = requestTypeValue === 'file-read' || requestTypeValue === 'file-change' ? requestTypeValue : 'command'
+            const paths = Array.isArray(event['paths'])
+                ? event['paths'].map((entry) => asString(entry)).filter((entry): entry is string => Boolean(entry))
+                : undefined
+            this.emitRuntime({
+                eventId: randomUUID(),
+                type: 'approval.requested',
+                createdAt: nowIso(),
+                threadId: context.localThreadId,
+                providerThreadId: context.providerThreadId,
+                turnId: turnId || undefined,
+                requestId,
+                payload: {
+                    requestType,
+                    title: asString(event['title']) || undefined,
+                    detail: asString(event['detail']) || undefined,
+                    command: asString(event['command']) || undefined,
+                    paths
+                }
+            })
+            return
+        }
+
+        if (type === 'approval_resolved') {
+            const requestId = asString(event['requestId'])
+            if (!requestId) return
+            const rawDecision = asString(event['decision'])
+            const decision: AssistantApprovalDecision = rawDecision === 'acceptOnce' || rawDecision === 'acceptForSession' ? rawDecision : 'decline'
+            this.emitRuntime({
+                eventId: randomUUID(),
+                type: 'approval.resolved',
+                createdAt: nowIso(),
+                threadId: context.localThreadId,
+                providerThreadId: context.providerThreadId,
+                turnId: turnId || undefined,
+                requestId,
+                payload: { decision }
+            })
+            return
+        }
+
         if (type === 'message_start' || type === 'message_update' || type === 'message_end') {
             const message = asRecord(event['message'])
-            if (message?.['role'] !== 'assistant' || !turnId) return
+            const role = asString(message?.['role'])
+            if (role === 'user') {
+                const originatedOutsideThisDesktopThread = Boolean(
+                    metadata?.localThreadId
+                    && metadata.localThreadId !== context.localThreadId
+                )
+                if (type !== 'message_start' || !turnId || !originatedOutsideThisDesktopThread) return
+                const content = extractAssistantEventContentParts(event, emptyAssistantContentParts(), type)
+                if (!content.text.trim()) return
+                const sourceMessageId = asString(message?.['id'])
+                this.emitRuntime({
+                    eventId: randomUUID(),
+                    type: 'user.message.received',
+                    createdAt: asString(event['timestamp']) || nowIso(),
+                    threadId: context.localThreadId,
+                    providerThreadId: context.providerThreadId,
+                    turnId,
+                    itemId: sourceMessageId || undefined,
+                    payload: {
+                        messageId: `assistant-message-user-${sourceMessageId || turnId}`,
+                        text: content.text
+                    }
+                })
+                return
+            }
+            if (role !== 'assistant' || !turnId) return
             const itemId = resolveAssistantEventItemId(context, event, turnId, type)
             const currentContent = {
                 thinking: context.internalTextByItemId.get(itemId) || '',
@@ -1574,7 +1987,7 @@ export class ZyraPiRuntime extends EventEmitter {
                 hasThinkingBlock: context.internalTextByItemId.has(itemId)
             }
             const content = extractAssistantEventContentParts(event, currentContent, type)
-            context.lastUsage = readUsage(message['usage']) || context.lastUsage
+            context.lastUsage = readUsage(message?.['usage']) || context.lastUsage
             if (hasAssistantThinkingText(content) || isReasoningOnlyAssistantEvent(event)) {
                 this.streamInternalText(context, turnId, content.thinking || content.text, itemId)
             }
@@ -1587,6 +2000,10 @@ export class ZyraPiRuntime extends EventEmitter {
                 }
                 if (hasAssistantContentText(content) && !isReasoningOnlyAssistantEvent(event)) {
                     this.completeAssistantText(context, turnId, content.text, itemId)
+                }
+                const terminalOutcome = readTerminalAssistantMessageOutcome(message)
+                if (terminalOutcome) {
+                    context.terminalAssistantMessageOutcome = { turnId, ...terminalOutcome }
                 }
                 if (context.activeAssistantItemId === itemId) {
                     context.activeAssistantItemId = null
@@ -1798,6 +2215,8 @@ export class ZyraPiRuntime extends EventEmitter {
         const status = normalizeManagedCommandLifecycleStatus(event['status'])
         const jobId = asString(event['jobId'])
         if (!status || !jobId) return
+        if (status === 'running') context.runningManagedCommandJobIds.add(jobId)
+        else context.runningManagedCommandJobIds.delete(jobId)
         const toolCallId = asString(event['toolCallId'])
         const activityId = toolCallId
             ? `zyra-tool-${toolCallId}`
@@ -1945,6 +2364,8 @@ export class ZyraPiRuntime extends EventEmitter {
         if (!isCommandCheckpoint && commandJobId) {
             context.commandActivityIdByJobId.set(commandJobId, activityId)
         }
+        if (commandJobId && lifecycleStatus === 'running') context.runningManagedCommandJobIds.add(commandJobId)
+        else if (commandJobId && lifecycleStatus) context.runningManagedCommandJobIds.delete(commandJobId)
         this.emitRuntime({
             eventId: randomUUID(),
             type: 'activity',

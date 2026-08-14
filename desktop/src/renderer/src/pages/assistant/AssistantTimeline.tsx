@@ -24,6 +24,7 @@ import {
     TimelineWorkingIndicator
 } from './AssistantTimelineRows'
 import { TimelineTurnWorkSummary } from './AssistantTimelineWorkSummary'
+import { TimelineVoiceTaskStatus } from './AssistantTimelineVoiceTask'
 import { AssistantVirtualTimeline } from './AssistantVirtualTimeline'
 import { computeStableAssistantTimelineRows, type StableTimelineRowsState } from './assistant-virtual-timeline-rows'
 import {
@@ -37,6 +38,7 @@ import {
     isInternalAssistantActivity,
     isIssueActivity,
     isModelNoticeActivity,
+    isVoiceStrongTaskActivity,
     type TimelineDisplayRow,
     type TimelineRenderRow
 } from './assistant-timeline-helpers'
@@ -312,6 +314,9 @@ function AssistantTimelineImpl({
             )
         }
         if (row.kind === 'activity') {
+            if (isVoiceStrongTaskActivity(row.activity)) {
+                return <TimelineVoiceTaskStatus key={row.id} activity={row.activity} />
+            }
             if (isInternalAssistantActivity(row.activity)) {
                 return <TimelineThought key={row.id} activity={row.activity} />
             }

@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { ChevronRight, GripVertical, LoaderCircle, Plus, X } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { GripVertical, LoaderCircle, Plus, X } from 'lucide-react'
+import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
+import { usePublishAssistantTitleBarEndRegion } from '@/lib/assistant/assistant-title-bar'
 import { cn } from '@/lib/utils'
 import { ASSISTANT_MIN_INSPECTOR_WIDTH } from './assistant-pane-layout'
 
@@ -24,6 +26,7 @@ type ResizeState = {
 
 const MAX_WORKSPACE_TAB_WIDTH = 112
 const MIN_WORKSPACE_TAB_WIDTH = 74
+const TITLE_BAR_RESERVED_WIDTH = 188
 
 function clampInspectorWidth(width: number, maxWidth: number): number {
     const resolvedMaxWidth = Math.max(ASSISTANT_MIN_INSPECTOR_WIDTH, Math.round(maxWidth))
@@ -40,8 +43,7 @@ export function AssistantInspectorSidebar({
     onSelectTab,
     onCloseTab,
     onReorderTab,
-    onAddTab,
-    onClose,
+    addTabItems,
     children
 }: {
     open: boolean
@@ -53,11 +55,11 @@ export function AssistantInspectorSidebar({
     onSelectTab: (tabId: string) => void
     onCloseTab: (tabId: string) => void
     onReorderTab: (fromTabId: string, toTabId: string) => void
-    onAddTab: () => void
-    onClose: () => void
+    addTabItems: FileActionsMenuItem[]
     children: ReactNode
 }) {
     const rootRef = useRef<HTMLDivElement | null>(null)
+    const titleBarSurfaceRef = useRef<HTMLDivElement | null>(null)
     const tabRailRef = useRef<HTMLElement | null>(null)
     const resizeStateRef = useRef<ResizeState | null>(null)
     const resizeFrameRef = useRef(0)
@@ -74,7 +76,7 @@ export function AssistantInspectorSidebar({
     const resolvedWidth = clampInspectorWidth(width, maxWidth)
     const tabIdentity = tabs.map((tab) => tab.id).join('|')
     const availableTabWidth = Math.floor(
-        (resolvedWidth - 38 - Math.max(0, tabs.length - 1) * 2) / Math.max(1, tabs.length)
+        (resolvedWidth - TITLE_BAR_RESERVED_WIDTH - Math.max(0, tabs.length - 1) * 4) / Math.max(1, tabs.length)
     )
     const targetWorkspaceTabWidth = Math.max(
         MIN_WORKSPACE_TAB_WIDTH,
@@ -131,6 +133,8 @@ export function AssistantInspectorSidebar({
         resizeFrameRef.current = 0
         rootRef.current?.style.setProperty('width', `${state.width}px`)
         rootRef.current?.style.removeProperty('transition')
+        titleBarSurfaceRef.current?.style.setProperty('width', `${state.width}px`)
+        titleBarSurfaceRef.current?.style.removeProperty('transition')
         setResizing(false)
         onWidthChange(state.width)
         if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId)
@@ -143,6 +147,7 @@ export function AssistantInspectorSidebar({
         event.preventDefault()
         event.currentTarget.setPointerCapture(event.pointerId)
         rootRef.current?.style.setProperty('transition', 'none')
+        titleBarSurfaceRef.current?.style.setProperty('transition', 'none')
         resizeStateRef.current = {
             pointerId: event.pointerId,
             startX: event.clientX,
@@ -162,7 +167,9 @@ export function AssistantInspectorSidebar({
         resizeFrameRef.current = window.requestAnimationFrame(() => {
             resizeFrameRef.current = 0
             const latest = resizeStateRef.current
-            if (latest) rootRef.current?.style.setProperty('width', `${latest.width}px`)
+            if (!latest) return
+            rootRef.current?.style.setProperty('width', `${latest.width}px`)
+            titleBarSurfaceRef.current?.style.setProperty('width', `${latest.width}px`)
         })
     }, [maxWidth])
 
@@ -253,66 +260,46 @@ export function AssistantInspectorSidebar({
         document.body.style.removeProperty('user-select')
     }, [])
 
-    return (
+    const titleBarRegion = useMemo(() => (
         <div
-            ref={rootRef}
+            ref={titleBarSurfaceRef}
             className={cn(
-                'relative shrink-0 overflow-visible [contain:layout]',
-                !resizing && 'transition-[width] duration-[360ms] ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none',
-                !open && 'pointer-events-none'
+                'drag-region relative h-full shrink-0 overflow-visible transition-[width,opacity] duration-[360ms] ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none',
+                !open && 'pointer-events-none opacity-0'
             )}
             style={{ width: open ? `${resolvedWidth}px` : '0px' }}
+            data-assistant-inspector-titlebar=""
+            data-open={open ? 'true' : 'false'}
         >
             {open ? (
                 <button
                     type="button"
                     className={cn(
-                        'group absolute left-0 top-0 z-30 flex h-full w-3 -translate-x-1/2 cursor-col-resize items-center justify-center outline-none',
+                        'group absolute left-0 top-0 z-[4] flex h-full w-3 -translate-x-1/2 cursor-col-resize items-center justify-center outline-none',
                         resizing && 'bg-[var(--accent-primary)]/[0.04]'
                     )}
-                    aria-label="Resize inspector workspace"
+                    aria-label="Resize inspector workspace from title bar"
                     onPointerDown={handleResizePointerDown}
                     onPointerMove={handleResizePointerMove}
                     onPointerUp={handleResizePointerEnd}
                     onPointerCancel={handleResizePointerEnd}
                 >
-                    <span className="flex h-10 w-2 items-center justify-center rounded-full text-transparent transition-colors group-hover:bg-white/[0.055] group-hover:text-sparkle-text-muted">
-                        <GripVertical size={10} />
-                    </span>
+                    <span className="h-5 w-px bg-transparent transition-colors group-hover:bg-[var(--surface-panel-divider)]" />
                 </button>
             ) : null}
-
-            <div className="absolute inset-0 overflow-hidden">
-            <aside
-                className={cn(
-                    'flex h-full min-h-0 flex-col overflow-hidden border-l border-[color-mix(in_srgb,var(--color-text)_9%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_94%,black)] [contain:layout_paint] transform-gpu transition-[transform,opacity] duration-[320ms] ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none',
-                    resizing ? 'relative w-full' : 'absolute inset-y-0 right-0',
-                    open ? 'translate-x-0 opacity-100' : 'translate-x-4 opacity-0'
-                )}
-                style={resizing ? undefined : { width: `${resolvedWidth}px` }}
-                aria-label="Assistant inspector workspace"
-                aria-hidden={!open}
+            <div
+                className="zyra-inspector-surface flex h-full min-w-0 items-center overflow-hidden border-l border-[var(--surface-panel-divider)]"
+                style={{ paddingRight: 'var(--zyra-titlebar-controls-width, 120px)' }}
             >
-                <div className="flex h-10 shrink-0 items-center justify-between bg-[#1b1829]/95 px-2.5">
-                    <h2 className="min-w-0 truncate text-[13px] font-semibold text-sparkle-text">Inspector</h2>
-                    <button
-                        type="button"
-                        onClick={() => {
-                            dismissTabPreview()
-                            onClose()
-                        }}
-                        className="inline-flex size-6 items-center justify-center rounded-md text-sparkle-text-muted/70 transition-colors hover:bg-white/[0.04] hover:text-sparkle-text"
-                        aria-label="Close review"
-                    >
-                        <ChevronRight size={14} />
-                    </button>
-                </div>
-
-                <nav ref={tabRailRef} onWheel={handleTabRailWheel} className="no-scrollbar flex h-9 shrink-0 items-end gap-0.5 overflow-x-auto overscroll-x-contain bg-[#1b1829]/95 pl-0 pr-1" aria-label="Workspace tabs">
-                    {tabs.map((tab, index) => {
+                <nav
+                    ref={tabRailRef}
+                    onWheel={handleTabRailWheel}
+                    className="no-scrollbar flex h-full min-w-0 flex-1 items-center gap-1 overflow-x-auto overscroll-x-contain px-2"
+                    aria-label="Workspace tabs"
+                >
+                    {tabs.map((tab) => {
                         const active = tab.id === activeTabId
                         const closing = closingTabIds.has(tab.id)
-                        const separatedFromPrevious = index > 0 && !active && tabs[index - 1]?.id !== activeTabId
                         return (
                             <div
                                 key={tab.id}
@@ -347,18 +334,17 @@ export function AssistantInspectorSidebar({
                                 onPointerLeave={handleTabPreviewLeave}
                                 style={{ width: targetWorkspaceTabWidth }}
                                 className={cn(
-                                    'inspector-workspace-tab group/tab relative -mb-px flex h-8 shrink-0 items-center rounded-t-md border border-b-0',
+                                    'inspector-workspace-tab no-drag group/tab relative flex h-7 shrink-0 items-center rounded-md border border-transparent',
                                     closing
                                         ? 'pointer-events-none animate-[inspector-tab-out_130ms_ease-in_both]'
                                         : 'animate-[inspector-tab-in_150ms_ease-out_both]',
-                                    separatedFromPrevious && 'before:pointer-events-none before:absolute before:-left-[3px] before:top-2 before:h-4 before:w-px before:bg-[color-mix(in_srgb,var(--color-text)_9%,transparent)]',
                                     draggedTabId === tab.id && 'opacity-45',
                                     dragTargetTabId === tab.id && 'bg-[color-mix(in_srgb,var(--accent-primary)_7%,var(--color-card))]',
                                     active
-                                        ? 'border-[color-mix(in_srgb,var(--color-text)_10%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_95%,black)] text-sparkle-text shadow-[inset_0_1px_0_color-mix(in_srgb,var(--color-text)_6%,transparent)]'
+                                        ? 'bg-[var(--surface-inspector-tab)] text-sparkle-text shadow-[inset_0_1px_0_color-mix(in_srgb,var(--color-text)_5%,transparent)]'
                                         : tab.attention
-                                            ? 'h-7 border-amber-300/25 bg-amber-400/[0.07] text-amber-100 shadow-[inset_0_1px_0_rgba(252,211,77,0.14)]'
-                                            : 'h-7 border-transparent bg-transparent text-sparkle-text-muted/65 hover:bg-[color-mix(in_srgb,var(--color-text)_5%,transparent)] hover:text-sparkle-text-secondary'
+                                            ? 'border-amber-300/20 bg-amber-400/[0.07] text-amber-100'
+                                            : 'text-sparkle-text-muted/65 hover:bg-[var(--surface-hover)] hover:text-sparkle-text-secondary'
                                 )}
                             >
                                 <button
@@ -367,7 +353,7 @@ export function AssistantInspectorSidebar({
                                         dismissTabPreview()
                                         onSelectTab(tab.id)
                                     }}
-                                    className="inline-flex h-full min-w-0 flex-1 items-center justify-start gap-1.5 overflow-hidden pl-2.5 pr-1.5 text-left text-[10px] font-medium"
+                                    className="inline-flex h-full min-w-0 flex-1 items-center justify-start gap-1.5 overflow-hidden pl-2 pr-1 text-left text-[10px] font-medium"
                                     aria-current={active ? 'page' : undefined}
                                 >
                                     <span className={cn(active ? 'text-[var(--accent-primary)]/85' : 'text-current')}>
@@ -386,7 +372,7 @@ export function AssistantInspectorSidebar({
                                     <button
                                         type="button"
                                         onClick={() => requestTabClose(tab.id)}
-                                        className="mr-1 inline-flex size-4 items-center justify-center rounded text-sparkle-text-muted/50 hover:bg-white/[0.05] hover:text-sparkle-text"
+                                        className="mr-1 inline-flex size-4 shrink-0 items-center justify-center rounded text-sparkle-text-muted/50 opacity-0 transition-opacity hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus:opacity-100 group-hover/tab:opacity-100"
                                         aria-label={`Close ${tab.label}`}
                                     >
                                         <X size={9} />
@@ -395,22 +381,86 @@ export function AssistantInspectorSidebar({
                             </div>
                         )
                     })}
-                    <button
-                        type="button"
-                        onClick={() => {
-                            dismissTabPreview()
-                            onAddTab()
-                        }}
-                        className="mb-0.5 ml-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted/60 transition-colors hover:bg-[color-mix(in_srgb,var(--color-text)_6%,transparent)] hover:text-sparkle-text active:bg-[color-mix(in_srgb,var(--color-text)_9%,transparent)]"
-                        aria-label="Open new Inspector tab"
-                    >
-                        <Plus size={13} />
-                    </button>
+                    <FileActionsMenu
+                        items={addTabItems}
+                        title="Add Inspector workspace"
+                        triggerIcon={<Plus size={13} />}
+                        presentation="portal"
+                        preferredDirection="down"
+                        density="compact"
+                        buttonClassName="no-drag size-7 shrink-0 rounded-md text-sparkle-text-muted/60 hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
+                        openButtonClassName="bg-[var(--surface-hover)] text-sparkle-text"
+                    />
                 </nav>
+            </div>
+        </div>
+    ), [
+        activeTabId,
+        closingTabIds,
+        dismissTabPreview,
+        draggedTabId,
+        dragTargetTabId,
+        handleResizePointerDown,
+        handleResizePointerEnd,
+        handleResizePointerMove,
+        handleTabPreviewEnter,
+        handleTabPreviewLeave,
+        handleTabRailWheel,
+        addTabItems,
+        onReorderTab,
+        onSelectTab,
+        open,
+        requestTabClose,
+        resizing,
+        resolvedWidth,
+        tabs,
+        targetWorkspaceTabWidth
+    ])
+    usePublishAssistantTitleBarEndRegion(titleBarRegion, open)
 
+    return (
+        <div
+            ref={rootRef}
+            className={cn(
+                'relative shrink-0 overflow-visible [contain:layout]',
+                !resizing && 'transition-[width] duration-[360ms] ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none',
+                !open && 'pointer-events-none'
+            )}
+            style={{ width: open ? `${resolvedWidth}px` : '0px' }}
+        >
+            {open ? (
+                <button
+                    type="button"
+                    className={cn(
+                        'group absolute left-0 top-0 z-30 flex h-full w-3 -translate-x-1/2 cursor-col-resize items-center justify-center outline-none',
+                        resizing && 'bg-[var(--accent-primary)]/[0.04]'
+                    )}
+                    aria-label="Resize inspector workspace"
+                    onPointerDown={handleResizePointerDown}
+                    onPointerMove={handleResizePointerMove}
+                    onPointerUp={handleResizePointerEnd}
+                    onPointerCancel={handleResizePointerEnd}
+                >
+                    <span className="flex h-10 w-2 items-center justify-center rounded-full text-transparent transition-colors group-hover:bg-white/[0.055] group-hover:text-sparkle-text-muted">
+                        <GripVertical size={10} />
+                    </span>
+                </button>
+            ) : null}
+
+            <div className="absolute inset-0 overflow-hidden">
+            <aside
+                className={cn(
+                    'flex h-full min-h-0 flex-col overflow-hidden border-l border-[var(--surface-panel-divider)] bg-sparkle-bg [contain:layout_paint] transform-gpu transition-[transform,opacity] duration-[320ms] ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none',
+                    resizing ? 'relative w-full' : 'absolute inset-y-0 right-0',
+                    open ? 'translate-x-0 opacity-100' : 'translate-x-4 opacity-0'
+                )}
+                style={resizing ? undefined : { width: `${resolvedWidth}px` }}
+                aria-label="Assistant inspector workspace"
+                aria-hidden={!open}
+            >
                 {tabPreview ? (
                     <div
-                        className="pointer-events-none absolute top-[82px] z-40 w-[184px] rounded-2xl border border-[color-mix(in_srgb,var(--color-text)_11%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_92%,var(--color-bg))] px-3 py-2.5 shadow-[0_14px_34px_rgba(0,0,0,0.28),inset_0_1px_0_color-mix(in_srgb,var(--color-text)_5%,transparent)] animate-[inspector-tab-in_140ms_ease-out_both]"
+                        className="pointer-events-none absolute top-2 z-40 w-[184px] rounded-2xl border border-[color-mix(in_srgb,var(--color-text)_11%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_92%,var(--color-bg))] px-3 py-2.5 shadow-[0_14px_34px_rgba(0,0,0,0.28),inset_0_1px_0_color-mix(in_srgb,var(--color-text)_5%,transparent)] animate-[inspector-tab-in_140ms_ease-out_both]"
                         style={{ left: tabPreview.left }}
                         role="tooltip"
                     >

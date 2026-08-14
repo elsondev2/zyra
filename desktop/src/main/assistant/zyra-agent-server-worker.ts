@@ -42,6 +42,15 @@ export type CanonicalAgentChatPresence = {
     activeTurnId: string | null
     clients: Array<{ clientId: string; surface: string }>
     backgroundWorkActive: boolean
+    attention?: 'approval' | 'input' | null
+    latestTurn?: {
+        id: string
+        state: 'running' | 'completed' | 'interrupted' | 'error'
+        requestedAt: string
+        startedAt: string | null
+        completedAt: string | null
+        assistantMessageId: string | null
+    } | null
     latestSequence?: number
 }
 
@@ -54,6 +63,8 @@ export type CanonicalAgentChat = {
     title: string
     archived: boolean
     archivedAt?: string | null
+    deleted?: boolean
+    deletedAt?: string | null
     createdAt: string
     modifiedAt: string
     messageCount: number
@@ -102,8 +113,8 @@ export class DesktopAgentServerConnection {
         return () => this.catalogChangedListeners.delete(listener)
     }
 
-    createWorker(cwd: string): ZyraAgentServerWorker {
-        return new ZyraAgentServerWorker(this, cwd)
+    createWorker(cwd: string, latestSequence = 0): ZyraAgentServerWorker {
+        return new ZyraAgentServerWorker(this, cwd, latestSequence)
     }
 
     async listModels(forceRefresh = false): Promise<Record<string, unknown>[]> {
@@ -123,6 +134,12 @@ export class DesktopAgentServerConnection {
         return Array.isArray(result['chats']) ? result['chats'] as CanonicalAgentChat[] : []
     }
 
+    async getCanonicalChat(session: string, project?: string): Promise<CanonicalAgentChat | null> {
+        const client = await this.getClient()
+        const result = await client.request('catalog.get', { session, project, allProjects: true })
+        return asRecord(result['chat']) as CanonicalAgentChat | null
+    }
+
     async readCanonicalChatHistory(
         session: string,
         project?: string,
@@ -138,9 +155,21 @@ export class DesktopAgentServerConnection {
         return asRecord(result['history']) as CanonicalAgentChatHistory | null
     }
 
+    async appendCanonicalMessage(session: string, message: Record<string, unknown>): Promise<Record<string, unknown>> {
+        const client = await this.getClient()
+        const result = await client.request('catalog.message.append', { session, message }, { timeoutMs: 15_000 })
+        return asRecord(result['receipt']) || {}
+    }
+
+    async findCanonicalMessageReceipt(session: string, operationId: string): Promise<Record<string, unknown> | null> {
+        const client = await this.getClient()
+        const result = await client.request('catalog.message.find', { session, operationId }, { timeoutMs: 15_000 })
+        return asRecord(result['receipt'])
+    }
+
     async updateCanonicalChat(
         session: string,
-        patch: { title?: string; project?: string; cwd?: string; archived?: boolean }
+        patch: { title?: string; project?: string; cwd?: string; archived?: boolean; deleted?: boolean }
     ): Promise<CanonicalAgentChat | null> {
         const client = await this.getClient()
         const result = await client.request('catalog.update', { session, ...patch }, { timeoutMs: 5_000 })
@@ -157,6 +186,9 @@ export class DesktopAgentServerConnection {
             model: payload['model'],
             thinking: payload['thinking'],
             profile: payload['profile'],
+            runtimeMode: payload['runtimeMode'],
+            webSearch: payload['webSearch'],
+            webFetch: payload['webFetch'],
             noSession: payload['noSession'],
             lastSequence: worker.latestSequence
         })
@@ -256,7 +288,14 @@ export class DesktopAgentServerConnection {
 
     private async getClient(): Promise<AgentServerClient> {
         if (this.disposed) throw new Error('Zyra agent-server connection is closed.')
-        if (!this.clientPromise) this.clientPromise = this.createClient()
+        if (!this.clientPromise) {
+            const pending = this.createClient()
+            const tracked = pending.catch((error) => {
+                if (this.clientPromise === tracked) this.clientPromise = null
+                throw error
+            })
+            this.clientPromise = tracked
+        }
         return this.clientPromise
     }
 
@@ -337,7 +376,13 @@ export class ZyraAgentServerWorker implements ZyraWorkerLike {
     latestSequence = 0
     connectPayload: Record<string, unknown> | null = null
 
-    constructor(private readonly connection: DesktopAgentServerConnection, readonly cwd: string) {}
+    constructor(
+        private readonly connection: DesktopAgentServerConnection,
+        readonly cwd: string,
+        latestSequence = 0
+    ) {
+        this.latestSequence = Math.max(0, Number(latestSequence) || 0)
+    }
 
     onEvent(listener: (event: unknown, metadata?: ZyraWorkerEventMetadata) => void): () => void {
         this.eventListeners.add(listener)
@@ -366,7 +411,6 @@ export class ZyraAgentServerWorker implements ZyraWorkerLike {
 
     markRemoteDetached(): void {
         this.sessionKey = null
-        this.latestSequence = 0
     }
 
     queueReplay(entries: ReplayEntry[]): void {

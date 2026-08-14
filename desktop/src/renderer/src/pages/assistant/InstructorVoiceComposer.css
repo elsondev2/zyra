@@ -1,0 +1,30 @@
+.instructor-voice-composer-pill {
+    min-width: 280px;
+}
+
+.instructor-voice-composer-images {
+    animation: instructor-voice-composer-images-in 280ms cubic-bezier(0.2, 0.9, 0.25, 1) both;
+}
+
+@keyframes instructor-voice-composer-images-in {
+    from {
+        opacity: 0;
+        transform: translateY(6px) scale(0.97);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+@media (max-width: 420px) {
+    .instructor-voice-composer-pill {
+        min-width: 0;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .instructor-voice-composer-images {
+        animation: none;
+    }
+}

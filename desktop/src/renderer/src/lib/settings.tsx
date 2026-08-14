@@ -3,8 +3,10 @@
  * Manages all app settings with localStorage persistence
  */
 
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react'
 import { dispatchZyraThemeChanged } from './theme-events'
+import { clearProjectViewCaches } from './projectViewCache'
+import { clearRecentProjects } from './recentProjects'
 import type { AssistantReasoningEffort } from '@shared/assistant/contracts'
 import {
     loadLegacyAssistantComposerDefaults,
@@ -12,7 +14,8 @@ import {
     sanitizeAssistantDefaultInteractionMode,
     sanitizeAssistantDefaultRuntimeMode
 } from './settings-assistant-defaults'
-import { getThemeDefinition, isDarkThemeId, isThemeId, THEME_CLASS_IDS, THEMES, type DarkTheme, type Theme } from './settings-theme-catalog'
+import { getThemeDefinition, isDarkThemeId, isThemeId, THEME_CLASS_IDS, THEMES, type DarkTheme, type Theme, type ThemeTokens } from './settings-theme-catalog'
+import { resolveAccentTokens, resolveStatusTokens, resolveThemeTokens, toRgbChannels } from './settings-theme-semantics'
 
 export { THEMES, type DarkTheme, type Theme } from './settings-theme-catalog'
 export {
@@ -27,13 +30,14 @@ export {
 // Settings Types
 export type Shell = 'powershell' | 'cmd'
 export type CommitAIProvider = 'groq' | 'gemini' | 'codex'
-export type ScrollMode = 'smooth' | 'native'
 export type BrowserViewMode = 'grid' | 'finder'
 export type BrowserContentLayout = 'grouped' | 'explorer'
 export type GitBulkActionScope = 'project' | 'repo'
 export type FilePreviewDefaultMode = 'preview' | 'edit'
 export type FilePreviewPythonRunMode = 'terminal' | 'output'
 export type FilePreviewExplorerNameLayout = 'wrap' | 'horizontal'
+export type FileEditorWordWrap = 'on' | 'off'
+export type FileDiffRenderMode = 'stacked' | 'split'
 export type PackageRuntimePreference = 'auto' | 'node' | 'npm' | 'pnpm' | 'yarn' | 'bun'
 export type PullRequestGuideSource = 'project' | 'global' | 'repo-template' | 'none'
 export type PullRequestGuideMode = 'text' | 'file'
@@ -44,8 +48,14 @@ export type AssistantToolOutputDefaultMode = 'expanded' | 'minimized'
 export type AssistantDefaultRuntimeMode = 'approval-required' | 'full-access'
 export type AssistantDefaultInteractionMode = 'default' | 'plan'
 export type AssistantDefaultEffort = AssistantReasoningEffort
-export type AssistantTranscriptionEngine = 'browser' | 'vosk'
+export type AssistantTranscriptionEngine = 'browser' | 'codex'
 export type AssistantBusyMessageMode = 'queue' | 'force'
+export type AssistantProductProfile = 'default' | 'builder'
+export type AppearanceThemeMode = 'system' | 'light' | 'dark'
+export type AppearanceManagedFont = `managed:${string}`
+export type AppearanceLocalFont = `local:${string}`
+export type AppearanceUiFont = 'hanken' | 'bricolage' | 'segoe' | 'system' | AppearanceManagedFont | AppearanceLocalFont
+export type AppearanceCodeFont = 'system-mono' | 'cascadia' | 'consolas' | 'jetbrains' | AppearanceManagedFont | AppearanceLocalFont
 // Kept dormant until Appearance settings exposes the classic/workspace inspector choice.
 
 export interface PullRequestGuideConfig {
@@ -68,6 +78,74 @@ export interface AccentColor {
     secondary: string
 }
 
+export interface AppearanceCustomTheme {
+    baseTheme: Theme
+    tokens: ThemeTokens
+    accentColor: AccentColor
+    uiFont: AppearanceUiFont
+    codeFont: AppearanceCodeFont
+}
+
+export const APPEARANCE_UI_FONTS: ReadonlyArray<{ id: AppearanceUiFont; label: string; stack: string }> = [
+    { id: 'hanken', label: 'Hanken Grotesk', stack: '"Hanken Grotesk Variable", "Hanken Grotesk", "Segoe UI", system-ui, sans-serif' },
+    { id: 'bricolage', label: 'Bricolage Grotesque', stack: '"Bricolage Grotesque", "Hanken Grotesk", "Segoe UI", system-ui, sans-serif' },
+    { id: 'segoe', label: 'Segoe UI', stack: '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif' },
+    { id: 'system', label: 'System UI', stack: '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif' }
+]
+
+export const APPEARANCE_CODE_FONTS: ReadonlyArray<{ id: AppearanceCodeFont; label: string; stack: string }> = [
+    { id: 'system-mono', label: 'System monospace', stack: 'ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace' },
+    { id: 'cascadia', label: 'Cascadia Code', stack: '"Cascadia Code", "Cascadia Mono", Consolas, monospace' },
+    { id: 'consolas', label: 'Consolas', stack: 'Consolas, "Courier New", monospace' },
+    { id: 'jetbrains', label: 'JetBrains Mono', stack: '"JetBrains Mono", "Cascadia Code", Consolas, monospace' }
+]
+
+export function createAppearanceManagedFont(fontId: string): AppearanceManagedFont {
+    return `managed:${fontId.replace(/[^a-z0-9-]/gi, '').slice(0, 96)}`
+}
+
+export function getAppearanceManagedFontId(font: AppearanceUiFont | AppearanceCodeFont): string | null {
+    return font.startsWith('managed:') ? font.slice('managed:'.length) : null
+}
+
+export function getAppearanceManagedFontAlias(fontId: string): string {
+    return `Zyra Managed ${fontId.replace(/[^a-z0-9-]/gi, '-').slice(0, 96)}`
+}
+
+export function createAppearanceLocalFont(family: string): AppearanceLocalFont {
+    const normalized = family.trim().replace(/\s+/g, ' ').slice(0, 96)
+    return `local:${encodeURIComponent(normalized)}`
+}
+
+export function getAppearanceLocalFontFamily(font: AppearanceUiFont | AppearanceCodeFont): string | null {
+    if (!font.startsWith('local:')) return null
+    try {
+        return decodeURIComponent(font.slice('local:'.length)).replace(/[";{}]/g, '').trim().slice(0, 96) || null
+    } catch {
+        return null
+    }
+}
+
+function quoteFontFamily(family: string): string {
+    return `"${family.replace(/["\\]/g, '')}"`
+}
+
+export function getAppearanceUiFontStack(font: AppearanceUiFont): string {
+    const managedFontId = getAppearanceManagedFontId(font)
+    if (managedFontId) return `${quoteFontFamily(getAppearanceManagedFontAlias(managedFontId))}, "Segoe UI", system-ui, sans-serif`
+    const localFamily = getAppearanceLocalFontFamily(font)
+    if (localFamily) return `${quoteFontFamily(localFamily)}, "Segoe UI", system-ui, sans-serif`
+    return APPEARANCE_UI_FONTS.find((entry) => entry.id === font)?.stack || APPEARANCE_UI_FONTS[0].stack
+}
+
+export function getAppearanceCodeFontStack(font: AppearanceCodeFont): string {
+    const managedFontId = getAppearanceManagedFontId(font)
+    if (managedFontId) return `${quoteFontFamily(getAppearanceManagedFontAlias(managedFontId))}, Consolas, monospace`
+    const localFamily = getAppearanceLocalFontFamily(font)
+    if (localFamily) return `${quoteFontFamily(localFamily)}, Consolas, monospace`
+    return APPEARANCE_CODE_FONTS.find((entry) => entry.id === font)?.stack || APPEARANCE_CODE_FONTS[0].stack
+}
+
 export const ACCENT_COLORS: AccentColor[] = [
     { name: 'Blue', primary: '#3b82f6', secondary: '#60a5fa' },
     { name: 'Purple', primary: '#8b5cf6', secondary: '#a78bfa' },
@@ -88,18 +166,23 @@ export const ACCENT_COLORS: AccentColor[] = [
 ]
 
 export interface Settings {
+    settingsSchemaVersion: 4
     theme: Theme
-    lastDarkTheme: DarkTheme
+    appearanceThemeMode: AppearanceThemeMode
+    appearanceDarkTheme: DarkTheme
+    appearanceCustomTheme: AppearanceCustomTheme | null
+    appearanceCustomThemeActive: boolean
+    appearanceUiFont: AppearanceUiFont
+    appearanceCodeFont: AppearanceCodeFont
     accentColor: AccentColor
     compactMode: boolean
     sidebarCollapsed: boolean
-    betaSettingsEnabled: boolean
+    assistantAgentInboxSidebarEnabled: boolean
     explorerTabEnabled: boolean
     explorerHomePath: string
     defaultShell: Shell
     startMinimized: boolean
     startWithWindows: boolean
-    scrollMode: ScrollMode
     browserViewMode: BrowserViewMode
     browserContentLayout: BrowserContentLayout
     filePreviewOpenInFullscreen: boolean
@@ -108,8 +191,17 @@ export interface Settings {
     filePreviewDefaultMode: FilePreviewDefaultMode
     filePreviewPythonRunMode: FilePreviewPythonRunMode
     filePreviewExplorerNameLayout: FilePreviewExplorerNameLayout
+    fileEditorWordWrap: FileEditorWordWrap
+    fileEditorMinimapEnabled: boolean
+    fileEditorFontSize: number
+    fileCsvDistinctColorsEnabled: boolean
+    fileDiffRenderMode: FileDiffRenderMode
     packageRuntimePreference: PackageRuntimePreference
     filePreviewTerminalPanelHeight: number
+    terminalFontSize: number
+    terminalCursorBlink: boolean
+    terminalScrollback: number
+    assistantBrowserRestoreTabs: boolean
     projectsFolder: string
     additionalFolders: string[]
     gitAutoRefreshOnProjectOpen: boolean
@@ -117,7 +209,6 @@ export interface Settings {
     gitInitCreateGitignore: boolean
     gitInitCreateInitialCommit: boolean
     gitWarnOnAuthorMismatch: boolean
-    gitConfirmPartialPushRange: boolean
     gitBulkActionScope: GitBulkActionScope
     gitPullRequestGlobalGuide: PullRequestGuideConfig
     gitPullRequestDefaultGuideSource: PullRequestGuideSource
@@ -136,29 +227,40 @@ export interface Settings {
     assistantToolOutputDefaultMode: AssistantToolOutputDefaultMode
     assistantDefaultModel: string
     assistantDefaultPromptTemplate: string
+    assistantProductProfile: AssistantProductProfile
     assistantDefaultRuntimeMode: AssistantDefaultRuntimeMode
     assistantDefaultInteractionMode: AssistantDefaultInteractionMode
     assistantDefaultEffort: AssistantDefaultEffort
     assistantDefaultFastMode: boolean
     assistantBusyMessageMode: AssistantBusyMessageMode
-    assistantPlaygroundTerminalAccessDefault: boolean
+    assistantAutoReconnect: boolean
+    assistantHistoryPrefetch: boolean
+    assistantShowStatusDetails: boolean
+    assistantShowDiagnostics: boolean
+    accessibilityReduceMotion: boolean
+    projectIconOverrides: Record<string, string>
     assistantTranscriptionEnabled: boolean
     assistantTranscriptionEngine: AssistantTranscriptionEngine
 }
 
 const DEFAULT_SETTINGS: Settings = {
+    settingsSchemaVersion: 4,
     theme: 'dark',
-    lastDarkTheme: 'dark',
+    appearanceThemeMode: 'system',
+    appearanceDarkTheme: 'dark',
+    appearanceCustomTheme: null,
+    appearanceCustomThemeActive: false,
+    appearanceUiFont: 'hanken',
+    appearanceCodeFont: 'system-mono',
     accentColor: ACCENT_COLORS[0],
     compactMode: false,
     sidebarCollapsed: false,
-    betaSettingsEnabled: false,
+    assistantAgentInboxSidebarEnabled: false,
     explorerTabEnabled: false,
     explorerHomePath: '',
     defaultShell: 'powershell',
     startMinimized: false,
     startWithWindows: false,
-    scrollMode: 'smooth',
     browserViewMode: 'finder',
     browserContentLayout: 'explorer',
     filePreviewOpenInFullscreen: false,
@@ -167,8 +269,17 @@ const DEFAULT_SETTINGS: Settings = {
     filePreviewDefaultMode: 'preview',
     filePreviewPythonRunMode: 'terminal',
     filePreviewExplorerNameLayout: 'wrap',
+    fileEditorWordWrap: 'on',
+    fileEditorMinimapEnabled: true,
+    fileEditorFontSize: 13,
+    fileCsvDistinctColorsEnabled: true,
+    fileDiffRenderMode: 'stacked',
     packageRuntimePreference: 'auto',
     filePreviewTerminalPanelHeight: 220,
+    terminalFontSize: 12,
+    terminalCursorBlink: true,
+    terminalScrollback: 5000,
+    assistantBrowserRestoreTabs: true,
     projectsFolder: '',
     additionalFolders: [],
     gitAutoRefreshOnProjectOpen: true,
@@ -176,7 +287,6 @@ const DEFAULT_SETTINGS: Settings = {
     gitInitCreateGitignore: true,
     gitInitCreateInitialCommit: false,
     gitWarnOnAuthorMismatch: true,
-    gitConfirmPartialPushRange: true,
     gitBulkActionScope: 'repo',
     gitPullRequestGlobalGuide: {
         mode: 'text',
@@ -196,15 +306,21 @@ const DEFAULT_SETTINGS: Settings = {
     commitAIProvider: 'groq',
     assistantUsageDisplayMode: 'remaining',
     assistantTextStreamingMode: 'stream',
-    assistantToolOutputDefaultMode: 'expanded',
+    assistantToolOutputDefaultMode: 'minimized',
     assistantDefaultModel: '',
     assistantDefaultPromptTemplate: '',
+    assistantProductProfile: 'default',
     assistantDefaultRuntimeMode: 'approval-required',
     assistantDefaultInteractionMode: 'default',
     assistantDefaultEffort: 'medium',
     assistantDefaultFastMode: false,
     assistantBusyMessageMode: 'queue',
-    assistantPlaygroundTerminalAccessDefault: false,
+    assistantAutoReconnect: true,
+    assistantHistoryPrefetch: false,
+    assistantShowStatusDetails: true,
+    assistantShowDiagnostics: false,
+    accessibilityReduceMotion: false,
+    projectIconOverrides: {},
     assistantTranscriptionEnabled: false,
     assistantTranscriptionEngine: 'browser'
 }
@@ -212,12 +328,122 @@ const DEFAULT_SETTINGS: Settings = {
 const STORAGE_KEY = 'devscope-settings'
 const LEGACY_ASSISTANT_COMPOSER_PREFERENCES_STORAGE_KEY = 'devscope:assistant-composer-preferences'
 
+function sanitizeString(value: unknown, maxLength: number, trim = true): string {
+    if (typeof value !== 'string') return ''
+    const normalized = trim ? value.trim() : value
+    return normalized.slice(0, maxLength)
+}
+
+function sanitizeStringRecord(value: unknown, limit = 100): Record<string, string> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+    return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+            .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[0].trim().length > 0 && entry[1].trim().length > 0)
+            .slice(0, limit)
+            .map(([key, entryValue]) => [key.trim().slice(0, 2_048), entryValue.trim().slice(0, 2_048)])
+    )
+}
+
+function sanitizeStringList(value: unknown, limit = 32): string[] {
+    if (!Array.isArray(value)) return []
+    return [...new Set(value
+        .filter((entry): entry is string => typeof entry === 'string')
+        .map((entry) => entry.trim().slice(0, 2_048))
+        .filter(Boolean))]
+        .slice(0, limit)
+}
+
+function sanitizeDynamicAppearanceFont(value: unknown): AppearanceManagedFont | AppearanceLocalFont | null {
+    if (typeof value !== 'string') return null
+    if (/^managed:[a-z0-9-]{3,96}$/i.test(value)) return value.toLowerCase() as AppearanceManagedFont
+    if (value.startsWith('local:')) {
+        const family = getAppearanceLocalFontFamily(value as AppearanceLocalFont)
+        return family ? createAppearanceLocalFont(family) : null
+    }
+    return null
+}
+
+function sanitizeAppearanceUiFont(value: unknown): AppearanceUiFont {
+    const dynamicFont = sanitizeDynamicAppearanceFont(value)
+    if (dynamicFont) return dynamicFont
+    return value === 'bricolage' || value === 'segoe' || value === 'system' ? value : 'hanken'
+}
+
+function sanitizeAppearanceCodeFont(value: unknown): AppearanceCodeFont {
+    const dynamicFont = sanitizeDynamicAppearanceFont(value)
+    if (dynamicFont) return dynamicFont
+    return value === 'cascadia' || value === 'consolas' || value === 'jetbrains' ? value : 'system-mono'
+}
+
+function sanitizeHexColor(value: unknown): string | null {
+    if (typeof value !== 'string') return null
+    const normalized = value.trim().toLowerCase()
+    return /^#[0-9a-f]{6}$/.test(normalized) ? normalized : null
+}
+
+function sanitizeAccentColor(value: unknown): AccentColor {
+    if (!value || typeof value !== 'object') return ACCENT_COLORS[0]
+    const candidate = value as Partial<AccentColor>
+    const requestedName = sanitizeString(candidate.name, 32)
+    const preset = ACCENT_COLORS.find((color) => color.name === requestedName)
+    if (preset) return preset
+
+    const primary = sanitizeHexColor(candidate.primary)
+    const secondary = sanitizeHexColor(candidate.secondary)
+    return requestedName === 'Custom' && primary && secondary
+        ? { name: 'Custom', primary, secondary }
+        : ACCENT_COLORS[0]
+}
+
+function sanitizeThemeTokens(value: unknown, fallback: ThemeTokens): ThemeTokens {
+    const candidate = value && typeof value === 'object' ? value as Partial<ThemeTokens> : {}
+    return {
+        bg: sanitizeHexColor(candidate.bg) || fallback.bg,
+        text: sanitizeHexColor(candidate.text) || fallback.text,
+        textDark: sanitizeHexColor(candidate.textDark) || fallback.textDark,
+        textDarker: sanitizeHexColor(candidate.textDarker) || fallback.textDarker,
+        textSecondary: sanitizeHexColor(candidate.textSecondary) || fallback.textSecondary,
+        textMuted: sanitizeHexColor(candidate.textMuted) || fallback.textMuted,
+        card: sanitizeHexColor(candidate.card) || fallback.card,
+        border: sanitizeHexColor(candidate.border) || fallback.border,
+        borderSecondary: sanitizeHexColor(candidate.borderSecondary) || fallback.borderSecondary,
+        primary: sanitizeHexColor(candidate.primary) || fallback.primary,
+        secondary: sanitizeHexColor(candidate.secondary) || fallback.secondary,
+        accent: sanitizeHexColor(candidate.accent) || fallback.accent
+    }
+}
+
+function sanitizeAppearanceCustomTheme(value: unknown): AppearanceCustomTheme | null {
+    if (!value || typeof value !== 'object') return null
+    const candidate = value as Partial<AppearanceCustomTheme>
+    if (!isThemeId(candidate.baseTheme)) return null
+    const baseTheme = getThemeDefinition(candidate.baseTheme)
+    return {
+        baseTheme: candidate.baseTheme,
+        tokens: sanitizeThemeTokens(candidate.tokens, baseTheme.tokens),
+        accentColor: sanitizeAccentColor(candidate.accentColor),
+        uiFont: sanitizeAppearanceUiFont(candidate.uiFont),
+        codeFont: sanitizeAppearanceCodeFont(candidate.codeFont)
+    }
+}
+
+export function getSystemAppearanceTheme(): 'light' | 'dark' {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return 'dark'
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function resolveAppearanceTheme(mode: AppearanceThemeMode, darkTheme: DarkTheme): Theme {
+    if (mode === 'light') return 'light'
+    if (mode === 'dark') return darkTheme
+    return getSystemAppearanceTheme()
+}
+
 function sanitizePullRequestGuideConfig(value: unknown): PullRequestGuideConfig {
     const candidate = typeof value === 'object' && value !== null ? value as Partial<PullRequestGuideConfig> : {}
     return {
         mode: candidate.mode === 'file' ? 'file' : 'text',
-        text: typeof candidate.text === 'string' ? candidate.text : '',
-        filePath: typeof candidate.filePath === 'string' ? candidate.filePath : ''
+        text: sanitizeString(candidate.text, 32_000, false),
+        filePath: sanitizeString(candidate.filePath, 2_048)
     }
 }
 
@@ -237,9 +463,7 @@ function sanitizeProjectPullRequestConfig(value: unknown, defaults: Settings): P
             ? candidate.guideSource
             : 'global',
         guide: sanitizePullRequestGuideConfig(candidate.guide),
-        targetBranch: typeof candidate.targetBranch === 'string' && candidate.targetBranch.trim()
-            ? candidate.targetBranch.trim()
-            : defaults.gitPullRequestDefaultTargetBranch,
+        targetBranch: sanitizeString(candidate.targetBranch, 256) || defaults.gitPullRequestDefaultTargetBranch,
         draft: candidate.draft !== false,
         changeSource: sanitizePullRequestChangeSource(
             (candidate as Partial<ProjectPullRequestConfig> & { scope?: unknown }).changeSource
@@ -249,7 +473,7 @@ function sanitizeProjectPullRequestConfig(value: unknown, defaults: Settings): P
     }
 }
 
-function loadSettings(): Settings {
+export function loadSettings(): Settings {
     try {
         const legacyAssistantDefaults = loadLegacyAssistantComposerDefaults(
             LEGACY_ASSISTANT_COMPOSER_PREFERENCES_STORAGE_KEY,
@@ -257,35 +481,63 @@ function loadSettings(): Settings {
         )
         const stored = localStorage.getItem(STORAGE_KEY)
         if (stored) {
-            const parsed = JSON.parse(stored)
-            const candidate = { ...DEFAULT_SETTINGS, ...legacyAssistantDefaults, ...parsed }
+            const parsedValue: unknown = JSON.parse(stored)
+            const parsed = parsedValue && typeof parsedValue === 'object' && !Array.isArray(parsedValue)
+                ? parsedValue as Record<string, unknown>
+                : {}
+            const candidate = { ...DEFAULT_SETTINGS, ...legacyAssistantDefaults, ...parsed } as Record<string, any>
             const legacyCodexModel = typeof candidate.codexModel === 'string' ? candidate.codexModel.trim() : ''
-            const theme = isThemeId(candidate.theme) ? candidate.theme : DEFAULT_SETTINGS.theme
-            const lastDarkTheme = isDarkThemeId(candidate.lastDarkTheme)
-                ? candidate.lastDarkTheme
-                : isDarkThemeId(theme)
-                    ? theme
-                    : DEFAULT_SETTINGS.lastDarkTheme
+            const storedTheme = isThemeId(candidate.theme) ? candidate.theme : DEFAULT_SETTINGS.theme
+            const requestedDarkTheme = parsed.appearanceDarkTheme ?? parsed.lastDarkTheme
+            const appearanceDarkTheme = isDarkThemeId(requestedDarkTheme)
+                ? requestedDarkTheme
+                : isDarkThemeId(storedTheme) ? storedTheme : DEFAULT_SETTINGS.appearanceDarkTheme
+            const appearanceThemeMode: AppearanceThemeMode = parsed.appearanceThemeMode === 'system'
+                || parsed.appearanceThemeMode === 'light'
+                || parsed.appearanceThemeMode === 'dark'
+                ? parsed.appearanceThemeMode
+                : parsed.theme === undefined
+                    ? DEFAULT_SETTINGS.appearanceThemeMode
+                    : storedTheme === 'light' ? 'light' : 'dark'
+            const theme = resolveAppearanceTheme(appearanceThemeMode, appearanceDarkTheme)
+            const appearanceCustomTheme = sanitizeAppearanceCustomTheme(parsed.appearanceCustomTheme)
+            const appearanceCustomThemeActive = parsed.appearanceCustomThemeActive === true
+                && appearanceThemeMode !== 'system'
+                && appearanceCustomTheme?.baseTheme === theme
+            const appearanceUiFont = appearanceCustomThemeActive && appearanceCustomTheme
+                ? appearanceCustomTheme.uiFont
+                : sanitizeAppearanceUiFont(candidate.appearanceUiFont)
+            const appearanceCodeFont = appearanceCustomThemeActive && appearanceCustomTheme
+                ? appearanceCustomTheme.codeFont
+                : sanitizeAppearanceCodeFont(candidate.appearanceCodeFont)
             const gitCommitCodexModel = typeof candidate.gitCommitCodexModel === 'string'
                 ? candidate.gitCommitCodexModel.trim()
                 : legacyCodexModel
             const gitPullRequestCodexModel = typeof candidate.gitPullRequestCodexModel === 'string'
                 ? candidate.gitPullRequestCodexModel.trim()
                 : legacyCodexModel
+            const legacyFileDiffRenderMode = localStorage.getItem('devscope:project-details:diff-render-mode:v1')
+            const legacyProductProfile = localStorage.getItem('zyra-ui:active-profile:v2')
+                || localStorage.getItem('zyra-ui:active-profile:v1')
 
             return {
+                settingsSchemaVersion: 4,
                 theme,
-                lastDarkTheme,
-                accentColor: candidate.accentColor,
-                compactMode: candidate.compactMode,
-                sidebarCollapsed: candidate.sidebarCollapsed,
-                betaSettingsEnabled: candidate.betaSettingsEnabled === true,
+                appearanceThemeMode,
+                appearanceDarkTheme,
+                appearanceCustomTheme,
+                appearanceCustomThemeActive,
+                appearanceUiFont,
+                appearanceCodeFont,
+                accentColor: sanitizeAccentColor(candidate.accentColor),
+                compactMode: candidate.compactMode === true,
+                sidebarCollapsed: candidate.sidebarCollapsed === true,
+                assistantAgentInboxSidebarEnabled: candidate.assistantAgentInboxSidebarEnabled === true,
                 explorerTabEnabled: candidate.explorerTabEnabled === true,
-                explorerHomePath: typeof candidate.explorerHomePath === 'string' ? candidate.explorerHomePath : '',
-                defaultShell: candidate.defaultShell,
-                startMinimized: candidate.startMinimized,
-                startWithWindows: candidate.startWithWindows,
-                scrollMode: candidate.scrollMode === 'native' ? 'native' : 'smooth',
+                explorerHomePath: sanitizeString(candidate.explorerHomePath, 2_048),
+                defaultShell: candidate.defaultShell === 'cmd' ? 'cmd' : 'powershell',
+                startMinimized: candidate.startMinimized === true,
+                startWithWindows: candidate.startWithWindows === true,
                 browserViewMode: candidate.browserViewMode === 'finder' ? 'finder' : 'grid',
                 browserContentLayout: candidate.browserContentLayout === 'explorer' ? 'explorer' : 'grouped',
                 filePreviewOpenInFullscreen: !!candidate.filePreviewOpenInFullscreen,
@@ -294,6 +546,15 @@ function loadSettings(): Settings {
                 filePreviewDefaultMode: candidate.filePreviewDefaultMode === 'edit' ? 'edit' : 'preview',
                 filePreviewPythonRunMode: candidate.filePreviewPythonRunMode === 'output' ? 'output' : 'terminal',
                 filePreviewExplorerNameLayout: candidate.filePreviewExplorerNameLayout === 'horizontal' ? 'horizontal' : 'wrap',
+                fileEditorWordWrap: candidate.fileEditorWordWrap === 'off' ? 'off' : 'on',
+                fileEditorMinimapEnabled: candidate.fileEditorMinimapEnabled !== false,
+                fileEditorFontSize: Number.isFinite(Number(candidate.fileEditorFontSize))
+                    ? Math.max(10, Math.min(24, Math.round(Number(candidate.fileEditorFontSize))))
+                    : 13,
+                fileCsvDistinctColorsEnabled: candidate.fileCsvDistinctColorsEnabled !== false,
+                fileDiffRenderMode: parsed.fileDiffRenderMode === 'split' || (parsed.fileDiffRenderMode === undefined && legacyFileDiffRenderMode === 'split')
+                    ? 'split'
+                    : 'stacked',
                 packageRuntimePreference:
                     candidate.packageRuntimePreference === 'npm'
                     || candidate.packageRuntimePreference === 'node'
@@ -305,16 +566,21 @@ function loadSettings(): Settings {
                 filePreviewTerminalPanelHeight: Number.isFinite(Number(candidate.filePreviewTerminalPanelHeight))
                     ? Math.max(140, Math.min(720, Math.round(Number(candidate.filePreviewTerminalPanelHeight))))
                     : 220,
-                projectsFolder: candidate.projectsFolder,
-                additionalFolders: candidate.additionalFolders,
+                terminalFontSize: Number.isFinite(Number(candidate.terminalFontSize))
+                    ? Math.max(10, Math.min(24, Math.round(Number(candidate.terminalFontSize))))
+                    : 12,
+                terminalCursorBlink: candidate.terminalCursorBlink !== false,
+                terminalScrollback: Number.isFinite(Number(candidate.terminalScrollback))
+                    ? Math.max(1_000, Math.min(50_000, Math.round(Number(candidate.terminalScrollback))))
+                    : 5_000,
+                assistantBrowserRestoreTabs: candidate.assistantBrowserRestoreTabs !== false,
+                projectsFolder: sanitizeString(candidate.projectsFolder, 2_048),
+                additionalFolders: sanitizeStringList(candidate.additionalFolders),
                 gitAutoRefreshOnProjectOpen: candidate.gitAutoRefreshOnProjectOpen !== false,
-                gitInitDefaultBranch: typeof candidate.gitInitDefaultBranch === 'string' && candidate.gitInitDefaultBranch.trim()
-                    ? candidate.gitInitDefaultBranch.trim()
-                    : 'main',
+                gitInitDefaultBranch: sanitizeString(candidate.gitInitDefaultBranch, 256) || 'main',
                 gitInitCreateGitignore: candidate.gitInitCreateGitignore !== false,
                 gitInitCreateInitialCommit: !!candidate.gitInitCreateInitialCommit,
                 gitWarnOnAuthorMismatch: candidate.gitWarnOnAuthorMismatch !== false,
-                gitConfirmPartialPushRange: candidate.gitConfirmPartialPushRange !== false,
                 gitBulkActionScope: candidate.gitBulkActionScope === 'project' ? 'project' : 'repo',
                 gitPullRequestGlobalGuide: sanitizePullRequestGuideConfig(candidate.gitPullRequestGlobalGuide),
                 gitPullRequestDefaultGuideSource:
@@ -323,9 +589,8 @@ function loadSettings(): Settings {
                     || candidate.gitPullRequestDefaultGuideSource === 'none'
                         ? candidate.gitPullRequestDefaultGuideSource
                         : 'global',
-                gitPullRequestDefaultTargetBranch: typeof candidate.gitPullRequestDefaultTargetBranch === 'string' && candidate.gitPullRequestDefaultTargetBranch.trim()
-                    ? candidate.gitPullRequestDefaultTargetBranch.trim()
-                    : DEFAULT_SETTINGS.gitPullRequestDefaultTargetBranch,
+                gitPullRequestDefaultTargetBranch: sanitizeString(candidate.gitPullRequestDefaultTargetBranch, 256)
+                    || DEFAULT_SETTINGS.gitPullRequestDefaultTargetBranch,
                 gitPullRequestDefaultDraft: candidate.gitPullRequestDefaultDraft !== false,
                 gitPullRequestDefaultChangeSource: sanitizePullRequestChangeSource(
                     candidate.gitPullRequestDefaultChangeSource ?? candidate.gitPullRequestDefaultScope,
@@ -336,46 +601,72 @@ function loadSettings(): Settings {
                         typeof candidate.gitProjectPullRequestConfigs === 'object' && candidate.gitProjectPullRequestConfigs !== null
                             ? candidate.gitProjectPullRequestConfigs as Record<string, unknown>
                             : {}
-                    ).map(([projectPath, config]) => [
-                        projectPath,
+                    ).slice(0, 100).map(([projectPath, config]) => [
+                        projectPath.trim().slice(0, 2_048),
                         sanitizeProjectPullRequestConfig(config, DEFAULT_SETTINGS)
-                    ])
+                    ]).filter(([projectPath]) => Boolean(projectPath))
                 ),
                 gitAutoCreateBranchWhenTargetMatches: candidate.gitAutoCreateBranchWhenTargetMatches === true,
-                groqApiKey: candidate.groqApiKey,
-                geminiApiKey: candidate.geminiApiKey,
-                gitCommitCodexModel,
-                gitPullRequestCodexModel,
+                groqApiKey: sanitizeString(candidate.groqApiKey, 4_096),
+                geminiApiKey: sanitizeString(candidate.geminiApiKey, 4_096),
+                gitCommitCodexModel: gitCommitCodexModel.slice(0, 256),
+                gitPullRequestCodexModel: gitPullRequestCodexModel.slice(0, 256),
                 commitAIProvider: candidate.commitAIProvider === 'gemini' || candidate.commitAIProvider === 'codex' ? candidate.commitAIProvider : 'groq',
                 assistantUsageDisplayMode: candidate.assistantUsageDisplayMode === 'used' ? 'used' : 'remaining',
                 assistantTextStreamingMode: candidate.assistantTextStreamingMode === 'chunks' ? 'chunks' : 'stream',
-                assistantToolOutputDefaultMode: candidate.assistantToolOutputDefaultMode === 'minimized' ? 'minimized' : 'expanded',
-                assistantDefaultModel: typeof candidate.assistantDefaultModel === 'string' ? candidate.assistantDefaultModel.trim() : '',
-                assistantDefaultPromptTemplate: typeof candidate.assistantDefaultPromptTemplate === 'string'
-                    ? candidate.assistantDefaultPromptTemplate
-                    : '',
+                assistantToolOutputDefaultMode: parsed.assistantToolOutputDefaultMode === 'expanded'
+                    || (
+                        parsed.assistantToolOutputDefaultMode === undefined
+                        && (parsed.settingsSchemaVersion === undefined || Number(parsed.settingsSchemaVersion) < 4)
+                    )
+                    ? 'expanded'
+                    : 'minimized',
+                assistantDefaultModel: sanitizeString(candidate.assistantDefaultModel, 256),
+                assistantDefaultPromptTemplate: sanitizeString(candidate.assistantDefaultPromptTemplate, 32_000, false),
+                assistantProductProfile: parsed.assistantProductProfile === 'builder'
+                    || (parsed.assistantProductProfile === undefined && legacyProductProfile === ['e', 'lson'].join(''))
+                    || (parsed.assistantProductProfile === undefined && legacyProductProfile === 'builder')
+                    ? 'builder'
+                    : 'default',
                 assistantDefaultRuntimeMode: sanitizeAssistantDefaultRuntimeMode(candidate.assistantDefaultRuntimeMode),
                 assistantDefaultInteractionMode: sanitizeAssistantDefaultInteractionMode(candidate.assistantDefaultInteractionMode),
                 assistantDefaultEffort: sanitizeAssistantDefaultEffort(candidate.assistantDefaultEffort),
                 assistantDefaultFastMode: !!candidate.assistantDefaultFastMode,
                 assistantBusyMessageMode: candidate.assistantBusyMessageMode === 'force' ? 'force' : 'queue',
-                assistantPlaygroundTerminalAccessDefault: candidate.assistantPlaygroundTerminalAccessDefault === true,
+                assistantAutoReconnect: candidate.assistantAutoReconnect !== false,
+                assistantHistoryPrefetch: Number(parsed.settingsSchemaVersion) >= 3
+                    && candidate.assistantHistoryPrefetch === true,
+                assistantShowStatusDetails: candidate.assistantShowStatusDetails !== false,
+                assistantShowDiagnostics: candidate.assistantShowDiagnostics === true,
+                accessibilityReduceMotion: candidate.accessibilityReduceMotion === true,
+                projectIconOverrides: sanitizeStringRecord(candidate.projectIconOverrides),
                 assistantTranscriptionEnabled: candidate.assistantTranscriptionEnabled === true,
-                assistantTranscriptionEngine: candidate.assistantTranscriptionEngine === 'vosk' ? 'vosk' : 'browser'
+                assistantTranscriptionEngine: candidate.assistantTranscriptionEngine === 'codex'
+                    || candidate.assistantTranscriptionEngine === 'vosk'
+                    ? 'codex'
+                    : 'browser'
             }
         }
     } catch (e) {
         console.error('Failed to load settings:', e)
     }
-    return {
+    const defaults = {
         ...DEFAULT_SETTINGS,
         ...loadLegacyAssistantComposerDefaults(LEGACY_ASSISTANT_COMPOSER_PREFERENCES_STORAGE_KEY, DEFAULT_SETTINGS)
+    }
+    return {
+        ...defaults,
+        theme: resolveAppearanceTheme(defaults.appearanceThemeMode, defaults.appearanceDarkTheme)
     }
 }
 
 function saveSettings(settings: Settings): void {
     try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
+        localStorage.removeItem('devscope:project-details:diff-render-mode:v1')
+        localStorage.removeItem(LEGACY_ASSISTANT_COMPOSER_PREFERENCES_STORAGE_KEY)
+        localStorage.removeItem('zyra-ui:active-profile:v2')
+        localStorage.removeItem('zyra-ui:active-profile:v1')
     } catch (e) {
         console.error('Failed to save settings:', e)
     }
@@ -384,7 +675,6 @@ function saveSettings(settings: Settings): void {
 interface SettingsContextType {
     settings: Settings
     updateSettings: (partial: Partial<Settings>) => void
-    resetSettings: () => void
     clearCache: () => void
 }
 
@@ -394,12 +684,46 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     const [settings, setSettings] = useState<Settings>(loadSettings)
 
     useEffect(() => {
-        applyTheme(settings.theme)
-    }, [settings.theme])
+        if (typeof window.matchMedia !== 'function') return
+        const colorScheme = window.matchMedia('(prefers-color-scheme: dark)')
+        const syncSystemTheme = () => {
+            setSettings((current) => {
+                if (current.appearanceThemeMode !== 'system') return current
+                const theme: Theme = colorScheme.matches ? 'dark' : 'light'
+                if (current.theme === theme) return current
+                const definition = getThemeDefinition(theme)
+                const accentColor = ACCENT_COLORS.find((accent) => accent.name === definition.accentColor) || ACCENT_COLORS[0]
+                return { ...current, theme, accentColor, appearanceCustomThemeActive: false }
+            })
+        }
+        syncSystemTheme()
+        colorScheme.addEventListener('change', syncSystemTheme)
+        return () => colorScheme.removeEventListener('change', syncSystemTheme)
+    }, [])
 
     useEffect(() => {
-        applyAccentColor(settings.accentColor)
-    }, [settings.accentColor])
+        const customTokens = settings.appearanceCustomThemeActive
+            && settings.appearanceCustomTheme?.baseTheme === settings.theme
+            ? settings.appearanceCustomTheme.tokens
+            : undefined
+        applyTheme(settings.theme, settings.accentColor, customTokens)
+    }, [settings.accentColor, settings.appearanceCustomTheme, settings.appearanceCustomThemeActive, settings.theme])
+
+    useEffect(() => {
+        const root = document.documentElement
+        const uiFont = getAppearanceUiFontStack(settings.appearanceUiFont)
+        const codeFont = getAppearanceCodeFontStack(settings.appearanceCodeFont)
+        root.style.setProperty('--font-ui', uiFont)
+        root.style.setProperty('--font-code', codeFont)
+        root.style.setProperty('--font-mono', codeFont)
+        void import('./appearance-font-runtime').then(({ ensureAppearanceFontLoaded }) => (
+            Promise.all([
+                ensureAppearanceFontLoaded(settings.appearanceUiFont),
+                ensureAppearanceFontLoaded(settings.appearanceCodeFont)
+            ])
+        )).then(() => dispatchZyraThemeChanged())
+            .catch((error) => console.warn('Failed to load a managed appearance font:', error))
+    }, [settings.appearanceCodeFont, settings.appearanceUiFont])
 
     useEffect(() => {
         if (settings.compactMode) {
@@ -410,46 +734,26 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     }, [settings.compactMode])
 
     useEffect(() => {
+        document.body.classList.toggle('zyra-reduce-motion', settings.accessibilityReduceMotion)
+        return () => document.body.classList.remove('zyra-reduce-motion')
+    }, [settings.accessibilityReduceMotion])
+
+    useEffect(() => {
         saveSettings(settings)
     }, [settings])
 
-    const updateSettings = (partial: Partial<Settings>) => {
-        setSettings((prev) => {
-            const nextTheme = partial.theme ?? prev.theme
-            const nextLastDarkTheme = isDarkThemeId(partial.lastDarkTheme)
-                ? partial.lastDarkTheme
-                : isDarkThemeId(nextTheme)
-                    ? nextTheme
-                    : prev.lastDarkTheme
+    const updateSettings = useCallback((partial: Partial<Settings>) => {
+        setSettings((prev) => ({ ...prev, ...partial }))
+    }, [])
 
-            return {
-                ...prev,
-                ...partial,
-                theme: nextTheme,
-                lastDarkTheme: nextLastDarkTheme
-            }
-        })
-    }
-
-    const resetSettings = () => {
-        setSettings(DEFAULT_SETTINGS)
-        localStorage.removeItem(STORAGE_KEY)
-    }
-
-    const clearCache = () => {
-        const keysToRemove: string[] = []
-        for (let index = 0; index < localStorage.length; index += 1) {
-            const key = localStorage.key(index)
-            if (key && key.startsWith('devscope-') && key !== STORAGE_KEY) {
-                keysToRemove.push(key)
-            }
-        }
-        keysToRemove.forEach((key) => localStorage.removeItem(key))
+    const clearCache = useCallback(() => {
+        clearProjectViewCaches()
+        clearRecentProjects()
         window.dispatchEvent(new CustomEvent('devscope:cache-cleared'))
-    }
+    }, [])
 
     return (
-        <SettingsContext.Provider value={{ settings, updateSettings, resetSettings, clearCache }}>
+        <SettingsContext.Provider value={{ settings, updateSettings, clearCache }}>
             {children}
         </SettingsContext.Provider>
     )
@@ -463,30 +767,54 @@ export function useSettings() {
     return context
 }
 
-function applyTheme(theme: Theme) {
+function applyTheme(theme: Theme, accent: AccentColor, customTokens?: ThemeTokens) {
     const themeDefinition = getThemeDefinition(theme)
-    document.body.classList.remove(...THEME_CLASS_IDS)
-    if (theme !== 'dark') {
-        document.body.classList.add(theme)
+    const tokens = resolveThemeTokens(customTokens || themeDefinition.tokens)
+    const roots = [document.documentElement, document.body]
+    for (const target of roots) {
+        target.classList.remove(...THEME_CLASS_IDS)
+        target.classList.toggle('dark', theme !== 'light')
+        target.classList.toggle('light', theme === 'light')
+        if (theme !== 'dark' && theme !== 'light') target.classList.add(theme)
     }
+    document.body.classList.add('theme-adaptive')
 
     const root = document.documentElement
-    root.style.setProperty('--color-bg', themeDefinition.tokens.bg)
-    root.style.setProperty('--color-text', themeDefinition.tokens.text)
-    root.style.setProperty('--color-text-dark', themeDefinition.tokens.textDark)
-    root.style.setProperty('--color-text-darker', themeDefinition.tokens.textDarker)
-    root.style.setProperty('--color-text-secondary', themeDefinition.tokens.textSecondary)
-    root.style.setProperty('--color-text-muted', themeDefinition.tokens.textMuted)
-    root.style.setProperty('--color-card', themeDefinition.tokens.card)
-    root.style.setProperty('--color-border', themeDefinition.tokens.border)
-    root.style.setProperty('--color-border-secondary', themeDefinition.tokens.borderSecondary)
-    root.style.setProperty('--color-primary', themeDefinition.tokens.primary)
-    root.style.setProperty('--color-secondary', themeDefinition.tokens.secondary)
-    root.style.setProperty('--color-accent', themeDefinition.tokens.accent)
-    dispatchZyraThemeChanged()
-}
+    root.style.colorScheme = theme === 'light' ? 'light' : 'dark'
+    root.style.setProperty('--color-bg', tokens.bg)
+    root.style.setProperty('--color-text', tokens.text)
+    root.style.setProperty('--theme-background-rgb', toRgbChannels(tokens.bg))
+    root.style.setProperty('--theme-foreground-rgb', toRgbChannels(tokens.text))
+    root.style.setProperty('--color-text-dark', tokens.textDark)
+    root.style.setProperty('--color-text-darker', tokens.textDarker)
+    root.style.setProperty('--color-text-secondary', tokens.textSecondary)
+    root.style.setProperty('--color-text-muted', tokens.textMuted)
+    root.style.setProperty('--color-card', tokens.card)
+    root.style.setProperty('--color-border', tokens.border)
+    root.style.setProperty('--color-border-secondary', tokens.borderSecondary)
+    root.style.setProperty('--color-primary', tokens.primary)
+    root.style.setProperty('--color-primary-on', resolveAccentTokens(tokens.primary, tokens.secondary, tokens.bg).onPrimary)
+    root.style.setProperty('--color-secondary', tokens.secondary)
+    root.style.setProperty('--color-accent', tokens.accent)
+    root.style.setProperty('--color-theme-accent', tokens.textSecondary)
 
-function applyAccentColor(accent: AccentColor) {
-    document.documentElement.style.setProperty('--accent-primary', accent.primary)
-    document.documentElement.style.setProperty('--accent-secondary', accent.secondary)
+    const resolvedAccent = resolveAccentTokens(accent.primary, accent.secondary, tokens.bg)
+    root.style.setProperty('--accent-primary', resolvedAccent.primary)
+    root.style.setProperty('--accent-secondary', resolvedAccent.secondary)
+    root.style.setProperty('--accent-primary-rgb', toRgbChannels(resolvedAccent.primary))
+    root.style.setProperty('--accent-secondary-rgb', toRgbChannels(resolvedAccent.secondary))
+    root.style.setProperty('--accent-on-primary', resolvedAccent.onPrimary)
+    root.style.setProperty('--accent-contrast', resolvedAccent.onPrimary)
+
+    const status = resolveStatusTokens(tokens.bg, tokens.primary)
+    root.style.setProperty('--status-danger', status.danger)
+    root.style.setProperty('--status-warning', status.warning)
+    root.style.setProperty('--status-success', status.success)
+    root.style.setProperty('--status-info', status.info)
+    root.style.setProperty('--status-danger-rgb', toRgbChannels(status.danger))
+    root.style.setProperty('--status-warning-rgb', toRgbChannels(status.warning))
+    root.style.setProperty('--status-success-rgb', toRgbChannels(status.success))
+    root.style.setProperty('--status-info-rgb', toRgbChannels(status.info))
+    root.style.setProperty('--status-danger-contrast', status.onDanger)
+    dispatchZyraThemeChanged()
 }

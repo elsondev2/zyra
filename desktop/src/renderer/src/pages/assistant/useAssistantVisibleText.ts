@@ -1,5 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { AssistantTextStreamingMode } from '@/lib/settings'
+import {
+    shouldSnapRendererPresentation,
+    useRendererVisibilitySnapshot
+} from '@/lib/renderer-visibility'
 import {
     assistantStreamPresentation,
     type AssistantStreamPresentationChannel
@@ -33,7 +37,6 @@ function hasActiveDocumentSelection(): boolean {
 }
 
 function shouldAvoidAnimatedStreaming(): boolean {
-    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return true
     return typeof window !== 'undefined'
         && typeof window.matchMedia === 'function'
         && window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -122,6 +125,7 @@ export function useAssistantVisibleText({
         [channel, streamId]
     )
     const streamSnapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+    const visibilitySnapshot = useRendererVisibilitySnapshot()
     const targetText = useMemo(
         () => resolvePresentationTarget(
             text,
@@ -138,8 +142,9 @@ export function useAssistantVisibleText({
     const visibleTextRef = useRef(initialVisibleText)
     const lastRevealAtRef = useRef(0)
     const activeStreamKeyRef = useRef(`${channel}:${streamId}`)
+    const handledResumeRevisionRef = useRef(visibilitySnapshot.resumeRevision)
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         const nextStreamKey = `${channel}:${streamId}`
         if (activeStreamKeyRef.current === nextStreamKey) return
         activeStreamKeyRef.current = nextStreamKey
@@ -148,6 +153,33 @@ export function useAssistantVisibleText({
         lastRevealAtRef.current = 0
         setVisibleText(nextVisibleText)
     }, [channel, shouldReplayInitialStream, streamId, text])
+
+    useLayoutEffect(() => {
+        const shouldSnap = shouldSnapRendererPresentation(
+            visibilitySnapshot,
+            handledResumeRevisionRef.current
+        )
+        handledResumeRevisionRef.current = visibilitySnapshot.resumeRevision
+        if (!shouldSnap) return
+
+        const latestSnapshot = assistantStreamPresentation.getSnapshot(channel, streamId)
+        const latestTargetText = resolvePresentationTarget(
+            text,
+            latestSnapshot.text,
+            latestSnapshot.revision
+        )
+        lastRevealAtRef.current = 0
+        if (visibleTextRef.current === latestTargetText) return
+        visibleTextRef.current = latestTargetText
+        setVisibleText(latestTargetText)
+    }, [
+        channel,
+        streamId,
+        streamSnapshot.revision,
+        text,
+        visibilitySnapshot.resumeRevision,
+        visibilitySnapshot.visible
+    ])
 
     useEffect(() => {
         if (!streaming && streamSnapshot.revision === 0) return
@@ -159,18 +191,28 @@ export function useAssistantVisibleText({
     }, [streamSnapshot.revision, streaming])
 
     useEffect(() => {
-        if (selectionPaused) return
-        if (shouldAvoidAnimatedStreaming()) {
-            if (visibleTextRef.current !== targetText) {
-                visibleTextRef.current = targetText
-                setVisibleText(targetText)
+        const latestSnapshot = assistantStreamPresentation.getSnapshot(channel, streamId)
+        const presentationTargetText = resolvePresentationTarget(
+            text,
+            latestSnapshot.text,
+            latestSnapshot.revision
+        )
+        const presentationSourceStreaming = latestSnapshot.revision > 0
+            ? latestSnapshot.streaming
+            : sourceStreaming
+
+        if (!visibilitySnapshot.visible || shouldAvoidAnimatedStreaming()) {
+            if (visibleTextRef.current !== presentationTargetText) {
+                visibleTextRef.current = presentationTargetText
+                setVisibleText(presentationTargetText)
             }
             return
         }
-        if (visibleTextRef.current === targetText) return
-        if (!targetText.startsWith(visibleTextRef.current)) {
-            visibleTextRef.current = targetText
-            setVisibleText(targetText)
+        if (selectionPaused) return
+        if (visibleTextRef.current === presentationTargetText) return
+        if (!presentationTargetText.startsWith(visibleTextRef.current)) {
+            visibleTextRef.current = presentationTargetText
+            setVisibleText(presentationTargetText)
             return
         }
 
@@ -178,9 +220,9 @@ export function useAssistantVisibleText({
         let frameId = 0
         const frameInterval = mode === 'chunks' ? CHUNKED_FRAME_INTERVAL_MS : STREAM_FRAME_INTERVAL_MS
         const minimumRevealCount = getAssistantStreamRevealCount(
-            targetText.length - visibleTextRef.current.length,
+            presentationTargetText.length - visibleTextRef.current.length,
             mode,
-            !sourceStreaming
+            !presentationSourceStreaming
         )
         const pump = (timestamp: number) => {
             if (cancelled) return
@@ -193,23 +235,33 @@ export function useAssistantVisibleText({
             lastRevealAtRef.current = timestamp
             const nextText = revealAssistantStreamText(
                 visibleTextRef.current,
-                targetText,
+                presentationTargetText,
                 mode,
-                !sourceStreaming,
+                !presentationSourceStreaming,
                 minimumRevealCount
             )
             if (nextText !== visibleTextRef.current) {
                 visibleTextRef.current = nextText
                 setVisibleText(nextText)
             }
-            if (nextText !== targetText) frameId = window.requestAnimationFrame(pump)
+            if (nextText !== presentationTargetText) frameId = window.requestAnimationFrame(pump)
         }
         frameId = window.requestAnimationFrame(pump)
         return () => {
             cancelled = true
             window.cancelAnimationFrame(frameId)
         }
-    }, [mode, selectionPaused, sourceStreaming, targetText])
+    }, [
+        channel,
+        mode,
+        selectionPaused,
+        sourceStreaming,
+        streamId,
+        targetText,
+        text,
+        visibilitySnapshot.resumeRevision,
+        visibilitySnapshot.visible
+    ])
 
     return {
         text: visibleText,

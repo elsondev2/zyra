@@ -1,9 +1,16 @@
 import { useCallback, useEffect, useRef, useState, type SetStateAction } from 'react'
+import { useSettings } from '@/lib/settings'
 import type { AssistantComposerPreferenceEffort } from './assistant-composer-preferences'
+import {
+    ASSISTANT_LEFT_SIDEBAR_WIDTH_STORAGE_KEY,
+    resolveStoredAssistantLeftSidebarWidth
+} from './assistant-pane-layout'
+import {
+    readAssistantBubblePreviewPinned,
+    writeAssistantBubblePreviewPinned
+} from './assistant-sidebar-preview-state'
 
-const LEFT_SIDEBAR_COLLAPSED_STORAGE_KEY = 'assistant-left-sidebar-collapsed'
-const LEFT_SIDEBAR_WIDTH_STORAGE_KEY = 'assistant-left-sidebar-width'
-const BUBBLE_PREVIEW_PINNED_KEY = 'assistant:bubble-preview-pinned:v1'
+const LEGACY_LEFT_SIDEBAR_COLLAPSED_STORAGE_KEY = 'assistant-left-sidebar-collapsed'
 const RIGHT_SIDEBAR_OPEN_STORAGE_KEY = 'assistant-right-sidebar-open'
 const RIGHT_PANEL_MODE_STORAGE_KEY = 'assistant-right-panel-mode'
 const RIGHT_SIDEBAR_WIDTHS_STORAGE_KEY = 'assistant-right-sidebar-widths:v1'
@@ -50,16 +57,22 @@ function persistRightSidebarWidth(sessionId: string, width: number): void {
 }
 
 export function useAssistantPageSidebarState(selectedSessionId: string | null = null) {
-    const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(() => {
-        return localStorage.getItem(LEFT_SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true'
-    })
-    const [leftSidebarWidth, setLeftSidebarWidth] = useState(() => {
-        const saved = Number(localStorage.getItem(LEFT_SIDEBAR_WIDTH_STORAGE_KEY))
-        return Number.isFinite(saved) && saved > 0 ? saved : 322
-    })
-    const [bubblePreviewPinned, setBubblePreviewPinned] = useState(() => {
-        return localStorage.getItem(BUBBLE_PREVIEW_PINNED_KEY) === 'true'
-    })
+    const { settings, updateSettings } = useSettings()
+    const legacyLeftSidebarCollapsed = localStorage.getItem(LEGACY_LEFT_SIDEBAR_COLLAPSED_STORAGE_KEY)
+    const [leftSidebarCollapsed, setLeftSidebarCollapsedState] = useState(() => (
+        legacyLeftSidebarCollapsed === null ? settings.sidebarCollapsed : legacyLeftSidebarCollapsed === 'true'
+    ))
+    const leftSidebarCollapsedRef = useRef(leftSidebarCollapsed)
+    const setLeftSidebarCollapsed = useCallback((value: SetStateAction<boolean>) => {
+        const next = typeof value === 'function' ? value(leftSidebarCollapsedRef.current) : value
+        leftSidebarCollapsedRef.current = next
+        setLeftSidebarCollapsedState(next)
+        updateSettings({ sidebarCollapsed: next })
+    }, [updateSettings])
+    const [leftSidebarWidth, setLeftSidebarWidth] = useState(() => (
+        resolveStoredAssistantLeftSidebarWidth(localStorage.getItem(ASSISTANT_LEFT_SIDEBAR_WIDTH_STORAGE_KEY))
+    ))
+    const [bubblePreviewPinned, setBubblePreviewPinned] = useState(readAssistantBubblePreviewPinned)
     const [rightPanelMode, setRightPanelMode] = useState<AssistantRightPanelMode>('none')
     const [rightSidebarWidthState, setRightSidebarWidthState] = useState(() => readRightSidebarWidth(selectedSessionId))
     const selectedSessionIdRef = useRef(selectedSessionId)
@@ -82,15 +95,21 @@ export function useAssistantPageSidebarState(selectedSessionId: string | null = 
     })
 
     useEffect(() => {
-        localStorage.setItem(LEFT_SIDEBAR_COLLAPSED_STORAGE_KEY, String(leftSidebarCollapsed))
-    }, [leftSidebarCollapsed])
+        if (legacyLeftSidebarCollapsed !== null) {
+            updateSettings({ sidebarCollapsed: legacyLeftSidebarCollapsed === 'true' })
+            localStorage.removeItem(LEGACY_LEFT_SIDEBAR_COLLAPSED_STORAGE_KEY)
+            return
+        }
+        leftSidebarCollapsedRef.current = settings.sidebarCollapsed
+        setLeftSidebarCollapsedState(settings.sidebarCollapsed)
+    }, [legacyLeftSidebarCollapsed, settings.sidebarCollapsed, updateSettings])
 
     useEffect(() => {
-        localStorage.setItem(LEFT_SIDEBAR_WIDTH_STORAGE_KEY, String(leftSidebarWidth))
+        localStorage.setItem(ASSISTANT_LEFT_SIDEBAR_WIDTH_STORAGE_KEY, String(leftSidebarWidth))
     }, [leftSidebarWidth])
 
     useEffect(() => {
-        localStorage.setItem(BUBBLE_PREVIEW_PINNED_KEY, String(bubblePreviewPinned))
+        writeAssistantBubblePreviewPinned(bubblePreviewPinned)
     }, [bubblePreviewPinned])
 
     useEffect(() => {

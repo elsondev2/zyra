@@ -185,6 +185,10 @@ export async function archiveAssistantSessionAction(deps: AssistantServiceAction
 export async function deleteAssistantSessionAction(deps: AssistantServiceActionDeps, sessionId: string) {
     await deps.ensureReady()
     const session = requireSession(deps.getSnapshot(), sessionId)
+    const canonicalThreadIds = [...new Set(session.threads
+        .map((thread) => thread.providerThreadId)
+        .filter((threadId): threadId is string => Boolean(threadId)))]
+    await Promise.all(canonicalThreadIds.map((threadId) => deps.runtime.updateCanonicalChat(threadId, { deleted: true })))
     for (const thread of session.threads) {
         deps.runtime.disconnect(getAssistantCanonicalThreadId(thread))
     }
@@ -599,7 +603,7 @@ export async function interruptAssistantTurnAction(
 
 export async function respondAssistantApprovalAction(
     deps: AssistantServiceActionDeps,
-    input: { requestId: string; decision: 'acceptForSession' | 'decline' }
+    input: { requestId: string; decision: 'acceptOnce' | 'acceptForSession' | 'decline' }
 ) {
     await deps.ensureReady()
     const target = findThreadForApproval(deps.getSnapshot(), input.requestId)

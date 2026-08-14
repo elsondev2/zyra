@@ -256,3 +256,17 @@ export function setCachedProjectGitSnapshot(projectPath: string, value: GitSnaps
     gitSnapshotCache.set(key, { value: sanitizedValue, updatedAt })
     writePersistedGitSnapshot(projectPath, sanitizedValue)
 }
+
+export function clearProjectViewCaches(): void {
+    projectDetailsCache.clear()
+    fileTreeCache.clear()
+    previewFolderTreeCache.clear()
+    gitSnapshotCache.clear()
+    if (typeof window === 'undefined' || !window.localStorage) return
+    const keys: string[] = []
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+        const key = window.localStorage.key(index)
+        if (key?.startsWith(PERSISTED_GIT_CACHE_KEY_PREFIX)) keys.push(key)
+    }
+    for (const key of keys) window.localStorage.removeItem(key)
+}

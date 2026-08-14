@@ -37,6 +37,7 @@ import { parseJson, toNullableString, toNumber } from './persistence-utils'
 
 export const INITIAL_ASSISTANT_HISTORY_TURN_LIMIT = 20
 export const OLDER_ASSISTANT_HISTORY_TURN_LIMIT = 15
+export const INITIAL_ASSISTANT_HISTORY_PAGE_MAX_RECORDS = 160
 export const ASSISTANT_HISTORY_PAGE_MAX_RECORDS = 320
 export const ASSISTANT_HISTORY_PAGE_MAX_CHARACTERS = 1_800_000
 const LEGACY_RECORDS_PER_TURN = 8
@@ -99,7 +100,9 @@ function mapMessage(row: SqlValue[]): AssistantMessage {
         streaming: toNumber(row[4]) === 1,
         timelineSequence: typeof row[5] === 'number' ? row[5] : undefined,
         createdAt: String(row[6] || new Date(0).toISOString()),
-        updatedAt: String(row[7] || new Date(0).toISOString())
+        updatedAt: String(row[7] || new Date(0).toISOString()),
+        providerItemId: toNullableString(row[8]) || undefined,
+        modality: (toNullableString(row[9]) || undefined) as AssistantMessage['modality']
     }
 }
 
@@ -131,7 +134,7 @@ function mapPlan(row: SqlValue[]): AssistantProposedPlan {
 function readMessages(db: SqlDatabase, threadId: string, lower: AssistantTimelineOrderKey | null, upper: AssistantTimelineOrderKey | null, limit?: number): AssistantMessage[] {
     const range = keyRangeSql('message', lower, upper)
     const descending = typeof limit === 'number'
-    const rows = db.exec(`SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at FROM assistant_messages WHERE thread_id = ?${range.sql} ORDER BY created_at ${descending ? 'DESC' : 'ASC'}, COALESCE(timeline_sequence, -1) ${descending ? 'DESC' : 'ASC'}, id ${descending ? 'DESC' : 'ASC'}${descending ? ' LIMIT ?' : ''}`, [threadId, ...range.params, ...(descending ? [limit!] : [])])[0]?.values || []
+    const rows = db.exec(`SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at, provider_item_id, modality FROM assistant_messages WHERE thread_id = ?${range.sql} ORDER BY created_at ${descending ? 'DESC' : 'ASC'}, COALESCE(timeline_sequence, -1) ${descending ? 'DESC' : 'ASC'}, id ${descending ? 'DESC' : 'ASC'}${descending ? ' LIMIT ?' : ''}`, [threadId, ...range.params, ...(descending ? [limit!] : [])])[0]?.values || []
     const records = rows.map(mapMessage)
     return descending ? records.reverse() : records
 }
@@ -224,6 +227,7 @@ export function readAssistantHistoryPage(db: SqlDatabase, input: AssistantGetHis
     }
 
     const upper = decodeCursor(threadId, input.before)
+    const maxRecords = input.before ? ASSISTANT_HISTORY_PAGE_MAX_RECORDS : INITIAL_ASSISTANT_HISTORY_PAGE_MAX_RECORDS
     const turnLimit = clampTurnLimit(input.turnLimit, input.before ? OLDER_ASSISTANT_HISTORY_TURN_LIMIT : INITIAL_ASSISTANT_HISTORY_TURN_LIMIT)
     const beforeClause = upper
         ? ' AND (created_at, COALESCE(timeline_sequence, -1), 0, id) < (?, ?, ?, ?)'
@@ -232,9 +236,14 @@ export function readAssistantHistoryPage(db: SqlDatabase, input: AssistantGetHis
 
     if (boundaryRows.length === 0) return readLegacyFallbackPage(db, threadId, upper, turnLimit)
 
-    let selectedBoundary = boundaryRows[0]!
-    let selectedTurnCount = 1
-    for (let index = 0; index < boundaryRows.length; index += 1) {
+    // Range size grows monotonically as the boundary moves toward older turns.
+    // Binary search keeps initial hydration bounded to O(log turnLimit) aggregate
+    // checks instead of issuing three COUNT/SUM queries for every candidate turn.
+    let selectedBoundaryIndex = 0
+    let low = 0
+    let high = boundaryRows.length - 1
+    while (low <= high) {
+        const index = Math.floor((low + high) / 2)
         const candidateBoundary = boundaryRows[index]!
         const candidateLower: AssistantTimelineOrderKey = {
             id: String(candidateBoundary[0] || ''),
@@ -243,12 +252,19 @@ export function readAssistantHistoryPage(db: SqlDatabase, input: AssistantGetHis
             kindRank: ASSISTANT_TIMELINE_KIND_RANK.message
         }
         const size = readHistoryRangeSize(db, threadId, candidateLower, upper)
-        const withinBudget = size.records <= ASSISTANT_HISTORY_PAGE_MAX_RECORDS
+        const withinBudget = index === 0 || (
+            size.records <= maxRecords
             && size.characters <= ASSISTANT_HISTORY_PAGE_MAX_CHARACTERS
-        if (index > 0 && !withinBudget) break
-        selectedBoundary = candidateBoundary
-        selectedTurnCount = index + 1
+        )
+        if (withinBudget) {
+            selectedBoundaryIndex = index
+            low = index + 1
+        } else {
+            high = index - 1
+        }
     }
+    const selectedBoundary = boundaryRows[selectedBoundaryIndex]!
+    const selectedTurnCount = selectedBoundaryIndex + 1
 
     const lower: AssistantTimelineOrderKey = {
         id: String(selectedBoundary[0] || ''),
@@ -417,7 +433,7 @@ export function readAssistantReviewIndex(db: SqlDatabase, threadId: string): Ass
     }
 
     const users = (db.exec(`
-        SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at
+        SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at, provider_item_id, modality
         FROM assistant_messages
         WHERE thread_id = ? AND role = 'user'
         ORDER BY created_at ASC, COALESCE(timeline_sequence, -1) ASC, id ASC
@@ -442,7 +458,7 @@ export function readAssistantReviewIndex(db: SqlDatabase, threadId: string): Ass
 
     const responseRows = db.exec(`
         WITH ranked_responses AS (
-            SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at,
+            SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at, provider_item_id, modality,
                 ROW_NUMBER() OVER (
                     PARTITION BY turn_id
                     ORDER BY created_at DESC, COALESCE(timeline_sequence, -1) DESC, id DESC
@@ -450,12 +466,12 @@ export function readAssistantReviewIndex(db: SqlDatabase, threadId: string): Ass
             FROM assistant_messages
             WHERE thread_id = ? AND role = 'assistant' AND turn_id IS NOT NULL
         )
-        SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at
+        SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at, provider_item_id, modality
         FROM ranked_responses
         WHERE response_rank = 1
     `, [normalizedThreadId])[0]?.values || []
     const nullTurnResponses = (db.exec(`
-        SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at
+        SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at, provider_item_id, modality
         FROM assistant_messages
         WHERE thread_id = ? AND role = 'assistant' AND turn_id IS NULL
         ORDER BY created_at ASC, COALESCE(timeline_sequence, -1) ASC, id ASC
@@ -549,7 +565,7 @@ export function searchAssistantTurns(db: SqlDatabase, threadId: string, query: s
 
 export function readAssistantTurnDetail(db: SqlDatabase, threadId: string, turnId: string): AssistantTurnDetail {
     const turnRow = db.exec('SELECT requested_at FROM assistant_turns WHERE id = ? AND thread_id = ? LIMIT 1', [turnId, threadId])[0]?.values?.[0]
-    const directMessageRows = db.exec(`SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at FROM assistant_messages WHERE thread_id = ? AND turn_id = ? ORDER BY created_at ASC, COALESCE(timeline_sequence, -1) ASC, id ASC`, [threadId, turnId])[0]?.values || []
+    const directMessageRows = db.exec(`SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at, provider_item_id, modality FROM assistant_messages WHERE thread_id = ? AND turn_id = ? ORDER BY created_at ASC, COALESCE(timeline_sequence, -1) ASC, id ASC`, [threadId, turnId])[0]?.values || []
     const directActivityRows = db.exec(`SELECT id, kind, tone, summary, detail, turn_id, timeline_sequence, created_at, ${assistantActivityPayloadColumns()} FROM assistant_activities WHERE thread_id = ? AND turn_id = ? ORDER BY created_at ASC, COALESCE(timeline_sequence, -1) ASC, id ASC`, [threadId, turnId])[0]?.values || []
     const directPlanRows = db.exec(`SELECT id, turn_id, plan_markdown, timeline_sequence, created_at, updated_at FROM assistant_proposed_plans WHERE thread_id = ? AND turn_id = ? ORDER BY created_at ASC, COALESCE(timeline_sequence, -1) ASC, id ASC`, [threadId, turnId])[0]?.values || []
 
@@ -557,7 +573,7 @@ export function readAssistantTurnDetail(db: SqlDatabase, threadId: string, turnI
         const requestedAt = String(turnRow?.[0] || directMessageRows[0]?.[6] || directActivityRows[0]?.[7] || directPlanRows[0]?.[4] || '')
         const messages = directMessageRows.map(mapMessage)
         if (!messages.some((message) => message.role === 'user')) {
-            const promptRow = db.exec(`SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at FROM assistant_messages WHERE thread_id = ? AND role = 'user' AND created_at <= ? ORDER BY created_at DESC, COALESCE(timeline_sequence, -1) DESC, id DESC LIMIT 1`, [threadId, requestedAt])[0]?.values?.[0]
+            const promptRow = db.exec(`SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at, provider_item_id, modality FROM assistant_messages WHERE thread_id = ? AND role = 'user' AND created_at <= ? ORDER BY created_at DESC, COALESCE(timeline_sequence, -1) DESC, id DESC LIMIT 1`, [threadId, requestedAt])[0]?.values?.[0]
             if (promptRow) messages.unshift(mapMessage(promptRow))
         }
         return {
@@ -571,13 +587,13 @@ export function readAssistantTurnDetail(db: SqlDatabase, threadId: string, turnI
 
     const syntheticMessageId = turnId.startsWith('message:') ? turnId.slice('message:'.length) : ''
     const promptRow = syntheticMessageId
-        ? db.exec(`SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at FROM assistant_messages WHERE thread_id = ? AND id = ? AND role = 'user' LIMIT 1`, [threadId, syntheticMessageId])[0]?.values?.[0]
+        ? db.exec(`SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at, provider_item_id, modality FROM assistant_messages WHERE thread_id = ? AND id = ? AND role = 'user' LIMIT 1`, [threadId, syntheticMessageId])[0]?.values?.[0]
         : null
     if (!promptRow) throw new Error('Assistant turn not found.')
     const prompt = mapMessage(promptRow)
     const lower = getAssistantTimelineOrderKey('message', prompt)
     const nextPromptRow = db.exec(`
-        SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at
+        SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at, provider_item_id, modality
         FROM assistant_messages
         WHERE thread_id = ? AND role = 'user'
           AND (created_at, COALESCE(timeline_sequence, -1), id) > (?, ?, ?)

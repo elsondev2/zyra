@@ -12,8 +12,9 @@ import scss from 'react-syntax-highlighter/dist/esm/languages/prism/scss'
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx'
 import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript'
 import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml'
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { cn } from '@/lib/utils'
+import { useMarkdownVisualTheme } from '@/components/ui/markdown/markdownTheme'
 import type { InlineDiffLine } from './AssistantInlineDiffPreview'
 
 SyntaxHighlighter.registerLanguage('bash', bash)
@@ -29,22 +30,29 @@ SyntaxHighlighter.registerLanguage('tsx', tsx)
 SyntaxHighlighter.registerLanguage('typescript', typescript)
 SyntaxHighlighter.registerLanguage('yaml', yaml)
 
-const syntaxTheme = Object.fromEntries(
-    Object.entries(oneDark).map(([selector, style]) => [selector, {
-        ...(style as Record<string, unknown>),
-        background: 'transparent',
-        backgroundColor: 'transparent',
-        fontFamily: 'inherit',
-        textShadow: 'none'
-    }])
-)
+function createSyntaxTheme(theme: typeof oneDark) {
+    return Object.fromEntries(
+        Object.entries(theme).map(([selector, style]) => [selector, {
+            ...(style as Record<string, unknown>),
+            background: 'transparent',
+            backgroundColor: 'transparent',
+            fontFamily: 'inherit',
+            textShadow: 'none'
+        }])
+    )
+}
+
+const syntaxThemes = {
+    dark: createSyntaxTheme(oneDark),
+    light: createSyntaxTheme(oneLight)
+}
 
 const rowToneClassName: Record<InlineDiffLine['kind'], string> = {
-    context: 'bg-[#111827] text-[#d8dee9]',
-    addition: 'bg-[#10271f] text-[#d7f6e3]',
-    deletion: 'bg-[#2a171c] text-[#ffd8d8]',
-    hunk: 'bg-[#172033] text-[#a8c2e6]',
-    notice: 'bg-[#151b27] text-[#b9c3d0]'
+    context: 'bg-[var(--color-card)] text-sparkle-text',
+    addition: 'bg-[color-mix(in_srgb,var(--status-success)_10%,var(--color-bg))] text-sparkle-text',
+    deletion: 'bg-[color-mix(in_srgb,var(--status-danger)_10%,var(--color-bg))] text-sparkle-text',
+    hunk: 'bg-[color-mix(in_srgb,var(--accent-primary)_10%,var(--color-bg))] text-sparkle-text-dark',
+    notice: 'bg-[color-mix(in_srgb,var(--color-card)_82%,var(--color-bg))] text-sparkle-text-dark'
 }
 
 const languageByExtension: Record<string, string> = {
@@ -111,12 +119,13 @@ export const AssistantInlineDiffSyntax = memo(function AssistantInlineDiffSyntax
     lines: InlineDiffLine[]
     displayPath: string
 }) {
+    const visualTheme = useMarkdownVisualTheme()
     const source = lines.map(getSyntaxSource).join('\n')
 
     return (
         <SyntaxHighlighter
             language={resolveLanguage(displayPath)}
-            style={syntaxTheme}
+            style={syntaxThemes[visualTheme]}
             PreTag="div"
             CodeTag="div"
             customStyle={{
@@ -140,17 +149,17 @@ export const AssistantInlineDiffSyntax = memo(function AssistantInlineDiffSyntax
                                 key={index}
                                 className={cn('grid min-h-5 grid-cols-[3.25rem_3.25rem_minmax(max-content,1fr)]', rowToneClassName[line.kind])}
                             >
-                                <span className="select-none border-r border-white/[0.05] bg-black/10 pr-2 text-right text-[#78879a] tabular-nums">
+                                <span className="select-none border-r border-white/[0.05] bg-black/10 pr-2 text-right text-sparkle-text-muted tabular-nums">
                                     {line.oldLine ?? ''}
                                 </span>
-                                <span className="select-none border-r border-white/[0.06] bg-black/10 pr-2 text-right text-[#78879a] tabular-nums">
+                                <span className="select-none border-r border-white/[0.06] bg-black/10 pr-2 text-right text-sparkle-text-muted tabular-nums">
                                     {line.newLine ?? ''}
                                 </span>
                                 <span className="whitespace-pre px-2">
                                     <span className={cn(
                                         'inline-block w-[1ch] select-none',
-                                        line.kind === 'addition' && 'text-[#73d69a]',
-                                        line.kind === 'deletion' && 'text-[#ff8585]'
+                                        line.kind === 'addition' && 'text-[var(--status-success)]',
+                                        line.kind === 'deletion' && 'text-[var(--status-danger)]'
                                     )}>{getDiffMarker(line)}</span>
                                     {syntaxRow
                                         ? createSyntaxElement({

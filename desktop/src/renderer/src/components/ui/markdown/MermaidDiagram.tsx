@@ -1,26 +1,39 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import mermaid from 'mermaid'
+import { useMarkdownVisualTheme } from './markdownTheme'
+import { useThemeRevision } from '@/lib/use-theme-revision'
 
-mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: 'strict',
-    theme: 'base',
-    themeVariables: {
-        darkMode: true,
-        primaryColor: '#6366f1',
-        primaryTextColor: '#e2e8f0',
-        primaryBorderColor: '#4f46e5',
-        lineColor: '#64748b',
-        secondaryColor: '#8b5cf6',
-        tertiaryColor: '#ec4899',
-        background: '#1e293b',
-        mainBkg: '#1e293b',
-        secondBkg: '#334155',
-        textColor: '#e2e8f0',
-        noteTextColor: '#333333',
-        fontSize: '14px'
+function readMermaidTheme(visualTheme: 'light' | 'dark') {
+    const root = getComputedStyle(document.documentElement)
+    const read = (property: string, fallback: string) => root.getPropertyValue(property).trim() || fallback
+    const background = read('--color-bg', visualTheme === 'light' ? '#f9fafb' : '#0c121f')
+    const surface = read('--color-card', visualTheme === 'light' ? '#ffffff' : '#131c2c')
+    const text = read('--color-text', visualTheme === 'light' ? '#1e293b' : '#f0f4f8')
+    const supportingText = read('--color-text-secondary', visualTheme === 'light' ? '#475569' : '#aab4c3')
+    const border = read('--color-border-secondary', visualTheme === 'light' ? '#cbd5e1' : '#334155')
+    const accent = read('--accent-primary', '#3b82f6')
+    const accentSurface = read('--color-accent', surface)
+    return {
+        cacheKey: [visualTheme, background, surface, text, supportingText, border, accent, accentSurface].join(':'),
+        variables: {
+            darkMode: visualTheme === 'dark',
+            primaryColor: surface,
+            primaryTextColor: text,
+            primaryBorderColor: accent,
+            lineColor: supportingText,
+            secondaryColor: accentSurface,
+            tertiaryColor: background,
+            background,
+            mainBkg: surface,
+            secondBkg: background,
+            textColor: text,
+            noteBkgColor: surface,
+            noteTextColor: text,
+            noteBorderColor: border,
+            fontSize: '14px'
+        }
     }
-})
+}
 
 const MAX_MERMAID_CACHE_ENTRIES = 80
 const MAX_MERMAID_CACHE_LENGTH = 2_000_000
@@ -28,19 +41,19 @@ const mermaidSvgCache = new Map<string, string>()
 const mermaidRenderPromiseCache = new Map<string, Promise<string>>()
 let mermaidSvgCacheLength = 0
 
-function readCachedSvg(chart: string): string {
-    const cached = mermaidSvgCache.get(chart) || ''
+function readCachedSvg(cacheKey: string): string {
+    const cached = mermaidSvgCache.get(cacheKey) || ''
     if (!cached) return ''
-    mermaidSvgCache.delete(chart)
-    mermaidSvgCache.set(chart, cached)
+    mermaidSvgCache.delete(cacheKey)
+    mermaidSvgCache.set(cacheKey, cached)
     return cached
 }
 
-function retainCachedSvg(chart: string, svg: string): void {
-    const previous = mermaidSvgCache.get(chart)
+function retainCachedSvg(cacheKey: string, svg: string): void {
+    const previous = mermaidSvgCache.get(cacheKey)
     if (previous) mermaidSvgCacheLength -= previous.length
-    mermaidSvgCache.delete(chart)
-    mermaidSvgCache.set(chart, svg)
+    mermaidSvgCache.delete(cacheKey)
+    mermaidSvgCache.set(cacheKey, svg)
     mermaidSvgCacheLength += svg.length
     while (mermaidSvgCache.size > MAX_MERMAID_CACHE_ENTRIES || mermaidSvgCacheLength > MAX_MERMAID_CACHE_LENGTH) {
         const oldest = mermaidSvgCache.entries().next().value as [string, string] | undefined
@@ -61,11 +74,15 @@ function hashString(input: string): string {
 
 export const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }) {
     const containerRef = useRef<HTMLDivElement | null>(null)
-    const [svg, setSvg] = useState<string>(() => readCachedSvg(chart))
+    const visualTheme = useMarkdownVisualTheme()
+    const themeRevision = useThemeRevision()
+    const activeTheme = useMemo(() => readMermaidTheme(visualTheme), [themeRevision, visualTheme])
+    const cacheKey = `${activeTheme.cacheKey}:${chart}`
+    const [svg, setSvg] = useState<string>(() => readCachedSvg(cacheKey))
     const [error, setError] = useState('')
 
     useEffect(() => {
-        const cachedSvg = readCachedSvg(chart)
+        const cachedSvg = readCachedSvg(cacheKey)
         setSvg((previous) => (previous === (cachedSvg || '') ? previous : (cachedSvg || '')))
         setError((previous) => (previous ? '' : previous))
 
@@ -76,17 +93,23 @@ export const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: s
         let cancelled = false
 
         const renderDiagram = (): Promise<string> => {
-            const existingPromise = mermaidRenderPromiseCache.get(chart)
+            const existingPromise = mermaidRenderPromiseCache.get(cacheKey)
             if (existingPromise) return existingPromise
 
-            const renderPromise = mermaid.render(`mermaid-${hashString(chart)}`, chart)
+            mermaid.initialize({
+                startOnLoad: false,
+                securityLevel: 'strict',
+                theme: 'base',
+                themeVariables: activeTheme.variables
+            })
+            const renderPromise = mermaid.render(`mermaid-${hashString(cacheKey)}`, chart)
                 .then(({ svg: renderedSvg }) => {
-                    retainCachedSvg(chart, renderedSvg)
-                    mermaidRenderPromiseCache.delete(chart)
+                    retainCachedSvg(cacheKey, renderedSvg)
+                    mermaidRenderPromiseCache.delete(cacheKey)
                     return renderedSvg
                 })
                 .catch((renderError) => {
-                    mermaidRenderPromiseCache.delete(chart)
+                    mermaidRenderPromiseCache.delete(cacheKey)
                     throw renderError
                 })
 
@@ -108,7 +131,7 @@ export const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: s
         return () => {
             cancelled = true
         }
-    }, [chart])
+    }, [activeTheme.variables, cacheKey, chart])
 
     if (error) {
         return (

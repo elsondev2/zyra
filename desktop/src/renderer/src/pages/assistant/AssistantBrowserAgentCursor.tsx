@@ -8,8 +8,9 @@ function cursorLabel(cursor: ControlCursorState): string {
     return 'Zyra'
 }
 
-export const AssistantBrowserAgentCursor = memo(function AssistantBrowserAgentCursor({ cursor }: {
+export const AssistantBrowserAgentCursor = memo(function AssistantBrowserAgentCursor({ cursor, scale = 1 }: {
     cursor: ControlCursorState | null
+    scale?: number
 }) {
     if (!cursor?.visible) return null
     const active = cursor.phase !== 'idle'
@@ -17,7 +18,7 @@ export const AssistantBrowserAgentCursor = memo(function AssistantBrowserAgentCu
         <div className="pointer-events-none absolute inset-0 z-[26] overflow-hidden" aria-label={`${cursorLabel(cursor)} Browser cursor`}>
             <div
                 className="absolute left-0 top-0 will-change-transform"
-                style={{ transform: `translate3d(${cursor.x}px, ${cursor.y}px, 0)` }}
+                style={{ transform: `translate3d(${cursor.x * scale}px, ${cursor.y * scale}px, 0)` }}
             >
                 <span className={cn(
                     'absolute -left-2.5 -top-2.5 size-5 rounded-full border transition-all motion-reduce:transition-none',
