@@ -2,7 +2,7 @@
  * Zyra - IPC Handler Registry
  */
 
-import { BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import log from 'electron-log'
 import {
     handleGetFileSystemRoots,
@@ -71,6 +71,7 @@ import {
     handleAssistantUnsubscribe
 } from './handlers/assistant-handlers'
 import { ASSISTANT_IPC } from '../../shared/assistant/contracts'
+import { resolveZyraWindowChromePolicy, type ZyraDesktopPlatform } from '../../shared/platform-window-chrome'
 import { peekAssistantService } from '../assistant'
 import {
     handleCopyToClipboard,
@@ -431,6 +432,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     ipcMain.removeAllListeners('window:maximize')
     ipcMain.removeAllListeners('window:close')
     ipcMain.removeHandler('window:isMaximized')
+    ipcMain.removeHandler('window:getRuntimeInfo')
 
     ipcMain.on('window:minimize', (event) => {
         const targetWindow = BrowserWindow.fromWebContents(event.sender)
@@ -451,7 +453,20 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     ipcMain.handle('window:isMaximized', (event) => {
         const targetWindow = BrowserWindow.fromWebContents(event.sender)
         if (!targetWindow || targetWindow.isDestroyed()) return false
-        return targetWindow.isMaximized()
+        return targetWindow.isMaximized() || targetWindow.isFullScreen()
+    })
+    ipcMain.handle('window:getRuntimeInfo', () => {
+        const platform = process.platform as ZyraDesktopPlatform
+        const policy = resolveZyraWindowChromePolicy(platform)
+        return {
+            platform,
+            architecture: process.arch,
+            appVersion: app.getVersion(),
+            electronVersion: process.versions.electron || null,
+            isPackaged: app.isPackaged,
+            nativeFrame: policy.nativeFrame,
+            customWindowControls: policy.customWindowControls
+        }
     })
 
     mainWindow.webContents.once('destroyed', () => {

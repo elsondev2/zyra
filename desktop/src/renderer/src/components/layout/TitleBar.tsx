@@ -2,7 +2,7 @@
  * Zyra - contextual desktop title bar
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ChevronDown, Copy, Minus, PanelLeftClose, PanelLeftOpen, ShieldAlert, Square, X } from 'lucide-react'
 import { useAssistantStoreActions, useAssistantStoreSelector } from '@/lib/assistant/store'
@@ -19,6 +19,7 @@ import {
 import { buildAssistantChatRoute } from '@/pages/assistant/assistant-chat-route'
 import { createAssistantChatAndNavigate } from '@/pages/assistant/create-assistant-chat-and-navigate'
 import { cn } from '@/lib/utils'
+import { useWindowChrome } from '@/lib/useWindowChrome'
 
 type AppNavEntry = { path: string; search: string; sessionId: string | null }
 type AppMenuItem = {
@@ -47,6 +48,7 @@ export default function TitleBar() {
     const location = useLocation()
     const commandPalette = useCommandPalette()
     const { settings } = useSettings()
+    const { runtime, policy: windowChromePolicy, isMaximized } = useWindowChrome()
     const loadingScreenActive = useLoadingScreenActive()
     const assistantTitleBarContent = useAssistantTitleBarContent()
     const assistantTitleBarEndRegion = useAssistantTitleBarEndRegion()
@@ -64,7 +66,6 @@ export default function TitleBar() {
         localStorage.getItem(ASSISTANT_LEFT_SIDEBAR_WIDTH_STORAGE_KEY)
     ))
     const pendingNavigationKeyRef = useRef<string | null>(null)
-    const [isMaximized, setIsMaximized] = useState(false)
     const [sidebarCollapsed, setSidebarCollapsed] = useState(settings.sidebarCollapsed)
     const [appMenuOpen, setAppMenuOpen] = useState(false)
     const [controlActive, setControlActive] = useState(false)
@@ -73,17 +74,15 @@ export default function TitleBar() {
     const settingsPageActive = location.pathname.startsWith('/settings')
     const sidebarWorkspaceActive = assistantWorkspaceActive || settingsPageActive
     const contextualTitleParts = getContextualTitleParts(location.pathname)
-    const desktopWindowControlsAvailable = /\bElectron\//.test(navigator.userAgent)
+    const nativeDesktop = runtime.platform !== 'browser'
+    const isMac = runtime.platform === 'darwin'
+    const desktopWindowControlsAvailable = windowChromePolicy.customWindowControls
 
     useEffect(() => {
         void window.devscope.agentControl.getState().then((result) => {
             if (result.success) setControlActive(result.state.active || result.state.pairing.state !== 'stopped')
         }).catch(() => undefined)
         return window.devscope.agentControl.onStateChange((state) => setControlActive(state.active || state.pairing.state !== 'stopped'))
-    }, [])
-
-    useEffect(() => {
-        void window.devscope.window.isMaximized().then(setIsMaximized).catch(() => undefined)
     }, [])
 
     useLayoutEffect(() => {
@@ -98,7 +97,7 @@ export default function TitleBar() {
         const observer = new ResizeObserver(syncControlsWidth)
         observer.observe(controls)
         return () => observer.disconnect()
-    }, [])
+    }, [controlActive, desktopWindowControlsAvailable])
 
     useEffect(() => {
         sidebarCollapsedRef.current = settings.sidebarCollapsed
@@ -116,14 +115,14 @@ export default function TitleBar() {
                 const nextWidth = Math.round(detail.width)
                 sidebarWidthRef.current = nextWidth
                 if (!sidebarCollapsedRef.current) {
-                    assistantAppZoneRef.current?.style.setProperty('width', `${nextWidth}px`)
+                    assistantAppZoneRef.current?.style.setProperty('width', `${isMac ? Math.max(184, nextWidth) : nextWidth}px`)
                 }
             }
         }
 
         window.addEventListener('zyra:assistant-sidebar-state', handleSidebarState)
         return () => window.removeEventListener('zyra:assistant-sidebar-state', handleSidebarState)
-    }, [])
+    }, [isMac])
 
     useEffect(() => {
         const entry: AppNavEntry = {
@@ -180,7 +179,6 @@ export default function TitleBar() {
 
     const handleMaximize = () => {
         window.devscope.window.maximize()
-        setIsMaximized((current) => !current)
     }
 
     const handleClose = () => window.devscope.window.close()
@@ -227,7 +225,7 @@ export default function TitleBar() {
         return () => window.removeEventListener('keydown', handleHistoryShortcut)
     })
 
-    const handleNewChat = () => {
+    const handleNewChat = useCallback(() => {
         if (selectedAssistantSession && selectedAssistantSession.threads.every((thread) => (
             (thread.messageCount || 0) === 0 && !thread.latestTurn
         ))) {
@@ -235,33 +233,54 @@ export default function TitleBar() {
             return
         }
         void createAssistantChatAndNavigate(assistantActions, navigate)
-    }
+    }, [assistantActions, navigate, selectedAssistantSession])
+
+    useEffect(() => window.devscope.window.onAppMenuCommand((command) => {
+        if (command === 'new-chat') handleNewChat()
+        else if (command === 'search') commandPalette.open()
+        else if (command === 'settings') navigate('/settings')
+        else if (command === 'about') navigate('/settings/about')
+        else if (command === 'reload') window.location.reload()
+    }), [commandPalette, handleNewChat, navigate])
 
     const runAppMenuAction = (action: () => void) => {
         setAppMenuOpen(false)
         action()
     }
 
+    const primaryShortcut = isMac ? '⌘' : 'Ctrl '
+    const closeShortcut = isMac ? '⌘W' : 'Alt F4'
     const appMenuGroups: AppMenuItem[][] = [
         [
-            { id: 'new-chat', label: 'New chat', shortcut: 'Ctrl N', action: handleNewChat },
-            { id: 'search', label: 'Search', shortcut: 'Ctrl K', action: commandPalette.open }
+            { id: 'new-chat', label: 'New chat', shortcut: `${primaryShortcut}N`, action: handleNewChat },
+            { id: 'search', label: 'Search', shortcut: `${primaryShortcut}K`, action: commandPalette.open }
         ],
         [
             ...(sidebarWorkspaceActive ? [{ id: 'sidebar', label: sidebarActionLabel, action: handleToggleSidebar }] : []),
-            { id: 'settings', label: 'Settings', action: () => navigate('/settings') },
-            { id: 'reload', label: 'Reload UI', shortcut: 'Ctrl R', action: () => window.location.reload() }
+            { id: 'settings', label: 'Settings', shortcut: isMac ? '⌘,' : undefined, action: () => navigate('/settings') },
+            { id: 'reload', label: 'Reload UI', shortcut: `${primaryShortcut}R`, action: () => window.location.reload() }
         ],
         [
             { id: 'voice-lab', label: 'Instructor Voice Lab', action: () => navigate('/assistant/instructor') },
             { id: 'about', label: 'About Zyra', action: () => navigate('/settings/about') }
         ],
-        ...(desktopWindowControlsAvailable ? [[
-            { id: 'close', label: 'Close window', shortcut: 'Alt F4', danger: true, action: handleClose }
+        ...(nativeDesktop ? [[
+            { id: 'close', label: 'Close window', shortcut: closeShortcut, danger: true, action: handleClose }
         ]] : [])
     ]
 
     const expandedSidebar = sidebarWorkspaceActive && !sidebarCollapsed
+    const baseAppZoneWidth = loadingScreenActive && assistantWorkspaceActive
+        ? 112
+        : expandedSidebar
+            ? sidebarWidthRef.current
+            : 112
+    const appZoneStyle = {
+        ...(sidebarWorkspaceActive ? { width: `${isMac ? Math.max(184, baseAppZoneWidth) : baseAppZoneWidth}px` } : {}),
+        paddingLeft: isMac ? '76px' : '10px',
+        paddingRight: '10px'
+    }
+    const rightChromeVisible = desktopWindowControlsAvailable || controlActive
 
     return (
         <div
@@ -276,16 +295,10 @@ export default function TitleBar() {
             <div
                 ref={assistantAppZoneRef}
                 className={cn(
-                    'flex h-full shrink-0 items-center gap-1.5 px-2.5',
+                    'flex h-full shrink-0 items-center gap-1.5',
                     sidebarWorkspaceActive && !(assistantWorkspaceActive && loadingScreenActive) && 'border-r border-[var(--surface-panel-divider)]'
                 )}
-                style={sidebarWorkspaceActive ? {
-                    width: loadingScreenActive && assistantWorkspaceActive
-                        ? '112px'
-                        : expandedSidebar
-                            ? `${sidebarWidthRef.current}px`
-                            : '112px'
-                } : undefined}
+                style={appZoneStyle}
             >
                 {sidebarWorkspaceActive ? (
                     <button
@@ -343,7 +356,7 @@ export default function TitleBar() {
             <div
                 className="drag-region min-w-0 flex-1 self-stretch"
                 style={{
-                    paddingRight: desktopWindowControlsAvailable && assistantWorkspaceActive && !loadingScreenActive && !assistantTitleBarEndRegion?.open
+                    paddingRight: rightChromeVisible && assistantWorkspaceActive && !loadingScreenActive && !assistantTitleBarEndRegion?.open
                         ? 'var(--zyra-titlebar-controls-width, 120px)'
                         : undefined
                 }}
@@ -363,7 +376,7 @@ export default function TitleBar() {
 
             {assistantWorkspaceActive && !loadingScreenActive ? assistantTitleBarEndRegion?.content : null}
 
-            {desktopWindowControlsAvailable ? (
+            {rightChromeVisible ? (
                 <div
                     ref={titleBarControlsRef}
                     className={cn(
@@ -377,15 +390,19 @@ export default function TitleBar() {
                             <ShieldAlert size={10} /> Stop control
                         </button>
                     ) : null}
-                    <button onClick={handleMinimize} className={cn(windowControlClass, 'hover:bg-[var(--surface-hover)]')} aria-label="Minimize">
-                        <Minus size={14} />
-                    </button>
-                    <button onClick={handleMaximize} className={cn(windowControlClass, 'hover:bg-[var(--surface-hover)]')} aria-label={isMaximized ? 'Restore window' : 'Maximize window'}>
-                        {isMaximized ? <Copy size={12} /> : <Square size={12} />}
-                    </button>
-                    <button onClick={handleClose} className={cn(windowControlClass, 'hover:bg-red-600 hover:text-white')} aria-label="Close">
-                        <X size={14} />
-                    </button>
+                    {desktopWindowControlsAvailable ? (
+                        <>
+                            <button onClick={handleMinimize} className={cn(windowControlClass, 'hover:bg-[var(--surface-hover)]')} aria-label="Minimize">
+                                <Minus size={14} />
+                            </button>
+                            <button onClick={handleMaximize} className={cn(windowControlClass, 'hover:bg-[var(--surface-hover)]')} aria-label={isMaximized ? 'Restore window' : 'Maximize window'}>
+                                {isMaximized ? <Copy size={12} /> : <Square size={12} />}
+                            </button>
+                            <button onClick={handleClose} className={cn(windowControlClass, 'hover:bg-red-600 hover:text-white')} aria-label="Close">
+                                <X size={14} />
+                            </button>
+                        </>
+                    ) : null}
                 </div>
             ) : null}
         </div>

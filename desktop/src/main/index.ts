@@ -18,6 +18,7 @@ import { registerFileProtocol } from './file-protocol'
 import { isSafeBrowserNavigationUrl, isZyraBrowserPartition } from './ipc/handlers/browser-preview-handlers'
 import { disposeAgentControlBroker, getAgentControlBroker } from './agent-control'
 import { trustedBrowserGuests } from './agent-control/trusted-guest-registry'
+import { resolveZyraWindowChromePolicy, type ZyraDesktopPlatform } from '../shared/platform-window-chrome'
 
 const APP_NAME = "Zyra"
 const DEV_APP_NAME = `${APP_NAME}-dev`
@@ -129,9 +130,132 @@ function syncOpenWindowIcons(): void {
     }
 }
 
+function getWindowChromeOptions(): Pick<Electron.BrowserWindowConstructorOptions, 'frame' | 'titleBarStyle' | 'trafficLightPosition' | 'autoHideMenuBar'> {
+    const platform = process.platform as ZyraDesktopPlatform
+    const policy = resolveZyraWindowChromePolicy(platform)
+
+    if (platform === 'darwin') {
+        return {
+            frame: policy.nativeFrame,
+            titleBarStyle: 'hiddenInset',
+            trafficLightPosition: { x: 14, y: 10 },
+            autoHideMenuBar: false
+        }
+    }
+
+    return {
+        frame: policy.nativeFrame,
+        titleBarStyle: 'default',
+        autoHideMenuBar: true
+    }
+}
+
+function sendAppMenuCommand(command: 'new-chat' | 'search' | 'settings' | 'reload' | 'about'): void {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    if (!mainWindow.isVisible()) mainWindow.show()
+    mainWindow.focus()
+    mainWindow.webContents.send('window:app-menu-command', command)
+}
+
+function configureApplicationMenu(): void {
+    if (process.platform !== 'darwin') {
+        Menu.setApplicationMenu(null)
+        return
+    }
+
+    const template: Electron.MenuItemConstructorOptions[] = [
+        {
+            label: APP_NAME,
+            submenu: [
+                { role: 'about' },
+                {
+                    label: 'Settings…',
+                    accelerator: 'CommandOrControl+,',
+                    click: () => sendAppMenuCommand('settings')
+                },
+                { type: 'separator' },
+                { role: 'services' },
+                { type: 'separator' },
+                { role: 'hide' },
+                { role: 'hideOthers' },
+                { role: 'unhide' },
+                { type: 'separator' },
+                { role: 'quit' }
+            ]
+        },
+        {
+            label: 'File',
+            submenu: [
+                {
+                    label: 'New Chat',
+                    accelerator: 'CommandOrControl+N',
+                    click: () => sendAppMenuCommand('new-chat')
+                },
+                { type: 'separator' },
+                { role: 'close' }
+            ]
+        },
+        { role: 'editMenu' },
+        {
+            label: 'View',
+            submenu: [
+                {
+                    label: 'Search',
+                    accelerator: 'CommandOrControl+K',
+                    click: () => sendAppMenuCommand('search')
+                },
+                { type: 'separator' },
+                { role: 'reload' },
+                ...(is.dev ? [{ role: 'toggleDevTools' as const }] : []),
+                { type: 'separator' },
+                { role: 'resetZoom' },
+                { role: 'zoomIn' },
+                { role: 'zoomOut' },
+                { type: 'separator' },
+                { role: 'togglefullscreen' }
+            ]
+        },
+        { role: 'windowMenu' },
+        {
+            role: 'help',
+            submenu: [
+                {
+                    label: 'About Zyra',
+                    click: () => sendAppMenuCommand('about')
+                },
+                {
+                    label: 'Zyra on GitHub',
+                    click: () => void shell.openExternal('https://github.com/justelson/zyra')
+                },
+                {
+                    label: 'Report an issue',
+                    click: () => void shell.openExternal('https://github.com/justelson/zyra/issues')
+                }
+            ]
+        }
+    ]
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
+function attachWindowStateEvents(window: BrowserWindow): void {
+    const publish = () => {
+        if (window.isDestroyed() || window.webContents.isDestroyed()) return
+        window.webContents.send('window:maximized-changed', window.isMaximized() || window.isFullScreen())
+    }
+    window.on('maximize', publish)
+    window.on('unmaximize', publish)
+    window.on('enter-full-screen', publish)
+    window.on('leave-full-screen', publish)
+    window.webContents.on('did-finish-load', publish)
+}
+
 function isDevToolsShortcut(input: Electron.Input): boolean {
     const key = input.key?.toLowerCase()
-    return input.type === 'keyDown' && !!input.control && !!input.shift && key === 'i'
+    if (input.type !== 'keyDown' || key !== 'i') return false
+    return process.platform === 'darwin'
+        ? !!input.meta && !!input.alt
+        : !!input.control && !!input.shift
 }
 
 function lockWindowZoom(window: BrowserWindow): void {
@@ -306,7 +430,7 @@ function createWindow(showOnReady = true, initialRoute = '/'): BrowserWindow {
         minWidth: 900,
         minHeight: 600,
         show: false,
-        frame: false,
+        ...getWindowChromeOptions(),
         backgroundColor: '#0c121f',
         ...(iconPath ? { icon: iconPath } : {}),
         webPreferences: {
@@ -350,6 +474,7 @@ function createWindow(showOnReady = true, initialRoute = '/'): BrowserWindow {
 
     registerBrowserPreviewWebviewSecurity(window)
     registerEditableContextMenu(window)
+    attachWindowStateEvents(window)
     lockWindowZoom(window)
     loadRendererRoute(window, initialRoute)
     registerUpdateWindow(window)
@@ -375,9 +500,8 @@ function createQuickPreviewWindow(filePath: string): BrowserWindow {
         minWidth: 760,
         minHeight: 520,
         show: false,
-        frame: false,
+        ...getWindowChromeOptions(),
         backgroundColor: '#0c121f',
-        autoHideMenuBar: true,
         ...(iconPath ? { icon: iconPath } : {}),
         webPreferences: {
             preload: getPreloadPath(),
@@ -405,6 +529,7 @@ function createQuickPreviewWindow(filePath: string): BrowserWindow {
     })
 
     registerEditableContextMenu(window)
+    attachWindowStateEvents(window)
     lockWindowZoom(window)
     loadRendererRoute(window, route)
     quickPreviewWindow = window
@@ -471,6 +596,7 @@ app.on('second-instance', (_event, argv) => {
 
 app.whenReady().then(() => {
     electronApp.setAppUserModelId(runtimeIdentity.appUserModelId)
+    configureApplicationMenu()
     void initializeUpdater()
     const rendererUrl = process.env['ELECTRON_RENDERER_URL']
     try {
@@ -581,5 +707,6 @@ ipcMain.on('window:close', (event) => {
 })
 
 ipcMain.handle('window:isMaximized', (event) => {
-    return resolveSenderWindow(event)?.isMaximized() ?? false
+    const targetWindow = resolveSenderWindow(event)
+    return targetWindow ? targetWindow.isMaximized() || targetWindow.isFullScreen() : false
 })

@@ -96,6 +96,7 @@ import type {
     BrowserSurfaceOpenRequest,
     RendererControlGrantInput
 } from '../agent-control/protocol'
+import type { ZyraClientPlatform } from '../platform-window-chrome'
 
 export * from './devscope-git-contracts'
 export * from './devscope-project-contracts'
@@ -311,11 +312,26 @@ export type DevScopeUpdateActionResult = {
     state: DevScopeUpdateState
 }
 
+export type DevScopeAppMenuCommand = 'new-chat' | 'search' | 'settings' | 'reload' | 'about'
+
+export type DevScopeWindowRuntimeInfo = {
+    platform: ZyraClientPlatform
+    architecture: string
+    appVersion: string
+    electronVersion: string | null
+    isPackaged: boolean
+    nativeFrame: boolean
+    customWindowControls: boolean
+}
+
 export interface DevScopeWindowApi {
     minimize: () => void
     maximize: () => void
     close: () => void
     isMaximized: () => Promise<boolean>
+    getRuntimeInfo: () => Promise<DevScopeWindowRuntimeInfo>
+    onMaximizedChange: (callback: (maximized: boolean) => void) => () => void
+    onAppMenuCommand: (callback: (command: DevScopeAppMenuCommand) => void) => () => void
 }
 
 export interface DevScopeUpdatesApi {

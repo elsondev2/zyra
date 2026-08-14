@@ -728,7 +728,18 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
             minimize: () => {},
             maximize: () => {},
             close: () => {},
-            isMaximized: () => Promise.resolve(false)
+            isMaximized: () => Promise.resolve(false),
+            getRuntimeInfo: () => Promise.resolve({
+                platform: 'browser' as const,
+                architecture: 'browser',
+                appVersion: browserUpdateState.currentVersion,
+                electronVersion: null,
+                isPackaged: false,
+                nativeFrame: true,
+                customWindowControls: false
+            }),
+            onMaximizedChange: () => noopUnsubscribe,
+            onAppMenuCommand: () => noopUnsubscribe
         },
         updates: {
             getState: () => Promise.resolve(browserUpdateState),
