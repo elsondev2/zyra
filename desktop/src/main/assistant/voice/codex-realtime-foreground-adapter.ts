@@ -1,6 +1,5 @@
 import type {
     AssistantRealtimeVoiceEvent,
-    AssistantSendRealtimeVoiceMessageInput,
     HydrationReceipt,
     InstructorOutputModality,
     InstructorRealtimeVoice,
@@ -19,15 +18,15 @@ import type {
 import { evaluateRealtimeAudioCapabilities } from '../../../shared/assistant/contracts'
 import type { ForegroundClock } from '../foreground/foreground-route-controller'
 import { systemForegroundClock } from '../foreground/foreground-route-controller'
-import type { CodexRealtimeCapabilityEvidence } from './codex-realtime-capabilities'
-import { createCodexRealtimeCapabilityReport } from './codex-realtime-capabilities'
+import type { ChatGptRealtimeCapabilityEvidence } from './codex-realtime-capabilities'
+import { createChatGptRealtimeCapabilityReport } from './codex-realtime-capabilities'
 import {
     applyRealtimeHydrationDelta,
     validateRealtimeHydrationDelta,
     validateRealtimeHydrationSeed
 } from './realtime-hydration'
 
-export interface CodexRealtimeTransport {
+export interface ChatGptRealtimeTransport {
     start(input: {
         cwd: string
         sdp: string
@@ -36,21 +35,28 @@ export interface CodexRealtimeTransport {
         outputModality?: InstructorOutputModality
         initialItems?: Array<{ role: 'developer' | 'user' | 'assistant'; text: string }>
         clientManagedHandoffs?: boolean
+        adapterSessionId: string
+        conversationId: string
+        realtimeSessionGeneration: number
+        signal: AbortSignal
     }): Promise<{
         threadId: string
         sdp: string
         realtimeVersion: string
         realtimeSessionId?: string
+        realtimeSessionGeneration?: number
     }>
     appendContext(items: Array<{ role: 'developer' | 'user' | 'assistant'; text: string }>): Promise<void>
     requestSpeech(text: string): Promise<void>
-    sendMessage(input: AssistantSendRealtimeVoiceMessageInput): Promise<{ mode: 'text-turn' | 'vision-turn' }>
+    presentComposerResponse(input: { turnId: string; text?: string; error?: string }): void
     stop(): Promise<void>
     on(event: 'event', listener: (payload: AssistantRealtimeVoiceEvent) => void): unknown
     off(event: 'event', listener: (payload: AssistantRealtimeVoiceEvent) => void): unknown
 }
 
-interface CodexAdapterSession {
+export type CodexRealtimeTransport = ChatGptRealtimeTransport
+
+interface ChatGptAdapterSession {
     input: RealtimeConnectInput
     handle: RealtimeSessionHandle | null
     currentWatermarks: RealtimeHydrationSeed['sourceWatermarks']
@@ -61,16 +67,16 @@ interface CodexAdapterSession {
     completedTranscriptProviderItemIds: Set<string>
 }
 
-export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter {
+export class ChatGptRealtimeForegroundAdapter implements RealtimeForegroundAdapter {
     private readonly listeners = new Set<(event: RealtimeDomainEvent) => void>()
-    private readonly sessions = new Map<string, CodexAdapterSession>()
+    private readonly sessions = new Map<string, ChatGptAdapterSession>()
     private readonly runtimeListener: (event: AssistantRealtimeVoiceEvent) => void
     private currentAdapterSessionId: string | null = null
     private nextSessionOrdinal = 0
 
     constructor(
-        private readonly runtime: CodexRealtimeTransport,
-        private readonly capabilityEvidence: CodexRealtimeCapabilityEvidence,
+        private readonly runtime: ChatGptRealtimeTransport,
+        private readonly capabilityEvidence: ChatGptRealtimeCapabilityEvidence,
         private readonly clock: ForegroundClock = systemForegroundClock
     ) {
         this.runtimeListener = (event) => this.handleRuntimeEvent(event)
@@ -78,24 +84,24 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
     }
 
     async capabilities(): Promise<RealtimeProviderCapabilityReport> {
-        return createCodexRealtimeCapabilityReport(this.capabilityEvidence, this.clock.now())
+        return createChatGptRealtimeCapabilityReport(this.capabilityEvidence, this.clock.now())
     }
 
     async connect(input: RealtimeConnectInput): Promise<RealtimeSessionHandle> {
         const gate = evaluateRealtimeAudioCapabilities(await this.capabilities(), new Date(this.clock.now()))
-        if (!gate.ok) throw new Error(gate.reason || 'Codex realtime Voice is unavailable.')
+        if (!gate.ok) throw new Error(gate.reason || 'ChatGPT Voice is unavailable.')
         validateRealtimeHydrationSeed(input.hydrationSeed)
         if (input.signal.aborted) throw input.signal.reason || new Error('Realtime connection cancelled.')
         if (input.hydrationSeed.conversationId !== input.conversationId) {
             throw new Error('Realtime hydration belongs to another canonical conversation.')
         }
-        const adapterSessionId = `codex_adapter_session_${++this.nextSessionOrdinal}`
+        const adapterSessionId = `chatgpt_adapter_session_${++this.nextSessionOrdinal}`
         const previousSessionId = this.currentAdapterSessionId
         if (previousSessionId) {
             const previous = this.sessions.get(previousSessionId)
             if (previous) previous.closed = true
         }
-        const session: CodexAdapterSession = {
+        const session: ChatGptAdapterSession = {
             input: cloneConnectInput(input),
             handle: null,
             currentWatermarks: structuredClone(input.hydrationSeed.sourceWatermarks),
@@ -124,14 +130,22 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
                 voice: input.voice as InstructorRealtimeVoice,
                 outputModality: input.output,
                 initialItems: input.hydrationSeed.items.map(({ role, text }) => ({ role, text })),
-                clientManagedHandoffs: true
+                clientManagedHandoffs: true,
+                adapterSessionId,
+                conversationId: input.conversationId,
+                realtimeSessionGeneration: input.requestedSessionGeneration,
+                signal: input.signal
             })
             if (input.signal.aborted) {
                 await this.runtime.stop().catch(() => undefined)
                 throw input.signal.reason || new Error('Realtime connection cancelled.')
             }
-            if (result.realtimeVersion !== 'v3') throw new Error(`Codex negotiated unsupported realtime version ${result.realtimeVersion}.`)
-            if (!result.realtimeSessionId) throw new Error('Codex did not return a stable realtime session ID.')
+            if (result.realtimeVersion !== 'v3') throw new Error(`ChatGPT negotiated unsupported Voice version ${result.realtimeVersion}.`)
+            if (!result.realtimeSessionId) throw new Error('ChatGPT did not return a stable Voice session ID.')
+            if (result.realtimeSessionGeneration !== undefined
+                && result.realtimeSessionGeneration !== input.requestedSessionGeneration) {
+                throw new Error('ChatGPT returned a stale Voice session generation.')
+            }
             const handle: RealtimeSessionHandle = {
                 adapterSessionId,
                 realtimeProviderThreadId: result.threadId,
@@ -184,12 +198,15 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
         await this.runtime.appendContext([{ role: 'developer', text: normalized.slice(0, 4000) }])
     }
 
-    async sendComposerMessage(
+    async deliverComposerResponse(
         sessionId: string,
-        input: AssistantSendRealtimeVoiceMessageInput
-    ): Promise<{ mode: 'text-turn' | 'vision-turn' }> {
+        input: { turnId: string; text?: string; error?: string }
+    ): Promise<{ mode: 'text-turn' }> {
         this.requireCurrentSession(sessionId)
-        return this.runtime.sendMessage(input)
+        this.runtime.presentComposerResponse(input)
+        const text = String(input.text || '').trim()
+        if (text) await this.runtime.requestSpeech(text)
+        return { mode: 'text-turn' }
     }
 
     ingestWebRtcEvent(sessionId: string, value: unknown): void {
@@ -209,7 +226,7 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
                     ...eventBase(session, this.clock.now()),
                     type: 'realtime.session.error',
                     category: 'incompatible_protocol',
-                    message: 'Codex completed a realtime turn without the stable item identity and transcript required for canonical delivery.'
+                    message: 'ChatGPT completed a Voice turn without the stable item identity and transcript required for canonical delivery.'
                 })
             }
             return
@@ -229,9 +246,9 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
         if (item.routeClaim.conversationId !== session.input.conversationId
             || item.routeClaim.realtimeSessionId !== handle.realtimeSessionId
             || item.routeClaim.realtimeSessionGeneration !== handle.realtimeSessionGeneration) {
-            throw new Error('Codex speech request carries a stale Voice route claim.')
+            throw new Error('ChatGPT speech request carries a stale Voice route claim.')
         }
-        if (Date.parse(item.expiresAt) <= Date.parse(this.clock.now())) throw new Error('Codex speech request expired.')
+        if (Date.parse(item.expiresAt) <= Date.parse(this.clock.now())) throw new Error('ChatGPT speech request expired.')
         await this.runtime.requestSpeech(item.text)
         return {
             sessionId,
@@ -267,10 +284,10 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
         this.currentAdapterSessionId = null
     }
 
-    private requireCurrentSession(sessionId: string): CodexAdapterSession {
+    private requireCurrentSession(sessionId: string): ChatGptAdapterSession {
         const session = this.sessions.get(sessionId)
         if (!session || session.closed || !session.handle || this.currentAdapterSessionId !== sessionId) {
-            throw new Error(`Codex realtime session ${sessionId} is not current.`)
+            throw new Error(`ChatGPT Voice session ${sessionId} is not current.`)
         }
         return session
     }
@@ -291,7 +308,7 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
                     event.text,
                     event.providerItemId
                 )) return
-            // Flat app-server notifications may omit item identity. The
+            // Flat legacy notifications may omit item identity. The
             // production Desktop bridge supplies the identity-bearing WebRTC
             // event instead; never guess or commit the flat notification.
             if (!event.providerItemId) return
@@ -306,35 +323,12 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
             } as RealtimeDomainEvent)
             return
         }
-        if (event.type === 'composer.response.delta') return
-        if (event.type === 'composer.response.done') {
-            if (event.error || !event.text.trim()) {
-                this.emit({
-                    ...eventBase(session, this.clock.now()),
-                    type: 'realtime.session.error',
-                    category: 'request_rejected',
-                    message: event.error || 'The private typed-input turn ended without a result for Voice to narrate.'
-                })
-                return
-            }
-            const adapterSessionId = session.handle.adapterSessionId
-            void this.runtime.requestSpeech(event.text.trim()).catch((error) => {
-                const current = this.sessions.get(adapterSessionId)
-                if (!current || current.closed || current !== session) return
-                this.emit({
-                    ...eventBase(session, this.clock.now()),
-                    type: 'realtime.session.error',
-                    category: 'request_rejected',
-                    message: error instanceof Error ? error.message : 'Voice could not narrate the typed-input result.'
-                })
-            })
-            return
-        }
+        if (event.type === 'composer.response.delta' || event.type === 'composer.response.done' || event.type === 'client.command') return
         if (event.type === 'session.error') {
             this.emit({
                 ...eventBase(session, this.clock.now()),
                 type: 'realtime.session.error',
-                category: normalizeCodexErrorCategory(event.message),
+                category: normalizeChatGptErrorCategory(event.message),
                 message: event.message
             })
         } else if (event.type === 'session.closed') {
@@ -348,6 +342,8 @@ export class CodexRealtimeForegroundAdapter implements RealtimeForegroundAdapter
         for (const listener of this.listeners) listener(event)
     }
 }
+
+export { ChatGptRealtimeForegroundAdapter as CodexRealtimeForegroundAdapter }
 
 function createHydrationReplayBudget(items: RealtimeHydrationItem[]): Map<string, number> {
     const budget = new Map<string, number>()
@@ -364,7 +360,7 @@ function addHydrationReplayBudget(budget: Map<string, number>, items: RealtimeHy
 }
 
 function consumeHydrationReplay(
-    session: CodexAdapterSession,
+    session: ChatGptAdapterSession,
     role: 'user' | 'assistant',
     text: string,
     providerItemId: string
@@ -406,11 +402,21 @@ export function normalizeWebRtcTranscriptEvent(
     if (type === 'turn.created' || type === 'conversation.item.created') return null
     const role = explicitRole
         || (turnId ? turnRoles.get(turnId) : undefined)
-        || (type.includes('input_audio_transcription') ? 'user' : type.includes('transcript') ? 'assistant' : undefined)
+        || (type.includes('input_transcript') || type.includes('input_audio_transcription')
+            ? 'user'
+            : type.includes('output_transcript') || type.includes('audio_transcript') || type.includes('transcript')
+                ? 'assistant'
+                : undefined)
     if (!turnId || !role) return null
 
-    const delta = typeof payload?.['delta'] === 'string' ? payload['delta'] : ''
+    const delta = typeof payload?.['delta'] === 'string'
+        ? payload['delta']
+        : typeof item?.['text'] === 'string'
+            ? item['text']
+            : ''
     if (type === 'turn.delta'
+        || type === 'input_transcript.added'
+        || type === 'output_transcript.added'
         || type.endsWith('.transcript.delta')
         || type.endsWith('.audio_transcript.delta')
         || type.endsWith('.input_audio_transcription.delta')) {
@@ -454,7 +460,7 @@ function boundedProviderItemId(value: string | null): string | null {
     return value && value.length <= 512 ? value : null
 }
 
-function normalizeCodexErrorCategory(message: string): string {
+function normalizeChatGptErrorCategory(message: string): string {
     const normalized = message.toLowerCase()
     if (normalized.includes('auth') || normalized.includes('login')) return 'authentication_required'
     if (normalized.includes('unsupported') || normalized.includes('unavailable')) return 'feature_unavailable'
@@ -474,7 +480,7 @@ function pendingEventBase(adapterSessionId: string, input: RealtimeConnectInput,
     }
 }
 
-function eventBase(session: CodexAdapterSession, occurredAt: string) {
+function eventBase(session: ChatGptAdapterSession, occurredAt: string) {
     const handle = session.handle as RealtimeSessionHandle
     return {
         adapterSessionId: handle.adapterSessionId,

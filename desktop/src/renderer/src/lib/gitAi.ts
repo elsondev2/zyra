@@ -58,5 +58,5 @@ export function resolvePreferredGitTextProvider(
 export function formatGitTextProviderLabel(provider: CommitAIProvider) {
     if (provider === 'groq') return 'Groq'
     if (provider === 'gemini') return 'Gemini'
-    return 'Codex'
+    return 'Zyra · ChatGPT'
 }

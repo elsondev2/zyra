@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
+    AssistantRealtimeVoiceClientCommandEvent,
     AssistantRealtimeVoiceEvent,
     AssistantSendRealtimeVoiceMessageInput,
     AssistantVoiceExecutionConfiguration,
@@ -17,6 +18,12 @@ import {
     readCompletedRealtimeUserTranscriptId,
     readRealtimeInputSpeechBoundary
 } from './assistant-realtime-input-recovery'
+import {
+    isCurrentRealtimeVoiceClientCommand,
+    readRealtimeVoiceResponseActivity,
+    sendRealtimeVoiceClientCommand,
+    type RealtimeVoiceClientCommandBinding
+} from './assistant-realtime-client-commands'
 
 export type InstructorVoiceStatus = 'idle' | 'requesting-microphone' | 'connecting' | 'active' | 'stopping' | 'error'
 
@@ -111,6 +118,8 @@ function isCanonicalTranscriptBridgeEvent(payload: Record<string, unknown>): boo
     return type === 'turn.created'
         || type === 'turn.delta'
         || type === 'turn.done'
+        || type === 'input_transcript.added'
+        || type === 'output_transcript.added'
         || type === 'conversation.item.created'
         || type.endsWith('.transcript.delta')
         || type.endsWith('.transcript.done')
@@ -131,7 +140,7 @@ function readDataChannelError(value: unknown): string | null {
         ? error.message
         : (typeof payload.message === 'string' ? payload.message : null)
     if (error || type === 'error' || type.endsWith('.error')) {
-        return message || 'Codex voice reported a connection error.'
+        return message || 'ChatGPT Voice reported a connection error.'
     }
     return null
 }
@@ -164,6 +173,10 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
     const readyCuePlayedRef = useRef(false)
     const activeThreadIdRef = useRef<string | null>(null)
     const adapterSessionIdRef = useRef<string | null>(null)
+    const realtimeClientBindingRef = useRef<RealtimeVoiceClientCommandBinding | null>(null)
+    const pendingClientCommandsRef = useRef<AssistantRealtimeVoiceClientCommandEvent[]>([])
+    const sentClientCommandIdsRef = useRef(new Set<string>())
+    const realtimeResponseActiveRef = useRef(false)
     const bridgeQueueRef = useRef<Promise<void>>(Promise.resolve())
     const [status, setStatus] = useState<InstructorVoiceStatus>('idle')
     const [startedAt, setStartedAt] = useState<string | null>(null)
@@ -172,6 +185,54 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
     const [realtimeVersion, setRealtimeVersion] = useState<string | null>(null)
     const [activityLevel, setActivityLevel] = useState(0)
     const [microphoneMuted, setMicrophoneMuted] = useState(false)
+
+    const flushClientCommands = useCallback(() => {
+        const binding = realtimeClientBindingRef.current
+        const channel = dataChannelRef.current
+        if (!binding || !channel || channel.readyState !== 'open') return
+        const remaining: AssistantRealtimeVoiceClientCommandEvent[] = []
+        for (const command of pendingClientCommandsRef.current) {
+            if (sentClientCommandIdsRef.current.has(command.commandId)) continue
+            if (!isCurrentRealtimeVoiceClientCommand(command, binding)) continue
+            const createsResponse = command.messages.some((message) => message.type === 'response.create')
+            const requiresIdleResponse = createsResponse
+                || command.messages.some((message) => message.type === 'session.context.append')
+            if (requiresIdleResponse && realtimeResponseActiveRef.current) {
+                remaining.push(command)
+                continue
+            }
+            if (sendRealtimeVoiceClientCommand(channel, command, binding)) {
+                sentClientCommandIdsRef.current.add(command.commandId)
+                if (createsResponse) realtimeResponseActiveRef.current = true
+            } else {
+                remaining.push(command)
+            }
+        }
+        pendingClientCommandsRef.current = remaining
+        while (sentClientCommandIdsRef.current.size > 256) {
+            const oldest = sentClientCommandIdsRef.current.values().next().value
+            if (!oldest) break
+            sentClientCommandIdsRef.current.delete(oldest)
+        }
+    }, [])
+
+    const queueClientCommand = useCallback((command: AssistantRealtimeVoiceClientCommandEvent) => {
+        if (sentClientCommandIdsRef.current.has(command.commandId)
+            || pendingClientCommandsRef.current.some((entry) => entry.commandId === command.commandId)) return
+        pendingClientCommandsRef.current.push(command)
+        if (pendingClientCommandsRef.current.length > 64) pendingClientCommandsRef.current.shift()
+        flushClientCommands()
+    }, [flushClientCommands])
+
+    const sendLocalSessionClose = useCallback(() => {
+        const channel = dataChannelRef.current
+        if (channel?.readyState !== 'open') return
+        try {
+            channel.send(JSON.stringify({ type: 'session.close' }))
+        } catch {
+            // Main still releases canonical ownership even if the peer closed first.
+        }
+    }, [])
 
     const releaseLocalMedia = useCallback(() => {
         if (connectionTimerRef.current !== null) {
@@ -216,6 +277,10 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
         lastActivityUpdateRef.current = 0
         if (mountedRef.current) setActivityLevel(0)
 
+        realtimeClientBindingRef.current = null
+        pendingClientCommandsRef.current = []
+        sentClientCommandIdsRef.current.clear()
+        realtimeResponseActiveRef.current = false
         const dataChannel = dataChannelRef.current
         dataChannelRef.current = null
         if (dataChannel) {
@@ -319,6 +384,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
 
     const endWithError = useCallback((message: string) => {
         if (terminalHandledRef.current) return
+        sendLocalSessionClose()
         if (readyCuePlayedRef.current) playVoiceCue(voiceEndedCueUrl)
         readyCuePlayedRef.current = false
         terminalHandledRef.current = true
@@ -331,17 +397,22 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
             setStatus('error')
         }
         stopRemoteSilently()
-    }, [releaseLocalMedia, stopRemoteSilently])
+    }, [releaseLocalMedia, sendLocalSessionClose, stopRemoteSilently])
 
     useEffect(() => {
         mountedRef.current = true
         const unsubscribe = window.devscope.assistant.onRealtimeVoiceEvent((event: AssistantRealtimeVoiceEvent) => {
-            if (!mountedRef.current || terminalHandledRef.current) return
+            if (!mountedRef.current) return
+            if (event.type === 'client.command') {
+                queueClientCommand(event)
+                return
+            }
+            if (terminalHandledRef.current) return
             if (activeThreadIdRef.current && event.threadId && event.threadId !== activeThreadIdRef.current) return
 
             if (event.type === 'session.started') {
                 if (event.realtimeVersion && event.realtimeVersion !== 'v3') {
-                    endWithError(`Codex connected with unsupported voice version ${event.realtimeVersion}.`)
+                    endWithError(`ChatGPT connected with unsupported Voice version ${event.realtimeVersion}.`)
                     return
                 }
                 setRealtimeVersion(event.realtimeVersion || null)
@@ -410,7 +481,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
             releaseLocalMedia()
             stopRemoteSilently()
         }
-    }, [endWithError, releaseLocalMedia, stopRemoteSilently])
+    }, [endWithError, queueClientCommand, releaseLocalMedia, stopRemoteSilently])
 
     const start = useCallback(async (options: InstructorVoiceStartOptions) => {
         if (startPendingRef.current || peerRef.current) return
@@ -421,6 +492,10 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
         const generation = ++generationRef.current
         activeThreadIdRef.current = null
         adapterSessionIdRef.current = null
+        realtimeClientBindingRef.current = null
+        pendingClientCommandsRef.current = []
+        sentClientCommandIdsRef.current.clear()
+        realtimeResponseActiveRef.current = false
         bridgeQueueRef.current = Promise.resolve()
         setStartedAt(new Date().toISOString())
         setError(null)
@@ -547,6 +622,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
 
             dataChannel.onopen = () => {
                 readiness.dataChannelOpen = true
+                flushClientCommands()
                 markActiveIfReady()
             }
             dataChannel.onmessage = (event) => {
@@ -561,6 +637,12 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
                     if (payload.type === 'session.started' || payload.type === 'session.updated') {
                         readiness.sessionInitialized = true
                         markActiveIfReady()
+                    }
+                    const responseActivity = readRealtimeVoiceResponseActivity(payload)
+                    if (responseActivity === 'started') realtimeResponseActiveRef.current = true
+                    else if (responseActivity === 'finished') {
+                        realtimeResponseActiveRef.current = false
+                        flushClientCommands()
                     }
                     const speechBoundary = readRealtimeInputSpeechBoundary(payload)
                     if (speechBoundary?.kind === 'started') {
@@ -622,9 +704,9 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
                     // Ignore unrelated non-JSON realtime payloads.
                 }
             }
-            dataChannel.onerror = () => failConnection('The Codex voice data connection failed.')
+            dataChannel.onerror = () => failConnection('The ChatGPT Voice data connection failed.')
             dataChannel.onclose = () => {
-                if (isCurrent()) failConnection('The Codex voice data connection closed.')
+                if (isCurrent()) failConnection('The ChatGPT Voice data connection closed.')
             }
 
             peer.ontrack = (event) => {
@@ -659,12 +741,12 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
                         peerDisconnectTimerRef.current = window.setTimeout(() => {
                             peerDisconnectTimerRef.current = null
                             if (isCurrent() && peer.connectionState === 'disconnected') {
-                                failConnection('The Codex voice connection was interrupted.')
+                                failConnection('The ChatGPT Voice connection was interrupted.')
                             }
                         }, REALTIME_PEER_DISCONNECT_GRACE_MS)
                     }
                 } else if (peer.connectionState === 'failed') {
-                    failConnection('The Codex voice connection failed.')
+                    failConnection('The ChatGPT Voice connection failed.')
                 }
             }
             for (const track of stream.getAudioTracks()) peer.addTrack(track, stream)
@@ -697,13 +779,24 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
                 stopRemoteSilently()
                 return
             }
-            if (!result.success) throw new Error(result.error || 'Codex realtime voice could not start.')
+            if (!result.success) throw new Error(result.error || 'ChatGPT Voice could not start.')
             if (result.realtimeVersion !== 'v3') {
-                throw new Error(`Codex connected with unsupported voice version ${result.realtimeVersion || 'unknown'}.`)
+                throw new Error(`ChatGPT connected with unsupported Voice version ${result.realtimeVersion || 'unknown'}.`)
+            }
+            if (!result.adapterSessionId || !result.realtimeSessionId
+                || !Number.isSafeInteger(result.realtimeSessionGeneration)
+                || (result.realtimeSessionGeneration as number) < 1) {
+                throw new Error('ChatGPT Voice did not return a stable owner-scoped session binding.')
             }
 
             activeThreadIdRef.current = result.threadId
-            adapterSessionIdRef.current = result.adapterSessionId || null
+            adapterSessionIdRef.current = result.adapterSessionId
+            realtimeClientBindingRef.current = {
+                adapterSessionId: result.adapterSessionId,
+                realtimeSessionId: result.realtimeSessionId,
+                realtimeSessionGeneration: result.realtimeSessionGeneration as number
+            }
+            flushClientCommands()
             readiness.sessionInitialized = true
             setRealtimeVersion(result.realtimeVersion)
             await peer.setRemoteDescription({ type: 'answer', sdp: result.sdp })
@@ -711,7 +804,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
 
             if (!markActiveIfReady() && connectionTimerRef.current === null) {
                 connectionTimerRef.current = window.setTimeout(
-                    () => failConnection('Codex voice connected, but media did not become ready.'),
+                    () => failConnection('ChatGPT Voice connected, but media did not become ready.'),
                     30_000
                 )
             }
@@ -722,7 +815,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
         } finally {
             startPendingRef.current = false
         }
-    }, [attachOutputActivityMeter, beginActivityMeter, binding, endWithError, releaseLocalMedia, stopRemoteSilently])
+    }, [attachOutputActivityMeter, beginActivityMeter, binding, endWithError, flushClientCommands, releaseLocalMedia, stopRemoteSilently])
 
     const toggleMicrophone = useCallback(() => {
         const stream = mediaStreamRef.current
@@ -774,27 +867,29 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
     const stop = useCallback(async () => {
         if (status === 'idle' || status === 'stopping') return
 
+        sendLocalSessionClose()
         terminalHandledRef.current = true
         generationRef.current += 1
         if (readyCuePlayedRef.current) playVoiceCue(voiceEndedCueUrl)
         readyCuePlayedRef.current = false
-        activeThreadIdRef.current = null
-        adapterSessionIdRef.current = null
         setStatus('stopping')
-        releaseLocalMedia()
 
         try {
             const bridgeError = await bridgeQueueRef.current.then(() => null).catch((error) => error)
             const result = await window.devscope.assistant.stopRealtimeVoice()
-            if (!result.success) throw new Error(result.error || 'Codex voice could not stop cleanly.')
+            if (!result.success) throw new Error(result.error || 'ChatGPT Voice could not stop cleanly.')
             if (bridgeError) throw bridgeError
             if (mountedRef.current) setStatus('idle')
         } catch (stopError) {
             if (!mountedRef.current) return
             setError(stopError instanceof Error ? stopError.message : 'Voice session could not stop cleanly.')
             setStatus('error')
+        } finally {
+            activeThreadIdRef.current = null
+            adapterSessionIdRef.current = null
+            releaseLocalMedia()
         }
-    }, [releaseLocalMedia, status])
+    }, [releaseLocalMedia, sendLocalSessionClose, status])
 
     return {
         status,

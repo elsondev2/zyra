@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import initSqlJs from 'sql.js/dist/sql-asm.js'
@@ -39,10 +39,7 @@ import {
     CodexRealtimeForegroundAdapter,
     type CodexRealtimeTransport
 } from '../src/main/assistant/voice/codex-realtime-foreground-adapter'
-import {
-    inspectCodexRealtimeSchemaMarkers,
-    probeInstalledCodexRealtimeCapabilitiesAsync
-} from '../src/main/assistant/voice/codex-realtime-capability-probe'
+import { probeInstalledCodexRealtimeCapabilitiesAsync } from '../src/main/assistant/voice/codex-realtime-capability-probe'
 import { createCodexRealtimeCapabilityReport } from '../src/main/assistant/voice/codex-realtime-capabilities'
 import { FakeRealtimeContinuitySource } from '../src/main/assistant/voice/fake-realtime-continuity-source'
 import { FakeRealtimeForegroundAdapter } from '../src/main/assistant/voice/fake-realtime-foreground-adapter'
@@ -62,9 +59,13 @@ class ScriptedCodexTransport extends EventEmitter implements CodexRealtimeTransp
     lastStart: Parameters<CodexRealtimeTransport['start']>[0] | null = null
     appendedContext: Array<{ role: 'developer' | 'user' | 'assistant'; text: string }> = []
     requestedSpeech: string[] = []
+    presentedComposerResponses: Array<{ turnId: string; text?: string; error?: string }> = []
 
     async start(input: Parameters<CodexRealtimeTransport['start']>[0]) {
-        this.lastStart = structuredClone(input)
+        this.lastStart = {
+            ...input,
+            initialItems: input.initialItems ? structuredClone(input.initialItems) : undefined
+        }
         return {
             threadId: 'codex_provider_thread_1',
             sdp: 'v=0\r\no=codex 1 1 IN IP4 127.0.0.1\r\n',
@@ -78,7 +79,9 @@ class ScriptedCodexTransport extends EventEmitter implements CodexRealtimeTransp
     }
 
     async requestSpeech(text: string): Promise<void> { this.requestedSpeech.push(text) }
-    async sendMessage(): Promise<{ mode: 'text-turn' }> { return { mode: 'text-turn' } }
+    presentComposerResponse(input: { turnId: string; text?: string; error?: string }): void {
+        this.presentedComposerResponses.push(structuredClone(input))
+    }
     async stop(): Promise<void> {}
 }
 
@@ -504,80 +507,31 @@ assert.equal(reopenedDurableStore.activeRoute('chat_durable')?.context_version, 
 reopenedDurableStore.close()
 rmSync(controllerDirectory, { recursive: true, force: true })
 
-// Codex capabilities fail closed until both installed schema and a stable WebRTC transcript identity bridge are proven.
-assert.deepEqual(inspectCodexRealtimeSchemaMarkers([
-    'ThreadRealtimeInitialItem',
-    'ThreadRealtimeStartTransport',
-    'thread/realtime/started',
-    'thread/realtime/transcript/done',
-    'webrtc',
-    'v3'
-].join(' ')), [])
-assert.deepEqual(inspectCodexRealtimeSchemaMarkers('ThreadRealtimeInitialItem'), [
-    'ThreadRealtimeStartTransport',
-    'thread/realtime/started',
-    'thread/realtime/transcript/done',
-    'webrtc',
-    'v3'
-])
-const probeDirectory = mkdtempSync(join(tmpdir(), 'zyra-voice-probe-test-'))
-const fakeCodexScript = join(probeDirectory, 'fake-codex.cjs')
-const fakeSchemaText = [
-    'ThreadRealtimeInitialItem',
-    'ThreadRealtimeStartTransport',
-    'thread/realtime/started',
-    'thread/realtime/transcript/done',
-    'webrtc',
-    'v3'
-].join(' ')
-writeFileSync(fakeCodexScript, `
-const fs = require('node:fs')
-const path = require('node:path')
-const args = process.argv.slice(2)
-if (args.includes('--version')) {
-  console.log('codex-test 1.0')
-} else {
-  const outputIndex = args.indexOf('--out')
-  const output = args[outputIndex + 1]
-  setTimeout(() => {
-    fs.mkdirSync(output, { recursive: true })
-    fs.writeFileSync(path.join(output, 'schema.json'), ${JSON.stringify(JSON.stringify(fakeSchemaText))})
-  }, 120)
-}
-`)
-const fakeCodexBinary = process.platform === 'win32'
-    ? join(probeDirectory, 'fake-codex.cmd')
-    : join(probeDirectory, 'fake-codex')
-if (process.platform === 'win32') {
-    writeFileSync(fakeCodexBinary, `@echo off\r\n"${process.execPath}" "${fakeCodexScript}" %*\r\n`)
-} else {
-    writeFileSync(fakeCodexBinary, `#!/bin/sh\n"${process.execPath}" "${fakeCodexScript}" "$@"\n`)
-    chmodSync(fakeCodexBinary, 0o755)
-}
-let eventLoopTicks = 0
-const probeTick = setInterval(() => { eventLoopTicks += 1 }, 10)
+// Direct ChatGPT capabilities are source-controlled and fail closed until the renderer bridges are proven.
 const asyncProbe = await probeInstalledCodexRealtimeCapabilitiesAsync({
-    codexBinary: fakeCodexBinary,
+    directSignalingVerified: true,
     transcriptIdentityBridge: true,
+    ownerScopedClientCommands: true,
     clock
 })
-clearInterval(probeTick)
 assert.equal(asyncProbe.report.realtime.session.support, 'supported')
-assert.ok(eventLoopTicks >= 3, 'the Codex capability probe must not block Electron\'s event loop')
-rmSync(probeDirectory, { recursive: true, force: true })
+assert.equal(asyncProbe.report.realtime.sideband_control.support, 'supported')
+assert.deepEqual(asyncProbe.report.realtime.transports, ['webrtc'])
 
 const incompleteCodexReport = createCodexRealtimeCapabilityReport({
-    providerVersion: 'codex-test',
-    generatedSchemaVerified: true,
-    transcriptIdentityBridge: false
+    providerVersion: 'chatgpt-frameless-v3',
+    directSignalingVerified: true,
+    transcriptIdentityBridge: false,
+    ownerScopedClientCommands: false
 }, clock.now())
 assert.equal(evaluateRealtimeAudioCapabilities(incompleteCodexReport, new Date(clock.now())).ok, false)
 
 const scriptedTransport = new ScriptedCodexTransport()
 const codexAdapter = new CodexRealtimeForegroundAdapter(scriptedTransport, {
-    providerVersion: 'codex-test',
-    generatedSchemaVerified: true,
-    transcriptIdentityBridge: true
+    providerVersion: 'chatgpt-frameless-v3',
+    directSignalingVerified: true,
+    transcriptIdentityBridge: true,
+    ownerScopedClientCommands: true
 }, clock)
 const codexEvents: RealtimeDomainEvent[] = []
 codexAdapter.subscribe((event) => codexEvents.push(event))
@@ -686,12 +640,14 @@ assert.ok(codexEvents.some((event) => event.type === 'realtime.assistant.transcr
 assert.ok(codexEvents.some((event) => event.type === 'realtime.assistant.transcript.completed'
     && event.providerItemId === 'webrtc_turn_1'
     && event.text === 'Identity-bearing result.'))
-scriptedTransport.emit('event', {
-    type: 'composer.response.done',
-    threadId: codexHandle.realtimeProviderThreadId,
+await codexAdapter.deliverComposerResponse(codexHandle.adapterSessionId, {
     turnId: 'private_typed_turn_1',
     text: 'Narrate this private read-only result.'
-} satisfies AssistantRealtimeVoiceEvent)
+})
+assert.deepEqual(scriptedTransport.presentedComposerResponses, [{
+    turnId: 'private_typed_turn_1',
+    text: 'Narrate this private read-only result.'
+}])
 assert.deepEqual(scriptedTransport.requestedSpeech, ['Narrate this private read-only result.'])
 assert.equal(codexEvents.some((event) => event.type === 'realtime.assistant.transcript.completed'
     && event.providerItemId === 'composer:private_typed_turn_1'), false)

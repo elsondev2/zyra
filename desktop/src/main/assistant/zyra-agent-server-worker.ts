@@ -117,15 +117,15 @@ export class DesktopAgentServerConnection {
         return new ZyraAgentServerWorker(this, cwd, latestSequence)
     }
 
-    async listModels(forceRefresh = false): Promise<Record<string, unknown>[]> {
+    async listModels(forceRefresh = false, skipAvailability = false): Promise<Record<string, unknown>[]> {
         const client = await this.getClient()
-        const result = await client.request('runtime.models', { forceRefresh }, { timeoutMs: 65_000 })
+        const result = await client.request('runtime.models', { forceRefresh, skipAvailability }, { timeoutMs: 65_000 })
         return Array.isArray(result['models']) ? result['models'] as Record<string, unknown>[] : []
     }
 
-    async generateText(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    async generateText(payload: Record<string, unknown>, timeoutMs = 60_000): Promise<Record<string, unknown>> {
         const client = await this.getClient()
-        return client.request('runtime.generateText', payload)
+        return client.request('runtime.generateText', payload, { timeoutMs: Math.max(1_000, timeoutMs + 5_000) })
     }
 
     async listCanonicalChats(project?: string): Promise<CanonicalAgentChat[]> {

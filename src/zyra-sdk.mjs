@@ -940,10 +940,12 @@ export async function listAvailableModels(options = {}) {
     modelRegistry.refresh();
     registerZyraRuntimeModels(modelRegistry);
   }
-  await refreshZyraModelAvailability(modelRegistry, {
-    forceRefresh: options.forceRefresh ?? options.forceModelPing,
-    timeoutMs: options.timeoutMs,
-  });
+  if (!options.skipAvailability) {
+    await refreshZyraModelAvailability(modelRegistry, {
+      forceRefresh: options.forceRefresh ?? options.forceModelPing,
+      timeoutMs: options.timeoutMs,
+    });
+  }
   return getZyraAvailableModels(modelRegistry).map((model) => ({
     id: `${model.provider}/${model.id}`,
     label: model.id,
@@ -1055,7 +1057,10 @@ export async function warmupZyraRuntime(options = {}) {
     loadPiSessionManager(),
     loadPiStartupResources(),
     loadZyraToolModules(),
-    listAvailableModels(options),
+    listAvailableModels({
+      forceRefresh: Boolean(options.forceRefresh),
+      skipAvailability: options.skipAvailability === true,
+    }),
   ]);
   return { models };
 }

@@ -46,7 +46,8 @@ import { isAssistantToolLifecycleStartEvent } from '../../shared/assistant/tool-
 import { isAssistantReasoningEffort } from '../../shared/assistant/reasoning-efforts'
 import { AssistantTextDeltaBuffer } from './assistant-text-delta-buffer'
 import { AssistantActivityDeltaBuffer } from './assistant-activity-delta-buffer'
-import { CodexRealtimeVoiceRuntime } from './codex-realtime-voice'
+import { ChatGptRealtimeVoiceRuntime } from './codex-realtime-voice'
+import { normalizeInstructorRealtimeMessage } from './codex-realtime-voice-contract'
 import { ConversationGateway } from './foreground/conversation-gateway'
 import { ForegroundControllerPersistence } from './foreground/foreground-controller-persistence'
 import { ForegroundRouteController, routeExpectation } from './foreground/foreground-route-controller'
@@ -54,8 +55,8 @@ import { PiCanonicalMessageWriter } from './foreground/pi-canonical-message-writ
 import { AssistantRealtimeContinuitySource } from './voice/assistant-realtime-continuity-source'
 import { CanonicalVoiceSessionController } from './voice/canonical-voice-session-controller'
 import { CanonicalVoiceTranscriptCommitter } from './voice/canonical-voice-transcript-committer'
-import { CodexRealtimeForegroundAdapter } from './voice/codex-realtime-foreground-adapter'
-import { probeInstalledCodexRealtimeCapabilitiesAsync } from './voice/codex-realtime-capability-probe'
+import { ChatGptRealtimeForegroundAdapter } from './voice/codex-realtime-foreground-adapter'
+import { probeDirectChatGptRealtimeCapabilitiesAsync } from './voice/codex-realtime-capability-probe'
 import {
     boundedVoiceTaskResult,
     buildVoiceStrongInspectionPrompt,
@@ -159,6 +160,14 @@ type ActiveVoiceStrongTask = {
     abortController: AbortController
 }
 
+type TypedVoiceResponseRequest = {
+    text: string
+    turnId: string
+    active: ActiveCanonicalVoice | null
+    expectedAdapterSessionId: string
+    canonicalMessageId?: string
+}
+
 type PendingCanonicalVoiceStart = {
     senderId: number
     conversationId: string
@@ -179,13 +188,13 @@ export class AssistantService {
 
     private readonly runtime = new ZyraPiRuntime()
     private readonly accountService = new ZyraAccountService()
-    private readonly realtimeVoiceRuntime = new CodexRealtimeVoiceRuntime()
+    private readonly realtimeVoiceRuntime = new ChatGptRealtimeVoiceRuntime()
     private readonly persistence = new AssistantPersistence()
     private foregroundPersistence: ForegroundControllerPersistence | null = null
     private foregroundRoutes: ForegroundRouteController | null = null
     private conversationGateway: ConversationGateway | null = null
     private realtimeContinuity: AssistantRealtimeContinuitySource | null = null
-    private canonicalRealtimeAdapter: CodexRealtimeForegroundAdapter | null = null
+    private canonicalRealtimeAdapter: ChatGptRealtimeForegroundAdapter | null = null
     private canonicalVoiceSessions: CanonicalVoiceSessionController | null = null
     private canonicalVoiceCommitter: CanonicalVoiceTranscriptCommitter | null = null
     private canonicalVoiceSetupPromise: Promise<void> | null = null
@@ -197,6 +206,7 @@ export class AssistantService {
     private readonly activeVoiceStrongTasks = new Map<string, ActiveVoiceStrongTask>()
     private readonly queuedVoiceStrongRequests = new Map<string, CompletedRealtimeUserTranscriptEvent[]>()
     private readonly delegatedVoiceProviderItems = new Set<string>()
+    private readonly typedVoiceResponseQueues = new Map<string, Promise<void>>()
     private readonly fleetProjection = new FleetProjection()
     private readonly assistantTextDeltaBuffer = new AssistantTextDeltaBuffer({
         flushDelayMs: AssistantService.ASSISTANT_TEXT_DELTA_FLUSH_MS,
@@ -300,6 +310,16 @@ export class AssistantService {
             void this.queueCanonicalChatImport()
         })
         this.realtimeVoiceRuntime.on('event', (event) => {
+            if (event.type === 'client.command') {
+                if (this.realtimeVoiceRuntime.isCurrentClientCommand(event)) {
+                    this.broadcastRealtimeVoiceEvent(event, true)
+                }
+                return
+            }
+            if (event.type === 'composer.response.delta' || event.type === 'composer.response.done') {
+                this.broadcastRealtimeVoiceEvent(event, true)
+                return
+            }
             if (this.activeCanonicalVoice) return
             if (event.type === 'session.error' || event.type === 'session.closed') {
                 this.realtimeVoiceOwnerId = null
@@ -342,8 +362,14 @@ export class AssistantService {
         return () => this.externalRealtimeVoiceSubscribers.delete(listener)
     }
 
-    private broadcastRealtimeVoiceEvent(event: AssistantRealtimeVoiceEvent): void {
-        broadcastAssistantRealtimeVoiceEvent(this.realtimeVoiceSubscribers, event)
+    private broadcastRealtimeVoiceEvent(event: AssistantRealtimeVoiceEvent, ownerOnly = false): void {
+        if (ownerOnly && this.realtimeVoiceOwnerId === null) return
+        const subscribers = ownerOnly
+            ? new Set(this.realtimeVoiceSubscribers.has(this.realtimeVoiceOwnerId as number)
+                ? [this.realtimeVoiceOwnerId as number]
+                : [])
+            : this.realtimeVoiceSubscribers
+        broadcastAssistantRealtimeVoiceEvent(subscribers, event)
         for (const listener of [...this.externalRealtimeVoiceSubscribers]) {
             try {
                 listener(event)
@@ -387,6 +413,28 @@ export class AssistantService {
         this.state.snapshot.knownModels = models
         this.persistence.updateMetadata(this.state.snapshot)
         return { success: true as const, models }
+    }
+
+    /** Utility generation never attaches or creates a canonical Inbox chat. */
+    async generateUtilityText(
+        prompt: string,
+        options: {
+            cwd?: string
+            model?: string
+            effort?: import('../../shared/assistant/contracts').AssistantReasoningEffort
+            timeoutMs?: number
+        } = {}
+    ) {
+        return this.runtime.generateText(prompt, {
+            cwd: String(options.cwd || process.cwd()),
+            model: options.model,
+            effort: options.effort,
+            timeoutMs: options.timeoutMs
+        })
+    }
+
+    async testChatGptUtilityConnection(model?: string) {
+        return this.runtime.testChatGptUtilityConnection(model)
     }
 
     async getFleetSnapshot(threadId: string) {
@@ -645,17 +693,30 @@ export class AssistantService {
         if (this.realtimeVoiceOwnerId !== senderId) {
             throw new Error('Only the Zyra window running Voice can send to this session.')
         }
-        const active = this.activeCanonicalVoice
-        if (!active) {
-            const result = await this.realtimeVoiceRuntime.sendMessage(input)
-            return { success: true as const, ...result }
+        const message = normalizeInstructorRealtimeMessage(input)
+        if (message.images.length > 0) {
+            throw new Error('Typed Voice images are not supported yet. Stop Voice and send the image in Chat so Zyra can inspect it truthfully.')
         }
-        if (input.images?.length) {
-            throw new Error('Stop Voice before sending images so the strong assistant can process them canonically.')
-        }
-        const text = String(input.text || '').trim()
+        const text = message.text
         if (!text) throw new Error('Type a message for the active Voice conversation.')
-        const clientMessageId = normalizeClientVoiceMessageId(input.clientMessageId)
+        const active = this.activeCanonicalVoice
+        const clientMessageId = active
+            ? normalizeClientVoiceMessageId(input.clientMessageId)
+            : normalizeClientVoiceMessageId(input.clientMessageId || `voice-typed-${randomUUID()}`)
+        const turnId = `voice_typed_response_${createHash('sha256').update(clientMessageId).digest('hex').slice(0, 32)}`
+
+        if (!active) {
+            const isolatedSession = this.realtimeVoiceRuntime.currentSessionIdentity()
+            if (!isolatedSession) throw new Error('Start Voice before sending a typed message.')
+            this.queueTypedVoiceResponse({
+                text,
+                turnId,
+                active: null,
+                expectedAdapterSessionId: isolatedSession.adapterSessionId
+            })
+            return { success: true as const, mode: 'text-turn' as const }
+        }
+
         const routes = this.requireForegroundRoutes()
         const gateway = this.requireConversationGateway()
         const route = routes.activeRoute(active.conversationId)
@@ -678,11 +739,97 @@ export class AssistantService {
             routeClaim: foregroundRouteClaim(route),
             idempotencyKey: `voice-typed:${active.conversationId}:${clientMessageId}`
         })
-        const result = await this.requireCanonicalRealtimeAdapter().sendComposerMessage(
-            active.adapterSessionId,
-            { ...input, clientMessageId, text, images: undefined }
-        )
-        return { success: true as const, ...result }
+        this.queueTypedVoiceResponse({
+            text,
+            turnId,
+            active,
+            expectedAdapterSessionId: active.adapterSessionId,
+            canonicalMessageId: messageId
+        })
+        return { success: true as const, mode: 'text-turn' as const }
+    }
+
+    private queueTypedVoiceResponse(input: TypedVoiceResponseRequest): void {
+        const key = input.expectedAdapterSessionId
+        const previous = this.typedVoiceResponseQueues.get(key) || Promise.resolve()
+        const next = previous
+            .catch(() => undefined)
+            .then(async () => {
+                const currentAdapterSessionId = this.activeCanonicalVoice?.adapterSessionId
+                    || this.realtimeVoiceRuntime.currentSessionIdentity()?.adapterSessionId
+                if (currentAdapterSessionId !== key) return
+                try {
+                    await this.realtimeVoiceRuntime.appendContext([{ role: 'user', text: input.text }])
+                } catch {
+                    const error = 'ChatGPT Voice could not accept the typed message context.'
+                    if (input.active) {
+                        await this.requireCanonicalRealtimeAdapter().deliverComposerResponse(
+                            key,
+                            { turnId: input.turnId, error }
+                        )
+                    } else {
+                        this.realtimeVoiceRuntime.presentComposerResponse({ turnId: input.turnId, error })
+                    }
+                    return
+                }
+                await this.generateTypedVoiceResponse(input)
+            })
+        this.typedVoiceResponseQueues.set(key, next)
+        void next
+            .catch((error) => log.warn('[AssistantVoice] Typed Voice response failed', error))
+            .finally(() => {
+                if (this.typedVoiceResponseQueues.get(key) === next) this.typedVoiceResponseQueues.delete(key)
+            })
+    }
+
+    private async generateTypedVoiceResponse(input: TypedVoiceResponseRequest): Promise<void> {
+        const record = input.active ? findThreadRecord(this.state.snapshot, input.active.localThreadId) : null
+        let contextItems: Array<{ role: 'developer' | 'user' | 'assistant'; text: string }> = []
+        if (input.active) {
+            try {
+                const route = this.requireForegroundRoutes().activeRoute(input.active.conversationId)
+                const seed = await this.requireRealtimeContinuity().materialize(
+                    input.active.conversationId,
+                    foregroundRouteClaim(route)
+                )
+                const messageIndex = input.canonicalMessageId
+                    ? seed.items.findIndex((item) => item.canonicalMessageId === input.canonicalMessageId)
+                    : -1
+                const boundedItems = messageIndex >= 0 ? seed.items.slice(0, messageIndex + 1) : seed.items
+                contextItems = boundedItems.map(({ role, text }) => ({ role, text }))
+            } catch (error) {
+                log.warn('[AssistantVoice] Typed Voice context refresh failed; using the current message only', error)
+            }
+        }
+        const result = await this.runtime.generateText(buildTypedVoiceUtilityPrompt(input.text, contextItems), {
+            cwd: record && input.active
+                ? this.getSessionRuntimeCwd(record.session, record.thread)
+                : REALTIME_VOICE_LAB_CWD,
+            model: input.active?.executionConfiguration.model,
+            effort: input.active?.executionConfiguration.effort || 'low',
+            timeoutMs: 45_000
+        })
+        const currentAdapterSessionId = this.activeCanonicalVoice?.adapterSessionId
+            || this.realtimeVoiceRuntime.currentSessionIdentity()?.adapterSessionId
+        if (currentAdapterSessionId !== input.expectedAdapterSessionId) return
+
+        const text = String(result.text || '').trim()
+        const error = result.success && text
+            ? ''
+            : String(result.error || 'Zyra could not generate the typed Voice response.').trim().slice(0, 1_000)
+        if (input.active) {
+            await this.requireCanonicalRealtimeAdapter().deliverComposerResponse(
+                input.expectedAdapterSessionId,
+                { turnId: input.turnId, text, ...(error ? { error } : {}) }
+            )
+            return
+        }
+        this.realtimeVoiceRuntime.presentComposerResponse({
+            turnId: input.turnId,
+            text,
+            ...(error ? { error } : {})
+        })
+        if (text) await this.realtimeVoiceRuntime.requestSpeech(text)
     }
 
     async ingestRealtimeVoiceEvent(input: AssistantIngestRealtimeVoiceEventInput, senderId: number) {
@@ -737,6 +884,7 @@ export class AssistantService {
         this.activeVoiceStrongTasks.clear()
         this.queuedVoiceStrongRequests.clear()
         this.delegatedVoiceProviderItems.clear()
+        this.typedVoiceResponseQueues.clear()
         this.activeCanonicalVoice = null
         this.canonicalVoiceCommitter?.dispose()
         this.canonicalVoiceUnsubscribe?.()
@@ -823,8 +971,11 @@ export class AssistantService {
     private async ensureCanonicalVoiceSetup(): Promise<void> {
         if (this.canonicalVoiceSetupPromise) return this.canonicalVoiceSetupPromise
         this.canonicalVoiceSetupPromise = (async () => {
-            const probe = await probeInstalledCodexRealtimeCapabilitiesAsync({ transcriptIdentityBridge: true })
-            const adapter = new CodexRealtimeForegroundAdapter(this.realtimeVoiceRuntime, probe.evidence)
+            const probe = await probeDirectChatGptRealtimeCapabilitiesAsync({
+                transcriptIdentityBridge: true,
+                ownerScopedClientCommands: true
+            })
+            const adapter = new ChatGptRealtimeForegroundAdapter(this.realtimeVoiceRuntime, probe.evidence)
             const sessions = new CanonicalVoiceSessionController(
                 this.requireForegroundRoutes(),
                 this.requireRealtimeContinuity(),
@@ -940,6 +1091,7 @@ export class AssistantService {
                 conversationId,
                 adapterSessionId: activation.handle.adapterSessionId,
                 realtimeSessionId: activation.handle.realtimeSessionId,
+                realtimeSessionGeneration: activation.handle.realtimeSessionGeneration,
                 sdp: activation.handle.answerSdp,
                 realtimeVersion: activation.handle.realtimeVersion
             }
@@ -1287,7 +1439,7 @@ export class AssistantService {
         return this.realtimeContinuity
     }
 
-    private requireCanonicalRealtimeAdapter(): CodexRealtimeForegroundAdapter {
+    private requireCanonicalRealtimeAdapter(): ChatGptRealtimeForegroundAdapter {
         if (!this.canonicalRealtimeAdapter) throw new Error('Canonical realtime adapter is not ready.')
         return this.canonicalRealtimeAdapter
     }
@@ -1878,6 +2030,22 @@ function createPendingCanonicalVoiceStart(senderId: number, conversationId: stri
 
 function throwIfVoiceStartAborted(signal: AbortSignal): void {
     if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('Voice startup was cancelled.')
+}
+
+function buildTypedVoiceUtilityPrompt(
+    text: string,
+    contextItems: Array<{ role: 'developer' | 'user' | 'assistant'; text: string }>
+): string {
+    const context = contextItems.length > 0
+        ? `\n\nRecent canonical conversation context:\n${contextItems
+            .map((item) => `[${item.role}] ${item.text}`)
+            .join('\n\n')}`
+        : ''
+    return `Write the strong response to this typed message in an active Zyra Voice conversation.
+Return only the response for the user. Keep it concise and naturally speakable. Use the canonical context when supplied. Do not claim to inspect images, run tools, or access context that is not present below. If the request needs tools or durable work, explain that the user should send it in Chat.${context}
+
+Typed message:
+${text}`
 }
 
 function canonicalVoiceInstructions(stylePreference: unknown): string {

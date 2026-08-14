@@ -9,6 +9,34 @@ import {
 
 const CHATGPT_ACCOUNT_PROVIDER = "openai-codex";
 const CODEX_ACCOUNT_API_BASE = "https://chatgpt.com/backend-api";
+export const CHATGPT_REALTIME_CALL_URL = "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas";
+export const CHATGPT_REALTIME_MODEL = "gpt-live-1-boulder-alpha";
+
+const CHATGPT_REALTIME_MAX_SDP_BYTES = 512 * 1024;
+const CHATGPT_REALTIME_MAX_RESPONSE_BYTES = 512 * 1024;
+const CHATGPT_REALTIME_MAX_INSTRUCTIONS_CHARACTERS = 8_000;
+const CHATGPT_REALTIME_MAX_INITIAL_ITEMS = 128;
+const CHATGPT_REALTIME_MAX_INITIAL_TEXT_BYTES = 32 * 1024;
+const CHATGPT_REALTIME_REQUEST_TIMEOUT_MS = 30_000;
+const CHATGPT_REALTIME_MAX_REQUEST_TIMEOUT_MS = 60_000;
+class ChatGptRealtimeCallError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ChatGptRealtimeCallError";
+  }
+}
+
+const CHATGPT_REALTIME_VOICES = new Set([
+  "arbor",
+  "breeze",
+  "cove",
+  "ember",
+  "juniper",
+  "maple",
+  "sol",
+  "spruce",
+  "vale",
+]);
 
 let piAuthStoragePromise;
 
@@ -160,6 +188,288 @@ export async function resolveChatGptAccountAuth() {
 }
 
 export const resolveZyraSubscriptionAuth = resolveChatGptAccountAuth;
+
+export async function getChatGptAccountAuthStatus(dependencies = {}) {
+  const resolveAuth = dependencies.resolveAuth ?? resolveChatGptAccountAuth;
+  try {
+    const auth = await resolveAuth();
+    return {
+      provider: CHATGPT_ACCOUNT_PROVIDER,
+      configured: Boolean(nonEmptyString(auth?.accessToken) && nonEmptyString(auth?.accountId)),
+    };
+  } catch {
+    return { provider: CHATGPT_ACCOUNT_PROVIDER, configured: false };
+  }
+}
+
+/**
+ * Creates a subscription-backed Frameless Bidi WebRTC call without exposing
+ * OAuth credentials outside this narrow account boundary. The request shape
+ * mirrors openai/codex rust-v0.147.0's backend realtime call path.
+ */
+export async function createChatGptRealtimeCall(input = {}, dependencies = {}) {
+  const sdp = normalizeRealtimeSdp(input.sdp, "offer");
+  const sessionId = normalizeRealtimeIdentifier(input.sessionId, "realtime session id");
+  const threadId = normalizeRealtimeIdentifier(input.threadId, "realtime thread id");
+  const session = buildChatGptRealtimeSession(input);
+  const resolveAuth = dependencies.resolveAuth ?? resolveChatGptAccountAuth;
+  const fetchImpl = dependencies.fetchImpl ?? globalThis.fetch;
+  if (typeof fetchImpl !== "function") throw new ChatGptRealtimeCallError("ChatGPT Voice signaling is unavailable.");
+
+  const timeoutMs = normalizeRealtimeTimeout(input.timeoutMs);
+  const controller = new AbortController();
+  const externalSignal = input.signal;
+  const abortFromCaller = () => controller.abort(externalSignal?.reason);
+  if (externalSignal?.aborted) abortFromCaller();
+  else externalSignal?.addEventListener?.("abort", abortFromCaller, { once: true });
+
+  let timedOut = false;
+  const scheduleTimeout = dependencies.setTimeoutImpl ?? setTimeout;
+  const cancelTimeout = dependencies.clearTimeoutImpl ?? clearTimeout;
+  const timeout = scheduleTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    let auth;
+    try {
+      auth = await runAbortableRealtimeOperation(
+        () => resolveAuth({ signal: controller.signal }),
+        controller.signal,
+      );
+    } catch (error) {
+      if (controller.signal.aborted) throw error;
+      throw new ChatGptRealtimeCallError("Connect your ChatGPT account through Zyra before starting Voice.");
+    }
+    const accessToken = normalizeRealtimeAccessToken(auth?.accessToken);
+    const rawAccountId = nonEmptyString(auth?.accountId);
+    if (!accessToken || !rawAccountId) {
+      throw new ChatGptRealtimeCallError("Connect your ChatGPT account through Zyra before starting Voice.");
+    }
+    const accountId = normalizeRealtimeHeaderValue(rawAccountId, "ChatGPT account id");
+
+    const response = await runAbortableRealtimeOperation(
+      () => fetchImpl(CHATGPT_REALTIME_CALL_URL, {
+        method: "POST",
+        redirect: "error",
+        signal: controller.signal,
+        headers: {
+          Accept: "application/sdp",
+          Authorization: `Bearer ${accessToken}`,
+          "ChatGPT-Account-Id": accountId,
+          "Content-Type": "application/json",
+          "User-Agent": "Zyra Desktop Realtime Voice",
+          "openai-alpha": "quicksilver=v2",
+          originator: "zyra_desktop",
+          "session-id": sessionId,
+          "thread-id": threadId,
+          "x-session-id": sessionId,
+        },
+        body: JSON.stringify({ sdp, session }),
+      }),
+      controller.signal,
+    );
+
+    if (!response?.ok) {
+      await runAbortableRealtimeOperation(
+        () => discardBoundedRealtimeResponse(response),
+        controller.signal,
+      );
+      throw new ChatGptRealtimeCallError(formatRealtimeCallHttpFailure(response?.status));
+    }
+
+    const answerSdp = normalizeRealtimeSdp(
+      await runAbortableRealtimeOperation(
+        () => readBoundedRealtimeResponseText(response),
+        controller.signal,
+      ),
+      "answer",
+    );
+    const callId = parseChatGptRealtimeCallId(response.headers?.get?.("location"));
+    return { sdp: answerSdp, callId };
+  } catch (error) {
+    if (timedOut) throw new ChatGptRealtimeCallError("ChatGPT Voice signaling timed out. Try again.");
+    if (externalSignal?.aborted) throw new ChatGptRealtimeCallError("ChatGPT Voice signaling was cancelled.");
+    if (error instanceof ChatGptRealtimeCallError) throw error;
+    throw new ChatGptRealtimeCallError("ChatGPT Voice signaling failed.");
+  } finally {
+    cancelTimeout(timeout);
+    externalSignal?.removeEventListener?.("abort", abortFromCaller);
+  }
+}
+
+function runAbortableRealtimeOperation(operation, signal) {
+  if (signal.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    Promise.resolve()
+      .then(() => {
+        if (signal.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+        return operation();
+      })
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
+export function buildChatGptRealtimeSession(input = {}) {
+  const instructions = String(input.instructions ?? "").trim();
+  if (!instructions || instructions.length > CHATGPT_REALTIME_MAX_INSTRUCTIONS_CHARACTERS) {
+    throw new ChatGptRealtimeCallError(`Voice instructions must contain 1–${CHATGPT_REALTIME_MAX_INSTRUCTIONS_CHARACTERS.toLocaleString()} characters.`);
+  }
+  const voice = CHATGPT_REALTIME_VOICES.has(input.voice) ? input.voice : "cove";
+  const initialItems = normalizeRealtimeInitialItems(input.initialItems);
+  return {
+    model: CHATGPT_REALTIME_MODEL,
+    instructions,
+    audio: { output: { voice } },
+    delegation: { type: "client", ack_filler: false },
+    ...(initialItems.length > 0 ? { initial_items: initialItems } : {}),
+  };
+}
+
+export function parseChatGptRealtimeCallId(value) {
+  const location = nonEmptyString(value);
+  if (!location || location.length > 2_048 || /[\u0000-\u001f\u007f]/.test(location)) {
+    throw new ChatGptRealtimeCallError("ChatGPT Voice signaling response is missing a valid call location.");
+  }
+  const path = location.split("?", 1)[0];
+  const callId = path
+    .split("/")
+    .reverse()
+    .find((segment) => /^rtc_[A-Za-z0-9_-]{1,248}$/.test(segment)
+      || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment));
+  if (!callId) throw new ChatGptRealtimeCallError("ChatGPT Voice signaling response contains an invalid call location.");
+  return callId;
+}
+
+function normalizeRealtimeInitialItems(value) {
+  const items = Array.isArray(value) ? value : [];
+  if (items.length > CHATGPT_REALTIME_MAX_INITIAL_ITEMS) {
+    throw new ChatGptRealtimeCallError(`Voice startup context supports at most ${CHATGPT_REALTIME_MAX_INITIAL_ITEMS} items.`);
+  }
+  let totalBytes = 0;
+  return items.map((item, index) => {
+    const role = item?.role;
+    if (role !== "developer" && role !== "user" && role !== "assistant") {
+      throw new ChatGptRealtimeCallError(`Voice startup context item ${index + 1} has an invalid role.`);
+    }
+    const text = String(item?.text ?? "").trim();
+    const textBytes = Buffer.byteLength(text, "utf8");
+    totalBytes += textBytes;
+    if (!text || textBytes > CHATGPT_REALTIME_MAX_INITIAL_TEXT_BYTES || totalBytes > CHATGPT_REALTIME_MAX_INITIAL_TEXT_BYTES) {
+      throw new ChatGptRealtimeCallError("Voice startup context exceeds its 32 KiB text limit.");
+    }
+    return {
+      type: "message",
+      role,
+      content: [{
+        type: role === "assistant" ? "output_text" : "input_text",
+        text,
+      }],
+    };
+  });
+}
+
+function normalizeRealtimeSdp(value, kind) {
+  const sdp = typeof value === "string" ? value : "";
+  const bytes = Buffer.byteLength(sdp, "utf8");
+  if (!sdp.trimStart().startsWith("v=0") || bytes > CHATGPT_REALTIME_MAX_SDP_BYTES) {
+    throw new ChatGptRealtimeCallError(`ChatGPT Voice returned an invalid WebRTC ${kind}.`);
+  }
+  return sdp;
+}
+
+function normalizeRealtimeIdentifier(value, label) {
+  const normalized = String(value ?? "").trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$/.test(normalized)) {
+    throw new ChatGptRealtimeCallError(`The ${label} is invalid.`);
+  }
+  return normalized;
+}
+
+function normalizeRealtimeAccessToken(value) {
+  const normalized = nonEmptyString(value);
+  return normalized
+    && normalized.length <= 32_768
+    && !/[\u0000-\u001f\u007f]/.test(normalized)
+    ? normalized
+    : undefined;
+}
+
+function normalizeRealtimeHeaderValue(value, label) {
+  const normalized = nonEmptyString(value);
+  if (!normalized || normalized.length > 512 || /[\u0000-\u001f\u007f]/.test(normalized)) {
+    throw new ChatGptRealtimeCallError(`The ${label} is invalid.`);
+  }
+  return normalized;
+}
+
+function normalizeRealtimeTimeout(value) {
+  if (value === undefined) return CHATGPT_REALTIME_REQUEST_TIMEOUT_MS;
+  const timeoutMs = Number(value);
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > CHATGPT_REALTIME_MAX_REQUEST_TIMEOUT_MS) {
+    throw new ChatGptRealtimeCallError("ChatGPT Voice signaling timeout is invalid.");
+  }
+  return Math.ceil(timeoutMs);
+}
+
+async function readBoundedRealtimeResponseText(response) {
+  const declaredLength = Number(response.headers?.get?.("content-length") || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > CHATGPT_REALTIME_MAX_RESPONSE_BYTES) {
+    throw new ChatGptRealtimeCallError("ChatGPT Voice returned an oversized signaling response.");
+  }
+  if (!response.body?.getReader) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > CHATGPT_REALTIME_MAX_RESPONSE_BYTES) {
+      throw new ChatGptRealtimeCallError("ChatGPT Voice returned an oversized signaling response.");
+    }
+    return text;
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    totalBytes += value.byteLength;
+    if (totalBytes > CHATGPT_REALTIME_MAX_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new ChatGptRealtimeCallError("ChatGPT Voice returned an oversized signaling response.");
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(body);
+}
+
+async function discardBoundedRealtimeResponse(response) {
+  try {
+    await readBoundedRealtimeResponseText(response);
+  } catch {
+    await response?.body?.cancel?.().catch?.(() => undefined);
+  }
+}
+
+function formatRealtimeCallHttpFailure(status) {
+  if (status === 401 || status === 403) return "ChatGPT Voice authentication expired. Reconnect your account and try again.";
+  if (status === 429) return "ChatGPT Voice is temporarily rate limited. Try again later.";
+  const code = Number.isInteger(status) ? ` (${status})` : "";
+  return `ChatGPT Voice signaling failed${code}.`;
+}
+
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
 
 export function normalizeCodexUsageStats(data, source, auth = {}) {
   const rateLimit = data?.rate_limit ?? {};

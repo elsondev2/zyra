@@ -62,6 +62,25 @@ export interface AssistantIngestRealtimeVoiceEventInput {
     payload: unknown
 }
 
+export type AssistantRealtimeVoiceClientMessage =
+    | {
+        type: 'session.context.append'
+        channel: 'speakable' | 'commentary'
+        content: [{ type: 'input_text'; text: string }]
+    }
+    | { type: 'response.create' }
+    | { type: 'session.close' }
+
+export interface AssistantRealtimeVoiceClientCommandEvent {
+    type: 'client.command'
+    commandId: string
+    adapterSessionId: string
+    threadId: string
+    realtimeSessionId: string
+    realtimeSessionGeneration: number
+    messages: AssistantRealtimeVoiceClientMessage[]
+}
+
 export type AssistantRealtimeVoiceEvent =
     | {
         type: 'session.starting'
@@ -100,6 +119,7 @@ export type AssistantRealtimeVoiceEvent =
         text: string
         error?: string
     }
+    | AssistantRealtimeVoiceClientCommandEvent
     | {
         type: 'session.error'
         threadId?: string

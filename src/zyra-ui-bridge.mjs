@@ -584,6 +584,7 @@ async function handleGenerateText(payload) {
   const titleRuntime = await sdk.createZyraSession({
     project: payload.cwd,
     noSession: true,
+    noTools: "all",
     model: payload.model,
     thinking: payload.thinking || 'low',
     skipGuide: true,
@@ -621,7 +622,10 @@ async function handleModels(payload) {
 
 async function handleWarmup(payload) {
   const sdk = await loadSdk();
-  return sdk.warmupZyraRuntime({ forceRefresh: Boolean(payload.forceRefresh) });
+  return sdk.warmupZyraRuntime({
+    forceRefresh: Boolean(payload.forceRefresh),
+    skipAvailability: payload.skipAvailability === true,
+  });
 }
 
 async function handleAbort() {

@@ -289,16 +289,26 @@ try {
     assert.equal(secondVoiceClient.value.success, false, 'another browser tab must not control the current Voice session')
     assert.ok(realtimeVoiceEventListener, 'browser Voice must subscribe directly to AssistantService realtime events')
     realtimeVoiceEventListener!({ type: 'session.started', realtimeVersion: 'v3' })
+    realtimeVoiceEventListener!({
+        type: 'client.command',
+        commandId: 'voice-command-owner-1',
+        adapterSessionId: 'adapter-owner-1',
+        threadId: 'thread:real',
+        realtimeSessionId: 'realtime-owner-1',
+        realtimeSessionGeneration: 1,
+        messages: [{ type: 'response.create' }]
+    })
     const voiceReader = voiceEventResponse.body!.getReader()
     const voiceDecoder = new TextDecoder()
     let voiceEventText = ''
-    for (let attempt = 0; attempt < 3 && !voiceEventText.includes('session.started'); attempt += 1) {
+    for (let attempt = 0; attempt < 4 && !voiceEventText.includes('voice-command-owner-1'); attempt += 1) {
         const chunk = await voiceReader.read()
         if (chunk.done) break
         voiceEventText += voiceDecoder.decode(chunk.value)
     }
     assert.equal(voiceEventText.includes('streamId'), true, 'browser Voice events need a process stream identity for reconnect deduplication')
     assert.equal(voiceEventText.includes('session.started'), true, 'browser Voice events must reach the owning renderer')
+    assert.equal(voiceEventText.includes('voice-command-owner-1'), true, 'owner-scoped WebRTC commands must reach only the owning renderer')
     const leakedVoiceEvent = await Promise.race<string>([
         otherVoiceReader.read().then((chunk) => chunk.done ? '' : voiceDecoder.decode(chunk.value)),
         new Promise((resolve) => setTimeout(() => resolve('owner-isolated'), 60))

@@ -2,18 +2,18 @@ import assert from 'node:assert/strict'
 import { buildLinuxTerminalLaunchCommands, buildMacTerminalScript } from '../src/main/ipc/handlers/platform-terminal-launcher'
 
 const macScript = buildMacTerminalScript({
-    cwd: "/Users/elson/Project's work",
+    cwd: "/Users/dev/Project's work",
     initialCommand: 'npm test',
     shellPath: '/bin/zsh'
 })
 assert.match(macScript, /^#!\/bin\/sh/m)
-assert.match(macScript, /cd -- '\/Users\/elson\/Project'"'"'s work'/)
+assert.match(macScript, /cd -- '\/Users\/dev\/Project'"'"'s work'/)
 assert.match(macScript, /npm test/)
 assert.match(macScript, /exec '\/bin\/zsh' -l/)
 assert.equal(macScript.includes('powershell'), false)
 
 const linux = buildLinuxTerminalLaunchCommands({
-    cwd: '/home/elson/my project',
+    cwd: '/home/dev/my project',
     initialCommand: 'bun test',
     shellPath: '/bin/bash'
 })
@@ -24,7 +24,7 @@ assert.deepEqual(linux.map((entry) => entry.executable), [
     'xterm'
 ])
 for (const candidate of linux) {
-    assert(candidate.args.some((argument) => argument.includes("cd -- '/home/elson/my project'")))
+    assert(candidate.args.some((argument) => argument.includes("cd -- '/home/dev/my project'")))
     assert(candidate.args.some((argument) => argument.includes('bun test')))
     assert(candidate.args.some((argument) => argument.includes("exec '/bin/bash' -l")))
 }

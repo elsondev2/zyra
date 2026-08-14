@@ -174,7 +174,7 @@ export function summarizePullRequestOutcome(input: {
     }
 
     if (input.draftSource === 'ai' && input.provider) {
-        return `Created pull request with ${input.provider === 'groq' ? 'Groq' : input.provider === 'gemini' ? 'Gemini' : 'Codex'} draft content.`
+        return `Created pull request with ${input.provider === 'groq' ? 'Groq' : input.provider === 'gemini' ? 'Gemini' : 'Zyra · ChatGPT'} draft content.`
     }
 
     if (input.draftSource === 'fallback') {

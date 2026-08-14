@@ -464,6 +464,7 @@ export interface DevScopeAssistantApi {
         conversationId?: string
         adapterSessionId?: string
         realtimeSessionId?: string
+        realtimeSessionGeneration?: number
         sdp: string
         realtimeVersion: string
     }>>

@@ -261,7 +261,7 @@ export async function generateCodexPullRequestDraft(
         const parsed = parseDraftResponse(result.text)
         return { success: true, ...parsed }
     } catch (err: any) {
-        log.error('[Codex] Failed to generate pull request draft:', err)
+        log.error('[ChatGPT] Failed to generate pull request draft:', err)
         return { success: false, error: err.message || 'Failed to generate pull request draft.' }
     }
 }

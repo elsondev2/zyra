@@ -349,14 +349,14 @@ export function CodexProviderModal({
             ? { label: 'Testing', tone: 'accent' as const }
             : status === 'error'
                 ? { label: 'Unavailable', tone: 'danger' as const }
-                : { label: 'Local CLI', tone: 'neutral' as const }
+                : { label: 'Pi OAuth', tone: 'neutral' as const }
 
     return (
         <ProviderModalShell
             open={open}
             provider="codex"
-            title="Configure Codex"
-            description="Choose commit and PR models."
+            title="Configure Zyra · ChatGPT"
+            description="Choose ChatGPT models for commit and PR text."
             tags={[
                 connectionTag,
                 { label: 'No API key', tone: 'neutral' }
@@ -382,7 +382,7 @@ export function CodexProviderModal({
                                 : 'bg-white/[0.05] hover:bg-white/[0.08]'
                         )}
                     >
-                        {status === 'testing' ? 'Testing...' : 'Test Codex'}
+                        {status === 'testing' ? 'Testing...' : 'Test ChatGPT'}
                     </button>
                     <button
                         type="button"
@@ -410,7 +410,7 @@ export function CodexProviderModal({
                             value: option.id,
                             label: option.label
                         }))}
-                        placeholder="Select a Codex model"
+                        placeholder="Select a ChatGPT model"
                     />
                 </div>
                 <div>
@@ -422,7 +422,7 @@ export function CodexProviderModal({
                             value: option.id,
                             label: option.label
                         }))}
-                        placeholder="Select a Codex model"
+                        placeholder="Select a ChatGPT model"
                     />
                 </div>
             </div>
@@ -431,7 +431,7 @@ export function CodexProviderModal({
             {status === 'success' ? (
                 <ProviderMessageRow
                     tone="success"
-                    text="Codex CLI responded."
+                    text="ChatGPT auth and models are available through Pi."
                 />
             ) : null}
             {status === 'error' ? <ProviderMessageRow tone="danger" text={error} /> : null}

@@ -48,9 +48,9 @@ export default function AISettings() {
 
     const providerStatus = (provider: CommitAIProvider) => {
         if (status[provider] === 'testing') return 'Testing…'
-        if (status[provider] === 'success') return 'Connection verified'
+        if (status[provider] === 'success') return provider === 'codex' ? 'Account verified through Pi' : 'Connection verified'
         if (status[provider] === 'error') return 'Unavailable'
-        if (provider === 'codex') return 'Uses the local Codex CLI'
+        if (provider === 'codex') return 'Uses your ChatGPT account through Pi'
         return (provider === 'groq' ? settings.groqApiKey : settings.geminiApiKey) ? 'API key saved locally' : 'No API key saved'
     }
 
@@ -68,7 +68,7 @@ export default function AISettings() {
                 <SettingsRow
                     title="Default Git AI provider"
                     description="Provider used for generated commit messages and pull-request drafts."
-                    control={<SettingsSelect value={settings.commitAIProvider} onChange={(event) => updateSettings({ commitAIProvider: event.target.value as CommitAIProvider })} aria-label="Default Git AI provider"><option value="groq">Groq</option><option value="gemini">Google Gemini</option><option value="codex">Codex CLI</option></SettingsSelect>}
+                    control={<SettingsSelect value={settings.commitAIProvider} onChange={(event) => updateSettings({ commitAIProvider: event.target.value as CommitAIProvider })} aria-label="Default Git AI provider"><option value="groq">Groq</option><option value="gemini">Google Gemini</option><option value="codex">Zyra · ChatGPT</option></SettingsSelect>}
                 />
             </SettingsSection>
 
@@ -94,9 +94,9 @@ export default function AISettings() {
                 />
             </SettingsSection>
 
-            <SettingsSection title="Codex CLI" headerAction={<SettingsButton variant="ghost" onClick={() => void testProvider('codex')} disabled={status.codex === 'testing'}>{status.codex === 'testing' ? <RefreshCw size={12} className="animate-spin" /> : null}Test connection</SettingsButton>}>
-                <SettingsRow title="Commit model" description="Codex model used for generated commit messages." status={providerStatus('codex')} statusTone={providerStatusTone('codex')} statusTitle={status.codex === 'error' ? errors.codex : undefined} control={<SettingsSelect value={settings.gitCommitCodexModel} onChange={(event) => updateSettings({ gitCommitCodexModel: event.target.value })} aria-label="Codex commit model"><option value="">Default model</option>{modelOptions.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}</SettingsSelect>} />
-                <SettingsRow title="Pull-request model" description="Codex model used for generated PR titles and bodies." control={<SettingsSelect value={settings.gitPullRequestCodexModel} onChange={(event) => updateSettings({ gitPullRequestCodexModel: event.target.value })} aria-label="Codex pull-request model"><option value="">Default model</option>{modelOptions.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}</SettingsSelect>} />
+            <SettingsSection title="Zyra · ChatGPT" headerAction={<SettingsButton variant="ghost" onClick={() => void testProvider('codex')} disabled={status.codex === 'testing'}>{status.codex === 'testing' ? <RefreshCw size={12} className="animate-spin" /> : null}Test connection</SettingsButton>}>
+                <SettingsRow title="Commit model" description="ChatGPT model used for generated commit messages." status={providerStatus('codex')} statusTone={providerStatusTone('codex')} statusTitle={status.codex === 'error' ? errors.codex : undefined} control={<SettingsSelect value={settings.gitCommitCodexModel} onChange={(event) => updateSettings({ gitCommitCodexModel: event.target.value })} aria-label="ChatGPT commit model"><option value="">Default model</option>{modelOptions.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}</SettingsSelect>} />
+                <SettingsRow title="Pull-request model" description="ChatGPT model used for generated PR titles and bodies." control={<SettingsSelect value={settings.gitPullRequestCodexModel} onChange={(event) => updateSettings({ gitPullRequestCodexModel: event.target.value })} aria-label="ChatGPT pull-request model"><option value="">Default model</option>{modelOptions.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}</SettingsSelect>} />
                 {codexModelsError ? <SettingsNotice tone="error">{codexModelsError}</SettingsNotice> : null}
             </SettingsSection>
 

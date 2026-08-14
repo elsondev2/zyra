@@ -3,31 +3,29 @@ import type {
     RealtimeProviderCapabilityReport
 } from '../../../shared/assistant/contracts'
 
-export interface CodexRealtimeCapabilityEvidence {
+export interface ChatGptRealtimeCapabilityEvidence {
     providerVersion: string
-    generatedSchemaVerified: boolean
+    directSignalingVerified: boolean
     transcriptIdentityBridge: boolean
+    ownerScopedClientCommands: boolean
 }
 
-export function createCodexRealtimeCapabilityReport(
-    evidence: CodexRealtimeCapabilityEvidence,
+/** Historical type alias retained for internal test/fixture compatibility. */
+export type CodexRealtimeCapabilityEvidence = ChatGptRealtimeCapabilityEvidence
+
+export function createChatGptRealtimeCapabilityReport(
+    evidence: ChatGptRealtimeCapabilityEvidence,
     observedAt: string
 ): RealtimeProviderCapabilityReport {
-    const schemaCapability = (method: string): ProviderCapability => evidence.generatedSchemaVerified
-        ? capability('supported', method, observedAt, ['generated_schema', 'adapter_assertion'])
-        : capability('unknown', method, null, [], ['The installed Codex schema has not been verified.'])
-    const documentedCapability = (method: string): ProviderCapability => evidence.generatedSchemaVerified
-        ? capability('supported', method, observedAt, ['public_docs', 'interoperability_test'])
-        : capability('unknown', method, null, [], ['The installed Codex realtime schema has not been verified.'])
-    const transcriptCapability: ProviderCapability = evidence.generatedSchemaVerified && evidence.transcriptIdentityBridge
-        ? capability('supported', 'WebRTC data-channel item identity + thread/realtime/transcript/*', observedAt, ['generated_schema', 'interoperability_test'])
-        : capability(
-            'unknown',
-            null,
-            null,
-            [],
-            ['Flat app-server transcript notifications do not carry item IDs; a verified WebRTC identity bridge is required.']
-        )
+    const direct = (method: string): ProviderCapability => evidence.directSignalingVerified
+        ? capability('supported', method, observedAt, ['public_docs', 'adapter_assertion'])
+        : capability('unknown', method, null, [], ['Direct ChatGPT realtime signaling has not been verified.'])
+    const ownerCommand = (method: string): ProviderCapability => evidence.ownerScopedClientCommands
+        ? capability('supported', method, observedAt, ['interoperability_test', 'adapter_assertion'])
+        : capability('unknown', method, null, [], ['The owner-scoped renderer command bridge has not been verified.'])
+    const transcriptCapability: ProviderCapability = evidence.transcriptIdentityBridge
+        ? capability('supported', 'Frameless WebRTC identity-bearing transcript events', observedAt, ['public_docs', 'interoperability_test'])
+        : capability('unknown', null, null, [], ['A verified WebRTC transcript identity bridge is required.'])
     const unsupported = (notes: string): ProviderCapability => capability(
         'unsupported', null, observedAt, ['adapter_assertion'], [notes]
     )
@@ -35,45 +33,49 @@ export function createCodexRealtimeCapabilityReport(
 
     return {
         schema_version: 2,
+        // Keep the persisted adapter identifier stable while replacing its runtime.
         adapter_id: 'codex_subscription_realtime_v3',
-        adapter_version: '1',
-        provider_version: evidence.providerVersion || 'unknown',
+        adapter_version: '2',
+        provider_version: evidence.providerVersion || 'chatgpt-realtime-v3',
         auth_mode: 'subscription_oauth',
         adapter_role: 'realtime_foreground',
         observed_at: observedAt,
         expires_at: new Date(Date.parse(observedAt) + 30 * 60 * 1000).toISOString(),
         experimental_adapter: true,
         notes: [
-            'Codex thread realtime is experimental and capability-gated.',
-            'Apps, plugins, and external MCP servers are disabled for the adapter-owned process.'
+            'Zyra signals ChatGPT Frameless Bidi WebRTC directly through Pi OAuth.',
+            'The owning renderer exclusively controls media and the oai-events data channel.'
         ],
         realtime: {
-            session: schemaCapability('thread/realtime/start:v3'),
-            transports: evidence.generatedSchemaVerified ? ['webrtc'] : [],
-            input_modalities: evidence.generatedSchemaVerified ? ['audio', 'text'] : [],
-            output_modalities: evidence.generatedSchemaVerified ? ['audio', 'text'] : [],
-            audio_input: schemaCapability('WebRTC input track'),
-            audio_output: schemaCapability('WebRTC output track'),
+            session: direct('POST /backend-api/codex/realtime/calls (Frameless Bidi v3)'),
+            transports: evidence.directSignalingVerified ? ['webrtc'] : [],
+            input_modalities: evidence.directSignalingVerified ? ['audio', 'text'] : [],
+            output_modalities: evidence.directSignalingVerified ? ['audio', 'text'] : [],
+            audio_input: direct('Browser-owned WebRTC input track'),
+            audio_output: direct('Browser-owned WebRTC output track'),
             transcript_events: transcriptCapability,
-            session_context_seed: schemaCapability('thread/realtime/start.initialItems'),
-            silent_context_append: documentedCapability('thread/realtime/appendText'),
-            explicit_speech: documentedCapability('thread/realtime/appendSpeech'),
-            direct_image_input: unsupported('The installed thread-realtime schema exposes no append-image method.'),
-            arbitrary_client_tools: unsupported('Codex thread realtime does not expose generic client function-tool registration.'),
-            sideband_control: schemaCapability('codex app-server stdio control plane'),
-            voice_list: unknown('Voice-list discovery is not yet included in the production capability probe.'),
-            interruption: schemaCapability('thread/realtime/stop + local playback interruption'),
-            response_cancel: unsupported('The adapter can stop local playback/session but has no proven response-only cancellation method.'),
-            usage_events: unknown('Realtime usage event mapping needs isolated compatibility evidence.'),
-            session_expiry_signal: unknown('No stable expiry notification has been proven for this Codex build.'),
+            session_context_seed: direct('Frameless session.initial_items'),
+            silent_context_append: ownerCommand('session.context.append channel=commentary'),
+            explicit_speech: ownerCommand('session.context.append channel=speakable + response.create'),
+            direct_image_input: unsupported('Typed Voice images are explicitly gated because utility text generation cannot truthfully inspect them.'),
+            arbitrary_client_tools: unsupported('The realtime foreground does not register arbitrary client tools.'),
+            sideband_control: ownerCommand('Owner-scoped oai-events client commands'),
+            voice_list: unknown('Voice-list discovery is not included in the direct signaling boundary.'),
+            interruption: ownerCommand('session.close + local WebRTC shutdown'),
+            response_cancel: unsupported('Zyra closes the local Voice session instead of issuing response-only cancellation.'),
+            usage_events: unknown('Realtime usage event mapping is not part of the canonical Voice contract.'),
+            session_expiry_signal: unknown('No stable Frameless session-expiry event is relied upon.'),
             max_session_seconds: null,
             known_limits: [
-                'V3 initialItems are role-bearing text only.',
-                'Canonical Voice image input routes through the private strong primary.'
+                'V3 initial_items are bounded role-bearing text only.',
+                'Typed Voice images are rejected instead of being presented as inspected.',
+                'Later context and speech commands are accepted only by the owning renderer and current session generation.'
             ]
         }
     }
 }
+
+export const createCodexRealtimeCapabilityReport = createChatGptRealtimeCapabilityReport
 
 function capability(
     support: ProviderCapability['support'],

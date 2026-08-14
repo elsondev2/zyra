@@ -27,7 +27,7 @@ export interface AssistantRuntimeBridge {
     hasSession(threadId: string): boolean
     generateText(
         prompt: string,
-        options: { cwd: string; model?: string; effort?: 'low' }
+        options: { cwd: string; model?: string; effort?: AssistantReasoningEffort; timeoutMs?: number }
     ): Promise<{ success: boolean; text?: string; model?: string; error?: string }>
     updateCanonicalChat(
         threadId: string,

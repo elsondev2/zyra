@@ -89,7 +89,7 @@ export default function LogsSettings() {
             <SettingsSection title="Diagnostics" headerAction={<div className="flex gap-1"><SettingsButton variant="ghost" onClick={() => void loadLogs()} disabled={loading}><RefreshCw size={12} className={loading ? 'animate-spin' : ''} />Refresh</SettingsButton><SettingsButton variant="ghost" onClick={() => void copyText('visible', visiblePayload)} disabled={filteredLogs.length === 0}>{copiedKey === 'visible' ? <Check size={12} /> : <Copy size={12} />}Copy visible</SettingsButton></div>}>
                 {error ? <SettingsNotice tone="error">{error}</SettingsNotice> : null}
                 <SettingsRow title="AI debug logs" description="Local provider requests and responses retained for Git AI troubleshooting." control={<span className="font-mono text-xs tabular-nums text-sparkle-text-secondary">{logs.length}</span>} />
-                <SettingsRow title="Provider filter" description="Limit the visible log records by provider." control={<SettingsSegmented value={filter} options={[{ value: 'all', label: 'All' }, { value: 'groq', label: 'Groq' }, { value: 'gemini', label: 'Gemini' }, { value: 'codex', label: 'Codex' }]} onChange={setFilter} label="AI log provider filter" />} />
+                <SettingsRow title="Provider filter" description="Limit the visible log records by provider." control={<SettingsSegmented value={filter} options={[{ value: 'all', label: 'All' }, { value: 'groq', label: 'Groq' }, { value: 'gemini', label: 'Gemini' }, { value: 'codex', label: 'ChatGPT' }]} onChange={setFilter} label="AI log provider filter" />} />
                 <SettingsRow title="Clear logs" description="Remove all local AI provider debug records." control={<SettingsButton variant="danger" onClick={() => void clearLogs()} disabled={clearing || logs.length === 0}><Trash2 size={12} />{clearing ? 'Clearing…' : 'Clear'}</SettingsButton>} />
             </SettingsSection>
 
@@ -100,7 +100,7 @@ export default function LogsSettings() {
                     return (
                         <SettingsRow
                             key={entry.id}
-                            title={`${entry.provider.toUpperCase()} · ${entry.action === 'testConnection' ? 'Connection test' : 'Commit message'}`}
+                            title={`${entry.provider === 'codex' ? 'ChatGPT' : entry.provider.toUpperCase()} · ${entry.action === 'testConnection' ? 'Connection test' : 'Commit message'}`}
                             description={entry.error || entry.finalMessage || entry.candidateMessage || entry.promptPreview || 'No summary available.'}
                             status={`${entry.status} · ${new Date(entry.timestamp).toLocaleString()}${entry.model ? ` · ${entry.model}` : ''}`}
                             statusTone={entry.status === 'success' ? 'ready' : 'danger'}

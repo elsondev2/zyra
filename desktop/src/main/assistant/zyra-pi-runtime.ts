@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events'
 import { existsSync } from 'node:fs'
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline'
 import { isAbsolute, join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import log from 'electron-log'
 import type {
     AssistantApprovalDecision,
@@ -1062,7 +1063,7 @@ export class ZyraPiRuntime extends EventEmitter {
 
     async generateText(
         prompt: string,
-        options: { cwd: string; model?: string; effort?: 'low' }
+        options: { cwd: string; model?: string; effort?: AssistantReasoningEffort; timeoutMs?: number }
     ): Promise<{ success: boolean; text?: string; model?: string; error?: string }> {
         const normalizedPrompt = String(prompt || '').trim()
         if (!normalizedPrompt) return { success: false, error: 'Prompt is required.' }
@@ -1073,23 +1074,61 @@ export class ZyraPiRuntime extends EventEmitter {
         }
 
         try {
+            const timeoutMs = Math.max(1_000, Math.min(120_000, Number(options.timeoutMs) || 60_000))
             const result = await this.getAgentServerConnection(resolveZyraRoot()).generateText({
                 prompt: normalizedPrompt,
                 cwd: options.cwd,
                 model: normalizeZyraModel(options.model),
-                thinking: options.effort || 'low'
-            })
+                thinking: options.effort || 'low',
+                timeoutMs
+            }, timeoutMs)
             const text = asString(result['text'])
-            if (!text) return { success: false, error: 'Zyra returned an empty title.' }
+            if (!text) return { success: false, error: 'Zyra returned an empty utility response.' }
             return {
                 success: true,
                 text,
                 model: asString(result['model']) || normalizeZyraModel(options.model)
             }
         } catch (error) {
-            const message = error instanceof Error ? error.message : 'Zyra title generation failed.'
-            log.warn('[ZyraPiRuntime] background text generation failed', message)
+            const message = error instanceof Error ? error.message : 'Zyra utility text generation failed.'
+            log.warn('[ZyraPiRuntime] utility text generation failed', message)
             return { success: false, error: message }
+        }
+    }
+
+    async testChatGptUtilityConnection(model?: string): Promise<{ success: boolean; model?: string; error?: string }> {
+        const availability = await this.checkAvailability()
+        if (!availability.available) return { success: false, error: availability.reason || 'Zyra Pi runtime is unavailable.' }
+
+        try {
+            const root = resolveZyraRoot()
+            const accountModuleUrl = pathToFileURL(join(root, 'src', 'chatgpt-account.mjs')).href
+            const accountModule = await import(/* @vite-ignore */ accountModuleUrl) as {
+                getChatGptAccountAuthStatus(): Promise<{ configured?: boolean }>
+            }
+            const authStatus = await accountModule.getChatGptAccountAuthStatus()
+            if (authStatus.configured !== true) {
+                return { success: false, error: 'Connect your ChatGPT account through Zyra before using this provider.' }
+            }
+
+            // This path reads Pi's authenticated model registry but deliberately
+            // skips live model pings, so Test connection does not spend quota.
+            const values = await this.getAgentServerConnection(root).listModels(false, true)
+            const models = values
+                .map(normalizeModelInfo)
+                .filter((entry): entry is AssistantModelInfo => Boolean(entry))
+                .filter((entry) => entry.id.startsWith('openai-codex/'))
+            const requestedModel = normalizeZyraModel(String(model || '').trim())
+            if (requestedModel && !models.some((entry) => entry.id === requestedModel)) {
+                return { success: false, error: `ChatGPT model ${requestedModel} is not available through Pi.` }
+            }
+            if (models.length === 0) return { success: false, error: 'Pi did not report any authenticated ChatGPT models.' }
+            return { success: true, model: requestedModel || models[0]?.id }
+        } catch (error) {
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : 'Could not verify ChatGPT through Pi.'
+            }
         }
     }
 

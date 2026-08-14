@@ -1,80 +1,90 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import readline, { type Interface as ReadlineInterface } from 'node:readline'
-import log from 'electron-log'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type {
+    AssistantRealtimeVoiceClientCommandEvent,
+    AssistantRealtimeVoiceClientMessage,
     AssistantRealtimeVoiceEvent,
-    AssistantSendRealtimeVoiceMessageInput,
     InstructorOutputModality,
     InstructorRealtimeVoice
 } from '../../shared/assistant/contracts'
+import { resolveZyraRoot } from '../zyra/zyra-root'
 import {
-    buildInstructorAppServerArgs,
-    buildInstructorRealtimeMessageTurnParams,
-    buildInstructorRealtimeStartParams,
-    buildInstructorThreadStartParams,
-    normalizeInstructorRealtimeMessage,
+    chunkFramelessContextText,
+    normalizeInstructorRealtimeVoice,
     normalizeInstructorVoiceInstructions,
-    normalizeWebRtcOfferSdp,
-    parseInstructorRealtimeNotification
+    normalizeWebRtcOfferSdp
 } from './codex-realtime-voice-contract'
 
-interface PendingRequest {
-    timer: NodeJS.Timeout
-    resolve: (value: unknown) => void
-    reject: (error: Error) => void
+type ChatGptRealtimeCallResult = {
+    sdp: string
+    callId: string
 }
 
-interface PendingSdp {
-    timer: NodeJS.Timeout
-    resolve: (sdp: string) => void
-    reject: (error: Error) => void
+type ChatGptRealtimeCallInput = {
+    sdp: string
+    instructions: string
+    voice: InstructorRealtimeVoice
+    initialItems?: Array<{ role: 'developer' | 'user' | 'assistant'; text: string }>
+    sessionId: string
+    threadId: string
+    signal?: AbortSignal
 }
 
-interface PendingStarted {
-    timer: NodeJS.Timeout
-    resolve: (value: { version: string; realtimeSessionId?: string }) => void
-    reject: (error: Error) => void
+type ChatGptRealtimeAccountModule = {
+    createChatGptRealtimeCall(input: ChatGptRealtimeCallInput): Promise<ChatGptRealtimeCallResult>
 }
 
-type JsonRecord = Record<string, unknown>
-
-function asRecord(value: unknown): JsonRecord | null {
-    return value && typeof value === 'object' ? value as JsonRecord : null
+type ChatGptRealtimeVoiceDependencies = {
+    createCall?: (input: ChatGptRealtimeCallInput) => Promise<ChatGptRealtimeCallResult>
 }
 
-function asString(value: unknown): string | null {
-    return typeof value === 'string' && value.trim() ? value : null
+type DirectRealtimeSession = {
+    adapterSessionId: string
+    conversationId: string | null
+    threadId: string
+    realtimeSessionId: string
+    realtimeSessionGeneration: number
+    closed: boolean
 }
 
-function stopChildProcess(child: ChildProcessWithoutNullStreams): void {
-    if (process.platform === 'win32' && child.pid) {
-        try {
-            spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
-                stdio: 'ignore',
-                windowsHide: true
+const MAX_CLIENT_COMMAND_MESSAGES = 32
+const MAX_SPEAKABLE_TEXT_CHARACTERS = 8_000
+
+let accountModulePromise: Promise<ChatGptRealtimeAccountModule> | null = null
+
+async function loadChatGptRealtimeAccountModule(): Promise<ChatGptRealtimeAccountModule> {
+    if (!accountModulePromise) {
+        const moduleUrl = pathToFileURL(join(resolveZyraRoot(), 'src', 'chatgpt-account.mjs')).href
+        accountModulePromise = (import(/* @vite-ignore */ moduleUrl) as Promise<ChatGptRealtimeAccountModule>)
+            .catch((error) => {
+                accountModulePromise = null
+                throw error
             })
-            return
-        } catch {
-            // Fall through to a direct process kill.
-        }
     }
-    child.kill()
+    return accountModulePromise
 }
 
-export class CodexRealtimeVoiceRuntime extends EventEmitter {
-    private readonly codexBinary = process.platform === 'win32' ? 'codex.cmd' : 'codex'
-    private child: ChildProcessWithoutNullStreams | null = null
-    private output: ReadlineInterface | null = null
-    private readonly pending = new Map<string, PendingRequest>()
-    private pendingSdp: PendingSdp | null = null
-    private pendingStarted: PendingStarted | null = null
-    private nextRequestId = 1
-    private threadId: string | null = null
-    private stopping = false
+async function createDirectChatGptCall(input: ChatGptRealtimeCallInput): Promise<ChatGptRealtimeCallResult> {
+    return (await loadChatGptRealtimeAccountModule()).createChatGptRealtimeCall(input)
+}
+
+/**
+ * Main-process ownership for direct ChatGPT WebRTC signaling. Media and the
+ * `oai-events` data channel remain exclusively in the owning renderer.
+ */
+export class ChatGptRealtimeVoiceRuntime extends EventEmitter {
+    private readonly createCall: (input: ChatGptRealtimeCallInput) => Promise<ChatGptRealtimeCallResult>
+    private activeSession: DirectRealtimeSession | null = null
+    private startAbortController: AbortController | null = null
     private lifecycleGeneration = 0
-    private terminalEventEmitted = false
-    private readonly composerTurnText = new Map<string, string>()
+    private nextCommandOrdinal = 0
+
+    constructor(dependencies: ChatGptRealtimeVoiceDependencies = {}) {
+        super()
+        this.createCall = dependencies.createCall || createDirectChatGptCall
+    }
 
     async start(input: {
         cwd: string
@@ -84,407 +94,241 @@ export class CodexRealtimeVoiceRuntime extends EventEmitter {
         outputModality?: InstructorOutputModality
         initialItems?: Array<{ role: 'developer' | 'user' | 'assistant'; text: string }>
         clientManagedHandoffs?: boolean
+        adapterSessionId?: string
+        conversationId?: string
+        realtimeSessionGeneration?: number
+        signal?: AbortSignal
     }): Promise<{
         threadId: string
         sdp: string
         realtimeVersion: string
-        realtimeSessionId?: string
+        realtimeSessionId: string
+        realtimeSessionGeneration: number
+        adapterSessionId: string
     }> {
         const generation = ++this.lifecycleGeneration
-        await this.stopCurrent()
-        this.assertCurrentGeneration(generation)
+        this.closeLocalSession(true)
+        const controller = new AbortController()
+        this.startAbortController = controller
+        const abortFromCaller = () => controller.abort(input.signal?.reason)
+        if (input.signal?.aborted) abortFromCaller()
+        else input.signal?.addEventListener('abort', abortFromCaller, { once: true })
 
         const instructions = normalizeInstructorVoiceInstructions(input.instructions)
         const offerSdp = normalizeWebRtcOfferSdp(input.sdp)
-        this.spawnServer(input.cwd)
-        this.emitVoiceEvent({ type: 'session.starting' })
+        const voice = normalizeInstructorRealtimeVoice(input.voice)
+        const adapterSessionId = normalizeRuntimeIdentifier(
+            input.adapterSessionId || `voice_lab_adapter_${randomUUID()}`,
+            'Voice adapter session'
+        )
+        const threadId = `zyra_realtime_thread_${randomUUID()}`
+        const requestSessionId = `zyra_realtime_session_${randomUUID()}`
+        const realtimeSessionGeneration = normalizeSessionGeneration(input.realtimeSessionGeneration)
+        this.emitVoiceEvent({ type: 'session.starting', threadId })
 
         try {
-            await this.sendRequest('initialize', {
-                clientInfo: {
-                    name: 'Zyra',
-                    title: 'Zyra Voice Lab',
-                    version: '0.1.0'
-                },
-                capabilities: {
-                    experimentalApi: true
-                }
-            }, 30_000)
-            this.assertCurrentGeneration(generation)
-            this.writeMessage({ method: 'initialized', params: {} })
-
-            const threadResponse = await this.sendRequest(
-                'thread/start',
-                buildInstructorThreadStartParams(input.cwd, instructions),
-                60_000
-            )
-            this.assertCurrentGeneration(generation)
-
-            const threadRecord = asRecord(asRecord(threadResponse)?.['thread'])
-            const threadId = asString(threadRecord?.['id']) || asString(asRecord(threadResponse)?.['threadId'])
-            if (!threadId) throw new Error('Codex did not return a realtime thread id.')
-            this.threadId = threadId
-
-            const startedPromise = this.waitForStarted(60_000)
-            const answerSdpPromise = this.waitForAnswerSdp(60_000)
-            const requestPromise = this.sendRequest(
-                'thread/realtime/start',
-                buildInstructorRealtimeStartParams(threadId, offerSdp, instructions, {
-                    voice: input.voice,
-                    outputModality: input.outputModality,
-                    initialItems: input.initialItems,
-                    clientManagedHandoffs: input.clientManagedHandoffs
-                }),
-                45_000
-            )
-            const [, started, answerSdp] = await Promise.all([
-                requestPromise,
-                startedPromise,
-                answerSdpPromise
-            ])
-            this.assertCurrentGeneration(generation)
-
-            if (started.version !== 'v3') {
-                throw new Error(`Codex negotiated unsupported realtime version ${started.version || 'unknown'}.`)
+            const result = await this.createCall({
+                sdp: offerSdp,
+                instructions,
+                voice,
+                initialItems: input.initialItems,
+                sessionId: requestSessionId,
+                threadId,
+                signal: controller.signal
+            })
+            if (generation !== this.lifecycleGeneration || controller.signal.aborted) {
+                throw new Error('ChatGPT Voice startup was superseded.')
             }
-
-            log.info('[InstructorVoice] Codex realtime v3 signaling ready', { threadId })
+            const realtimeSessionId = normalizeRuntimeIdentifier(result.callId, 'ChatGPT Voice call')
+            const session: DirectRealtimeSession = {
+                adapterSessionId,
+                conversationId: normalizeOptionalRuntimeIdentifier(input.conversationId),
+                threadId,
+                realtimeSessionId,
+                realtimeSessionGeneration,
+                closed: false
+            }
+            this.activeSession = session
+            this.emitVoiceEvent({
+                type: 'session.started',
+                threadId,
+                realtimeSessionId,
+                realtimeVersion: 'v3'
+            })
             return {
                 threadId,
-                sdp: answerSdp,
-                realtimeVersion: started.version,
-                realtimeSessionId: started.realtimeSessionId
+                sdp: result.sdp,
+                realtimeVersion: 'v3',
+                realtimeSessionId,
+                realtimeSessionGeneration,
+                adapterSessionId
             }
         } catch (error) {
-            if (generation === this.lifecycleGeneration) {
-                const message = error instanceof Error ? error.message : 'Codex realtime voice failed to start.'
-                if (!this.terminalEventEmitted) {
-                    this.emitVoiceEvent({ type: 'session.error', threadId: this.threadId || undefined, message })
-                }
-                await this.stopCurrent()
+            if (generation === this.lifecycleGeneration && !controller.signal.aborted) {
+                this.emitVoiceEvent({
+                    type: 'session.error',
+                    threadId,
+                    message: error instanceof Error ? error.message : 'ChatGPT Voice signaling failed.'
+                })
             }
             throw error
+        } finally {
+            input.signal?.removeEventListener('abort', abortFromCaller)
+            if (this.startAbortController === controller) this.startAbortController = null
         }
-    }
-
-    async sendMessage(input: AssistantSendRealtimeVoiceMessageInput): Promise<{ mode: 'text-turn' | 'vision-turn' }> {
-        const child = this.child
-        const threadId = this.threadId
-        if (!child?.stdin.writable || !threadId || this.stopping) {
-            throw new Error('Start the voice session before sending a message.')
-        }
-
-        const message = normalizeInstructorRealtimeMessage(input)
-        const response = await this.sendRequest(
-            'turn/start',
-            buildInstructorRealtimeMessageTurnParams(threadId, message),
-            30_000
-        )
-        const turnId = asString(asRecord(asRecord(response)?.['turn'])?.['id'])
-        if (!turnId) throw new Error('Codex did not return a typed voice turn id.')
-        this.composerTurnText.set(turnId, '')
-        return { mode: message.images.length > 0 ? 'vision-turn' : 'text-turn' }
     }
 
     async appendContext(items: Array<{ role: 'developer' | 'user' | 'assistant'; text: string }>): Promise<void> {
-        const threadId = this.requireActiveThread()
-        for (const item of items) {
-            await this.sendRequest('thread/realtime/appendText', {
-                threadId,
-                role: item.role,
-                text: item.text
-            }, 15_000)
-        }
+        const session = this.requireActiveSession()
+        const messages = items.flatMap((item) => chunkFramelessContextText(String(item.text || '').trim()).map((text): AssistantRealtimeVoiceClientMessage => ({
+            type: 'session.context.append' as const,
+            channel: 'commentary' as const,
+            content: [{ type: 'input_text' as const, text }]
+        })))
+        this.emitClientMessages(session, messages)
     }
 
     async requestSpeech(text: string): Promise<void> {
-        const threadId = this.requireActiveThread()
+        const session = this.requireActiveSession()
         const normalized = String(text || '').trim()
         if (!normalized) throw new Error('Speech text is required.')
-        await this.sendRequest('thread/realtime/appendSpeech', { threadId, text: normalized }, 15_000)
+        if (normalized.length > MAX_SPEAKABLE_TEXT_CHARACTERS) {
+            throw new Error(`Voice narration must be ${MAX_SPEAKABLE_TEXT_CHARACTERS.toLocaleString()} characters or fewer.`)
+        }
+        const messages: AssistantRealtimeVoiceClientMessage[] = chunkFramelessContextText(normalized).map((chunk) => ({
+            type: 'session.context.append',
+            channel: 'speakable',
+            content: [{ type: 'input_text', text: chunk }]
+        }))
+        messages.push({ type: 'response.create' })
+        this.emitClientMessages(session, messages)
+    }
+
+    presentComposerResponse(input: { turnId: string; text?: string; error?: string }): void {
+        const session = this.requireActiveSession()
+        const turnId = normalizeRuntimeIdentifier(input.turnId, 'typed Voice turn')
+        const text = String(input.text || '').trim()
+        const error = String(input.error || '').trim()
+        if (!text && !error) throw new Error('Typed Voice response text is required.')
+        this.emitVoiceEvent({
+            type: 'composer.response.done',
+            threadId: session.threadId,
+            turnId,
+            text,
+            ...(error ? { error } : {})
+        })
     }
 
     async stop(): Promise<void> {
         this.lifecycleGeneration += 1
-        await this.stopCurrent()
+        this.closeLocalSession(true)
+    }
+
+    currentSessionIdentity(): {
+        adapterSessionId: string
+        threadId: string
+        realtimeSessionId: string
+        realtimeSessionGeneration: number
+    } | null {
+        const session = this.activeSession
+        return session && !session.closed ? {
+            adapterSessionId: session.adapterSessionId,
+            threadId: session.threadId,
+            realtimeSessionId: session.realtimeSessionId,
+            realtimeSessionGeneration: session.realtimeSessionGeneration
+        } : null
+    }
+
+    isCurrentClientCommand(event: AssistantRealtimeVoiceClientCommandEvent): boolean {
+        const session = this.activeSession
+        return Boolean(session
+            && !session.closed
+            && event.adapterSessionId === session.adapterSessionId
+            && event.threadId === session.threadId
+            && event.realtimeSessionId === session.realtimeSessionId
+            && event.realtimeSessionGeneration === session.realtimeSessionGeneration)
     }
 
     dispose(): void {
         this.lifecycleGeneration += 1
-        if (!this.child) return
-        this.stopping = true
-        this.disposeProcess(new Error('Codex realtime voice disposed.'))
-        this.stopping = false
+        this.closeLocalSession(false)
+        this.removeAllListeners()
     }
 
-    private async stopCurrent(): Promise<void> {
-        const child = this.child
-        const threadId = this.threadId
-        if (!child) return
+    private requireActiveSession(): DirectRealtimeSession {
+        const session = this.activeSession
+        if (!session || session.closed) throw new Error('Start ChatGPT Voice before sending to the realtime session.')
+        return session
+    }
 
-        this.stopping = true
-        try {
-            if (threadId && child.stdin.writable) {
-                await this.sendRequest('thread/realtime/stop', { threadId }, 5_000).catch(() => undefined)
+    private emitClientMessages(session: DirectRealtimeSession, messages: AssistantRealtimeVoiceClientMessage[]): void {
+        if (this.activeSession !== session || session.closed || messages.length === 0) return
+        for (let offset = 0; offset < messages.length; offset += MAX_CLIENT_COMMAND_MESSAGES) {
+            const command: AssistantRealtimeVoiceClientCommandEvent = {
+                type: 'client.command',
+                commandId: `voice_command_${++this.nextCommandOrdinal}_${randomUUID()}`,
+                adapterSessionId: session.adapterSessionId,
+                threadId: session.threadId,
+                realtimeSessionId: session.realtimeSessionId,
+                realtimeSessionGeneration: session.realtimeSessionGeneration,
+                messages: messages.slice(offset, offset + MAX_CLIENT_COMMAND_MESSAGES)
             }
-            if (this.child === child) {
-                this.disposeProcess(new Error('Codex realtime voice stopped.'))
-            }
-        } finally {
-            this.stopping = false
+            this.emitVoiceEvent(command)
         }
     }
 
-    private assertCurrentGeneration(generation: number): void {
-        if (generation !== this.lifecycleGeneration) {
-            throw new Error('Codex realtime voice start was superseded.')
-        }
-    }
-
-    private spawnServer(cwd: string): void {
-        const child = spawn(this.codexBinary, buildInstructorAppServerArgs(), {
-            cwd,
-            shell: process.platform === 'win32',
-            windowsHide: true,
-            stdio: ['pipe', 'pipe', 'pipe']
-        }) as ChildProcessWithoutNullStreams
-        const output = readline.createInterface({ input: child.stdout })
-
-        this.child = child
-        this.output = output
-        this.threadId = null
-        this.nextRequestId = 1
-        this.stopping = false
-        this.terminalEventEmitted = false
-        this.composerTurnText.clear()
-
-        output.on('line', (line) => this.handleLine(line))
-        child.stderr.on('data', (chunk) => {
-            const message = String(chunk || '').trim()
-            if (message) log.debug('[InstructorVoice] codex app-server stderr', message)
-        })
-        child.on('error', (error) => {
-            if (this.stopping || this.child !== child) return
-            this.terminalEventEmitted = true
-            this.emitVoiceEvent({ type: 'session.error', threadId: this.threadId || undefined, message: error.message })
-            this.disposeProcess(error)
-        })
-        child.on('exit', (code, signal) => {
-            if (this.child !== child) return
-            const expected = this.stopping
-            const threadId = this.threadId || undefined
-            const message = `Codex realtime process exited (code=${code ?? 'null'}, signal=${signal ?? 'null'}).`
-            this.disposeProcess(new Error(message), false)
-            if (!expected) {
-                this.terminalEventEmitted = true
-                this.emitVoiceEvent({ type: 'session.closed', threadId, reason: message })
-            }
-        })
-    }
-
-    private handleLine(line: string): void {
-        let message: JsonRecord
-        try {
-            message = JSON.parse(line) as JsonRecord
-        } catch {
-            log.debug('[InstructorVoice] ignored malformed app-server output')
+    private closeLocalSession(notifyRenderer: boolean): void {
+        this.startAbortController?.abort()
+        this.startAbortController = null
+        const session = this.activeSession
+        if (!session || session.closed) {
+            this.activeSession = null
             return
         }
+        if (notifyRenderer) this.emitClientMessagesForClosedSession(session)
+        session.closed = true
+        this.activeSession = null
+    }
 
-        const method = asString(message['method'])
-        const id = message['id']
-        if (id !== undefined && !method) {
-            const pending = this.pending.get(String(id))
-            if (!pending) return
-            clearTimeout(pending.timer)
-            this.pending.delete(String(id))
-            const error = asRecord(message['error'])
-            const errorMessage = asString(error?.['message'])
-            if (errorMessage) pending.reject(new Error(errorMessage))
-            else pending.resolve(message['result'])
-            return
+    private emitClientMessagesForClosedSession(session: DirectRealtimeSession): void {
+        const command: AssistantRealtimeVoiceClientCommandEvent = {
+            type: 'client.command',
+            commandId: `voice_command_${++this.nextCommandOrdinal}_${randomUUID()}`,
+            adapterSessionId: session.adapterSessionId,
+            threadId: session.threadId,
+            realtimeSessionId: session.realtimeSessionId,
+            realtimeSessionGeneration: session.realtimeSessionGeneration,
+            messages: [{ type: 'session.close' }]
         }
-
-        if (!method) return
-        const payload = asRecord(message['params']) || {}
-        const notificationThreadId = asString(payload['threadId'])
-        if (
-            method.startsWith('thread/realtime/')
-            && this.threadId
-            && notificationThreadId
-            && notificationThreadId !== this.threadId
-        ) {
-            return
-        }
-
-        if (method === 'thread/realtime/sdp') {
-            const sdp = asString(payload['sdp'])
-            if (sdp && this.pendingSdp) {
-                const pendingSdp = this.pendingSdp
-                this.pendingSdp = null
-                clearTimeout(pendingSdp.timer)
-                pendingSdp.resolve(sdp)
-            }
-            return
-        }
-
-        this.handleComposerTurnNotification(method, payload)
-
-        const event = parseInstructorRealtimeNotification(method, payload)
-        if (event) {
-            if (event.type === 'session.started' && this.pendingStarted) {
-                const pendingStarted = this.pendingStarted
-                this.pendingStarted = null
-                clearTimeout(pendingStarted.timer)
-                pendingStarted.resolve({
-                    version: event.realtimeVersion || '',
-                    realtimeSessionId: event.realtimeSessionId
-                })
-            }
-
-            this.emitVoiceEvent(event)
-
-            if (event.type === 'session.error' || event.type === 'session.closed') {
-                const terminalError = new Error(
-                    event.type === 'session.error'
-                        ? event.message
-                        : event.reason || 'Codex realtime voice closed.'
-                )
-                this.terminalEventEmitted = true
-                this.rejectPendingStarted(terminalError)
-                this.rejectPendingSdp(terminalError)
-                if (!this.stopping) this.disposeProcess(terminalError)
-            }
-        }
-
-        if (id !== undefined && this.child) {
-            this.writeMessage({
-                id,
-                error: {
-                    code: -32601,
-                    message: `Unsupported instructor voice request: ${method}`
-                }
-            })
-        }
-    }
-
-    private handleComposerTurnNotification(method: string, payload: JsonRecord): void {
-        if (method === 'item/agentMessage/delta') {
-            const turnId = asString(payload['turnId'])
-            const delta = typeof payload['delta'] === 'string' ? payload['delta'] as string : ''
-            if (!turnId || !delta || !this.composerTurnText.has(turnId)) return
-            const text = `${this.composerTurnText.get(turnId) || ''}${delta}`
-            this.composerTurnText.set(turnId, text)
-            this.emitVoiceEvent({
-                type: 'composer.response.delta',
-                threadId: this.threadId || undefined,
-                turnId,
-                delta
-            })
-            return
-        }
-
-        if (method !== 'turn/completed') return
-        const turn = asRecord(payload['turn'])
-        const turnId = asString(turn?.['id'])
-        if (!turnId || !this.composerTurnText.has(turnId)) return
-        const text = this.composerTurnText.get(turnId) || ''
-        this.composerTurnText.delete(turnId)
-        const status = asString(turn?.['status']) || ''
-        const error = asString(asRecord(turn?.['error'])?.['message'])
-        this.emitVoiceEvent({
-            type: 'composer.response.done',
-            threadId: this.threadId || undefined,
-            turnId,
-            text,
-            error: error || (status === 'failed' ? 'The typed voice turn failed.' : undefined)
-        })
-    }
-
-    private requireActiveThread(): string {
-        if (!this.child?.stdin.writable || !this.threadId || this.stopping) {
-            throw new Error('Start the realtime voice session first.')
-        }
-        return this.threadId
-    }
-
-    private sendRequest(method: string, params: JsonRecord, timeoutMs: number): Promise<unknown> {
-        const id = this.nextRequestId++
-        return new Promise((resolve, reject) => {
-            const timer = setTimeout(() => {
-                this.pending.delete(String(id))
-                reject(new Error(`Timed out waiting for ${method}.`))
-            }, timeoutMs)
-            this.pending.set(String(id), { timer, resolve, reject })
-            try {
-                this.writeMessage({ id, method, params })
-            } catch (error) {
-                clearTimeout(timer)
-                this.pending.delete(String(id))
-                reject(error instanceof Error ? error : new Error(`Failed to send ${method}.`))
-            }
-        })
-    }
-
-    private waitForStarted(timeoutMs: number): Promise<{ version: string; realtimeSessionId?: string }> {
-        this.rejectPendingStarted(new Error('A newer realtime request replaced this one.'))
-        return new Promise((resolve, reject) => {
-            const timer = setTimeout(() => {
-                if (this.pendingStarted?.timer === timer) this.pendingStarted = null
-                reject(new Error('Timed out waiting for Codex realtime startup.'))
-            }, timeoutMs)
-            this.pendingStarted = { timer, resolve, reject }
-        })
-    }
-
-    private waitForAnswerSdp(timeoutMs: number): Promise<string> {
-        this.rejectPendingSdp(new Error('A newer realtime request replaced this one.'))
-        return new Promise((resolve, reject) => {
-            const timer = setTimeout(() => {
-                if (this.pendingSdp?.timer === timer) this.pendingSdp = null
-                reject(new Error('Timed out waiting for the Codex WebRTC answer.'))
-            }, timeoutMs)
-            this.pendingSdp = { timer, resolve, reject }
-        })
-    }
-
-    private rejectPendingStarted(error: Error): void {
-        if (!this.pendingStarted) return
-        clearTimeout(this.pendingStarted.timer)
-        this.pendingStarted.reject(error)
-        this.pendingStarted = null
-    }
-
-    private rejectPendingSdp(error: Error): void {
-        if (!this.pendingSdp) return
-        clearTimeout(this.pendingSdp.timer)
-        this.pendingSdp.reject(error)
-        this.pendingSdp = null
-    }
-
-    private writeMessage(message: JsonRecord): void {
-        if (!this.child?.stdin.writable) throw new Error('Codex realtime process is unavailable.')
-        this.child.stdin.write(`${JSON.stringify(message)}\n`)
-    }
-
-    private disposeProcess(error: Error, terminate = true): void {
-        const child = this.child
-        this.child = null
-        this.threadId = null
-        this.rejectPendingStarted(error)
-        this.rejectPendingSdp(error)
-        for (const pending of this.pending.values()) {
-            clearTimeout(pending.timer)
-            pending.reject(error)
-        }
-        this.pending.clear()
-        this.composerTurnText.clear()
-        this.output?.close()
-        this.output = null
-        if (terminate && child && !child.killed) stopChildProcess(child)
+        this.emitVoiceEvent(command)
     }
 
     private emitVoiceEvent(event: AssistantRealtimeVoiceEvent): void {
         this.emit('event', event)
     }
+}
+
+// Persisted/internal callers may still use the historical class name. Active
+// Desktop wiring imports ChatGptRealtimeVoiceRuntime.
+export { ChatGptRealtimeVoiceRuntime as CodexRealtimeVoiceRuntime }
+
+function normalizeRuntimeIdentifier(value: unknown, label: string): string {
+    const normalized = String(value || '').trim()
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,511}$/.test(normalized)) {
+        throw new Error(`${label} identity is invalid.`)
+    }
+    return normalized
+}
+
+function normalizeOptionalRuntimeIdentifier(value: unknown): string | null {
+    const normalized = String(value || '').trim()
+    return normalized ? normalizeRuntimeIdentifier(normalized, 'Voice conversation') : null
+}
+
+function normalizeSessionGeneration(value: unknown): number {
+    if (value === undefined) return 1
+    if (!Number.isSafeInteger(value) || (value as number) < 1) {
+        throw new Error('Voice session generation is invalid.')
+    }
+    return value as number
 }

@@ -55,8 +55,8 @@ function classifyAssistantRecoveryText(value: string): AssistantRecoveryClassifi
     if (/502 bad gateway|unexpected status 502/i.test(normalized)) {
         return {
             key: 'upstream-502',
-            title: 'Codex upstream unavailable',
-            brief: '502 Bad Gateway from Codex backend.',
+            title: 'ChatGPT upstream unavailable',
+            brief: '502 Bad Gateway from the ChatGPT backend.',
             recoverable: true
         }
     }
@@ -64,8 +64,8 @@ function classifyAssistantRecoveryText(value: string): AssistantRecoveryClassifi
     if (/503 service unavailable|unexpected status 503/i.test(normalized)) {
         return {
             key: 'upstream-503',
-            title: 'Codex upstream unavailable',
-            brief: '503 Service Unavailable from Codex backend.',
+            title: 'ChatGPT upstream unavailable',
+            brief: '503 Service Unavailable from the ChatGPT backend.',
             recoverable: true
         }
     }
@@ -73,8 +73,8 @@ function classifyAssistantRecoveryText(value: string): AssistantRecoveryClassifi
     if (/504 gateway timeout|unexpected status 504/i.test(normalized)) {
         return {
             key: 'upstream-504',
-            title: 'Codex upstream unavailable',
-            brief: '504 Gateway Timeout from Codex backend.',
+            title: 'ChatGPT upstream unavailable',
+            brief: '504 Gateway Timeout from the ChatGPT backend.',
             recoverable: true
         }
     }
@@ -82,13 +82,13 @@ function classifyAssistantRecoveryText(value: string): AssistantRecoveryClassifi
     if (/error running remote compact task|chatgpt\.com\/backend-api\/codex|cloudflare/i.test(normalized)) {
         return {
             key: 'upstream-transient',
-            title: 'Codex upstream unavailable',
-            brief: 'Codex backend returned an upstream failure.',
+            title: 'ChatGPT upstream unavailable',
+            brief: 'The ChatGPT backend returned an upstream failure.',
             recoverable: true
         }
     }
 
-    if (isAssistantTransportFailure(normalized) || /timed out waiting for|session stopped before request completed|cannot write to codex app-server stdin|codex app-server exited|pipe is being closed/i.test(normalized)) {
+    if (isAssistantTransportFailure(normalized) || /timed out waiting for|session stopped before request completed|cannot write to .* stdin|pipe is being closed/i.test(normalized)) {
         return {
             key: 'connection-lost',
             title: 'Connection lost',
@@ -97,10 +97,10 @@ function classifyAssistantRecoveryText(value: string): AssistantRecoveryClassifi
         }
     }
 
-    if (/codex cli is unavailable|failed to load assistant/i.test(normalized)) {
+    if (/assistant runtime is unavailable|failed to load assistant/i.test(normalized)) {
         return {
-            key: 'codex-unavailable',
-            title: 'Codex unavailable',
+            key: 'chatgpt-unavailable',
+            title: 'ChatGPT unavailable',
             brief: summarizeAssistantErrorText(normalized),
             recoverable: false
         }

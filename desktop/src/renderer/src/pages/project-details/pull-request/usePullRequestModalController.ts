@@ -235,7 +235,7 @@ export function usePullRequestModalController(props: PullRequestModalProps) {
             const statusText = result.status === 'opened_existing'
                 ? `Opened existing PR${prNumberLabel}.`
                 : result.draftSource === 'ai' && result.provider
-                    ? `Created PR${prNumberLabel} with ${result.provider === 'groq' ? 'Groq' : result.provider === 'gemini' ? 'Gemini' : 'Codex'} draft content.`
+                    ? `Created PR${prNumberLabel} with ${result.provider === 'groq' ? 'Groq' : result.provider === 'gemini' ? 'Gemini' : 'Zyra · ChatGPT'} draft content.`
                     : result.draftSource === 'fallback'
                         ? `Created PR${prNumberLabel} with the built-in draft template.`
                         : `Created PR${prNumberLabel}.`

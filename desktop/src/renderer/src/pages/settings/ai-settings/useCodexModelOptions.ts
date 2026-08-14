@@ -12,7 +12,7 @@ export function useCodexModelOptions(effectiveCodexModels: string[]) {
             try {
                 const result = await window.devscope.assistant.listModels(false)
                 if (!result.success) {
-                    throw new Error(result.error || 'Failed to load Codex models.')
+                    throw new Error(result.error || 'Failed to load ChatGPT models.')
                 }
                 if (cancelled) return
                 setCodexModelOptions(Array.isArray(result.models) ? result.models : [])
@@ -20,7 +20,7 @@ export function useCodexModelOptions(effectiveCodexModels: string[]) {
             } catch (error) {
                 if (!cancelled) {
                     setCodexModelOptions([])
-                    setCodexModelsError(error instanceof Error ? error.message : 'Failed to load Codex models.')
+                    setCodexModelsError(error instanceof Error ? error.message : 'Failed to load ChatGPT models.')
                 }
             }
         }
@@ -45,9 +45,9 @@ export function useCodexModelOptions(effectiveCodexModels: string[]) {
             }
         }
         if (options.length === 0) {
-            options.push({ id: '', label: 'Default Codex model' })
+            options.push({ id: '', label: 'Default ChatGPT model' })
         } else if (!options.some((option) => option.id === '')) {
-            options.unshift({ id: '', label: 'Default Codex model' })
+            options.unshift({ id: '', label: 'Default ChatGPT model' })
         }
         return options
     }, [codexModelOptions, effectiveCodexModels])

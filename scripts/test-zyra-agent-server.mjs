@@ -24,6 +24,9 @@ class FakeWorker extends EventEmitter {
     this.requests.push({ type, payload });
     if (type === "connect") return Promise.resolve({ threadId: "chat:test", providerThreadId: sessionPath, events: [] });
     if (type === "prompt") return new Promise((resolve) => { this.activePrompt = resolve; });
+    if (type === "generate_text") {
+      return Promise.resolve({ success: true, text: "Utility text result", model: payload.model || "openai-codex/test" });
+    }
     if (type === "abort") return Promise.resolve({ aborted: true });
     if (type === "canonical_message.append") {
       const receipt = {
@@ -356,6 +359,28 @@ try {
   workers[0].emit("control", { type: "control.request", requestId: "control:1", operation: { action: "observe" } });
   await waitUntil(() => workers[0].controlResponses.length === 2);
   assert.deepEqual(workers[0].controlResponses[1].result, { accepted: true });
+
+  const utilityText = await reconnect.request("runtime.generateText", {
+    prompt: "Generate bounded Git text.",
+    model: "openai-codex/test",
+    timeoutMs: 12_000,
+    noSession: true
+  });
+  assert.deepEqual(utilityText, {
+    success: true,
+    text: "Utility text result",
+    model: "openai-codex/test"
+  }, "utility text generation must cross the agent-server worker without creating a canonical chat");
+  assert.equal(workers.length, 2, "utility generation must use an isolated no-session worker");
+  assert.deepEqual(workers[1].requests.at(-1), {
+    type: "generate_text",
+    payload: {
+      prompt: "Generate bounded Git text.",
+      model: "openai-codex/test",
+      timeoutMs: 12_000,
+      noSession: true
+    }
+  });
 
   await reconnect.detach("chat:test");
   reconnect.close();

@@ -205,10 +205,14 @@ export class ZyraAgentServer extends EventEmitter {
   async handleRequest(client, method, params) {
     if (method === "server.status") return this.state();
     if (method === "runtime.models") {
-      return this.getUtilityWorker().request("warmup", { forceRefresh: params.forceRefresh === true }, { timeoutMs: 60_000 });
+      return this.getUtilityWorker().request("warmup", {
+        forceRefresh: params.forceRefresh === true,
+        skipAvailability: params.skipAvailability === true,
+      }, { timeoutMs: 60_000 });
     }
     if (method === "runtime.generateText") {
-      return this.getUtilityWorker().request("generate_text", params);
+      const timeoutMs = Math.max(1_000, Math.min(120_000, Number(params.timeoutMs) || 60_000));
+      return this.getUtilityWorker().request("generate_text", params, { timeoutMs });
     }
     if (method === "catalog.registerProject") {
       return { project: this.catalog.registerProject(params.project) };

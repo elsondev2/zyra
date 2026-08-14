@@ -51,6 +51,28 @@ function appendTranscriptDelta(currentValue: string, deltaValue: string): string
     return `${current}${delta}`
 }
 
+function removeMatchingComposerResponse(
+    entries: InstructorTranscriptEntry[],
+    role: string,
+    text: string,
+    providerItemId: string
+): InstructorTranscriptEntry[] {
+    if (role !== 'assistant' || !text) return entries
+    const normalized = text.replace(/\s+/gu, ' ').trim()
+    let index = -1
+    for (let entryIndex = entries.length - 1; entryIndex >= 0; entryIndex -= 1) {
+        const entry = entries[entryIndex]
+        if (entry.id !== providerItemId
+            && entry.id.startsWith('composer-response-')
+            && entry.final
+            && entry.text.replace(/\s+/gu, ' ').trim() === normalized) {
+            index = entryIndex
+            break
+        }
+    }
+    return index < 0 ? entries : entries.filter((_, entryIndex) => entryIndex !== index)
+}
+
 function updateEntry(
     entries: InstructorTranscriptEntry[],
     id: string,
@@ -64,7 +86,7 @@ function updateEntry(
 }
 
 /**
- * Applies the identity-bearing transcript events emitted on Codex realtime v3's
+ * Applies the identity-bearing transcript events emitted on ChatGPT realtime v3's
  * WebRTC data channel. Turn IDs are the source of truth, so replaying a turn
  * updates its existing bubble while an intentional repeat receives a new ID.
  */
@@ -109,16 +131,17 @@ export function applyRealtimeTranscriptEvent(
         const turn = readRealtimeTurn(payload?.turn)
         if (!turn) return entries
         const text = turn.transcript.trim()
-        const existing = entries.find((entry) => entry.id === turn.id)
+        const deduplicatedEntries = removeMatchingComposerResponse(entries, turn.role, text, turn.id)
+        const existing = deduplicatedEntries.find((entry) => entry.id === turn.id)
         if (existing) {
-            return updateEntry(entries, turn.id, (entry) => ({
+            return updateEntry(deduplicatedEntries, turn.id, (entry) => ({
                 ...entry,
                 role: turn.role,
                 text: text || entry.text,
                 final: true
             }))
         }
-        return [...entries, {
+        return [...deduplicatedEntries, {
             id: turn.id,
             role: turn.role,
             text,
@@ -136,11 +159,19 @@ export function applyRealtimeTranscriptEvent(
         return [...entries, { id: itemId, role: explicitRole, text: '', final: false }]
     }
     if (!itemId) return entries
-    const role = explicitRole === 'user' || type?.includes('input_audio_transcription')
+    const role = explicitRole === 'user'
+        || type?.includes('input_transcript')
+        || type?.includes('input_audio_transcription')
         ? 'user'
         : 'assistant'
-    const delta = typeof payload?.delta === 'string' ? payload.delta : ''
-    if (type?.endsWith('.transcript.delta')
+    const delta = typeof payload?.delta === 'string'
+        ? payload.delta
+        : typeof item?.text === 'string'
+            ? item.text
+            : ''
+    if (type === 'input_transcript.added'
+        || type === 'output_transcript.added'
+        || type?.endsWith('.transcript.delta')
         || type?.endsWith('.audio_transcript.delta')
         || type?.endsWith('.input_audio_transcription.delta')) {
         if (!delta) return entries
@@ -156,9 +187,10 @@ export function applyRealtimeTranscriptEvent(
         || type?.endsWith('.audio_transcript.done')
         || type?.endsWith('.input_audio_transcription.completed')) {
         const text = String(payload?.transcript ?? payload?.text ?? '').trim()
-        const existing = entries.find((entry) => entry.id === itemId)
-        if (!existing) return text ? [...entries, { id: itemId, role, text, final: true }] : entries
-        return updateEntry(entries, itemId, (entry) => ({
+        const deduplicatedEntries = removeMatchingComposerResponse(entries, role, text, itemId)
+        const existing = deduplicatedEntries.find((entry) => entry.id === itemId)
+        if (!existing) return text ? [...deduplicatedEntries, { id: itemId, role, text, final: true }] : deduplicatedEntries
+        return updateEntry(deduplicatedEntries, itemId, (entry) => ({
             ...entry,
             role,
             text: text || entry.text,

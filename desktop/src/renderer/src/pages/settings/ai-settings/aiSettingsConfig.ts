@@ -6,7 +6,7 @@ export type ModelOption = { id: string; label: string; description?: string }
 export const PROVIDER_MODELS: Record<CommitAIProvider, string> = {
     groq: 'llama-3.1-8b-instant',
     gemini: 'auto (Gemini Flash)',
-    codex: 'custom Codex model'
+    codex: 'custom ChatGPT model'
 }
 
 export const PROVIDER_COLORS: Record<CommitAIProvider, { primary: string; bg: string; border: string; icon: string }> = {

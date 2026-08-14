@@ -18,6 +18,11 @@ import {
     applyRealtimeTranscriptEvent
 } from '../src/renderer/src/pages/assistant/instructor-voice-transcript'
 import { shouldShowComposerRealtimeVoicePrimaryAction } from '../src/renderer/src/pages/assistant/assistant-composer-view-state'
+import {
+    isCurrentRealtimeVoiceClientCommand,
+    readRealtimeVoiceResponseActivity,
+    sendRealtimeVoiceClientCommand
+} from '../src/renderer/src/pages/assistant/assistant-realtime-client-commands'
 import { filterVoiceHydrationReplay } from '../src/renderer/src/pages/assistant/assistant-voice-hydration-replay'
 import { projectVoiceLiveTimelineMessages } from '../src/renderer/src/pages/assistant/assistant-voice-live-timeline'
 import {
@@ -40,14 +45,11 @@ import {
 } from '../src/renderer/src/pages/assistant/instructor-voice-preferences'
 import { CodexRealtimeVoiceRuntime } from '../src/main/assistant/codex-realtime-voice'
 import {
-    buildInstructorAppServerArgs,
-    buildInstructorRealtimeMessageTurnParams,
-    buildInstructorRealtimeStartParams,
-    buildInstructorThreadStartParams,
+    chunkFramelessContextText,
     normalizeInstructorRealtimeMessage,
+    normalizeInstructorRealtimeVoice,
     normalizeInstructorVoiceInstructions,
-    normalizeWebRtcOfferSdp,
-    parseInstructorRealtimeNotification
+    normalizeWebRtcOfferSdp
 } from '../src/main/assistant/codex-realtime-voice-contract'
 
 const instructions = normalizeInstructorVoiceInstructions('  Teach me TypeScript one step at a time.  ')
@@ -60,86 +62,68 @@ assert.equal(normalizeWebRtcOfferSdp(offerSdp), offerSdp)
 assert.equal(normalizeWebRtcOfferSdp(offerSdp).endsWith('\r\n'), true)
 assert.throws(() => normalizeWebRtcOfferSdp('not an sdp'), /WebRTC offer/)
 
-assert.deepEqual(buildInstructorAppServerArgs(), [
-    'app-server',
-    '--stdio',
-    '-c',
-    'mcp_servers={}',
-    '--disable',
-    'plugins',
-    '--disable',
-    'apps',
-    '--enable',
-    'realtime_conversation'
-])
+assert.equal(normalizeInstructorRealtimeVoice('sol'), 'sol')
+assert.equal(normalizeInstructorRealtimeVoice('verse'), DEFAULT_INSTRUCTOR_REALTIME_VOICE)
+const multibyteContext = '🙂'.repeat(300)
+const contextChunks = chunkFramelessContextText(multibyteContext)
+assert.equal(contextChunks.join(''), multibyteContext)
+assert.equal(contextChunks.every((chunk) => Buffer.byteLength(chunk, 'utf8') <= 500), true)
 
-const threadParams = buildInstructorThreadStartParams('C:\\workspace', instructions)
-assert.deepEqual(threadParams, {
-    cwd: 'C:\\workspace',
-    approvalPolicy: 'never',
-    sandbox: 'read-only',
-    ephemeral: true,
-    developerInstructions: instructions,
-    serviceName: 'zyra_desktop'
-})
-
-const realtimeParams = buildInstructorRealtimeStartParams('thread-1', offerSdp, instructions, {
-    voice: 'sol',
-    outputModality: 'text'
-})
-assert.equal(
-    realtimeParams.outputModality,
-    'audio',
-    'text-only display should retain the subscription-backed v3 audio transport'
-)
-assert.equal(realtimeParams.includeStartupContext, false)
-assert.equal(realtimeParams.prompt, instructions)
-assert.equal(realtimeParams.version, 'v3')
-assert.equal(realtimeParams.voice, 'sol')
-assert.equal(realtimeParams.codexResponseHandoffMode, 'bemTags')
-assert.equal(realtimeParams.delegationAckFiller, false)
-assert.deepEqual(realtimeParams.transport, { type: 'webrtc', sdp: offerSdp })
-const canonicalRealtimeParams = buildInstructorRealtimeStartParams('thread-1', offerSdp, instructions, {
-    initialItems: [
-        { role: 'user', text: 'Earlier canonical user turn.' },
-        { role: 'assistant', text: 'Earlier canonical assistant turn.' }
-    ],
-    clientManagedHandoffs: true
-})
-assert.deepEqual(canonicalRealtimeParams.initialItems, [
-    { role: 'user', text: 'Earlier canonical user turn.' },
-    { role: 'assistant', text: 'Earlier canonical assistant turn.' }
-])
-assert.equal(canonicalRealtimeParams.clientManagedHandoffs, true)
+const rendererCommandBinding = {
+    adapterSessionId: 'adapter-renderer-1',
+    realtimeSessionId: 'realtime-renderer-1',
+    realtimeSessionGeneration: 3
+}
+const rendererClientCommand = {
+    type: 'client.command' as const,
+    commandId: 'renderer-command-1',
+    ...rendererCommandBinding,
+    threadId: 'thread-renderer-1',
+    messages: [{
+        type: 'session.context.append' as const,
+        channel: 'commentary' as const,
+        content: [{ type: 'input_text' as const, text: 'Bounded renderer context.' }]
+    }, { type: 'response.create' as const }]
+}
+const rendererCommandMessages: string[] = []
+const rendererDataChannel = {
+    readyState: 'open' as const,
+    send: (value: string) => rendererCommandMessages.push(value)
+}
+assert.equal(isCurrentRealtimeVoiceClientCommand(rendererClientCommand, rendererCommandBinding), true)
+assert.equal(sendRealtimeVoiceClientCommand(rendererDataChannel, rendererClientCommand, rendererCommandBinding), true)
+assert.deepEqual(rendererCommandMessages.map((value) => JSON.parse(value).type), ['session.context.append', 'response.create'])
+assert.equal(sendRealtimeVoiceClientCommand(rendererDataChannel, {
+    ...rendererClientCommand,
+    realtimeSessionGeneration: 2
+}, rendererCommandBinding), false, 'stale generation commands must never reach oai-events')
+assert.equal(sendRealtimeVoiceClientCommand(rendererDataChannel, {
+    ...rendererClientCommand,
+    commandId: 'renderer-command-oversized',
+    messages: [{
+        type: 'session.context.append',
+        channel: 'commentary',
+        content: [{ type: 'input_text', text: '🙂'.repeat(126) }]
+    }]
+}, rendererCommandBinding), false, 'renderer validation must independently enforce the 500-byte command bound')
+assert.equal(readRealtimeVoiceResponseActivity({
+    type: 'turn.created',
+    turn: { id: 'assistant-turn', role: 'assistant' }
+}), 'started')
+assert.equal(readRealtimeVoiceResponseActivity({
+    type: 'turn.done',
+    turn: { id: 'assistant-turn', role: 'assistant', transcript: 'Done.' }
+}), 'finished')
+assert.equal(readRealtimeVoiceResponseActivity({
+    type: 'turn.done',
+    turn: { id: 'user-turn', role: 'user', transcript: 'Question.' }
+}), null)
 
 const normalizedRealtimeMessage = normalizeInstructorRealtimeMessage({
-    text: '  What is in this image?  ',
-    images: [{
-        name: 'sample.png',
-        mimeType: 'image/png',
-        dataUrl: 'data:image/png;base64,aA=='
-    }]
+    text: '  What changed?  ',
+    images: []
 })
-assert.deepEqual(normalizedRealtimeMessage, {
-    text: 'What is in this image?',
-    images: [{
-        name: 'sample.png',
-        mimeType: 'image/png',
-        dataUrl: 'data:image/png;base64,aA=='
-    }]
-})
-assert.deepEqual(
-    buildInstructorRealtimeMessageTurnParams('thread-1', normalizedRealtimeMessage),
-    {
-        threadId: 'thread-1',
-        input: [
-            { type: 'text', text: 'What is in this image?' },
-            { type: 'image', url: 'data:image/png;base64,aA==', detail: 'auto' }
-        ],
-        approvalPolicy: 'never',
-        sandboxPolicy: { type: 'readOnly' }
-    }
-)
+assert.deepEqual(normalizedRealtimeMessage, { text: 'What changed?', images: [] })
 assert.throws(
     () => normalizeInstructorRealtimeMessage({
         images: [{ mimeType: 'image/jpeg', dataUrl: 'data:image/png;base64,aA==' }]
@@ -147,47 +131,72 @@ assert.throws(
     /inconsistent image metadata/
 )
 
-const composerRuntime = new CodexRealtimeVoiceRuntime()
-const composerRuntimeEvents: unknown[] = []
-composerRuntime.on('event', (event) => composerRuntimeEvents.push(event))
-const composerRuntimeInternals = composerRuntime as unknown as {
-    threadId: string
-    composerTurnText: Map<string, string>
-    handleComposerTurnNotification: (method: string, payload: Record<string, unknown>) => void
-}
-composerRuntimeInternals.threadId = 'thread-1'
-composerRuntimeInternals.composerTurnText.set('typed-turn-1', '')
-composerRuntimeInternals.handleComposerTurnNotification('item/agentMessage/delta', {
-    turnId: 'typed-turn-1',
-    delta: 'Image response.'
-})
-composerRuntimeInternals.handleComposerTurnNotification('turn/completed', {
-    turn: { id: 'typed-turn-1', status: 'completed' }
-})
-assert.deepEqual(composerRuntimeEvents, [
-    {
-        type: 'composer.response.delta',
-        threadId: 'thread-1',
-        turnId: 'typed-turn-1',
-        delta: 'Image response.'
-    },
-    {
-        type: 'composer.response.done',
-        threadId: 'thread-1',
-        turnId: 'typed-turn-1',
-        text: 'Image response.',
-        error: undefined
+const createCallInputs: Array<Record<string, unknown>> = []
+const directRuntime = new CodexRealtimeVoiceRuntime({
+    createCall: async (input) => {
+        createCallInputs.push(input as unknown as Record<string, unknown>)
+        return { sdp: 'v=0\r\no=- 2 3 IN IP4 127.0.0.1\r\n', callId: 'rtc_test_voice' }
     }
-])
-composerRuntime.dispose()
-
-const defaultRealtimeParams = buildInstructorRealtimeStartParams('thread-1', offerSdp, instructions)
-assert.equal(defaultRealtimeParams.outputModality, DEFAULT_INSTRUCTOR_OUTPUT_MODALITY)
-assert.equal(defaultRealtimeParams.voice, DEFAULT_INSTRUCTOR_REALTIME_VOICE)
-const unsupportedVoiceParams = buildInstructorRealtimeStartParams('thread-1', offerSdp, instructions, {
-    voice: 'verse'
 })
-assert.equal(unsupportedVoiceParams.voice, DEFAULT_INSTRUCTOR_REALTIME_VOICE)
+const directRuntimeEvents: any[] = []
+directRuntime.on('event', (event) => directRuntimeEvents.push(event))
+const directStart = await directRuntime.start({
+    cwd: 'C:\\workspace',
+    sdp: offerSdp,
+    instructions,
+    voice: 'sol',
+    initialItems: [
+        { role: 'user', text: 'Earlier canonical user turn.' },
+        { role: 'assistant', text: 'Earlier canonical assistant turn.' }
+    ],
+    clientManagedHandoffs: true,
+    adapterSessionId: 'adapter-session-1',
+    conversationId: 'conversation-1',
+    realtimeSessionGeneration: 7
+})
+assert.equal(directStart.realtimeVersion, 'v3')
+assert.equal(directStart.realtimeSessionId, 'rtc_test_voice')
+assert.equal(directStart.realtimeSessionGeneration, 7)
+assert.equal(directStart.adapterSessionId, 'adapter-session-1')
+assert.match(directStart.threadId, /^zyra_realtime_thread_/u)
+assert.equal(createCallInputs.length, 1)
+assert.equal(createCallInputs[0]?.['sdp'], offerSdp)
+assert.equal(createCallInputs[0]?.['instructions'], instructions)
+assert.equal(createCallInputs[0]?.['voice'], 'sol')
+assert.deepEqual(createCallInputs[0]?.['initialItems'], [
+    { role: 'user', text: 'Earlier canonical user turn.' },
+    { role: 'assistant', text: 'Earlier canonical assistant turn.' }
+])
+assert.equal((createCallInputs[0]?.['signal'] as AbortSignal).aborted, false)
+assert.deepEqual(directRuntimeEvents.slice(0, 2).map((event) => event.type), ['session.starting', 'session.started'])
+
+await directRuntime.appendContext([{ role: 'developer', text: multibyteContext }])
+await directRuntime.requestSpeech('Narrate this result.')
+directRuntime.presentComposerResponse({ turnId: 'typed-turn-1', text: 'Typed response.' })
+const clientCommands = directRuntimeEvents.filter((event) => event.type === 'client.command')
+assert.equal(clientCommands.length, 2)
+for (const command of clientCommands) {
+    assert.equal(command.adapterSessionId, 'adapter-session-1')
+    assert.equal(command.realtimeSessionId, 'rtc_test_voice')
+    assert.equal(command.realtimeSessionGeneration, 7)
+    assert.equal(directRuntime.isCurrentClientCommand(command), true)
+}
+assert.equal(
+    clientCommands[0].messages.every((message: any) => Buffer.byteLength(message.content[0].text, 'utf8') <= 500),
+    true,
+    'Frameless context commands must stay within the 500-byte provider bound'
+)
+assert.deepEqual(clientCommands[1].messages.at(-1), { type: 'response.create' })
+assert.equal(
+    directRuntimeEvents.some((event) => event.type === 'composer.response.done' && event.text === 'Typed response.'),
+    true
+)
+assert.equal(directRuntime.isCurrentClientCommand({ ...clientCommands[0], realtimeSessionGeneration: 6 }), false)
+await directRuntime.stop()
+assert.deepEqual(directRuntimeEvents.at(-1).messages, [{ type: 'session.close' }])
+assert.equal(directRuntime.currentSessionIdentity(), null)
+directRuntime.dispose()
+
 assert.deepEqual(INSTRUCTOR_REALTIME_VOICES, [
     'arbor',
     'breeze',
@@ -225,72 +234,23 @@ let sustainedLevel = 0
 for (let index = 0; index < 16; index += 1) sustainedLevel = smoothInstructorVoiceActivity(sustainedLevel, 1)
 assert.ok(sustainedLevel > 0.9)
 assert.ok(smoothInstructorVoiceActivity(sustainedLevel, 0) < sustainedLevel)
-assert.deepEqual(
-    parseInstructorRealtimeNotification('thread/realtime/started', {
-        threadId: 'thread-1',
-        realtimeSessionId: 'realtime-1',
-        version: 'v3'
-    }),
-    {
-        type: 'session.started',
-        threadId: 'thread-1',
-        realtimeSessionId: 'realtime-1',
-        realtimeVersion: 'v3'
-    }
-)
-assert.deepEqual(
-    parseInstructorRealtimeNotification('thread/realtime/transcript/delta', {
-        threadId: 'thread-1',
-        role: 'user',
-        delta: 'Hello'
-    }),
-    {
-        type: 'transcript.delta',
-        threadId: 'thread-1',
-        role: 'user',
-        delta: 'Hello'
-    }
-)
-assert.deepEqual(
-    parseInstructorRealtimeNotification('thread/realtime/transcript/delta', {
-        threadId: 'thread-1',
-        itemId: 'provider-item-1',
+const typedVoiceTranscript = applyRealtimeTranscriptEvent([{
+    id: 'composer-response-typed-turn-1',
+    role: 'assistant',
+    text: 'Typed response spoken through ChatGPT.',
+    final: true
+}], {
+    type: 'turn.done',
+    turn: {
+        id: 'provider-spoken-turn-1',
         role: 'assistant',
-        delta: 'Identified'
-    }),
-    {
-        type: 'transcript.delta',
-        threadId: 'thread-1',
-        providerItemId: 'provider-item-1',
-        role: 'assistant',
-        delta: 'Identified'
+        transcript: 'Typed response spoken through ChatGPT.'
     }
-)
-assert.deepEqual(
-    parseInstructorRealtimeNotification('thread/realtime/transcript/delta', {
-        threadId: 'thread-1',
-        role: 'assistant',
-        delta: ' '
-    }),
-    {
-        type: 'transcript.delta',
-        threadId: 'thread-1',
-        role: 'assistant',
-        delta: ' '
-    }
-)
-assert.deepEqual(
-    parseInstructorRealtimeNotification('thread/realtime/error', {
-        threadId: 'thread-1',
-        message: 'Feature unavailable.'
-    }),
-    {
-        type: 'session.error',
-        threadId: 'thread-1',
-        message: 'Feature unavailable.'
-    }
-)
-assert.equal(parseInstructorRealtimeNotification('item/completed', {}), null)
+})
+assert.deepEqual(typedVoiceTranscript.map(({ id, text }) => ({ id, text })), [{
+    id: 'provider-spoken-turn-1',
+    text: 'Typed response spoken through ChatGPT.'
+}], 'the provider completion must replace the optimistic typed Voice bubble instead of duplicating it')
 
 const repeatedUserText = "We're going to take a shower"
 let transcript = applyRealtimeTranscriptEvent([], {
@@ -702,6 +662,9 @@ assert.match(
     /peer\.connectionState === 'disconnected'[\s\S]{0,650}REALTIME_PEER_DISCONNECT_GRACE_MS/u,
     'brief WebRTC disconnects should receive a bounded recovery grace instead of killing Voice immediately'
 )
+assert.match(voiceSessionSource, /sentClientCommandIdsRef/u, 'renderer commands must be deduplicated before reaching oai-events')
+assert.match(voiceSessionSource, /realtimeSessionGeneration/u, 'renderer commands must be bound to the active Voice generation')
+assert.match(voiceSessionSource, /requiresIdleResponse && realtimeResponseActiveRef\.current/u, 'context and response.create commands must queue while ChatGPT is already speaking')
 assert.match(
     realtimeVoiceContractSource,
     /executionConfiguration\?: AssistantVoiceExecutionConfiguration/u,
@@ -733,6 +696,26 @@ assert.match(
     assistantServiceSource,
     /await this\.runtime\.configureSession\(connected\.thread\.providerThreadId, executionConfiguration\)/u,
     'Voice activation must synchronize the visible Chat configuration before handing off authority'
+)
+assert.match(
+    assistantServiceSource,
+    /private queueTypedVoiceResponse[\s\S]{0,1500}appendContext\(\[\{ role: 'user', text: input\.text \}\]\)[\s\S]{0,1500}generateTypedVoiceResponse/u,
+    'typed Voice input must enter the current Frameless context before its Pi-generated response is spoken'
+)
+assert.match(
+    assistantServiceSource,
+    /requireRealtimeContinuity\(\)\.materialize[\s\S]{0,800}runtime\.generateText/u,
+    'typed Voice utility generation must receive bounded canonical conversation context'
+)
+assert.match(
+    assistantServiceSource,
+    /typedVoiceResponseQueues\.get\(key\)[\s\S]{0,500}previous[\s\S]{0,1500}generateTypedVoiceResponse/u,
+    'typed Voice utility responses must preserve submission order within one Voice session'
+)
+assert.match(
+    assistantServiceSource,
+    /canonicalMessageId[\s\S]{0,2000}seed\.items\.findIndex[\s\S]{0,500}seed\.items\.slice\(0, messageIndex \+ 1\)/u,
+    'each queued typed response must exclude canonical messages submitted after its own user turn'
 )
 assert.match(
     zyraRuntimeSource,

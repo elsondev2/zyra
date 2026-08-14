@@ -152,12 +152,12 @@ export const SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly SettingsS
         row('Package runtime', 'Project script runner', 'node npm pnpm yarn bun package manager')
     ],
     providers: [
-        row('Providers', 'Default Git AI provider', 'groq gemini codex commit pull request'),
+        row('Providers', 'Default Git AI provider', 'groq gemini chatgpt codex commit pull request'),
         row('Groq', 'Groq API key', 'credential hosted provider test connection', 'API key'),
         row('Google Gemini', 'Gemini API key', 'google credential hosted provider test connection', 'API key'),
-        ...rows('Codex CLI', ['Commit model', 'Pull-request model'], {
-            'Commit model': 'git generated commit message codex',
-            'Pull-request model': 'git pr title body codex'
+        ...rows('Zyra · ChatGPT', ['Commit model', 'Pull-request model'], {
+            'Commit model': 'git generated commit message chatgpt codex',
+            'Pull-request model': 'git pr title body chatgpt codex'
         }),
         row('Stored credentials', 'Clear hosted API keys', 'remove groq gemini credentials')
     ],

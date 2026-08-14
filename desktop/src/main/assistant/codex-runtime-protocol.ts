@@ -1,7 +1,4 @@
-import type { ChildProcess, ChildProcessByStdio } from 'node:child_process'
-import { spawnSync } from 'node:child_process'
 import type readline from 'node:readline'
-import type { Readable, Writable } from 'node:stream'
 import type {
     AssistantApprovalRequestType,
     AssistantInteractionMode,
@@ -69,10 +66,7 @@ export interface PendingUserInputRequest {
     itemId?: string
 }
 
-export type CodexServerChildProcess = ChildProcessByStdio<Writable, Readable, Readable>
-
 export interface SessionContext {
-    child: CodexServerChildProcess
     output: readline.Interface
     pending: Map<string, PendingRpc>
     pendingApprovals: Map<string, PendingApprovalRequest>
@@ -81,18 +75,6 @@ export interface SessionContext {
     nextRequestId: number
     stopping: boolean
     thread: AssistantThread
-}
-
-export function killChildTree(child: Pick<ChildProcess, 'pid' | 'kill'>): void {
-    if (process.platform === 'win32' && child.pid) {
-        try {
-            spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
-            return
-        } catch {
-            // Fall through to direct kill.
-        }
-    }
-    child.kill()
 }
 
 export function readTurnUsage(turn: Record<string, unknown> | undefined, payload: Record<string, unknown>) {

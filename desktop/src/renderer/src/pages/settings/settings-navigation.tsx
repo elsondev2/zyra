@@ -123,7 +123,7 @@ export const SETTINGS_NAVIGATION_GROUPS: SettingsNavigationGroup[] = [
                 id: 'providers',
                 label: 'Providers',
                 description: 'AI providers and model connections',
-                keywords: 'groq gemini codex api key commit pull request',
+                keywords: 'groq gemini chatgpt codex api key commit pull request',
                 to: '/settings/providers',
                 icon: KeyRound,
                 legacyPaths: ['/settings/ai']
