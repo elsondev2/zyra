@@ -26,7 +26,12 @@ Status words used below:
 - [Local browser client](architecture/local-browser-client.md) — **Current.** Same-device Chrome runtime, transport, security, and capability boundary.
 - [Assistant resources](architecture/assistant-resources.md) — **Current.** Resource indexing and presentation ownership.
 - [Desktop theme contract](architecture/desktop-theme-contract.md) — **Current.** Shared shell surfaces, accessible palette resolution, specialized renderers, and validation.
-- [Voice-agent architecture](architecture/voice-agent/README.md) — **Draft.** Normative Phase One Chat/Voice authority, provider, continuity, and delivery contracts, plus optional Phase Two sequencing.
+- [Voice-agent architecture](architecture/voice-agent/README.md) — **Draft specification.** Product Phase One defines direct strong-agent Chat, optional realtime Voice, exclusive foreground routing, deterministic task control, selective speech, and resumable continuity. Optional Product Phase Two adds a relationship-first Zyra Home, scoped work threads, hybrid Inbox, and voice-led focus visits while retaining Phase One. A linked Betum-informed research note explores evidence-owned adaptive coaching beyond these committed phases.
+
+## Architecture decisions
+
+- [Decision record index](adr/README.md) — **Current record format.** Accepted design decisions and their implementation status.
+- [Voice-agent ADRs](adr/README.md#voice-agent-decisions) — **Accepted design; implementation pending.** Canonical Voice identity, two model roles, deterministic ledgers, central narration, continuity, permission separation, product-profile coexistence, relationship focus, retrieval-first escalation, and attention visits.
 
 ## Implementation records
 

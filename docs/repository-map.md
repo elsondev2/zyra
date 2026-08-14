@@ -15,8 +15,9 @@
 | `prompts/` | Public Zyra system prompt, inspection prompt, and profile overlays. | Tracked; loaded by CLI startup/profile code and packaged by `package.json`. | Keep. |
 | `bin/` | Published/local CLI entry point. | Tracked; root `bin` metadata and scripts invoke `bin/zyra.mjs`. | Keep. |
 | `scripts/` | Regression checks, automation, release helper, and maintenance entry points. | Tracked; referenced by `package.json`. | Keep; generated outputs belong outside this directory. |
-| `docs/` | Current guides plus architecture, implementation, research, runbook, handoff, and internal-agent records. | Tracked; indexed by `docs/README.md`. | Keep organized by document role. |
-| Root launch/config files | `README.md`, `AGENTS.md`, `RELEASE.md`, manifests, lockfiles, installers, and shell launchers. | Tracked; required for development, installation, and package metadata. | Keep at repository root. |
+| `docs/` | Current guides plus architecture, decision records, implementation, research, runbook, handoff, and internal-agent records. | Tracked; indexed by `docs/README.md`. | Keep organized by document role. |
+| `.github/` | Public issue and pull-request contribution templates. | Tracked; consumed by GitHub contribution flows. | Keep templates aligned with repository privacy and architecture rules. |
+| Root launch/config files | `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `LICENSE`, `RELEASE.md`, manifests, lockfiles, installers, and shell launchers. | Tracked; required for development, licensing, installation, and package metadata. | Keep at repository root. |
 
 ## Local, ignored, or generated surfaces
 

@@ -158,6 +158,14 @@ Inside chat:
 
 The complete agent/workflow guide, safety boundaries, definition formats, persistence layout, and desktop controls are in [docs/guides/subagents-workflows.md](docs/guides/subagents-workflows.md). Current provider compatibility and deferred model work are tracked in [docs/guides/model-support.md](docs/guides/model-support.md).
 
+## Open Voice-Agent Architecture
+
+Zyra’s proposed conversation architecture is documented as an open, provider-aware reference design. Product Phase One routes normal Chat directly to the strong coding agent and lets an explicit Start Voice action attach a capable realtime foreground to the same conversation and active work. Deterministic task control, exceptional subagents, selective speech, canonical multimodal context, and silent resume remain shared across both surfaces.
+
+Optional Product Phase Two is specified as a separate relationship-first profile implemented only after Phase One passes. It adds a permanent Zyra Home entry point, conversation-first background work threads, a hybrid Inbox and active-work strip, retrieval-first worker escalation, mostly invisible strong consultation, and voice-led same-canvas focus visits. Any runtime implementing Phase Two must keep Phase One selectable and expose every Phase Two canonical conversation without data rewriting.
+
+Start with the [Voice-Agent Architecture](docs/architecture/voice-agent/README.md), [Product phases](docs/architecture/voice-agent/product-phases.md), [Phase Two relationship-first interaction](docs/architecture/voice-agent/relationship-first-interaction.md), and the noncommitting [adaptive-coaching future direction](docs/architecture/voice-agent/future-adaptive-coaching.md). The package includes Mermaid diagrams, ADRs, machine-readable Phase One JSON Schemas, synthetic examples, security and usage boundaries, prior-art research, evaluation plans, and a two-product-phase implementation roadmap. Its status is **draft specification; implementation pending**.
+
 ## Project Shape
 
 - `src/` is the terminal app: input, status line, slash commands, file mentions, session handling, and Pi SDK wiring.
@@ -171,3 +179,10 @@ The complete agent/workflow guide, safety boundaries, definition formats, persis
 
 Commands should earn their place. The tool should grow from real use, not from pretending every workflow is known in advance.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development, privacy, documentation, and pull-request expectations. Voice-architecture proposals also have a [focused contribution guide](docs/architecture/voice-agent/CONTRIBUTING.md).
+
+## License
+
+Zyra is open source under the [Apache License 2.0](LICENSE). Contributions submitted to this repository are licensed under the same terms unless explicitly stated otherwise.

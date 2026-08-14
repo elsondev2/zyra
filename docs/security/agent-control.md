@@ -2,6 +2,10 @@
 
 Zyra control is a revocable desktop capability, not a general script or remote-desktop channel.
 
+Under the draft [voice-agent architecture](../architecture/voice-agent/README.md), spoken conversation never grants control authority. The realtime foreground has no direct control capability; a primary agent still needs the existing principal, target, approval, lease, observation-revision, and emergency-stop path. Speech may discuss or navigate to an approval, but it does not authorize one in the proposed reference profile.
+
+Optional Phase Two relationship membership, work-thread launch, Inbox selection, focus-visit acceptance, context retrieval, and profile switching do not transfer or mint a control grant. A task keeps its exact principal/attempt/lease through Home ↔ thread focus changes, and stale focus-lease, route, and provider-binding generations cannot route control results into another conversation.
+
 ## Authority flow
 
 ```text
