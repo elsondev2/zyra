@@ -72,8 +72,8 @@ assert.deepEqual(build.mac.target, [
 assert.equal(build.mac.artifactName, 'Zyra-${version}-macos-${arch}.${ext}')
 assert.equal(
     build.mac.x64ArchFiles,
-    'Contents/Resources/zyra-runtime/node_modules/**/*darwin-{arm64,x64}*/**/*',
-    'universal merging must preserve explicitly architecture-qualified runtime prebuilds without trying to lipo identical copies'
+    'Contents/Resources/{zyra-runtime/node_modules/**,app.asar.unpacked/node_modules/node-pty/prebuilds}/*darwin-{arm64,x64}*/**/*',
+    'universal merging must preserve explicitly architecture-qualified runtime and node-pty prebuilds without trying to lipo identical copies'
 )
 assert.equal(build.mac.hardenedRuntime, true)
 assert.equal(build.mac.category, 'public.app-category.developer-tools')

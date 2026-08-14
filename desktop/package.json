@@ -298,7 +298,7 @@
                 }
             ],
             "artifactName": "Zyra-${version}-macos-${arch}.${ext}",
-            "x64ArchFiles": "Contents/Resources/zyra-runtime/node_modules/**/*darwin-{arm64,x64}*/**/*",
+            "x64ArchFiles": "Contents/Resources/{zyra-runtime/node_modules/**,app.asar.unpacked/node_modules/node-pty/prebuilds}/*darwin-{arm64,x64}*/**/*",
             "icon": "resources/icon.icns",
             "category": "public.app-category.developer-tools",
             "hardenedRuntime": true,

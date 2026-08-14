@@ -48,61 +48,89 @@ assert.deepEqual(runtimeDependencyResource.filter, ['**/*'])
 
 const macUniversalRuntimePattern = buildConfig.mac.x64ArchFiles
 assert.equal(typeof macUniversalRuntimePattern, 'string')
-const stagedNodeModules = path.join(runtimeRoot, 'node_modules')
-const stagedMachOFiles: Array<{ architecture: 'arm64' | 'x64' | 'universal'; relativePath: string }> = []
-const pendingDirectories = [stagedNodeModules]
-while (pendingDirectories.length > 0) {
-    const directory = pendingDirectories.pop()!
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-        const file = path.join(directory, entry.name)
-        if (entry.isDirectory()) {
-            pendingDirectories.push(file)
-            continue
+type MachOFile = { architecture: 'arm64' | 'x64' | 'universal'; packagedPath: string }
+function collectMachOFiles(sourceRoot: string, packagedRoot: string): MachOFile[] {
+    const result: MachOFile[] = []
+    const pendingDirectories = [sourceRoot]
+    while (pendingDirectories.length > 0) {
+        const directory = pendingDirectories.pop()!
+        for (const entry of readdirSync(directory, { withFileTypes: true })) {
+            const file = path.join(directory, entry.name)
+            if (entry.isDirectory()) {
+                pendingDirectories.push(file)
+                continue
+            }
+            if (!entry.isFile()) continue
+            const relativePath = path.relative(sourceRoot, file).split(path.sep).join('/')
+            const normalizedPath = relativePath.toLowerCase()
+            const plausibleNativeBinary = normalizedPath.includes('darwin')
+                || normalizedPath.endsWith('.node')
+                || normalizedPath.includes('/native/')
+                || normalizedPath.includes('/prebuild')
+                || normalizedPath.includes('/bin/')
+                || path.posix.extname(normalizedPath) === ''
+            if (!plausibleNativeBinary) continue
+            const descriptor = openSync(file, 'r')
+            const header = Buffer.alloc(8)
+            let bytesRead = 0
+            try {
+                bytesRead = readSync(descriptor, header, 0, header.length, 0)
+            } finally {
+                closeSync(descriptor)
+            }
+            if (bytesRead < 8) continue
+            const packagedPath = `${packagedRoot}/${relativePath}`
+            const magic = header.subarray(0, 4).toString('hex')
+            if (['cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca'].includes(magic)) {
+                result.push({ architecture: 'universal', packagedPath })
+                continue
+            }
+            const littleEndian = magic === 'cffaedfe' || magic === 'cefaedfe'
+            const bigEndian = magic === 'feedfacf' || magic === 'feedface'
+            if (!littleEndian && !bigEndian) continue
+            const cpuType = littleEndian ? header.readUInt32LE(4) : header.readUInt32BE(4)
+            const architecture = cpuType === 0x0100000c
+                ? 'arm64'
+                : cpuType === 0x01000007
+                    ? 'x64'
+                    : null
+            assert(architecture, `unsupported thin Mach-O CPU type 0x${cpuType.toString(16)} in ${file}`)
+            result.push({ architecture, packagedPath })
         }
-        if (!entry.isFile()) continue
-        const descriptor = openSync(file, 'r')
-        const header = Buffer.alloc(8)
-        let bytesRead = 0
-        try {
-            bytesRead = readSync(descriptor, header, 0, header.length, 0)
-        } finally {
-            closeSync(descriptor)
-        }
-        if (bytesRead < 8) continue
-        const magic = header.subarray(0, 4).toString('hex')
-        if (['cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca'].includes(magic)) {
-            stagedMachOFiles.push({ architecture: 'universal', relativePath: path.relative(stagedNodeModules, file).split(path.sep).join('/') })
-            continue
-        }
-        const littleEndian = magic === 'cffaedfe' || magic === 'cefaedfe'
-        const bigEndian = magic === 'feedfacf' || magic === 'feedface'
-        if (!littleEndian && !bigEndian) continue
-        const cpuType = littleEndian ? header.readUInt32LE(4) : header.readUInt32BE(4)
-        const architecture = cpuType === 0x0100000c
-            ? 'arm64'
-            : cpuType === 0x01000007
-                ? 'x64'
-                : null
-        assert(architecture, `unsupported thin Mach-O CPU type 0x${cpuType.toString(16)} in ${file}`)
-        stagedMachOFiles.push({ architecture, relativePath: path.relative(stagedNodeModules, file).split(path.sep).join('/') })
     }
+    return result
 }
-const thinMachOFiles = stagedMachOFiles.filter((file) => file.architecture !== 'universal')
-assert(thinMachOFiles.length > 0, 'the staged runtime fixture must exercise architecture-qualified thin Mach-O prebuilds')
-for (const file of thinMachOFiles) {
+const runtimeMachOFiles = collectMachOFiles(
+    path.join(runtimeRoot, 'node_modules'),
+    'Contents/Resources/zyra-runtime/node_modules'
+)
+const nodePtyMachOFiles = collectMachOFiles(
+    path.join(desktopRoot, 'node_modules', 'node-pty'),
+    'Contents/Resources/app.asar.unpacked/node_modules/node-pty'
+)
+const thinRuntimeMachOFiles = runtimeMachOFiles.filter((file) => file.architecture !== 'universal')
+assert(thinRuntimeMachOFiles.length > 0, 'the staged runtime fixture must exercise architecture-qualified thin Mach-O prebuilds')
+const thinNodePtyMachOFiles = nodePtyMachOFiles.filter((file) => file.architecture !== 'universal')
+assert.deepEqual(
+    [...new Set(thinNodePtyMachOFiles.map((file) => file.architecture))].sort(),
+    ['arm64', 'x64'],
+    'unpacked node-pty must exercise both Darwin prebuild architectures'
+)
+const packagedMachOFiles = [...runtimeMachOFiles, ...nodePtyMachOFiles]
+for (const file of packagedMachOFiles.filter((entry) => entry.architecture !== 'universal')) {
     assert(
-        file.relativePath.includes(`darwin-${file.architecture}`),
-        `thin Mach-O runtime dependency must be explicitly architecture-qualified: ${file.relativePath}`
+        file.packagedPath.includes(`darwin-${file.architecture}`),
+        `thin Mach-O dependency must be explicitly architecture-qualified: ${file.packagedPath}`
     )
     assert(
-        minimatch(`Contents/Resources/zyra-runtime/node_modules/${file.relativePath}`, macUniversalRuntimePattern, { matchBase: true }),
-        `macOS universal skip-lipo rule does not cover ${file.relativePath}`
+        minimatch(file.packagedPath, macUniversalRuntimePattern, { matchBase: true }),
+        `macOS universal skip-lipo rule does not cover ${file.packagedPath}`
     )
 }
-for (const file of stagedMachOFiles.filter((entry) => entry.architecture === 'universal')) {
+for (const file of packagedMachOFiles.filter((entry) => entry.architecture === 'universal')) {
     assert(
-        !minimatch(`Contents/Resources/zyra-runtime/node_modules/${file.relativePath}`, macUniversalRuntimePattern, { matchBase: true }),
-        `macOS skip-lipo rule is too broad and matches an already-universal dependency: ${file.relativePath}`
+        !minimatch(file.packagedPath, macUniversalRuntimePattern, { matchBase: true }),
+        `macOS skip-lipo rule is too broad and matches an already-universal dependency: ${file.packagedPath}`
     )
 }
 
