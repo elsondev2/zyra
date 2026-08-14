@@ -297,9 +297,9 @@ function upsertAssistantThreadSummary(db: SqlDatabase, sessionId: string, thread
         INSERT INTO assistant_threads (
             id, session_id, provider_thread_id, source, parent_thread_id, provider_parent_thread_id, subagent_depth, agent_nickname, agent_role,
             model, thinking, profile, cwd, message_count, last_seen_completed_turn_id,
-            runtime_mode, interaction_mode, state, canonical_presence_json, last_error, created_at, updated_at, latest_turn_json, active_plan_json
+            runtime_mode, interaction_mode, web_search, web_fetch, state, canonical_presence_json, last_error, created_at, updated_at, latest_turn_json, active_plan_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             session_id = excluded.session_id,
             provider_thread_id = excluded.provider_thread_id,
@@ -317,6 +317,8 @@ function upsertAssistantThreadSummary(db: SqlDatabase, sessionId: string, thread
             last_seen_completed_turn_id = excluded.last_seen_completed_turn_id,
             runtime_mode = excluded.runtime_mode,
             interaction_mode = excluded.interaction_mode,
+            web_search = excluded.web_search,
+            web_fetch = excluded.web_fetch,
             state = excluded.state,
             canonical_presence_json = excluded.canonical_presence_json,
             last_error = excluded.last_error,
@@ -342,6 +344,8 @@ function upsertAssistantThreadSummary(db: SqlDatabase, sessionId: string, thread
         thread.lastSeenCompletedTurnId,
         thread.runtimeMode,
         thread.interactionMode,
+        typeof thread.webSearch === 'boolean' ? sqlBool(thread.webSearch) : null,
+        typeof thread.webFetch === 'boolean' ? sqlBool(thread.webFetch) : null,
         thread.state,
         jsonStringify(thread.canonicalPresence),
         thread.lastError,

@@ -26,7 +26,9 @@ export function installBrowserDevscopeRelay(devscope: DevScopeApi): void {
         () => devscope.agentControl.onStateChange((payload) => relayEvent('agentControlState', payload)),
         () => devscope.onGitCloneProgress((payload) => relayEvent('gitCloneProgress', payload)),
         () => devscope.onPreviewTerminalEvent((payload) => relayEvent('previewTerminal', payload)),
-        () => devscope.onPythonPreviewEvent((payload) => relayEvent('pythonPreview', payload))
+        () => devscope.onPythonPreviewEvent((payload) => relayEvent('pythonPreview', payload)),
+        () => devscope.preferences.onChanged((payload) => relayEvent('preferencesChanged', payload)),
+        () => devscope.onboarding.onChanged((payload) => relayEvent('onboardingChanged', payload))
     ]
     for (const subscribe of eventSubscriptions) {
         try {

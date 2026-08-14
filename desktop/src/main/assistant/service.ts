@@ -167,6 +167,10 @@ type PendingCanonicalVoiceStart = {
     resolveFinished: () => void
 }
 
+export type AssistantServiceOptions = {
+    getNewChatExecutionDefaults?: () => Promise<{ webSearch: boolean; webFetch: boolean }>
+}
+
 export class AssistantService {
     private static readonly MAX_IN_MEMORY_EVENTS = 256
     private static readonly ASSISTANT_TEXT_DELTA_FLUSH_MS = 40
@@ -266,7 +270,7 @@ export class AssistantService {
         threadId: string
     }>()
 
-    constructor() {
+    constructor(private readonly options: AssistantServiceOptions = {}) {
         this.readyPromise = this.initialize()
         this.actionDeps = {
             runtime: this.runtime,
@@ -276,6 +280,8 @@ export class AssistantService {
                 this.state.snapshot = await this.persistence.hydrateSelectedSession(this.state.snapshot, sessionId)
             },
             getFirstUserMessageText: (sessionId: string) => this.persistence.readFirstUserMessageText(sessionId),
+            getNewChatExecutionDefaults: () => this.options.getNewChatExecutionDefaults?.()
+                || Promise.resolve({ webSearch: true, webFetch: true }),
             appendEvent: (type, occurredAt, payload, sessionId, threadId) => {
                 this.appendEvent(type, occurredAt, payload, sessionId, threadId)
             },

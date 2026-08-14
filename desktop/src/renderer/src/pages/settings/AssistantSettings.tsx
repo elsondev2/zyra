@@ -81,6 +81,13 @@ export default function AssistantSettings() {
 
     const browserSpeechAvailable = typeof window !== 'undefined'
         && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)
+    const webDefaultMode = settings.assistantDefaultWebSearch
+        ? settings.assistantDefaultWebFetch ? 'all' : 'search'
+        : settings.assistantDefaultWebFetch ? 'fetch' : 'off'
+    const setWebDefaultMode = (mode: 'all' | 'search' | 'fetch' | 'off') => updateSettings({
+        assistantDefaultWebSearch: mode === 'all' || mode === 'search',
+        assistantDefaultWebFetch: mode === 'all' || mode === 'fetch'
+    })
     const chatGptVoiceStatus: { label: string; tone: 'ready' | 'warning' | 'muted'; title?: string } = transcriptionStateLoading
         ? { label: 'Checking', tone: 'muted' }
         : transcriptionError
@@ -115,6 +122,7 @@ export default function AssistantSettings() {
                 <SettingsRow title="Interaction mode" description="Start new chats in normal conversation or planning mode." control={<SettingsSegmented value={settings.assistantDefaultInteractionMode} options={[{ value: 'default', label: 'Default' }, { value: 'plan', label: 'Plan' }]} onChange={(assistantDefaultInteractionMode) => updateSettings({ assistantDefaultInteractionMode })} label="Default interaction mode" />} />
                 <SettingsRow title="Reasoning effort" description="Set the default reasoning depth for compatible models." control={<SettingsSelect value={settings.assistantDefaultEffort} onChange={(event) => updateSettings({ assistantDefaultEffort: event.target.value as typeof settings.assistantDefaultEffort })} aria-label="Default reasoning effort">{['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map((effort) => <option key={effort} value={effort}>{effort === 'xhigh' ? 'Extra high' : effort.charAt(0).toUpperCase() + effort.slice(1)}</option>)}</SettingsSelect>} />
                 <SettingsRow title="Fast service tier" description="Request the faster provider service tier for new chats." control={<SettingsSwitch checked={settings.assistantDefaultFastMode} onCheckedChange={(assistantDefaultFastMode) => updateSettings({ assistantDefaultFastMode })} label="Fast service tier" />} />
+                <SettingsRow title="Web access" description="Choose which web tools new chats start with. Existing chats keep their own choice." control={<SettingsSegmented value={webDefaultMode} options={[{ value: 'all', label: 'Search + fetch' }, { value: 'search', label: 'Search' }, { value: 'fetch', label: 'Fetch' }, { value: 'off', label: 'Off' }]} onChange={setWebDefaultMode} label="Default web access" />} />
                 <SettingsRow title="Busy send behavior" description="Choose what Send does while the current turn is still active." control={<SettingsSegmented value={settings.assistantBusyMessageMode} options={[{ value: 'queue', label: 'Queue next' }, { value: 'force', label: 'Interrupt' }]} onChange={(assistantBusyMessageMode) => updateSettings({ assistantBusyMessageMode })} label="Busy send behavior" />} />
                 <SettingsRow
                     title="Default prompt"

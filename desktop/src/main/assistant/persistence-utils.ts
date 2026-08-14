@@ -136,6 +136,8 @@ export function initializeAssistantPersistenceSchema(db: SqlDatabase): void {
             last_seen_completed_turn_id TEXT,
             runtime_mode TEXT NOT NULL,
             interaction_mode TEXT NOT NULL,
+            web_search INTEGER,
+            web_fetch INTEGER,
             state TEXT NOT NULL,
             canonical_presence_json TEXT,
             last_error TEXT,
@@ -320,6 +322,8 @@ export function initializeAssistantPersistenceSchema(db: SqlDatabase): void {
     ensureTableColumn(db, 'assistant_threads', 'thinking', 'TEXT')
     ensureTableColumn(db, 'assistant_threads', 'profile', 'TEXT')
     ensureTableColumn(db, 'assistant_threads', 'canonical_presence_json', 'TEXT')
+    ensureTableColumn(db, 'assistant_threads', 'web_search', 'INTEGER')
+    ensureTableColumn(db, 'assistant_threads', 'web_fetch', 'INTEGER')
     ensureTableColumn(db, 'assistant_messages', 'timeline_sequence', 'INTEGER')
     ensureTableColumn(db, 'assistant_messages', 'provider_item_id', 'TEXT')
     ensureTableColumn(db, 'assistant_messages', 'modality', 'TEXT')

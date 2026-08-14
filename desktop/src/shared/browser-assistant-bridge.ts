@@ -103,7 +103,9 @@ export const BROWSER_DEVSCOPE_EVENT_NAMES = [
     'agentControlState',
     'gitCloneProgress',
     'previewTerminal',
-    'pythonPreview'
+    'pythonPreview',
+    'preferencesChanged',
+    'onboardingChanged'
 ] as const
 
 export type BrowserDevscopeEventName = typeof BROWSER_DEVSCOPE_EVENT_NAMES[number]
@@ -168,7 +170,16 @@ export function isBrowserDevscopeBridgePath(value: unknown): value is string[] {
         && /^[A-Za-z][A-Za-z0-9]*$/.test(segment)
         && !FORBIDDEN_BROWSER_DEVSCOPE_PATH_SEGMENTS.has(segment)
     ))) return false
-    if (value[0] === 'window' || value[0] === 'assistant') return false
+    if (value[0] === 'window' || value[0] === 'assistant' || value[0] === 'secrets') return false
     const method = value[value.length - 1]
+    if (value[0] === 'onboarding') return value.length === 2 && method === 'getState'
     return method !== 'getPathForFile' && !method.startsWith('on')
+}
+
+export function isBrowserDevscopePathAllowedBeforeOnboarding(path: readonly string[]): boolean {
+    return path.length === 2
+        && (
+            (path[0] === 'onboarding' && path[1] === 'getState')
+            || (path[0] === 'preferences' && path[1] === 'get')
+        )
 }

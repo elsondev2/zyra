@@ -77,6 +77,15 @@ try {
     assert.equal(indexResponse.headers.get('permissions-policy')?.includes('microphone=(self)'), true, 'same-device browser Voice must be allowed to request this origin\'s microphone')
     assert.equal(indexResponse.headers.get('permissions-policy')?.includes('camera=()'), true, 'browser Voice must not broaden unrelated camera access')
 
+    const localhostOrigin = address.origin.replace('127.0.0.1', 'localhost')
+    const canonicalResponse = await fetch(`${localhostOrigin}/assistant?source=bookmark`, { redirect: 'manual' })
+    assert.equal(canonicalResponse.status, 308)
+    assert.equal(
+        canonicalResponse.headers.get('location'),
+        `${address.origin}/assistant?source=bookmark`,
+        'localhost bookmarks must converge on the canonical 127.0.0.1 origin'
+    )
+
     const routeResponse = await fetch(`${address.origin}/assistant/chat/session-1`)
     assert.equal(routeResponse.status, 200, 'client-side routes must fall back to the renderer entry point')
     assert.equal((await routeResponse.text()).includes('Zyra browser client'), true)

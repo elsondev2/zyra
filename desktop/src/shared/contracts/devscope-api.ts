@@ -97,6 +97,25 @@ import type {
     RendererControlGrantInput
 } from '../agent-control/protocol'
 import type { ZyraClientPlatform } from '../platform-window-chrome'
+import type {
+    BeginOnboardingReviewInput,
+    CancelOnboardingReviewInput,
+    CommitOnboardingStepInput,
+    NavigateOnboardingInput,
+    OnboardingAuthStatus,
+    OnboardingSnapshot
+} from '../onboarding/contracts'
+import type {
+    DevicePreferencesChangedEvent,
+    DevicePreferencesSnapshot,
+    GetDevicePreferencesInput,
+    UpdateDevicePreferencesInput
+} from '../preferences/contracts'
+import type {
+    HostedAiSecrets,
+    HostedAiSecretStatus,
+    UpdateHostedAiSecretsInput
+} from '../preferences/secrets-contracts'
 
 export * from './devscope-git-contracts'
 export * from './devscope-project-contracts'
@@ -332,6 +351,30 @@ export interface DevScopeWindowApi {
     getRuntimeInfo: () => Promise<DevScopeWindowRuntimeInfo>
     onMaximizedChange: (callback: (maximized: boolean) => void) => () => void
     onAppMenuCommand: (callback: (command: DevScopeAppMenuCommand) => void) => () => void
+}
+
+export interface DevScopePreferencesApi {
+    get: (input: GetDevicePreferencesInput) => Promise<DevScopeResult<{ snapshot: DevicePreferencesSnapshot }>>
+    update: (input: UpdateDevicePreferencesInput) => Promise<DevScopeResult<{ snapshot: DevicePreferencesSnapshot }>>
+    onChanged: (callback: (event: DevicePreferencesChangedEvent) => void) => () => void
+}
+
+export interface DevScopeSecretsApi {
+    getHostedAiKeys: () => Promise<DevScopeResult<{ secrets: HostedAiSecrets; status: HostedAiSecretStatus }>>
+    updateHostedAiKeys: (input: UpdateHostedAiSecretsInput) => Promise<DevScopeResult<{ status: HostedAiSecretStatus }>>
+    migrateLegacyHostedAiKeys: (input: UpdateHostedAiSecretsInput) => Promise<DevScopeResult<{ status: HostedAiSecretStatus }>>
+}
+
+export interface DevScopeOnboardingApi {
+    getState: () => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>
+    getAuthStatus: () => Promise<DevScopeResult<{ status: OnboardingAuthStatus }>>
+    connectChatGpt: () => Promise<DevScopeResult<{ status: OnboardingAuthStatus }>>
+    connectApiKey: (apiKey: string) => Promise<DevScopeResult<{ status: OnboardingAuthStatus }>>
+    commitStep: (input: CommitOnboardingStepInput) => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>
+    navigate: (input: NavigateOnboardingInput) => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>
+    beginReview: (input: BeginOnboardingReviewInput) => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>
+    cancelReview: (input: CancelOnboardingReviewInput) => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>
+    onChanged: (callback: (snapshot: OnboardingSnapshot) => void) => () => void
 }
 
 export interface DevScopeUpdatesApi {
@@ -686,6 +729,9 @@ export interface DevScopeApi {
     assistant: DevScopeAssistantApi
     agentscope: DevScopeAgentScopeApi
     agentControl: DevScopeAgentControlApi
+    preferences: DevScopePreferencesApi
+    secrets: DevScopeSecretsApi
+    onboarding: DevScopeOnboardingApi
     updates: DevScopeUpdatesApi
     window: DevScopeWindowApi
 }

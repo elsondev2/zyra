@@ -20,6 +20,7 @@ import {
     BROWSER_FILE_BRIDGE_PATH,
     isBrowserAssistantBridgeMethod,
     isBrowserDevscopeBridgePath,
+    isBrowserDevscopePathAllowedBeforeOnboarding,
     type BrowserAssistantBridgeDescriptor,
     type BrowserAssistantBridgeInvokeRequest,
     type BrowserAssistantBridgeInvokeResponse,
@@ -56,7 +57,8 @@ const BROWSER_CLIENT_ID_PATTERN = /^[A-Za-z0-9_-]{16,128}$/
 const BROWSER_VOICE_DISCONNECT_GRACE_MS = 2_500
 
 type BrowserAssistantBridgeDependencies = {
-    service: AssistantService
+    service?: AssistantService
+    getService?: () => AssistantService | null
     allowedOrigins: ReadonlySet<string>
     capability: string
     descriptorPath?: string
@@ -69,6 +71,7 @@ type BrowserAssistantBridgeDependencies = {
     resolveClipboardAttachment: (reference: string) => Promise<string | null>
     getVoiceTranscriptionState: () => Promise<AssistantVoiceTranscriptionState>
     transcribeVoice: (input: AssistantTranscribeVoiceInput) => Promise<string>
+    isOnboardingComplete?: () => boolean
 }
 
 export class BrowserAssistantBridge {
@@ -80,6 +83,7 @@ export class BrowserAssistantBridge {
     private unsubscribeAssistantEvents: (() => void) | null = null
     private unsubscribeDevscopeEvents: (() => void) | null = null
     private unsubscribeRealtimeVoiceEvents: (() => void) | null = null
+    private activeAssistantService: AssistantService | null = null
     private browserRealtimeVoiceOwnerClientId: string | null = null
     private browserRealtimeVoiceDisconnectTimer: NodeJS.Timeout | null = null
 
@@ -98,21 +102,24 @@ export class BrowserAssistantBridge {
             })
         })
         this.server = server
-        this.unsubscribeAssistantEvents = this.dependencies.service.subscribeExternalEvents((payload) => {
-            this.broadcastEvent(payload)
-        })
         this.unsubscribeDevscopeEvents = this.dependencies.subscribeDevscopeEvents((event) => {
+            if (
+                event.event === 'onboardingChanged'
+                && event.payload
+                && typeof event.payload === 'object'
+                && (event.payload as { accessAllowed?: unknown }).accessAllowed === false
+            ) this.closeProtectedBrowserStreams()
+            if (
+                this.dependencies.isOnboardingComplete?.() === false
+                && event.event !== 'onboardingChanged'
+                && event.event !== 'preferencesChanged'
+            ) return
             this.devscopeEventStream.broadcast(event)
         })
-        this.unsubscribeRealtimeVoiceEvents = this.dependencies.service.subscribeExternalRealtimeVoiceEvents((event) => {
-            const ownerClientId = this.browserRealtimeVoiceOwnerClientId
-            if (!ownerClientId) return
-            this.realtimeVoiceEventStream.broadcast(ownerClientId, event)
-            if (event.type === 'session.closed' && this.browserRealtimeVoiceOwnerClientId === ownerClientId) {
-                this.clearBrowserVoiceDisconnectTimer()
-                this.browserRealtimeVoiceOwnerClientId = null
-            }
-        })
+        const initialService = this.resolveAssistantService()
+        if (initialService && this.dependencies.isOnboardingComplete?.() !== false) {
+            this.bindAssistantService(initialService)
+        }
         this.realtimeVoiceEventStream.setClientCountListener((clientId, count) => {
             if (count > 0) {
                 if (this.browserRealtimeVoiceOwnerClientId === clientId) this.clearBrowserVoiceDisconnectTimer()
@@ -124,7 +131,12 @@ export class BrowserAssistantBridge {
                 this.browserRealtimeVoiceDisconnectTimer = null
                 if (this.browserRealtimeVoiceOwnerClientId !== clientId || this.realtimeVoiceEventStream.hasClient(clientId)) return
                 const ownerId = this.browserVoiceOwnerId(clientId)
-                void this.dependencies.service.stopRealtimeVoice(ownerId)
+                const service = this.activeAssistantService || this.resolveAssistantService()
+                if (!service) {
+                    this.browserRealtimeVoiceOwnerClientId = null
+                    return
+                }
+                void service.stopRealtimeVoice(ownerId)
                     .catch(() => undefined)
                     .finally(() => {
                         if (this.browserRealtimeVoiceOwnerClientId === clientId) {
@@ -220,6 +232,14 @@ export class BrowserAssistantBridge {
         return { host: address.address, port: address.port }
     }
 
+    private closeProtectedBrowserStreams(): void {
+        for (const response of [...this.eventResponses]) {
+            this.removeEventResponse(response)
+            response.end()
+        }
+        this.realtimeVoiceEventStream.stop()
+    }
+
     private cleanupSubscriptions(): void {
         this.unsubscribeAssistantEvents?.()
         this.unsubscribeAssistantEvents = null
@@ -227,14 +247,46 @@ export class BrowserAssistantBridge {
         this.unsubscribeDevscopeEvents = null
         this.unsubscribeRealtimeVoiceEvents?.()
         this.unsubscribeRealtimeVoiceEvents = null
+        const service = this.activeAssistantService
+        this.activeAssistantService = null
         const ownerClientId = this.browserRealtimeVoiceOwnerClientId
         this.clearBrowserVoiceDisconnectTimer()
         this.browserRealtimeVoiceOwnerClientId = null
-        if (ownerClientId) {
-            void this.dependencies.service.stopRealtimeVoice(this.browserVoiceOwnerId(ownerClientId)).catch(() => undefined)
+        if (ownerClientId && service) {
+            void service.stopRealtimeVoice(this.browserVoiceOwnerId(ownerClientId)).catch(() => undefined)
         }
         if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
         this.heartbeatTimer = null
+    }
+
+    private resolveAssistantService(): AssistantService | null {
+        return this.dependencies.service || this.dependencies.getService?.() || null
+    }
+
+    private requireAssistantService(): AssistantService {
+        const service = this.resolveAssistantService()
+        if (!service) throw new Error('Finish setup in Zyra Desktop before using Assistant.')
+        this.bindAssistantService(service)
+        return service
+    }
+
+    private bindAssistantService(service: AssistantService): void {
+        if (this.activeAssistantService === service) return
+        this.unsubscribeAssistantEvents?.()
+        this.unsubscribeRealtimeVoiceEvents?.()
+        this.activeAssistantService = service
+        this.unsubscribeAssistantEvents = service.subscribeExternalEvents((payload) => {
+            this.broadcastEvent(payload)
+        })
+        this.unsubscribeRealtimeVoiceEvents = service.subscribeExternalRealtimeVoiceEvents((event) => {
+            const ownerClientId = this.browserRealtimeVoiceOwnerClientId
+            if (!ownerClientId) return
+            this.realtimeVoiceEventStream.broadcast(ownerClientId, event)
+            if (event.type === 'session.closed' && this.browserRealtimeVoiceOwnerClientId === ownerClientId) {
+                this.clearBrowserVoiceDisconnectTimer()
+                this.browserRealtimeVoiceOwnerClientId = null
+            }
+        })
     }
 
     private hasValidCapability(value: string | string[] | undefined): boolean {
@@ -293,15 +345,24 @@ export class BrowserAssistantBridge {
         }
 
         const requestUrl = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)
+        const onboardingComplete = this.dependencies.isOnboardingComplete?.() !== false
         if ((request.method === 'GET' || request.method === 'HEAD') && requestUrl.pathname === BROWSER_FILE_BRIDGE_PATH) {
+            if (!onboardingComplete) {
+                this.writeOnboardingRequired(response)
+                return
+            }
             await serveBrowserFileContent(request, response, requestUrl)
             return
         }
         if (request.method === 'GET' && requestUrl.pathname === BROWSER_ASSISTANT_BRIDGE_HEALTH_PATH) {
-            this.writeJson(response, 200, { ok: true, service: 'zyra-browser-assistant', version: 1 })
+            this.writeJson(response, 200, { ok: true, service: 'zyra-browser-assistant', version: 1, onboardingComplete })
             return
         }
         if (request.method === 'GET' && requestUrl.pathname === BROWSER_ASSISTANT_BRIDGE_EVENTS_PATH) {
+            if (!onboardingComplete) {
+                this.writeOnboardingRequired(response)
+                return
+            }
             this.openEventStream(request, response)
             return
         }
@@ -310,6 +371,10 @@ export class BrowserAssistantBridge {
             return
         }
         if (request.method === 'GET' && requestUrl.pathname === BROWSER_REALTIME_VOICE_EVENTS_PATH) {
+            if (!onboardingComplete) {
+                this.writeOnboardingRequired(response)
+                return
+            }
             const clientId = this.readBrowserClientId(request.headers[BROWSER_ASSISTANT_CLIENT_ID_HEADER])
             if (!clientId) {
                 this.writeJson(response, 400, { ok: false, error: 'Browser Voice client identity is invalid.' })
@@ -329,8 +394,13 @@ export class BrowserAssistantBridge {
                 this.writeJson(response, 400, { ok: false, error: 'Browser action request is invalid.' })
                 return
             }
+            if (!onboardingComplete && !isBrowserDevscopePathAllowedBeforeOnboarding(candidate.path)) {
+                this.writeOnboardingRequired(response)
+                return
+            }
+            const browserArgs = this.scopeBrowserDevscopeArgs(candidate.path, candidate.args)
             try {
-                const value = await this.dependencies.invokeDevscope(candidate.path, candidate.args)
+                const value = await this.dependencies.invokeDevscope(candidate.path, browserArgs)
                 this.writeJson(response, 200, { ok: true, value } satisfies BrowserAssistantBridgeInvokeResponse)
             } catch (error) {
                 this.writeJson(response, 200, {
@@ -342,6 +412,10 @@ export class BrowserAssistantBridge {
         }
         if (request.method !== 'POST' || requestUrl.pathname !== BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH) {
             this.writeJson(response, 404, { ok: false, error: 'Browser bridge route not found.' })
+            return
+        }
+        if (!onboardingComplete) {
+            this.writeOnboardingRequired(response)
             return
         }
         if (!String(request.headers['content-type'] || '').toLowerCase().startsWith('application/json')) {
@@ -384,8 +458,16 @@ export class BrowserAssistantBridge {
         }
     }
 
+    private scopeBrowserDevscopeArgs(path: string[], args: unknown[]): unknown[] {
+        if (path.length !== 2 || path[0] !== 'preferences') return args
+        const input = args[0] && typeof args[0] === 'object' && !Array.isArray(args[0])
+            ? args[0] as Record<string, unknown>
+            : {}
+        return [{ ...input, surface: 'browser', legacySettings: undefined }]
+    }
+
     private async invoke(method: BrowserAssistantBridgeMethod, args: unknown[], clientId: string | null): Promise<unknown> {
-        const service = this.dependencies.service
+        const service = this.requireAssistantService()
         switch (method) {
             case 'bootstrap': return service.getBootstrap()
             case 'getSnapshot': return service.getSnapshot()
@@ -497,6 +579,7 @@ export class BrowserAssistantBridge {
     }
 
     private openEventStream(request: IncomingMessage, response: ServerResponse): void {
+        const service = this.requireAssistantService()
         if (this.eventResponses.size >= MAX_EVENT_CLIENTS) {
             this.writeJson(response, 429, { ok: false, error: 'Too many browser event clients are connected.' })
             return
@@ -509,7 +592,7 @@ export class BrowserAssistantBridge {
         response.write(': connected\n\n')
         this.eventResponses.add(response)
         this.dependencies.onAssistantClientCountChanged?.(this.eventResponses.size)
-        const replay = this.dependencies.service.getExternalEventReplay()
+        const replay = service.getExternalEventReplay()
         if (replay.event || (replay.events && replay.events.length > 0)) {
             if (!response.write(this.serializeEvent(replay))) {
                 this.removeEventResponse(response)
@@ -575,6 +658,14 @@ export class BrowserAssistantBridge {
         response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         response.setHeader('Access-Control-Allow-Headers', `Content-Type, ${BROWSER_ASSISTANT_BRIDGE_HEADER}, ${BROWSER_ASSISTANT_BRIDGE_CAPABILITY_HEADER}, ${BROWSER_ASSISTANT_CLIENT_ID_HEADER}`)
         response.setHeader('Vary', 'Origin')
+    }
+
+    private writeOnboardingRequired(response: ServerResponse): void {
+        this.writeJson(response, 423, {
+            ok: false,
+            code: 'ONBOARDING_REQUIRED',
+            error: 'Finish setup in Zyra Desktop before using this action.'
+        })
     }
 
     private writeJson(response: ServerResponse, statusCode: number, value: unknown): void {

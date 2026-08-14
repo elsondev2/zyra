@@ -94,6 +94,12 @@ try {
     assert.equal(guestConfigFallbackCalls, 1, 'Electron guest APIs must remain intentionally gated in Chrome')
     assert.equal(eventRequestCount, 1, 'gated Electron guest APIs must not reach the Desktop relay')
 
+    assert.equal(typeof adapter.onboarding.onChanged, 'function', 'new live setup namespaces must expose typed event subscriptions even when the fallback adapter is older')
+    const onboardingState = await adapter.onboarding.getState()
+    assert.equal(onboardingState.success, true)
+    assert.equal(lastActionBody.includes('onboarding'), true)
+    assert.equal(lastActionBody.includes('getState'), true)
+
     const controlState = await adapter.agentControl.getState()
     assert.equal(controlState.success, true, 'browser clients must use the live Agent Control state')
     assert.equal(lastActionBody.includes('agentControl'), true)

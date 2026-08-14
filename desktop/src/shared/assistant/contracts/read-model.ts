@@ -156,6 +156,9 @@ export interface AssistantThreadShell {
     lastSeenCompletedTurnId: string | null
     runtimeMode: AssistantRuntimeMode
     interactionMode: AssistantInteractionMode
+    /** Per-chat execution values. Null/undefined means a legacy canonical chat owns the value. */
+    webSearch?: boolean | null
+    webFetch?: boolean | null
     state: AssistantThreadState
     canonicalPresence?: {
         state: 'detached' | 'ready' | 'running' | 'background'

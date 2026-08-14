@@ -1,4 +1,6 @@
 import type { ControlCursorState, ControlStateSnapshot } from '@shared/agent-control/contracts'
+import type { OnboardingSnapshot } from '@shared/onboarding/contracts'
+import type { DevicePreferencesChangedEvent } from '@shared/preferences/contracts'
 import type {
     DevScopeApi,
     DevScopeGitCloneProgressEvent,
@@ -38,7 +40,9 @@ const BROWSER_EVENT_METHODS = {
 
 const BROWSER_NAMESPACE_EVENT_METHODS = {
     'agentControl.onCursorChange': 'agentControlCursor',
-    'agentControl.onStateChange': 'agentControlState'
+    'agentControl.onStateChange': 'agentControlState',
+    'preferences.onChanged': 'preferencesChanged',
+    'onboarding.onChanged': 'onboardingChanged'
 } as const
 
 const AGENT_CONTROL_GUEST_ONLY_METHODS = new Set([
@@ -48,6 +52,8 @@ const AGENT_CONTROL_GUEST_ONLY_METHODS = new Set([
     'completeBrowserSurfaceRequest',
     'updateWorkspaceState'
 ])
+
+const LIVE_RELAY_NAMESPACES = new Set(['preferences', 'onboarding'])
 
 const ELECTRON_GUEST_ONLY_METHODS = new Set([
     'getBrowserPreviewConfig',
@@ -77,6 +83,8 @@ type BrowserEventPayloadByName = {
     gitCloneProgress: DevScopeGitCloneProgressEvent
     previewTerminal: DevScopePreviewTerminalEvent
     pythonPreview: DevScopePythonPreviewEvent
+    preferencesChanged: DevicePreferencesChangedEvent
+    onboardingChanged: OnboardingSnapshot
 }
 
 type BrowserActionTask = {
@@ -293,17 +301,19 @@ export function createLiveBrowserDevscopeAdapter(base: DevScopeApi): DevScopeApi
             if (property === 'then') return undefined
             if (typeof property !== 'string') return Reflect.get(target, property)
             const value = target[property]
-            if (property === 'window' || property === 'assistant' || property === 'updates') return value
+            if (property === 'window' || property === 'assistant' || property === 'updates' || property === 'secrets') return value
             const browserEventName = BROWSER_EVENT_METHODS[property as keyof typeof BROWSER_EVENT_METHODS]
             if (browserEventName) {
                 return (callback: (payload: unknown) => void) => browserDevscopeEventHub.subscribe(browserEventName, callback)
             }
             if (ELECTRON_GUEST_ONLY_METHODS.has(property)) return value
-            if (property.startsWith('on')) return eventFallback(value)
-            if (value && typeof value === 'object') {
+            if ((value && typeof value === 'object') || LIVE_RELAY_NAMESPACES.has(property)) {
                 const cached = namespaceCache.get(property)
                 if (cached) return cached
-                const namespace = new Proxy(value as Record<string, unknown>, {
+                const namespaceTarget = value && typeof value === 'object'
+                    ? value as Record<string, unknown>
+                    : {}
+                const namespace = new Proxy(namespaceTarget, {
                     get(namespaceTarget, method) {
                         if (method === 'then') return undefined
                         if (typeof method !== 'string') return Reflect.get(namespaceTarget, method)
@@ -320,6 +330,7 @@ export function createLiveBrowserDevscopeAdapter(base: DevScopeApi): DevScopeApi
                 namespaceCache.set(property, namespace)
                 return namespace
             }
+            if (property.startsWith('on')) return eventFallback(value)
             return (...args: unknown[]) => invokeBrowserDevscope([property], args)
         }
     }) as unknown as DevScopeApi

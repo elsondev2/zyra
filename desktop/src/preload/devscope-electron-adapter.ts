@@ -10,12 +10,14 @@ import { createFontsAdapter } from './adapters/fonts-adapter'
 import { createMemoryAdapter } from './adapters/memory-adapter'
 import { createProjectsAdapter } from './adapters/projects-adapter'
 import { createSettingsAndAiAdapter } from './adapters/settings-ai-adapter'
+import { createSetupAdapter } from './adapters/setup-adapter'
 import { createUpdatesAdapter } from './adapters/updates-adapter'
 import { createWindowAdapter } from './adapters/window-adapter'
 
 export function createDevScopeElectronAdapter(): DevScopeApi {
     const api: DevScopeApi = {
         ...createSettingsAndAiAdapter(),
+        ...createSetupAdapter(),
         ...createMemoryAdapter(),
         ...createProjectsAdapter(),
         ...createDisabledAdapters(),

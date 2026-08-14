@@ -85,7 +85,8 @@ export async function createAssistantSessionAction(deps: AssistantServiceActionD
         playground: deps.getSnapshot().playground
     })
     const projectPath = route.projectPath
-    const thread = createAssistantThread(createdAt, null, projectPath || null)
+    const defaults = await deps.getNewChatExecutionDefaults()
+    const thread = createAssistantThread(createdAt, null, projectPath || null, defaults)
     const session = createAssistantSessionRecord({
         sessionId,
         title: input?.title?.trim() || 'New Session',
@@ -371,10 +372,12 @@ export async function createAssistantThreadAction(deps: AssistantServiceActionDe
     }
 
     const createdAt = nowIso()
+    const defaults = await deps.getNewChatExecutionDefaults()
     const thread = createAssistantThread(
         createdAt,
         previousThread,
-        session.projectPath ?? previousThread?.cwd ?? null
+        session.projectPath ?? previousThread?.cwd ?? null,
+        defaults
     )
     deps.appendEvent('thread.created', createdAt, { sessionId: session.id, thread }, session.id, thread.id)
     deps.appendEvent('session.updated', createdAt, {

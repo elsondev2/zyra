@@ -724,6 +724,27 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
     }
 
     const base = {
+        preferences: {
+            get: () => unavailable('Device preferences require Zyra Desktop.'),
+            update: () => unavailable('Device preferences require Zyra Desktop.'),
+            onChanged: () => noopUnsubscribe
+        },
+        secrets: {
+            getHostedAiKeys: () => unavailable('Device secrets are available in Zyra Desktop only.'),
+            updateHostedAiKeys: () => unavailable('Device secrets are available in Zyra Desktop only.'),
+            migrateLegacyHostedAiKeys: () => unavailable('Device secrets are available in Zyra Desktop only.')
+        },
+        onboarding: {
+            getState: () => unavailable('Setup status requires Zyra Desktop.'),
+            getAuthStatus: () => unavailable('OpenAI setup requires Zyra Desktop.'),
+            connectChatGpt: () => unavailable('OpenAI setup requires Zyra Desktop.'),
+            connectApiKey: () => unavailable('OpenAI setup requires Zyra Desktop.'),
+            commitStep: () => unavailable('Setup changes require Zyra Desktop.'),
+            navigate: () => unavailable('Setup changes require Zyra Desktop.'),
+            beginReview: () => unavailable('Setup review requires Zyra Desktop.'),
+            cancelReview: () => unavailable('Setup review requires Zyra Desktop.'),
+            onChanged: () => noopUnsubscribe
+        },
         window: {
             minimize: () => {},
             maximize: () => {},

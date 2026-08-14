@@ -719,6 +719,8 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
                 thinking: event.payload.thinking,
                 profile: event.payload.profile,
                 runtimeMode: event.payload.runtimeMode,
+                webSearch: typeof event.payload.webSearch === 'boolean' ? event.payload.webSearch : existingThread.webSearch,
+                webFetch: typeof event.payload.webFetch === 'boolean' ? event.payload.webFetch : existingThread.webFetch,
                 updatedAt: event.createdAt
             }
         }, eventSession.id, eventThreadId)
@@ -751,6 +753,8 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
                 lastSeenCompletedTurnId: null,
                 runtimeMode: parentThread?.runtimeMode || 'approval-required',
                 interactionMode: parentThread?.interactionMode || 'default',
+                webSearch: parentThread?.webSearch ?? null,
+                webFetch: parentThread?.webFetch ?? null,
                 state: event.payload.state || 'ready',
                 lastError: null,
                 createdAt: event.createdAt,

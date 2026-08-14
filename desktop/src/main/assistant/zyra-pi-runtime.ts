@@ -88,6 +88,8 @@ type ZyraSessionContext = {
     runtimeMode: AssistantRuntimeMode
     interactionMode: AssistantInteractionMode
     profile: string
+    webSearch: boolean | null
+    webFetch: boolean | null
     activeTurnId: string | null
     completedTurnIds: Set<string>
     terminalAssistantMessageOutcome: TerminalAssistantMessageOutcome | null
@@ -1135,6 +1137,8 @@ export class ZyraPiRuntime extends EventEmitter {
             runtimeMode: thread.runtimeMode,
             interactionMode: thread.interactionMode,
             profile: normalizeZyraProfile(thread.profile),
+            webSearch: typeof thread.webSearch === 'boolean' ? thread.webSearch : null,
+            webFetch: typeof thread.webFetch === 'boolean' ? thread.webFetch : null,
             activeTurnId: null,
             completedTurnIds: new Set(),
             terminalAssistantMessageOutcome: null,
@@ -1184,7 +1188,9 @@ export class ZyraPiRuntime extends EventEmitter {
                 model,
                 runtimeMode: thread.runtimeMode,
                 interactionMode: thread.interactionMode,
-                profile: context.profile
+                profile: context.profile,
+                webSearch: context.webSearch ?? undefined,
+                webFetch: context.webFetch ?? undefined
             }
         })
         const attachmentState = thread.providerThreadId ? thread.state : 'starting'
@@ -1343,6 +1349,8 @@ export class ZyraPiRuntime extends EventEmitter {
             runtimeMode,
             interactionMode,
             profile,
+            webSearch: null,
+            webFetch: null,
             activeTurnId: input.taskId,
             completedTurnIds: new Set(),
             terminalAssistantMessageOutcome: null,
@@ -1623,6 +1631,8 @@ export class ZyraPiRuntime extends EventEmitter {
                 thinking: context.thinking,
                 profile: context.profile,
                 runtimeMode: context.runtimeMode,
+                webSearch: context.webSearch ?? undefined,
+                webFetch: context.webFetch ?? undefined,
                 images: options?.images
             })
             if (context.activeTurnId !== turnId) return
@@ -1714,7 +1724,9 @@ export class ZyraPiRuntime extends EventEmitter {
                 model: context.model,
                 thinking: context.thinking,
                 profile: context.profile,
-                runtimeMode: context.runtimeMode
+                runtimeMode: context.runtimeMode,
+                webSearch: context.webSearch ?? undefined,
+                webFetch: context.webFetch ?? undefined
             })
             const previousProviderThreadId = context.providerThreadId
             const providerThreadId = String(result['threadId'] || result['providerThreadId'] || context.resumeProviderThreadId || context.providerThreadId || randomUUID())
@@ -1726,6 +1738,8 @@ export class ZyraPiRuntime extends EventEmitter {
                 : result['runtimeMode'] === 'approval-required'
                     ? 'approval-required'
                     : context.runtimeMode
+            const webSearch = typeof result['webSearch'] === 'boolean' ? result['webSearch'] : context.webSearch
+            const webFetch = typeof result['webFetch'] === 'boolean' ? result['webFetch'] : context.webFetch
             const agentServerActiveTurnId = asString(result['agentServerActiveTurnId'])
             context.providerThreadId = providerThreadId
             context.resumeProviderThreadId = providerThreadId
@@ -1733,6 +1747,8 @@ export class ZyraPiRuntime extends EventEmitter {
             context.thinking = thinking
             context.profile = profile
             context.runtimeMode = runtimeMode
+            context.webSearch = webSearch
+            context.webFetch = webFetch
             context.connected = true
             if (agentServerActiveTurnId && !context.activeTurnId) context.activeTurnId = agentServerActiveTurnId
             const connectedFleet = asRecord(result['fleet']) as unknown as FleetSnapshot | null
@@ -1768,7 +1784,9 @@ export class ZyraPiRuntime extends EventEmitter {
                     model,
                     thinking,
                     profile,
-                    runtimeMode
+                    runtimeMode,
+                    webSearch: webSearch ?? undefined,
+                    webFetch: webFetch ?? undefined
                 }
             })
             this.emitRuntime({
@@ -1800,17 +1818,28 @@ export class ZyraPiRuntime extends EventEmitter {
             const thinking = isAssistantReasoningEffort(event['thinking']) ? event['thinking'] : context.thinking
             const profile = normalizeZyraProfile(event['profile'] || context.profile)
             const runtimeMode: AssistantRuntimeMode = event['runtimeMode'] === 'full-access' ? 'full-access' : 'approval-required'
+            const webSearch = typeof event['webSearch'] === 'boolean' ? event['webSearch'] : context.webSearch
+            const webFetch = typeof event['webFetch'] === 'boolean' ? event['webFetch'] : context.webFetch
             context.model = model
             context.thinking = thinking
             context.profile = profile
             context.runtimeMode = runtimeMode
+            context.webSearch = webSearch
+            context.webFetch = webFetch
             this.emitRuntime({
                 eventId: randomUUID(),
                 type: 'session.config.updated',
                 createdAt: nowIso(),
                 threadId: context.localThreadId,
                 providerThreadId: context.providerThreadId,
-                payload: { model, thinking, profile, runtimeMode }
+                payload: {
+                    model,
+                    thinking,
+                    profile,
+                    runtimeMode,
+                    webSearch: webSearch ?? undefined,
+                    webFetch: webFetch ?? undefined
+                }
             })
             return
         }

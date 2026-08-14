@@ -1,9 +1,9 @@
 /**
  * Zyra - Settings Store & Context
- * Manages all app settings with localStorage persistence
+ * Main-owned device settings facade with one-time renderer v4 migration.
  */
 
-import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from 'react'
 import { dispatchZyraThemeChanged } from './theme-events'
 import { clearProjectViewCaches } from './projectViewCache'
 import { clearRecentProjects } from './recentProjects'
@@ -16,6 +16,9 @@ import {
 } from './settings-assistant-defaults'
 import { getThemeDefinition, isDarkThemeId, isThemeId, THEME_CLASS_IDS, THEMES, type DarkTheme, type Theme, type ThemeTokens } from './settings-theme-catalog'
 import { resolveAccentTokens, resolveStatusTokens, resolveThemeTokens, toRgbChannels } from './settings-theme-semantics'
+import { getDevicePreferenceOwnership, type DevicePreferenceSurface, type DevicePreferencesSnapshot } from '@shared/preferences/contracts'
+import { isElectronRendererRuntime } from './browser-file-url'
+import { setCanonicalAssistantAutoReconnectPreference } from './assistant/assistant-runtime-preferences'
 
 export { THEMES, type DarkTheme, type Theme } from './settings-theme-catalog'
 export {
@@ -232,6 +235,8 @@ export interface Settings {
     assistantDefaultInteractionMode: AssistantDefaultInteractionMode
     assistantDefaultEffort: AssistantDefaultEffort
     assistantDefaultFastMode: boolean
+    assistantDefaultWebSearch: boolean
+    assistantDefaultWebFetch: boolean
     assistantBusyMessageMode: AssistantBusyMessageMode
     assistantAutoReconnect: boolean
     assistantHistoryPrefetch: boolean
@@ -314,6 +319,8 @@ const DEFAULT_SETTINGS: Settings = {
     assistantDefaultInteractionMode: 'default',
     assistantDefaultEffort: 'medium',
     assistantDefaultFastMode: false,
+    assistantDefaultWebSearch: true,
+    assistantDefaultWebFetch: true,
     assistantBusyMessageMode: 'queue',
     assistantAutoReconnect: true,
     assistantHistoryPrefetch: false,
@@ -473,15 +480,22 @@ function sanitizeProjectPullRequestConfig(value: unknown, defaults: Settings): P
     }
 }
 
-export function loadSettings(): Settings {
+export function loadSettings(source?: Record<string, unknown>): Settings {
+    const useRendererLegacyStorage = source === undefined
     try {
-        const legacyAssistantDefaults = loadLegacyAssistantComposerDefaults(
-            LEGACY_ASSISTANT_COMPOSER_PREFERENCES_STORAGE_KEY,
-            DEFAULT_SETTINGS
-        )
-        const stored = localStorage.getItem(STORAGE_KEY)
-        if (stored) {
-            const parsedValue: unknown = JSON.parse(stored)
+        const legacyAssistantDefaults = useRendererLegacyStorage
+            ? loadLegacyAssistantComposerDefaults(
+                LEGACY_ASSISTANT_COMPOSER_PREFERENCES_STORAGE_KEY,
+                DEFAULT_SETTINGS
+            )
+            : {}
+        const parsedValue: unknown = useRendererLegacyStorage
+            ? (() => {
+                const stored = localStorage.getItem(STORAGE_KEY)
+                return stored ? JSON.parse(stored) : null
+            })()
+            : source
+        if (parsedValue) {
             const parsed = parsedValue && typeof parsedValue === 'object' && !Array.isArray(parsedValue)
                 ? parsedValue as Record<string, unknown>
                 : {}
@@ -516,9 +530,12 @@ export function loadSettings(): Settings {
             const gitPullRequestCodexModel = typeof candidate.gitPullRequestCodexModel === 'string'
                 ? candidate.gitPullRequestCodexModel.trim()
                 : legacyCodexModel
-            const legacyFileDiffRenderMode = localStorage.getItem('devscope:project-details:diff-render-mode:v1')
-            const legacyProductProfile = localStorage.getItem('zyra-ui:active-profile:v2')
-                || localStorage.getItem('zyra-ui:active-profile:v1')
+            const legacyFileDiffRenderMode = useRendererLegacyStorage
+                ? localStorage.getItem('devscope:project-details:diff-render-mode:v1')
+                : null
+            const legacyProductProfile = useRendererLegacyStorage
+                ? localStorage.getItem('zyra-ui:active-profile:v2') || localStorage.getItem('zyra-ui:active-profile:v1')
+                : null
 
             return {
                 settingsSchemaVersion: 4,
@@ -632,6 +649,8 @@ export function loadSettings(): Settings {
                 assistantDefaultInteractionMode: sanitizeAssistantDefaultInteractionMode(candidate.assistantDefaultInteractionMode),
                 assistantDefaultEffort: sanitizeAssistantDefaultEffort(candidate.assistantDefaultEffort),
                 assistantDefaultFastMode: !!candidate.assistantDefaultFastMode,
+                assistantDefaultWebSearch: candidate.assistantDefaultWebSearch !== false,
+                assistantDefaultWebFetch: candidate.assistantDefaultWebFetch !== false,
                 assistantBusyMessageMode: candidate.assistantBusyMessageMode === 'force' ? 'force' : 'queue',
                 assistantAutoReconnect: candidate.assistantAutoReconnect !== false,
                 assistantHistoryPrefetch: Number(parsed.settingsSchemaVersion) >= 3
@@ -652,7 +671,9 @@ export function loadSettings(): Settings {
     }
     const defaults = {
         ...DEFAULT_SETTINGS,
-        ...loadLegacyAssistantComposerDefaults(LEGACY_ASSISTANT_COMPOSER_PREFERENCES_STORAGE_KEY, DEFAULT_SETTINGS)
+        ...(useRendererLegacyStorage
+            ? loadLegacyAssistantComposerDefaults(LEGACY_ASSISTANT_COMPOSER_PREFERENCES_STORAGE_KEY, DEFAULT_SETTINGS)
+            : {})
     }
     return {
         ...defaults,
@@ -660,20 +681,26 @@ export function loadSettings(): Settings {
     }
 }
 
-function saveSettings(settings: Settings): void {
+const LEGACY_SETTINGS_KEYS = [
+    STORAGE_KEY,
+    'devscope:project-details:diff-render-mode:v1',
+    LEGACY_ASSISTANT_COMPOSER_PREFERENCES_STORAGE_KEY,
+    'zyra-ui:active-profile:v2',
+    'zyra-ui:active-profile:v1'
+] as const
+
+function clearMigratedLegacySettings(): void {
     try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
-        localStorage.removeItem('devscope:project-details:diff-render-mode:v1')
-        localStorage.removeItem(LEGACY_ASSISTANT_COMPOSER_PREFERENCES_STORAGE_KEY)
-        localStorage.removeItem('zyra-ui:active-profile:v2')
-        localStorage.removeItem('zyra-ui:active-profile:v1')
-    } catch (e) {
-        console.error('Failed to save settings:', e)
+        for (const key of LEGACY_SETTINGS_KEYS) localStorage.removeItem(key)
+    } catch {
+        // Main now owns preferences; an unavailable renderer store needs no recovery action.
     }
 }
 
 interface SettingsContextType {
     settings: Settings
+    preferencesHydrated: boolean
+    preferencesError: string | null
     updateSettings: (partial: Partial<Settings>) => void
     clearCache: () => void
 }
@@ -681,13 +708,120 @@ interface SettingsContextType {
 const SettingsContext = createContext<SettingsContextType | null>(null)
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
-    const [settings, setSettings] = useState<Settings>(loadSettings)
+    const bootstrapRef = useRef<{
+        surface: DevicePreferenceSurface
+        legacy: Settings | null
+        initial: Settings
+    } | null>(null)
+    if (!bootstrapRef.current) {
+        const surface: DevicePreferenceSurface = isElectronRendererRuntime() ? 'desktop' : 'browser'
+        const legacy = surface === 'desktop' ? loadSettings() : null
+        bootstrapRef.current = {
+            surface,
+            legacy,
+            initial: legacy || loadSettings({ settingsSchemaVersion: 4 })
+        }
+    }
+    const bootstrap = bootstrapRef.current
+    const [settings, setSettings] = useState<Settings>(bootstrap.initial)
+    const [preferencesHydrated, setPreferencesHydrated] = useState(false)
+    const [preferencesError, setPreferencesError] = useState<string | null>(null)
+    const settingsRef = useRef(settings)
+    const revisionRef = useRef(0)
+    const writeQueueRef = useRef<Promise<void>>(Promise.resolve())
+
+    const replaceSettings = useCallback((next: Settings | ((current: Settings) => Settings)) => {
+        setSettings((current) => {
+            const resolved = typeof next === 'function' ? next(current) : next
+            settingsRef.current = resolved
+            return resolved
+        })
+    }, [])
+
+    const applyPreferenceSnapshot = useCallback((snapshot: DevicePreferencesSnapshot) => {
+        revisionRef.current = snapshot.revision
+        replaceSettings((current) => {
+            const canonical = loadSettings({ settingsSchemaVersion: 4, ...snapshot.settings })
+            return {
+                ...canonical,
+                // Startup is owned by Electron's OS integration; hosted keys are OS-encrypted.
+                startMinimized: current.startMinimized,
+                startWithWindows: current.startWithWindows,
+                groqApiKey: current.groqApiKey,
+                geminiApiKey: current.geminiApiKey
+            }
+        })
+    }, [replaceSettings])
+
+    const refreshPreferences = useCallback(async () => {
+        const result = await window.devscope.preferences.get({ surface: bootstrap.surface })
+        if (!result.success) throw new Error(result.error || 'Could not load device preferences.')
+        applyPreferenceSnapshot(result.snapshot)
+        setPreferencesError(null)
+    }, [applyPreferenceSnapshot, bootstrap.surface])
+
+    useEffect(() => {
+        let mounted = true
+        const unsubscribe = window.devscope.preferences.onChanged(() => {
+            if (!mounted) return
+            void refreshPreferences().catch(() => undefined)
+        })
+
+        void (async () => {
+            try {
+                const preferenceResult = await window.devscope.preferences.get({
+                    surface: bootstrap.surface,
+                    ...(bootstrap.surface === 'desktop' && bootstrap.legacy
+                        ? { legacySettings: bootstrap.legacy as unknown as Record<string, unknown> }
+                        : {})
+                })
+                if (!preferenceResult.success) throw new Error(preferenceResult.error || 'Could not load device preferences.')
+                if (mounted) {
+                    applyPreferenceSnapshot(preferenceResult.snapshot)
+                    setPreferencesError(null)
+                }
+
+                if (bootstrap.surface === 'desktop') {
+                    const legacySecrets = {
+                        groqApiKey: bootstrap.legacy?.groqApiKey || '',
+                        geminiApiKey: bootstrap.legacy?.geminiApiKey || ''
+                    }
+                    const migrationResult = await window.devscope.secrets
+                        .migrateLegacyHostedAiKeys(legacySecrets)
+                        .catch(() => null)
+                    const secretResult = migrationResult?.success
+                        ? await window.devscope.secrets.getHostedAiKeys().catch(() => null)
+                        : null
+                    if (mounted && secretResult?.success) {
+                        replaceSettings((current) => ({
+                            ...current,
+                            groqApiKey: secretResult.secrets.groqApiKey,
+                            geminiApiKey: secretResult.secrets.geminiApiKey
+                        }))
+                    }
+                    if (migrationResult?.success && migrationResult.status.legacyMigrationComplete) {
+                        clearMigratedLegacySettings()
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to hydrate main-owned settings:', error)
+                if (mounted) setPreferencesError(error instanceof Error ? error.message : 'Could not load device preferences.')
+            } finally {
+                if (mounted) setPreferencesHydrated(true)
+            }
+        })()
+
+        return () => {
+            mounted = false
+            unsubscribe()
+        }
+    }, [applyPreferenceSnapshot, bootstrap.legacy, bootstrap.surface, refreshPreferences, replaceSettings])
 
     useEffect(() => {
         if (typeof window.matchMedia !== 'function') return
         const colorScheme = window.matchMedia('(prefers-color-scheme: dark)')
         const syncSystemTheme = () => {
-            setSettings((current) => {
+            replaceSettings((current) => {
                 if (current.appearanceThemeMode !== 'system') return current
                 const theme: Theme = colorScheme.matches ? 'dark' : 'light'
                 if (current.theme === theme) return current
@@ -699,7 +833,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         syncSystemTheme()
         colorScheme.addEventListener('change', syncSystemTheme)
         return () => colorScheme.removeEventListener('change', syncSystemTheme)
-    }, [])
+    }, [replaceSettings])
 
     useEffect(() => {
         const customTokens = settings.appearanceCustomThemeActive
@@ -739,12 +873,54 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     }, [settings.accessibilityReduceMotion])
 
     useEffect(() => {
-        saveSettings(settings)
-    }, [settings])
+        setCanonicalAssistantAutoReconnectPreference(settings.assistantAutoReconnect)
+    }, [settings.assistantAutoReconnect])
 
     const updateSettings = useCallback((partial: Partial<Settings>) => {
-        setSettings((prev) => ({ ...prev, ...partial }))
-    }, [])
+        const next = loadSettings({
+            ...settingsRef.current,
+            ...partial,
+            settingsSchemaVersion: 4
+        } as unknown as Record<string, unknown>)
+        replaceSettings(next)
+
+        const preferencePatch: Record<string, unknown> = {}
+        const secretPatch: { groqApiKey?: string; geminiApiKey?: string } = {}
+        for (const [key, value] of Object.entries(partial)) {
+            const ownership = getDevicePreferenceOwnership(key)
+            if (ownership === 'shared' || ownership === 'surface') preferencePatch[key] = value
+            if (bootstrap.surface === 'desktop' && ownership === 'secret') {
+                if (key === 'groqApiKey') secretPatch.groqApiKey = String(value || '')
+                if (key === 'geminiApiKey') secretPatch.geminiApiKey = String(value || '')
+            }
+        }
+
+        if (Object.keys(secretPatch).length > 0) {
+            void window.devscope.secrets.updateHostedAiKeys(secretPatch).then((result) => {
+                if (!result.success) throw new Error(result.error || 'Could not save hosted AI credentials.')
+            }).catch((error) => console.error('Failed to save OS-owned credentials:', error))
+        }
+
+        if (Object.keys(preferencePatch).length === 0) return
+        writeQueueRef.current = writeQueueRef.current.then(async () => {
+            const save = () => window.devscope.preferences.update({
+                surface: bootstrap.surface,
+                expectedRevision: revisionRef.current,
+                patch: preferencePatch
+            })
+            let result = await save()
+            if (!result.success && (result as typeof result & { code?: string }).code === 'REVISION_CONFLICT') {
+                await refreshPreferences()
+                result = await save()
+            }
+            if (!result.success) throw new Error(result.error || 'Could not save device preferences.')
+            applyPreferenceSnapshot(result.snapshot)
+        }).catch((error) => {
+            console.error('Failed to save main-owned settings:', error)
+            setPreferencesError(error instanceof Error ? error.message : 'Could not save device preferences.')
+            return refreshPreferences().catch(() => undefined)
+        })
+    }, [applyPreferenceSnapshot, bootstrap.surface, refreshPreferences, replaceSettings])
 
     const clearCache = useCallback(() => {
         clearProjectViewCaches()
@@ -753,7 +929,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     }, [])
 
     return (
-        <SettingsContext.Provider value={{ settings, updateSettings, clearCache }}>
+        <SettingsContext.Provider value={{ settings, preferencesHydrated, preferencesError, updateSettings, clearCache }}>
             {children}
         </SettingsContext.Provider>
     )

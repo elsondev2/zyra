@@ -870,9 +870,18 @@ export async function loginZyraAuth(provider = "openai-codex", options = {}) {
   const AuthStorage = await loadPiAuthStorage();
   const authStorage = options.authStorage ?? AuthStorage.create();
   const tell = typeof options.onMessage === "function" ? options.onMessage : console.log;
+  const handleAuth = typeof options.onAuth === "function" ? options.onAuth : null;
+  const handleProgress = typeof options.onProgress === "function" ? options.onProgress : (message) => tell(message);
+  const handlePrompt = typeof options.onPrompt === "function"
+    ? options.onPrompt
+    : async (prompt) => askTerminal(prompt.message || "Paste the authorization code or redirect URL:");
 
   await authStorage.login(provider, {
     onAuth: (info) => {
+      if (handleAuth) {
+        handleAuth(info);
+        return;
+      }
       tell("Browser login opened. Finish the ChatGPT/Codex login there.");
       tell("If the browser does not open, copy this link:");
       tell(info.url);
@@ -880,8 +889,8 @@ export async function loginZyraAuth(provider = "openai-codex", options = {}) {
       openBrowserUrl(info.url);
       tell("Waiting for the browser callback... You are done when this terminal says login is complete.");
     },
-    onProgress: (message) => tell(message),
-    onPrompt: async (prompt) => askTerminal(prompt.message || "Paste the authorization code or redirect URL:"),
+    onProgress: handleProgress,
+    onPrompt: handlePrompt,
   });
 
   const status = authStorage.getAuthStatus(provider);

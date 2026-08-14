@@ -16,7 +16,7 @@ import { BrowserClientHost, getBrowserClientHostOrigins } from './browser-client
 import { BrowserDevscopeRelay } from './browser-devscope-relay'
 
 export type BrowserClientRuntimeDependencies = {
-    service: AssistantService
+    getAssistantService: () => AssistantService | null
     getDevscopeTarget: () => WebContents | null
     userDataPath: string
     staticRoot: string
@@ -25,6 +25,7 @@ export type BrowserClientRuntimeDependencies = {
     resolveClipboardAttachment: (reference: string) => Promise<string | null>
     getVoiceTranscriptionState: () => Promise<AssistantVoiceTranscriptionState>
     transcribeVoice: (input: AssistantTranscribeVoiceInput) => Promise<string>
+    isOnboardingComplete: () => boolean
 }
 
 export class BrowserClientRuntime {
@@ -72,7 +73,7 @@ export class BrowserClientRuntime {
 
         const devscopeRelay = new BrowserDevscopeRelay(this.dependencies.getDevscopeTarget)
         const bridge = new BrowserAssistantBridge({
-            service: this.dependencies.service,
+            getService: this.dependencies.getAssistantService,
             allowedOrigins,
             capability,
             descriptorPath: join(this.dependencies.userDataPath, BROWSER_ASSISTANT_BRIDGE_DESCRIPTOR_NAME),
@@ -82,7 +83,8 @@ export class BrowserClientRuntime {
             persistClipboardImage: this.dependencies.persistClipboardImage,
             resolveClipboardAttachment: this.dependencies.resolveClipboardAttachment,
             getVoiceTranscriptionState: this.dependencies.getVoiceTranscriptionState,
-            transcribeVoice: this.dependencies.transcribeVoice
+            transcribeVoice: this.dependencies.transcribeVoice,
+            isOnboardingComplete: this.dependencies.isOnboardingComplete
         })
         this.devscopeRelay = devscopeRelay
         this.bridge = bridge

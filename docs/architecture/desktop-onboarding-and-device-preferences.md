@@ -1,0 +1,135 @@
+# Desktop onboarding and device preferences
+
+**Status:** Current
+
+**Owner:** Zyra Desktop main process
+
+## Contract
+
+A fresh Zyra Desktop install cannot mount normal routes until the main process records a completed onboarding checkpoint. The local Browser client reads that same state and shows a Desktop-required blocking screen until completion. Renderer storage is never authoritative for completion.
+
+The setup sequence is fixed and ordered:
+
+1. Welcome
+2. Connect OpenAI
+3. Appearance
+4. Web access
+5. Projects folder
+6. Review
+
+Each successful Continue writes the next checkpoint. Closing, restarting, or crashing resumes at `currentStep`; forward navigation cannot skip an unfinished step. Back navigation is limited to completed steps.
+
+A completed device remains completed if its OpenAI credential later expires. Normal connection handling can ask the user to reconnect, but auth expiry does not recreate the first-run gate.
+
+## Main-owned files
+
+All paths are relative to Electron's `app.getPath('userData')`:
+
+| Path | Contents | Credential policy |
+| --- | --- | --- |
+| `setup/onboarding.json` | Schema/flow version, revision, status, exact step, completed steps, timestamps, and non-secret selections | Never contains API keys, OAuth tokens, or encrypted credential blobs |
+| `setup/device-preferences.json` | Versioned shared preferences and separate Desktop/Browser surface buckets | Secret and OS-owned keys are rejected |
+| `setup/device-secrets.bin` | Groq/Gemini hosted-provider keys encrypted by Electron `safeStorage` | Browser relay cannot invoke this API |
+| Existing Pi auth storage | ChatGPT OAuth and OpenAI API-key credentials | Reused through `src/zyra-sdk.mjs`; onboarding stores only method and verification time |
+
+### Atomicity and concurrency
+
+Onboarding, preferences, and encrypted secret writes use a sibling temporary file, flush the file, close it, and atomically rename it over the destination. POSIX directory handles are flushed after rename; Windows skips only the unsupported directory-fsync operation. Temporary files are removed after failed writes.
+
+Onboarding and preference mutations are serialized in the main process. Callers provide `expectedRevision`; a stale write returns `REVISION_CONFLICT` instead of overwriting newer state. Successful changes increment the revision and publish typed change events.
+
+### Corruption and newer versions
+
+- Invalid or malformed current onboarding data is renamed to `onboarding.json.<reason>-<timestamp>.bak`, and setup starts again from Welcome.
+- A newer onboarding schema or flow version is left byte-for-byte untouched. Desktop stays gated and asks for a newer Zyra version.
+- A newer preference schema is also left untouched. The renderer reports the load failure and does not fall back to writable renderer state.
+- Unreadable secret data fails closed; it is never copied into plaintext storage.
+
+## Authorization and startup
+
+Before completion:
+
+- Desktop renders only the setup chrome and full-window wizard. There is no route, backdrop, Escape, or maximize bypass; minimize and close remain available.
+- Assistant IPC, Browser Assistant/events, Browser Voice/events, Browser file content, and protected Browser devscope actions return `ONBOARDING_REQUIRED`.
+- Browser devscope permits only `onboarding.getState` and browser-scoped `preferences.get`, which are needed to render and live-update the blocking screen.
+- Browser callers cannot select the `desktop` preference surface, supply Desktop legacy settings, mutate onboarding, or invoke secret APIs.
+- Assistant construction and updater startup are deferred. The Browser host still starts so it can show the blocking state.
+- File/folder shell-launch intent is queued. It is replayed after completion instead of hiding or bypassing setup.
+
+The application menu is suppressed during setup. The custom setup title bar exposes only the allowed window controls.
+
+## OpenAI verification
+
+The OpenAI step uses Pi's real auth machinery:
+
+- **ChatGPT:** `loginZyraAuth('openai-codex')` opens the provider URL through Electron and waits for Pi's callback flow. Completion is accepted only when account status has usable live usage or a still-valid token.
+- **API key:** `configureZyraOpenAIApiKey` writes through Pi auth storage, then `verifyZyraOpenAIApiAuth` performs a real provider request.
+
+The connection is checked when leaving the OpenAI step and again at final completion. A renderer success flag alone cannot complete setup.
+
+## Preference ownership
+
+`desktop/src/shared/preferences/contracts.ts` is the key-level ownership source of truth.
+
+### Shared across Desktop and Browser
+
+Appearance intent, fonts, accessibility, project roots, editor/terminal defaults, Git defaults, Assistant creation defaults, and the new-chat web defaults (`assistantDefaultWebSearch`, `assistantDefaultWebFetch`). A write from either surface publishes a revision event; both surfaces refresh from main.
+
+### Surface-local
+
+Window/layout and presentation choices such as sidebars, Browser view/content layout, fullscreen panel state, usage/streaming presentation, reconnect, history prefetch, diagnostics, and transcription presentation. These values live in separate `surfaces.desktop` and `surfaces.browser` buckets.
+
+### OS-owned
+
+`startWithWindows` and `startMinimized` remain owned by Electron login-item settings and are not written to the preference JSON.
+
+### Secret
+
+`groqApiKey` and `geminiApiKey` are handled only by `DeviceSecretsService` and Electron `safeStorage`. If secure OS storage is unavailable, writes fail with an explicit error and the Desktop v4 renderer record is retained so migration can be retried without credential loss.
+
+### Derived
+
+`settingsSchemaVersion` and resolved `theme` are compatibility/derived values, not independently persisted main-owned preferences.
+
+## Desktop v4 migration
+
+Only the Electron renderer may offer its existing v4 `devscope-settings` record to main. Main partitions and sanitizes recognized keys, records `desktopLegacyV4CompletedAt`, and never runs that import again. Existing main-owned values win over a late legacy import.
+
+Hosted-provider keys migrate separately into `safeStorage`. Renderer legacy keys are cleared only after the encrypted secret migration confirms completion. Browser requests are forcibly scoped to `surface: 'browser'` and cannot trigger the Desktop migration.
+
+## New-chat web defaults
+
+The settings are creation defaults rather than live global switches:
+
+1. Main-owned preferences provide the current booleans to `AssistantService`.
+2. Every newly-created session/thread snapshots them into `AssistantThread.webSearch` and `AssistantThread.webFetch`.
+3. SQLite persists nullable `web_search` and `web_fetch` columns.
+4. Runtime connect and prompt payloads carry the per-thread values through the Desktop worker and shared agent server.
+5. `src/zyra-ui-bridge.mjs` applies and stores them in canonical chat config.
+
+Changing Settings affects later chats only. Existing chats reload their persisted thread/canonical configuration. Null values identify legacy chats whose canonical runtime remains authoritative.
+
+## Reviewing setup
+
+Desktop Settings → General → **Review setup** reopens the same flow. Review mode preserves `status: completed`, so Browser and protected main authorization remain valid. **Exit review** restores the completed checkpoint. The service supports invalidating completion only when a caller sends both `invalidateCompletion: true` and explicit confirmation; the current UI does not expose that destructive action.
+
+## Focused verification
+
+Run from the repository root:
+
+```text
+bun desktop/scripts/test-onboarding-state.ts
+bun desktop/scripts/test-device-preference-ownership.ts
+bun desktop/scripts/test-onboarding-renderer-gate.ts
+bun desktop/scripts/test-onboarding-browser-authorization.ts
+bun desktop/scripts/test-assistant-web-defaults.ts
+npm --prefix desktop run typecheck
+npm --prefix desktop run typecheck:browser-runtime
+npm --prefix desktop run test:browser-assistant-bridge
+npm --prefix desktop run test:browser-client-host
+npm --prefix desktop run test:browser-devscope-live
+npm --prefix desktop run test:assistant-realtime-voice
+npm --prefix desktop run test:assistant-new-chat
+npm --prefix desktop run test:assistant-startup
+npm --prefix desktop run test:settings
+```

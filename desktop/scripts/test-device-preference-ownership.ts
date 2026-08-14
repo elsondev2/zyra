@@ -1,0 +1,152 @@
+import assert from 'node:assert/strict'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+    getDevicePreferenceOwnership,
+    SHARED_DEVICE_PREFERENCE_KEYS,
+    SURFACE_DEVICE_PREFERENCE_KEYS
+} from '../src/shared/preferences/contracts'
+import {
+    DevicePreferencesService,
+    partitionDevicePreferencePatch
+} from '../src/main/setup/device-preferences-service'
+import { DeviceSecretsService } from '../src/main/setup/device-secrets-service'
+
+const root = await mkdtemp(join(tmpdir(), 'zyra-preferences-test-'))
+let tick = Date.parse('2026-08-14T11:00:00.000Z')
+const now = () => new Date(tick += 1_000)
+
+try {
+    const partitioned = partitionDevicePreferencePatch({
+        appearanceThemeMode: 'dark',
+        assistantDefaultWebSearch: false,
+        browserViewMode: 'grid',
+        startWithWindows: true,
+        groqApiKey: 'must-not-migrate',
+        theme: 'midnight',
+        unknownValue: true
+    }, 'desktop')
+    assert.deepEqual(partitioned.shared, {
+        appearanceThemeMode: 'dark',
+        assistantDefaultWebSearch: false
+    })
+    assert.deepEqual(partitioned.surface, { browserViewMode: 'grid' })
+    assert.equal(getDevicePreferenceOwnership('startWithWindows'), 'os')
+    assert.equal(getDevicePreferenceOwnership('groqApiKey'), 'secret')
+
+    const allOwned = new Set([...SHARED_DEVICE_PREFERENCE_KEYS, ...SURFACE_DEVICE_PREFERENCE_KEYS])
+    assert.equal(allOwned.size, SHARED_DEVICE_PREFERENCE_KEYS.length + SURFACE_DEVICE_PREFERENCE_KEYS.length, 'shared and surface preference keys must not overlap')
+
+    const path = join(root, 'device-preferences.json')
+    const service = new DevicePreferencesService(path, now)
+    const browserBeforeDesktop = await service.get({
+        surface: 'browser',
+        legacySettings: {
+            appearanceThemeMode: 'light',
+            browserViewMode: 'grid',
+            assistantDefaultWebFetch: false
+        }
+    })
+    assert.equal(browserBeforeDesktop.desktopLegacyMigrationComplete, false, 'browser legacy data must never trigger the Desktop migration')
+    assert.deepEqual(browserBeforeDesktop.settings, {})
+
+    const events: Array<{ revision: number; changedKeys: string[] }> = []
+    service.subscribe((event) => events.push({ revision: event.revision, changedKeys: event.changedKeys }))
+    const desktop = await service.get({
+        surface: 'desktop',
+        legacySettings: {
+            settingsSchemaVersion: 4,
+            appearanceThemeMode: 'light',
+            assistantDefaultWebSearch: false,
+            assistantDefaultWebFetch: true,
+            browserViewMode: 'grid',
+            assistantAutoReconnect: false,
+            startWithWindows: true,
+            groqApiKey: 'secret-groq',
+            geminiApiKey: 'secret-gemini'
+        }
+    })
+    assert.equal(desktop.desktopLegacyMigrationComplete, true)
+    assert.equal(desktop.settings.appearanceThemeMode, 'light')
+    assert.equal(desktop.settings.browserViewMode, 'grid')
+    assert.equal(desktop.settings.assistantAutoReconnect, false)
+    assert.equal('startWithWindows' in desktop.settings, false)
+    assert.equal('groqApiKey' in desktop.settings, false)
+
+    const browser = await service.get({ surface: 'browser' })
+    assert.equal(browser.settings.appearanceThemeMode, 'light', 'shared Desktop choices must reach the browser')
+    assert.equal(browser.settings.assistantDefaultWebSearch, false)
+    assert.equal('browserViewMode' in browser.settings, false, 'Desktop layout must not overwrite browser layout')
+    assert.equal('assistantAutoReconnect' in browser.settings, false, 'surface reconnect behavior must remain local')
+
+    const updated = await service.update({
+        surface: 'browser',
+        expectedRevision: browser.revision,
+        patch: {
+            browserViewMode: 'finder',
+            assistantHistoryPrefetch: true,
+            assistantDefaultWebSearch: true,
+            groqApiKey: 'still-secret'
+        }
+    })
+    assert.equal(updated.settings.browserViewMode, 'finder')
+    assert.equal(updated.settings.assistantHistoryPrefetch, true)
+    assert.equal(updated.settings.assistantDefaultWebSearch, true)
+    assert.equal(events.at(-1)?.revision, updated.revision, 'preference writes must publish a typed revision event')
+    assert.ok(events.at(-1)?.changedKeys.includes('assistantDefaultWebSearch'))
+
+    const desktopAfterBrowser = await service.get({ surface: 'desktop' })
+    assert.equal(desktopAfterBrowser.settings.browserViewMode, 'grid', 'browser surface updates must not alter Desktop view')
+    assert.equal(desktopAfterBrowser.settings.assistantDefaultWebSearch, true, 'shared updates must sync live across surfaces')
+
+    await assert.rejects(
+        service.update({ surface: 'desktop', expectedRevision: desktop.revision, patch: { compactMode: true } }),
+        /expected revision/
+    )
+    const persisted = await readFile(path, 'utf8')
+    assert.equal(persisted.includes('secret-groq'), false)
+    assert.equal(persisted.includes('secret-gemini'), false)
+    assert.equal(persisted.includes('still-secret'), false)
+
+    const encryptedPath = join(root, 'device-secrets.bin')
+    const encryption = {
+        isAvailable: () => true,
+        encrypt: (value: string) => Buffer.from(`enc:${Buffer.from(value).toString('base64')}`),
+        decrypt: (value: Buffer) => Buffer.from(value.toString().slice(4), 'base64').toString('utf8')
+    }
+    const secrets = new DeviceSecretsService(encryptedPath, encryption, now)
+    await secrets.migrateLegacyHostedAiKeys({ groqApiKey: 'groq-private', geminiApiKey: 'gemini-private' })
+    const secretSnapshot = await secrets.getHostedAiKeys()
+    assert.deepEqual(secretSnapshot.secrets, { groqApiKey: 'groq-private', geminiApiKey: 'gemini-private' })
+    const encrypted = await readFile(encryptedPath, 'utf8')
+    assert.equal(encrypted.includes('groq-private'), false, 'hosted keys must not be persisted as plaintext')
+    await secrets.migrateLegacyHostedAiKeys({ groqApiKey: 'browser-must-not-win' })
+    assert.equal((await secrets.getHostedAiKeys()).secrets.groqApiKey, 'groq-private', 'legacy migration must run once')
+
+    const unavailableSecrets = new DeviceSecretsService(join(root, 'unavailable-secrets.bin'), {
+        isAvailable: () => false,
+        encrypt: () => { throw new Error('must not encrypt') },
+        decrypt: () => { throw new Error('must not decrypt') }
+    }, now)
+    await assert.rejects(
+        unavailableSecrets.migrateLegacyHostedAiKeys({ groqApiKey: 'retain-in-legacy-until-secure' }),
+        /Secure OS credential storage is unavailable/
+    )
+    assert.equal((await unavailableSecrets.getHostedAiKeys()).status.persistenceAvailable, false)
+
+    const futurePath = join(root, 'future-device-preferences.json')
+    const futureContents = JSON.stringify({ schemaVersion: 88, revision: 9, shared: { compactMode: true } })
+    await writeFile(futurePath, futureContents)
+    const futureService = new DevicePreferencesService(futurePath, now)
+    await assert.rejects(futureService.get({ surface: 'desktop' }), /newer Zyra version/)
+    await assert.rejects(
+        futureService.update({ surface: 'desktop', expectedRevision: 9, patch: { compactMode: false } }),
+        /newer Zyra version/
+    )
+    assert.equal(await readFile(futurePath, 'utf8'), futureContents, 'future preference schemas must not be overwritten or downgraded')
+
+    console.log('device preference ownership and sync: ok')
+} finally {
+    await rm(root, { recursive: true, force: true })
+}

@@ -18,6 +18,7 @@ import type {
     AssistantThread
 } from '../../shared/assistant/contracts'
 import type { PreparedAssistantPromptImage } from './prompt-images'
+import type { AssistantNewChatExecutionDefaults } from './service-state'
 
 export interface AssistantRuntimeBridge {
     checkAvailability(): Promise<{ available: boolean; reason: string | null }>
@@ -60,6 +61,7 @@ export interface AssistantServiceActionDeps {
     getSnapshot(): AssistantSnapshot
     hydrateSelectedSession(sessionId: string): Promise<void>
     getFirstUserMessageText(sessionId: string): Promise<string | null>
+    getNewChatExecutionDefaults(): Promise<AssistantNewChatExecutionDefaults>
     appendEvent(
         type: AssistantDomainEvent['type'],
         occurredAt: string,

@@ -9,7 +9,7 @@ import { existsSync, statSync } from 'fs'
 import { electronApp, is } from './utils'
 import log from 'electron-log'
 import { registerIpcHandlers } from './ipc'
-import { disposeAssistantService, getAssistantService } from './assistant'
+import { configureAssistantService, disposeAssistantService, getAssistantService } from './assistant'
 import { persistAssistantClipboardImage, resolveAssistantClipboardAttachment } from './assistant/clipboard-attachments'
 import { getCodexVoiceTranscriptionState, transcribeVoiceWithCodex } from './assistant/codex-voice-transcription'
 import { BrowserClientRuntime } from './browser-client-runtime'
@@ -19,6 +19,7 @@ import { isSafeBrowserNavigationUrl, isZyraBrowserPartition } from './ipc/handle
 import { disposeAgentControlBroker, getAgentControlBroker } from './agent-control'
 import { trustedBrowserGuests } from './agent-control/trusted-guest-registry'
 import { resolveZyraWindowChromePolicy, type ZyraDesktopPlatform } from '../shared/platform-window-chrome'
+import { createDesktopSetupServices } from './setup'
 
 const APP_NAME = "Zyra"
 const DEV_APP_NAME = `${APP_NAME}-dev`
@@ -64,6 +65,8 @@ function applyRuntimeIdentity(identity: RuntimeIdentity): void {
 
 applyRuntimeIdentity(runtimeIdentity)
 
+const setupServices = createDesktopSetupServices(app.getPath('userData'))
+
 // Configure logging
 const verboseMainLogs = process.env.ZYRA_VERBOSE_LOGS === '1'
 log.transports.file.level = 'info'
@@ -76,6 +79,8 @@ let mainWindow: BrowserWindow | null = null
 let quickPreviewWindow: BrowserWindow | null = null
 let browserClientRuntime: BrowserClientRuntime | null = null
 let hasRegisteredIpcHandlers = false
+let normalDesktopRuntimeStarted = false
+const pendingShellLaunchTargets: ShellLaunchTarget[] = []
 const FILE_PROTOCOL = 'zyra'
 const QUICK_PREVIEW_ROUTE = '/quick-open'
 const EXTERNAL_EXPLORER_LAUNCH_QUERY = 'shellLaunch=1'
@@ -158,9 +163,31 @@ function sendAppMenuCommand(command: 'new-chat' | 'search' | 'settings' | 'reloa
     mainWindow.webContents.send('window:app-menu-command', command)
 }
 
-function configureApplicationMenu(): void {
+function configureApplicationMenu(setupComplete = true): void {
     if (process.platform !== 'darwin') {
         Menu.setApplicationMenu(null)
+        return
+    }
+
+    if (!setupComplete) {
+        Menu.setApplicationMenu(Menu.buildFromTemplate([
+            {
+                label: APP_NAME,
+                submenu: [
+                    { role: 'about' },
+                    { type: 'separator' },
+                    { role: 'services' },
+                    { type: 'separator' },
+                    { role: 'hide' },
+                    { role: 'hideOthers' },
+                    { role: 'unhide' },
+                    { type: 'separator' },
+                    { role: 'quit' }
+                ]
+            },
+            { role: 'editMenu' },
+            { role: 'windowMenu' }
+        ]))
         return
     }
 
@@ -384,7 +411,7 @@ function extractShellLaunchTargetFromArgv(argv: string[]): ShellLaunchTarget | n
 
 function ensureIpcHandlersRegistered(targetWindow: BrowserWindow): void {
     if (hasRegisteredIpcHandlers) return
-    registerIpcHandlers(targetWindow)
+    registerIpcHandlers(targetWindow, setupServices)
     hasRegisteredIpcHandlers = true
 }
 
@@ -537,6 +564,17 @@ function createQuickPreviewWindow(filePath: string): BrowserWindow {
 }
 
 function openFolderInMainWindow(folderPath: string): BrowserWindow {
+    if (!setupServices.onboarding.isAccessAllowed()) {
+        pendingShellLaunchTargets.push({ kind: 'directory', path: folderPath })
+        if (!mainWindow || mainWindow.isDestroyed()) {
+            mainWindow = createWindow(true)
+            ensureIpcHandlersRegistered(mainWindow)
+        }
+        if (mainWindow.isMinimized()) mainWindow.restore()
+        mainWindow.show()
+        mainWindow.focus()
+        return mainWindow
+    }
     const route = buildExternalExplorerRoute(folderPath)
 
     if (!mainWindow || mainWindow.isDestroyed()) {
@@ -553,6 +591,15 @@ function openFolderInMainWindow(folderPath: string): BrowserWindow {
 }
 
 function handleShellLaunchTarget(shellLaunchTarget: ShellLaunchTarget): void {
+    if (!setupServices.onboarding.isAccessAllowed()) {
+        pendingShellLaunchTargets.push(shellLaunchTarget)
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            if (mainWindow.isMinimized()) mainWindow.restore()
+            mainWindow.show()
+            mainWindow.focus()
+        }
+        return
+    }
     if (shellLaunchTarget.kind === 'directory') {
         openFolderInMainWindow(shellLaunchTarget.path)
         return
@@ -563,6 +610,26 @@ function handleShellLaunchTarget(shellLaunchTarget: ShellLaunchTarget): void {
         ensureIpcHandlersRegistered(mainWindow)
     }
     createQuickPreviewWindow(shellLaunchTarget.path)
+}
+
+function revealPendingShellLaunchTargets(): void {
+    if (!setupServices.onboarding.isAccessAllowed()) return
+    const pending = pendingShellLaunchTargets.splice(0, pendingShellLaunchTargets.length)
+    for (const target of pending) handleShellLaunchTarget(target)
+}
+
+function startNormalDesktopRuntime(): void {
+    if (normalDesktopRuntimeStarted || !setupServices.onboarding.isAccessAllowed()) return
+    normalDesktopRuntimeStarted = true
+    void initializeUpdater()
+    revealPendingShellLaunchTargets()
+}
+
+function stopNormalDesktopRuntimeForSetup(): void {
+    if (!normalDesktopRuntimeStarted) return
+    normalDesktopRuntimeStarted = false
+    disposeAssistantService()
+    disposeUpdater()
 }
 
 function resolveSenderWindow(event: IpcMainEvent | IpcMainInvokeEvent): BrowserWindow | null {
@@ -594,14 +661,25 @@ app.on('second-instance', (_event, argv) => {
     mainWindow.focus()
 })
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
     electronApp.setAppUserModelId(runtimeIdentity.appUserModelId)
-    configureApplicationMenu()
-    void initializeUpdater()
+    await setupServices.onboarding.initialize().catch((error) => {
+        log.error('[Onboarding] failed to hydrate mandatory setup state', error)
+    })
+    configureAssistantService({
+        getNewChatExecutionDefaults: () => setupServices.preferences.getNewChatWebDefaults()
+    })
+    configureApplicationMenu(setupServices.onboarding.isAccessAllowed())
+    setupServices.onboarding.subscribe((snapshot) => {
+        configureApplicationMenu(snapshot.accessAllowed)
+        if (snapshot.accessAllowed) startNormalDesktopRuntime()
+        else stopNormalDesktopRuntimeForSetup()
+    })
+
     const rendererUrl = process.env['ELECTRON_RENDERER_URL']
     try {
         const runtime = new BrowserClientRuntime({
-            service: getAssistantService(),
+            getAssistantService: () => setupServices.onboarding.isAccessAllowed() ? getAssistantService() : null,
             getDevscopeTarget: () => mainWindow?.webContents || null,
             userDataPath: app.getPath('userData'),
             staticRoot: join(__dirname, '../renderer'),
@@ -609,7 +687,8 @@ app.whenReady().then(() => {
             persistClipboardImage: persistAssistantClipboardImage,
             resolveClipboardAttachment: resolveAssistantClipboardAttachment,
             getVoiceTranscriptionState: getCodexVoiceTranscriptionState,
-            transcribeVoice: transcribeVoiceWithCodex
+            transcribeVoice: transcribeVoiceWithCodex,
+            isOnboardingComplete: () => setupServices.onboarding.isAccessAllowed()
         })
         browserClientRuntime = runtime
         void runtime.start().then((address) => {
@@ -629,16 +708,19 @@ app.whenReady().then(() => {
         void getAgentControlBroker().emergencyStop('Global emergency-stop shortcut pressed.')
     })
 
-    // Keep the full app alive in background for shell file-preview launches.
-    const launchHidden = initialShellLaunchTarget?.kind === 'file'
-    const initialRoute = initialShellLaunchTarget?.kind === 'directory'
+    const setupComplete = setupServices.onboarding.isAccessAllowed()
+    if (initialShellLaunchTarget && !setupComplete) pendingShellLaunchTargets.push(initialShellLaunchTarget)
+    // Keep the full app alive in background for completed shell file-preview launches.
+    const launchHidden = setupComplete && initialShellLaunchTarget?.kind === 'file'
+    const initialRoute = setupComplete && initialShellLaunchTarget?.kind === 'directory'
         ? buildExternalExplorerRoute(initialShellLaunchTarget.path)
         : '/'
     mainWindow = createWindow(!launchHidden, initialRoute)
     ensureIpcHandlersRegistered(mainWindow)
-    if (initialShellLaunchTarget?.kind === 'file') {
+    if (setupComplete && initialShellLaunchTarget?.kind === 'file') {
         createQuickPreviewWindow(initialShellLaunchTarget.path)
     }
+    startNormalDesktopRuntime()
 
     app.on('activate', function () {
         if (!mainWindow || mainWindow.isDestroyed()) {

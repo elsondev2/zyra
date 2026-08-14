@@ -26,6 +26,7 @@ Status words used below:
 - [Local browser client](architecture/local-browser-client.md) — **Current.** Same-device Chrome runtime, transport, security, and capability boundary.
 - [Assistant resources](architecture/assistant-resources.md) — **Current.** Resource indexing and presentation ownership.
 - [Desktop theme contract](architecture/desktop-theme-contract.md) — **Current.** Shared shell surfaces, accessible palette resolution, specialized renderers, and validation.
+- [Desktop onboarding and device preferences](architecture/desktop-onboarding-and-device-preferences.md) — **Current.** Mandatory setup gate, checkpoint recovery, preference ownership, migration, and per-chat web defaults.
 - [Voice-agent architecture](architecture/voice-agent/README.md) — **Draft specification.** Product Phase One defines direct strong-agent Chat, optional realtime Voice, exclusive foreground routing, deterministic task control, selective speech, and resumable continuity. Optional Product Phase Two adds a relationship-first Zyra Home, scoped work threads, hybrid Inbox, and voice-led focus visits while retaining Phase One. A linked Betum-informed research note explores evidence-owned adaptive coaching beyond these committed phases.
 
 ## Architecture decisions

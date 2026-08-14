@@ -9,6 +9,8 @@ import LinkHoverStatus from './components/ui/LinkHoverStatus'
 import { UpdatePromptCenter } from './components/updates/UpdatePromptCenter'
 import { AppUpdatesProvider } from './lib/app-updates'
 import { AssistantTitleBarProvider } from './lib/assistant/assistant-title-bar'
+import { OnboardingProvider } from './lib/onboarding'
+import { OnboardingGate } from './onboarding/OnboardingGate'
 import { AssistantRouteShell } from './pages/assistant/AssistantRouteShell'
 import {
     ASSISTANT_LEFT_SIDEBAR_WIDTH_STORAGE_KEY,
@@ -227,22 +229,32 @@ function AppContent() {
     )
 }
 
+function NormalDesktopApp() {
+    return (
+        <AppUpdatesProvider>
+            <CommandPaletteProvider>
+                <TerminalContextProvider>
+                    <HashRouter>
+                        <AssistantTitleBarProvider>
+                            <AppContent />
+                            <CommandPalette />
+                            <UpdatePromptCenter />
+                        </AssistantTitleBarProvider>
+                    </HashRouter>
+                </TerminalContextProvider>
+            </CommandPaletteProvider>
+        </AppUpdatesProvider>
+    )
+}
+
 function App() {
     return (
         <SettingsProvider>
-            <AppUpdatesProvider>
-                <CommandPaletteProvider>
-                    <TerminalContextProvider>
-                        <HashRouter>
-                            <AssistantTitleBarProvider>
-                                <AppContent />
-                                <CommandPalette />
-                                <UpdatePromptCenter />
-                            </AssistantTitleBarProvider>
-                        </HashRouter>
-                    </TerminalContextProvider>
-                </CommandPaletteProvider>
-            </AppUpdatesProvider>
+            <OnboardingProvider>
+                <OnboardingGate>
+                    <NormalDesktopApp />
+                </OnboardingGate>
+            </OnboardingProvider>
         </SettingsProvider>
     )
 }

@@ -78,6 +78,8 @@ export type AssistantRuntimeEvent =
             runtimeMode: AssistantRuntimeMode
             interactionMode: AssistantInteractionMode
             profile?: string
+            webSearch?: boolean
+            webFetch?: boolean
         }
     })
     | (AssistantRuntimeEventBase & {
@@ -87,6 +89,8 @@ export type AssistantRuntimeEvent =
             thinking: AssistantReasoningEffort
             profile: string
             runtimeMode: AssistantRuntimeMode
+            webSearch?: boolean
+            webFetch?: boolean
         }
     })
     | (AssistantRuntimeEventBase & {

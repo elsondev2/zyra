@@ -130,6 +130,14 @@ export class BrowserClientHost {
         }
 
         const requestUrl = new URL(request.url || '/', localOrigin)
+        if (this.shouldCanonicalizeRendererOrigin(request, requestUrl)) {
+            const address = this.address()
+            response.statusCode = 308
+            response.setHeader('Location', `http://${BROWSER_ASSISTANT_BRIDGE_HOST}:${address.port}${requestUrl.pathname}${requestUrl.search}`)
+            response.setHeader('Cache-Control', 'no-store')
+            response.end()
+            return
+        }
         if (this.isBridgePath(requestUrl.pathname)) {
             await this.proxyBridgeRequest(request, response, requestUrl, localOrigin)
             return
@@ -165,6 +173,12 @@ export class BrowserClientHost {
         }
         if (String(request.headers['sec-fetch-site'] || '').toLowerCase() === 'cross-site') return null
         return localOrigin
+    }
+
+    private shouldCanonicalizeRendererOrigin(request: IncomingMessage, requestUrl: URL): boolean {
+        return requestUrl.hostname.toLowerCase() === 'localhost'
+            && (request.method === 'GET' || request.method === 'HEAD')
+            && !this.isBridgePath(requestUrl.pathname)
     }
 
     private isBridgePath(pathname: string): boolean {

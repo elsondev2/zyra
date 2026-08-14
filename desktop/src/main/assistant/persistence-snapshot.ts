@@ -31,6 +31,8 @@ export function toAssistantThreadShell(thread: AssistantThread): AssistantThread
         lastSeenCompletedTurnId: thread.lastSeenCompletedTurnId,
         runtimeMode: thread.runtimeMode,
         interactionMode: thread.interactionMode,
+        webSearch: thread.webSearch ?? null,
+        webFetch: thread.webFetch ?? null,
         state: thread.state,
         canonicalPresence: thread.canonicalPresence ? {
             ...thread.canonicalPresence,

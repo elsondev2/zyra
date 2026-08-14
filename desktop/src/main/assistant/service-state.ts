@@ -20,7 +20,17 @@ export function isClearableIssueActivity(activity: { kind?: string; tone?: strin
         || activity.kind === 'ui.command-error'
 }
 
-export function createAssistantThread(createdAt: string, previousThread?: AssistantThread | null, cwd?: string | null): AssistantThread {
+export type AssistantNewChatExecutionDefaults = {
+    webSearch: boolean
+    webFetch: boolean
+}
+
+export function createAssistantThread(
+    createdAt: string,
+    previousThread?: AssistantThread | null,
+    cwd?: string | null,
+    defaults?: AssistantNewChatExecutionDefaults
+): AssistantThread {
     return {
         id: createAssistantId('assistant-thread'),
         providerThreadId: null,
@@ -38,6 +48,8 @@ export function createAssistantThread(createdAt: string, previousThread?: Assist
         lastSeenCompletedTurnId: null,
         runtimeMode: previousThread?.runtimeMode || 'approval-required',
         interactionMode: previousThread?.interactionMode || 'default',
+        webSearch: defaults?.webSearch ?? previousThread?.webSearch ?? null,
+        webFetch: defaults?.webFetch ?? previousThread?.webFetch ?? null,
         state: 'idle',
         lastError: null,
         createdAt,
