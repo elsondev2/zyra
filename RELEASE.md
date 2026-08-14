@@ -61,7 +61,7 @@ The staged contract contains:
 - built-in `agents/` definitions discovered by the fleet loader;
 - built-in `workflows/` definitions discovered by the workflow loader;
 - optional built-in `commands/` and `themes/` when present;
-- root `package.json`, `package-lock.json`, and production `node_modules/` installed from that lock;
+- root `package.json`, `package-lock.json`, Apache-2.0 `LICENSE`, and production `node_modules/` installed from that lock;
 - `zyra-runtime-manifest.json`, with sorted source paths, sizes, and SHA-256 hashes.
 
 Stage and validate it with:
@@ -83,6 +83,8 @@ All artifacts include version, OS, and architecture in noncolliding names.
 | Windows x64 | NSIS, assisted install | `Zyra-0.6.0-windows-x64-setup.exe` and `.blockmap` | `latest.yml` |
 | macOS universal | DMG and ZIP | `Zyra-0.6.0-macos-universal.dmg`, `.zip`, and ZIP `.blockmap` | `latest-mac.yml` |
 | Linux x64 | AppImage and deb | `Zyra-0.6.0-linux-x64.AppImage` and `.deb` (the AppImage carries its blockmap internally) | `latest-linux.yml` |
+
+The assembled release also contains the lockstep CLI/source archive `zyra-v0.6.0.zip`, the repository Apache-2.0 license inside every installed app/runtime, and one `SHA256SUMS` file covering the complete upload set.
 
 Windows retains the assisted NSIS flow, changeable install directory, icons, and Explorer shell integration in `desktop/build/installer.nsh`. The self-contained `win-x64` .NET computer-use sidecar is built and included only on Windows. The browser-control extension is built and packaged on every OS.
 
@@ -169,7 +171,7 @@ The repository contains no signing credentials. Configure these GitHub Actions s
 - `ZYRA_MACOS_NOTARIZATION_KEY_ID` — App Store Connect key ID.
 - `ZYRA_MACOS_NOTARIZATION_ISSUER_ID` — App Store Connect issuer UUID.
 
-A stable tag fails in preflight if any value is absent. The workflow never substitutes ad-hoc or fake signatures. Windows verifies the produced installer with Authenticode. macOS verifies the app with `codesign`, Gatekeeper, and the stapled notarization ticket. Unsigned artifacts are permitted only in a manual rehearsal and remain unpublished in both the workflow artifact store and a GitHub draft, so the updater cannot see them.
+Every publication tag, including alpha and beta tags, fails in preflight if any signing or notarization value is absent. The workflow never substitutes ad-hoc or fake signatures. Windows verifies the produced installer with Authenticode. macOS verifies the app with `codesign`, Gatekeeper, and the stapled notarization ticket. Unsigned artifacts are permitted only in a manual rehearsal and remain unpublished in both the workflow artifact store and a GitHub draft, so the updater cannot see them.
 
 ## Release checks
 

@@ -8,10 +8,8 @@ export type ResolvedGitTextProvider = {
     model?: string
 }
 
-function readProviderApiKey(settings: Settings, provider: Exclude<CommitAIProvider, 'codex'>) {
-    return provider === 'groq'
-        ? String(settings.groqApiKey || '').trim()
-        : String(settings.geminiApiKey || '').trim()
+function isHostedProviderConfigured(settings: Settings, provider: Exclude<CommitAIProvider, 'codex'>) {
+    return provider === 'groq' ? settings.groqApiKeyConfigured : settings.geminiApiKeyConfigured
 }
 
 function resolveCodexModel(settings: Settings, purpose: GitTextPurpose): string {
@@ -34,9 +32,9 @@ function buildResolvedProvider(settings: Settings, provider: CommitAIProvider, p
         }
     }
 
-    const apiKey = readProviderApiKey(settings, provider)
-    if (!apiKey) return null
-    return { provider, apiKey }
+    if (!isHostedProviderConfigured(settings, provider)) return null
+    // Main resolves the OS-encrypted key; persisted credentials never return to the renderer.
+    return { provider }
 }
 
 export function resolvePreferredGitTextProvider(

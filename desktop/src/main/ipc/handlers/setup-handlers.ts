@@ -1,9 +1,10 @@
-import { BrowserWindow, ipcMain } from 'electron'
+import { BrowserWindow, ipcMain as electronIpcMain } from 'electron'
 import {
     ONBOARDING_IPC,
     type BeginOnboardingReviewInput,
     type CancelOnboardingReviewInput,
     type CommitOnboardingStepInput,
+    type DisconnectOpenAIInput,
     type NavigateOnboardingInput,
     type OnboardingSnapshot
 } from '../../../shared/onboarding/contracts'
@@ -17,6 +18,18 @@ import {
     type UpdateHostedAiSecretsInput
 } from '../../../shared/preferences/secrets-contracts'
 import type { DesktopSetupServices } from '../../setup'
+import { createOnboardingGatedIpcMain } from '../onboarding-ipc-gate'
+
+const PRE_ONBOARDING_SETUP_CHANNELS = new Set<string>([
+    DEVICE_PREFERENCES_IPC.get,
+    DEVICE_SECRETS_IPC.migrateLegacyHostedAiKeys,
+    ONBOARDING_IPC.getState,
+    ONBOARDING_IPC.getAuthStatus,
+    ONBOARDING_IPC.connectChatGpt,
+    ONBOARDING_IPC.connectApiKey,
+    ONBOARDING_IPC.commitStep,
+    ONBOARDING_IPC.navigate
+])
 
 function errorPayload(error: unknown) {
     return {
@@ -48,6 +61,12 @@ export function registerSetupIpcHandlers(services: DesktopSetupServices): void {
     services.preferences.subscribe((event) => broadcast(DEVICE_PREFERENCES_IPC.changed, event))
     services.onboarding.subscribe((snapshot) => broadcast(ONBOARDING_IPC.changed, snapshot))
 
+    const ipcMain = createOnboardingGatedIpcMain(electronIpcMain, {
+        isAccessAllowed: () => services.onboarding.isAccessAllowed(),
+        allowedBeforeOnboarding: PRE_ONBOARDING_SETUP_CHANNELS,
+        blockedResult: onboardingRequiredError
+    })
+
     ipcMain.handle(DEVICE_PREFERENCES_IPC.get, (_event, input: GetDevicePreferencesInput) => result(async () => ({
         snapshot: await services.preferences.get(input)
     })))
@@ -55,9 +74,6 @@ export function registerSetupIpcHandlers(services: DesktopSetupServices): void {
         snapshot: await services.preferences.update(input)
     })))
 
-    ipcMain.handle(DEVICE_SECRETS_IPC.getHostedAiKeys, () => result(async () => (
-        services.secrets.getHostedAiKeys()
-    )))
     ipcMain.handle(DEVICE_SECRETS_IPC.updateHostedAiKeys, (_event, input: UpdateHostedAiSecretsInput) => result(async () => (
         services.secrets.updateHostedAiKeys(input)
     )))
@@ -71,12 +87,23 @@ export function registerSetupIpcHandlers(services: DesktopSetupServices): void {
     ipcMain.handle(ONBOARDING_IPC.getAuthStatus, () => result(async () => ({
         status: await services.onboarding.getAuthStatus()
     })))
+    ipcMain.handle(ONBOARDING_IPC.getConnectionsStatus, () => result(async () => ({
+        status: await services.auth.getConnectionsStatus()
+    })))
     ipcMain.handle(ONBOARDING_IPC.connectChatGpt, () => result(async () => ({
         status: await services.onboarding.connectChatGpt()
     })))
     ipcMain.handle(ONBOARDING_IPC.connectApiKey, (_event, apiKey: string) => result(async () => ({
         status: await services.onboarding.connectApiKey(apiKey)
     })))
+    ipcMain.handle(ONBOARDING_IPC.disconnectOpenAI, (_event, input: DisconnectOpenAIInput) => result(async () => {
+        if (input?.confirmed !== true) {
+            throw Object.assign(new Error('Confirm the exact OpenAI connection before disconnecting it.'), {
+                code: 'CONFIRMATION_REQUIRED'
+            })
+        }
+        return { status: await services.auth.disconnect(input.method) }
+    }))
     ipcMain.handle(ONBOARDING_IPC.commitStep, (_event, input: CommitOnboardingStepInput) => result(async () => ({
         snapshot: await services.onboarding.commitStep(input)
     })))

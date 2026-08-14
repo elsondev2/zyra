@@ -39,12 +39,15 @@ function rows(section: string, labels: string[], keywords: Record<string, string
 
 export const SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly SettingsSearchTarget[]>> = {
     general: [
-        ...rows('Desktop', ['Open at login', 'Start hidden', 'Chat rail', 'Agent Inbox sidebar'], {
-            'Open at login': 'startup launch automatically windows boot',
-            'Start hidden': 'startup minimized tray background',
-            'Chat rail': 'sidebar collapsed navigation',
+        ...rows('Desktop host', ['Open at login', 'Start hidden'], {
+            'Open at login': 'startup launch automatically sign in computer',
+            'Start hidden': 'startup minimized background'
+        }),
+        ...rows('Interface', ['Chat rail', 'Agent Inbox sidebar'], {
+            'Chat rail': 'sidebar collapsed navigation surface',
             'Agent Inbox sidebar': 'sidebar active work recent settled'
         }),
+        row('Setup', 'Review device setup', 'onboarding openai appearance web projects review'),
         row('Local maintenance', 'Cached UI data', 'clear cache renderer local maintenance')
     ],
     appearance: [
@@ -63,6 +66,11 @@ export const SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly SettingsS
         })
     ],
     account: [
+        ...rows('OpenAI connections', ['ChatGPT subscription', 'OpenAI API key', 'New-chat default'], {
+            'ChatGPT subscription': 'connect reconnect disconnect oauth retry use new chats',
+            'OpenAI API key': 'add replace verify remove disconnect api credential',
+            'New-chat default': 'switch provider model chatgpt api existing chats'
+        }),
         ...rows('ChatGPT account', ['Connection', 'Email', 'Plan', 'Pi provider', 'Account ID', 'Access refresh', 'Connection source'], {
             Connection: 'chatgpt openai oauth login signed in',
             'Pi provider': 'openai codex provider identifier',

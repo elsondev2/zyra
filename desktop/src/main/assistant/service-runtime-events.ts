@@ -680,6 +680,10 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
 
     if (event.type === 'session.state.changed') {
         if (!eventSession) return
+        // Connection lifecycle without a turn is client/navigation bookkeeping.
+        // Keep canonical recency, Agent Inbox status, and the durable timeline tied
+        // to actual agent work; the live runtime status carries connection errors.
+        if (!event.turnId) return
         const existingThread = eventThreadRecord?.thread || deps.requireThread(event.threadId)
         const modelNotice = getAssistantModelNoticePresentation(
             event.payload.error || event.payload.message,

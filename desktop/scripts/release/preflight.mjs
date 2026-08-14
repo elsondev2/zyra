@@ -64,8 +64,8 @@ if (mode !== 'contract') {
     }
 }
 
-const stablePublication = mode === 'tag' && !version.includes('-')
-if (stablePublication) {
+const taggedPublication = mode === 'tag'
+if (taggedPublication) {
     const requiredSecrets = [
         'ZYRA_WINDOWS_CERTIFICATE',
         'ZYRA_WINDOWS_CERTIFICATE_PASSWORD',
@@ -76,7 +76,7 @@ if (stablePublication) {
         'ZYRA_MACOS_NOTARIZATION_ISSUER_ID'
     ]
     const missing = requiredSecrets.filter((name) => !hasSecret(name))
-    assert(missing.length === 0, `Stable publication is blocked; missing signing/notarization secrets: ${missing.join(', ')}`)
+    assert(missing.length === 0, `Tagged publication is blocked; missing signing/notarization secrets: ${missing.join(', ')}`)
 }
 
 const output = process.env.GITHUB_OUTPUT
@@ -86,7 +86,7 @@ if (output) {
         `tag=${tag}`,
         `head=${head || ''}`,
         `publish=${mode === 'tag' ? 'true' : 'false'}`,
-        `require_signing=${stablePublication ? 'true' : 'false'}`
+        `require_signing=${taggedPublication ? 'true' : 'false'}`
     ].join('\n') + '\n')
 }
 

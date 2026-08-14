@@ -63,6 +63,12 @@ export class DeviceSecretsService {
         private readonly now: () => Date = () => new Date()
     ) {}
 
+    async getHostedAiKey(provider: 'groq' | 'gemini'): Promise<string> {
+        const record = await this.load()
+        return provider === 'groq' ? record.groqApiKey : record.geminiApiKey
+    }
+
+    /** Test/support boundary; decrypted keys are never exposed through IPC. */
     async getHostedAiKeys(): Promise<{ secrets: HostedAiSecrets; status: HostedAiSecretStatus }> {
         const record = await this.load()
         return {
@@ -77,14 +83,21 @@ export class DeviceSecretsService {
     updateHostedAiKeys(input: UpdateHostedAiSecretsInput): Promise<{ status: HostedAiSecretStatus }> {
         return this.enqueue(async () => {
             const record = await this.load()
+            const hasGroqUpdate = Object.prototype.hasOwnProperty.call(input || {}, 'groqApiKey')
+            const hasGeminiUpdate = Object.prototype.hasOwnProperty.call(input || {}, 'geminiApiKey')
+            const groqApiKey = hasGroqUpdate ? sanitizeSecret(input?.groqApiKey) : record.groqApiKey
+            const geminiApiKey = hasGeminiUpdate ? sanitizeSecret(input?.geminiApiKey) : record.geminiApiKey
+            const removesExistingCredential = (hasGroqUpdate && Boolean(record.groqApiKey) && !groqApiKey)
+                || (hasGeminiUpdate && Boolean(record.geminiApiKey) && !geminiApiKey)
+            if (removesExistingCredential && input?.confirmClear !== true) {
+                throw Object.assign(new Error('Confirm before removing saved hosted-provider API keys.'), {
+                    code: 'CONFIRMATION_REQUIRED'
+                })
+            }
             const next: SecretRecord = {
                 ...record,
-                ...(Object.prototype.hasOwnProperty.call(input || {}, 'groqApiKey')
-                    ? { groqApiKey: sanitizeSecret(input?.groqApiKey) }
-                    : {}),
-                ...(Object.prototype.hasOwnProperty.call(input || {}, 'geminiApiKey')
-                    ? { geminiApiKey: sanitizeSecret(input?.geminiApiKey) }
-                    : {}),
+                groqApiKey,
+                geminiApiKey,
                 updatedAt: this.now().toISOString()
             }
             await this.persist(next)

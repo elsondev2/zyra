@@ -10,6 +10,7 @@ on:
       - "workflows/**"
       - "package.json"
       - "package-lock.json"
+      - "LICENSE"
       - "RELEASE.md"
       - ".github/workflows/desktop-*.yml"
   push:
@@ -23,6 +24,7 @@ on:
       - "workflows/**"
       - "package.json"
       - "package-lock.json"
+      - "LICENSE"
       - "RELEASE.md"
       - ".github/workflows/desktop-*.yml"
 
@@ -88,6 +90,9 @@ jobs:
 
       - name: Validate release and updater contracts
         run: npm --prefix desktop run test:release-infra
+
+      - name: Validate onboarding, account, provider, and native behavior
+        run: npm --prefix desktop run test:release-readiness
 
       - name: Generate and validate native icon families
         run: npm --prefix desktop run brand:release-assets && npm --prefix desktop run test:branding

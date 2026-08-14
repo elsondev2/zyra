@@ -101,9 +101,11 @@ import type {
     BeginOnboardingReviewInput,
     CancelOnboardingReviewInput,
     CommitOnboardingStepInput,
+    DisconnectOpenAIInput,
     NavigateOnboardingInput,
     OnboardingAuthStatus,
-    OnboardingSnapshot
+    OnboardingSnapshot,
+    OpenAIConnectionsStatus
 } from '../onboarding/contracts'
 import type {
     DevicePreferencesChangedEvent,
@@ -112,7 +114,6 @@ import type {
     UpdateDevicePreferencesInput
 } from '../preferences/contracts'
 import type {
-    HostedAiSecrets,
     HostedAiSecretStatus,
     UpdateHostedAiSecretsInput
 } from '../preferences/secrets-contracts'
@@ -360,7 +361,6 @@ export interface DevScopePreferencesApi {
 }
 
 export interface DevScopeSecretsApi {
-    getHostedAiKeys: () => Promise<DevScopeResult<{ secrets: HostedAiSecrets; status: HostedAiSecretStatus }>>
     updateHostedAiKeys: (input: UpdateHostedAiSecretsInput) => Promise<DevScopeResult<{ status: HostedAiSecretStatus }>>
     migrateLegacyHostedAiKeys: (input: UpdateHostedAiSecretsInput) => Promise<DevScopeResult<{ status: HostedAiSecretStatus }>>
 }
@@ -368,8 +368,10 @@ export interface DevScopeSecretsApi {
 export interface DevScopeOnboardingApi {
     getState: () => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>
     getAuthStatus: () => Promise<DevScopeResult<{ status: OnboardingAuthStatus }>>
+    getConnectionsStatus: () => Promise<DevScopeResult<{ status: OpenAIConnectionsStatus }>>
     connectChatGpt: () => Promise<DevScopeResult<{ status: OnboardingAuthStatus }>>
     connectApiKey: (apiKey: string) => Promise<DevScopeResult<{ status: OnboardingAuthStatus }>>
+    disconnectOpenAI: (input: DisconnectOpenAIInput) => Promise<DevScopeResult<{ status: OpenAIConnectionsStatus }>>
     commitStep: (input: CommitOnboardingStepInput) => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>
     navigate: (input: NavigateOnboardingInput) => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>
     beginReview: (input: BeginOnboardingReviewInput) => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>

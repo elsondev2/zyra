@@ -1,5 +1,5 @@
 import log from 'electron-log'
-import { generateCodexText } from './codex'
+import { generateChatGptText } from './chatgpt'
 import { requestGenerateContent } from './gemini/request'
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions'
@@ -243,13 +243,13 @@ export async function generateGeminiPullRequestDraft(
     }
 }
 
-export async function generateCodexPullRequestDraft(
+export async function generateChatGptPullRequestDraft(
     input: PullRequestDraftInput,
     model?: string
 ): Promise<{ success: boolean; title?: string; body?: string; error?: string }> {
     try {
         const prompt = buildPrompt(input)
-        const result = await generateCodexText(prompt, {
+        const result = await generateChatGptText(prompt, {
             cwd: process.cwd(),
             model
         })

@@ -36,7 +36,8 @@ for (const path of sourceFiles(desktopSourceRoot)) {
   }
 }
 
-const gitProvider = read("desktop/src/main/ai/codex.ts");
+assert.equal(existsSync(join(root, "desktop/src/main/ai/codex.ts")), false, "the retired Git Codex module name must stay removed");
+const gitProvider = read("desktop/src/main/ai/chatgpt.ts");
 assert.doesNotMatch(gitProvider, /node:child_process|\b(?:spawn|execFile|exec)\s*\(/u, "Git ChatGPT text must not launch a CLI");
 assert.match(gitProvider, /getAssistantService\(\)\.generateUtilityText\(/u, "Git ChatGPT text must use AssistantService utility generation");
 

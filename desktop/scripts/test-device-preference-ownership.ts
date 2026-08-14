@@ -123,6 +123,14 @@ try {
     assert.equal(encrypted.includes('groq-private'), false, 'hosted keys must not be persisted as plaintext')
     await secrets.migrateLegacyHostedAiKeys({ groqApiKey: 'browser-must-not-win' })
     assert.equal((await secrets.getHostedAiKeys()).secrets.groqApiKey, 'groq-private', 'legacy migration must run once')
+    await assert.rejects(
+        secrets.updateHostedAiKeys({ groqApiKey: '' }),
+        (error: unknown) => (error as { code?: string }).code === 'CONFIRMATION_REQUIRED',
+        'removing an encrypted hosted credential requires an explicit destructive confirmation'
+    )
+    await secrets.updateHostedAiKeys({ groqApiKey: '', confirmClear: true })
+    assert.equal((await secrets.getHostedAiKeys()).status.groqConfigured, false)
+    assert.equal((await secrets.getHostedAiKeys()).status.geminiConfigured, true)
 
     const unavailableSecrets = new DeviceSecretsService(join(root, 'unavailable-secrets.bin'), {
         isAvailable: () => false,

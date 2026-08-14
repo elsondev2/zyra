@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, parse } from 'node:path'
 import { DevicePreferencesService } from '../src/main/setup/device-preferences-service'
-import { OnboardingService } from '../src/main/setup/onboarding-service'
+import { OnboardingService, validateOnboardingProjectsFolder } from '../src/main/setup/onboarding-service'
 import { OpenAIConnectionService } from '../src/main/setup/openai-connection-service'
 
 const root = await mkdtemp(join(tmpdir(), 'zyra-onboarding-test-'))
 const onboardingPath = join(root, 'setup', 'onboarding.json')
 const preferencesPath = join(root, 'setup', 'device-preferences.json')
+const projectsPath = join(root, 'projects')
+await mkdir(projectsPath)
 let connected = true
 let tick = Date.parse('2026-08-14T10:00:00.000Z')
 const now = () => new Date(tick += 1_000)
@@ -28,7 +30,10 @@ async function verifyOpenAiConnectionContract() {
             loginZyraAuth: async () => undefined,
             configureZyraOpenAIApiKey: async (key: string) => { apiConfigured = true; verifiedApiKey = key },
             verifyZyraOpenAIApiAuth: async () => { verificationCalls += 1; return { ok: true } },
-            getZyraAuthStatus: async () => ({ provider: 'openai', status: { configured: apiConfigured } })
+            getZyraAuthStatus: async () => ({ provider: 'openai', status: { configured: apiConfigured } }),
+            removeZyraAuth: async (method: 'subscription' | 'api') => {
+                if (method === 'api') apiConfigured = false
+            }
         })
     })
     const apiStatus = await apiAuth.connectApiKey('test-openai-key')
@@ -36,6 +41,11 @@ async function verifyOpenAiConnectionContract() {
     assert.equal(verificationCalls, 1, 'API-key onboarding must execute Pi’s provider verification call')
     assert.equal(apiStatus.method, 'api-key')
     assert.equal(apiStatus.verified, true)
+    const connectedMethods = await apiAuth.getConnectionsStatus()
+    assert.equal(connectedMethods.apiKey.verified, true)
+    assert.equal(connectedMethods.chatgpt.verified, true)
+    const disconnectedMethods = await apiAuth.disconnect('api-key')
+    assert.equal(disconnectedMethods.apiKey.configured, false)
 
     let chatConnected = false
     let openedUrl: string | null = null
@@ -55,7 +65,8 @@ async function verifyOpenAiConnectionContract() {
             },
             configureZyraOpenAIApiKey: async () => undefined,
             verifyZyraOpenAIApiAuth: async () => ({ ok: true }),
-            getZyraAuthStatus: async () => ({ provider: 'openai', status: { configured: false } })
+            getZyraAuthStatus: async () => ({ provider: 'openai', status: { configured: false } }),
+            removeZyraAuth: async () => undefined
         })
     })
     const chatStatus = await chatAuth.connectChatGpt()
@@ -77,7 +88,8 @@ function createAuth() {
             loginZyraAuth: async () => undefined,
             configureZyraOpenAIApiKey: async () => undefined,
             verifyZyraOpenAIApiAuth: async () => ({ ok: true }),
-            getZyraAuthStatus: async () => ({ provider: 'openai', status: { configured: false } })
+            getZyraAuthStatus: async () => ({ provider: 'openai', status: { configured: false } }),
+            removeZyraAuth: async () => undefined
         })
     })
 }
@@ -127,7 +139,7 @@ try {
     snapshot = await service.commitStep({
         expectedRevision: 4,
         step: 'projects',
-        selection: { projectsFolder: 'C:/work/projects' }
+        selection: { projectsFolder: projectsPath }
     })
     assert.equal(snapshot.record?.currentStep, 'review')
     snapshot = await service.commitStep({ expectedRevision: 5, step: 'review' })
@@ -143,6 +155,9 @@ try {
 
     const webDefaults = await preferences.getNewChatWebDefaults()
     assert.deepEqual(webDefaults, { webSearch: false, webFetch: true })
+    assert.equal(await validateOnboardingProjectsFolder(projectsPath), await realpath(projectsPath))
+    await assert.rejects(validateOnboardingProjectsFolder(join(root, 'missing')), /existing projects folder/)
+    await assert.rejects(validateOnboardingProjectsFolder(parse(root).root), /bounded projects folder/)
 
     connected = false
     const restarted = new OnboardingService(onboardingPath, preferences, createAuth(), now)

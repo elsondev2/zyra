@@ -1,8 +1,8 @@
 import type { DevScopeGitTextProvider } from '../../shared/contracts/devscope-git-contracts'
-import { generateCodexCommitMessage, testCodexConnection } from './codex'
+import { generateChatGptCommitMessage, testChatGptConnection } from './chatgpt'
 import { generateGeminiCommitMessage, testGeminiConnection } from './gemini'
 import {
-    generateCodexPullRequestDraft,
+    generateChatGptPullRequestDraft,
     generateGeminiPullRequestDraft,
     generateGroqPullRequestDraft
 } from './pull-request'
@@ -24,7 +24,7 @@ function requireApiKey(provider: Exclude<DevScopeGitTextProvider, 'codex'>, apiK
 
 export async function testGitTextProviderConnection(input: GitTextProviderInput): Promise<{ success: boolean; error?: string }> {
     if (input.provider === 'codex') {
-        return await testCodexConnection(input.model)
+        return await testChatGptConnection(input.model)
     }
     if (input.provider === 'groq') {
         return await testGroqConnection(requireApiKey('groq', input.apiKey))
@@ -36,7 +36,7 @@ export async function generateGitCommitMessageWithProvider(
     input: GitTextProviderInput & { diff: string }
 ): Promise<{ success: boolean; message?: string; error?: string }> {
     if (input.provider === 'codex') {
-        return await generateCodexCommitMessage(input.diff, input.model)
+        return await generateChatGptCommitMessage(input.diff, input.model)
     }
     if (input.provider === 'groq') {
         return await generateGroqCommitMessage(requireApiKey('groq', input.apiKey), input.diff)
@@ -57,7 +57,7 @@ export async function generateGitPullRequestDraftWithProvider(
     }
 ): Promise<{ success: boolean; title?: string; body?: string; error?: string }> {
     if (input.provider === 'codex') {
-        return await generateCodexPullRequestDraft(input.draftInput, input.model)
+        return await generateChatGptPullRequestDraft(input.draftInput, input.model)
     }
     if (input.provider === 'groq') {
         return await generateGroqPullRequestDraft(requireApiKey('groq', input.apiKey), input.draftInput)

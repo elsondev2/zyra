@@ -99,7 +99,7 @@ try {
         args: [{ surface: 'browser', expectedRevision: 4, patch: { browserViewMode: 'grid' }, legacySettings: undefined }]
     })
     assert.equal(isBrowserDevscopeBridgePath(['onboarding', 'connectApiKey']), false, 'browser clients cannot complete Desktop onboarding')
-    assert.equal(isBrowserDevscopeBridgePath(['secrets', 'getHostedAiKeys']), false, 'browser clients must never relay OS-owned secrets')
+    assert.equal(isBrowserDevscopeBridgePath(['secrets', 'getHostedAiStatus']), false, 'browser clients must never relay OS-owned secret metadata')
     assert.equal(isBrowserDevscopeBridgePath(['assistant', 'sendPrompt']), false)
     assert.ok(assistantServiceRequested <= 1, 'starting the blocked bridge must not hydrate Assistant')
 

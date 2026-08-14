@@ -45,9 +45,13 @@ if (arg('exact') === 'true') {
     const actualNames = (await readdir(directory, { withFileTypes: true }))
         .filter((entry) => entry.isFile())
         .map((entry) => entry.name)
+    const exactPlatform = platformArg === 'all' ? undefined : platforms[0]
     assertExactNames(
         actualNames,
-        expectedReleaseAssetNames(version, { includeChecksums: arg('checksums') === 'true' || arg('write-checksums') === 'true' }),
-        'assembled release assets'
+        expectedReleaseAssetNames(version, {
+            ...(exactPlatform ? { platform: exactPlatform } : {}),
+            includeChecksums: arg('checksums') === 'true' || arg('write-checksums') === 'true'
+        }),
+        exactPlatform ? `${exactPlatform} release assets` : 'assembled release assets'
     )
 }

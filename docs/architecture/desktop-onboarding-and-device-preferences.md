@@ -50,7 +50,7 @@ Onboarding and preference mutations are serialized in the main process. Callers 
 Before completion:
 
 - Desktop renders only the setup chrome and full-window wizard. There is no route, backdrop, Escape, or maximize bypass; minimize and close remain available.
-- Assistant IPC, Browser Assistant/events, Browser Voice/events, Browser file content, and protected Browser devscope actions return `ONBOARDING_REQUIRED`.
+- Assistant IPC, normal preference mutation, hosted-secret replacement/removal, account inspection/disconnect, Browser Assistant/events, Browser Voice/events, Browser file content, and protected Browser devscope actions return `ONBOARDING_REQUIRED`.
 - Browser devscope permits only `onboarding.getState` and browser-scoped `preferences.get`, which are needed to render and live-update the blocking screen.
 - Browser callers cannot select the `desktop` preference surface, supply Desktop legacy settings, mutate onboarding, or invoke secret APIs.
 - Assistant construction and updater startup are deferred. The Browser host still starts so it can show the blocking state.
@@ -66,6 +66,8 @@ The OpenAI step uses Pi's real auth machinery:
 - **API key:** `configureZyraOpenAIApiKey` writes through Pi auth storage, then `verifyZyraOpenAIApiAuth` performs a real provider request.
 
 The connection is checked when leaving the OpenAI step and again at final completion. A renderer success flag alone cannot complete setup.
+
+After completion, Desktop Account Settings reuses the same main-owned auth service for Connect, Replace, Retry, Disconnect, and new-chat provider switching. Disconnecting an expired or unwanted credential opens account recovery without replaying onboarding. Browser shows the connection state but deliberately directs credential mutations to Desktop. Destructive OpenAI disconnects and encrypted hosted-key removal carry explicit confirmation through the main-process contract; renderer-only confirmation state is insufficient.
 
 ## Preference ownership
 
@@ -85,7 +87,7 @@ Window/layout and presentation choices such as sidebars, Browser view/content la
 
 ### Secret
 
-`groqApiKey` and `geminiApiKey` are handled only by `DeviceSecretsService` and Electron `safeStorage`. If secure OS storage is unavailable, writes fail with an explicit error and the Desktop v4 renderer record is retained so migration can be retried without credential loss.
+`groqApiKey` and `geminiApiKey` are handled only by `DeviceSecretsService` and Electron `safeStorage`. IPC returns configuration booleans, never decrypted stored keys; Git provider handlers resolve encrypted credentials inside main. If secure OS storage is unavailable, writes fail with an explicit error and the Desktop v4 renderer record is retained so migration can be retried without credential loss.
 
 ### Derived
 

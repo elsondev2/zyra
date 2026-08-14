@@ -8,6 +8,7 @@ import { OpenAIConnectionService } from './openai-connection-service'
 export type DesktopSetupServices = {
     preferences: DevicePreferencesService
     secrets: DeviceSecretsService
+    auth: OpenAIConnectionService
     onboarding: OnboardingService
 }
 
@@ -27,5 +28,5 @@ export function createDesktopSetupServices(userDataPath: string): DesktopSetupSe
         preferences,
         auth
     )
-    return { preferences, secrets, onboarding }
+    return { preferences, secrets, auth, onboarding }
 }

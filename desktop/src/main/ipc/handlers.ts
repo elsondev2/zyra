@@ -2,12 +2,13 @@
  * Zyra - IPC Handler Registry
  */
 
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain as electronIpcMain } from 'electron'
 import log from 'electron-log'
 import {
     handleGetFileSystemRoots,
 } from './handlers/system-handlers'
 import {
+    configureHostedAiSecretResolver,
     handleClearAiDebugLogs,
     handleGenerateCommitMessage,
     handleGetAiDebugLogs,
@@ -226,10 +227,25 @@ import {
     onboardingRequiredError,
     registerSetupIpcHandlers
 } from './handlers/setup-handlers'
+import { createOnboardingGatedIpcMain } from './onboarding-ipc-gate'
+
+const PRE_ONBOARDING_ALLOWED_INVOKE_CHANNELS = new Set([
+    'devscope:selectFolder',
+    'window:isMaximized',
+    'window:getRuntimeInfo'
+])
+let isOnboardingAccessAllowed = () => false
+const ipcMain = createOnboardingGatedIpcMain(electronIpcMain, {
+    isAccessAllowed: () => isOnboardingAccessAllowed(),
+    allowedBeforeOnboarding: PRE_ONBOARDING_ALLOWED_INVOKE_CHANNELS,
+    blockedResult: onboardingRequiredError
+})
 
 export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: DesktopSetupServices): void {
     log.info('Registering IPC handlers...')
 
+    isOnboardingAccessAllowed = () => setupServices.onboarding.isAccessAllowed()
+    configureHostedAiSecretResolver((provider) => setupServices.secrets.getHostedAiKey(provider))
     registerSetupIpcHandlers(setupServices)
     const requireCompletedSetup = <T extends (...args: any[]) => any>(handler: T) => (
         (...args: Parameters<T>) => setupServices.onboarding.isAccessAllowed()

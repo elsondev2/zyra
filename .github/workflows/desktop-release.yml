@@ -77,6 +77,9 @@ jobs:
       - name: Run focused release contracts
         run: npm --prefix desktop run test:release-infra
 
+      - name: Run onboarding, account, provider, and native readiness contracts
+        run: npm --prefix desktop run test:release-readiness
+
       - name: Run public privacy gate
         run: npm run privacy-check
 
@@ -243,6 +246,10 @@ jobs:
           pattern: zyra-desktop-verification-*
           path: release-verification
           merge-multiple: true
+
+      - name: Build the lockstep Zyra CLI/source archive
+        shell: bash
+        run: git archive --format=zip --output="release-assets/zyra-v${{ needs.preflight.outputs.version }}.zip" HEAD
 
       - name: Validate complete matrix and generate checksums
         run: >-

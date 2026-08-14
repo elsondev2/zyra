@@ -1,6 +1,9 @@
 import type { ReactNode } from 'react'
 import { Download, ExternalLink, Github, RefreshCw, Rocket } from 'lucide-react'
 import { getUpdateActionLabel, useAppUpdates } from '@/lib/app-updates'
+import { formatDesktopVersion, resolveDesktopReleaseChannel } from '@/lib/release-build-metadata'
+import { useWindowChrome } from '@/lib/useWindowChrome'
+import { getZyraPlatformLabel } from '@shared/platform-window-chrome'
 import {
     SettingsButton,
     SettingsNotice,
@@ -10,6 +13,7 @@ import {
 } from './settings-layout'
 
 export default function AboutSettings() {
+    const { runtime } = useWindowChrome()
     const {
         updateState,
         pendingAction,
@@ -31,16 +35,23 @@ export default function AboutSettings() {
     const downloadedVersion = updateState?.downloadedDisplayVersion || updateState?.downloadedVersion || null
     const checkedAt = updateState?.checkedAt ? new Date(updateState.checkedAt) : null
     const checkedAtLabel = checkedAt && !Number.isNaN(checkedAt.getTime()) ? `Last checked ${checkedAt.toLocaleString()}` : 'Not checked in this session'
+    const packageVersion = updateState?.currentVersion || runtime.appVersion || __ZYRA_DESKTOP_VERSION__
+    const displayVersion = updateState?.currentDisplayVersion || formatDesktopVersion(packageVersion)
+    const releaseChannel = updateState?.channel || resolveDesktopReleaseChannel(packageVersion)
+    const platformLabel = getZyraPlatformLabel(runtime.platform)
+    const runtimeLabel = runtime.platform === 'browser'
+        ? `Hosted by Zyra Desktop · ${runtime.architecture}`
+        : `Electron ${runtime.electronVersion || 'unknown'} · ${runtime.architecture}`
 
     return (
         <SettingsPageContainer>
             <SettingsSection title="About Zyra">
-                <SettingsRow title="Version" description="Installed desktop application version." control={<span className="font-mono text-xs font-medium text-sparkle-text-secondary">{updateState?.currentDisplayVersion || 'v0.5.0'}</span>} />
-                <SettingsRow title="Package version" description="Semantic package version for this build." control={<span className="font-mono text-xs text-sparkle-text-secondary">{updateState?.currentVersion || '0.5.0'}</span>} />
-                <SettingsRow title="Release channel" description="Update feed selected for this installation." control={<span className="text-xs font-medium capitalize text-sparkle-text-secondary">{updateState?.channel || 'alpha'}</span>} />
-                <SettingsRow title="Platform" description="Supported desktop operating system." control={<span className="text-xs font-medium text-sparkle-text-secondary">Windows</span>} />
-                <SettingsRow title="Application stack" description="Core desktop and renderer frameworks." control={<span className="text-xs font-medium text-sparkle-text-secondary">Electron · React · TypeScript</span>} />
-                <SettingsRow title="License" description="Source-code license used by this project." control={<span className="text-xs font-medium text-sparkle-text-secondary">MIT</span>} />
+                <SettingsRow title="Version" description="Unified Zyra version reported by this Desktop host." control={<span className="font-mono text-xs font-medium text-sparkle-text-secondary">{displayVersion}</span>} />
+                <SettingsRow title="Package version" description="Lockstep repository and Desktop package version." control={<span className="font-mono text-xs text-sparkle-text-secondary">{packageVersion}</span>} />
+                <SettingsRow title="Release channel" description="Update feed selected for this installation." control={<span className="text-xs font-medium capitalize text-sparkle-text-secondary">{releaseChannel}</span>} />
+                <SettingsRow title="Platform" description="Native Desktop host for this client." control={<span className="text-xs font-medium text-sparkle-text-secondary">{platformLabel}</span>} />
+                <SettingsRow title="Application stack" description="Host runtime and architecture." control={<span className="text-xs font-medium text-sparkle-text-secondary">{runtimeLabel}</span>} />
+                <SettingsRow title="License" description="Source-code license used by this project." control={<span className="text-xs font-medium text-sparkle-text-secondary">Apache-2.0</span>} />
             </SettingsSection>
 
             <SettingsSection title="Updates" headerAction={<SettingsButton variant="ghost" onClick={openModal}>Open Update Center</SettingsButton>}>

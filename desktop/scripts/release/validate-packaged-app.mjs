@@ -1,4 +1,6 @@
-import { access, lstat, readFile, readdir } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
+import { access, lstat, mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { normalizeReleasePlatform } from './release-contract.mjs'
 import { validateRuntimeStage } from './runtime-contract.mjs'
@@ -44,6 +46,66 @@ async function requireOne(files, label) {
     throw new Error(`${label} is missing; checked ${files.join(', ')}`)
 }
 
+async function findPackagedExecutable(resources, platform) {
+    const applicationRoot = path.dirname(resources)
+    const candidates = platform === 'windows'
+        ? [path.join(applicationRoot, 'Zyra.exe')]
+        : platform === 'macos'
+            ? [path.join(applicationRoot, 'MacOS', 'Zyra')]
+            : [path.join(applicationRoot, 'zyra'), path.join(applicationRoot, 'Zyra')]
+    for (const candidate of candidates) {
+        const stats = await lstat(candidate).catch(() => null)
+        if (stats?.isFile() && stats.size > 0) return candidate
+    }
+    throw new Error(`Packaged ${platform} executable is missing; checked ${candidates.join(', ')}`)
+}
+
+async function runPackagedLaunchSmoke(resources, platform, version) {
+    const executable = await findPackagedExecutable(resources, platform)
+    const smokeDirectory = await mkdtemp(path.join(tmpdir(), 'zyra-packaged-launch-'))
+    const marker = path.join(smokeDirectory, 'launch.json')
+    let output = ''
+    try {
+        const child = spawn(executable, ['--headless', '--disable-gpu', '--no-sandbox'], {
+            env: {
+                ...process.env,
+                ZYRA_PACKAGED_SMOKE: '1',
+                ZYRA_PACKAGED_SMOKE_MARKER: marker,
+                ZYRA_DISABLE_AUTO_UPDATE: '1'
+            },
+            stdio: ['ignore', 'pipe', 'pipe'],
+            windowsHide: true
+        })
+        child.stdout?.on('data', (chunk) => { if (output.length < 64 * 1024) output += chunk })
+        child.stderr?.on('data', (chunk) => { if (output.length < 64 * 1024) output += chunk })
+        const exitCode = await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                child.kill('SIGKILL')
+                reject(new Error(`Packaged ${platform} launch smoke timed out.\n${output}`))
+            }, 45_000)
+            child.once('error', (error) => {
+                clearTimeout(timeout)
+                reject(error)
+            })
+            child.once('exit', (code) => {
+                clearTimeout(timeout)
+                resolve(code)
+            })
+        })
+        if (exitCode !== 0) throw new Error(`Packaged ${platform} launch exited with ${exitCode}.\n${output}`)
+        const result = JSON.parse(await readFile(marker, 'utf8'))
+        if (result.version !== version || result.platform !== (platform === 'windows' ? 'win32' : platform === 'macos' ? 'darwin' : 'linux')) {
+            throw new Error(`Packaged launch identity is invalid: ${JSON.stringify(result)}`)
+        }
+        if (path.resolve(result.resourcesPath) !== path.resolve(resources)
+            || path.resolve(result.runtimeRoot) !== path.resolve(resources, 'zyra-runtime')) {
+            throw new Error(`Packaged launch resolved the wrong runtime: ${JSON.stringify(result)}`)
+        }
+    } finally {
+        await rm(smokeDirectory, { recursive: true, force: true })
+    }
+}
+
 const rawDirectory = path.resolve(arg('raw-dir', '.'))
 const platform = normalizeReleasePlatform(arg('platform', process.platform))
 const version = arg('version')
@@ -51,6 +113,7 @@ if (!version) throw new Error('validate-packaged-app requires --version')
 const resources = await findResourcesDirectory(rawDirectory)
 if (!resources) throw new Error(`Could not find a packaged app resources directory under ${rawDirectory}`)
 
+await requireNonempty(path.join(resources, 'LICENSE'), 'Packaged Apache-2.0 license')
 const runtimeRoot = path.join(resources, 'zyra-runtime')
 await validateRuntimeStage(runtimeRoot, { expectedVersion: version, requireDependencies: true })
 await requireNonempty(path.join(resources, 'zyra-browser-control-extension', 'manifest.json'), 'Packaged browser extension')
@@ -78,5 +141,7 @@ if (platform === 'windows') {
         path.join(packagedNodePty, 'prebuilds', 'linux-x64', 'pty.node')
     ], 'Packaged Linux node-pty binding')
 }
+
+await runPackagedLaunchSmoke(resources, platform, version)
 
 console.log(`Validated packaged ${platform} app resources at ${resources}`)

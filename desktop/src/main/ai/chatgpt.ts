@@ -10,7 +10,7 @@ const CHATGPT_TEXT_TIMEOUT_MS = 45_000
  * Backward-compatible internal name for the Git provider. Generation is routed
  * through the agent-server utility worker and never creates a canonical chat.
  */
-export async function generateCodexText(prompt: string, options?: {
+export async function generateChatGptText(prompt: string, options?: {
     cwd?: string
     model?: string
     timeoutMs?: number
@@ -34,7 +34,7 @@ export async function generateCodexText(prompt: string, options?: {
     }
 }
 
-export async function testCodexConnection(model?: string): Promise<{ success: boolean; error?: string }> {
+export async function testChatGptConnection(model?: string): Promise<{ success: boolean; error?: string }> {
     const result = await getAssistantService().testChatGptUtilityConnection(model)
     if (!result.success) {
         recordAiDebugLog({
@@ -57,7 +57,7 @@ export async function testCodexConnection(model?: string): Promise<{ success: bo
     return { success: true }
 }
 
-export async function generateCodexCommitMessage(
+export async function generateChatGptCommitMessage(
     diff: string,
     model?: string
 ): Promise<{ success: boolean; message?: string; error?: string }> {
@@ -95,7 +95,7 @@ ${truncatedDiff}
 Commit message:`
 
     try {
-        const initial = await generateCodexText(prompt, { model })
+        const initial = await generateChatGptText(prompt, { model })
         if (!initial.success || !initial.text) {
             recordAiDebugLog({
                 provider: 'codex',

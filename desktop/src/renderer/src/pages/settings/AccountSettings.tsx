@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
-import type { AssistantAccountOverview, AssistantAccountPlanType } from '@shared/assistant/contracts'
+import type { AssistantAccountOverview, AssistantAccountPlanType, AssistantModelInfo } from '@shared/assistant/contracts'
+import type { OnboardingAuthMethod, OpenAIConnectionMethodStatus, OpenAIConnectionsStatus } from '@shared/onboarding/contracts'
 import { useSettings } from '@/lib/settings'
+import { isElectronRendererRuntime } from '@/lib/browser-file-url'
 import { cn } from '@/lib/utils'
+import { ConfirmModal } from '@/components/ui/ConfirmModal'
 import { buildRateLimitCards, formatFetchedAt, formatPlan } from './assistant-account-rate-limits'
 import { AccountResetCreditsSection } from './AccountResetCreditsSection'
 import {
     SettingsButton,
+    SettingsDialog,
+    SettingsInput,
     SettingsNotice,
     SettingsPageContainer,
     SettingsRow,
@@ -24,12 +29,39 @@ function resolvePreferredPlanType(overview: AssistantAccountOverview | null): As
     return accountPlanType || rateLimitPlanType
 }
 
+function connectionStatusLabel(status: OpenAIConnectionMethodStatus | null): string {
+    if (!status) return 'Checking…'
+    if (status.verified) return 'Connected'
+    return status.configured ? 'Needs attention' : 'Not connected'
+}
+
+function connectionStatusTone(status: OpenAIConnectionMethodStatus | null): 'ready' | 'warning' | 'muted' {
+    if (status?.verified) return 'ready'
+    return status?.configured ? 'warning' : 'muted'
+}
+
+function methodOwnsModel(method: OnboardingAuthMethod, model: string): boolean {
+    return method === 'chatgpt' ? model.startsWith('openai-codex/') : model.startsWith('openai/')
+}
+
+function firstModelForMethod(method: OnboardingAuthMethod, models: AssistantModelInfo[]): AssistantModelInfo | null {
+    return models.find((model) => methodOwnsModel(method, model.id)) || null
+}
+
 export default function AccountSettings() {
     const { settings, updateSettings } = useSettings()
     const [overview, setOverview] = useState<AssistantAccountOverview | null>(null)
     const [overviewLoading, setOverviewLoading] = useState(true)
     const [overviewError, setOverviewError] = useState<string | null>(null)
     const overviewRequestIdRef = useRef(0)
+    const desktopHost = isElectronRendererRuntime()
+    const [connections, setConnections] = useState<OpenAIConnectionsStatus | null>(null)
+    const [connectionError, setConnectionError] = useState<string | null>(null)
+    const [connectionAction, setConnectionAction] = useState<'refresh' | 'chatgpt' | 'api-key' | 'switch' | 'disconnect' | null>(null)
+    const [knownModels, setKnownModels] = useState<AssistantModelInfo[]>([])
+    const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false)
+    const [apiKeyDraft, setApiKeyDraft] = useState('')
+    const [disconnectMethod, setDisconnectMethod] = useState<OnboardingAuthMethod | null>(null)
 
     const loadOverview = useCallback(async () => {
         const requestId = ++overviewRequestIdRef.current
@@ -47,6 +79,23 @@ export default function AccountSettings() {
             if (requestId === overviewRequestIdRef.current) setOverviewLoading(false)
         }
     }, [])
+
+    const loadConnectionState = useCallback(async (forceModels = false) => {
+        if (!desktopHost) return
+        setConnectionAction((current) => current || 'refresh')
+        setConnectionError(null)
+        try {
+            const result = await window.devscope.onboarding.getConnectionsStatus()
+            if (!result.success) throw new Error(result.error || 'Could not load OpenAI connections.')
+            setConnections(result.status)
+            const modelResult = await window.devscope.assistant.listModels(forceModels).catch(() => null)
+            if (modelResult?.success) setKnownModels(modelResult.models)
+        } catch (error) {
+            setConnectionError(error instanceof Error ? error.message : 'Could not load OpenAI connections.')
+        } finally {
+            setConnectionAction((current) => current === 'refresh' ? null : current)
+        }
+    }, [desktopHost])
 
     const applyAccountOverview = useCallback((nextOverview: AssistantAccountOverview) => {
         overviewRequestIdRef.current += 1
@@ -68,6 +117,87 @@ export default function AccountSettings() {
             document.removeEventListener('visibilitychange', handleVisibility)
         }
     }, [loadOverview])
+
+    useEffect(() => {
+        if (desktopHost) void loadConnectionState()
+    }, [desktopHost, loadConnectionState])
+
+    const refreshAll = useCallback(async () => {
+        await Promise.all([loadOverview(), loadConnectionState(true)])
+    }, [loadConnectionState, loadOverview])
+
+    const connectChatGpt = useCallback(async () => {
+        setConnectionAction('chatgpt')
+        setConnectionError(null)
+        try {
+            const result = await window.devscope.onboarding.connectChatGpt()
+            if (!result.success || !result.status.verified) throw new Error(result.success ? result.status.detail || 'ChatGPT could not be verified.' : result.error)
+            await Promise.all([loadConnectionState(true), loadOverview()])
+        } catch (error) {
+            setConnectionError(error instanceof Error ? error.message : 'ChatGPT connection failed.')
+        } finally {
+            setConnectionAction(null)
+        }
+    }, [loadConnectionState, loadOverview])
+
+    const connectApiKey = useCallback(async () => {
+        const key = apiKeyDraft.trim()
+        if (!key) return
+        setConnectionAction('api-key')
+        setConnectionError(null)
+        setApiKeyDraft('')
+        try {
+            const result = await window.devscope.onboarding.connectApiKey(key)
+            if (!result.success || !result.status.verified) throw new Error(result.success ? result.status.detail || 'The API key could not be verified.' : result.error)
+            setApiKeyDialogOpen(false)
+            await loadConnectionState(true)
+        } catch (error) {
+            setConnectionError(error instanceof Error ? error.message : 'OpenAI API connection failed.')
+        } finally {
+            setConnectionAction(null)
+        }
+    }, [apiKeyDraft, loadConnectionState])
+
+    const switchDefaultConnection = useCallback(async (method: OnboardingAuthMethod) => {
+        setConnectionAction('switch')
+        setConnectionError(null)
+        try {
+            let models = knownModels
+            let target = firstModelForMethod(method, models)
+            if (!target) {
+                const result = await window.devscope.assistant.listModels(true)
+                if (!result.success) throw new Error(result.error || 'Could not load OpenAI models.')
+                models = result.models
+                setKnownModels(models)
+                target = firstModelForMethod(method, models)
+            }
+            if (!target) throw new Error(method === 'chatgpt'
+                ? 'Pi did not report an available ChatGPT subscription model.'
+                : 'This API key did not report a supported OpenAI API model.')
+            updateSettings({ assistantDefaultModel: target.id })
+        } catch (error) {
+            setConnectionError(error instanceof Error ? error.message : 'Could not switch the new-chat connection.')
+        } finally {
+            setConnectionAction(null)
+        }
+    }, [knownModels, updateSettings])
+
+    const disconnect = useCallback(async () => {
+        if (!disconnectMethod || connectionAction === 'disconnect') return
+        setConnectionAction('disconnect')
+        setConnectionError(null)
+        try {
+            const result = await window.devscope.onboarding.disconnectOpenAI({ method: disconnectMethod, confirmed: true })
+            if (!result.success) throw new Error(result.error || 'Could not disconnect OpenAI.')
+            setConnections(result.status)
+            setDisconnectMethod(null)
+            await loadOverview()
+        } catch (error) {
+            setConnectionError(error instanceof Error ? error.message : 'Could not disconnect OpenAI.')
+        } finally {
+            setConnectionAction(null)
+        }
+    }, [connectionAction, disconnectMethod, loadOverview])
 
     const usageCards = useMemo(
         () => buildRateLimitCards(overview, settings.assistantUsageDisplayMode),
@@ -91,9 +221,63 @@ export default function AccountSettings() {
     const accountPlan = initialAccountLoading
         ? 'Checking…'
         : formatPlan(resolvePreferredPlanType(overview))
+    const chatGptConnection = connections?.chatgpt || null
+    const apiKeyConnection = connections?.apiKey || null
+    const activeDefaultMethod: OnboardingAuthMethod | null = settings.assistantDefaultModel.startsWith('openai-codex/')
+        ? 'chatgpt'
+        : settings.assistantDefaultModel.startsWith('openai/') ? 'api-key' : null
+    const connectionBusy = connectionAction !== null
 
     return (
         <SettingsPageContainer>
+            <SettingsSection
+                title="OpenAI connections"
+                headerAction={desktopHost ? (
+                    <SettingsButton variant="ghost" onClick={() => void refreshAll()} disabled={connectionBusy}>
+                        <RefreshCw size={12} className={connectionAction === 'refresh' ? 'animate-spin motion-reduce:animate-none' : ''} />
+                        Retry
+                    </SettingsButton>
+                ) : undefined}
+            >
+                {!desktopHost ? <SettingsNotice tone="neutral">Open Zyra Desktop on this computer to connect, replace, switch, or disconnect OpenAI credentials.</SettingsNotice> : null}
+                {connectionError ? <SettingsNotice tone="error">{connectionError}</SettingsNotice> : null}
+                <SettingsRow
+                    title="ChatGPT subscription"
+                    description="OAuth connection stored by Pi. Use it for ChatGPT models, Voice, account limits, and banked resets."
+                    status={desktopHost ? connectionStatusLabel(chatGptConnection) : overview?.requiresOpenaiAuth ? 'Not connected' : 'Connected'}
+                    statusTone={desktopHost ? connectionStatusTone(chatGptConnection) : overview?.requiresOpenaiAuth ? 'muted' : 'ready'}
+                    statusTitle={chatGptConnection?.detail || undefined}
+                    control={desktopHost ? (
+                        <div className="flex flex-wrap justify-end gap-2">
+                            {chatGptConnection?.verified ? <SettingsButton variant="ghost" disabled={connectionBusy || activeDefaultMethod === 'chatgpt'} onClick={() => void switchDefaultConnection('chatgpt')}>{activeDefaultMethod === 'chatgpt' ? 'Default' : 'Use for new chats'}</SettingsButton> : null}
+                            <SettingsButton disabled={connectionBusy} onClick={() => void connectChatGpt()}>{connectionAction === 'chatgpt' ? 'Waiting…' : chatGptConnection?.configured ? 'Reconnect' : 'Connect'}</SettingsButton>
+                            {chatGptConnection?.configured ? <SettingsButton variant="danger" disabled={connectionBusy} onClick={() => setDisconnectMethod('chatgpt')}>Disconnect</SettingsButton> : null}
+                        </div>
+                    ) : <span className="text-xs text-sparkle-text-muted">Managed in Desktop</span>}
+                />
+                <SettingsRow
+                    title="OpenAI API key"
+                    description="Verified API credential stored by Pi. The key is never returned to this Settings page after it is saved."
+                    status={desktopHost ? connectionStatusLabel(apiKeyConnection) : 'Desktop only'}
+                    statusTone={desktopHost ? connectionStatusTone(apiKeyConnection) : 'muted'}
+                    statusTitle={apiKeyConnection?.detail || undefined}
+                    control={desktopHost ? (
+                        <div className="flex flex-wrap justify-end gap-2">
+                            {apiKeyConnection?.verified ? <SettingsButton variant="ghost" disabled={connectionBusy || activeDefaultMethod === 'api-key'} onClick={() => void switchDefaultConnection('api-key')}>{activeDefaultMethod === 'api-key' ? 'Default' : 'Use for new chats'}</SettingsButton> : null}
+                            <SettingsButton disabled={connectionBusy} onClick={() => setApiKeyDialogOpen(true)}>{apiKeyConnection?.configured ? 'Replace key' : 'Add key'}</SettingsButton>
+                            {apiKeyConnection?.configured ? <SettingsButton variant="danger" disabled={connectionBusy} onClick={() => setDisconnectMethod('api-key')}>Disconnect</SettingsButton> : null}
+                        </div>
+                    ) : <span className="text-xs text-sparkle-text-muted">Managed in Desktop</span>}
+                />
+                <SettingsRow
+                    title="New-chat default"
+                    description="New chats use this provider model. Existing chats keep their canonical model and connection."
+                    status={activeDefaultMethod ? 'Configured' : 'Uses Assistant default'}
+                    statusTone={activeDefaultMethod ? 'ready' : 'muted'}
+                    control={<span title={settings.assistantDefaultModel || undefined} className="max-w-64 truncate text-xs font-medium text-sparkle-text-secondary">{activeDefaultMethod === 'chatgpt' ? 'ChatGPT subscription' : activeDefaultMethod === 'api-key' ? 'OpenAI API' : settings.assistantDefaultModel || 'Automatic'}</span>}
+                />
+            </SettingsSection>
+
             <SettingsSection title="ChatGPT account" headerAction={<SettingsButton variant="ghost" onClick={() => void loadOverview()} disabled={overviewLoading}><RefreshCw size={12} className={overviewLoading ? 'animate-spin motion-reduce:animate-none' : ''} />Refresh</SettingsButton>}>
                 {overviewError ? <SettingsNotice tone="error">{overviewError}</SettingsNotice> : null}
                 {overview?.requiresOpenaiAuth ? <SettingsNotice tone="warning">Connect your ChatGPT account through Zyra to view its identity, plan, usage limits, and banked resets.</SettingsNotice> : null}
@@ -152,6 +336,53 @@ export default function AccountSettings() {
                 overview={overview}
                 loading={overviewLoading}
                 onOverviewChange={applyAccountOverview}
+            />
+
+            <SettingsDialog
+                open={apiKeyDialogOpen}
+                title="Connect OpenAI API"
+                description="Zyra verifies the key before Pi stores it. Closing this dialog does not save the draft."
+                onClose={() => {
+                    if (connectionAction === 'api-key') return
+                    setApiKeyDraft('')
+                    setApiKeyDialogOpen(false)
+                }}
+                footer={(
+                    <>
+                        <SettingsButton variant="ghost" disabled={connectionAction === 'api-key'} onClick={() => { setApiKeyDraft(''); setApiKeyDialogOpen(false) }}>Cancel</SettingsButton>
+                        <SettingsButton variant="accent" disabled={!apiKeyDraft.trim() || connectionAction === 'api-key'} onClick={() => void connectApiKey()}>
+                            {connectionAction === 'api-key' ? <RefreshCw size={12} className="animate-spin motion-reduce:animate-none" /> : null}
+                            {connectionAction === 'api-key' ? 'Verifying…' : 'Verify and save'}
+                        </SettingsButton>
+                    </>
+                )}
+            >
+                <label htmlFor="account-openai-api-key" className="text-[12px] font-medium text-[var(--settings-text)]">API key</label>
+                <SettingsInput
+                    id="account-openai-api-key"
+                    autoFocus
+                    type="password"
+                    value={apiKeyDraft}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(event) => setApiKeyDraft(event.target.value)}
+                    placeholder="sk-…"
+                    className="sm:w-full"
+                />
+            </SettingsDialog>
+
+            <ConfirmModal
+                isOpen={disconnectMethod !== null}
+                title={disconnectMethod === 'chatgpt' ? 'Disconnect ChatGPT?' : 'Remove OpenAI API key?'}
+                message={disconnectMethod === 'chatgpt'
+                    ? 'Zyra will remove the ChatGPT OAuth connection from Pi. Completed onboarding stays complete, but ChatGPT models, Voice, usage, and resets will require reconnection.'
+                    : 'Zyra will remove the OpenAI API key from Pi. Chats configured for API models may require another working connection.'}
+                confirmLabel={connectionAction === 'disconnect' ? 'Disconnecting…' : 'Disconnect'}
+                variant="warning"
+                onCancel={() => {
+                    if (connectionAction !== 'disconnect') setDisconnectMethod(null)
+                }}
+                onConfirm={() => void disconnect()}
             />
         </SettingsPageContainer>
     )

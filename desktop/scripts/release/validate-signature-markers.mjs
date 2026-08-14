@@ -23,14 +23,14 @@ if (requireSigning) {
     const windows = markers.get('windows')
     const macos = markers.get('macos')
     if (windows.signed !== true || !windows.checks.some((check) => check.name === 'authenticode')) {
-        throw new Error('Stable release requires a verified Windows Authenticode signature')
+        throw new Error('Tagged publication requires a verified Windows Authenticode signature')
     }
     if (macos.signed !== true || macos.notarized !== true) {
-        throw new Error('Stable release requires verified macOS signing and notarization')
+        throw new Error('Tagged publication requires verified macOS signing and notarization')
     }
     for (const requiredCheck of ['codesign', 'gatekeeper', 'notarization-staple']) {
         if (!macos.checks.some((check) => check.name === requiredCheck)) {
-            throw new Error(`Stable release is missing macOS verification: ${requiredCheck}`)
+            throw new Error(`Tagged publication is missing macOS verification: ${requiredCheck}`)
         }
     }
 }

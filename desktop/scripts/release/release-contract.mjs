@@ -57,6 +57,7 @@ export function expectedReleaseAssetNames(version, options = {}) {
         ? [normalizeReleasePlatform(options.platform)]
         : RELEASE_PLATFORM_KEYS
     const assets = platforms.flatMap((platform) => platformReleaseContract(version, platform).assets)
+    if (!options.platform) assets.push(`zyra-v${version}.zip`)
     if (options.includeChecksums) assets.push('SHA256SUMS')
     return [...new Set(assets)].sort((left, right) => left.localeCompare(right))
 }

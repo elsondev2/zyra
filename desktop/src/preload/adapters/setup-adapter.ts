@@ -4,6 +4,7 @@ import {
     type BeginOnboardingReviewInput,
     type CancelOnboardingReviewInput,
     type CommitOnboardingStepInput,
+    type DisconnectOpenAIInput,
     type NavigateOnboardingInput,
     type OnboardingSnapshot
 } from '../../shared/onboarding/contracts'
@@ -30,15 +31,16 @@ export function createSetupAdapter() {
             }
         },
         secrets: {
-            getHostedAiKeys: () => ipcRenderer.invoke(DEVICE_SECRETS_IPC.getHostedAiKeys),
             updateHostedAiKeys: (input: UpdateHostedAiSecretsInput) => ipcRenderer.invoke(DEVICE_SECRETS_IPC.updateHostedAiKeys, input),
             migrateLegacyHostedAiKeys: (input: UpdateHostedAiSecretsInput) => ipcRenderer.invoke(DEVICE_SECRETS_IPC.migrateLegacyHostedAiKeys, input)
         },
         onboarding: {
             getState: () => ipcRenderer.invoke(ONBOARDING_IPC.getState),
             getAuthStatus: () => ipcRenderer.invoke(ONBOARDING_IPC.getAuthStatus),
+            getConnectionsStatus: () => ipcRenderer.invoke(ONBOARDING_IPC.getConnectionsStatus),
             connectChatGpt: () => ipcRenderer.invoke(ONBOARDING_IPC.connectChatGpt),
             connectApiKey: (apiKey: string) => ipcRenderer.invoke(ONBOARDING_IPC.connectApiKey, apiKey),
+            disconnectOpenAI: (input: DisconnectOpenAIInput) => ipcRenderer.invoke(ONBOARDING_IPC.disconnectOpenAI, input),
             commitStep: (input: CommitOnboardingStepInput) => ipcRenderer.invoke(ONBOARDING_IPC.commitStep, input),
             navigate: (input: NavigateOnboardingInput) => ipcRenderer.invoke(ONBOARDING_IPC.navigate, input),
             beginReview: (input: BeginOnboardingReviewInput) => ipcRenderer.invoke(ONBOARDING_IPC.beginReview, input),

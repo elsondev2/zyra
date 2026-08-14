@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { RefreshCw, Trash2 } from 'lucide-react'
+import { ConfirmModal } from '@/components/ui/ConfirmModal'
 import { useSettings, type CommitAIProvider } from '@/lib/settings'
+import { isElectronRendererRuntime } from '@/lib/browser-file-url'
 import { useCodexModelOptions } from './ai-settings/useCodexModelOptions'
 import {
     SettingsButton,
@@ -16,16 +18,15 @@ import {
 type ProviderStatus = 'idle' | 'testing' | 'success' | 'error'
 
 export default function AISettings() {
-    const { settings, updateSettings } = useSettings()
-    const [groqDraft, setGroqDraft] = useState(settings.groqApiKey)
-    const [geminiDraft, setGeminiDraft] = useState(settings.geminiApiKey)
+    const { settings, updateSettings, updateHostedAiSecrets } = useSettings()
+    const desktopHost = isElectronRendererRuntime()
+    const [groqDraft, setGroqDraft] = useState('')
+    const [geminiDraft, setGeminiDraft] = useState('')
     const [editingProvider, setEditingProvider] = useState<Exclude<CommitAIProvider, 'codex'> | null>(null)
+    const [clearKeysConfirmOpen, setClearKeysConfirmOpen] = useState(false)
     const [status, setStatus] = useState<Record<CommitAIProvider, ProviderStatus>>({ groq: 'idle', gemini: 'idle', codex: 'idle' })
     const [errors, setErrors] = useState<Record<CommitAIProvider, string>>({ groq: '', gemini: '', codex: '' })
     const { codexModelsError, resolvedCodexModelOptions } = useCodexModelOptions([settings.gitCommitCodexModel, settings.gitPullRequestCodexModel, settings.assistantDefaultModel])
-
-    useEffect(() => setGroqDraft(settings.groqApiKey), [settings.groqApiKey])
-    useEffect(() => setGeminiDraft(settings.geminiApiKey), [settings.geminiApiKey])
 
     const modelOptions = useMemo(() => resolvedCodexModelOptions.map((option) => ({ id: option.id, label: option.label || option.id })), [resolvedCodexModelOptions])
 
@@ -46,12 +47,42 @@ export default function AISettings() {
         }
     }
 
+    const saveHostedKey = async (provider: Exclude<CommitAIProvider, 'codex'>) => {
+        const key = (provider === 'groq' ? groqDraft : geminiDraft).trim()
+        if (!key) return
+        setStatus((current) => ({ ...current, [provider]: 'testing' }))
+        setErrors((current) => ({ ...current, [provider]: '' }))
+        try {
+            await updateHostedAiSecrets(provider === 'groq' ? { groqApiKey: key } : { geminiApiKey: key })
+            if (provider === 'groq') setGroqDraft('')
+            else setGeminiDraft('')
+            setStatus((current) => ({ ...current, [provider]: 'success' }))
+            setEditingProvider(null)
+        } catch (error) {
+            setStatus((current) => ({ ...current, [provider]: 'error' }))
+            setErrors((current) => ({ ...current, [provider]: error instanceof Error ? error.message : 'Could not save the API key.' }))
+        }
+    }
+
+    const clearHostedKeys = async () => {
+        try {
+            await updateHostedAiSecrets({ groqApiKey: '', geminiApiKey: '', confirmClear: true })
+            setGroqDraft('')
+            setGeminiDraft('')
+            setStatus({ groq: 'idle', gemini: 'idle', codex: status.codex })
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Could not clear hosted API keys.'
+            setErrors((current) => ({ ...current, groq: message, gemini: message }))
+            setStatus((current) => ({ ...current, groq: 'error', gemini: 'error' }))
+        }
+    }
+
     const providerStatus = (provider: CommitAIProvider) => {
         if (status[provider] === 'testing') return 'Testing…'
         if (status[provider] === 'success') return provider === 'codex' ? 'Account verified through Pi' : 'Connection verified'
         if (status[provider] === 'error') return 'Unavailable'
         if (provider === 'codex') return 'Uses your ChatGPT account through Pi'
-        return (provider === 'groq' ? settings.groqApiKey : settings.geminiApiKey) ? 'API key saved locally' : 'No API key saved'
+        return (provider === 'groq' ? settings.groqApiKeyConfigured : settings.geminiApiKeyConfigured) ? 'API key saved securely' : 'No API key saved'
     }
 
     const providerStatusTone = (provider: CommitAIProvider): 'ready' | 'warning' | 'danger' | 'info' | 'muted' => {
@@ -59,7 +90,7 @@ export default function AISettings() {
         if (status[provider] === 'success') return 'ready'
         if (status[provider] === 'error') return 'danger'
         if (provider === 'codex') return 'muted'
-        return (provider === 'groq' ? settings.groqApiKey : settings.geminiApiKey) ? 'ready' : 'warning'
+        return (provider === 'groq' ? settings.groqApiKeyConfigured : settings.geminiApiKeyConfigured) ? 'ready' : 'warning'
     }
 
     return (
@@ -79,7 +110,7 @@ export default function AISettings() {
                     status={providerStatus('groq')}
                     statusTone={providerStatusTone('groq')}
                     statusTitle={status.groq === 'error' ? errors.groq : undefined}
-                    control={<SettingsButton onClick={() => setEditingProvider('groq')}>{settings.groqApiKey ? 'Edit key' : 'Add key'}</SettingsButton>}
+                    control={desktopHost ? <SettingsButton onClick={() => { setGroqDraft(''); setEditingProvider('groq') }}>{settings.groqApiKeyConfigured ? 'Replace key' : 'Add key'}</SettingsButton> : <span className="text-xs text-sparkle-text-muted">Managed in Desktop</span>}
                 />
             </SettingsSection>
 
@@ -90,7 +121,7 @@ export default function AISettings() {
                     status={providerStatus('gemini')}
                     statusTone={providerStatusTone('gemini')}
                     statusTitle={status.gemini === 'error' ? errors.gemini : undefined}
-                    control={<SettingsButton onClick={() => setEditingProvider('gemini')}>{settings.geminiApiKey ? 'Edit key' : 'Add key'}</SettingsButton>}
+                    control={desktopHost ? <SettingsButton onClick={() => { setGeminiDraft(''); setEditingProvider('gemini') }}>{settings.geminiApiKeyConfigured ? 'Replace key' : 'Add key'}</SettingsButton> : <span className="text-xs text-sparkle-text-muted">Managed in Desktop</span>}
                 />
             </SettingsSection>
 
@@ -101,25 +132,21 @@ export default function AISettings() {
             </SettingsSection>
 
             <SettingsSection title="Stored credentials">
-                <SettingsRow title="Clear hosted API keys" description="Remove the saved Groq and Gemini keys from local settings." control={<SettingsButton variant="danger" disabled={!settings.groqApiKey && !settings.geminiApiKey} onClick={() => { updateSettings({ groqApiKey: '', geminiApiKey: '' }); setGroqDraft(''); setGeminiDraft('') }}><Trash2 size={12} />Clear keys</SettingsButton>} />
+                {desktopHost ? <SettingsRow title="Clear hosted API keys" description="Remove the OS-encrypted Groq and Gemini keys from this device." control={<SettingsButton variant="danger" disabled={!settings.groqApiKeyConfigured && !settings.geminiApiKeyConfigured} onClick={() => setClearKeysConfirmOpen(true)}><Trash2 size={12} />Clear keys</SettingsButton>} /> : <SettingsNotice tone="neutral">Open Zyra Desktop to add, replace, test, or remove hosted-provider API keys.</SettingsNotice>}
             </SettingsSection>
 
             <SettingsDialog
                 open={editingProvider !== null}
                 title={`Configure ${editingProvider === 'gemini' ? 'Google Gemini' : 'Groq'}`}
                 description="The credential is hidden on the Settings page and can be tested before saving."
-                onClose={() => setEditingProvider(null)}
+                onClose={() => { setGroqDraft(''); setGeminiDraft(''); setEditingProvider(null) }}
                 footer={editingProvider ? (
                     <>
-                        <SettingsButton variant="ghost" onClick={() => setEditingProvider(null)}>Cancel</SettingsButton>
+                        <SettingsButton variant="ghost" onClick={() => { setGroqDraft(''); setGeminiDraft(''); setEditingProvider(null) }}>Cancel</SettingsButton>
                         <SettingsButton onClick={() => void testProvider(editingProvider)} disabled={!(editingProvider === 'groq' ? groqDraft : geminiDraft).trim() || status[editingProvider] === 'testing'}>
                             {status[editingProvider] === 'testing' ? <RefreshCw size={12} className="animate-spin" /> : null}Test
                         </SettingsButton>
-                        <SettingsButton variant="accent" onClick={() => {
-                            if (editingProvider === 'groq') updateSettings({ groqApiKey: groqDraft.trim() })
-                            else updateSettings({ geminiApiKey: geminiDraft.trim() })
-                            setEditingProvider(null)
-                        }}>Save key</SettingsButton>
+                        <SettingsButton variant="accent" disabled={!(editingProvider === 'groq' ? groqDraft : geminiDraft).trim() || status[editingProvider] === 'testing'} onClick={() => void saveHostedKey(editingProvider)}>{status[editingProvider] === 'testing' ? <RefreshCw size={12} className="animate-spin" /> : null}Save key</SettingsButton>
                     </>
                 ) : null}
             >
@@ -131,6 +158,8 @@ export default function AISettings() {
                             autoFocus
                             type="password"
                             value={editingProvider === 'groq' ? groqDraft : geminiDraft}
+                            autoComplete="off"
+                            spellCheck={false}
                             onChange={(event) => editingProvider === 'groq' ? setGroqDraft(event.target.value) : setGeminiDraft(event.target.value)}
                             placeholder={editingProvider === 'groq' ? 'gsk_…' : 'AIza…'}
                             className="sm:w-full"
@@ -139,6 +168,19 @@ export default function AISettings() {
                     </>
                 ) : null}
             </SettingsDialog>
+
+            <ConfirmModal
+                isOpen={clearKeysConfirmOpen}
+                title="Clear hosted API keys?"
+                message="Zyra will remove the OS-encrypted Groq and Gemini credentials from this device. Git text generation using those providers will require new keys."
+                confirmLabel="Clear keys"
+                variant="warning"
+                onCancel={() => setClearKeysConfirmOpen(false)}
+                onConfirm={() => {
+                    setClearKeysConfirmOpen(false)
+                    void clearHostedKeys()
+                }}
+            />
         </SettingsPageContainer>
     )
 }

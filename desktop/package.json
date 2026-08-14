@@ -35,6 +35,7 @@
         "test:assistant-project": "bun scripts/test-assistant-project-lock.ts && bun scripts/test-project-icon-resolver.ts",
         "test:assistant-images": "bun scripts/test-assistant-image-pipeline.ts",
         "test:assistant-account-runtime": "node scripts/test-assistant-account-electron-runtime.mjs",
+        "test:onboarding": "bun scripts/test-onboarding-state.ts && bun scripts/test-device-preference-ownership.ts && bun scripts/test-device-secret-renderer-boundary.ts && bun scripts/test-account-connection-actions.ts && bun scripts/test-onboarding-ipc-gate.ts && bun scripts/test-onboarding-renderer-gate.ts && bun scripts/test-onboarding-browser-authorization.ts && bun scripts/test-assistant-web-defaults.ts",
         "test:assistant-markdown": "bun scripts/test-assistant-markdown-cache.tsx",
         "test:assistant-realtime-voice": "bun scripts/test-assistant-realtime-voice.ts",
         "test:assistant-voice-core": "bun scripts/test-assistant-voice-core.ts",
@@ -72,6 +73,7 @@
         "release:package": "node scripts/release/package-desktop.mjs",
         "release:validate": "node scripts/release/validate-release-assets.mjs",
         "test:release-infra": "bun scripts/test-desktop-release-contract.ts && bun scripts/test-desktop-build-version.ts && bun scripts/test-desktop-updater-release-feed.ts && node scripts/test-release-asset-contract.mjs",
+        "test:release-readiness": "bun run test:onboarding && bun run test:assistant-account-runtime && bun run test:pi-assistant-lifecycle && bun run test:assistant-realtime-voice && bun run test:assistant-voice-core && bun run test:browser-assistant-bridge && bun scripts/test-platform-window-chrome.ts && bun scripts/test-platform-terminal-launcher.ts",
         "build:mac": "node scripts/release/package-desktop.mjs --platform=macos",
         "build:linux": "node scripts/release/package-desktop.mjs --platform=linux",
         "test:release-assets": "node scripts/test-release-asset-contract.mjs",
@@ -155,6 +157,10 @@
             "output": "dist"
         },
         "extraResources": [
+            {
+                "from": "../LICENSE",
+                "to": "LICENSE"
+            },
             {
                 "from": ".release/zyra-runtime",
                 "to": "zyra-runtime",

@@ -17,6 +17,7 @@ import {
 import { getThemeDefinition, isDarkThemeId, isThemeId, THEME_CLASS_IDS, THEMES, type DarkTheme, type Theme, type ThemeTokens } from './settings-theme-catalog'
 import { resolveAccentTokens, resolveStatusTokens, resolveThemeTokens, toRgbChannels } from './settings-theme-semantics'
 import { getDevicePreferenceOwnership, type DevicePreferenceSurface, type DevicePreferencesSnapshot } from '@shared/preferences/contracts'
+import type { UpdateHostedAiSecretsInput } from '@shared/preferences/secrets-contracts'
 import { isElectronRendererRuntime } from './browser-file-url'
 import { setCanonicalAssistantAutoReconnectPreference } from './assistant/assistant-runtime-preferences'
 
@@ -222,6 +223,8 @@ export interface Settings {
     gitAutoCreateBranchWhenTargetMatches: boolean
     groqApiKey: string
     geminiApiKey: string
+    groqApiKeyConfigured: boolean
+    geminiApiKeyConfigured: boolean
     gitCommitCodexModel: string
     gitPullRequestCodexModel: string
     commitAIProvider: CommitAIProvider
@@ -306,9 +309,11 @@ const DEFAULT_SETTINGS: Settings = {
     gitAutoCreateBranchWhenTargetMatches: false,
     groqApiKey: '',
     geminiApiKey: '',
+    groqApiKeyConfigured: false,
+    geminiApiKeyConfigured: false,
     gitCommitCodexModel: '',
     gitPullRequestCodexModel: '',
-    commitAIProvider: 'groq',
+    commitAIProvider: 'codex',
     assistantUsageDisplayMode: 'remaining',
     assistantTextStreamingMode: 'stream',
     assistantToolOutputDefaultMode: 'minimized',
@@ -626,6 +631,8 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
                 gitAutoCreateBranchWhenTargetMatches: candidate.gitAutoCreateBranchWhenTargetMatches === true,
                 groqApiKey: sanitizeString(candidate.groqApiKey, 4_096),
                 geminiApiKey: sanitizeString(candidate.geminiApiKey, 4_096),
+                groqApiKeyConfigured: candidate.groqApiKeyConfigured === true,
+                geminiApiKeyConfigured: candidate.geminiApiKeyConfigured === true,
                 gitCommitCodexModel: gitCommitCodexModel.slice(0, 256),
                 gitPullRequestCodexModel: gitPullRequestCodexModel.slice(0, 256),
                 commitAIProvider: candidate.commitAIProvider === 'gemini' || candidate.commitAIProvider === 'codex' ? candidate.commitAIProvider : 'groq',
@@ -702,6 +709,7 @@ interface SettingsContextType {
     preferencesHydrated: boolean
     preferencesError: string | null
     updateSettings: (partial: Partial<Settings>) => void
+    updateHostedAiSecrets: (partial: UpdateHostedAiSecretsInput) => Promise<void>
     clearCache: () => void
 }
 
@@ -747,8 +755,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
                 // Startup is owned by Electron's OS integration; hosted keys are OS-encrypted.
                 startMinimized: current.startMinimized,
                 startWithWindows: current.startWithWindows,
-                groqApiKey: current.groqApiKey,
-                geminiApiKey: current.geminiApiKey
+                groqApiKey: '',
+                geminiApiKey: '',
+                groqApiKeyConfigured: current.groqApiKeyConfigured,
+                geminiApiKeyConfigured: current.geminiApiKeyConfigured
             }
         })
     }, [replaceSettings])
@@ -789,14 +799,14 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
                     const migrationResult = await window.devscope.secrets
                         .migrateLegacyHostedAiKeys(legacySecrets)
                         .catch(() => null)
-                    const secretResult = migrationResult?.success
-                        ? await window.devscope.secrets.getHostedAiKeys().catch(() => null)
-                        : null
-                    if (mounted && secretResult?.success) {
+                    const secretStatus = migrationResult?.success ? migrationResult.status : null
+                    if (mounted && secretStatus) {
                         replaceSettings((current) => ({
                             ...current,
-                            groqApiKey: secretResult.secrets.groqApiKey,
-                            geminiApiKey: secretResult.secrets.geminiApiKey
+                            groqApiKey: '',
+                            geminiApiKey: '',
+                            groqApiKeyConfigured: secretStatus.groqConfigured,
+                            geminiApiKeyConfigured: secretStatus.geminiConfigured
                         }))
                     }
                     if (migrationResult?.success && migrationResult.status.legacyMigrationComplete) {
@@ -876,10 +886,31 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         setCanonicalAssistantAutoReconnectPreference(settings.assistantAutoReconnect)
     }, [settings.assistantAutoReconnect])
 
+    const updateHostedAiSecrets = useCallback(async (partial: UpdateHostedAiSecretsInput) => {
+        const result = await window.devscope.secrets.updateHostedAiKeys(partial)
+        if (!result.success) throw new Error(result.error || 'Could not save hosted AI credentials.')
+        replaceSettings((current) => ({
+            ...current,
+            groqApiKey: '',
+            geminiApiKey: '',
+            groqApiKeyConfigured: result.status.groqConfigured,
+            geminiApiKeyConfigured: result.status.geminiConfigured
+        }))
+    }, [replaceSettings])
+
     const updateSettings = useCallback((partial: Partial<Settings>) => {
+        const rendererPartial: Partial<Settings> = { ...partial }
+        if (Object.prototype.hasOwnProperty.call(partial, 'groqApiKey')) {
+            rendererPartial.groqApiKey = ''
+            rendererPartial.groqApiKeyConfigured = settingsRef.current.groqApiKeyConfigured
+        }
+        if (Object.prototype.hasOwnProperty.call(partial, 'geminiApiKey')) {
+            rendererPartial.geminiApiKey = ''
+            rendererPartial.geminiApiKeyConfigured = settingsRef.current.geminiApiKeyConfigured
+        }
         const next = loadSettings({
             ...settingsRef.current,
-            ...partial,
+            ...rendererPartial,
             settingsSchemaVersion: 4
         } as unknown as Record<string, unknown>)
         replaceSettings(next)
@@ -896,9 +927,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         }
 
         if (Object.keys(secretPatch).length > 0) {
-            void window.devscope.secrets.updateHostedAiKeys(secretPatch).then((result) => {
-                if (!result.success) throw new Error(result.error || 'Could not save hosted AI credentials.')
-            }).catch((error) => console.error('Failed to save OS-owned credentials:', error))
+            void updateHostedAiSecrets(secretPatch)
+                .catch((error) => console.error('Failed to save OS-owned credentials:', error))
         }
 
         if (Object.keys(preferencePatch).length === 0) return
@@ -920,7 +950,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
             setPreferencesError(error instanceof Error ? error.message : 'Could not save device preferences.')
             return refreshPreferences().catch(() => undefined)
         })
-    }, [applyPreferenceSnapshot, bootstrap.surface, refreshPreferences, replaceSettings])
+    }, [applyPreferenceSnapshot, bootstrap.surface, refreshPreferences, replaceSettings, updateHostedAiSecrets])
 
     const clearCache = useCallback(() => {
         clearProjectViewCaches()
@@ -929,7 +959,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     }, [])
 
     return (
-        <SettingsContext.Provider value={{ settings, preferencesHydrated, preferencesError, updateSettings, clearCache }}>
+        <SettingsContext.Provider value={{ settings, preferencesHydrated, preferencesError, updateSettings, updateHostedAiSecrets, clearCache }}>
             {children}
         </SettingsContext.Provider>
     )

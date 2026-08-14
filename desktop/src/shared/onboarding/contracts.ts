@@ -78,6 +78,27 @@ export type OnboardingAuthStatus = {
     checkedAt: string
 }
 
+export type OpenAIConnectionMethodStatus = {
+    method: OnboardingAuthMethod
+    provider: 'openai-codex' | 'openai'
+    configured: boolean
+    verified: boolean
+    label: string
+    detail: string | null
+    checkedAt: string
+}
+
+export type OpenAIConnectionsStatus = {
+    chatgpt: OpenAIConnectionMethodStatus
+    apiKey: OpenAIConnectionMethodStatus
+    checkedAt: string
+}
+
+export type DisconnectOpenAIInput = {
+    method: OnboardingAuthMethod
+    confirmed: true
+}
+
 export type CommitOnboardingStepInput =
     | { expectedRevision: number; step: 'welcome' }
     | { expectedRevision: number; step: 'connect-openai' }
@@ -104,8 +125,10 @@ export type CancelOnboardingReviewInput = {
 export const ONBOARDING_IPC = {
     getState: 'zyra:onboarding:get-state',
     getAuthStatus: 'zyra:onboarding:get-auth-status',
+    getConnectionsStatus: 'zyra:account:get-openai-connections',
     connectChatGpt: 'zyra:onboarding:connect-chatgpt',
     connectApiKey: 'zyra:onboarding:connect-api-key',
+    disconnectOpenAI: 'zyra:account:disconnect-openai',
     commitStep: 'zyra:onboarding:commit-step',
     navigate: 'zyra:onboarding:navigate',
     beginReview: 'zyra:onboarding:begin-review',

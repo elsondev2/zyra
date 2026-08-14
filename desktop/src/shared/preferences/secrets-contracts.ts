@@ -10,10 +10,12 @@ export type HostedAiSecrets = {
     geminiApiKey: string
 }
 
-export type UpdateHostedAiSecretsInput = Partial<HostedAiSecrets>
+export type UpdateHostedAiSecretsInput = Partial<HostedAiSecrets> & {
+    /** Required when an existing encrypted credential will be removed. */
+    confirmClear?: true
+}
 
 export const DEVICE_SECRETS_IPC = {
-    getHostedAiKeys: 'zyra:secrets:get-hosted-ai-keys',
     updateHostedAiKeys: 'zyra:secrets:update-hosted-ai-keys',
     migrateLegacyHostedAiKeys: 'zyra:secrets:migrate-legacy-hosted-ai-keys'
 } as const

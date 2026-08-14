@@ -1,6 +1,11 @@
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { OnboardingAuthStatus } from '../../shared/onboarding/contracts'
+import type {
+    OnboardingAuthMethod,
+    OnboardingAuthStatus,
+    OpenAIConnectionMethodStatus,
+    OpenAIConnectionsStatus
+} from '../../shared/onboarding/contracts'
 import { resolveZyraRoot } from '../zyra/zyra-root'
 
 type AuthStatusResult = { provider?: string; status?: { configured?: boolean } }
@@ -17,6 +22,7 @@ type ZyraSdkAuthModule = {
     configureZyraOpenAIApiKey(apiKey: string, options?: Record<string, unknown>): Promise<unknown>
     verifyZyraOpenAIApiAuth(options?: Record<string, unknown>): Promise<unknown>
     getZyraAuthStatus(provider: string): Promise<AuthStatusResult>
+    removeZyraAuth(method: 'subscription' | 'api', options?: Record<string, unknown>): Promise<unknown>
 }
 
 type ChatGptAccountModule = {
@@ -71,6 +77,23 @@ export class OpenAIConnectionService {
         return this.track(this.verifyConnections())
     }
 
+    async getConnectionsStatus(): Promise<OpenAIConnectionsStatus> {
+        if (this.operation) await this.operation.catch(() => undefined)
+        const [chatgpt, apiKey] = await Promise.all([
+            this.readChatGptConnection(),
+            this.readApiKeyConnection()
+        ])
+        return { chatgpt, apiKey, checkedAt: this.now().toISOString() }
+    }
+
+    async disconnect(method: OnboardingAuthMethod): Promise<OpenAIConnectionsStatus> {
+        if (method !== 'chatgpt' && method !== 'api-key') throw new Error('Choose a valid OpenAI connection to disconnect.')
+        if (this.operation) throw new Error('Wait for the current OpenAI connection action to finish.')
+        const sdk = await this.loadSdk()
+        await sdk.removeZyraAuth(method === 'chatgpt' ? 'subscription' : 'api')
+        return this.getConnectionsStatus()
+    }
+
     connectChatGpt(): Promise<OnboardingAuthStatus> {
         if (this.operation) return this.operation
         return this.track((async () => {
@@ -120,6 +143,76 @@ export class OpenAIConnectionService {
         }
         void request.then(clear, clear)
         return request
+    }
+
+    private async readChatGptConnection(): Promise<OpenAIConnectionMethodStatus> {
+        const checkedAt = this.now().toISOString()
+        try {
+            const account = await this.loadAccount()
+            const status = await account.buildChatGptAccountStatus('openai-codex')
+            const configured = status.status?.configured === true
+            const verified = configured && isUsableSubscription(status)
+            return {
+                method: 'chatgpt',
+                provider: 'openai-codex',
+                configured,
+                verified,
+                label: verified ? 'ChatGPT connected' : configured ? 'ChatGPT needs attention' : 'ChatGPT not connected',
+                detail: verified ? null : status.usageError || null,
+                checkedAt
+            }
+        } catch (error) {
+            return {
+                method: 'chatgpt',
+                provider: 'openai-codex',
+                configured: false,
+                verified: false,
+                label: 'ChatGPT unavailable',
+                detail: errorMessage(error),
+                checkedAt
+            }
+        }
+    }
+
+    private async readApiKeyConnection(): Promise<OpenAIConnectionMethodStatus> {
+        const checkedAt = this.now().toISOString()
+        let configured = false
+        try {
+            const sdk = await this.loadSdk()
+            const status = await sdk.getZyraAuthStatus('openai')
+            configured = status.status?.configured === true
+            if (!configured) {
+                return {
+                    method: 'api-key',
+                    provider: 'openai',
+                    configured: false,
+                    verified: false,
+                    label: 'OpenAI API key not connected',
+                    detail: null,
+                    checkedAt
+                }
+            }
+            await sdk.verifyZyraOpenAIApiAuth()
+            return {
+                method: 'api-key',
+                provider: 'openai',
+                configured: true,
+                verified: true,
+                label: 'OpenAI API connected',
+                detail: null,
+                checkedAt
+            }
+        } catch (error) {
+            return {
+                method: 'api-key',
+                provider: 'openai',
+                configured,
+                verified: false,
+                label: configured ? 'OpenAI API key needs attention' : 'OpenAI API unavailable',
+                detail: errorMessage(error),
+                checkedAt
+            }
+        }
     }
 
     private async verifyChatGptConnection(): Promise<OnboardingAuthStatus> {

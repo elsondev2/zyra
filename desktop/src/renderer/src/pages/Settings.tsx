@@ -14,10 +14,12 @@ import {
 export default function GeneralSettings() {
     const { settings, updateSettings, clearCache } = useSettings()
     const onboarding = useOnboarding()
+    const desktopHost = isElectronRendererRuntime()
     const [startupStatus, setStartupStatus] = useState<string | null>(null)
     const [setupReviewError, setSetupReviewError] = useState<string | null>(null)
 
     useEffect(() => {
+        if (!desktopHost) return
         let mounted = true
         void window.devscope.getStartupSettings().then((result) => {
             if (!mounted || !result.success) return
@@ -30,7 +32,7 @@ export default function GeneralSettings() {
             updateSettings({ startWithWindows: startup.openAtLogin === true, startMinimized: startup.openAsHidden === true })
         }).catch(() => {})
         return () => { mounted = false }
-    }, [updateSettings])
+    }, [desktopHost, updateSettings])
 
     const reviewSetup = async () => {
         const revision = onboarding.snapshot?.record?.revision
@@ -57,21 +59,30 @@ export default function GeneralSettings() {
 
     return (
         <SettingsPageContainer>
-            <SettingsSection title="Desktop">
-                <SettingsRow
-                    title="Open at login"
-                    description="Launch Zyra automatically when Windows starts."
-                    status={startupStatus === 'Saved' ? 'Saved' : startupStatus ? 'Not saved' : null}
-                    statusTone={startupStatus === 'Saved' ? 'ready' : 'danger'}
-                    statusTitle={startupStatus && startupStatus !== 'Saved' ? startupStatus : undefined}
-                    control={<SettingsSwitch checked={settings.startWithWindows} onCheckedChange={(checked) => void setStartup(checked, checked ? settings.startMinimized : false)} label="Open Zyra at login" />}
-                />
-                {settings.startWithWindows ? <SettingsRow title="Start hidden" description="Keep the window in the tray when Zyra opens at login." control={<SettingsSwitch checked={settings.startMinimized} onCheckedChange={(checked) => void setStartup(true, checked)} label="Start Zyra hidden" />} /> : null}
-                <SettingsRow title="Chat rail" description="Keep the conversation sidebar collapsed across restarts." control={<SettingsSwitch checked={settings.sidebarCollapsed} onCheckedChange={(sidebarCollapsed) => updateSettings({ sidebarCollapsed })} label="Collapse chat rail" />} />
+            {desktopHost ? (
+                <SettingsSection title="Desktop host">
+                    <SettingsRow
+                        title="Open at login"
+                        description="Launch Zyra automatically when you sign in to this computer."
+                        status={startupStatus === 'Saved' ? 'Saved' : startupStatus ? 'Not saved' : null}
+                        statusTone={startupStatus === 'Saved' ? 'ready' : 'danger'}
+                        statusTitle={startupStatus && startupStatus !== 'Saved' ? startupStatus : undefined}
+                        control={<SettingsSwitch checked={settings.startWithWindows} onCheckedChange={(checked) => void setStartup(checked, checked ? settings.startMinimized : false)} label="Open Zyra at login" />}
+                    />
+                    {settings.startWithWindows ? <SettingsRow title="Start hidden" description="Start Zyra in the background. Open Zyra again whenever you want to show the window." control={<SettingsSwitch checked={settings.startMinimized} onCheckedChange={(checked) => void setStartup(true, checked)} label="Start Zyra hidden" />} /> : null}
+                </SettingsSection>
+            ) : (
+                <SettingsSection title="Desktop host">
+                    <SettingsNotice tone="neutral">Open Zyra Desktop on this computer to change login and background-start behavior.</SettingsNotice>
+                </SettingsSection>
+            )}
+
+            <SettingsSection title="Interface">
+                <SettingsRow title="Chat rail" description="Keep the conversation sidebar collapsed across restarts on this surface." control={<SettingsSwitch checked={settings.sidebarCollapsed} onCheckedChange={(sidebarCollapsed) => updateSettings({ sidebarCollapsed })} label="Collapse chat rail" />} />
                 <SettingsRow title="Agent Inbox sidebar" description="Use one flat chat list in creation order. Active work renders as rich cards; settled chats collapse to compact rows. Switch back any time." control={<SettingsSwitch checked={settings.assistantAgentInboxSidebarEnabled} onCheckedChange={(assistantAgentInboxSidebarEnabled) => updateSettings({ assistantAgentInboxSidebarEnabled })} label="Use Agent Inbox sidebar" />} />
             </SettingsSection>
 
-            {isElectronRendererRuntime() ? (
+            {desktopHost ? (
                 <SettingsSection title="Setup">
                     <SettingsRow
                         title="Review device setup"

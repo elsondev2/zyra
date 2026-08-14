@@ -1,5 +1,6 @@
-import { readFile, rename } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { readFile, realpath, rename, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { basename, dirname, isAbsolute, join, parse, resolve } from 'node:path'
 import {
     ONBOARDING_FLOW_VERSION,
     ONBOARDING_SCHEMA_VERSION,
@@ -157,6 +158,31 @@ function requireCurrentStep(record: OnboardingRecord, step: OnboardingStep): voi
     }
 }
 
+function sameFilesystemPath(left: string, right: string): boolean {
+    return process.platform === 'win32'
+        ? left.toLocaleLowerCase() === right.toLocaleLowerCase()
+        : left === right
+}
+
+export async function validateOnboardingProjectsFolder(input: string): Promise<string> {
+    if (!isAbsolute(input)) throw new Error('Choose an absolute projects folder.')
+
+    let canonical: string
+    try {
+        canonical = await realpath(resolve(input))
+        if (!(await stat(canonical)).isDirectory()) throw new Error('not-directory')
+    } catch {
+        throw new Error('Choose an existing projects folder.')
+    }
+
+    const filesystemRoot = parse(canonical).root
+    const home = await realpath(homedir()).catch(() => resolve(homedir()))
+    if (sameFilesystemPath(canonical, filesystemRoot) || sameFilesystemPath(canonical, home)) {
+        throw new Error('Choose a bounded projects folder instead of an entire drive or home folder.')
+    }
+    return canonical
+}
+
 export class OnboardingService {
     private hydrated: HydratedOnboarding | null = null
     private hydrationPromise: Promise<HydratedOnboarding> | null = null
@@ -168,7 +194,8 @@ export class OnboardingService {
         private readonly filePath: string,
         private readonly preferences: DevicePreferencesService,
         private readonly auth: OpenAIConnectionService,
-        private readonly now: () => Date = () => new Date()
+        private readonly now: () => Date = () => new Date(),
+        private readonly validateProjectsFolder: (path: string) => Promise<string> = validateOnboardingProjectsFolder
     ) {}
 
     async initialize(): Promise<OnboardingSnapshot> {
@@ -272,8 +299,9 @@ export class OnboardingService {
                     break
                 }
                 case 'projects': {
-                    const projectsFolder = String(input.selection?.projectsFolder || '').trim().slice(0, 2_048)
-                    if (!projectsFolder) throw new Error('Choose a projects folder before continuing.')
+                    const requestedFolder = String(input.selection?.projectsFolder || '').trim().slice(0, 2_048)
+                    if (!requestedFolder) throw new Error('Choose a projects folder before continuing.')
+                    const projectsFolder = await this.validateProjectsFolder(requestedFolder)
                     await this.preferences.updateSharedFromMain({ projectsFolder })
                     next = withRevision(record, now, {
                         completedSteps: markStepCompleted(record, input.step),

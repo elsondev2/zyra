@@ -1489,6 +1489,55 @@ assert.equal(writeExisting?.type === 'activity' ? writeExisting.payload.data?.['
 assert.equal(writeExisting?.type === 'activity' ? writeExisting.payload.data?.['snapshotBacked'] : null, true)
 assert.equal(writeExisting?.type === 'activity' ? writeExisting.payload.data?.['patch'] : null, writeExistingPatch)
 
+const backgroundLifecycleThreadBefore = findProjectedRecord(projectedThread.id)?.thread
+assert.ok(backgroundLifecycleThreadBefore)
+const backgroundLifecycleActivityCount = backgroundLifecycleThreadBefore.activities.length
+const backgroundConnectError = 'Agent bridge request connect timed out.'
+handleAssistantRuntimeEvent({
+    eventId: 'background-connect-timeout',
+    type: 'session.state.changed',
+    createdAt: '2026-07-10T17:00:00.000Z',
+    threadId: projectedThread.id,
+    providerThreadId: projectedThread.providerThreadId || undefined,
+    payload: { state: 'error', error: backgroundConnectError, message: backgroundConnectError }
+}, projectedDeps)
+const backgroundConnectThread = findProjectedRecord(projectedThread.id)?.thread
+assert.equal(backgroundConnectThread?.lastError, backgroundLifecycleThreadBefore.lastError)
+assert.equal(backgroundConnectThread?.state, backgroundLifecycleThreadBefore.state)
+assert.equal(backgroundConnectThread?.updatedAt, backgroundLifecycleThreadBefore.updatedAt)
+assert.equal(
+    backgroundConnectThread?.activities.length,
+    backgroundLifecycleActivityCount,
+    'background connection failures must not become durable Agent Inbox timeline work'
+)
+handleAssistantRuntimeEvent({
+    eventId: 'background-session-disconnect',
+    type: 'session.state.changed',
+    createdAt: '2026-07-10T17:00:01.000Z',
+    threadId: projectedThread.id,
+    providerThreadId: projectedThread.providerThreadId || undefined,
+    payload: { state: 'stopped', message: 'Zyra session disconnected.' }
+}, projectedDeps)
+assert.equal(
+    findProjectedRecord(projectedThread.id)?.thread.activities.length,
+    backgroundLifecycleActivityCount,
+    'navigation disconnects must not become durable Agent Inbox timeline work'
+)
+handleAssistantRuntimeEvent({
+    eventId: 'turn-scoped-runtime-error',
+    type: 'session.state.changed',
+    createdAt: '2026-07-10T17:00:02.000Z',
+    threadId: projectedThread.id,
+    providerThreadId: projectedThread.providerThreadId || undefined,
+    turnId: 'turn-visible-runtime-error',
+    payload: { state: 'error', error: 'Provider request failed.', message: 'Provider request failed.' }
+}, projectedDeps)
+assert.equal(
+    findProjectedRecord(projectedThread.id)?.thread.activities.length,
+    backgroundLifecycleActivityCount + 1,
+    'turn-scoped runtime failures must remain visible in the canonical timeline'
+)
+
 const failedTurnRuntime = new ZyraPiRuntime()
 const failedTurnEvents: AssistantRuntimeEvent[] = []
 failedTurnRuntime.on('runtime', (event: AssistantRuntimeEvent) => failedTurnEvents.push(event))

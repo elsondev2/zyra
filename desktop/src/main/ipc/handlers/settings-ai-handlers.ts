@@ -9,6 +9,18 @@ import type { DevScopeGitTextProvider } from '../../../shared/contracts/devscope
 
 type CommitAIProvider = DevScopeGitTextProvider
 const execFileAsync = promisify(execFile)
+let resolveHostedAiSecret: (provider: 'groq' | 'gemini') => Promise<string> = async () => ''
+
+export function configureHostedAiSecretResolver(
+    resolver: (provider: 'groq' | 'gemini') => Promise<string>
+): void {
+    resolveHostedAiSecret = resolver
+}
+
+async function resolveProviderApiKey(provider: 'groq' | 'gemini', candidate: unknown): Promise<string> {
+    const explicit = typeof candidate === 'string' ? candidate.trim() : ''
+    return explicit || await resolveHostedAiSecret(provider)
+}
 
 const PACKAGE_RUNTIME_DEFINITIONS: Array<{ id: DevScopePackageRuntimeId; name: string; command: string }> = [
     { id: 'node', name: 'Node.js', command: 'node' },
@@ -91,12 +103,12 @@ export async function handleListInstalledPackageRuntimes() {
 
 export async function handleTestGroqConnection(_event: Electron.IpcMainInvokeEvent, apiKey: string) {
     log.info('IPC: testGroqConnection')
-    return await testGitTextProviderConnection({ provider: 'groq', apiKey })
+    return await testGitTextProviderConnection({ provider: 'groq', apiKey: await resolveProviderApiKey('groq', apiKey) })
 }
 
 export async function handleTestGeminiConnection(_event: Electron.IpcMainInvokeEvent, apiKey: string) {
     log.info('IPC: testGeminiConnection')
-    return await testGitTextProviderConnection({ provider: 'gemini', apiKey })
+    return await testGitTextProviderConnection({ provider: 'gemini', apiKey: await resolveProviderApiKey('gemini', apiKey) })
 }
 
 export async function handleTestCodexConnection(_event: Electron.IpcMainInvokeEvent, model?: string) {
@@ -112,7 +124,10 @@ export async function handleGenerateCommitMessage(
     model?: string
 ) {
     log.info('IPC: generateCommitMessage', { provider, model })
-    return await generateGitCommitMessageWithProvider({ provider, apiKey, diff, model })
+    const resolvedApiKey = provider === 'groq' || provider === 'gemini'
+        ? await resolveProviderApiKey(provider, apiKey)
+        : ''
+    return await generateGitCommitMessageWithProvider({ provider, apiKey: resolvedApiKey, diff, model })
 }
 
 export async function handleGetAiDebugLogs(_event: Electron.IpcMainInvokeEvent, limit?: number) {

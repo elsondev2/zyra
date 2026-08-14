@@ -4,8 +4,10 @@
  */
 
 import { app, BrowserWindow, Menu, shell, ipcMain, nativeTheme, protocol, globalShortcut, session, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
-import { join } from 'path'
+import { isAbsolute, join } from 'path'
 import { existsSync, statSync } from 'fs'
+import { writeFile } from 'node:fs/promises'
+import { pathToFileURL } from 'node:url'
 import { electronApp, is } from './utils'
 import log from 'electron-log'
 import { registerIpcHandlers } from './ipc'
@@ -20,6 +22,7 @@ import { disposeAgentControlBroker, getAgentControlBroker } from './agent-contro
 import { trustedBrowserGuests } from './agent-control/trusted-guest-registry'
 import { resolveZyraWindowChromePolicy, type ZyraDesktopPlatform } from '../shared/platform-window-chrome'
 import { createDesktopSetupServices } from './setup'
+import { resolveZyraRoot } from './zyra/zyra-root'
 
 const APP_NAME = "Zyra"
 const DEV_APP_NAME = `${APP_NAME}-dev`
@@ -636,6 +639,25 @@ function resolveSenderWindow(event: IpcMainEvent | IpcMainInvokeEvent): BrowserW
     return BrowserWindow.fromWebContents(event.sender)
 }
 
+async function runPackagedLaunchSmoke(): Promise<void> {
+    const markerPath = String(process.env.ZYRA_PACKAGED_SMOKE_MARKER || '').trim()
+    if (!isAbsolute(markerPath) || markerPath.length > 2_048) {
+        throw new Error('Packaged launch smoke requires a bounded absolute marker path.')
+    }
+    const root = resolveZyraRoot()
+    await Promise.all([
+        import(/* @vite-ignore */ pathToFileURL(join(root, 'src', 'zyra-sdk.mjs')).href),
+        import(/* @vite-ignore */ pathToFileURL(join(root, 'src', 'chatgpt-account.mjs')).href)
+    ])
+    await writeFile(markerPath, `${JSON.stringify({
+        version: app.getVersion(),
+        platform: process.platform,
+        architecture: process.arch,
+        resourcesPath: process.resourcesPath,
+        runtimeRoot: root
+    })}\n`, { encoding: 'utf8', mode: 0o600 })
+}
+
 const initialShellLaunchTarget = extractShellLaunchTargetFromArgv(process.argv)
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
@@ -662,6 +684,17 @@ app.on('second-instance', (_event, argv) => {
 })
 
 app.whenReady().then(async () => {
+    if (process.env.ZYRA_PACKAGED_SMOKE === '1') {
+        try {
+            await runPackagedLaunchSmoke()
+            app.quit()
+        } catch (error) {
+            log.error('[ReleaseSmoke] packaged launch failed', error)
+            app.exit(1)
+        }
+        return
+    }
+
     electronApp.setAppUserModelId(runtimeIdentity.appUserModelId)
     await setupServices.onboarding.initialize().catch((error) => {
         log.error('[Onboarding] failed to hydrate mandatory setup state', error)

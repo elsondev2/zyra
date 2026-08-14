@@ -22,6 +22,7 @@ import type {
 } from '@shared/contracts/devscope-api'
 import { createBrowserAssistantBridgeAdapter } from './browser-assistant-bridge-adapter'
 import { createLiveBrowserDevscopeAdapter } from './browser-devscope-live-adapter'
+import { formatDesktopVersion, resolveDesktopReleaseChannel } from './release-build-metadata'
 
 const BROWSER_PREVIEW_SESSION_ID = 'browser-preview-session'
 const BROWSER_PREVIEW_THREAD_ID = 'browser-preview-thread'
@@ -44,12 +45,12 @@ const previewModels: AssistantModelInfo[] = [
 const browserUpdateState: DevScopeUpdateState = {
     enabled: false,
     status: 'disabled',
-    currentVersion: '0.1.0',
-    currentDisplayVersion: '0.1.0',
-    channel: 'alpha',
+    currentVersion: __ZYRA_DESKTOP_VERSION__,
+    currentDisplayVersion: formatDesktopVersion(__ZYRA_DESKTOP_VERSION__),
+    channel: resolveDesktopReleaseChannel(__ZYRA_DESKTOP_VERSION__),
     repository: '',
     releasePageUrl: '',
-    disabledReason: 'Browser preview',
+    disabledReason: 'Updates are managed by the hosting Zyra Desktop app.',
     availableVersion: null,
     availableDisplayVersion: null,
     downloadedVersion: null,
@@ -271,7 +272,7 @@ function createRailDevActivities(): AssistantActivity[] {
                     content: [
                         {
                             type: 'text',
-                            text: '{\n  "name": "zyra-ui",\n  "version": "0.1.0",\n  "scripts": {\n    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json"\n  }\n}'
+                            text: '{\n  "name": "zyra-desktop",\n  "version": "0.6.0",\n  "scripts": {\n    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json"\n  }\n}'
                         }
                     ]
                 },
@@ -292,7 +293,7 @@ function createRailDevActivities(): AssistantActivity[] {
                     content: [
                         {
                             type: 'text',
-                            text: '> zyra-ui@0.1.0 typecheck\n> tsc --noEmit -p tsconfig.typecheck.json\n\nDone.'
+                            text: '> zyra-desktop@0.6.0 typecheck\n> tsc --noEmit -p tsconfig.typecheck.json\n\nDone.'
                         }
                     ]
                 },
@@ -730,15 +731,16 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
             onChanged: () => noopUnsubscribe
         },
         secrets: {
-            getHostedAiKeys: () => unavailable('Device secrets are available in Zyra Desktop only.'),
             updateHostedAiKeys: () => unavailable('Device secrets are available in Zyra Desktop only.'),
             migrateLegacyHostedAiKeys: () => unavailable('Device secrets are available in Zyra Desktop only.')
         },
         onboarding: {
             getState: () => unavailable('Setup status requires Zyra Desktop.'),
             getAuthStatus: () => unavailable('OpenAI setup requires Zyra Desktop.'),
+            getConnectionsStatus: () => unavailable('OpenAI account changes require Zyra Desktop.'),
             connectChatGpt: () => unavailable('OpenAI setup requires Zyra Desktop.'),
             connectApiKey: () => unavailable('OpenAI setup requires Zyra Desktop.'),
+            disconnectOpenAI: () => unavailable('OpenAI account changes require Zyra Desktop.'),
             commitStep: () => unavailable('Setup changes require Zyra Desktop.'),
             navigate: () => unavailable('Setup changes require Zyra Desktop.'),
             beginReview: () => unavailable('Setup review requires Zyra Desktop.'),
