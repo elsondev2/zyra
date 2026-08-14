@@ -169,6 +169,13 @@
                 ]
             },
             {
+                "from": ".release/zyra-runtime/node_modules",
+                "to": "zyra-runtime/node_modules",
+                "filter": [
+                    "**/*"
+                ]
+            },
+            {
                 "from": "../extensions/zyra-browser-control/dist/unpacked",
                 "to": "zyra-browser-control-extension",
                 "filter": [

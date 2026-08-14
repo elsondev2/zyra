@@ -51,6 +51,11 @@ assert(!preflightSource.includes('stablePublication'), 'prerelease tags must not
 const globalResources = build.extraResources
 assert(globalResources.some((entry: { from: string; to: string }) => entry.from === '../LICENSE' && entry.to === 'LICENSE'))
 assert(globalResources.some((entry: { from: string; to: string }) => entry.from === '.release/zyra-runtime' && entry.to === 'zyra-runtime'))
+assert(
+    globalResources.some((entry: { from: string; to: string }) =>
+        entry.from === '.release/zyra-runtime/node_modules' && entry.to === 'zyra-runtime/node_modules'),
+    'staged dependencies need their own resource mapping because electron-builder excludes a matcher-root node_modules directory'
+)
 assert(globalResources.some((entry: { to: string }) => entry.to === 'zyra-browser-control-extension'))
 assert(!globalResources.some((entry: { to: string }) => entry.to === 'zyra-computer-use'), 'Windows sidecar cannot be a global resource')
 assert(build.win.extraResources.some((entry: { to: string }) => entry.to === 'zyra-computer-use'))

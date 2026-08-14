@@ -38,6 +38,12 @@ const buildConfig = desktopPackage.build
 const runtimeResource = (buildConfig.extraResources || []).find((entry: { to?: string }) => entry.to === 'zyra-runtime')
 assert(runtimeResource, 'electron-builder must copy the staged runtime to resources/zyra-runtime')
 assert.equal(runtimeResource.from, '.release/zyra-runtime')
+const runtimeDependencyResource = (buildConfig.extraResources || []).find(
+    (entry: { to?: string }) => entry.to === 'zyra-runtime/node_modules'
+)
+assert(runtimeDependencyResource, 'electron-builder must copy staged dependencies through a non-node_modules matcher root')
+assert.equal(runtimeDependencyResource.from, '.release/zyra-runtime/node_modules')
+assert.deepEqual(runtimeDependencyResource.filter, ['**/*'])
 
 const outsideCheckout = mkdtempSync(path.join(os.tmpdir(), 'zyra-packaged-runtime-contract-'))
 try {
