@@ -30,6 +30,11 @@ assert.equal(browserRuntimeSource.includes('onAssistantClientCountChanged: setAc
 assert.equal(mainSource.includes("staticRoot: join(__dirname, '../renderer')"), true, 'packaged Desktop must serve its built renderer to the local browser')
 assert.equal(mainSource.includes('new BrowserClientRuntime'), true, 'Desktop must supervise the production browser runtime independently of renderer startup')
 assert.equal(mainSource.includes("log.info('[BrowserClientHost] ready'"), true, 'the stable local browser URL must be discoverable in Desktop logs')
+assert.match(
+    mainSource,
+    /app\.on\('window-all-closed', \(\) => \{\s*if \(process\.platform === 'darwin'\) return\s*void browserClientRuntime\?\.stop\(\)/,
+    'closing the last macOS window must keep the browser runtime alive until the app actually quits'
+)
 assert.equal(assistantHandlersSource.includes('withDesktopAssistantSelectionLease(() => getAssistantService().connect(options))'), true, 'Desktop auto-reconnect must not steal a browser-routed chat')
 assert.equal(preloadRelaySource.includes('Object.prototype.hasOwnProperty.call'), true, 'the generic relay must only invoke methods owned by the exposed Desktop adapter')
 assert.equal(preloadRelaySource.includes("relayEvent('previewTerminal'"), true, 'terminal output must cross the browser event relay')

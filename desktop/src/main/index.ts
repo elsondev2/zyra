@@ -538,14 +538,14 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
+    if (process.platform === 'darwin') return
+
     void browserClientRuntime?.stop()
     browserClientRuntime = null
     disposeAssistantService()
     disposeUpdater()
     void disposeAgentControlBroker()
-    if (process.platform !== 'darwin') {
-        app.quit()
-    }
+    app.quit()
 })
 
 app.on('before-quit', () => {
