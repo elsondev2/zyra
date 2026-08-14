@@ -124,9 +124,13 @@ export class BrowserAssistantBridge {
                 this.browserRealtimeVoiceDisconnectTimer = null
                 if (this.browserRealtimeVoiceOwnerClientId !== clientId || this.realtimeVoiceEventStream.hasClient(clientId)) return
                 const ownerId = this.browserVoiceOwnerId(clientId)
-                this.browserRealtimeVoiceOwnerClientId = null
-                this.realtimeVoiceEventStream.clearClient(clientId)
-                void this.dependencies.service.stopRealtimeVoice(ownerId).catch(() => undefined)
+                void this.dependencies.service.stopRealtimeVoice(ownerId)
+                    .catch(() => undefined)
+                    .finally(() => {
+                        if (this.browserRealtimeVoiceOwnerClientId === clientId) {
+                            this.browserRealtimeVoiceOwnerClientId = null
+                        }
+                    })
             }, BROWSER_VOICE_DISCONNECT_GRACE_MS)
             this.browserRealtimeVoiceDisconnectTimer.unref?.()
         })
@@ -446,6 +450,7 @@ export class BrowserAssistantBridge {
                     throw new Error('Voice is already active in another browser tab.')
                 }
                 this.clearBrowserVoiceDisconnectTimer()
+                this.realtimeVoiceEventStream.clearClient(ownerClientId)
                 this.browserRealtimeVoiceOwnerClientId = ownerClientId
                 try {
                     return await service.startRealtimeVoice(
@@ -478,7 +483,6 @@ export class BrowserAssistantBridge {
                 } finally {
                     this.clearBrowserVoiceDisconnectTimer()
                     if (this.browserRealtimeVoiceOwnerClientId === ownerClientId) this.browserRealtimeVoiceOwnerClientId = null
-                    this.realtimeVoiceEventStream.clearClient(ownerClientId)
                 }
             }
             case 'getVoiceTranscriptionState': return {

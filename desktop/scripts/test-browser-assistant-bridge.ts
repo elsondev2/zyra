@@ -94,7 +94,10 @@ const service = {
     async startRealtimeVoice() { return { success: true as const, sdp: 'answer', realtimeVersion: 'v3' } },
     async sendRealtimeVoiceMessage() { return { success: true as const, mode: 'text-turn' as const } },
     async ingestRealtimeVoiceEvent() { return { success: true as const } },
-    async stopRealtimeVoice() { return { success: true as const } }
+    async stopRealtimeVoice() {
+        realtimeVoiceEventListener?.({ type: 'session.closed', reason: 'test-stop' })
+        return { success: true as const }
+    }
 } as unknown as AssistantService
 
 const bridge = new BrowserAssistantBridge({
@@ -336,6 +339,53 @@ try {
     assert.equal(stopVoice.value.success, true)
     voiceReconnectController.abort()
     await voiceReconnectResponse.body?.cancel().catch(() => undefined)
+
+    const orphanController = new AbortController()
+    const orphanResponse = await fetch(`${baseUrl}${BROWSER_REALTIME_VOICE_EVENTS_PATH}`, {
+        headers: {
+            Origin: allowedOrigin,
+            [BROWSER_ASSISTANT_BRIDGE_HEADER]: BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE,
+            [BROWSER_ASSISTANT_BRIDGE_CAPABILITY_HEADER]: capability,
+            [BROWSER_ASSISTANT_CLIENT_ID_HEADER]: voiceClientId
+        },
+        signal: orphanController.signal
+    })
+    const orphanReader = orphanResponse.body!.getReader()
+    await orphanReader.read()
+    const orphanStart = await fetch(`${baseUrl}${BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+            method: 'startRealtimeVoice',
+            clientId: voiceClientId,
+            args: [{ sdp: 'offer', conversationId: 'thread:real', sessionId: 'session:real' }]
+        })
+    }).then((response) => response.json()) as any
+    assert.equal(orphanStart.value.success, true)
+    orphanController.abort()
+    await orphanReader.cancel().catch(() => undefined)
+    await new Promise((resolve) => setTimeout(resolve, 2_750))
+
+    const orphanReplayController = new AbortController()
+    const orphanReplayResponse = await fetch(`${baseUrl}${BROWSER_REALTIME_VOICE_EVENTS_PATH}`, {
+        headers: {
+            Origin: allowedOrigin,
+            [BROWSER_ASSISTANT_BRIDGE_HEADER]: BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE,
+            [BROWSER_ASSISTANT_BRIDGE_CAPABILITY_HEADER]: capability,
+            [BROWSER_ASSISTANT_CLIENT_ID_HEADER]: voiceClientId
+        },
+        signal: orphanReplayController.signal
+    })
+    const orphanReplayReader = orphanReplayResponse.body!.getReader()
+    let orphanReplayText = ''
+    for (let attempt = 0; attempt < 3 && !orphanReplayText.includes('session.closed'); attempt += 1) {
+        const chunk = await orphanReplayReader.read()
+        if (chunk.done) break
+        orphanReplayText += voiceDecoder.decode(chunk.value)
+    }
+    assert.equal(orphanReplayText.includes('session.closed'), true, 'late reconnects must replay the terminal event after orphan cleanup')
+    orphanReplayController.abort()
+    await orphanReplayReader.cancel().catch(() => undefined)
 
     const devscopeEventController = new AbortController()
     const devscopeEventResponse = await fetch(`${baseUrl}${BROWSER_DEVSCOPE_BRIDGE_EVENTS_PATH}`, {
