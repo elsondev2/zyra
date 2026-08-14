@@ -7,6 +7,7 @@ import {
     BROWSER_ASSISTANT_BRIDGE_HEADER,
     BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE,
     BROWSER_ASSISTANT_BRIDGE_HOST,
+    BROWSER_ASSISTANT_CLIENT_ID_HEADER,
     BROWSER_ASSISTANT_BRIDGE_PROXY_PREFIX,
     BROWSER_CLIENT_HOST_ORIGIN,
     BROWSER_CLIENT_HOST_PORT,
@@ -208,6 +209,9 @@ export class BrowserClientHost {
                     'Content-Type': String(request.headers['content-type'] || 'application/json'),
                     Origin: localOrigin,
                     ...(request.headers.range ? { Range: String(request.headers.range) } : {}),
+                    ...(request.headers[BROWSER_ASSISTANT_CLIENT_ID_HEADER]
+                        ? { [BROWSER_ASSISTANT_CLIENT_ID_HEADER]: String(request.headers[BROWSER_ASSISTANT_CLIENT_ID_HEADER]) }
+                        : {}),
                     [BROWSER_ASSISTANT_BRIDGE_HEADER]: BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE,
                     [BROWSER_ASSISTANT_BRIDGE_CAPABILITY_HEADER]: this.dependencies.bridge.capability
                 }
@@ -351,7 +355,7 @@ export class BrowserClientHost {
         response.setHeader('X-Content-Type-Options', 'nosniff')
         response.setHeader('Referrer-Policy', 'no-referrer')
         response.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
-        response.setHeader('Permissions-Policy', 'camera=(), geolocation=(), payment=(), usb=()')
+        response.setHeader('Permissions-Policy', 'camera=(), microphone=(self), geolocation=(), payment=(), usb=()')
     }
 
     private writeError(response: ServerResponse, statusCode: number, error: string): void {

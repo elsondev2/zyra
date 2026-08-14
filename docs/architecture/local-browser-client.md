@@ -40,20 +40,22 @@ The private bridge capability is generated for each Desktop process and is never
 - Git clone progress and Python preview events;
 - Agent Control state, cursor updates, approvals, revocation, Emergency Stop, Chrome pairing, and window selection;
 - local image, audio, and video rendering through the protected file endpoint, including byte ranges for media;
-- browser-native uploads staged into Desktop-owned Assistant attachment storage.
+- browser-native uploads staged into Desktop-owned Assistant attachment storage;
+- realtime conversation Voice, with Chrome owning microphone capture, WebRTC media, and playback while Desktop retains provider signaling, canonical route ownership, transcript commits, delegation, and persistence.
 
 ## Intentional Desktop-Only Surfaces
 
 - Electron window controls and app updates;
 - the Electron `<webview>`-based integrated website preview and its guest developer tools;
-- guest-bound Browser surface requests and recording frames;
-- realtime conversation voice while the conversation-scoped voice architecture is developed separately.
+- guest-bound Browser surface requests and integrated Browser recording frames.
 
 Desktop-only controls must be hidden, disabled, or represented by an explicit unavailable state in Chrome. They must not invoke arbitrary guest IDs through the generic relay.
 
 ## Event Transport
 
-Assistant domain events use the canonical bounded AssistantService replay stream. Non-Assistant Desktop events use a separate supervised event stream with an allowlisted envelope:
+Assistant domain events use the canonical bounded AssistantService replay stream. Realtime Voice uses a dedicated bounded SSE stream because WebRTC control events have different ownership and lifecycle requirements: each tab has an ephemeral session-scoped client ID, only the owning tab receives Voice events, event sequences are deduplicated after reconnect, provider-ingest requests stay ordered, and a short disconnect grace allows transparent SSE recovery before Desktop stops an orphaned Voice session.
+
+Non-Assistant Desktop events use a separate supervised event stream with an allowlisted envelope:
 
 - `agentControlCursor`
 - `agentControlState`
@@ -83,7 +85,8 @@ The endpoint preserves existing local-app file authority. LAN/public phases must
 - the internal bridge also requires its current process capability and an allowlisted origin;
 - generic DevScope paths reject prototype traversal and event-method invocation;
 - preload invocation requires owned adapter properties;
-- Electron guest and raw IPC authority are never exposed to Chrome.
+- Electron guest and raw IPC authority are never exposed to Chrome;
+- browser Voice requires an active owner-scoped event stream, rejects cross-tab control, permits microphone access only for the local host origin, and leaves camera access disabled.
 
 Loopback protects against network access, not hostile software running as the same operating-system user. Pairing, revocation, TLS/private-network policy, and environment-scoped credentials belong to the LAN and HTTPS phases.
 
@@ -93,7 +96,9 @@ Loopback protects against network access, not hostile software running as the sa
 bun run --cwd desktop typecheck:browser-runtime
 bun desktop/scripts/test-browser-client-host.ts
 bun desktop/scripts/test-browser-assistant-bridge.ts
+bun desktop/scripts/test-browser-surface-parity.ts
 bun desktop/scripts/test-browser-devscope-live-adapter.ts
+bun desktop/scripts/test-assistant-realtime-voice.ts
 bun desktop/scripts/test-assistant-chat-routing.ts
 bun desktop/scripts/test-assistant-client-local-selection.ts
 bun desktop/scripts/test-assistant-new-chat-surface.ts

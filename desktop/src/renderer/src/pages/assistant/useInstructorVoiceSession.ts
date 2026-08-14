@@ -48,6 +48,7 @@ type CanonicalVoiceBinding = {
 const ACTIVITY_UPDATE_INTERVAL_MS = 48
 const REALTIME_INPUT_TRANSCRIPT_FALLBACK_DELAY_MS = 1_500
 const REALTIME_INPUT_CAPTURE_PREROLL_MS = 650
+const REALTIME_PEER_DISCONNECT_GRACE_MS = 3_000
 
 type RealtimeInputCapture = {
     providerItemId: string
@@ -155,6 +156,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
     const activityUpdatesEnabledRef = useRef(false)
     const lastActivityUpdateRef = useRef(0)
     const connectionTimerRef = useRef<number | null>(null)
+    const peerDisconnectTimerRef = useRef<number | null>(null)
     const mountedRef = useRef(true)
     const generationRef = useRef(0)
     const startPendingRef = useRef(false)
@@ -175,6 +177,10 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
         if (connectionTimerRef.current !== null) {
             window.clearTimeout(connectionTimerRef.current)
             connectionTimerRef.current = null
+        }
+        if (peerDisconnectTimerRef.current !== null) {
+            window.clearTimeout(peerDisconnectTimerRef.current)
+            peerDisconnectTimerRef.current = null
         }
 
         if (meterFrameRef.current !== null) {
@@ -641,8 +647,22 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
             peer.onconnectionstatechange = () => {
                 if (!isCurrent()) return
                 if (peer.connectionState === 'connected') {
+                    if (peerDisconnectTimerRef.current !== null) {
+                        window.clearTimeout(peerDisconnectTimerRef.current)
+                        peerDisconnectTimerRef.current = null
+                    }
                     readiness.peerConnected = true
                     markActiveIfReady()
+                } else if (peer.connectionState === 'disconnected') {
+                    readiness.peerConnected = false
+                    if (peerDisconnectTimerRef.current === null) {
+                        peerDisconnectTimerRef.current = window.setTimeout(() => {
+                            peerDisconnectTimerRef.current = null
+                            if (isCurrent() && peer.connectionState === 'disconnected') {
+                                failConnection('The Codex voice connection was interrupted.')
+                            }
+                        }, REALTIME_PEER_DISCONNECT_GRACE_MS)
+                    }
                 } else if (peer.connectionState === 'failed') {
                     failConnection('The Codex voice connection failed.')
                 }

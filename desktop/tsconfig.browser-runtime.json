@@ -11,6 +11,7 @@
         "src/renderer/src/monaco-workers.d.ts",
         "src/preload/index.ts",
         "src/main/index.ts",
+        "src/main/browser-realtime-voice-event-stream.ts",
         "src/renderer/src/lib/browser-devscope-live-adapter.ts",
         "src/renderer/src/lib/browser-file-url.ts",
         "src/renderer/src/components/ui/file-preview/utils.ts",

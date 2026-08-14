@@ -256,9 +256,9 @@ export default function TitleBar() {
             { id: 'voice-lab', label: 'Instructor Voice Lab', action: () => navigate('/assistant/instructor') },
             { id: 'about', label: 'About Zyra', action: () => navigate('/settings/about') }
         ],
-        [
+        ...(desktopWindowControlsAvailable ? [[
             { id: 'close', label: 'Close window', shortcut: 'Alt F4', danger: true, action: handleClose }
-        ]
+        ]] : [])
     ]
 
     const expandedSidebar = sidebarWorkspaceActive && !sidebarCollapsed

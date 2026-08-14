@@ -3,16 +3,18 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { AssistantEventStreamPayload } from '../src/shared/assistant/contracts'
+import type { AssistantEventStreamPayload, AssistantRealtimeVoiceEvent } from '../src/shared/assistant/contracts'
 import {
     BROWSER_ASSISTANT_BRIDGE_CAPABILITY_HEADER,
     BROWSER_ASSISTANT_BRIDGE_EVENTS_PATH,
     BROWSER_ASSISTANT_BRIDGE_HEADER,
     BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE,
     BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH,
+    BROWSER_ASSISTANT_CLIENT_ID_HEADER,
     BROWSER_DEVSCOPE_BRIDGE_EVENTS_PATH,
     BROWSER_DEVSCOPE_BRIDGE_INVOKE_PATH,
     BROWSER_FILE_BRIDGE_PATH,
+    BROWSER_REALTIME_VOICE_EVENTS_PATH,
     type BrowserDevscopeRelayEvent
 } from '../src/shared/browser-assistant-bridge'
 import { BrowserAssistantBridge } from '../src/main/assistant/browser-assistant-bridge'
@@ -25,6 +27,7 @@ const assistantHandlersSource = readFileSync(new URL('../src/main/ipc/handlers/a
 const preloadRelaySource = readFileSync(new URL('../src/preload/browser-devscope-relay.ts', import.meta.url), 'utf8')
 const mainRelaySource = readFileSync(new URL('../src/main/browser-devscope-relay.ts', import.meta.url), 'utf8')
 const liveDevscopeSource = readFileSync(new URL('../src/renderer/src/lib/browser-devscope-live-adapter.ts', import.meta.url), 'utf8')
+const browserAssistantAdapterSource = readFileSync(new URL('../src/renderer/src/lib/browser-assistant-bridge-adapter.ts', import.meta.url), 'utf8')
 assert.equal(titleBarSource.includes('{desktopWindowControlsAvailable ? ('), true, 'browser clients must not render native window buttons')
 assert.equal(titleBarSource.includes("appMenuOpen ? 'text-sparkle-text' : 'text-sparkle-text-secondary hover:text-sparkle-text'"), true, 'the Zyra menu trigger should change only text/icon color rather than painting a button background')
 assert.equal(titleBarSource.includes("appMenuOpen ? 'bg-[var(--surface-hover)]"), false, 'the Zyra wordmark trigger must not retain a highlighted button surface')
@@ -45,6 +48,8 @@ assert.equal(preloadRelaySource.includes('BROWSER_DEVSCOPE_RELAY_READY_CHANNEL')
 assert.equal(mainRelaySource.includes('waitForReadyTarget'), true, 'browser actions must wait for the Desktop preload instead of being dropped during startup')
 assert.equal(liveDevscopeSource.includes('MAX_CONCURRENT_BACKGROUND_BROWSER_ACTIONS = 1'), true, 'background native reads must leave capacity for browser navigation and user actions')
 assert.equal(liveDevscopeSource.includes('isPriorityBrowserAction'), true, 'interactive native browser actions must bypass background read backlog')
+assert.equal(browserAssistantAdapterSource.includes('waitForVoiceStream()'), true, 'browser Voice start must wait until its owner-scoped event stream is connected')
+assert.equal(browserAssistantAdapterSource.includes('realtimeVoiceIngestQueue'), true, 'browser WebRTC control events must preserve provider ordering across HTTP requests')
 
 const allowedOrigin = 'http://localhost:5174'
 const capability = 'test-browser-assistant-capability'
@@ -53,6 +58,7 @@ const descriptorPath = path.join(stateDirectory, 'browser-assistant-bridge.json'
 const browserFilePath = path.join(stateDirectory, 'browser-file.txt')
 writeFileSync(browserFilePath, 'browser-file-content')
 let eventListener: ((payload: AssistantEventStreamPayload) => void) | null = null
+let realtimeVoiceEventListener: ((event: AssistantRealtimeVoiceEvent) => void) | null = null
 let devscopeEventListener: ((event: BrowserDevscopeRelayEvent) => void) | null = null
 const browserClientCounts: number[] = []
 const service = {
@@ -62,6 +68,10 @@ const service = {
     },
     getExternalEventReplay() {
         return { events: [{ eventId: 'event:replay', type: 'session.selected' } as any] }
+    },
+    subscribeExternalRealtimeVoiceEvents(listener: (event: AssistantRealtimeVoiceEvent) => void) {
+        realtimeVoiceEventListener = listener
+        return () => { realtimeVoiceEventListener = null }
     },
     async getBootstrap() {
         return {
@@ -80,7 +90,11 @@ const service = {
         }
     },
     async getSnapshot() { return { selectedSessionId: 'session:real', sessions: [] } },
-    async getStatus() { return { available: true, connected: true, state: 'idle' } }
+    async getStatus() { return { available: true, connected: true, state: 'idle' } },
+    async startRealtimeVoice() { return { success: true as const, sdp: 'answer', realtimeVersion: 'v3' } },
+    async sendRealtimeVoiceMessage() { return { success: true as const, mode: 'text-turn' as const } },
+    async ingestRealtimeVoiceEvent() { return { success: true as const } },
+    async stopRealtimeVoice() { return { success: true as const } }
 } as unknown as AssistantService
 
 const bridge = new BrowserAssistantBridge({
@@ -112,6 +126,7 @@ const descriptor = JSON.parse(readFileSync(descriptorPath, 'utf8'))
 assert.equal(descriptor.port, address.port)
 assert.equal(descriptor.capability, capability, 'bridge discovery must use a per-process capability outside browser code')
 const baseUrl = `http://127.0.0.1:${address.port}`
+const voiceClientId = 'browser-voice-client-0001'
 const headers = {
     Origin: allowedOrigin,
     'Content-Type': 'application/json',
@@ -212,6 +227,115 @@ try {
     await reader.cancel().catch(() => undefined)
     await new Promise((resolve) => setTimeout(resolve, 20))
     assert.equal(browserClientCounts.at(-1), 0, 'closing the browser stream must release the Assistant selection lease')
+
+    const voiceEventController = new AbortController()
+    const voiceEventResponse = await fetch(`${baseUrl}${BROWSER_REALTIME_VOICE_EVENTS_PATH}`, {
+        headers: {
+            Origin: allowedOrigin,
+            [BROWSER_ASSISTANT_BRIDGE_HEADER]: BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE,
+            [BROWSER_ASSISTANT_BRIDGE_CAPABILITY_HEADER]: capability,
+            [BROWSER_ASSISTANT_CLIENT_ID_HEADER]: voiceClientId
+        },
+        signal: voiceEventController.signal
+    })
+    assert.equal(voiceEventResponse.status, 200)
+    const otherVoiceEventController = new AbortController()
+    const otherVoiceEventResponse = await fetch(`${baseUrl}${BROWSER_REALTIME_VOICE_EVENTS_PATH}`, {
+        headers: {
+            Origin: allowedOrigin,
+            [BROWSER_ASSISTANT_BRIDGE_HEADER]: BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE,
+            [BROWSER_ASSISTANT_BRIDGE_CAPABILITY_HEADER]: capability,
+            [BROWSER_ASSISTANT_CLIENT_ID_HEADER]: 'browser-voice-client-0002'
+        },
+        signal: otherVoiceEventController.signal
+    })
+    assert.equal(otherVoiceEventResponse.status, 200)
+    const otherVoiceReader = otherVoiceEventResponse.body!.getReader()
+    await otherVoiceReader.read()
+    const startVoiceResponse = await fetch(`${baseUrl}${BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+            method: 'startRealtimeVoice',
+            clientId: voiceClientId,
+            args: [{ sdp: 'offer', conversationId: 'thread:real', sessionId: 'session:real' }]
+        })
+    })
+    const startVoice = await startVoiceResponse.json() as any
+    assert.equal(startVoice.ok, true)
+    assert.equal(startVoice.value.success, true, 'the browser Voice owner should start through the typed Assistant bridge')
+    const secondVoiceStart = await fetch(`${baseUrl}${BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+            method: 'startRealtimeVoice',
+            clientId: 'browser-voice-client-0002',
+            args: [{ sdp: 'offer', conversationId: 'thread:real', sessionId: 'session:real' }]
+        })
+    }).then((response) => response.json()) as any
+    assert.equal(secondVoiceStart.value.success, false, 'another browser tab must not replace the current Voice owner')
+    const secondVoiceClient = await fetch(`${baseUrl}${BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+            method: 'stopRealtimeVoice',
+            clientId: 'browser-voice-client-0002',
+            args: []
+        })
+    }).then((response) => response.json()) as any
+    assert.equal(secondVoiceClient.value.success, false, 'another browser tab must not control the current Voice session')
+    assert.ok(realtimeVoiceEventListener, 'browser Voice must subscribe directly to AssistantService realtime events')
+    realtimeVoiceEventListener!({ type: 'session.started', realtimeVersion: 'v3' })
+    const voiceReader = voiceEventResponse.body!.getReader()
+    const voiceDecoder = new TextDecoder()
+    let voiceEventText = ''
+    for (let attempt = 0; attempt < 3 && !voiceEventText.includes('session.started'); attempt += 1) {
+        const chunk = await voiceReader.read()
+        if (chunk.done) break
+        voiceEventText += voiceDecoder.decode(chunk.value)
+    }
+    assert.equal(voiceEventText.includes('streamId'), true, 'browser Voice events need a process stream identity for reconnect deduplication')
+    assert.equal(voiceEventText.includes('session.started'), true, 'browser Voice events must reach the owning renderer')
+    const leakedVoiceEvent = await Promise.race<string>([
+        otherVoiceReader.read().then((chunk) => chunk.done ? '' : voiceDecoder.decode(chunk.value)),
+        new Promise((resolve) => setTimeout(() => resolve('owner-isolated'), 60))
+    ])
+    assert.equal(leakedVoiceEvent, 'owner-isolated', 'browser Voice events must not leak into another tab stream')
+    otherVoiceEventController.abort()
+    await otherVoiceReader.cancel().catch(() => undefined)
+    voiceEventController.abort()
+    await voiceReader.cancel().catch(() => undefined)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    const voiceReconnectController = new AbortController()
+    const voiceReconnectResponse = await fetch(`${baseUrl}${BROWSER_REALTIME_VOICE_EVENTS_PATH}`, {
+        headers: {
+            Origin: allowedOrigin,
+            [BROWSER_ASSISTANT_BRIDGE_HEADER]: BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE,
+            [BROWSER_ASSISTANT_BRIDGE_CAPABILITY_HEADER]: capability,
+            [BROWSER_ASSISTANT_CLIENT_ID_HEADER]: voiceClientId
+        },
+        signal: voiceReconnectController.signal
+    })
+    assert.equal(voiceReconnectResponse.status, 200)
+    const sendAfterReconnect = await fetch(`${baseUrl}${BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+            method: 'sendRealtimeVoiceMessage',
+            clientId: voiceClientId,
+            args: [{ text: 'still connected' }]
+        })
+    }).then((response) => response.json()) as any
+    assert.equal(sendAfterReconnect.value.success, true, 'a brief Voice event-stream reconnect must preserve tab ownership')
+    const stopVoice = await fetch(`${baseUrl}${BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ method: 'stopRealtimeVoice', clientId: voiceClientId, args: [] })
+    }).then((response) => response.json()) as any
+    assert.equal(stopVoice.value.success, true)
+    voiceReconnectController.abort()
+    await voiceReconnectResponse.body?.cancel().catch(() => undefined)
 
     const devscopeEventController = new AbortController()
     const devscopeEventResponse = await fetch(`${baseUrl}${BROWSER_DEVSCOPE_BRIDGE_EVENTS_PATH}`, {
