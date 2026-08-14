@@ -19,7 +19,7 @@ export function platformReleaseContract(version, platformInput) {
     }
 
     if (platform === 'windows') {
-        const installer = `Zyra-${version}-windows-x64-setup.exe`
+        const installer = `Zyra-Desktop-${version}-Windows-x64.exe`
         return {
             platform,
             builderPlatform: 'win32',
@@ -30,7 +30,7 @@ export function platformReleaseContract(version, platformInput) {
         }
     }
     if (platform === 'macos') {
-        const artifact = `Zyra-${version}-macos-universal`
+        const artifact = `Zyra-Desktop-${version}-macOS-universal`
         return {
             platform,
             builderPlatform: 'darwin',
@@ -41,7 +41,7 @@ export function platformReleaseContract(version, platformInput) {
         }
     }
 
-    const artifact = `Zyra-${version}-linux-x64`
+    const artifact = `Zyra-Desktop-${version}-Linux-x64`
     return {
         platform,
         builderPlatform: 'linux',

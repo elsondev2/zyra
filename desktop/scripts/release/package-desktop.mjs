@@ -111,6 +111,7 @@ if (unpacked) {
     await run(process.execPath, [
         path.join(scriptDirectory, 'verify-platform-signature.mjs'),
         `--platform=${platform}`,
+        `--version=${version}`,
         `--raw-dir=${rawDirectory}`,
         `--marker=${verificationMarker}`,
         `--expected-signed=${expectedSigned ? 'true' : 'false'}`

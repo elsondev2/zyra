@@ -262,7 +262,7 @@
                     ]
                 }
             ],
-            "artifactName": "Zyra-${version}-windows-${arch}-setup.${ext}",
+            "artifactName": "Zyra-Desktop-${version}-Windows-${arch}.${ext}",
             "icon": "resources/icon.ico",
             "extraResources": [
                 {
@@ -297,7 +297,7 @@
                     ]
                 }
             ],
-            "artifactName": "Zyra-${version}-macos-${arch}.${ext}",
+            "artifactName": "Zyra-Desktop-${version}-macOS-${arch}.${ext}",
             "x64ArchFiles": "Contents/Resources/{zyra-runtime/node_modules/**,app.asar.unpacked/node_modules/node-pty/prebuilds}/*darwin-{arm64,x64}*/**/*",
             "icon": "resources/icon.icns",
             "category": "public.app-category.developer-tools",
@@ -328,7 +328,7 @@
                     ]
                 }
             ],
-            "artifactName": "Zyra-${version}-linux-${arch}.${ext}",
+            "artifactName": "Zyra-Desktop-${version}-Linux-${arch}.${ext}",
             "icon": "resources/icons",
             "category": "Development",
             "maintainer": "Zyra",

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { mkdir, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { normalizeReleasePlatform } from './release-contract.mjs'
+import { normalizeReleasePlatform, platformReleaseContract } from './release-contract.mjs'
 
 function arg(name, fallback = null) {
     const inline = process.argv.slice(2).find((value) => value.startsWith(`--${name}=`))
@@ -60,8 +60,11 @@ const result = {
 }
 
 if (expectedSigned && platform === 'windows') {
-    const installer = entries.find((entry) => !entry.directory && entry.path.endsWith('-windows-x64-setup.exe'))
-    if (!installer) throw new Error('Cannot verify Windows signing: installer was not found')
+    const version = arg('version')
+    if (!version) throw new Error('Cannot verify Windows signing without a release version')
+    const installerName = platformReleaseContract(version, platform).primaryUpdateArtifact
+    const installer = entries.find((entry) => !entry.directory && path.basename(entry.path) === installerName)
+    if (!installer) throw new Error(`Cannot verify Windows signing: ${installerName} was not found`)
     const target = path.join(rawDirectory, installer.path)
     const verification = await run('powershell.exe', [
         '-NoLogo',

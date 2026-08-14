@@ -40,8 +40,11 @@ assert(desktopPackage.scripts['native:prepare'].includes('verify-node-pty-instal
 assert(desktopPackage.scripts['test:native-abi'].includes('test-node-pty-electron.mjs'))
 const packageScript = readFileSync(path.join(desktopRoot, 'scripts', 'release', 'package-desktop.mjs'), 'utf8')
 const packagedValidator = readFileSync(path.join(desktopRoot, 'scripts', 'release', 'validate-packaged-app.mjs'), 'utf8')
+const signatureVerifier = readFileSync(path.join(desktopRoot, 'scripts', 'release', 'verify-platform-signature.mjs'), 'utf8')
 const preflightSource = readFileSync(path.join(desktopRoot, 'scripts', 'release', 'preflight.mjs'), 'utf8')
 assert(packageScript.includes('validate-packaged-app.mjs'), 'every native package must validate its installed resource layout')
+assert(packageScript.includes('`--version=${version}`'), 'signature verification must receive the exact release version')
+assert(signatureVerifier.includes('platformReleaseContract(version, platform)'), 'signature verification must use the canonical artifact name')
 assert(packagedValidator.includes('runPackagedLaunchSmoke'), 'every native package must execute its installed main process')
 assert(packagedValidator.includes("ZYRA_PACKAGED_SMOKE: '1'"), 'packaged launch smoke must use the bounded release probe')
 assert(preflightSource.includes("const taggedPublication = mode === 'tag'"), 'every public tag must enter the signing gate')
@@ -61,7 +64,7 @@ assert(!globalResources.some((entry: { to: string }) => entry.to === 'zyra-compu
 assert(build.win.extraResources.some((entry: { to: string }) => entry.to === 'zyra-computer-use'))
 
 assert.deepEqual(build.win.target, [{ target: 'nsis', arch: ['x64'] }])
-assert.equal(build.win.artifactName, 'Zyra-${version}-windows-${arch}-setup.${ext}')
+assert.equal(build.win.artifactName, 'Zyra-Desktop-${version}-Windows-${arch}.${ext}')
 assert.equal(build.nsis.oneClick, false)
 assert.equal(build.nsis.allowToChangeInstallationDirectory, true)
 assert.equal(build.nsis.include, 'build/installer.nsh')
@@ -69,7 +72,7 @@ assert.deepEqual(build.mac.target, [
     { target: 'dmg', arch: ['universal'] },
     { target: 'zip', arch: ['universal'] }
 ])
-assert.equal(build.mac.artifactName, 'Zyra-${version}-macos-${arch}.${ext}')
+assert.equal(build.mac.artifactName, 'Zyra-Desktop-${version}-macOS-${arch}.${ext}')
 assert.equal(
     build.mac.x64ArchFiles,
     'Contents/Resources/{zyra-runtime/node_modules/**,app.asar.unpacked/node_modules/node-pty/prebuilds}/*darwin-{arm64,x64}*/**/*',
@@ -84,7 +87,7 @@ assert.deepEqual(build.linux.target, [
     { target: 'AppImage', arch: ['x64'] },
     { target: 'deb', arch: ['x64'] }
 ])
-assert.equal(build.linux.artifactName, 'Zyra-${version}-linux-${arch}.${ext}')
+assert.equal(build.linux.artifactName, 'Zyra-Desktop-${version}-Linux-${arch}.${ext}')
 assert.equal(build.linux.icon, 'resources/icons')
 assert.equal(build.fileAssociations[0].icon, 'resources/icon')
 assert.equal(build.generateUpdatesFilesForAllChannels, true)
@@ -100,6 +103,10 @@ for (const platform of ['windows', 'macos', 'linux'] as const) {
     assert.deepEqual(updaterContract?.requiredAssetNames, contract.assets, `${platform} build and updater asset contracts must match`)
 }
 assert.equal(expectedReleaseAssetNames(rootPackage.version).length, 11)
+assert(
+    expectedReleaseAssetNames(rootPackage.version).includes(`Zyra-Desktop-${rootPackage.version}-Windows-x64.exe`),
+    'Desktop artifacts must retain the user-facing product name'
+)
 assert(expectedReleaseAssetNames(rootPackage.version).includes(`zyra-v${rootPackage.version}.zip`), 'unified release must retain the CLI/source archive')
 
 const electronConfig = readFileSync(path.join(desktopRoot, 'electron.vite.config.ts'), 'utf8')

@@ -80,9 +80,9 @@ All artifacts include version, OS, and architecture in noncolliding names.
 
 | Platform | Target | Release assets | Updater metadata |
 | --- | --- | --- | --- |
-| Windows x64 | NSIS, assisted install | `Zyra-0.6.0-windows-x64-setup.exe` and `.blockmap` | `latest.yml` |
-| macOS universal | DMG and ZIP | `Zyra-0.6.0-macos-universal.dmg`, `.zip`, and ZIP `.blockmap` | `latest-mac.yml` |
-| Linux x64 | AppImage and deb | `Zyra-0.6.0-linux-x64.AppImage` and `.deb` (the AppImage carries its blockmap internally) | `latest-linux.yml` |
+| Windows x64 | NSIS, assisted install | `Zyra-Desktop-0.6.0-Windows-x64.exe` and `.blockmap` | `latest.yml` |
+| macOS universal | DMG and ZIP | `Zyra-Desktop-0.6.0-macOS-universal.dmg`, `.zip`, and ZIP `.blockmap` | `latest-mac.yml` |
+| Linux x64 | AppImage and deb | `Zyra-Desktop-0.6.0-Linux-x64.AppImage` and `.deb` (the AppImage carries its blockmap internally) | `latest-linux.yml` |
 
 The assembled release also contains the lockstep CLI/source archive `zyra-v0.6.0.zip`, the repository Apache-2.0 license inside every installed app/runtime, and one `SHA256SUMS` file covering the complete upload set.
 

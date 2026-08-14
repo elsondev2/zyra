@@ -152,7 +152,7 @@ export function resolvePlatformReleaseContract(
     if (!parseVersion(normalizedVersion)) return null
 
     if (platform === 'win32' && arch === 'x64') {
-        const installer = `Zyra-${normalizedVersion}-windows-x64-setup.exe`
+        const installer = `Zyra-Desktop-${normalizedVersion}-Windows-x64.exe`
         return {
             platform: 'win32',
             arch,
@@ -162,7 +162,7 @@ export function resolvePlatformReleaseContract(
     }
 
     if (platform === 'darwin' && ['x64', 'arm64', 'universal'].includes(arch)) {
-        const artifact = `Zyra-${normalizedVersion}-macos-universal`
+        const artifact = `Zyra-Desktop-${normalizedVersion}-macOS-universal`
         return {
             platform: 'darwin',
             arch,
@@ -172,7 +172,7 @@ export function resolvePlatformReleaseContract(
     }
 
     if (platform === 'linux' && arch === 'x64') {
-        const artifact = `Zyra-${normalizedVersion}-linux-x64`
+        const artifact = `Zyra-Desktop-${normalizedVersion}-Linux-x64`
         return {
             platform: 'linux',
             arch,
