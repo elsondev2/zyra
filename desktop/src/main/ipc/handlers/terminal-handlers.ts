@@ -3,6 +3,22 @@ import { spawn } from 'child_process'
 import { access, stat, unlink, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import log from 'electron-log'
+import { buildLinuxTerminalLaunchCommands, buildMacTerminalScript } from './platform-terminal-launcher'
+
+function launchDetached(executable: string, args: string[], cwd: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+        const child = spawn(executable, args, {
+            cwd,
+            detached: true,
+            stdio: 'ignore'
+        })
+        child.once('spawn', () => {
+            child.unref()
+            resolve()
+        })
+        child.once('error', reject)
+    })
+}
 
 export async function handleOpenInTerminal(
     _event: Electron.IpcMainInvokeEvent,
@@ -25,8 +41,45 @@ export async function handleOpenInTerminal(
 
         await access(cwd)
 
+        if (process.platform === 'darwin') {
+            const commandToRun = initialCommand?.trim()
+            if (!commandToRun) {
+                await launchDetached('open', ['-a', 'Terminal', cwd], cwd)
+                return { success: true }
+            }
+
+            const tempScriptPath = join(app.getPath('temp'), `zyra-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.command`)
+            await writeFile(tempScriptPath, buildMacTerminalScript({
+                cwd,
+                initialCommand: commandToRun,
+                shellPath: process.env.SHELL
+            }), { encoding: 'utf-8', mode: 0o700 })
+            await launchDetached('open', ['-a', 'Terminal', tempScriptPath], cwd)
+            setTimeout(() => unlink(tempScriptPath).catch(() => undefined), 60_000)
+            return { success: true }
+        }
+
+        if (process.platform === 'linux') {
+            const candidates = buildLinuxTerminalLaunchCommands({
+                cwd,
+                initialCommand,
+                shellPath: process.env.SHELL
+            })
+            let lastError: unknown = null
+            for (const candidate of candidates) {
+                try {
+                    await launchDetached(candidate.executable, candidate.args, cwd)
+                    return { success: true }
+                } catch (error) {
+                    lastError = error
+                }
+            }
+            const detail = lastError instanceof Error ? ` ${lastError.message}` : ''
+            return { success: false, error: `No supported graphical terminal was found.${detail}` }
+        }
+
         if (process.platform !== 'win32') {
-            return { success: false, error: "Opening terminal is only supported on Windows in Zyra." }
+            return { success: false, error: `Opening a terminal is unavailable on ${process.platform}.` }
         }
 
         const normalizedShell: 'powershell' | 'cmd' = preferredShell === 'cmd' ? 'cmd' : 'powershell'

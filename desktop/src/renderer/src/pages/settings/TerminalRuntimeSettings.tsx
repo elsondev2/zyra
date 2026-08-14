@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import type { DevScopeInstalledPackageRuntime, DevScopePackageRuntimeId } from '@shared/contracts/devscope-api'
 import { useSettings, type PackageRuntimePreference } from '@/lib/settings'
+import { useWindowChrome } from '@/lib/useWindowChrome'
 import {
     SettingsButton,
     SettingsInput,
@@ -24,6 +25,7 @@ const RUNTIME_OPTIONS: Array<{ value: PackageRuntimePreference; runtimeId?: DevS
 
 export default function TerminalRuntimeSettings() {
     const { settings, updateSettings } = useSettings()
+    const { runtime } = useWindowChrome()
     const [runtimes, setRuntimes] = useState<DevScopeInstalledPackageRuntime[]>([])
     const [runtimeLoading, setRuntimeLoading] = useState(false)
     const [runtimeError, setRuntimeError] = useState<string | null>(null)
@@ -48,7 +50,17 @@ export default function TerminalRuntimeSettings() {
     return (
         <SettingsPageContainer>
             <SettingsSection title="Terminal">
-                <SettingsRow title="Default shell" description="Choose the shell used for terminal actions." control={<SettingsSegmented value={settings.defaultShell} options={[{ value: 'powershell', label: 'PowerShell' }, { value: 'cmd', label: 'Command Prompt' }]} onChange={(defaultShell) => updateSettings({ defaultShell })} label="Default shell" />} />
+                <SettingsRow
+                    title="Default shell"
+                    description={runtime.platform === 'win32' ? 'Choose the Windows shell used for terminal actions.' : 'Zyra uses the operating system login shell for terminal actions.'}
+                    control={runtime.platform === 'win32' ? (
+                        <SettingsSegmented value={settings.defaultShell} options={[{ value: 'powershell', label: 'PowerShell' }, { value: 'cmd', label: 'Command Prompt' }]} onChange={(defaultShell) => updateSettings({ defaultShell })} label="Default shell" />
+                    ) : (
+                        <span className="text-xs font-medium text-sparkle-text-secondary">
+                            {runtime.platform === 'darwin' ? 'System shell · Terminal' : runtime.platform === 'linux' ? 'System shell' : 'Desktop system shell'}
+                        </span>
+                    )}
+                />
                 <SettingsRow title="Font size" description="Apply the terminal text size to Assistant and file-preview terminals." control={<SettingsInput type="number" min={10} max={24} value={settings.terminalFontSize} onChange={(event) => updateSettings({ terminalFontSize: Math.max(10, Math.min(24, Math.round(Number(event.target.value) || 12))) })} className="sm:w-24" aria-label="Terminal font size" />} />
                 <SettingsRow title="Blinking cursor" description="Blink the cursor in embedded terminals." control={<SettingsSwitch checked={settings.terminalCursorBlink} onCheckedChange={(terminalCursorBlink) => updateSettings({ terminalCursorBlink })} label="Blinking terminal cursor" />} />
                 <SettingsRow title="Scrollback" description="Lines retained by each embedded terminal, from 1,000 to 50,000." control={<SettingsInput type="number" min={1000} max={50000} step={1000} value={settings.terminalScrollback} onChange={(event) => updateSettings({ terminalScrollback: Math.max(1_000, Math.min(50_000, Math.round(Number(event.target.value) || 5_000))) })} className="sm:w-28" aria-label="Terminal scrollback lines" />} />
