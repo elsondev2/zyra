@@ -1,4 +1,4 @@
-import type { AssistantEventStreamPayload } from '@shared/assistant/contracts'
+import type { AssistantEventStreamPayload, AssistantRealtimeVoiceEvent } from '@shared/assistant/contracts'
 import type { DevScopeApi, DevScopeAssistantApi } from '@shared/contracts/devscope-api'
 import {
     BROWSER_ASSISTANT_BRIDGE_EVENTS_PATH,
@@ -6,11 +6,48 @@ import {
     BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE,
     BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH,
     BROWSER_ASSISTANT_BRIDGE_PROXY_PREFIX,
+    BROWSER_ASSISTANT_CLIENT_ID_HEADER,
+    BROWSER_REALTIME_VOICE_EVENTS_PATH,
     type BrowserAssistantBridgeInvokeResponse,
     type BrowserAssistantBridgeMethod
 } from '@shared/browser-assistant-bridge'
 
 const RECONNECT_DELAY_MS = 1_000
+const MAX_EVENT_STREAM_BUFFER_CHARS = 2 * 1024 * 1024
+const VOICE_STREAM_READY_TIMEOUT_MS = 4_000
+const BROWSER_ASSISTANT_CLIENT_ID_STORAGE_KEY = 'zyra:browser-assistant-client-id:v1'
+const BROWSER_VOICE_METHODS = new Set<BrowserAssistantBridgeMethod>([
+    'startRealtimeVoice',
+    'sendRealtimeVoiceMessage',
+    'ingestRealtimeVoiceEvent',
+    'stopRealtimeVoice'
+])
+
+type BrowserRealtimeVoiceStreamEvent = {
+    streamId: string
+    sequence: number
+    event: AssistantRealtimeVoiceEvent
+}
+
+type BrowserVoiceStreamWaiter = {
+    resolve: () => void
+    reject: (error: Error) => void
+    timer: number
+}
+
+function getBrowserAssistantClientId(): string {
+    try {
+        const existing = sessionStorage.getItem(BROWSER_ASSISTANT_CLIENT_ID_STORAGE_KEY)
+        if (existing && /^[A-Za-z0-9_-]{16,128}$/.test(existing)) return existing
+        const created = crypto.randomUUID().replace(/-/g, '')
+        sessionStorage.setItem(BROWSER_ASSISTANT_CLIENT_ID_STORAGE_KEY, created)
+        return created
+    } catch {
+        return crypto.randomUUID().replace(/-/g, '')
+    }
+}
+
+const browserAssistantClientId = getBrowserAssistantClientId()
 
 async function invokeBrowserAssistantBridge<T>(method: BrowserAssistantBridgeMethod, args: unknown[]): Promise<T> {
     const response = await fetch(`${BROWSER_ASSISTANT_BRIDGE_PROXY_PREFIX}${BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH}`, {
@@ -19,7 +56,11 @@ async function invokeBrowserAssistantBridge<T>(method: BrowserAssistantBridgeMet
             'Content-Type': 'application/json',
             [BROWSER_ASSISTANT_BRIDGE_HEADER]: BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE
         },
-        body: JSON.stringify({ method, args })
+        body: JSON.stringify({
+            method,
+            args,
+            ...(BROWSER_VOICE_METHODS.has(method) ? { clientId: browserAssistantClientId } : {})
+        })
     })
     const payload = await response.json() as BrowserAssistantBridgeInvokeResponse
     if (!response.ok || !payload.ok) {
@@ -116,24 +157,27 @@ function waitForReconnect(signal: AbortSignal): Promise<void> {
     })
 }
 
-async function consumeAssistantEventStream(
-    callback: (payload: AssistantEventStreamPayload) => void,
-    signal: AbortSignal
+async function consumeServerSentEvents<T>(
+    path: string,
+    callback: (payload: T) => void,
+    signal: AbortSignal,
+    onConnectionChanged?: (connected: boolean) => void,
+    clientId?: string
 ): Promise<void> {
     while (!signal.aborted) {
+        let connected = false
         try {
-            const response = await fetch(`${BROWSER_ASSISTANT_BRIDGE_PROXY_PREFIX}${BROWSER_ASSISTANT_BRIDGE_EVENTS_PATH}`, {
+            const response = await fetch(`${BROWSER_ASSISTANT_BRIDGE_PROXY_PREFIX}${path}`, {
                 headers: {
-                    [BROWSER_ASSISTANT_BRIDGE_HEADER]: BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE
+                    [BROWSER_ASSISTANT_BRIDGE_HEADER]: BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE,
+                    ...(clientId ? { [BROWSER_ASSISTANT_CLIENT_ID_HEADER]: clientId } : {})
                 },
                 cache: 'no-store',
                 signal
             })
             if (!response.ok || !response.body) throw new Error(`Browser event bridge returned ${response.status}.`)
-            // An empty payload is a renderer-local stream-ready signal. It lets
-            // the browser reclaim its routed session only after the main-process
-            // lease is active, without inventing a domain event.
-            callback({ events: [] })
+            connected = true
+            onConnectionChanged?.(true)
             const reader = response.body.getReader()
             const decoder = new TextDecoder()
             let buffer = ''
@@ -141,6 +185,9 @@ async function consumeAssistantEventStream(
                 const result = await reader.read()
                 if (result.done) break
                 buffer += decoder.decode(result.value, { stream: true }).replace(/\r\n/g, '\n')
+                if (buffer.length > MAX_EVENT_STREAM_BUFFER_CHARS) {
+                    throw new Error('Browser Assistant event stream payload is too large.')
+                }
                 let boundary = buffer.indexOf('\n\n')
                 while (boundary >= 0) {
                     const block = buffer.slice(0, boundary)
@@ -150,18 +197,113 @@ async function consumeAssistantEventStream(
                         .filter((line) => line.startsWith('data:'))
                         .map((line) => line.slice(5).trimStart())
                         .join('\n')
-                    if (data) callback(JSON.parse(data) as AssistantEventStreamPayload)
+                    if (data) callback(JSON.parse(data) as T)
                     boundary = buffer.indexOf('\n\n')
                 }
             }
         } catch (error) {
             if (signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) return
+        } finally {
+            if (connected) onConnectionChanged?.(false)
         }
         await waitForReconnect(signal)
     }
 }
 
+async function consumeAssistantEventStream(
+    callback: (payload: AssistantEventStreamPayload) => void,
+    signal: AbortSignal
+): Promise<void> {
+    return consumeServerSentEvents(
+        BROWSER_ASSISTANT_BRIDGE_EVENTS_PATH,
+        callback,
+        signal,
+        // An empty payload is a renderer-local stream-ready signal. It lets
+        // the browser reclaim its routed session only after the main-process
+        // lease is active, without inventing a domain event.
+        (connected) => {
+            if (connected) callback({ events: [] })
+        }
+    )
+}
+
+async function consumeRealtimeVoiceEventStream(
+    callback: (event: AssistantRealtimeVoiceEvent) => void,
+    signal: AbortSignal,
+    onConnectionChanged: (connected: boolean) => void
+): Promise<void> {
+    let streamId: string | null = null
+    let lastSequence = 0
+    return consumeServerSentEvents<BrowserRealtimeVoiceStreamEvent>(
+        BROWSER_REALTIME_VOICE_EVENTS_PATH,
+        (payload) => {
+            if (!payload || typeof payload.streamId !== 'string' || !Number.isSafeInteger(payload.sequence)) return
+            if (payload.streamId !== streamId) {
+                streamId = payload.streamId
+                lastSequence = 0
+            }
+            if (payload.sequence <= lastSequence) return
+            lastSequence = payload.sequence
+            callback(payload.event)
+        },
+        signal,
+        onConnectionChanged,
+        browserAssistantClientId
+    )
+}
+
 export function createBrowserAssistantBridgeAdapter(): DevScopeApi['assistant'] {
+    const connectedVoiceStreams = new Set<number>()
+    const voiceStreamWaiters = new Set<BrowserVoiceStreamWaiter>()
+    let nextVoiceStreamId = 0
+    let realtimeVoiceIngestQueue: Promise<void> = Promise.resolve()
+    const startRealtimeVoiceRemote = remoteAssistantMethod('startRealtimeVoice')
+    const ingestRealtimeVoiceEventRemote = remoteAssistantMethod('ingestRealtimeVoiceEvent')
+    const stopRealtimeVoiceRemote = remoteAssistantMethod('stopRealtimeVoice')
+
+    const updateVoiceStreamConnection = (streamId: number, connected: boolean) => {
+        if (connected) connectedVoiceStreams.add(streamId)
+        else connectedVoiceStreams.delete(streamId)
+        if (connectedVoiceStreams.size === 0) return
+        for (const waiter of voiceStreamWaiters) {
+            window.clearTimeout(waiter.timer)
+            waiter.resolve()
+        }
+        voiceStreamWaiters.clear()
+    }
+
+    const waitForVoiceStream = (): Promise<void> => {
+        if (connectedVoiceStreams.size > 0) return Promise.resolve()
+        return new Promise((resolve, reject) => {
+            let waiter: BrowserVoiceStreamWaiter
+            const timer = window.setTimeout(() => {
+                voiceStreamWaiters.delete(waiter)
+                reject(new Error('Voice could not connect to the Zyra browser event stream. Try again.'))
+            }, VOICE_STREAM_READY_TIMEOUT_MS)
+            waiter = { resolve, reject, timer }
+            voiceStreamWaiters.add(waiter)
+        })
+    }
+
+    const startRealtimeVoice = (async (...args: Parameters<typeof startRealtimeVoiceRemote>) => {
+        await waitForVoiceStream()
+        await realtimeVoiceIngestQueue.catch(() => undefined)
+        return startRealtimeVoiceRemote(...args)
+    }) as typeof startRealtimeVoiceRemote
+
+    const ingestRealtimeVoiceEvent = ((...args: Parameters<typeof ingestRealtimeVoiceEventRemote>) => {
+        const result = realtimeVoiceIngestQueue
+            .catch(() => undefined)
+            .then(() => ingestRealtimeVoiceEventRemote(...args))
+        realtimeVoiceIngestQueue = result.then(() => undefined, () => undefined)
+        return result
+    }) as typeof ingestRealtimeVoiceEventRemote
+
+    const stopRealtimeVoice = (async (...args: Parameters<typeof stopRealtimeVoiceRemote>) => {
+        await realtimeVoiceIngestQueue.catch(() => undefined)
+        return stopRealtimeVoiceRemote(...args)
+    }) as typeof stopRealtimeVoiceRemote
+
     return {
         subscribe: async () => ({ success: true as const }),
         unsubscribe: async () => ({ success: true as const }),
@@ -205,11 +347,23 @@ export function createBrowserAssistantBridgeAdapter(): DevScopeApi['assistant'] 
         interruptTurn: remoteAssistantMethod('interruptTurn'),
         respondApproval: remoteAssistantMethod('respondApproval'),
         respondUserInput: remoteAssistantMethod('respondUserInput'),
-        startRealtimeVoice: async () => ({ success: false as const, error: 'Realtime voice currently requires the Zyra desktop window.' }),
-        sendRealtimeVoiceMessage: async () => ({ success: false as const, error: 'Realtime voice currently requires the Zyra desktop window.' }),
-        ingestRealtimeVoiceEvent: async () => ({ success: false as const, error: 'Realtime voice currently requires the Zyra desktop window.' }),
-        stopRealtimeVoice: async () => ({ success: true as const }),
-        onRealtimeVoiceEvent: () => () => {},
+        startRealtimeVoice,
+        sendRealtimeVoiceMessage: remoteAssistantMethod('sendRealtimeVoiceMessage'),
+        ingestRealtimeVoiceEvent,
+        stopRealtimeVoice,
+        onRealtimeVoiceEvent: (callback: (event: AssistantRealtimeVoiceEvent) => void) => {
+            const controller = new AbortController()
+            const streamId = ++nextVoiceStreamId
+            void consumeRealtimeVoiceEventStream(
+                callback,
+                controller.signal,
+                (connected) => updateVoiceStreamConnection(streamId, connected)
+            )
+            return () => {
+                controller.abort()
+                updateVoiceStreamConnection(streamId, false)
+            }
+        },
         getVoiceTranscriptionState: remoteAssistantMethod('getVoiceTranscriptionState'),
         transcribeVoice: remoteAssistantMethod('transcribeVoice'),
         onEvent: (callback: (payload: AssistantEventStreamPayload) => void) => {

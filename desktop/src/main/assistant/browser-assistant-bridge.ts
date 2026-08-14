@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto'
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { dirname } from 'node:path'
@@ -13,7 +13,9 @@ import {
     BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH,
     BROWSER_ASSISTANT_BRIDGE_PORT,
     BROWSER_ASSISTANT_BRIDGE_PORT_CANDIDATES,
+    BROWSER_ASSISTANT_CLIENT_ID_HEADER,
     BROWSER_DEVSCOPE_BRIDGE_EVENTS_PATH,
+    BROWSER_REALTIME_VOICE_EVENTS_PATH,
     BROWSER_DEVSCOPE_BRIDGE_INVOKE_PATH,
     BROWSER_FILE_BRIDGE_PATH,
     isBrowserAssistantBridgeMethod,
@@ -27,18 +29,31 @@ import {
 } from '../../shared/browser-assistant-bridge'
 import type {
     AssistantEventStreamPayload,
+    AssistantIngestRealtimeVoiceEventInput,
     AssistantPersistClipboardImageInput,
+    AssistantRealtimeVoiceEvent,
+    AssistantSendRealtimeVoiceMessageInput,
+    AssistantStartRealtimeVoiceInput,
     AssistantTranscribeVoiceInput,
     AssistantVoiceTranscriptionState
 } from '../../shared/assistant/contracts'
 import { serveBrowserFileContent } from '../browser-file-content'
 import { BrowserDevscopeEventStream } from '../browser-devscope-event-stream'
+import { BrowserRealtimeVoiceEventStream } from '../browser-realtime-voice-event-stream'
 import type { AssistantService } from './service'
 
 const MAX_REQUEST_BYTES = 32 * 1024 * 1024
 const EVENT_HEARTBEAT_MS = 15_000
 const MAX_EVENT_CLIENTS = 4
 const DIRECT_READ_METHODS = new Set<BrowserAssistantBridgeMethod>(['bootstrap', 'getSnapshot', 'getStatus'])
+const BROWSER_VOICE_METHODS = new Set<BrowserAssistantBridgeMethod>([
+    'startRealtimeVoice',
+    'sendRealtimeVoiceMessage',
+    'ingestRealtimeVoiceEvent',
+    'stopRealtimeVoice'
+])
+const BROWSER_CLIENT_ID_PATTERN = /^[A-Za-z0-9_-]{16,128}$/
+const BROWSER_VOICE_DISCONNECT_GRACE_MS = 2_500
 
 type BrowserAssistantBridgeDependencies = {
     service: AssistantService
@@ -60,9 +75,13 @@ export class BrowserAssistantBridge {
     private server: Server | null = null
     private readonly eventResponses = new Set<ServerResponse>()
     private readonly devscopeEventStream = new BrowserDevscopeEventStream()
+    private readonly realtimeVoiceEventStream = new BrowserRealtimeVoiceEventStream()
     private heartbeatTimer: NodeJS.Timeout | null = null
     private unsubscribeAssistantEvents: (() => void) | null = null
     private unsubscribeDevscopeEvents: (() => void) | null = null
+    private unsubscribeRealtimeVoiceEvents: (() => void) | null = null
+    private browserRealtimeVoiceOwnerClientId: string | null = null
+    private browserRealtimeVoiceDisconnectTimer: NodeJS.Timeout | null = null
 
     constructor(private readonly dependencies: BrowserAssistantBridgeDependencies) {}
 
@@ -85,6 +104,36 @@ export class BrowserAssistantBridge {
         this.unsubscribeDevscopeEvents = this.dependencies.subscribeDevscopeEvents((event) => {
             this.devscopeEventStream.broadcast(event)
         })
+        this.unsubscribeRealtimeVoiceEvents = this.dependencies.service.subscribeExternalRealtimeVoiceEvents((event) => {
+            const ownerClientId = this.browserRealtimeVoiceOwnerClientId
+            if (!ownerClientId) return
+            this.realtimeVoiceEventStream.broadcast(ownerClientId, event)
+            if (event.type === 'session.closed' && this.browserRealtimeVoiceOwnerClientId === ownerClientId) {
+                this.clearBrowserVoiceDisconnectTimer()
+                this.browserRealtimeVoiceOwnerClientId = null
+            }
+        })
+        this.realtimeVoiceEventStream.setClientCountListener((clientId, count) => {
+            if (count > 0) {
+                if (this.browserRealtimeVoiceOwnerClientId === clientId) this.clearBrowserVoiceDisconnectTimer()
+                return
+            }
+            if (this.browserRealtimeVoiceOwnerClientId !== clientId) return
+            this.clearBrowserVoiceDisconnectTimer()
+            this.browserRealtimeVoiceDisconnectTimer = setTimeout(() => {
+                this.browserRealtimeVoiceDisconnectTimer = null
+                if (this.browserRealtimeVoiceOwnerClientId !== clientId || this.realtimeVoiceEventStream.hasClient(clientId)) return
+                const ownerId = this.browserVoiceOwnerId(clientId)
+                void this.dependencies.service.stopRealtimeVoice(ownerId)
+                    .catch(() => undefined)
+                    .finally(() => {
+                        if (this.browserRealtimeVoiceOwnerClientId === clientId) {
+                            this.browserRealtimeVoiceOwnerClientId = null
+                        }
+                    })
+            }, BROWSER_VOICE_DISCONNECT_GRACE_MS)
+            this.browserRealtimeVoiceDisconnectTimer.unref?.()
+        })
         this.heartbeatTimer = setInterval(() => {
             for (const response of [...this.eventResponses]) {
                 if (response.write(': heartbeat\n\n')) continue
@@ -92,6 +141,7 @@ export class BrowserAssistantBridge {
                 response.end()
             }
             this.devscopeEventStream.heartbeat()
+            this.realtimeVoiceEventStream.heartbeat()
         }, EVENT_HEARTBEAT_MS)
         this.heartbeatTimer.unref?.()
 
@@ -135,6 +185,9 @@ export class BrowserAssistantBridge {
         for (const response of [...this.eventResponses]) response.end()
         this.eventResponses.clear()
         this.devscopeEventStream.stop()
+        this.realtimeVoiceEventStream.stop()
+        this.clearBrowserVoiceDisconnectTimer()
+        this.browserRealtimeVoiceOwnerClientId = null
         this.dependencies.onAssistantClientCountChanged?.(0)
         if (!server) return
         await new Promise<void>((resolve) => server.close(() => resolve()))
@@ -172,6 +225,14 @@ export class BrowserAssistantBridge {
         this.unsubscribeAssistantEvents = null
         this.unsubscribeDevscopeEvents?.()
         this.unsubscribeDevscopeEvents = null
+        this.unsubscribeRealtimeVoiceEvents?.()
+        this.unsubscribeRealtimeVoiceEvents = null
+        const ownerClientId = this.browserRealtimeVoiceOwnerClientId
+        this.clearBrowserVoiceDisconnectTimer()
+        this.browserRealtimeVoiceOwnerClientId = null
+        if (ownerClientId) {
+            void this.dependencies.service.stopRealtimeVoice(this.browserVoiceOwnerId(ownerClientId)).catch(() => undefined)
+        }
         if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
         this.heartbeatTimer = null
     }
@@ -248,6 +309,15 @@ export class BrowserAssistantBridge {
             this.devscopeEventStream.open(request, response)
             return
         }
+        if (request.method === 'GET' && requestUrl.pathname === BROWSER_REALTIME_VOICE_EVENTS_PATH) {
+            const clientId = this.readBrowserClientId(request.headers[BROWSER_ASSISTANT_CLIENT_ID_HEADER])
+            if (!clientId) {
+                this.writeJson(response, 400, { ok: false, error: 'Browser Voice client identity is invalid.' })
+                return
+            }
+            this.realtimeVoiceEventStream.open(clientId, request, response)
+            return
+        }
         if (request.method === 'POST' && requestUrl.pathname === BROWSER_DEVSCOPE_BRIDGE_INVOKE_PATH) {
             if (!String(request.headers['content-type'] || '').toLowerCase().startsWith('application/json')) {
                 this.writeJson(response, 415, { ok: false, error: 'Browser bridge requests require JSON.' })
@@ -290,8 +360,16 @@ export class BrowserAssistantBridge {
             return
         }
 
+        const clientId = BROWSER_VOICE_METHODS.has(candidate.method)
+            ? this.readBrowserClientId(candidate.clientId)
+            : null
+        if (BROWSER_VOICE_METHODS.has(candidate.method) && !clientId) {
+            this.writeJson(response, 400, { ok: false, error: 'Browser Voice client identity is invalid.' })
+            return
+        }
+
         try {
-            const value = await this.invoke(candidate.method, candidate.args)
+            const value = await this.invoke(candidate.method, candidate.args, clientId)
             this.writeJson(response, 200, { ok: true, value } satisfies BrowserAssistantBridgeInvokeResponse)
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Assistant request failed.'
@@ -306,7 +384,7 @@ export class BrowserAssistantBridge {
         }
     }
 
-    private async invoke(method: BrowserAssistantBridgeMethod, args: unknown[]): Promise<unknown> {
+    private async invoke(method: BrowserAssistantBridgeMethod, args: unknown[], clientId: string | null): Promise<unknown> {
         const service = this.dependencies.service
         switch (method) {
             case 'bootstrap': return service.getBootstrap()
@@ -363,6 +441,50 @@ export class BrowserAssistantBridge {
             case 'interruptTurn': return service.interruptTurn(args[0] as string | undefined, args[1] as string | undefined)
             case 'respondApproval': return service.respondApproval(args[0] as any)
             case 'respondUserInput': return service.respondUserInput(args[0] as any)
+            case 'startRealtimeVoice': {
+                const ownerClientId = this.requireVoiceClient(clientId)
+                if (!this.realtimeVoiceEventStream.hasClient(ownerClientId)) {
+                    throw new Error('Open the browser Voice event stream before starting Voice.')
+                }
+                if (this.browserRealtimeVoiceOwnerClientId && this.browserRealtimeVoiceOwnerClientId !== ownerClientId) {
+                    throw new Error('Voice is already active in another browser tab.')
+                }
+                this.clearBrowserVoiceDisconnectTimer()
+                this.realtimeVoiceEventStream.clearClient(ownerClientId)
+                this.browserRealtimeVoiceOwnerClientId = ownerClientId
+                try {
+                    return await service.startRealtimeVoice(
+                        args[0] as AssistantStartRealtimeVoiceInput,
+                        this.browserVoiceOwnerId(ownerClientId)
+                    )
+                } catch (error) {
+                    if (this.browserRealtimeVoiceOwnerClientId === ownerClientId) this.browserRealtimeVoiceOwnerClientId = null
+                    throw error
+                }
+            }
+            case 'sendRealtimeVoiceMessage': {
+                const ownerClientId = this.requireCurrentVoiceOwner(clientId)
+                return service.sendRealtimeVoiceMessage(
+                    args[0] as AssistantSendRealtimeVoiceMessageInput,
+                    this.browserVoiceOwnerId(ownerClientId)
+                )
+            }
+            case 'ingestRealtimeVoiceEvent': {
+                const ownerClientId = this.requireCurrentVoiceOwner(clientId)
+                return service.ingestRealtimeVoiceEvent(
+                    args[0] as AssistantIngestRealtimeVoiceEventInput,
+                    this.browserVoiceOwnerId(ownerClientId)
+                )
+            }
+            case 'stopRealtimeVoice': {
+                const ownerClientId = this.requireCurrentVoiceOwner(clientId)
+                try {
+                    return await service.stopRealtimeVoice(this.browserVoiceOwnerId(ownerClientId))
+                } finally {
+                    this.clearBrowserVoiceDisconnectTimer()
+                    if (this.browserRealtimeVoiceOwnerClientId === ownerClientId) this.browserRealtimeVoiceOwnerClientId = null
+                }
+            }
             case 'getVoiceTranscriptionState': return {
                 success: true,
                 state: await this.dependencies.getVoiceTranscriptionState()
@@ -420,10 +542,38 @@ export class BrowserAssistantBridge {
         }
     }
 
+    private clearBrowserVoiceDisconnectTimer(): void {
+        if (!this.browserRealtimeVoiceDisconnectTimer) return
+        clearTimeout(this.browserRealtimeVoiceDisconnectTimer)
+        this.browserRealtimeVoiceDisconnectTimer = null
+    }
+
+    private readBrowserClientId(value: unknown): string | null {
+        return typeof value === 'string' && BROWSER_CLIENT_ID_PATTERN.test(value) ? value : null
+    }
+
+    private requireVoiceClient(clientId: string | null): string {
+        if (!clientId) throw new Error('Browser Voice client identity is invalid.')
+        return clientId
+    }
+
+    private requireCurrentVoiceOwner(clientId: string | null): string {
+        const ownerClientId = this.requireVoiceClient(clientId)
+        if (this.browserRealtimeVoiceOwnerClientId !== ownerClientId) {
+            throw new Error('This browser tab does not own the active Voice session.')
+        }
+        return ownerClientId
+    }
+
+    private browserVoiceOwnerId(clientId: string): number {
+        const digest = createHash('sha256').update(`${this.dependencies.capability}:${clientId}`).digest()
+        return -(digest.readUInt32BE(0) % 2_000_000_000 + 1)
+    }
+
     private writeCorsHeaders(response: ServerResponse, origin: string): void {
         response.setHeader('Access-Control-Allow-Origin', origin)
         response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        response.setHeader('Access-Control-Allow-Headers', `Content-Type, ${BROWSER_ASSISTANT_BRIDGE_HEADER}, ${BROWSER_ASSISTANT_BRIDGE_CAPABILITY_HEADER}`)
+        response.setHeader('Access-Control-Allow-Headers', `Content-Type, ${BROWSER_ASSISTANT_BRIDGE_HEADER}, ${BROWSER_ASSISTANT_BRIDGE_CAPABILITY_HEADER}, ${BROWSER_ASSISTANT_CLIENT_ID_HEADER}`)
         response.setHeader('Vary', 'Origin')
     }
 

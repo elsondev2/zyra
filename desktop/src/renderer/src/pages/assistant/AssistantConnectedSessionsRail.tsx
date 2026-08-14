@@ -12,6 +12,7 @@ import type {
 } from './useAssistantPageSidebarState'
 import { isAssistantDraftSession } from './assistant-sessions-rail-utils'
 import { buildAssistantChatRoute } from './assistant-chat-route'
+import { createAssistantChatAndNavigate } from './create-assistant-chat-and-navigate'
 
 export const ConnectedAssistantSessionsRail = memo(function ConnectedAssistantSessionsRail(props: {
     collapsed: boolean
@@ -40,15 +41,21 @@ export const ConnectedAssistantSessionsRail = memo(function ConnectedAssistantSe
         if (creatingChatRef.current) return
 
         const activeSession = railController.snapshot.sessions.find((session) => session.id === railController.activeSessionId) || null
-        if (activeSession && isAssistantDraftSession(activeSession)) return
+        if (activeSession && isAssistantDraftSession(activeSession)) {
+            navigate(buildAssistantChatRoute(activeSession.id, activeSession.activeThreadId || null))
+            return
+        }
 
         try {
             creatingChatRef.current = true
-            await railController.createSession({ mode: 'work' })
+            const result = await createAssistantChatAndNavigate(railController, navigate)
+            if (!result.success) {
+                onShowToast({ message: result.error || 'Could not create chat.', tone: 'error' })
+            }
         } finally {
             creatingChatRef.current = false
         }
-    }, [railController])
+    }, [navigate, onShowToast, railController])
 
     const handleSelectSession = useCallback((sessionId: string) => {
         const session = railController.snapshot.sessions.find((entry) => entry.id === sessionId) || null
@@ -65,9 +72,13 @@ export const ConnectedAssistantSessionsRail = memo(function ConnectedAssistantSe
             creatingProjectChatRef.current = true
             const trimmedProjectPath = String(projectPath || '').trim()
             if (trimmedProjectPath) {
-                const result = await railController.createSessionResult({ mode: 'work', projectPath: trimmedProjectPath })
-                if (!result?.success) {
-                    onShowToast({ message: (result as any)?.error || 'Could not create chat in project.', tone: 'error' })
+                const result = await createAssistantChatAndNavigate(
+                    railController,
+                    navigate,
+                    { mode: 'work', projectPath: trimmedProjectPath }
+                )
+                if (!result.success) {
+                    onShowToast({ message: result.error || 'Could not create chat in project.', tone: 'error' })
                 }
                 return
             }

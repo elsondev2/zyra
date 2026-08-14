@@ -16,6 +16,8 @@ import {
     ASSISTANT_LEFT_SIDEBAR_WIDTH_STORAGE_KEY,
     resolveStoredAssistantLeftSidebarWidth
 } from '@/pages/assistant/assistant-pane-layout'
+import { buildAssistantChatRoute } from '@/pages/assistant/assistant-chat-route'
+import { createAssistantChatAndNavigate } from '@/pages/assistant/create-assistant-chat-and-navigate'
 import { cn } from '@/lib/utils'
 
 type AppNavEntry = { path: string; search: string; sessionId: string | null }
@@ -49,7 +51,10 @@ export default function TitleBar() {
     const assistantTitleBarContent = useAssistantTitleBarContent()
     const assistantTitleBarEndRegion = useAssistantTitleBarEndRegion()
     const assistantActions = useAssistantStoreActions()
-    const selectedSessionId = useAssistantStoreSelector((state) => state.snapshot.selectedSessionId)
+    const selectedAssistantSession = useAssistantStoreSelector((state) => (
+        state.snapshot.sessions.find((session) => session.id === state.snapshot.selectedSessionId) || null
+    ))
+    const selectedSessionId = selectedAssistantSession?.id || null
     const appMenuRootRef = useRef<HTMLDivElement | null>(null)
     const titleBarRootRef = useRef<HTMLDivElement | null>(null)
     const titleBarControlsRef = useRef<HTMLDivElement | null>(null)
@@ -223,8 +228,13 @@ export default function TitleBar() {
     })
 
     const handleNewChat = () => {
-        navigate('/assistant')
-        void assistantActions.createSession({ mode: 'work' })
+        if (selectedAssistantSession && selectedAssistantSession.threads.every((thread) => (
+            (thread.messageCount || 0) === 0 && !thread.latestTurn
+        ))) {
+            navigate(buildAssistantChatRoute(selectedAssistantSession.id, selectedAssistantSession.activeThreadId))
+            return
+        }
+        void createAssistantChatAndNavigate(assistantActions, navigate)
     }
 
     const runAppMenuAction = (action: () => void) => {
@@ -246,9 +256,9 @@ export default function TitleBar() {
             { id: 'voice-lab', label: 'Instructor Voice Lab', action: () => navigate('/assistant/instructor') },
             { id: 'about', label: 'About Zyra', action: () => navigate('/settings/about') }
         ],
-        [
+        ...(desktopWindowControlsAvailable ? [[
             { id: 'close', label: 'Close window', shortcut: 'Alt F4', danger: true, action: handleClose }
-        ]
+        ]] : [])
     ]
 
     const expandedSidebar = sidebarWorkspaceActive && !sidebarCollapsed
@@ -256,7 +266,11 @@ export default function TitleBar() {
     return (
         <div
             ref={titleBarRootRef}
-            className={cn('zyra-topbar-surface fixed left-0 right-0 top-0 z-50 flex h-[34px] items-center text-sparkle-text', settingsPageActive && 'zyra-settings-topbar')}
+            className={cn(
+                'zyra-topbar-surface fixed left-0 right-0 top-0 flex h-[34px] items-center text-sparkle-text',
+                appMenuOpen ? 'z-[220]' : 'z-50',
+                settingsPageActive && 'zyra-settings-topbar'
+            )}
             style={{ WebkitAppRegion: 'drag' } as any}
         >
             <div
@@ -277,7 +291,7 @@ export default function TitleBar() {
                     <button
                         type="button"
                         onClick={handleToggleSidebar}
-                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-sparkle-text-secondary transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]/35"
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center text-sparkle-text-secondary transition-colors hover:text-sparkle-text focus:outline-none focus-visible:text-sparkle-text"
                         style={{ WebkitAppRegion: 'no-drag' } as any}
                         title={sidebarActionLabel}
                         aria-label={sidebarActionLabel}
@@ -291,14 +305,14 @@ export default function TitleBar() {
                         type="button"
                         onClick={() => setAppMenuOpen((current) => !current)}
                         className={cn(
-                            'inline-flex h-full items-center gap-1 rounded-md px-2 text-[12px] font-semibold leading-none transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]/35',
-                            appMenuOpen ? 'bg-[var(--surface-hover)] text-sparkle-text' : 'text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text'
+                            'group inline-flex h-full items-center gap-1 px-2 text-[12px] font-semibold leading-none transition-colors focus:outline-none focus-visible:text-sparkle-text',
+                            appMenuOpen ? 'text-sparkle-text' : 'text-sparkle-text-secondary hover:text-sparkle-text'
                         )}
                         aria-haspopup="menu"
                         aria-expanded={appMenuOpen}
                     >
                         <span>Zyra</span>
-                        <ChevronDown size={11} className={cn('text-sparkle-text-muted transition-transform', appMenuOpen && 'rotate-180')} />
+                        <ChevronDown size={11} className={cn('text-sparkle-text-muted transition-[color,transform] group-hover:text-sparkle-text-secondary', appMenuOpen && 'rotate-180 text-sparkle-text-secondary')} />
                     </button>
                     {appMenuOpen ? (
                         <div className="absolute left-0 top-full z-[190] mt-1 w-[208px] overflow-hidden rounded-xl border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1 text-[13px] shadow-[0_18px_48px_rgba(0,0,0,0.28)] backdrop-blur-xl" role="menu">

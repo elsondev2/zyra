@@ -3,6 +3,7 @@ import { Bot, FileDiff, Files, FolderTree, GitCompareArrows, Globe2, Library, Lo
 import type { FleetSnapshot } from '@shared/assistant/contracts'
 import type { ControlStateSnapshot, ControlWorkspaceSnapshot } from '@shared/agent-control/contracts'
 import type { BrowserSurfaceOpenRequest } from '@shared/agent-control/protocol'
+import { isElectronRendererRuntime } from '@/lib/browser-file-url'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import type { FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
 import { useSettings } from '@/lib/settings'
@@ -209,14 +210,22 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
             loadAssistantInspectorWorkspaceState(browserWorkspaceKey),
             restoredBrowserTabIds
         )
-        setActiveTabId(restoredWorkspace.activeTabId)
-        setWorkspaceTabs(restoredWorkspace.tabs)
+        const desktopBrowserAvailable = isElectronRendererRuntime()
+        const supportedWorkspaceTabs = desktopBrowserAvailable
+            ? restoredWorkspace.tabs
+            : restoredWorkspace.tabs.filter((tab) => tab.kind !== 'browser')
+        const nextWorkspaceTabs = supportedWorkspaceTabs.length > 0 ? supportedWorkspaceTabs : [REVIEW_TAB]
+        const nextActiveTabId = nextWorkspaceTabs.some((tab) => tab.id === restoredWorkspace.activeTabId)
+            ? restoredWorkspace.activeTabId
+            : nextWorkspaceTabs[0].id
+        setActiveTabId(nextActiveTabId)
+        setWorkspaceTabs(nextWorkspaceTabs)
         setReviewTurnId(null)
         setFocusedDiffRequestId(null)
         setTransitionLoadingTabId(null)
         setContentLoadingTabId(null)
-        setBrowserTabs(persistedBrowser.tabs)
-        setBrowserActiveTabId(persistedBrowser.activeTabId)
+        setBrowserTabs(desktopBrowserAvailable ? persistedBrowser.tabs : [])
+        setBrowserActiveTabId(desktopBrowserAvailable ? persistedBrowser.activeTabId : null)
         setBrowserNavigationRequest(null)
         setBrowserWorkspaceState({ open: false, activeTabId: null, splitTabId: null, visibleTabIds: [], tabs: [] })
         browserControllerRef.current = null
@@ -237,6 +246,10 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     useEffect(() => {
         if (!browserSurfaceRequest || processedBrowserSurfaceRequestRef.current === browserSurfaceRequest.requestId) return
         processedBrowserSurfaceRequestRef.current = browserSurfaceRequest.requestId
+        if (!isElectronRendererRuntime()) {
+            onBrowserSurfaceRequestHandled(browserSurfaceRequest.requestId)
+            return
+        }
         const mode = browserSurfaceRequest.mode || 'open'
         if (mode === 'close' || mode === 'external') return
         pendingBrowserTabIdsRef.current.add(browserSurfaceRequest.tabId)
@@ -252,7 +265,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
             setActiveTabId(browserTab.id)
             beginTabTransition(browserTab.id)
         }
-    }, [beginTabTransition, browserSurfaceRequest])
+    }, [beginTabTransition, browserSurfaceRequest, onBrowserSurfaceRequestHandled])
 
     useEffect(() => {
         if (!open || !revealRequest) return
@@ -531,7 +544,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     }, [threadId])
 
     const handleOpenResourceUrl = useCallback((url: string) => {
-        if (!projectPath) {
+        if (!isElectronRendererRuntime() || !projectPath) {
             void window.devscope.openBrowserPreviewExternal(url)
             return
         }
@@ -669,7 +682,9 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     }, [])
 
     const addTabItems = useMemo<FileActionsMenuItem[]>(() => [
-        { id: 'browser', label: 'Browser', icon: <Globe2 size={14} />, onSelect: handleOpenBrowserWorkspace },
+        ...(isElectronRendererRuntime()
+            ? [{ id: 'browser', label: 'Browser', icon: <Globe2 size={14} />, onSelect: handleOpenBrowserWorkspace }]
+            : []),
         { id: 'terminal', label: 'Terminal', icon: <SquareTerminal size={14} />, onSelect: handleOpenTerminalWorkspace },
         { id: 'explorer', label: 'Files', icon: <Files size={14} />, onSelect: handleOpenExplorerWorkspace },
         { id: 'review', label: 'Diff', icon: <FileDiff size={14} />, onSelect: handleOpenReviewWorkspace },

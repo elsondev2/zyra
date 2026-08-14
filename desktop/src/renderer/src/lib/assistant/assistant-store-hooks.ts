@@ -228,6 +228,7 @@ export function useAssistantConversationStore() {
 
         return {
             knownModels: state.snapshot.knownModels,
+            sessions: state.snapshot.sessions,
             available: state.status.available,
             connected: state.status.connected,
             loading: state.hydrating,

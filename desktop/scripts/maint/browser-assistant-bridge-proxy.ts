@@ -10,6 +10,7 @@ import {
     BROWSER_ASSISTANT_BRIDGE_HEADER,
     BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE,
     BROWSER_ASSISTANT_BRIDGE_HOST,
+    BROWSER_ASSISTANT_CLIENT_ID_HEADER,
     BROWSER_ASSISTANT_BRIDGE_PROXY_PREFIX,
     type BrowserAssistantBridgeDescriptor
 } from '../../src/shared/browser-assistant-bridge'
@@ -100,6 +101,9 @@ async function proxyBrowserAssistantRequest(request: IncomingMessage, response: 
             'Content-Type': String(request.headers['content-type'] || 'application/json'),
             Origin: origin,
             ...(request.headers.range ? { Range: String(request.headers.range) } : {}),
+            ...(request.headers[BROWSER_ASSISTANT_CLIENT_ID_HEADER]
+                ? { [BROWSER_ASSISTANT_CLIENT_ID_HEADER]: String(request.headers[BROWSER_ASSISTANT_CLIENT_ID_HEADER]) }
+                : {}),
             [BROWSER_ASSISTANT_BRIDGE_HEADER]: BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE,
             [BROWSER_ASSISTANT_BRIDGE_CAPABILITY_HEADER]: descriptor.capability
         }

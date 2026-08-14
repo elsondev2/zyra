@@ -9,10 +9,12 @@ export const BROWSER_CLIENT_HOST_ORIGIN = `http://${BROWSER_ASSISTANT_BRIDGE_HOS
 export const BROWSER_ASSISTANT_BRIDGE_HEADER = 'x-zyra-browser-client'
 export const BROWSER_ASSISTANT_BRIDGE_HEADER_VALUE = 'assistant-v1'
 export const BROWSER_ASSISTANT_BRIDGE_CAPABILITY_HEADER = 'x-zyra-browser-capability'
+export const BROWSER_ASSISTANT_CLIENT_ID_HEADER = 'x-zyra-browser-client-id'
 export const BROWSER_ASSISTANT_BRIDGE_PROXY_PREFIX = '/__zyra_browser_assistant'
 export const BROWSER_ASSISTANT_BRIDGE_DESCRIPTOR_NAME = 'browser-assistant-bridge.json'
 export const BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH = '/v1/assistant/invoke'
 export const BROWSER_ASSISTANT_BRIDGE_EVENTS_PATH = '/v1/assistant/events'
+export const BROWSER_REALTIME_VOICE_EVENTS_PATH = '/v1/assistant/realtime-voice/events'
 export const BROWSER_DEVSCOPE_BRIDGE_INVOKE_PATH = '/v1/devscope/invoke'
 export const BROWSER_DEVSCOPE_BRIDGE_EVENTS_PATH = '/v1/devscope/events'
 export const BROWSER_FILE_BRIDGE_PATH = '/v1/files/content'
@@ -62,6 +64,10 @@ export const BROWSER_ASSISTANT_BRIDGE_METHODS = [
     'interruptTurn',
     'respondApproval',
     'respondUserInput',
+    'startRealtimeVoice',
+    'sendRealtimeVoiceMessage',
+    'ingestRealtimeVoiceEvent',
+    'stopRealtimeVoice',
     'getVoiceTranscriptionState',
     'transcribeVoice'
 ] as const
@@ -133,6 +139,7 @@ export function isBrowserDevscopeStreamEvent(value: unknown): value is BrowserDe
 export type BrowserAssistantBridgeInvokeRequest = {
     method: BrowserAssistantBridgeMethod
     args: unknown[]
+    clientId?: string
 }
 
 export type BrowserAssistantBridgeInvokeResponse =

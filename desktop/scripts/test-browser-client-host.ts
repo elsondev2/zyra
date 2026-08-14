@@ -74,6 +74,8 @@ try {
     assert.equal(await indexResponse.text(), '<!doctype html><main>Zyra browser client</main>')
     assert.equal(indexResponse.headers.get('cache-control'), 'no-cache')
     assert.equal(indexResponse.headers.get('x-content-type-options'), 'nosniff')
+    assert.equal(indexResponse.headers.get('permissions-policy')?.includes('microphone=(self)'), true, 'same-device browser Voice must be allowed to request this origin\'s microphone')
+    assert.equal(indexResponse.headers.get('permissions-policy')?.includes('camera=()'), true, 'browser Voice must not broaden unrelated camera access')
 
     const routeResponse = await fetch(`${address.origin}/assistant/chat/session-1`)
     assert.equal(routeResponse.status, 200, 'client-side routes must fall back to the renderer entry point')

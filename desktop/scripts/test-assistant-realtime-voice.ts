@@ -698,6 +698,11 @@ assert.match(
     'the current composer configuration must cross the renderer-to-main Voice start boundary'
 )
 assert.match(
+    voiceSessionSource,
+    /peer\.connectionState === 'disconnected'[\s\S]{0,650}REALTIME_PEER_DISCONNECT_GRACE_MS/u,
+    'brief WebRTC disconnects should receive a bounded recovery grace instead of killing Voice immediately'
+)
+assert.match(
     realtimeVoiceContractSource,
     /executionConfiguration\?: AssistantVoiceExecutionConfiguration/u,
     'canonical Voice start must carry a typed primary-agent execution configuration'

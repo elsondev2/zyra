@@ -240,6 +240,7 @@ export class AssistantService {
     private readonly subscribers = new Set<number>()
     private readonly externalEventSubscribers = new Set<(payload: AssistantEventStreamPayload) => void>()
     private readonly realtimeVoiceSubscribers = new Set<number>()
+    private readonly externalRealtimeVoiceSubscribers = new Set<(event: AssistantRealtimeVoiceEvent) => void>()
     private realtimeVoiceOwnerId: number | null = null
     private readonly planBuffers = new Map<string, string>()
     private readonly assistantTextBuffers = new Map<string, string>()
@@ -297,7 +298,7 @@ export class AssistantService {
             if (event.type === 'session.error' || event.type === 'session.closed') {
                 this.realtimeVoiceOwnerId = null
             }
-            broadcastAssistantRealtimeVoiceEvent(this.realtimeVoiceSubscribers, event)
+            this.broadcastRealtimeVoiceEvent(event)
         })
         void this.readyPromise
             .then(() => this.recoverSelectedSessionTitle())
@@ -328,6 +329,22 @@ export class AssistantService {
     subscribeRealtimeVoice(senderId: number) {
         this.realtimeVoiceSubscribers.add(senderId)
         return { success: true as const }
+    }
+
+    subscribeExternalRealtimeVoiceEvents(listener: (event: AssistantRealtimeVoiceEvent) => void): () => void {
+        this.externalRealtimeVoiceSubscribers.add(listener)
+        return () => this.externalRealtimeVoiceSubscribers.delete(listener)
+    }
+
+    private broadcastRealtimeVoiceEvent(event: AssistantRealtimeVoiceEvent): void {
+        broadcastAssistantRealtimeVoiceEvent(this.realtimeVoiceSubscribers, event)
+        for (const listener of [...this.externalRealtimeVoiceSubscribers]) {
+            try {
+                listener(event)
+            } catch (error) {
+                log.warn('[AssistantVoice] External realtime event subscriber failed', error)
+            }
+        }
     }
 
     unsubscribeRealtimeVoice(senderId: number) {
@@ -576,6 +593,7 @@ export class AssistantService {
     }
 
     async startRealtimeVoice(input: AssistantStartRealtimeVoiceInput, senderId: number) {
+        if (!Number.isSafeInteger(senderId)) throw new Error('Voice owner identity is invalid.')
         if (this.realtimeVoiceOwnerId !== null && this.realtimeVoiceOwnerId !== senderId) {
             throw new Error('Voice is already active in another Zyra window.')
         }
@@ -617,6 +635,7 @@ export class AssistantService {
     }
 
     async sendRealtimeVoiceMessage(input: AssistantSendRealtimeVoiceMessageInput, senderId: number) {
+        if (!Number.isSafeInteger(senderId)) throw new Error('Voice owner identity is invalid.')
         if (this.realtimeVoiceOwnerId !== senderId) {
             throw new Error('Only the Zyra window running Voice can send to this session.')
         }
@@ -661,6 +680,7 @@ export class AssistantService {
     }
 
     async ingestRealtimeVoiceEvent(input: AssistantIngestRealtimeVoiceEventInput, senderId: number) {
+        if (!Number.isSafeInteger(senderId)) throw new Error('Voice owner identity is invalid.')
         if (this.realtimeVoiceOwnerId !== senderId || !this.activeCanonicalVoice) {
             throw new Error('This Zyra window does not own the canonical Voice session.')
         }
@@ -675,6 +695,7 @@ export class AssistantService {
     }
 
     async stopRealtimeVoice(senderId: number) {
+        if (!Number.isSafeInteger(senderId)) throw new Error('Voice owner identity is invalid.')
         if (this.realtimeVoiceOwnerId !== null && this.realtimeVoiceOwnerId !== senderId) {
             throw new Error('Only the Zyra window that started Voice can stop it.')
         }
@@ -701,6 +722,7 @@ export class AssistantService {
 
     dispose() {
         this.externalEventSubscribers.clear()
+        this.externalRealtimeVoiceSubscribers.clear()
         this.assistantTextDeltaBuffer.dispose()
         this.assistantActivityDeltaBuffer.dispose()
         this.realtimeVoiceOwnerId = null
@@ -809,7 +831,7 @@ export class AssistantService {
             )
             committer.onError((error, event) => {
                 log.error('[AssistantVoice] Canonical transcript commit failed', error)
-                broadcastAssistantRealtimeVoiceEvent(this.realtimeVoiceSubscribers, {
+                this.broadcastRealtimeVoiceEvent({
                     type: 'session.error',
                     threadId: event.realtimeProviderThreadId,
                     message: `Voice stopped because its transcript could not be saved: ${error.message}`
@@ -958,7 +980,7 @@ export class AssistantService {
                 this.activeCanonicalVoice = null
                 this.realtimeVoiceOwnerId = null
             }
-            broadcastAssistantRealtimeVoiceEvent(this.realtimeVoiceSubscribers, {
+            this.broadcastRealtimeVoiceEvent({
                 type: 'session.closed',
                 threadId: handle?.realtimeProviderThreadId || active.conversationId,
                 reason
@@ -974,7 +996,7 @@ export class AssistantService {
 
     private handleCanonicalVoiceEvent(event: RealtimeDomainEvent): void {
         const legacy = canonicalVoicePresentationEvent(event)
-        if (legacy) broadcastAssistantRealtimeVoiceEvent(this.realtimeVoiceSubscribers, legacy)
+        if (legacy) this.broadcastRealtimeVoiceEvent(legacy)
         if (isCompletedRealtimeUserTranscriptEvent(event) && shouldDelegateVoiceInspection(event.text)) {
             const sourceKey = `${event.adapterSessionId}:${event.providerItemId}`
             if (this.delegatedVoiceProviderItems.has(sourceKey)) return

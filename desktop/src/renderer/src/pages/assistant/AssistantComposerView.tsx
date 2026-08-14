@@ -23,6 +23,7 @@ import {
 } from 'lucide-react'
 import AssistantAttachmentPreviewModal from './AssistantAttachmentPreviewModal'
 import { AssistantVoiceRecorderBar } from './AssistantVoiceRecorderBar'
+import { AssistantNewChatProjectChip } from './AssistantNewChatProjectChip'
 import { ComposerAttachmentsShelf, ComposerFooterControls, ComposerMentionMenu, ComposerRealtimeVoiceButton, ComposerSendButton, ComposerVoiceButton } from './AssistantComposerSections'
 import { formatAssistantModelLabel } from './assistant-model-labels'
 import {
@@ -92,6 +93,7 @@ export function AssistantComposerView({
     const showCodexRecorder = transcriptionEnabled
         && settings.assistantTranscriptionEngine === 'codex'
         && (controller.voiceInput.isRecording || controller.voiceInput.isTranscribing)
+    const composerMotionDuration = showCodexRecorder ? 320 : 240
 
     useEffect(() => {
         if (settings.assistantTranscriptionEngine !== 'browser') {
@@ -379,11 +381,21 @@ export function AssistantComposerView({
                     </div>
                 ) : null}
                 <div ref={controller.composerRootRef} className="pointer-events-auto relative z-40">
+                    {controller.placement === 'center' && controller.onSelectProject && controller.onChooseProjectFolder ? (
+                        <AssistantNewChatProjectChip
+                            projectPath={controller.projectPath || null}
+                            projectChoices={controller.projectChoices}
+                            disabled={controller.projectContextDisabled}
+                            onSelectProject={controller.onSelectProject}
+                            onChooseFolder={controller.onChooseProjectFolder}
+                        />
+                    ) : null}
                     <div className={cn(
-                        'group relative overflow-visible rounded-[18px] border transition-[background-color,border-color,box-shadow] duration-200',
+                        'group relative overflow-visible border transition-[background-color,border-radius,box-shadow,min-height] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+                        showCodexRecorder ? 'rounded-full' : 'rounded-[18px]',
                         controller.placement === 'bottom'
                             ? 'border-white/[0.09] bg-[color-mix(in_srgb,var(--color-card)_97%,transparent)] shadow-[0_18px_54px_rgba(0,0,0,0.30),0_1px_0_rgba(255,255,255,0.045),inset_0_1px_0_rgba(255,255,255,0.045),inset_0_-1px_0_rgba(0,0,0,0.18)] backdrop-blur-md'
-                            : 'border-[color-mix(in_srgb,var(--color-border)_78%,transparent)] bg-sparkle-card'
+                            : 'border-[var(--surface-divider)] bg-[color-mix(in_srgb,var(--surface-floating)_94%,transparent)] shadow-[0_22px_68px_color-mix(in_srgb,var(--color-bg)_54%,transparent),0_1px_0_rgba(255,255,255,0.045),inset_0_1px_0_color-mix(in_srgb,var(--color-text)_4%,transparent)] backdrop-blur-[18px]'
                     )}>
                         {controller.placement === 'bottom' ? (
                             <>
@@ -411,7 +423,14 @@ export function AssistantComposerView({
                                 event.currentTarget.value = ''
                             }}
                         />
-                        <AnimatedHeight isOpen={!showCodexRecorder} duration={220}>
+                        <AnimatedHeight
+                            isOpen={!showCodexRecorder}
+                            duration={composerMotionDuration}
+                            contentClassName={cn(
+                                'transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+                                showCodexRecorder ? 'translate-y-1 opacity-0' : 'translate-y-0 opacity-100'
+                            )}
+                        >
                             <div ref={controller.mentionMenuRef} className="relative px-3 pb-1.5 pt-2.5 sm:px-3.5 sm:pt-3">
                             <ComposerMentionMenu
                                 isOpen={controller.showMentionMenu}
@@ -496,7 +515,7 @@ export function AssistantComposerView({
                         <div className={cn(
                             'flex items-center justify-between',
                             showCodexRecorder
-                                ? 'gap-2 px-2 py-2'
+                                ? 'gap-2 px-1.5 py-1.5'
                                 : controller.isCompactFooter
                                     ? 'gap-2 px-1.5 pb-1.5 sm:px-2 sm:pb-2'
                                     : 'flex-wrap gap-2.5 px-1.5 pb-1.5 sm:flex-nowrap sm:gap-3 sm:px-2 sm:pb-2'

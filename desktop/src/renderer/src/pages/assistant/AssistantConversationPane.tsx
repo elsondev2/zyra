@@ -32,7 +32,7 @@ import {
     resolveAssistantComposerInsetEnd,
     resolveAssistantStableComposerInsetEnd
 } from './assistant-pane-layout'
-import { getAssistantThreadDisplayTitle, getSessionDisplayTitle, isAssistantDraftSession, resolveSessionProjectPath } from './assistant-sessions-rail-utils'
+import { getAssistantThreadDisplayTitle, getProjectLabel, getSessionDisplayTitle, isAssistantDraftSession, resolveSessionProjectPath } from './assistant-sessions-rail-utils'
 import {
     deriveAssistantConversationSurfaceMode,
     resolveAssistantComposerConnectionPresentation
@@ -187,6 +187,16 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const latestProjectLabel = displayProjectPath
         ? (displayProjectPath.split(/[\\/]/).filter(Boolean).pop() || displayProjectPath)
         : 'select project'
+    const newChatProjectChoices = useMemo(() => {
+        const paths = new Map<string, string>()
+        for (const session of controller.sessions) {
+            if (session.archived) continue
+            const projectPath = resolveSessionProjectPath(session).trim()
+            if (!projectPath || paths.has(projectPath)) continue
+            paths.set(projectPath, getProjectLabel(projectPath))
+        }
+        return Array.from(paths, ([path, label]) => ({ path, label })).slice(0, 12)
+    }, [controller.sessions])
     const assistantMessageFilePath = useMemo(
         () => getAssistantLinkBaseFilePath(displayProjectPath),
         [displayProjectPath]
@@ -821,6 +831,24 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         await actions.createProjectSession()
     }, [actions, controller.commandPending, controller.selectedSession?.id])
 
+    const handleSelectNewChatProject = useCallback(async (projectPath: string | null) => {
+        const session = controller.selectedSession
+        if (!session || !selectedSessionIsDraft || projectDirectoryLocked || controller.commandPending) return
+        const result = await actions.setSessionProjectPathResult(session.id, projectPath)
+        if (!result.success) {
+            props.onShowToast?.(`Could not update project: ${result.error}`, 'error')
+        }
+    }, [actions, controller.commandPending, controller.selectedSession, projectDirectoryLocked, props.onShowToast, selectedSessionIsDraft])
+
+    const handleChooseNewChatProjectFolder = useCallback(async () => {
+        const session = controller.selectedSession
+        if (!session || !selectedSessionIsDraft || projectDirectoryLocked || controller.commandPending) return
+        const result = await actions.chooseProjectPathResult(session.id)
+        if (!result.success && !('cancelled' in result && result.cancelled)) {
+            props.onShowToast?.(`Could not update project: ${result.error}`, 'error')
+        }
+    }, [actions, controller.commandPending, controller.selectedSession, projectDirectoryLocked, props.onShowToast, selectedSessionIsDraft])
+
     const handleToggleDetailsPanel = useCallback(() => {
         props.onToggleRightSidebar()
     }, [props.onToggleRightSidebar])
@@ -978,7 +1006,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                     <AssistantConversationComposerPane
                         paneRef={composerPaneRef}
                         placement={composerIsCentered ? 'center' : 'bottom'}
-                        newChatPrompt={composerIsCentered ? emptyComposerPrompt : null}
+                        newChatPrompt={emptyComposerPrompt}
                         pendingPlaygroundLabRequest={null}
                         pendingApprovals={effectivePendingApprovals}
                         pendingUserInputs={effectivePendingUserInputs}
@@ -997,6 +1025,10 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         assistantAvailable={controller.available}
                         assistantConnected={composerConnectionPresentation.connected}
                         selectedProjectPath={displayProjectPath || null}
+                        projectChoices={composerIsCentered ? newChatProjectChoices : undefined}
+                        projectContextDisabled={newChatHandoffActive || projectDirectoryLocked || controller.commandPending}
+                        onSelectProject={composerIsCentered ? handleSelectNewChatProject : undefined}
+                        onChooseProjectFolder={composerIsCentered ? handleChooseNewChatProjectFolder : undefined}
                         availableModels={availableModels}
                         activeModel={activeComposerConfiguration.activeModel}
                         activeEffort={activeComposerConfiguration.activeEffort}
