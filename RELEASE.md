@@ -134,8 +134,8 @@ Set `ZYRA_DESKTOP_UPDATE_FEED_URL` to the printed loopback URL when launching an
 
 `.github/workflows/desktop-release.yml` supports:
 
-- `workflow_dispatch`: unsigned rehearsal builds only; it uploads the complete assembled workflow artifact and never creates a GitHub release;
-- `v*` tag pushes: publication candidates.
+- `workflow_dispatch`: unsigned native rehearsal builds from `master`; it uploads the complete assembled workflow artifact and places the same validated files in the private `v<version>` GitHub draft;
+- `v*` tag pushes: signed/notarized publication candidates that refresh and validate the existing draft before publication.
 
 The tag path requires all of the following before any public release exists:
 
@@ -169,7 +169,7 @@ The repository contains no signing credentials. Configure these GitHub Actions s
 - `ZYRA_MACOS_NOTARIZATION_KEY_ID` — App Store Connect key ID.
 - `ZYRA_MACOS_NOTARIZATION_ISSUER_ID` — App Store Connect issuer UUID.
 
-A stable tag fails in preflight if any value is absent. The workflow never substitutes ad-hoc or fake signatures. Windows verifies the produced installer with Authenticode. macOS verifies the app with `codesign`, Gatekeeper, and the stapled notarization ticket. Unsigned artifacts are permitted only in a manual rehearsal and remain workflow artifacts.
+A stable tag fails in preflight if any value is absent. The workflow never substitutes ad-hoc or fake signatures. Windows verifies the produced installer with Authenticode. macOS verifies the app with `codesign`, Gatekeeper, and the stapled notarization ticket. Unsigned artifacts are permitted only in a manual rehearsal and remain unpublished in both the workflow artifact store and a GitHub draft, so the updater cannot see them.
 
 ## Release checks
 

@@ -96,12 +96,15 @@ const ciWorkflow = readFileSync(path.join(repositoryRoot, '.github', 'workflows'
 const releaseWorkflow = readFileSync(path.join(repositoryRoot, '.github', 'workflows', 'desktop-release.yml'), 'utf8')
 assert(ciWorkflow.includes('windows-2025') && ciWorkflow.includes('macos-15') && ciWorkflow.includes('ubuntu-24.04'))
 assert(releaseWorkflow.includes('workflow_dispatch:') && releaseWorkflow.includes('tags:'))
-assert(releaseWorkflow.includes('Create draft before uploading anything'))
+assert(releaseWorkflow.includes('Create or verify the private draft'))
 assert(releaseWorkflow.includes('validate-github-draft.mjs'))
 assert(releaseWorkflow.includes('--sha="${RELEASE_SHA}" --branch=master'))
 assert(releaseWorkflow.includes('RELEASE_SHA: ${{ needs.preflight.outputs.head }}'))
-assert(releaseWorkflow.indexOf('Create draft before uploading anything') < releaseWorkflow.indexOf('Publish only the verified draft'))
-assert(releaseWorkflow.includes('needs.preflight.outputs.publish == \'true\''))
+assert(releaseWorkflow.indexOf('Create or verify the private draft') < releaseWorkflow.indexOf('Publish only the signed and notarized tagged candidate'))
+assert(releaseWorkflow.includes('Keep unsigned workflow-dispatch builds unpublished'))
+assert(releaseWorkflow.includes("needs.preflight.outputs.publish != 'true'"))
+assert(releaseWorkflow.includes("needs.preflight.outputs.publish == 'true'"))
+assert(releaseWorkflow.includes('gh release upload "${RELEASE_TAG}" release-assets/* --repo "${GITHUB_REPOSITORY}" --clobber'))
 assert(!releaseWorkflow.includes('origin/main') && !releaseWorkflow.includes('refs/remotes/origin/main'))
 for (const secret of [
     'ZYRA_WINDOWS_CERTIFICATE',
