@@ -15,8 +15,19 @@ function walkUpForZyraRoot(start: string): string | null {
     }
 }
 
+export function resolvePackagedZyraRoot(resourcesPath = process.resourcesPath): string | null {
+    if (!resourcesPath) return null
+    const candidate = join(resourcesPath, 'zyra-runtime')
+    return hasZyraSdk(candidate) ? candidate : null
+}
+
 export function resolveZyraRoot(): string {
-    // The desktop bundle/worktree that loaded this module is authoritative.
+    // Installed builds own a complete runtime under process.resourcesPath.
+    // It must win even if the process was launched from a source checkout.
+    const fromPackagedResources = resolvePackagedZyraRoot()
+    if (fromPackagedResources) return fromPackagedResources
+
+    // The desktop bundle/worktree that loaded this module is authoritative in development.
     // A parent shell may carry ZYRA_ROOT from another Zyra checkout; honoring
     // that first mixes one Electron build with another checkout's SDK/tools.
     const fromCompiledApp = walkUpForZyraRoot(__dirname)

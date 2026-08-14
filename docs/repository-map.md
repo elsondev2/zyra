@@ -7,7 +7,7 @@
 | Path | Purpose / owner | State and evidence | Action |
 |---|---|---|---|
 | `src/` | Terminal app, shared CLI runtime, memory, agent fleet, workflow runtime, and TUI. | Tracked; loaded by `bin/zyra.mjs` and root scripts. | Keep as product source. |
-| `desktop/` | Electron main/preload/renderer application and Desktop contract tests. | Tracked; root `ui:*` and agent-platform scripts invoke its package. | Keep as product source. Generated `out/`, `dist/`, `release/`, local logs, and Desktop state stay ignored. |
+| `desktop/` | Electron main/preload/renderer application, cross-platform release tooling, and Desktop contract tests. | Tracked; root `ui:*` and agent-platform scripts invoke its package. | Keep as product source. Generated `out/`, `dist/`, `.release/`, local logs, and Desktop state stay ignored. |
 | `extensions/` | Chrome exact-tab visual-control extension. | Tracked source; packaged by Desktop from `extensions/zyra-browser-control/dist/unpacked`. | Keep source; keep generated `dist/` ignored. |
 | `native/` | Windows computer-use sidecar and deterministic tests. | Tracked .NET source; root `test:agent-control` builds the test project. | Keep source; keep `bin/` and `obj/` ignored. |
 | `agents/` | Built-in child-agent definitions. | Tracked; discovered by the fleet definition loader. | Keep. |
@@ -30,6 +30,7 @@
 | `.playwright-cli/`, `desktop/.playwright-cli/` | Browser automation state and captures. | Ignored; referenced only by test/migration documentation. | Generated test state; safe to recreate. |
 | `dist/` | Root release archives and checksums. | Ignored; release tooling is the source. | Generated release output. Preserve intentionally retained archives; do not package as source. |
 | `desktop/out/`, `desktop/dist/`, `desktop/release/` | Electron compile/package output. | Ignored and recreated by Desktop scripts. | Generated; remove exact copies when cleaning. |
+| `desktop/.release/` | Deterministic package-input staging for `zyra-runtime` and the Windows-only self-contained sidecar. | Ignored; rebuilt from tracked source and lockfiles by `desktop/scripts/release/prepare-release-resources.mjs`. | Never commit; validate before packaging. |
 | `output/` | Screenshots and report render output. | Ignored; no runtime consumer. | Generated review evidence; retain or remove by explicit review. |
 | `tmp/` | Database-recovery work, stress-test output, downloaded tools, and scratch files. | Ignored; no production import. Some recovery files may be unique evidence. | Local-only; review subdirectories individually rather than deleting broadly. |
 | `resources/` (repository root) | Private exports and derived local analysis. | Root `.gitignore` intentionally excludes it; no package/runtime source dependency. | Keep private; never commit or copy into public docs. This is separate from tracked `desktop/resources/`. |

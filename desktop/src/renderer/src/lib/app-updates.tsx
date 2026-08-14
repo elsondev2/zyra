@@ -10,6 +10,7 @@ import type {
     DevScopeUpdateActionResult,
     DevScopeUpdateState
 } from '@shared/contracts/devscope-api'
+import { reportHostDesktopVersion } from './release-build-metadata'
 
 type UpdatePendingAction = 'check' | 'download' | 'install' | null
 
@@ -113,13 +114,13 @@ export function AppUpdatesProvider({ children }: { children: ReactNode }) {
 
         void window.devscope.updates.getState().then((state) => {
             if (mounted) {
-                setUpdateState(state)
+                setUpdateState(reportHostDesktopVersion(state))
             }
         }).catch(() => undefined)
 
         const unsubscribe = window.devscope.updates.onStateChange((state) => {
             if (mounted) {
-                setUpdateState(state)
+                setUpdateState(reportHostDesktopVersion(state))
             }
         })
 
@@ -180,7 +181,7 @@ export function AppUpdatesProvider({ children }: { children: ReactNode }) {
         setPendingAction(action)
         try {
             const result = await callback()
-            setUpdateState(result.state)
+            setUpdateState(reportHostDesktopVersion(result.state))
             if (!result.accepted || !result.completed) {
                 setIsModalOpen(true)
             }

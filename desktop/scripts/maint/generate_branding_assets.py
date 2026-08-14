@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import shutil
+import sys
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -17,6 +18,7 @@ PROD_ICON_SOURCE_PATH = APP_ICON_DIR / 'zyra-prod-source.png'
 
 MASTER_SIZE = 1024
 ICON_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+LINUX_ICON_SIZES = (16, 32, 48, 64, 128, 256, 512, 1024)
 APP_ICON_MARK_SIZE = (570, 760)
 APP_ICON_TILE_BOUNDS = (48, 48, 976, 976)
 APP_ICON_TILE_RADIUS = 196
@@ -302,17 +304,23 @@ def save_ico(image: Image.Image, path: Path) -> None:
     image.save(path, format='ICO', sizes=ICON_SIZES)
 
 
+def save_icns(image: Image.Image, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(path, format='ICNS')
+
+
 def main() -> None:
-    clean_master = draw_clean_mark(MASTER_SIZE)
-    blueprint_master = load_blueprint_master(MASTER_SIZE)
-
-    BRANDING_DIR.mkdir(parents=True, exist_ok=True)
-    RENDERER_BRANDING_DIR.mkdir(parents=True, exist_ok=True)
-
+    icons_only = '--icons-only' in sys.argv[1:]
     clean_brand_path = BRANDING_DIR / 'zyra-mark.png'
     blueprint_path = BRANDING_DIR / 'zyra-blueprint.png'
-    save_png(clean_master, clean_brand_path, 1024)
-    save_png(blueprint_master, blueprint_path, 1024)
+
+    BRANDING_DIR.mkdir(parents=True, exist_ok=True)
+    if not icons_only:
+        clean_master = draw_clean_mark(MASTER_SIZE)
+        blueprint_master = load_blueprint_master(MASTER_SIZE)
+        RENDERER_BRANDING_DIR.mkdir(parents=True, exist_ok=True)
+        save_png(clean_master, clean_brand_path, 1024)
+        save_png(blueprint_master, blueprint_path, 1024)
 
     app_icon_mark_mask = extract_app_icon_mark_mask()
     app_icon_outline_mask = app_icon_mark_mask.filter(ImageFilter.MaxFilter(31))
@@ -338,17 +346,23 @@ def main() -> None:
     save_png(dev_icon_master, dev_icon_png, 512)
     save_ico(prod_icon_master, ROOT / 'resources' / 'icon.ico')
     save_ico(dev_icon_master, ROOT / 'resources' / 'icon-dev.ico')
+    save_icns(prod_icon_master, ROOT / 'resources' / 'icon.icns')
+    linux_icon_dir = ROOT / 'resources' / 'icons'
+    for size in LINUX_ICON_SIZES:
+        save_png(prod_icon_master, linux_icon_dir / f'{size}x{size}.png', size)
 
-    if LANDING_PUBLIC_DIR.exists():
-        shutil.copyfile(clean_brand_path, LANDING_PUBLIC_DIR / 'logo.png')
-    shutil.copyfile(clean_brand_path, RENDERER_BRANDING_DIR / 'zyra-mark.png')
-    shutil.copyfile(blueprint_path, RENDERER_BRANDING_DIR / 'zyra-blueprint.png')
+    if not icons_only:
+        if LANDING_PUBLIC_DIR.exists():
+            shutil.copyfile(clean_brand_path, LANDING_PUBLIC_DIR / 'logo.png')
+        shutil.copyfile(clean_brand_path, RENDERER_BRANDING_DIR / 'zyra-mark.png')
+        shutil.copyfile(blueprint_path, RENDERER_BRANDING_DIR / 'zyra-blueprint.png')
 
     print('Generated branding assets:')
-    if BLUEPRINT_SOURCE_PATH.exists():
-        print(f'  {BLUEPRINT_SOURCE_PATH.relative_to(ROOT)}')
-    print(f'  {clean_brand_path.relative_to(ROOT)}')
-    print(f'  {blueprint_path.relative_to(ROOT)}')
+    if not icons_only:
+        if BLUEPRINT_SOURCE_PATH.exists():
+            print(f'  {BLUEPRINT_SOURCE_PATH.relative_to(ROOT)}')
+        print(f'  {clean_brand_path.relative_to(ROOT)}')
+        print(f'  {blueprint_path.relative_to(ROOT)}')
     for source_path in (DEV_ICON_SOURCE_PATH, PROD_ICON_SOURCE_PATH):
         print(f'  {source_path.relative_to(ROOT)}')
     for file_name in app_icon_variants:
@@ -357,10 +371,14 @@ def main() -> None:
     print(f'  {dev_icon_png.relative_to(ROOT)}')
     print(f"  {(ROOT / 'resources' / 'icon.ico').relative_to(ROOT)}")
     print(f"  {(ROOT / 'resources' / 'icon-dev.ico').relative_to(ROOT)}")
-    if LANDING_PUBLIC_DIR.exists():
-        print(f"  {(LANDING_PUBLIC_DIR / 'logo.png').relative_to(ROOT)}")
-    print(f"  {(RENDERER_BRANDING_DIR / 'zyra-mark.png').relative_to(ROOT)}")
-    print(f"  {(RENDERER_BRANDING_DIR / 'zyra-blueprint.png').relative_to(ROOT)}")
+    print(f"  {(ROOT / 'resources' / 'icon.icns').relative_to(ROOT)}")
+    for size in LINUX_ICON_SIZES:
+        print(f"  {(ROOT / 'resources' / 'icons' / f'{size}x{size}.png').relative_to(ROOT)}")
+    if not icons_only:
+        if LANDING_PUBLIC_DIR.exists():
+            print(f"  {(LANDING_PUBLIC_DIR / 'logo.png').relative_to(ROOT)}")
+        print(f"  {(RENDERER_BRANDING_DIR / 'zyra-mark.png').relative_to(ROOT)}")
+        print(f"  {(RENDERER_BRANDING_DIR / 'zyra-blueprint.png').relative_to(ROOT)}")
 
 
 if __name__ == '__main__':

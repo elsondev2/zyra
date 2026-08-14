@@ -36,6 +36,14 @@ function parseRepository(repository) {
     return { owner, repo }
 }
 
+function normalizePlatform(value) {
+    const normalized = String(value).trim().toLowerCase()
+    if (['windows', 'win', 'win32'].includes(normalized)) return 'win32'
+    if (['mac', 'macos', 'darwin'].includes(normalized)) return 'darwin'
+    if (normalized === 'linux') return 'linux'
+    throw new Error(`Unsupported updater platform: ${value}`)
+}
+
 function requestJson(hostname, requestPath) {
     const token = process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() || ''
 
@@ -97,6 +105,8 @@ async function main() {
     const allowPrerelease = argv['allow-prerelease']
         ? argv['allow-prerelease'] === 'true'
         : resolveReleaseChannelForVersion(currentVersion) !== 'stable'
+    const platform = normalizePlatform(argv.platform || process.platform)
+    const arch = argv.arch || process.arch
 
     if (!repository) {
         throw new Error('No repository available. Pass --repository owner/repo or configure package.json build.publish.')
@@ -106,7 +116,9 @@ async function main() {
     const resolvedFeed = await resolveGitHubReleaseFeed({
         repository,
         currentVersion,
-        allowPrerelease
+        allowPrerelease,
+        platform,
+        arch
     })
     const selectedTag = resolvedFeed?.tagName || null
     const selectedVersion = selectedTag ? selectedTag.replace(/^v/, '') : null
@@ -122,13 +134,15 @@ async function main() {
         `repository: ${repository}`,
         `currentVersion: ${currentVersion}`,
         `channel: ${resolveReleaseChannelForVersion(currentVersion)}`,
-        `allowPrerelease: ${allowPrerelease}`
+        `allowPrerelease: ${allowPrerelease}`,
+        `platform: ${platform}`,
+        `arch: ${arch}`
     ])
 
     if (!resolvedFeed || !selectedVersion || !selectedRelease) {
         printSection('Result', [
             'No valid GitHub release feed was found.',
-            'Expected a non-draft release with latest.yml, a Windows installer .exe, and a .blockmap.'
+            `Expected a non-draft ${platform}/${arch} release with its updater metadata and complete artifact set.`
         ])
         process.exitCode = 1
         return
@@ -139,6 +153,7 @@ async function main() {
         `prerelease: ${Boolean(selectedRelease.prerelease)}`,
         `publishedAt: ${selectedRelease.published_at || 'unknown'}`,
         `releaseUrl: ${resolvedFeed.releasePageUrl}`,
+        `metadata: ${resolvedFeed.metadataFile}`,
         `feedUrl: ${resolvedFeed.feedUrl}`
     ])
 

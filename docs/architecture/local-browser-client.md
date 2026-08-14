@@ -45,7 +45,7 @@ The private bridge capability is generated for each Desktop process and is never
 
 ## Intentional Desktop-Only Surfaces
 
-- Electron window controls and app updates;
+- Electron window controls and app update actions (the Browser may report the host Desktop package version, but cannot check, download, or install updates);
 - the Electron `<webview>`-based integrated website preview and its guest developer tools;
 - guest-bound Browser surface requests and integrated Browser recording frames.
 

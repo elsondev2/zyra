@@ -301,7 +301,7 @@ Redact any OAuth `code` or `state` values in reporting. Never paste callback sec
 
 ### License metadata
 
-`desktop/package.json` currently declares `MIT`, while the root package declares `UNLICENSED`. Do not silently make a legal-policy decision. For this migration, use `UNLICENSED` for the desktop package unless the repository already contains an explicit license granting MIT terms or the user explicitly directs otherwise. Mention the chosen value in the final report.
+This legal-policy decision is now resolved: the repository contains an explicit Apache License 2.0 grant. Root and Desktop package metadata must both declare `Apache-2.0`.
 
 ## Work package 05 — CLI installer and release separation
 

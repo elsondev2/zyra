@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
@@ -5,6 +6,7 @@ import { browserAssistantBridgeProxyPlugin } from './scripts/maint/browser-assis
 
 const projectRoot = resolve(__dirname)
 const rendererRoot = resolve(__dirname, 'src/renderer')
+const desktopVersion = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8')).version
 
 export default defineConfig({
     main: {
@@ -33,6 +35,9 @@ export default defineConfig({
     },
     renderer: {
         root: rendererRoot,
+        define: {
+            __ZYRA_DESKTOP_VERSION__: JSON.stringify(desktopVersion)
+        },
         optimizeDeps: {
             include: ['@pierre/diffs', '@pierre/diffs/react', '@pierre/diffs/worker/worker.js']
         },

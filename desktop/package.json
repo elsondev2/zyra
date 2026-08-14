@@ -1,10 +1,11 @@
 {
-    "name": "zyra-ui",
-    "version": "0.1.0",
+    "name": "zyra-desktop",
+    "version": "0.6.0",
+    "private": true,
     "description": "Zyra desktop UI for project work, Pi-backed chat, memory, and settings.",
     "main": "./out/main/index.js",
     "author": "Zyra",
-    "license": "UNLICENSED",
+    "license": "Apache-2.0",
     "type": "module",
     "scripts": {
         "dev": "node scripts/maint/ensure-electron.mjs && node scripts/maint/dev-runner.mjs",
@@ -54,16 +55,29 @@
         "test:assistant-client-selection": "bun scripts/test-assistant-client-local-selection.ts",
         "maint:loc": "node scripts/maint/check-loc.mjs",
         "maint:loc:strict": "node scripts/maint/check-loc.mjs --strict",
-        "postinstall": "echo Zyra: skipping native terminal rebuild",
-        "build:win": "electron-vite build && node scripts/maint/package-win-release.mjs release",
-        "build:unpack": "electron-vite build && node scripts/maint/package-win-release.mjs unpacked",
-        "dist:organize": "node scripts/maint/organize-dist.mjs",
+        "postinstall": "node scripts/release/verify-node-pty-install.mjs",
+        "build:win": "node scripts/release/package-desktop.mjs --platform=windows",
+        "build:unpack": "node scripts/release/package-desktop.mjs --dir=true",
         "brand:assets": "python scripts/maint/generate_branding_assets.py",
         "test:branding": "python scripts/test-branding-assets.py",
         "release:notes": "node scripts/maint/generate-release-notes.mjs",
-        "release:publish:local": "node scripts/maint/publish-local-release.mjs",
         "update:test-feed": "node --experimental-strip-types scripts/maint/check-github-update-feed.mjs",
-        "update:serve-feed": "node scripts/maint/serve-update-feed.mjs"
+        "update:serve-feed": "node scripts/maint/serve-update-feed.mjs",
+        "test:native-abi": "node scripts/release/test-node-pty-electron.mjs",
+        "runtime:stage": "node scripts/release/stage-zyra-runtime.mjs",
+        "runtime:validate": "node scripts/release/validate-zyra-runtime.mjs",
+        "test:packaged-runtime": "bun scripts/test-packaged-runtime-contract.ts",
+        "test:updater-release-feed": "bun scripts/test-desktop-updater-release-feed.ts",
+        "release:prepare": "node scripts/release/prepare-release-resources.mjs",
+        "release:package": "node scripts/release/package-desktop.mjs",
+        "release:validate": "node scripts/release/validate-release-assets.mjs",
+        "test:release-infra": "bun scripts/test-desktop-release-contract.ts && bun scripts/test-desktop-build-version.ts && bun scripts/test-desktop-updater-release-feed.ts && node scripts/test-release-asset-contract.mjs",
+        "build:mac": "node scripts/release/package-desktop.mjs --platform=macos",
+        "build:linux": "node scripts/release/package-desktop.mjs --platform=linux",
+        "test:release-assets": "node scripts/test-release-asset-contract.mjs",
+        "native:prepare": "node scripts/release/verify-node-pty-install.mjs",
+        "brand:release-assets": "python scripts/maint/generate_branding_assets.py --icons-only",
+        "test:build-version": "bun scripts/test-desktop-build-version.ts"
     },
     "dependencies": {
         "@chenglou/pretext": "^0.0.5",
@@ -85,7 +99,7 @@
         "lucide-react": "^0.469.0",
         "mermaid": "^11.12.3",
         "monaco-editor": "^0.55.1",
-        "node-pty": "^1.1.0",
+        "node-pty": "1.1.0",
         "ogl": "^1.0.11",
         "react": "^19.2.0",
         "react-dom": "^19.2.0",
@@ -115,8 +129,8 @@
         "@types/react-syntax-highlighter": "^15.5.13",
         "@vitejs/plugin-react": "^5.1.0",
         "autoprefixer": "^10.4.20",
-        "electron": "^33.3.0",
-        "electron-builder": "^25.1.8",
+        "electron": "43.4.0",
+        "electron-builder": "26.15.3",
         "electron-vite": "^2.3.0",
         "postcss": "^8.4.49",
         "tailwindcss": "^3.4.17",
@@ -127,19 +141,23 @@
     "build": {
         "appId": "app.zyra.desktop",
         "productName": "Zyra",
-        "artifactName": "Zyra-Setup-${version}.${ext}",
         "icon": "resources/icon.png",
         "files": [
             "!dist/**",
+            "!.release/**",
             "!resources/branding/icons/*-source.png"
         ],
+        "asarUnpack": [
+            "node_modules/node-pty/**"
+        ],
+        "npmRebuild": false,
         "directories": {
             "output": "dist"
         },
         "extraResources": [
             {
-                "from": "../native/zyra-computer-use/publish",
-                "to": "zyra-computer-use",
+                "from": ".release/zyra-runtime",
+                "to": "zyra-runtime",
                 "filter": [
                     "**/*"
                 ]
@@ -165,7 +183,7 @@
                 "name": "Code and Text File",
                 "description": "Open with Zyra quick preview",
                 "role": "Viewer",
-                "icon": "resources/icon.ico",
+                "icon": "resources/icon",
                 "ext": [
                     "md",
                     "markdown",
@@ -224,16 +242,84 @@
         ],
         "win": {
             "target": [
-                "nsis"
+                {
+                    "target": "nsis",
+                    "arch": [
+                        "x64"
+                    ]
+                }
             ],
-            "icon": "resources/icon.ico"
+            "artifactName": "Zyra-${version}-windows-${arch}-setup.${ext}",
+            "icon": "resources/icon.ico",
+            "extraResources": [
+                {
+                    "from": ".release/zyra-computer-use/win-x64",
+                    "to": "zyra-computer-use",
+                    "filter": [
+                        "**/*"
+                    ]
+                }
+            ]
         },
         "nsis": {
             "oneClick": false,
             "allowToChangeInstallationDirectory": true,
             "include": "build/installer.nsh",
             "installerIcon": "resources/icon.ico",
-            "uninstallerIcon": "resources/icon.ico"
+            "uninstallerIcon": "resources/icon.ico",
+            "differentialPackage": true
+        },
+        "mac": {
+            "target": [
+                {
+                    "target": "dmg",
+                    "arch": [
+                        "universal"
+                    ]
+                },
+                {
+                    "target": "zip",
+                    "arch": [
+                        "universal"
+                    ]
+                }
+            ],
+            "artifactName": "Zyra-${version}-macos-${arch}.${ext}",
+            "icon": "resources/icon.icns",
+            "category": "public.app-category.developer-tools",
+            "hardenedRuntime": true,
+            "entitlements": "build/entitlements.mac.plist",
+            "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+            "gatekeeperAssess": false,
+            "notarize": false,
+            "extendInfo": {
+                "NSMicrophoneUsageDescription": "Zyra uses the microphone only when you start a voice conversation or transcription."
+            }
+        },
+        "dmg": {
+            "sign": false
+        },
+        "linux": {
+            "target": [
+                {
+                    "target": "AppImage",
+                    "arch": [
+                        "x64"
+                    ]
+                },
+                {
+                    "target": "deb",
+                    "arch": [
+                        "x64"
+                    ]
+                }
+            ],
+            "artifactName": "Zyra-${version}-linux-${arch}.${ext}",
+            "icon": "resources/icons",
+            "category": "Development",
+            "maintainer": "Zyra",
+            "synopsis": "Local Zyra coding assistant desktop application"
         }
-    }
+    },
+    "homepage": "https://github.com/justelson/zyra"
 }

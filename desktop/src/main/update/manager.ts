@@ -219,7 +219,9 @@ async function configureAutoUpdaterFeed(autoUpdater: AutoUpdater): Promise<void>
     const feed = await resolveGitHubReleaseFeed({
         repository: releaseRepository,
         currentVersion: app.getVersion(),
-        allowPrerelease
+        allowPrerelease,
+        platform: process.platform,
+        arch: process.arch
     })
 
     if (!feed) {
@@ -310,7 +312,7 @@ async function performUpdaterInitialization(): Promise<void> {
     autoUpdater.autoInstallOnAppQuit = false
     autoUpdater.allowPrerelease = resolveReleaseChannel(app.getVersion()) !== 'stable'
     autoUpdater.allowDowngrade = false
-    autoUpdater.disableDifferentialDownload = true
+    autoUpdater.disableDifferentialDownload = false
 
     try {
         await configureAutoUpdaterFeed(autoUpdater)
@@ -454,7 +456,7 @@ export async function downloadAppUpdate(): Promise<DevScopeUpdateActionResult> {
 
     updateDownloadInFlight = true
     setUpdateState(reduceUpdateStateOnDownloadStart(updateState))
-    autoUpdaterRef.disableDifferentialDownload = true
+    autoUpdaterRef.disableDifferentialDownload = false
 
     try {
         await autoUpdaterRef.downloadUpdate()

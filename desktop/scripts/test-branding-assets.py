@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RESOURCES = ROOT / 'resources'
 ICONS = RESOURCES / 'branding' / 'icons'
 EXPECTED_ICO_SIZES = {(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)}
+EXPECTED_LINUX_ICON_SIZES = (16, 32, 48, 64, 128, 256, 512, 1024)
 
 
 def open_rgba(path: Path) -> Image.Image:
@@ -73,10 +74,25 @@ def main() -> None:
         sizes = set(image.ico.sizes()) if hasattr(image, 'ico') else {image.size}
         assert EXPECTED_ICO_SIZES.issubset(sizes), f'{file_name} is missing Windows icon sizes: {EXPECTED_ICO_SIZES - sizes}'
 
+    icns_path = RESOURCES / 'icon.icns'
+    icns = Image.open(icns_path)
+    icns_sizes = set(icns.info.get('sizes', []))
+    assert {(16, 16, 2), (256, 256, 1), (512, 512, 2)}.issubset(icns_sizes), 'icon.icns is missing required macOS representations'
+
+    for size in EXPECTED_LINUX_ICON_SIZES:
+        icon_path = RESOURCES / 'icons' / f'{size}x{size}.png'
+        image = open_rgba(icon_path)
+        assert image.size == (size, size), f'{icon_path.name} must match its Linux icon size'
+        assert image.getpixel((0, 0))[3] <= 2, f'{icon_path.name} must retain visually transparent corners'
+        assert image.getpixel((size // 2, size // 2))[3] == 255, f'{icon_path.name} center must remain opaque'
+
     package = json.loads((ROOT / 'package.json').read_text(encoding='utf-8'))
     build = package['build']
     assert build['icon'] == 'resources/icon.png', 'production packaging must use the white PNG master'
     assert build['win']['icon'] == 'resources/icon.ico', 'Windows production packaging must use the white ICO master'
+    assert build['mac']['icon'] == 'resources/icon.icns', 'macOS production packaging must use the ICNS family'
+    assert build['linux']['icon'] == 'resources/icons', 'Linux production packaging must use the PNG family'
+    assert build['fileAssociations'][0]['icon'] == 'resources/icon', 'file associations must resolve the platform-correct icon extension'
     assert '!resources/branding/icons/*-source.png' in build['files'], 'downloaded source artwork must stay out of packaged apps'
 
     main_source = (ROOT / 'src' / 'main' / 'index.ts').read_text(encoding='utf-8')

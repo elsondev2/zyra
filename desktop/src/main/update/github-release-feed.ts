@@ -5,7 +5,7 @@ type GitHubReleaseAsset = {
     browser_download_url?: string
 }
 
-type GitHubRelease = {
+export type GitHubRelease = {
     tag_name?: string
     html_url?: string
     prerelease?: boolean
@@ -14,7 +14,7 @@ type GitHubRelease = {
     assets?: GitHubReleaseAsset[]
 }
 
-type ParsedVersion = {
+export type ParsedVersion = {
     major: number
     minor: number
     patch: number
@@ -22,11 +22,23 @@ type ParsedVersion = {
     previewStep: number
 }
 
+export type ReleasePlatform = 'win32' | 'darwin' | 'linux'
+
 export type GitHubReleaseFeed = {
     feedUrl: string
+    metadataFile: 'latest.yml' | 'latest-mac.yml' | 'latest-linux.yml'
     tagName: string
     releasePageUrl: string
     previousBlockmapBaseUrlOverride: string
+    platform: ReleasePlatform
+    arch: string
+}
+
+type PlatformReleaseContract = {
+    platform: ReleasePlatform
+    arch: string
+    metadataFile: GitHubReleaseFeed['metadataFile']
+    requiredAssetNames: string[]
 }
 
 function parseRepository(repository: string): { owner: string; repo: string } {
@@ -84,21 +96,14 @@ function requestJson<T>(hostname: string, requestPath: string): Promise<T> {
 }
 
 export function parseVersion(version: string): ParsedVersion | null {
-    const match = version.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:-([a-z]+)\.?(\d+)?)?$/i)
+    const match = version.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)\.(\d+))?$/i)
     if (!match) return null
-
-    const prerelease = String(match[4] || '').toLowerCase()
-    const channel = prerelease.startsWith('alpha')
-        ? 'alpha'
-        : prerelease.startsWith('beta')
-            ? 'beta'
-            : 'stable'
 
     return {
         major: Number(match[1]),
         minor: Number(match[2]),
         patch: Number(match[3]),
-        channel,
+        channel: (String(match[4] || 'stable').toLowerCase() as ParsedVersion['channel']),
         previewStep: Number(match[5] || 0)
     }
 }
@@ -111,18 +116,17 @@ function getChannelRank(channel: ParsedVersion['channel']): number {
             return 2
         case 'alpha':
             return 1
-        default:
-            return 0
     }
 }
 
 function compareVersions(left: ParsedVersion, right: ParsedVersion): number {
-    const channelRankDiff = getChannelRank(left.channel) - getChannelRank(right.channel)
-    if (channelRankDiff !== 0) return channelRankDiff
-    if (left.previewStep !== right.previewStep) return left.previewStep - right.previewStep
     if (left.major !== right.major) return left.major - right.major
     if (left.minor !== right.minor) return left.minor - right.minor
-    return left.patch - right.patch
+    if (left.patch !== right.patch) return left.patch - right.patch
+
+    const channelRankDiff = getChannelRank(left.channel) - getChannelRank(right.channel)
+    if (channelRankDiff !== 0) return channelRankDiff
+    return left.previewStep - right.previewStep
 }
 
 export function compareReleaseVersionStrings(leftVersion: string, rightVersion: string): number {
@@ -139,52 +143,156 @@ export function resolveReleaseChannelForVersion(version: string): ParsedVersion[
     return parseVersion(version)?.channel || 'stable'
 }
 
-function getLatestYmlAsset(release: GitHubRelease): GitHubReleaseAsset | null {
-    const assets = Array.isArray(release.assets) ? release.assets : []
-    return assets.find((asset) => String(asset.name || '').toLowerCase() === 'latest.yml') || null
-}
+export function resolvePlatformReleaseContract(
+    version: string,
+    platform: NodeJS.Platform | string,
+    arch: string
+): PlatformReleaseContract | null {
+    const normalizedVersion = version.replace(/^v/, '')
+    if (!parseVersion(normalizedVersion)) return null
 
-function hasRequiredWindowsAssets(release: GitHubRelease): boolean {
-    const assets = Array.isArray(release.assets) ? release.assets : []
-    let hasInstaller = false
-    let hasBlockmap = false
-    let hasLatestYml = false
-
-    for (const asset of assets) {
-        const name = String(asset.name || '').toLowerCase()
-        if (name === 'latest.yml') hasLatestYml = true
-        if (name.endsWith('.exe')) hasInstaller = true
-        if (name.endsWith('.exe.blockmap')) hasBlockmap = true
+    if (platform === 'win32' && arch === 'x64') {
+        const installer = `Zyra-${normalizedVersion}-windows-x64-setup.exe`
+        return {
+            platform: 'win32',
+            arch,
+            metadataFile: 'latest.yml',
+            requiredAssetNames: ['latest.yml', installer, `${installer}.blockmap`]
+        }
     }
 
-    return hasInstaller && hasBlockmap && hasLatestYml
+    if (platform === 'darwin' && ['x64', 'arm64', 'universal'].includes(arch)) {
+        const artifact = `Zyra-${normalizedVersion}-macos-universal`
+        return {
+            platform: 'darwin',
+            arch,
+            metadataFile: 'latest-mac.yml',
+            requiredAssetNames: ['latest-mac.yml', `${artifact}.dmg`, `${artifact}.zip`, `${artifact}.zip.blockmap`]
+        }
+    }
+
+    if (platform === 'linux' && arch === 'x64') {
+        const artifact = `Zyra-${normalizedVersion}-linux-x64`
+        return {
+            platform: 'linux',
+            arch,
+            metadataFile: 'latest-linux.yml',
+            requiredAssetNames: ['latest-linux.yml', `${artifact}.AppImage`, `${artifact}.deb`]
+        }
+    }
+
+    return null
+}
+
+function isChannelEligible(
+    releaseChannel: ParsedVersion['channel'],
+    currentChannel: ParsedVersion['channel'],
+    allowPrerelease: boolean
+): boolean {
+    if (releaseChannel === 'stable') return true
+    if (!allowPrerelease) return false
+    if (currentChannel === 'beta') return releaseChannel === 'beta'
+    if (currentChannel === 'alpha') return true
+    return true
+}
+
+function hasPlatformAssets(release: GitHubRelease, contract: PlatformReleaseContract): boolean {
+    const assetNames = new Set((release.assets || []).map((asset) => String(asset.name || '')))
+    return contract.requiredAssetNames.every((assetName) => assetNames.has(assetName))
 }
 
 function compareReleaseFeeds(left: GitHubRelease, right: GitHubRelease): number {
     const leftVersion = parseVersion(String(left.tag_name || ''))
     const rightVersion = parseVersion(String(right.tag_name || ''))
+    if (!leftVersion || !rightVersion) return 0
 
-    if (leftVersion && rightVersion) {
-        const versionComparison = compareVersions(leftVersion, rightVersion)
-        if (versionComparison !== 0) return versionComparison
-    }
+    const versionComparison = compareVersions(leftVersion, rightVersion)
+    if (versionComparison !== 0) return versionComparison
 
     const leftPublishedAt = Date.parse(String(left.published_at || ''))
     const rightPublishedAt = Date.parse(String(right.published_at || ''))
-    return leftPublishedAt - rightPublishedAt
+    return (Number.isFinite(leftPublishedAt) ? leftPublishedAt : 0)
+        - (Number.isFinite(rightPublishedAt) ? rightPublishedAt : 0)
 }
 
-function getFeedUrlFromLatestYml(asset: GitHubReleaseAsset): string | null {
-    const downloadUrl = String(asset.browser_download_url || '').trim()
+function getMetadataAsset(release: GitHubRelease, metadataFile: string): GitHubReleaseAsset | null {
+    return (release.assets || []).find((asset) => String(asset.name || '') === metadataFile) || null
+}
+
+function getFeedUrl(metadataAsset: GitHubReleaseAsset, metadataFile: string): string | null {
+    const downloadUrl = String(metadataAsset.browser_download_url || '').trim()
     if (!downloadUrl) return null
-    if (!downloadUrl.toLowerCase().endsWith('/latest.yml')) return null
-    return downloadUrl.slice(0, -'/latest.yml'.length)
+
+    try {
+        const parsed = new URL(downloadUrl)
+        if (parsed.protocol !== 'https:' || decodeURIComponent(parsed.pathname).split('/').pop() !== metadataFile) return null
+        return new URL('.', parsed).toString()
+    } catch {
+        return null
+    }
+}
+
+export function buildPreviousBlockmapBaseUrl(repository: string, currentVersion: string): string {
+    const { owner, repo } = parseRepository(repository)
+    const parsedVersion = parseVersion(currentVersion)
+    if (!parsedVersion) throw new Error(`Invalid current release version "${currentVersion}".`)
+    const normalizedVersion = currentVersion.trim().replace(/^v/, '')
+    const tagName = `v${normalizedVersion}`
+    return `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/download/${encodeURIComponent(tagName)}/`
+}
+
+export function selectGitHubReleaseFeed(args: {
+    repository: string
+    currentVersion: string
+    allowPrerelease: boolean
+    platform: NodeJS.Platform | string
+    arch: string
+    releases: GitHubRelease[]
+}): GitHubReleaseFeed | null {
+    const { owner, repo } = parseRepository(args.repository)
+    const current = parseVersion(args.currentVersion)
+    if (!current) throw new Error(`Invalid current release version "${args.currentVersion}".`)
+
+    const candidates = args.releases
+        .flatMap((release) => {
+            const tagName = String(release.tag_name || '').trim()
+            const version = parseVersion(tagName)
+            if (!version || release.draft) return []
+            if (Boolean(release.prerelease) !== (version.channel !== 'stable')) return []
+            if (!isChannelEligible(version.channel, current.channel, args.allowPrerelease)) return []
+            const contract = resolvePlatformReleaseContract(tagName, args.platform, args.arch)
+            if (!contract || !hasPlatformAssets(release, contract)) return []
+            return [{ release, contract, tagName }]
+        })
+        .sort((left, right) => compareReleaseFeeds(right.release, left.release))
+
+    for (const candidate of candidates) {
+        const metadataAsset = getMetadataAsset(candidate.release, candidate.contract.metadataFile)
+        if (!metadataAsset) continue
+        const feedUrl = getFeedUrl(metadataAsset, candidate.contract.metadataFile)
+        if (!feedUrl) continue
+
+        return {
+            feedUrl,
+            metadataFile: candidate.contract.metadataFile,
+            tagName: candidate.tagName,
+            releasePageUrl: String(candidate.release.html_url || '').trim()
+                || `https://github.com/${owner}/${repo}/releases/tag/${encodeURIComponent(candidate.tagName)}`,
+            previousBlockmapBaseUrlOverride: buildPreviousBlockmapBaseUrl(args.repository, args.currentVersion),
+            platform: candidate.contract.platform,
+            arch: args.arch
+        }
+    }
+
+    return null
 }
 
 export async function resolveGitHubReleaseFeed(args: {
     repository: string
     currentVersion: string
     allowPrerelease: boolean
+    platform?: NodeJS.Platform | string
+    arch?: string
 }): Promise<GitHubReleaseFeed | null> {
     const { owner, repo } = parseRepository(args.repository)
     const releases = await requestJson<GitHubRelease[]>(
@@ -192,26 +300,10 @@ export async function resolveGitHubReleaseFeed(args: {
         `/repos/${owner}/${repo}/releases?per_page=50`
     )
 
-    const candidates = releases
-        .filter((release) => !release.draft)
-        .filter((release) => args.allowPrerelease || !release.prerelease)
-        .filter(hasRequiredWindowsAssets)
-        .sort((left, right) => compareReleaseFeeds(right, left))
-
-    const selectedRelease = candidates[0]
-    if (!selectedRelease) return null
-
-    const latestYmlAsset = getLatestYmlAsset(selectedRelease)
-    if (!latestYmlAsset) return null
-
-    const feedUrl = getFeedUrlFromLatestYml(latestYmlAsset)
-    const tagName = String(selectedRelease.tag_name || '').trim()
-    if (!feedUrl || !tagName) return null
-
-    return {
-        feedUrl,
-        tagName,
-        releasePageUrl: String(selectedRelease.html_url || '').trim() || `https://github.com/${owner}/${repo}/releases/tag/${tagName}`,
-        previousBlockmapBaseUrlOverride: `https://github.com/${owner}/${repo}/releases/download/v${args.currentVersion}`
-    }
+    return selectGitHubReleaseFeed({
+        ...args,
+        platform: args.platform || process.platform,
+        arch: args.arch || process.arch,
+        releases
+    })
 }

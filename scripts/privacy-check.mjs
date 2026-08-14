@@ -64,8 +64,9 @@ for (const file of files) {
   const lines = text.split(/\r?\n/);
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
+    const scannableLine = redactOpaqueLockIntegrity(file, line);
     for (const check of checks) {
-      if (!check.pattern.test(line)) continue;
+      if (!check.pattern.test(scannableLine)) continue;
       findings.push({ file, line: index + 1, label: check.label, text: line.trim() });
     }
   }
@@ -85,6 +86,16 @@ console.log("privacy-check: ok");
 function gitFiles() {
   const output = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], { encoding: "utf8" });
   return output.split(/\r?\n/).filter(Boolean);
+}
+
+function redactOpaqueLockIntegrity(file, line) {
+  if (file.endsWith("package-lock.json") || file.endsWith("npm-shrinkwrap.json")) {
+    return line.replace(/("integrity"\s*:\s*")[^"]+("?)/g, "$1<integrity>$2");
+  }
+  if (file.endsWith("bun.lock") || file.endsWith("yarn.lock") || file.endsWith("pnpm-lock.yaml")) {
+    return line.replace(/sha(?:256|512)-[A-Za-z0-9+/=_-]+/g, "<integrity>");
+  }
+  return line;
 }
 
 function shouldScan(file) {
