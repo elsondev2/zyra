@@ -447,6 +447,101 @@ assert.equal(interruptedMarkup.includes('Worked for'), true)
 assert.equal(interruptedMarkup.includes('Interrupted'), true)
 assert.equal(interruptedMarkup.includes('data-state="closed"'), true)
 
+const projectedInterruptedTurnId = 'shared-turn:canonical-chat:stopped-user-message'
+const projectedInterruptedUser = message({
+    id: 'projected-interrupted-user',
+    role: 'user',
+    turnId: projectedInterruptedTurnId,
+    millisecond: 1820,
+    text: 'Research the release.',
+    timelineSequence: 1
+})
+const projectedInterruptedProgress = message({
+    id: 'projected-interrupted-progress',
+    role: 'assistant',
+    turnId: projectedInterruptedTurnId,
+    millisecond: 1840,
+    text: 'I am checking the announcement.',
+    timelineSequence: 2
+})
+const projectedInterruptedPartialFinal = message({
+    id: 'projected-interrupted-partial-final',
+    role: 'assistant',
+    turnId: projectedInterruptedTurnId,
+    millisecond: 1880,
+    text: 'The release exists. I am opening the remaining sources now.',
+    timelineSequence: 4
+})
+const projectedInterruptedToolBefore = activity({
+    id: 'projected-interrupted-tool-before',
+    turnId: projectedInterruptedTurnId,
+    millisecond: 1860,
+    timelineSequence: 3
+})
+const projectedInterruptedToolAfter = activity({
+    id: 'projected-interrupted-tool-after',
+    turnId: projectedInterruptedTurnId,
+    millisecond: 1900,
+    timelineSequence: 5
+})
+const projectedInterruptedTerminal: AssistantActivity = {
+    id: 'shared-error:projected-interrupted-terminal',
+    kind: 'error',
+    tone: 'warning',
+    summary: 'Assistant interrupted',
+    detail: 'Request was aborted',
+    turnId: projectedInterruptedTurnId,
+    timelineSequence: 6,
+    createdAt: iso(1920),
+    payload: { stopReason: 'aborted', status: 'cancelled', completedAt: iso(1920) }
+}
+const projectedNextUser = message({
+    id: 'projected-next-user',
+    role: 'user',
+    turnId: 'shared-turn:canonical-chat:next-user-message',
+    millisecond: 2000,
+    text: 'Use a different source.',
+    timelineSequence: 7
+})
+const projectedInterruptedMessages = [
+    projectedInterruptedUser,
+    projectedInterruptedProgress,
+    projectedInterruptedPartialFinal,
+    projectedNextUser
+]
+const projectedInterruptedRows = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries(projectedInterruptedMessages, [
+        projectedInterruptedToolBefore,
+        projectedInterruptedToolAfter,
+        projectedInterruptedTerminal
+    ]), false, null),
+    messages: projectedInterruptedMessages,
+    latestAssistantMessageId: null,
+    latestTurnStartedAt: null,
+    isWorking: false
+})
+assert.deepEqual(
+    projectedInterruptedRows.map((row) => row.kind),
+    ['message', 'turn-work-summary', 'message'],
+    'an externally stopped TUI turn must collapse every partial response, tool, and terminal notice before the next prompt'
+)
+const projectedInterruptedSummary = projectedInterruptedRows[1]
+assert.equal(projectedInterruptedSummary?.kind === 'turn-work-summary' ? projectedInterruptedSummary.outcome : null, 'interrupted')
+assert.equal(
+    projectedInterruptedSummary?.kind === 'turn-work-summary'
+        ? projectedInterruptedSummary.rows.some((row) => row.id === projectedInterruptedToolAfter.id)
+        : false,
+    true,
+    'tools emitted after the last partial assistant narration must remain inside the stopped work disclosure'
+)
+assert.equal(
+    projectedInterruptedSummary?.kind === 'turn-work-summary'
+        ? projectedInterruptedSummary.rows.some((row) => row.id === projectedInterruptedTerminal.id)
+        : false,
+    true,
+    'the interruption notice must collapse with the stopped work instead of remaining exposed in the timeline'
+)
+
 const orphanTurnId = 'turn-no-final-response'
 const orphanPrompt = message({ id: 'orphan-user', role: 'user', turnId: orphanTurnId, millisecond: 2000, text: 'Do work without a final response.' })
 const orphanTool = activity({ id: 'orphan-tool', turnId: orphanTurnId, millisecond: 2200 })

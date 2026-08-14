@@ -152,6 +152,43 @@ assert.deepEqual(
     'canonical history and live bridge events must project the same stable message IDs'
 )
 
+const canonicalAbortedProjection = projectCanonicalTimeline([
+    {
+        type: 'message',
+        id: 'aborted-user-entry',
+        timestamp: new Date(canonicalUserTimestamp).toISOString(),
+        message: { role: 'user', timestamp: canonicalUserTimestamp, content: [{ type: 'text', text: 'Start research' }] }
+    },
+    {
+        type: 'message',
+        id: 'aborted-progress-entry',
+        timestamp: new Date(canonicalAssistantTimestamp).toISOString(),
+        message: {
+            role: 'assistant',
+            timestamp: canonicalAssistantTimestamp,
+            content: [{ type: 'text', text: 'Research is still running.' }],
+            stopReason: 'toolUse'
+        }
+    },
+    {
+        type: 'message',
+        id: 'aborted-terminal-entry',
+        timestamp: new Date(canonicalAssistantTimestamp + 100).toISOString(),
+        message: {
+            role: 'assistant',
+            timestamp: canonicalAssistantTimestamp + 100,
+            content: [{ type: 'thinking', thinking: '' }],
+            stopReason: 'aborted',
+            errorMessage: 'Request was aborted'
+        }
+    }
+], 'canonical:aborted', 'aborted-key', new Date(canonicalUserTimestamp).toISOString(), 0)
+const canonicalInterruptedActivity = canonicalAbortedProjection.activities.find((activity) => activity.id === `shared-error:pi-message:assistant:${canonicalAssistantTimestamp + 100}`)
+assert.equal(canonicalInterruptedActivity?.tone, 'warning', 'a canonical TUI abort must project as an intentional interruption rather than an Assistant error')
+assert.equal(canonicalInterruptedActivity?.summary, 'Assistant interrupted')
+assert.equal(canonicalInterruptedActivity?.payload?.['status'], 'cancelled')
+assert.equal(canonicalInterruptedActivity?.payload?.['stopReason'], 'aborted')
+
 const canonicalEditPatch = [
     '--- C:/fixture/src/review-index.ts',
     '+++ C:/fixture/src/review-index.ts',
@@ -634,6 +671,29 @@ assert.equal(
     1,
     'the later synthetic server completion cannot duplicate agent_end completion'
 )
+
+replayGuardEvents.length = 0
+replayGuardContext.completedTurnIds.clear()
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'message_end',
+    message: {
+        id: 'live-aborted-response',
+        role: 'assistant',
+        content: [{ type: 'thinking', thinking: '' }],
+        stopReason: 'aborted',
+        errorMessage: 'Request was aborted'
+    }
+}, { turnId: 'turn-live-aborted', replay: false })
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'agent_end'
+}, { turnId: 'turn-live-aborted', replay: false })
+const liveAbortedCompletion = replayGuardEvents.find((event) => event.type === 'turn.completed' && event.turnId === 'turn-live-aborted')
+assert.equal(
+    liveAbortedCompletion?.type === 'turn.completed' ? liveAbortedCompletion.payload.outcome : null,
+    'interrupted',
+    'agent_end must preserve the aborted assistant response as an interrupted TUI turn'
+)
+assert.equal(replayGuardContext.activeTurnId, null)
 
 const completedToolEvent = runtimeEvents.findLast((event) => event.type === 'activity' && event.itemId === 'tool-search')
 const completedToolData = completedToolEvent?.type === 'activity'

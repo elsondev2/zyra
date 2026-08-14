@@ -2164,21 +2164,29 @@ export function projectCanonicalTimeline(
         }
 
         const errorMessage = String(message['errorMessage'] || '').trim()
-        if (errorMessage || message['stopReason'] === 'error') {
+        const stopReason = String(message['stopReason'] || '').trim().toLowerCase()
+        const interrupted = stopReason === 'aborted'
+            || stopReason === 'cancelled'
+            || stopReason === 'canceled'
+            || stopReason === 'interrupted'
+            || stopReason === 'stopped'
+        if (interrupted || errorMessage || stopReason === 'error') {
             const errorActivityId = `shared-error:${sourceMessageId}`
             const legacyErrorActivityId = `shared-error:${legacyMessageId}`
             if (errorActivityId !== legacyErrorActivityId) legacyActivityIds.add(legacyErrorActivityId)
             activities.set(errorActivityId, {
                 id: errorActivityId,
                 kind: 'error',
-                tone: 'error',
-                summary: 'Assistant error',
-                detail: errorMessage || 'The assistant turn ended with an error.',
+                tone: interrupted ? 'warning' : 'error',
+                summary: interrupted ? 'Assistant interrupted' : 'Assistant error',
+                detail: errorMessage || (interrupted ? 'The assistant turn was interrupted.' : 'The assistant turn ended with an error.'),
                 turnId: activeTurnId,
                 timelineSequence,
                 createdAt: messageOccurredAt,
                 payload: {
-                    stopReason: message['stopReason'],
+                    stopReason,
+                    status: interrupted ? 'cancelled' : 'failed',
+                    completedAt: messageOccurredAt,
                     canonicalMessageId: messageId
                 }
             })

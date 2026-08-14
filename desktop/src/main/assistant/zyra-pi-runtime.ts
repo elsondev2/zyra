@@ -13,6 +13,7 @@ import type {
     AssistantRuntimeEvent,
     AssistantRuntimeMode,
     AssistantThread,
+    AssistantTurnOutcome,
     AssistantTurnUsage,
     FleetSnapshot
 } from '../../shared/assistant/contracts'
@@ -45,6 +46,12 @@ type ActiveCompactionLifecycle = {
     startedAt: string
     reason: string
     turnId: string | null
+}
+
+type TerminalAssistantMessageOutcome = {
+    turnId: string
+    outcome: 'interrupted' | 'failed'
+    errorMessage: string | null
 }
 
 export type PrivateVoiceTaskInput = {
@@ -83,6 +90,7 @@ type ZyraSessionContext = {
     profile: string
     activeTurnId: string | null
     completedTurnIds: Set<string>
+    terminalAssistantMessageOutcome: TerminalAssistantMessageOutcome | null
     assistantMessageSequence: number
     activeAssistantItemId: string | null
     toolArgsByCallId: Map<string, Record<string, unknown>>
@@ -127,6 +135,38 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asString(value: unknown): string | null {
     return typeof value === 'string' && value.trim() ? value : null
+}
+
+function readTerminalAssistantMessageOutcome(message: Record<string, unknown> | null): Omit<TerminalAssistantMessageOutcome, 'turnId'> | null {
+    const stopReason = String(message?.['stopReason'] || '').trim().toLowerCase()
+    const errorMessage = asString(message?.['errorMessage'])
+    if (
+        stopReason === 'aborted'
+        || stopReason === 'cancelled'
+        || stopReason === 'canceled'
+        || stopReason === 'interrupted'
+        || stopReason === 'stopped'
+    ) return { outcome: 'interrupted', errorMessage }
+    if (stopReason === 'error' || errorMessage) return { outcome: 'failed', errorMessage }
+    return null
+}
+
+function resolveZyraTerminalOutcome(
+    type: string,
+    event: Record<string, unknown>,
+    messageOutcome: TerminalAssistantMessageOutcome | null
+): AssistantTurnOutcome {
+    if (messageOutcome) return messageOutcome.outcome
+    if (type === 'agent_end') return 'completed'
+    const outcome = String(event['outcome'] || '').trim().toLowerCase()
+    if (outcome === 'interrupted' || outcome === 'cancelled' || outcome === 'canceled') return 'interrupted'
+    if (outcome === 'failed') {
+        const errorMessage = asString(event['errorMessage']) || ''
+        return /\b(?:abort(?:ed)?|cancel(?:led|ed)?|interrupt(?:ed)?|stopp?ed)\b/i.test(errorMessage)
+            ? 'interrupted'
+            : 'failed'
+    }
+    return 'completed'
 }
 
 function nowIso(): string {
@@ -1097,6 +1137,7 @@ export class ZyraPiRuntime extends EventEmitter {
             profile: normalizeZyraProfile(thread.profile),
             activeTurnId: null,
             completedTurnIds: new Set(),
+            terminalAssistantMessageOutcome: null,
             assistantMessageSequence: 0,
             activeAssistantItemId: null,
             toolArgsByCallId: new Map(),
@@ -1241,6 +1282,7 @@ export class ZyraPiRuntime extends EventEmitter {
         const turnId = randomUUID()
         context.activeTurnId = turnId
         context.completedTurnIds.delete(turnId)
+        context.terminalAssistantMessageOutcome = null
         context.assistantMessageSequence = 0
         context.activeAssistantItemId = null
         context.toolArgsByCallId.clear()
@@ -1303,6 +1345,7 @@ export class ZyraPiRuntime extends EventEmitter {
             profile,
             activeTurnId: input.taskId,
             completedTurnIds: new Set(),
+            terminalAssistantMessageOutcome: null,
             assistantMessageSequence: 0,
             activeAssistantItemId: null,
             toolArgsByCallId: new Map(),
@@ -1779,6 +1822,7 @@ export class ZyraPiRuntime extends EventEmitter {
             && !context.completedTurnIds.has(observedTurnId)
         ) {
             context.activeTurnId = observedTurnId
+            context.terminalAssistantMessageOutcome = null
             context.assistantMessageSequence = 0
             context.activeAssistantItemId = null
             context.toolArgsByCallId.clear()
@@ -1807,8 +1851,11 @@ export class ZyraPiRuntime extends EventEmitter {
 
         if ((type === 'zyra_server_turn_completed' || type === 'agent_end') && turnId) {
             if (context.completedTurnIds.has(turnId)) return
+            const terminalMessageOutcome = context.terminalAssistantMessageOutcome?.turnId === turnId
+                ? context.terminalAssistantMessageOutcome
+                : null
+            const outcome = resolveZyraTerminalOutcome(type, event, terminalMessageOutcome)
             markTurnCompleted(context, turnId)
-            const outcome = type === 'zyra_server_turn_completed' && event['outcome'] === 'failed' ? 'failed' : 'completed'
             this.completeAssistantText(context, turnId)
             this.emitRuntime({
                 eventId: randomUUID(),
@@ -1820,10 +1867,13 @@ export class ZyraPiRuntime extends EventEmitter {
                 sourceSequence: metadata?.sequence,
                 payload: {
                     outcome,
-                    ...(outcome === 'failed' ? { errorMessage: asString(event['errorMessage']) || 'Zyra prompt failed.' } : {}),
+                    ...(outcome === 'failed' ? {
+                        errorMessage: terminalMessageOutcome?.errorMessage || asString(event['errorMessage']) || 'Zyra prompt failed.'
+                    } : {}),
                     usage: context.lastUsage
                 }
             })
+            if (terminalMessageOutcome) context.terminalAssistantMessageOutcome = null
             if (context.activeTurnId === turnId) {
                 getAgentControlBroker().revokePrincipal(
                     { type: 'root', threadId: context.localThreadId, turnId },
@@ -1950,6 +2000,10 @@ export class ZyraPiRuntime extends EventEmitter {
                 }
                 if (hasAssistantContentText(content) && !isReasoningOnlyAssistantEvent(event)) {
                     this.completeAssistantText(context, turnId, content.text, itemId)
+                }
+                const terminalOutcome = readTerminalAssistantMessageOutcome(message)
+                if (terminalOutcome) {
+                    context.terminalAssistantMessageOutcome = { turnId, ...terminalOutcome }
                 }
                 if (context.activeAssistantItemId === itemId) {
                     context.activeAssistantItemId = null
