@@ -62,6 +62,7 @@ async function findPackagedExecutable(resources, platform) {
 
 async function runPackagedLaunchSmoke(resources, platform, version) {
     const executable = await findPackagedExecutable(resources, platform)
+    const launchTimeoutMs = platform === 'windows' ? 180_000 : 90_000
     const smokeDirectory = await mkdtemp(path.join(tmpdir(), 'zyra-packaged-launch-'))
     const marker = path.join(smokeDirectory, 'launch.json')
     let output = ''
@@ -82,7 +83,7 @@ async function runPackagedLaunchSmoke(resources, platform, version) {
             const timeout = setTimeout(() => {
                 child.kill('SIGKILL')
                 reject(new Error(`Packaged ${platform} launch smoke timed out.\n${output}`))
-            }, 45_000)
+            }, launchTimeoutMs)
             child.once('error', (error) => {
                 clearTimeout(timeout)
                 reject(error)

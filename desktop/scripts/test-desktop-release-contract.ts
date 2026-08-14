@@ -46,6 +46,7 @@ assert(packageScript.includes('validate-packaged-app.mjs'), 'every native packag
 assert(packageScript.includes('`--version=${version}`'), 'signature verification must receive the exact release version')
 assert(signatureVerifier.includes('platformReleaseContract(version, platform)'), 'signature verification must use the canonical artifact name')
 assert(packagedValidator.includes('runPackagedLaunchSmoke'), 'every native package must execute its installed main process')
+assert(packagedValidator.includes("platform === 'windows' ? 180_000 : 90_000"), 'cold unsigned package scans need a bounded native-platform launch allowance')
 assert(packagedValidator.includes("ZYRA_PACKAGED_SMOKE: '1'"), 'packaged launch smoke must use the bounded release probe')
 assert(preflightSource.includes("const taggedPublication = mode === 'tag'"), 'every public tag must enter the signing gate')
 assert(preflightSource.includes("require_signing=${taggedPublication ? 'true' : 'false'}"), 'alpha, beta, and stable tags must all require native signing')
