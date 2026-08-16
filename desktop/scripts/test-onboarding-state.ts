@@ -73,6 +73,27 @@ async function verifyOpenAiConnectionContract() {
     assert.equal(openedUrl, 'https://auth.openai.test/')
     assert.equal(chatStatus.method, 'chatgpt')
     assert.equal(chatStatus.verified, true)
+
+    const usageFallback = new OpenAIConnectionService({
+        now,
+        openExternal: () => undefined,
+        loadAccount: async () => ({
+            buildChatGptAccountStatus: async () => ({
+                provider: 'openai-codex',
+                status: { configured: true },
+                usageError: 'temporarily unavailable',
+                tokenExpiresAt: '2099-08-15T10:00:00.000Z'
+            })
+        }),
+        loadSdk: async () => ({
+            loginZyraAuth: async () => undefined,
+            configureZyraOpenAIApiKey: async () => undefined,
+            verifyZyraOpenAIApiAuth: async () => ({ ok: true }),
+            getZyraAuthStatus: async () => ({ provider: 'openai', status: { configured: false } }),
+            removeZyraAuth: async () => undefined
+        })
+    })
+    assert.equal((await usageFallback.getStatus()).verified, true, 'a valid token survives a temporary usage lookup failure')
 }
 
 function createAuth() {

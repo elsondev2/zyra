@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { CanonicalChatCatalog } from "../src/agent-server/catalog.mjs";
 import { CanonicalChatIndex } from "../src/agent-server/chat-index.mjs";
+import { MAX_EAGER_HISTORY_TOOL_RESULT_BYTES, projectLoadedHistoryEntries } from "../src/agent-server/history-bodies.mjs";
 import { getProjectSessionsDir } from "../src/zyra-sdk.mjs";
 
 const root = mkdtempSync(path.join(os.tmpdir(), "zyra-chat-index-test-"));
@@ -14,6 +15,19 @@ const sessionsDirectory = getProjectSessionsDir(project);
 const sessionPath = path.join(sessionsDirectory, "canonical.jsonl");
 mkdirSync(sessionsDirectory, { recursive: true });
 mkdirSync(reassignedProject, { recursive: true });
+
+const oversizedRecent = projectLoadedHistoryEntries([{
+  type: "message",
+  id: "entry:oversized-recent",
+  message: {
+    role: "toolResult",
+    toolCallId: "tool:oversized-recent",
+    toolName: "read",
+    content: [{ type: "text", text: "x".repeat(MAX_EAGER_HISTORY_TOOL_RESULT_BYTES + 1) }]
+  }
+}], 0, { toolResultBodies: "lazy-v1", canonicalChatId: "canonical:oversized" });
+assert.ok(oversizedRecent[0].historyBodyRef, "a recent body larger than the eager byte budget remains on demand");
+assert.ok(JSON.stringify(oversizedRecent).length < 2_000, "oversized recent bodies cannot overflow the history response");
 
 const lines = [
   { type: "session", id: "canonical:test", timestamp: "2026-07-01T00:00:00.000Z", cwd: project },

@@ -635,7 +635,7 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
                 geminiApiKeyConfigured: candidate.geminiApiKeyConfigured === true,
                 gitCommitCodexModel: gitCommitCodexModel.slice(0, 256),
                 gitPullRequestCodexModel: gitPullRequestCodexModel.slice(0, 256),
-                commitAIProvider: candidate.commitAIProvider === 'gemini' || candidate.commitAIProvider === 'codex' ? candidate.commitAIProvider : 'groq',
+                commitAIProvider: candidate.commitAIProvider === 'gemini' || candidate.commitAIProvider === 'codex' ? candidate.commitAIProvider : DEFAULT_SETTINGS.commitAIProvider,
                 assistantUsageDisplayMode: candidate.assistantUsageDisplayMode === 'used' ? 'used' : 'remaining',
                 assistantTextStreamingMode: candidate.assistantTextStreamingMode === 'chunks' ? 'chunks' : 'stream',
                 assistantToolOutputDefaultMode: parsed.assistantToolOutputDefaultMode === 'expanded'

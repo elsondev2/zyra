@@ -266,7 +266,8 @@ function cachePackagedWindowsNode(source, dataRoot) {
   const sourceSize = statSync(source).size;
   const directory = path.join(dataRoot, ".zyra", "runtime");
   const target = path.join(directory, `node-${process.versions.node}-${sourceSize}.exe`);
-  if (!existsSync(target) || statSync(target).size !== sourceSize) {
+  if (existsSync(target) && statSync(target).size !== sourceSize) rmSync(target, { force: true });
+  if (!existsSync(target)) {
     mkdirSync(directory, { recursive: true });
     try { copyFileSync(source, target, fsConstants.COPYFILE_EXCL); }
     catch (error) { if (error?.code !== "EEXIST") throw error; }

@@ -4,6 +4,7 @@ import { open as openFile } from "node:fs/promises";
 
 export const HISTORY_TOOL_RESULT_BODY_POLICY = "lazy-v1";
 export const EAGER_HISTORY_TOOL_RESULTS = 15;
+export const MAX_EAGER_HISTORY_TOOL_RESULT_BYTES = 8 * 1024 * 1024;
 
 export function normalizeHistoryBodyOptions(options = {}) {
   return { deferToolResults: options.toolResultBodies === HISTORY_TOOL_RESULT_BODY_POLICY };
@@ -87,8 +88,8 @@ export function readIndexedHistoryRecord(file, offset) {
 export function projectIndexedHistoryEntries(input = {}) {
   const options = normalizeHistoryBodyOptions(input.options);
   if (!options.deferToolResults) return readSelectedEntries(input.file, input.selected);
-  const eagerIndexes = eagerToolResultIndexSet(input.toolResultEntryIndexes);
   const deferredRecords = input.deferredToolResults || [];
+  const eagerIndexes = eagerToolResultIndexSet(input.toolResultEntryIndexes, deferredRecords);
   return readSelectedEntries(input.file, input.selected, (selection) => {
     if (eagerIndexes.has(selection.entryIndex)) return null;
     const record = findRecordByEntryIndex(deferredRecords, selection.entryIndex);
@@ -109,7 +110,7 @@ export function projectLoadedHistoryEntries(entries, startIndex, options = {}) {
   const toolResultIndexes = Array.isArray(options.toolResultEntryIndexes)
     ? options.toolResultEntryIndexes
     : records.filter(Boolean).map((record) => record.entryIndex);
-  const eagerIndexes = eagerToolResultIndexSet(toolResultIndexes);
+  const eagerIndexes = eagerToolResultIndexSet(toolResultIndexes, records.filter(isDeferrableHistoryRecord));
   return entries.map((entry, localIndex) => {
     const record = records[localIndex];
     return isDeferrableHistoryRecord(record) && !eagerIndexes.has(record.entryIndex)
@@ -148,8 +149,19 @@ export function createHistoryBodyRef(record) {
   };
 }
 
-function eagerToolResultIndexSet(indexes = []) {
-  return new Set(indexes.slice(-EAGER_HISTORY_TOOL_RESULTS));
+function eagerToolResultIndexSet(indexes = [], records = []) {
+  const eager = new Set();
+  let eagerBytes = 0;
+  for (let index = indexes.length - 1; index >= 0 && eager.size < EAGER_HISTORY_TOOL_RESULTS; index -= 1) {
+    const entryIndex = indexes[index];
+    const record = findRecordByEntryIndex(records, entryIndex);
+    if (!record) continue;
+    const bodyBytes = Math.max(0, Number(record.bodyBytes) || 0);
+    if (bodyBytes > MAX_EAGER_HISTORY_TOOL_RESULT_BYTES - eagerBytes) continue;
+    eager.add(entryIndex);
+    eagerBytes += bodyBytes;
+  }
+  return eager;
 }
 
 export function findRecordByEntryIndex(records, entryIndex) {

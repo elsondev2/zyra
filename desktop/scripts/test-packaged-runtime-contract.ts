@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -168,6 +168,14 @@ try {
         assert.equal(existsSync(path.join(resourcesPath, 'zyra-node', 'electron-run-as-node.txt')), true, 'Unix resources declare the signed Electron Node runtime')
     }
     const agentState = path.join(outsideCheckout, 'agent-state')
+    let expectedCachedNode: string | null = null
+    if (process.platform === 'win32') {
+        const stagedNode = path.join(resourcesPath, 'zyra-node', 'node.exe')
+        const runtimeDirectory = path.join(dataRoot, '.zyra', 'runtime')
+        mkdirSync(runtimeDirectory, { recursive: true })
+        expectedCachedNode = path.join(runtimeDirectory, `node-${process.versions.node}-${statSync(stagedNode).size}.exe`)
+        writeFileSync(expectedCachedNode, 'partial')
+    }
     const clientUrl = pathToFileURL(path.join(runtimeRoot, 'src', 'agent-server', 'client.mjs')).href
     const agentSmoke = spawnSync(process.execPath, [
         '--input-type=module',
@@ -185,7 +193,8 @@ try {
         `packaged agent server must start without system Node on PATH\nstdout: ${agentSmoke.stdout}\nstderr: ${agentSmoke.stderr}`
     )
     if (process.platform === 'win32') {
-        assert.equal(readdirSync(path.join(dataRoot, '.zyra', 'runtime')).some((name) => /^node-.*\.exe$/i.test(name)), true, 'Windows runs the detached server from a writable versioned Node cache')
+        assert(expectedCachedNode)
+        assert.equal(statSync(expectedCachedNode).size, statSync(path.join(resourcesPath, 'zyra-node', 'node.exe')).size, 'Windows repairs an incomplete cached Node runtime')
     }
     const descriptorName = readdirSync(agentState).find((name) => /^agent-server-v\d+-packaged-smoke\.json$/.test(name))
     assert(descriptorName, 'packaged smoke writes a protocol-versioned descriptor')
