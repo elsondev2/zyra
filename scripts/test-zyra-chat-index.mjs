@@ -115,6 +115,9 @@ try {
   assert.equal(eagerImageEntry.message.content[1].data, "fixture-image-19", "the newest 15 tool results remain complete, including images");
   const pairedLatest = index.history("canonical:test", { limit: 1, toolResultBodies: "lazy-v1" });
   assert.deepEqual(pairedLatest.entries.map((entry) => entry.id), ["entry:bulk-assistant:19", "entry:bulk-tool:19"], "lazy pages keep a boundary tool result paired with its assistant tool call");
+  const newestPage = index.history("canonical:test", { limit: 30, toolResultBodies: "lazy-v1" });
+  const olderPage = index.history("canonical:test", { before: newestPage.pageInfo.oldestCursor, limit: 30, toolResultBodies: "lazy-v1" });
+  assert.equal(olderPage.entries.filter((entry) => entry.message?.role === "toolResult").every((entry) => entry.historyBodyRef), true, "older pages do not create another eager-output window");
   assert.ok(JSON.stringify(lazyHistory).length < JSON.stringify(eagerHistory).length * 0.8, "deferred history must avoid transporting old tool outputs");
   const sidecar = readFileSync(path.join(stateDirectory, "chat-index-v3.json"), "utf8");
   assert.equal(sidecar.includes("output-0:"), false, "the rebuildable sidecar must never duplicate canonical output bodies");
