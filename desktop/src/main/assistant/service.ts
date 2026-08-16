@@ -674,6 +674,11 @@ export class AssistantService {
         const detail = await this.persistence.readTurnDetail(record.thread.id, turnId)
         const hydratedFileChanges = await this.hydrateDeferredFileChanges(detail.activities)
         if (hydratedFileChanges.length > 0) {
+            await this.persistence.projectCanonicalReviewTimeline({
+                threadId: record.thread.id,
+                messages: [],
+                activities: hydratedFileChanges
+            })
             const byId = new Map(hydratedFileChanges.map((activity) => [activity.id, activity]))
             detail.activities = detail.activities.map((activity) => byId.get(activity.id) || activity)
         }
@@ -1953,14 +1958,6 @@ export class AssistantService {
             removedMessageIds,
             removedActivityIds
         })
-        const hydratedFileChanges = await this.hydrateDeferredFileChanges(projection.activities)
-        if (hydratedFileChanges.length > 0) {
-            await this.persistence.projectCanonicalReviewTimeline({
-                threadId: thread.id,
-                messages: [],
-                activities: hydratedFileChanges
-            })
-        }
         this.canonicalReviewHistoryState.set(canonicalChatId, { threadId: thread.id, totalEntries, modifiedAt })
     }
 
