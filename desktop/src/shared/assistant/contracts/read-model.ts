@@ -196,6 +196,41 @@ export interface AssistantGetHistoryPageInput {
     turnLimit?: number
 }
 
+export interface AssistantHistoryBodyRef {
+    version: 1
+    canonicalChatId: string
+    entryIndex: number
+    entryId: string
+    entrySha256: string
+    toolCallId?: string | null
+    toolName?: string | null
+    bodyBytes?: number
+    contentTypes?: string[]
+    imageCount?: number
+}
+
+export function parseAssistantHistoryBodyRef(value: unknown): AssistantHistoryBodyRef | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    const ref = value as Partial<AssistantHistoryBodyRef>
+    return ref.version === 1
+        && typeof ref.canonicalChatId === 'string'
+        && Number.isSafeInteger(ref.entryIndex)
+        && Number(ref.entryIndex) >= 0
+        && typeof ref.entryId === 'string'
+        && /^[a-f0-9]{64}$/i.test(String(ref.entrySha256 || ''))
+        ? ref as AssistantHistoryBodyRef
+        : null
+}
+
+export interface AssistantHydrateHistoryBodyInput {
+    activityId: string
+    ref: AssistantHistoryBodyRef
+}
+
+export interface AssistantHistoryBody {
+    payload: Record<string, unknown>
+}
+
 export interface AssistantGetTurnDetailInput {
     threadId: string
     turnId: string

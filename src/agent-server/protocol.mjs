@@ -12,6 +12,8 @@ const METHOD_NAMES = new Set([
   "catalog.list",
   "catalog.get",
   "catalog.history",
+  "catalog.entry.body",
+  "catalog.tool-output.search",
   "catalog.update",
   "catalog.message.append",
   "catalog.message.find",

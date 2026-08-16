@@ -22,7 +22,15 @@ class FakeWorker extends EventEmitter {
   isAlive() { return !this.disposed; }
   request(type, payload = {}) {
     this.requests.push({ type, payload });
-    if (type === "connect") return Promise.resolve({ threadId: "chat:test", providerThreadId: sessionPath, events: [] });
+    if (type === "connect") return Promise.resolve({
+      threadId: "chat:test",
+      providerThreadId: sessionPath,
+      events: [],
+      messages: [
+        { id: "connected:user", role: "user", content: "connected user" },
+        { id: "connected:tool", role: "toolResult", toolCallId: "connected:call", content: [{ type: "text", text: "connected historical output" }] }
+      ]
+    });
     if (type === "prompt") return new Promise((resolve) => { this.activePrompt = resolve; });
     if (type === "generate_text") {
       return Promise.resolve({ success: true, text: "Utility text result", model: payload.model || "openai-codex/test" });
@@ -76,12 +84,25 @@ const fakeSessions = [{
   messageCount: 8,
   firstMessage: "hello"
 }];
+const injectedHistoryEntries = [
+  { type: "message", id: "entry:user", message: { role: "user", content: "hello" } },
+  ...Array.from({ length: 16 }, (_, index) => ({
+    type: "message",
+    id: `entry:tool:${index}`,
+    message: {
+      role: "toolResult",
+      toolCallId: `tool:${index}`,
+      toolName: "read",
+      content: [{ type: "text", text: `historical output ${index}` }]
+    }
+  }))
+];
 const catalog = new CanonicalChatCatalog({
   stateDirectory,
   channel,
   loadSessionManager: async () => ({
     list: async () => fakeSessions,
-    open: () => ({ getEntries: () => [{ type: "message", message: { role: "user", content: "hello" } }] })
+    open: () => ({ getEntries: () => injectedHistoryEntries })
   })
 });
 const durableJournal = new AgentEventJournal(path.join(stateDirectory, "journal-test"), "chat:journal");
@@ -123,6 +144,26 @@ try {
   assert.equal(listed.chats[0].presence.state, "detached");
   const history = await desktop.request("catalog.history", { session: "chat:test", project });
   assert.equal(history.history.entries[0].message.content, "hello");
+  const lazyHistory = await desktop.request("catalog.history", {
+    session: "chat:test",
+    project,
+    toolResultBodies: "lazy-v1"
+  });
+  const deferredHistoryEntry = lazyHistory.history.entries.find((entry) => entry.historyBodyRef);
+  assert.ok(deferredHistoryEntry, "the server history contract must expose deferred tool body references");
+  assert.equal("content" in deferredHistoryEntry.message, false);
+  const hydratedHistoryBody = await desktop.request("catalog.entry.body", {
+    session: "chat:test",
+    project,
+    ref: deferredHistoryEntry.historyBodyRef
+  });
+  assert.equal(hydratedHistoryBody.body.entry.message.content[0].text, "historical output 0");
+  const searchedToolOutput = await desktop.request("catalog.tool-output.search", {
+    session: "chat:test",
+    project,
+    query: "historical output 0"
+  });
+  assert.equal(searchedToolOutput.matches[0].toolCallId, "tool:0", "explicit search scans deferred canonical output without rehydrating every history page");
   const archived = await desktop.request("catalog.update", { session: "chat:test", archived: true });
   assert.equal(archived.chat.archived, true);
   assert.equal((await tui.request("catalog.list", {})).chats.length, 0, "archived chats must be hidden by default");
@@ -157,8 +198,10 @@ try {
 
   const desktopAttached = await desktop.attach({ project, cwd: project, session: "chat:test", localThreadId: "assistant-thread:desktop" });
   assert.equal(desktopAttached.canonicalChatId, "chat:test");
+  assert.equal(desktopAttached.connected.messages.some((message) => message.role === "toolResult"), false, "Desktop attach must not duplicate historical tool bodies before paged history loads");
   const tuiAttached = await tui.attach({ project, cwd: project, session: "assistant-thread:desktop", localThreadId: "tui:local" });
   assert.equal(tuiAttached.canonicalChatId, "chat:test");
+  assert.equal(tuiAttached.connected.messages.some((message) => message.role === "toolResult"), false, "TUI attach must not duplicate historical tool bodies before paged history loads");
   assert.equal(workers.length, 1, "desktop and TUI must share one server worker");
   const attachedList = await desktop.request("catalog.list", {});
   const attachedSingle = await desktop.request("catalog.get", { session: "chat:test", project });
@@ -277,6 +320,9 @@ try {
     "a later TUI attachment must synchronize its explicit max setting to the shared worker"
   );
   assert.equal(tuiRuntime.history.events()[0].message.content[0].text, "hello");
+  const deferredTuiTool = tuiRuntime.history.events().find((event) => event.historyBodyRef);
+  assert.ok(deferredTuiTool, "the TUI history projection must retain an on-demand body reference");
+  assert.equal((await tuiRuntime.history.loadToolResult(deferredTuiTool.historyBodyRef)).output, "historical output 0");
   const remoteEvents = [];
   tuiRuntime.session.subscribe((event) => remoteEvents.push(event));
 

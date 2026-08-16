@@ -131,11 +131,44 @@ export function readAssistantTimelineProjectionRows(
     db: SqlDatabase,
     threadId: string
 ): Pick<AssistantHydratedThreadData, 'messages' | 'activities'> {
-    const details = readThreadDetails(db, threadId)
     return {
-        messages: details?.messages || [],
-        activities: details?.activities || []
+        messages: readAssistantMessages(db, threadId),
+        activities: readAssistantActivities(db, threadId, false)
     }
+}
+
+function readAssistantMessages(db: SqlDatabase, threadId: string): AssistantMessage[] {
+    return readThreadRows<AssistantMessage>(db, 'assistant_messages', threadId, [
+        'id', 'role', 'text', 'turn_id', 'streaming', 'timeline_sequence', 'created_at', 'updated_at', 'provider_item_id', 'modality'
+    ], (row) => ({
+        id: String(row[0] || ''),
+        role: String(row[1] || 'assistant') as AssistantMessage['role'],
+        text: String(row[2] || ''),
+        turnId: toNullableString(row[3]),
+        streaming: toNumber(row[4]) === 1,
+        timelineSequence: typeof row[5] === 'number' ? row[5] : undefined,
+        createdAt: String(row[6] || new Date(0).toISOString()),
+        updatedAt: String(row[7] || new Date(0).toISOString()),
+        providerItemId: toNullableString(row[8]) || undefined,
+        modality: (toNullableString(row[9]) || undefined) as AssistantMessage['modality']
+    }))
+}
+
+function readAssistantActivities(db: SqlDatabase, threadId: string, includePayload: boolean): AssistantActivity[] {
+    const payloadColumns = includePayload ? [assistantActivityPayloadColumns()] : []
+    return readThreadRows<AssistantActivity>(db, 'assistant_activities', threadId, [
+        'id', 'kind', 'tone', 'summary', 'detail', 'turn_id', 'timeline_sequence', 'created_at', ...payloadColumns
+    ], (row) => ({
+        id: String(row[0] || ''),
+        kind: String(row[1] || ''),
+        tone: String(row[2] || 'info') as AssistantActivity['tone'],
+        summary: String(row[3] || ''),
+        detail: toNullableString(row[4]) || undefined,
+        turnId: toNullableString(row[5]),
+        timelineSequence: typeof row[6] === 'number' ? row[6] : undefined,
+        createdAt: String(row[7] || new Date(0).toISOString()),
+        ...(includePayload ? { payload: parseAssistantActivityPayload(row[8], row[9]) } : {})
+    }))
 }
 
 function readThreadDetails(db: SqlDatabase, threadId: string): AssistantHydratedThreadData | null {
@@ -144,20 +177,7 @@ function readThreadDetails(db: SqlDatabase, threadId: string): AssistantHydrated
     const activePlanRow = db.exec('SELECT active_plan_json FROM assistant_threads WHERE id = ?', [threadId])[0]?.values?.[0] || null
     return {
         activePlan: parseJson(activePlanRow?.[0] ?? null, null),
-        messages: readThreadRows<AssistantMessage>(db, 'assistant_messages', threadId, [
-            'id', 'role', 'text', 'turn_id', 'streaming', 'timeline_sequence', 'created_at', 'updated_at', 'provider_item_id', 'modality'
-        ], (row) => ({
-            id: String(row[0] || ''),
-            role: String(row[1] || 'assistant') as AssistantMessage['role'],
-            text: String(row[2] || ''),
-            turnId: toNullableString(row[3]),
-            streaming: toNumber(row[4]) === 1,
-            timelineSequence: typeof row[5] === 'number' ? row[5] : undefined,
-            createdAt: String(row[6] || new Date(0).toISOString()),
-            updatedAt: String(row[7] || new Date(0).toISOString()),
-            providerItemId: toNullableString(row[8]) || undefined,
-            modality: (toNullableString(row[9]) || undefined) as AssistantMessage['modality']
-        })),
+        messages: readAssistantMessages(db, threadId),
         proposedPlans: readThreadRows<AssistantProposedPlan>(db, 'assistant_proposed_plans', threadId, [
             'id', 'turn_id', 'plan_markdown', 'timeline_sequence', 'created_at', 'updated_at'
         ], (row) => ({
@@ -168,19 +188,7 @@ function readThreadDetails(db: SqlDatabase, threadId: string): AssistantHydrated
             createdAt: String(row[4] || new Date(0).toISOString()),
             updatedAt: String(row[5] || new Date(0).toISOString())
         })),
-        activities: readThreadRows<AssistantActivity>(db, 'assistant_activities', threadId, [
-            'id', 'kind', 'tone', 'summary', 'detail', 'turn_id', 'timeline_sequence', 'created_at', assistantActivityPayloadColumns()
-        ], (row) => ({
-            id: String(row[0] || ''),
-            kind: String(row[1] || ''),
-            tone: String(row[2] || 'info') as AssistantActivity['tone'],
-            summary: String(row[3] || ''),
-            detail: toNullableString(row[4]) || undefined,
-            turnId: toNullableString(row[5]),
-            timelineSequence: typeof row[6] === 'number' ? row[6] : undefined,
-            createdAt: String(row[7] || new Date(0).toISOString()),
-            payload: parseAssistantActivityPayload(row[8], row[9])
-        })),
+        activities: readAssistantActivities(db, threadId, true),
         pendingApprovals: readThreadRows<AssistantPendingApproval>(db, 'assistant_pending_approvals', threadId, [
             'id', 'request_id', 'request_type', 'title', 'detail', 'command', 'paths_json', 'status', 'decision', 'turn_id', 'created_at', 'resolved_at'
         ], (row) => ({

@@ -10,6 +10,8 @@ import type {
     AssistantDomainEvent,
     AssistantRateLimitResetRedemption,
     AssistantGetHistoryPageInput,
+    AssistantHydrateHistoryBodyInput,
+    AssistantHistoryBody,
     AssistantGetReviewIndexInput,
     AssistantGetTurnDetailInput,
     AssistantHistoryPage,
@@ -44,6 +46,7 @@ export const ASSISTANT_IPC = {
     selectThread: 'devscope:assistant:selectThread',
     getThreadDetailBootstrap: 'devscope:assistant:getThreadDetailBootstrap',
     getHistoryPage: 'devscope:assistant:getHistoryPage',
+    hydrateHistoryBody: 'devscope:assistant:hydrateHistoryBody',
     getReviewIndex: 'devscope:assistant:getReviewIndex',
     getTurnDetail: 'devscope:assistant:getTurnDetail',
     searchTurns: 'devscope:assistant:searchTurns',
@@ -114,7 +117,7 @@ export interface AssistantFleetOperationResultPayload {
 
 export type { FleetOperationInput }
 
-export type { AssistantGetHistoryPageInput, AssistantGetReviewIndexInput, AssistantGetTurnDetailInput, AssistantSearchTurnsInput }
+export type { AssistantGetHistoryPageInput, AssistantHydrateHistoryBodyInput, AssistantGetReviewIndexInput, AssistantGetTurnDetailInput, AssistantSearchTurnsInput }
 
 export interface AssistantThreadDetailResultPayload {
     detail: AssistantThreadDetail
@@ -122,6 +125,10 @@ export interface AssistantThreadDetailResultPayload {
 
 export interface AssistantHistoryPageResultPayload {
     page: AssistantHistoryPage
+}
+
+export interface AssistantHistoryBodyResultPayload {
+    body: AssistantHistoryBody
 }
 
 export interface AssistantTurnDetailResultPayload {

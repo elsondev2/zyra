@@ -4,6 +4,13 @@ import { getProjectSessionsDir } from "../zyra-sdk.mjs";
 import { CanonicalChatIndex } from "./chat-index.mjs";
 import { getAgentServerPaths } from "./paths.mjs";
 import { appendCanonicalMessage, findCanonicalMessageReceipt } from "./canonical-message-ledger.mjs";
+import {
+  EAGER_HISTORY_TOOL_RESULTS,
+  HISTORY_TOOL_RESULT_BODY_POLICY,
+  inspectToolResultEntry,
+  projectLoadedHistoryEntries,
+  validateHistoryBodyRef
+} from "./history-bodies.mjs";
 
 const CATALOG_VERSION = 1;
 const MAX_KNOWN_PROJECTS = 256;
@@ -88,10 +95,24 @@ export class CanonicalChatCatalog {
       const entries = typeof manager.getEntries === "function" ? manager.getEntries() : [];
       const limit = Math.max(1, Math.min(2000, Number(options.limit) || 500));
       const end = options.before == null ? entries.length : Math.max(0, Math.min(entries.length, Number(options.before) || 0));
-      const start = Math.max(0, end - limit);
+      let start = Math.max(0, end - limit);
+      if (options.toolResultBodies === HISTORY_TOOL_RESULT_BODY_POLICY) {
+        while (start > 0 && entries[start]?.type === "message" && entries[start].message?.role === "toolResult") start -= 1;
+      }
+      const toolResultEntryIndexes = [];
+      for (let entryIndex = entries.length - 1; entryIndex >= 0 && toolResultEntryIndexes.length < EAGER_HISTORY_TOOL_RESULTS; entryIndex -= 1) {
+        if (entries[entryIndex]?.type === "message" && entries[entryIndex].message?.role === "toolResult") {
+          toolResultEntryIndexes.unshift(entryIndex);
+        }
+      }
+      const projected = projectLoadedHistoryEntries(entries.slice(start, end), start, {
+        ...options,
+        canonicalChatId: chat.canonicalChatId,
+        toolResultEntryIndexes
+      });
       return {
         chat,
-        entries: cloneJson(entries.slice(start, end)),
+        entries: projected,
         pageInfo: {
           startCursor: String(start),
           endCursor: String(end),
@@ -103,6 +124,49 @@ export class CanonicalChatCatalog {
     }
     const history = this.index.history(chat.canonicalChatId, options);
     return history ? { ...history, chat: applyMetadata(history.chat, this.record.metadata[chat.canonicalChatId], this.record) } : null;
+  }
+
+  async searchToolResults(selector, query, options = {}) {
+    const chat = await this.find(selector, { project: options.project, allProjects: true });
+    if (!chat) return null;
+    if (!this.loadSessionManager) return this.index.searchToolResults(chat.canonicalChatId, query, options.limit);
+    const needle = String(query || "").trim().toLowerCase();
+    if (!needle) return [];
+    const limit = Math.max(1, Math.min(200, Number(options.limit) || 100));
+    const SessionManager = await this.loadSessionManager();
+    const manager = SessionManager.open(chat.sessionPath, getProjectSessionsDir(chat.storageProject || chat.project));
+    const entries = typeof manager.getEntries === "function" ? manager.getEntries() : [];
+    const matches = [];
+    for (let entryIndex = entries.length - 1; entryIndex >= 0 && matches.length < limit; entryIndex -= 1) {
+      const entry = entries[entryIndex];
+      const message = entry?.type === "message" ? entry.message : null;
+      if (message?.role !== "toolResult" || !JSON.stringify(entry).toLowerCase().includes(needle)) continue;
+      matches.push({
+        entryIndex,
+        entryId: String(entry.id || ""),
+        toolCallId: String(message.toolCallId || message.tool_call_id || ""),
+        toolName: String(message.toolName || "tool")
+      });
+    }
+    return matches;
+  }
+
+  async historyEntryBody(selector, ref = {}, options = {}) {
+    const chat = await this.find(selector, { project: options.project, allProjects: true });
+    if (!chat) return null;
+    if (!this.loadSessionManager) return this.index.entryBody(chat.canonicalChatId, ref);
+    const SessionManager = await this.loadSessionManager();
+    const manager = SessionManager.open(chat.sessionPath, getProjectSessionsDir(chat.storageProject || chat.project));
+    const entries = typeof manager.getEntries === "function" ? manager.getEntries() : [];
+    const entryIndex = Number(ref.entryIndex);
+    const entry = Number.isSafeInteger(entryIndex) ? entries[entryIndex] : null;
+    const rawLine = JSON.stringify(entry ?? null);
+    const record = inspectToolResultEntry(entry, entryIndex, Buffer.byteLength(rawLine, "utf8"), {
+      canonicalChatId: chat.canonicalChatId,
+      rawLine
+    });
+    validateHistoryBodyRef(record, ref);
+    return { entry: cloneJson(entry) };
   }
 
   async listInjectedSessions(projects) {

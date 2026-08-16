@@ -69,6 +69,14 @@ Both Desktop and TUI query the same catalog. Opening a catalog entry attaches to
 
 Catalog registration is additive and local. It never copies, rewrites, or deletes session JSONL files.
 
+### Lazy historical tool bodies
+
+Pi session JSONL remains complete and unchanged. The rebuildable chat-index sidecar stores entry offsets, byte lengths, hashes, and lightweight envelopes; it never copies tool-output bodies. Clients may request `catalog.history` with `toolResultBodies: "lazy-v1"`. The server keeps the latest 15 tool results eager and replaces older results with a validated `historyBodyRef` containing the canonical chat ID, entry index/ID, SHA-256, tool identity, byte count, and content metadata.
+
+An expanded historical tool card resolves that reference through `catalog.entry.body`. The server checks the indexed chat, exact entry offset, entry ID, hash, tool call ID, and tool name before returning the canonical entry. TUI and Desktop keep bounded per-process LRU caches; Desktop SQLite stores the lightweight reference until expansion and then stores the hydrated activity payload as a rebuildable projection. Deferred bodies remain distinguishable from genuinely empty outputs. Worker attach snapshots also omit historical tool-result messages so the same bodies are not serialized once during connection and again during catalog paging.
+
+This policy applies only to UI/catalog projection and transport. It does not truncate Pi `SessionManager` state, model context, compaction input, branching, exports, search, Review, or canonical JSONL. Explicit Review search scans deferred tool-result lines through the offset index and merges matching tool calls back into persisted turn results without hydrating every output. A future Pi runtime optimization requires an upstream-supported lazy session reader or a separately proven compatibility layer.
+
 ## Implemented Migration
 
 ### Server foundation

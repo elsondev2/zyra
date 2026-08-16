@@ -20,7 +20,7 @@ import type {
 } from '../../shared/assistant/contracts'
 import { is } from '../utils'
 import { createDefaultSnapshot, recoverPersistedSnapshot } from './projector'
-import { readAssistantHistoryPage, readAssistantReviewIndex, readAssistantThreadDetail, readAssistantTurnDetail, searchAssistantTurns } from './persistence-history'
+import { mergeAssistantSearchTurnIds, readAssistantActivity, readAssistantHistoryPage, readAssistantReviewIndex, readAssistantThreadDetail, readAssistantTurnDetail, searchAssistantTurns } from './persistence-history'
 import { hydrateSnapshotThreads } from './persistence-snapshot'
 import { deleteFleetProjection, projectFleetSnapshot, readFleetSnapshot } from './fleet-persistence'
 import {
@@ -172,6 +172,13 @@ export class AssistantPersistence {
         return this.enqueue(() => readAssistantTimelineProjectionRows(this.requireDb(), threadId))
     }
 
+    async readActivity(threadId: string, activityId: string): Promise<AssistantActivity | null> {
+        await this.ensureInitialized()
+        this.clearPendingEventTimer()
+        await this.processPendingEvents()
+        return this.enqueue(() => readAssistantActivity(this.requireDb(), threadId, activityId))
+    }
+
     async readHistoryPage(input: AssistantGetHistoryPageInput): Promise<AssistantHistoryPage> {
         await this.ensureInitialized()
         this.clearPendingEventTimer()
@@ -205,6 +212,13 @@ export class AssistantPersistence {
     async searchTurns(threadId: string, query: string, limit?: number): Promise<AssistantSearchTurnsResult> {
         await this.ensureInitialized()
         return this.enqueue(() => searchAssistantTurns(this.requireDb(), threadId, query, limit))
+    }
+
+    async mergeSearchTurnIds(threadId: string, existingTurnIds: string[], activityIds: string[], limit?: number): Promise<AssistantSearchTurnsResult> {
+        await this.ensureInitialized()
+        this.clearPendingEventTimer()
+        await this.processPendingEvents()
+        return this.enqueue(() => mergeAssistantSearchTurnIds(this.requireDb(), threadId, existingTurnIds, activityIds, limit))
     }
 
     async readTurnDetail(threadId: string, turnId: string): Promise<AssistantTurnDetail> {

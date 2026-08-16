@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, FilePenLine, FileText, MessageSquareQuote, Search, Wrench } from 'lucide-react'
-import type { AssistantActivity, AssistantUserInputQuestion, FileChangeKind } from '@shared/assistant/contracts'
+import { parseAssistantHistoryBodyRef, type AssistantActivity, type AssistantHistoryBody, type AssistantUserInputQuestion, type FileChangeKind } from '@shared/assistant/contracts'
 import {
     analyzeAssistantReadResult,
     buildAssistantReadPreview,
@@ -227,7 +227,7 @@ function InlineDiffStats({ additions, deletions, className }: { additions: numbe
 }
 
 export const TimelineToolCallCard = memo(({
-    activity,
+    activity: sourceActivity,
     runningCommandCount = 0,
     projectRootPath,
     toolOutputDefaultMode = 'expanded',
@@ -241,7 +241,18 @@ export const TimelineToolCallCard = memo(({
     onOpenFilePath?: (filePath: string) => Promise<void> | void
     onViewDiff?: (target: AssistantDiffTarget) => void
 }) => {
-    const [expanded, setExpanded] = useState(() => getCanonicalActivityImagePaths(activity).length > 0 || shouldAutoExpandTerminalTool(activity, toolOutputDefaultMode))
+    const historyBodyRef = useMemo(() => parseAssistantHistoryBodyRef(sourceActivity.payload?.historyBodyRef), [sourceActivity])
+    const [hydratedBody, setHydratedBody] = useState<AssistantHistoryBody | null>(null)
+    const [historyBodyLoading, setHistoryBodyLoading] = useState(false)
+    const [historyBodyError, setHistoryBodyError] = useState<string | null>(null)
+    const activity = useMemo<AssistantActivity>(() => hydratedBody ? {
+        ...sourceActivity,
+        payload: {
+            ...(sourceActivity.payload || {}),
+            ...hydratedBody.payload
+        }
+    } : sourceActivity, [hydratedBody, sourceActivity])
+    const [expanded, setExpanded] = useState(() => !historyBodyRef && (getCanonicalActivityImagePaths(activity).length > 0 || shouldAutoExpandTerminalTool(activity, toolOutputDefaultMode)))
     const [nowIso, setNowIso] = useState(() => new Date().toISOString())
     const userChangedExpansionRef = useRef(false)
     const autoCollapseTimerRef = useRef<number | null>(null)
@@ -440,18 +451,18 @@ export const TimelineToolCallCard = memo(({
     const rawToolOutputText = isRawTool
         ? (rawToolBodyText || (status === 'running' ? 'waiting for output...' : ''))
         : ''
-    const commandCompletedWithoutOutput = isCommand && status !== 'running' && !commandHasStoredOutput
-    const rawToolCompletedWithoutOutput = isRawTool && status !== 'running' && !rawToolHasStoredOutput
+    const commandCompletedWithoutOutput = isCommand && status !== 'running' && !commandHasStoredOutput && !historyBodyRef
+    const rawToolCompletedWithoutOutput = isRawTool && status !== 'running' && !rawToolHasStoredOutput && !historyBodyRef
     const completedWithoutOutput = commandCompletedWithoutOutput || rawToolCompletedWithoutOutput
     const terminalOutputText = isCommand ? commandOutputText : rawToolOutputText
     const terminalOutputHeightClass = getTerminalOutputHeightClass(status, runningCommandCount)
     const terminalHasRealOutput = isCommand ? Boolean(filteredOutput) : Boolean(rawToolBodyText)
     const hasTerminalOutput = isTerminalLikeTool && Boolean(terminalOutputText)
-    const hasExpandableBody = isCommand
+    const hasExpandableBody = Boolean(historyBodyRef) || (isCommand
         ? status === 'running' || commandHasStoredOutput
         : isRawTool
             ? status === 'running' || rawToolHasStoredOutput
-            : true
+            : true)
     const copyValue = useMemo(() => {
         if (!expanded) return ''
         if (activity.kind === 'user-input.resolved') {
@@ -516,11 +527,27 @@ export const TimelineToolCallCard = memo(({
             inlineDiffTarget.changeKind
         )
     }, [canViewDiff, inlineDiffTarget, viewDiffForPath])
+    const hydrateHistoryBody = useCallback(async () => {
+        if (!historyBodyRef || hydratedBody || historyBodyLoading) return
+        setHistoryBodyLoading(true)
+        setHistoryBodyError(null)
+        try {
+            const result = await window.devscope.assistant.hydrateHistoryBody({ activityId: sourceActivity.id, ref: historyBodyRef })
+            if (!result.success) throw new Error(result.error)
+            setHydratedBody(result.body)
+        } catch (error) {
+            setHistoryBodyError(error instanceof Error ? error.message : 'Failed to load historical tool output.')
+        } finally {
+            setHistoryBodyLoading(false)
+        }
+    }, [historyBodyLoading, historyBodyRef, hydratedBody, sourceActivity.id])
     const handleToggleExpanded = useCallback(() => {
         if (!hasExpandableBody) return
         userChangedExpansionRef.current = true
-        setExpanded((current) => !current)
-    }, [hasExpandableBody])
+        const nextExpanded = !expanded
+        setExpanded(nextExpanded)
+        if (nextExpanded) void hydrateHistoryBody()
+    }, [expanded, hasExpandableBody, hydrateHistoryBody])
 
     useEffect(() => {
         if (status !== 'running' || isRead) return
@@ -646,7 +673,7 @@ export const TimelineToolCallCard = memo(({
                 </span>
             </button>
             <AnimatedHeight
-                isOpen={expanded && hasExpandableBody && (!isTerminalLikeTool || hasTerminalOutput || canonicalImagePaths.length > 0)}
+                isOpen={expanded && hasExpandableBody && (!isTerminalLikeTool || hasTerminalOutput || canonicalImagePaths.length > 0 || historyBodyLoading || Boolean(historyBodyError))}
                 duration={activity.kind === 'file-change' ? 220 : 240}
                 crispContent={activity.kind === 'file-change'}
             >
@@ -656,6 +683,11 @@ export const TimelineToolCallCard = memo(({
                         : 'mt-2 rounded-lg border border-white/5',
                     isTerminalLikeTool ? 'bg-[#050606] p-0' : activity.kind !== 'file-change' && 'bg-black/20 p-2.5'
                 )}>
+                    {historyBodyLoading ? (
+                        <div className="px-3 py-2.5 font-mono text-[10px] text-white/30">Loading historical output…</div>
+                    ) : historyBodyError ? (
+                        <div className="px-3 py-2.5 text-[10px] text-red-200/55">{historyBodyError}</div>
+                    ) : null}
                     {!isTerminalLikeTool && activity.kind !== 'file-change' ? (
                         <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">

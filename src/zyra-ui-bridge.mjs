@@ -202,7 +202,10 @@ async function handleConnect(payload) {
     sessionName: runtime.session.sessionManager?.getSessionName?.() || undefined,
     cwd: runtime.session.sessionManager?.getCwd?.() || payload.cwd,
     messages: Array.isArray(runtime.session.state?.messages)
-      ? runtime.session.state.messages.slice(-500).map(normalizeMessage).filter(Boolean)
+      ? runtime.session.state.messages.slice(-500)
+        .filter((message) => message?.role !== "toolResult")
+        .map(normalizeMessage)
+        .filter(Boolean)
       : [],
   };
 }

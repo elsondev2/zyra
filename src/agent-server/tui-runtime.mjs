@@ -10,6 +10,10 @@ import {
 } from "../zyra-sdk.mjs";
 import { resolveTerminalTheme } from "../terminal-theme.mjs";
 import { ZyraAgentServerClient } from "./client.mjs";
+import { EAGER_HISTORY_TOOL_RESULTS, HISTORY_TOOL_RESULT_BODY_POLICY } from "./history-bodies.mjs";
+
+const MAX_HISTORY_TOOL_RESULT_CACHE_BYTES = 16 * 1024 * 1024;
+const MAX_SINGLE_HISTORY_TOOL_RESULT_CACHE_BYTES = 8 * 1024 * 1024;
 
 export async function createZyraTuiClientRuntime(options = {}) {
   const project = path.resolve(options.project || defaults.project);
@@ -67,11 +71,15 @@ export async function createZyraTuiClientRuntime(options = {}) {
   let historyEvents = [];
   let historyCursor = null;
   let historyHasOlder = false;
+  const historyToolResultCache = new Map();
+  const pendingHistoryToolResults = new Map();
+  let historyToolResultCacheBytes = 0;
   try {
     const historyResult = await client.request("catalog.history", {
       session: canonicalChatId,
       project,
-      limit: 240
+      limit: 240,
+      toolResultBodies: HISTORY_TOOL_RESULT_BODY_POLICY
     }, { timeoutMs: 35_000 });
     const history = asRecord(historyResult.history);
     historyEvents = projectHistoryEntries(Array.isArray(history?.entries) ? history.entries : []);
@@ -432,7 +440,8 @@ export async function createZyraTuiClientRuntime(options = {}) {
           session: canonicalChatId,
           project: currentProject,
           before: historyCursor,
-          limit: 240
+          limit: 240,
+          toolResultBodies: HISTORY_TOOL_RESULT_BODY_POLICY
         }, { timeoutMs: 35_000 });
         const history = asRecord(result.history);
         const olderEvents = projectHistoryEntries(Array.isArray(history?.entries) ? history.entries : []);
@@ -441,6 +450,41 @@ export async function createZyraTuiClientRuntime(options = {}) {
         historyCursor = asString(pageInfo?.oldestCursor);
         historyHasOlder = pageInfo?.hasOlder === true;
         return { events: [...historyEvents], added: olderEvents.length, hasOlder: historyHasOlder };
+      },
+      async loadToolResult(ref) {
+        const key = `${ref?.canonicalChatId || canonicalChatId}:${ref?.entryIndex}:${ref?.entrySha256 || ref?.entryId}`;
+        const cached = historyToolResultCache.get(key);
+        if (cached) {
+          historyToolResultCache.delete(key);
+          historyToolResultCache.set(key, cached);
+          return { content: cached.content, isError: cached.isError, output: historyContentText(cached.content) };
+        }
+        if (pendingHistoryToolResults.has(key)) return pendingHistoryToolResults.get(key);
+        const pending = client.request("catalog.entry.body", {
+          session: canonicalChatId,
+          project: currentProject,
+          ref
+        }, { timeoutMs: 35_000 }).then((result) => {
+          const entry = asRecord(asRecord(result.body)?.entry);
+          const message = asRecord(entry?.message);
+          const content = normalizeHistoryContent(message?.content);
+          const hydrated = { content, isError: message?.isError === true };
+          const output = historyContentText(content);
+          const bodyBytes = Math.max(0, Number(ref?.bodyBytes) || Buffer.byteLength(output, "utf8"));
+          if (bodyBytes <= MAX_SINGLE_HISTORY_TOOL_RESULT_CACHE_BYTES) {
+            historyToolResultCache.set(key, { ...hydrated, bytes: bodyBytes });
+            historyToolResultCacheBytes += bodyBytes;
+            while (historyToolResultCache.size > EAGER_HISTORY_TOOL_RESULTS || historyToolResultCacheBytes > MAX_HISTORY_TOOL_RESULT_CACHE_BYTES) {
+              const oldest = historyToolResultCache.keys().next().value;
+              const evicted = historyToolResultCache.get(oldest);
+              historyToolResultCache.delete(oldest);
+              historyToolResultCacheBytes -= Number(evicted?.bytes) || 0;
+            }
+          }
+          return { ...hydrated, output };
+        }).finally(() => pendingHistoryToolResults.delete(key));
+        pendingHistoryToolResults.set(key, pending);
+        return pending;
       }
     },
     agentServer: {
@@ -676,13 +720,15 @@ function projectHistoryEntries(entries) {
     if (role === "toolResult") {
       const toolCallId = asString(message.toolCallId) || asString(message.tool_call_id) || `${id}:tool-result`;
       const started = tools.get(toolCallId) || {};
+      const historyBodyRef = asRecord(entry.historyBodyRef);
       events.push({
         ...started,
         type: "tool_execution_end",
         toolCallId,
         toolName: asString(message.toolName) || started.toolName || "tool",
-        result: historyContentText(content),
-        output: historyContentText(content),
+        ...(historyBodyRef
+          ? { historyBodyRef: { ...historyBodyRef } }
+          : { result: { content } }),
         isError: message.isError === true,
         historical: true
       });

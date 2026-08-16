@@ -489,6 +489,7 @@ export class BrowserAssistantBridge {
             }
             case 'getThreadDetailBootstrap': return service.getThreadDetailBootstrap(args[0] as string)
             case 'getHistoryPage': return service.getHistoryPage(args[0] as any)
+            case 'hydrateHistoryBody': return service.hydrateHistoryBody(args[0] as any)
             case 'getReviewIndex': return service.getReviewIndex((args[0] as { threadId: string }).threadId)
             case 'getTurnDetail': {
                 const input = args[0] as { threadId: string; turnId: string }

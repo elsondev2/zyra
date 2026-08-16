@@ -206,17 +206,20 @@ export function renderToolBlock(toolState, theme = fallbackTheme, width = 100) {
     ? [{ kind: "command", title, state, stateLabel, text: command, rightText: toolCommandStatusText(toolState, { title, state, stateLabel }) }]
     : [{ kind: "title", title, state, stateLabel }];
   let outputText = [];
+  const deferredOutput = Boolean(toolState.historyBodyRef);
   if (command) {
-    outputText = summarizeCommandToolResult(toolState.result ?? toolState.partialResult, commandOutputPreviewRows);
-    rows.push({ kind: "spacer" });
-    for (let index = 0; index < commandOutputPreviewRows; index += 1) {
-      rows.push({ kind: "commandOutput", text: outputText[index] ?? "" });
+    if (!deferredOutput) {
+      outputText = summarizeCommandToolResult(toolState.result ?? toolState.partialResult, commandOutputPreviewRows);
+      rows.push({ kind: "spacer" });
+      for (let index = 0; index < commandOutputPreviewRows; index += 1) {
+        rows.push({ kind: "commandOutput", text: outputText[index] ?? "" });
+      }
     }
   } else {
     const args = summarizeToolArgs(rawArgs, { toolName: title, state, commandAsTitle: false });
     if (args) rows.push(...normalizeToolSummaryRows(args, "args"));
     outputText = summarizeToolResult(toolState.result ?? toolState.partialResult);
-    if (outputText.length > 0) {
+    if (!deferredOutput && outputText.length > 0) {
       rows.push({ kind: "spacer" });
       rows.push(...outputText.flatMap((line) => splitDisplayLines(line)).map((line) => ({ kind: "output", text: line })));
     }
@@ -227,6 +230,10 @@ export function renderToolBlock(toolState, theme = fallbackTheme, width = 100) {
     } else if (state === "running") {
       rows.push({ kind: "hint", text: "status started" });
     }
+  }
+  if (deferredOutput) {
+    rows.push({ kind: "spacer" });
+    rows.push({ kind: "hint", text: "stored output — load on demand" });
   }
   const surface = toolSurfaceForState(state, resolvedTheme);
   const innerBlank = renderToolBlankRow(terminalWidth, surface);

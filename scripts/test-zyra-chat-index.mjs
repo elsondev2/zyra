@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CanonicalChatCatalog } from "../src/agent-server/catalog.mjs";
@@ -78,6 +78,60 @@ try {
   assert.equal(afterUpdate.title, "Canonical parity");
   assert.equal(afterUpdate.project, path.resolve(reassignedProject));
   assert.equal(afterUpdate.sessionPath, path.resolve(sessionPath), "metadata changes must not move transcript storage");
+
+  const historicalToolEntries = [];
+  for (let indexValue = 0; indexValue < 20; indexValue += 1) {
+    const toolCallId = `tool:bulk:${indexValue}`;
+    const toolName = indexValue === 0 ? "edit" : "read";
+    historicalToolEntries.push({
+      type: "message", id: `entry:bulk-assistant:${indexValue}`, timestamp: `2026-07-01T00:01:${String(indexValue).padStart(2, "0")}.000Z`,
+      message: {
+        id: `message:bulk-assistant:${indexValue}`, role: "assistant",
+        content: [{ type: "toolCall", id: toolCallId, name: toolName, arguments: { path: `fixture-${indexValue}.txt` } }]
+      }
+    }, {
+      type: "message", id: `entry:bulk-tool:${indexValue}`, timestamp: `2026-07-01T00:02:${String(indexValue).padStart(2, "0")}.000Z`,
+      message: {
+        id: `message:bulk-tool:${indexValue}`, role: "toolResult", toolCallId, toolName, isError: false,
+        content: [
+          { type: "text", text: `output-${indexValue}:${"x".repeat(10_000)}` },
+          ...([0, 19].includes(indexValue) ? [{ type: "image", data: `fixture-image-${indexValue}`, mimeType: "image/png" }] : [])
+        ]
+      }
+    });
+  }
+  appendFileSync(sessionPath, `${historicalToolEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+  await index.listProjects([project]);
+  const eagerHistory = index.history("canonical:test", { limit: 100 });
+  const lazyHistory = index.history("canonical:test", { limit: 100, toolResultBodies: "lazy-v1" });
+  const deferredEntries = lazyHistory.entries.filter((entry) => entry.historyBodyRef);
+  assert.equal(deferredEntries.length, 6, "only the latest 15 of 21 tool results should keep eager bodies");
+  assert.equal("content" in deferredEntries[0].message, false, "deferred history must distinguish an omitted body from a canonical empty result");
+  assert.equal(deferredEntries.some((entry) => entry.historyBodyRef.toolName === "edit"), true, "old mutation results follow the same lazy-body policy");
+  const deferredImageEntry = deferredEntries.find((entry) => entry.id === "entry:bulk-tool:0");
+  assert.equal(deferredImageEntry.historyBodyRef.imageCount, 1, "deferred references preserve image metadata without embedding image bytes");
+  assert.deepEqual(deferredImageEntry.historyBodyRef.contentTypes, ["text", "image"]);
+  const eagerImageEntry = lazyHistory.entries.find((entry) => entry.id === "entry:bulk-tool:19");
+  assert.equal(eagerImageEntry.message.content[1].data, "fixture-image-19", "the newest 15 tool results remain complete, including images");
+  const pairedLatest = index.history("canonical:test", { limit: 1, toolResultBodies: "lazy-v1" });
+  assert.deepEqual(pairedLatest.entries.map((entry) => entry.id), ["entry:bulk-assistant:19", "entry:bulk-tool:19"], "lazy pages keep a boundary tool result paired with its assistant tool call");
+  assert.ok(JSON.stringify(lazyHistory).length < JSON.stringify(eagerHistory).length * 0.8, "deferred history must avoid transporting old tool outputs");
+  const sidecar = readFileSync(path.join(stateDirectory, "chat-index-v3.json"), "utf8");
+  assert.equal(sidecar.includes("output-0:"), false, "the rebuildable sidecar must never duplicate canonical output bodies");
+  const hydrated = index.entryBody("canonical:test", deferredEntries[0].historyBodyRef);
+  assert.match(hydrated.entry.message.content[0].text, /^file contents$|^output-/, "an indexed body reference must hydrate the exact canonical entry");
+  const hydratedImage = index.entryBody("canonical:test", deferredImageEntry.historyBodyRef);
+  assert.equal(hydratedImage.entry.message.content[1].data, "fixture-image-0", "on-demand hydration preserves canonical image bodies exactly");
+  assert.throws(
+    () => index.entryBody("canonical:test", { ...deferredEntries[0].historyBodyRef, entryId: "wrong-entry" }),
+    /does not match|stale/,
+    "body hydration must reject stale or forged entry references"
+  );
+  assert.throws(
+    () => index.entryBody("canonical:test", { ...deferredEntries[0].historyBodyRef, entrySha256: "0".repeat(64) }),
+    /stale/,
+    "body hydration must bind the reference to the exact canonical line"
+  );
 
   process.stdout.write("zyra incremental chat index tests passed\n");
 } finally {

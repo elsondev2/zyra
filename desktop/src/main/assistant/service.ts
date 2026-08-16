@@ -16,6 +16,8 @@ import type {
     AssistantDeletePlaygroundLabInput,
     AssistantDomainEvent,
     AssistantGetHistoryPageInput,
+    AssistantHistoryBody,
+    AssistantHydrateHistoryBodyInput,
     AssistantGetSessionTurnUsageInput,
     AssistantIngestRealtimeVoiceEventInput,
     AssistantRedeemAccountResetInput,
@@ -40,7 +42,8 @@ import {
     DEFAULT_INSTRUCTOR_OUTPUT_MODALITY,
     DEFAULT_INSTRUCTOR_REALTIME_VOICE,
     DEFAULT_INSTRUCTOR_VOICE_INSTRUCTIONS,
-    foregroundRouteClaim
+    foregroundRouteClaim,
+    parseAssistantHistoryBodyRef
 } from '../../shared/assistant/contracts'
 import { isAssistantToolLifecycleStartEvent } from '../../shared/assistant/tool-lifecycle'
 import { isAssistantReasoningEffort } from '../../shared/assistant/reasoning-efforts'
@@ -127,6 +130,9 @@ import {
 
 const REALTIME_VOICE_LAB_CWD = join(tmpdir(), 'zyra-voice-lab')
 const MAX_REALTIME_BRIDGE_EVENT_BYTES = 256 * 1024
+const MAX_CACHED_HISTORY_BODIES = 15
+const MAX_CACHED_HISTORY_BODY_BYTES = 16 * 1024 * 1024
+const MAX_SINGLE_CACHED_HISTORY_BODY_BYTES = 8 * 1024 * 1024
 const CANONICAL_ZYRA_VOICE_INSTRUCTIONS = `You are Zyra's realtime foreground voice for the current canonical Assistant conversation.
 Continue naturally from the supplied canonical history. Keep responses concise, conversational, and honest about uncertainty.
 You own the user-facing conversation while Voice is active. The same primary agent selected in Chat performs commands and file work; you narrate only the verified task state and result supplied by the controller. You cannot grant approvals or invent tool progress.
@@ -271,6 +277,8 @@ export class AssistantService {
     private readonly canonicalCatalogReconciler = new TrailingAsyncReconciler(() => this.importCanonicalChats())
     private readonly canonicalReviewHistoryState = new Map<string, { threadId: string; totalEntries: number; modifiedAt: string }>()
     private readonly canonicalReviewIndexPromises = new Map<string, Promise<void>>()
+    private readonly canonicalHistoryBodyCache = new Map<string, { body: AssistantHistoryBody; bytes: number }>()
+    private canonicalHistoryBodyCacheBytes = 0
     private readonly canonicalHistoryState = new Map<string, {
         before: string | null
         hasOlder: boolean
@@ -535,6 +543,72 @@ export class AssistantService {
         }
     }
 
+    async hydrateHistoryBody(input: AssistantHydrateHistoryBodyInput) {
+        await this.ensureReady()
+        const activityId = String(input?.activityId || '').trim()
+        const ref = parseAssistantHistoryBodyRef(input?.ref)
+        if (!activityId || !ref) throw new Error('Historical tool output reference is invalid.')
+        const { canonicalChatId, entryId, entryIndex, entrySha256 } = ref
+        const owner = findThreadRecord(this.state.snapshot, canonicalChatId)
+        if (!owner) throw new Error('Historical tool output does not belong to a known Assistant thread.')
+        const storedActivity = await this.persistence.readActivity(owner.thread.id, activityId)
+        const storedRef = asCanonicalRecord(storedActivity?.payload?.['historyBodyRef'])
+        if (!storedActivity || String(storedRef?.['entrySha256'] || '') !== entrySha256) {
+            throw new Error('Historical tool output does not match the stored activity.')
+        }
+        const cacheKey = `${canonicalChatId}:${entryIndex}:${entrySha256}`
+        const cached = this.canonicalHistoryBodyCache.get(cacheKey)
+        if (cached) {
+            this.canonicalHistoryBodyCache.delete(cacheKey)
+            this.canonicalHistoryBodyCache.set(cacheKey, cached)
+            return { success: true as const, body: cached.body }
+        }
+        const result = await this.runtime.readCanonicalHistoryEntryBody(canonicalChatId, undefined, ref as unknown as Record<string, unknown>)
+        const entry = asCanonicalRecord(result?.['entry'])
+        const message = entry?.['type'] === 'message' ? asCanonicalRecord(entry['message']) : null
+        if (!message || message['role'] !== 'toolResult' || String(entry?.['id'] || '') !== entryId) {
+            throw new Error('Historical tool output no longer matches its canonical entry.')
+        }
+        const toolCallId = String(message['toolCallId'] || message['tool_call_id'] || '').trim()
+        if (ref.toolCallId && toolCallId !== ref.toolCallId) throw new Error('Historical tool output no longer matches its tool call.')
+        if (toolCallId && activityId !== `zyra-tool-${toolCallId}`) throw new Error('Historical tool output does not belong to this activity.')
+        const content = canonicalContentParts(message['content'])
+        const messageId = String(message['id'] || entryId)
+        const toolName = String(message['toolName'] || storedActivity.payload?.['toolName'] || 'tool')
+        const args = asCanonicalRecord(storedActivity.payload?.['args'])
+        const projected = projectCanonicalToolResult({
+            canonicalChatId,
+            messageId,
+            message,
+            content,
+            toolName,
+            args,
+            cwd: owner.thread.cwd || owner.session.projectPath || process.cwd(),
+            stripBodyFields: true
+        })
+        const body: AssistantHistoryBody = {
+            payload: {
+                ...projected.data,
+                status: projected.isError ? 'failed' : 'completed',
+                output: projected.output,
+                imageAttachments: projected.imageAttachments
+            }
+        }
+        const bodyBytes = Math.max(0, Number(ref.bodyBytes) || Buffer.byteLength(projected.output, 'utf8'))
+        if (bodyBytes <= MAX_SINGLE_CACHED_HISTORY_BODY_BYTES) {
+            this.canonicalHistoryBodyCache.set(cacheKey, { body, bytes: bodyBytes })
+            this.canonicalHistoryBodyCacheBytes += bodyBytes
+            while (this.canonicalHistoryBodyCache.size > MAX_CACHED_HISTORY_BODIES || this.canonicalHistoryBodyCacheBytes > MAX_CACHED_HISTORY_BODY_BYTES) {
+                const oldest = this.canonicalHistoryBodyCache.keys().next().value
+                if (typeof oldest !== 'string') break
+                const evicted = this.canonicalHistoryBodyCache.get(oldest)
+                this.canonicalHistoryBodyCache.delete(oldest)
+                this.canonicalHistoryBodyCacheBytes -= evicted?.bytes || 0
+            }
+        }
+        return { success: true as const, body }
+    }
+
     async getReviewIndex(threadId: string) {
         await this.ensureReady()
         const record = findThreadRecord(this.state.snapshot, threadId)
@@ -545,8 +619,33 @@ export class AssistantService {
 
     async searchTurns(threadId: string, query: string, limit?: number) {
         await this.ensureReady()
-        const localThreadId = requireThread(this.state.snapshot, threadId).id
-        return { success: true as const, result: await this.persistence.searchTurns(localThreadId, query, limit) }
+        const record = findThreadRecord(this.state.snapshot, threadId)
+        if (!record) throw new Error(`Assistant thread not found: ${threadId}`)
+        const canonicalChatId = record.thread.providerThreadId
+        if (canonicalChatId && !this.canonicalReviewHistoryState.has(canonicalChatId)) {
+            await this.ensureCanonicalReviewHistoryIndexed(record.session, record.thread)
+        }
+        const persisted = await this.persistence.searchTurns(record.thread.id, query, limit)
+        if (!canonicalChatId || !String(query || '').trim()) return { success: true as const, result: persisted }
+        try {
+            const matches = await this.runtime.searchCanonicalToolOutputs(
+                canonicalChatId,
+                record.session.projectPath || record.thread.cwd || undefined,
+                query,
+                limit
+            )
+            const activityIds = matches
+                .map((match) => String(match['toolCallId'] || '').trim())
+                .filter(Boolean)
+                .map((toolCallId) => `zyra-tool-${toolCallId}`)
+            return {
+                success: true as const,
+                result: await this.persistence.mergeSearchTurnIds(record.thread.id, persisted.turnIds, activityIds, limit)
+            }
+        } catch (error) {
+            log.warn('[Assistant] Failed to search deferred canonical tool output', { canonicalChatId, error })
+            return { success: true as const, result: persisted }
+        }
     }
 
     async getTurnDetail(threadId: string, turnId: string) {
@@ -885,6 +984,8 @@ export class AssistantService {
         this.queuedVoiceStrongRequests.clear()
         this.delegatedVoiceProviderItems.clear()
         this.typedVoiceResponseQueues.clear()
+        this.canonicalHistoryBodyCache.clear()
+        this.canonicalHistoryBodyCacheBytes = 0
         this.activeCanonicalVoice = null
         this.canonicalVoiceCommitter?.dispose()
         this.canonicalVoiceUnsubscribe?.()
@@ -1654,7 +1755,8 @@ export class AssistantService {
         try {
             const history = await this.runtime.readCanonicalChatHistory(input.canonicalChatId, input.project, {
                 before: input.before,
-                limit: 500
+                limit: 500,
+                toolResultBodies: 'lazy-v1'
             })
             if (!history) return
             const projection = projectCanonicalTimeline(
@@ -1736,7 +1838,10 @@ export class AssistantService {
         const canonicalChatId = thread.providerThreadId
         if (!canonicalChatId) return
         const project = session.projectPath || thread.cwd || process.cwd()
-        const latest = await this.runtime.readCanonicalChatHistory(canonicalChatId, project, { limit: 2_000 })
+        const latest = await this.runtime.readCanonicalChatHistory(canonicalChatId, project, {
+            limit: 2_000,
+            toolResultBodies: 'lazy-v1'
+        })
         if (!latest) return
 
         const totalEntries = Math.max(0, Number(latest.pageInfo?.totalEntries) || latest.entries.length)
@@ -1771,7 +1876,8 @@ export class AssistantService {
                 seenCursors.add(before)
                 const older = await this.runtime.readCanonicalChatHistory(canonicalChatId, project, {
                     before,
-                    limit: 2_000
+                    limit: 2_000,
+                    toolResultBodies: 'lazy-v1'
                 })
                 if (!older) break
                 pages.push(older.entries || [])
@@ -2163,6 +2269,7 @@ export function projectCanonicalTimeline(
         const entry = entryValue as Record<string, unknown>
         const timelineSequence = baseEntryIndex + entryIndex + 1
         const entryId = String(entry['id'] || `entry:${key}:${timelineSequence}`)
+        const historyBodyRef = asCanonicalRecord(entry['historyBodyRef'])
         const occurredAt = normalizeCatalogDate(entry['timestamp'], fallbackCreatedAt)
         if (entry['type'] !== 'message') {
             if (entry['type'] === 'compaction' || entry['type'] === 'branch_summary') {
@@ -2309,50 +2416,38 @@ export function projectCanonicalTimeline(
             const existing = activities.get(activityId)
             const toolName = String(message['toolName'] || existing?.payload?.['toolName'] || 'tool')
             const args = asCanonicalRecord(existing?.payload?.['args'])
-            const imagePaths = content
-                .map((part, partIndex) => part['type'] === 'image'
-                    ? canonicalImageAttachment(canonicalChatId, messageId, partIndex, part)
-                    : null)
-                .filter((value): value is string => Boolean(value))
-            const output = canonicalMessageText(content)
-            const isError = message['isError'] === true
-            const state = isError ? 'error' : 'completed'
-            const classified = classifyZyraToolActivity({
+            const projected = projectCanonicalToolResult({
+                canonicalChatId,
+                messageId,
+                message,
+                content,
                 toolName,
                 args,
-                result: message,
-                partialResult: message,
-                state,
-                output
+                cwd,
+                deferBody: Boolean(historyBodyRef),
+                stripBodyFields: Boolean(historyBodyRef)
             })
-            if (classified.kind === 'file-change') {
-                Object.assign(classified.data, readPiFileChangeData({
-                    cwd,
-                    toolName,
-                    args,
-                    result: message,
-                    partialResult: message,
-                    type: 'tool_execution_end',
-                    state
-                }))
-            }
             activities.set(activityId, {
                 id: activityId,
-                kind: classified.kind,
-                tone: isError ? 'error' : 'tool',
-                summary: classified.summary,
-                detail: classified.detail || existing?.detail,
+                kind: projected.kind,
+                tone: projected.isError ? 'error' : 'tool',
+                summary: projected.summary,
+                detail: projected.detail || existing?.detail,
                 turnId: existing?.turnId || activeTurnId,
                 timelineSequence: existing?.timelineSequence || timelineSequence,
                 createdAt: existing?.createdAt || messageOccurredAt,
                 payload: {
                     ...(existing?.payload || {}),
-                    ...classified.data,
-                    status: isError ? 'failed' : 'completed',
+                    ...projected.data,
+                    status: projected.isError ? 'failed' : 'completed',
                     toolName,
                     toolCallId,
-                    output,
-                    imageAttachments: imagePaths,
+                    ...(historyBodyRef ? {
+                        historyBodyRef: { ...historyBodyRef, canonicalChatId }
+                    } : {
+                        output: projected.output,
+                        imageAttachments: projected.imageAttachments
+                    }),
                     completedAt: messageOccurredAt,
                     canonicalMessageId: messageId
                 }
@@ -2582,6 +2677,58 @@ function canonicalImageAttachment(
 
 function serializeCanonicalAttachments(body: string, attachments: string[]): string {
     return `${body.trimEnd()}\n\nAttached files (${attachments.length}):\n${attachments.join('\n\n')}`.trimStart()
+}
+
+function projectCanonicalToolResult(input: {
+    canonicalChatId: string
+    messageId: string
+    message: Record<string, unknown>
+    content: Array<Record<string, unknown>>
+    toolName: string
+    args: Record<string, unknown> | null
+    cwd: string
+    deferBody?: boolean
+    stripBodyFields?: boolean
+}) {
+    const output = input.deferBody ? '' : canonicalMessageText(input.content)
+    const isError = input.message['isError'] === true
+    const state = isError ? 'error' : 'completed'
+    const classified = classifyZyraToolActivity({
+        toolName: input.toolName,
+        args: input.args,
+        result: input.message,
+        partialResult: input.message,
+        state,
+        output
+    })
+    if (classified.kind === 'file-change') {
+        Object.assign(classified.data, readPiFileChangeData({
+            cwd: input.cwd,
+            toolName: input.toolName,
+            args: input.args,
+            result: input.message,
+            partialResult: input.message,
+            type: 'tool_execution_end',
+            state
+        }))
+    }
+    const imageAttachments = input.content
+        .map((part, partIndex) => part['type'] === 'image'
+            ? canonicalImageAttachment(input.canonicalChatId, input.messageId, partIndex, part)
+            : null)
+        .filter((value): value is string => Boolean(value))
+    return {
+        ...classified,
+        data: input.stripBodyFields ? omitHistoricalBodyFields(classified.data) : classified.data,
+        imageAttachments,
+        isError,
+        output
+    }
+}
+
+function omitHistoricalBodyFields(value: Record<string, unknown>): Record<string, unknown> {
+    const { output: _output, result: _result, rawResult: _rawResult, content: _content, ...metadata } = value
+    return metadata
 }
 
 function canonicalToolDetail(value: unknown): string | undefined {

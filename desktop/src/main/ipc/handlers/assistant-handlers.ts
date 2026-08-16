@@ -11,6 +11,7 @@ import type {
     AssistantDeletePlaygroundLabInput,
     AssistantDeleteMessageInput,
     AssistantGetHistoryPageInput,
+    AssistantHydrateHistoryBodyInput,
     AssistantGetReviewIndexInput,
     AssistantGetSessionTurnUsageInput,
     AssistantGetTurnDetailInput,
@@ -149,6 +150,11 @@ export function handleAssistantGetThreadDetailBootstrap(_event: Electron.IpcMain
 export function handleAssistantGetHistoryPage(_event: Electron.IpcMainInvokeEvent, input: AssistantGetHistoryPageInput) {
     log.info('IPC: assistant:getHistoryPage', { threadId: input?.threadId, hasCursor: Boolean(input?.before) })
     return withAssistantResult(() => getAssistantService().getHistoryPage(input))
+}
+
+export function handleAssistantHydrateHistoryBody(_event: Electron.IpcMainInvokeEvent, input: AssistantHydrateHistoryBodyInput) {
+    log.info('IPC: assistant:hydrateHistoryBody', { activityId: input?.activityId })
+    return withAssistantResult(() => getAssistantService().hydrateHistoryBody(input))
 }
 
 export function handleAssistantGetReviewIndex(_event: Electron.IpcMainInvokeEvent, input: AssistantGetReviewIndexInput) {

@@ -76,6 +76,12 @@ export type CanonicalAgentChat = {
     presence?: CanonicalAgentChatPresence
 }
 
+export type CanonicalAgentChatHistoryOptions = {
+    before?: string | null
+    limit?: number
+    toolResultBodies?: 'lazy-v1'
+}
+
 export type CanonicalAgentChatHistory = {
     chat: CanonicalAgentChat
     entries: unknown[]
@@ -143,16 +149,38 @@ export class DesktopAgentServerConnection {
     async readCanonicalChatHistory(
         session: string,
         project?: string,
-        options: { before?: string | null; limit?: number } = {}
+        options: CanonicalAgentChatHistoryOptions = {}
     ): Promise<CanonicalAgentChatHistory | null> {
         const client = await this.getClient()
         const result = await client.request('catalog.history', {
             session,
             project,
             before: options.before,
-            limit: options.limit || 1000
+            limit: options.limit || 1000,
+            toolResultBodies: options.toolResultBodies
         }, { timeoutMs: 35_000 })
         return asRecord(result['history']) as CanonicalAgentChatHistory | null
+    }
+
+    async readCanonicalHistoryEntryBody(
+        session: string,
+        project: string | undefined,
+        ref: Record<string, unknown>
+    ): Promise<Record<string, unknown> | null> {
+        const client = await this.getClient()
+        const result = await client.request('catalog.entry.body', { session, project, ref }, { timeoutMs: 35_000 })
+        return asRecord(result['body'])
+    }
+
+    async searchCanonicalToolOutputs(
+        session: string,
+        project: string | undefined,
+        query: string,
+        limit?: number
+    ): Promise<Array<Record<string, unknown>>> {
+        const client = await this.getClient()
+        const result = await client.request('catalog.tool-output.search', { session, project, query, limit }, { timeoutMs: 35_000 })
+        return Array.isArray(result['matches']) ? result['matches'].map(asRecord).filter((value): value is Record<string, unknown> => Boolean(value)) : []
     }
 
     async appendCanonicalMessage(session: string, message: Record<string, unknown>): Promise<Record<string, unknown>> {

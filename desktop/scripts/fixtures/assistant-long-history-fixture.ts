@@ -4,7 +4,7 @@ import { createDefaultSnapshot } from '../../src/main/assistant/projector'
 const BASE_TIME = Date.parse('2026-07-16T08:00:00.000Z')
 const iso = (sequence: number) => new Date(BASE_TIME + sequence * 10).toISOString()
 
-export function createAssistantLongHistoryFixture(turnCount = 1000): AssistantSnapshot {
+export function createAssistantLongHistoryFixture(turnCount = 1000, toolOutputCharacters = 2): AssistantSnapshot {
     const messages: AssistantMessage[] = []
     const activities: AssistantActivity[] = []
     const proposedPlans: AssistantProposedPlan[] = []
@@ -34,7 +34,7 @@ export function createAssistantLongHistoryFixture(turnCount = 1000): AssistantSn
                 createdAt: iso(sequence),
                 payload: activityIndex === 3
                     ? { status: 'completed', paths: [`src/fixture-${turn}.ts`], patch: `--- a/src/fixture-${turn}.ts\n+++ b/src/fixture-${turn}.ts\n@@ -1 +1 @@\n-old\n+new\n` }
-                    : { status: 'completed', command: `echo fixture-${turn}-${activityIndex}`, output: 'ok' }
+                    : { status: 'completed', command: `echo fixture-${turn}-${activityIndex}`, output: 'o'.repeat(toolOutputCharacters) }
             })
         }
         const assistantCreatedAt = iso(sequence)

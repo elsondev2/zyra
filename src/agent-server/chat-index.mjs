@@ -3,15 +3,25 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { getProjectSessionsDir } from "../zyra-sdk.mjs";
 import { getAgentServerPaths } from "./paths.mjs";
+import {
+  findRecordByEntryIndex,
+  HISTORY_TOOL_RESULT_BODY_POLICY,
+  inspectToolResultEntry,
+  isDeferrableHistoryRecord,
+  projectIndexedHistoryEntries,
+  readIndexedHistoryRecord,
+  searchIndexedToolResults,
+  validateHistoryBodyRef
+} from "./history-bodies.mjs";
 
-const INDEX_VERSION = 2;
+const INDEX_VERSION = 3;
 const READ_BUFFER_SIZE = 1024 * 1024;
 const MAX_TITLE_SOURCE_CHARS = 2_000;
 
 export class CanonicalChatIndex {
   constructor(options = {}) {
     this.paths = getAgentServerPaths(options);
-    this.file = path.join(this.paths.stateDirectory, "chat-index-v2.json");
+    this.file = path.join(this.paths.stateDirectory, "chat-index-v3.json");
     this.record = readIndex(this.file);
     this.projectScans = new Map();
   }
@@ -98,8 +108,21 @@ export class CanonicalChatIndex {
     const requestedEnd = options.before == null || options.before === ""
       ? offsets.length
       : Math.max(0, Math.min(offsets.length, Number(options.before) || 0));
-    const start = Math.max(0, requestedEnd - limit);
-    const entries = readEntries(chat.sessionPath, offsets.slice(start, requestedEnd));
+    let start = Math.max(0, requestedEnd - limit);
+    if (options.toolResultBodies === HISTORY_TOOL_RESULT_BODY_POLICY) {
+      while (start > 0 && includesSortedNumber(chat.toolResultEntryIndexes || [], start)) start -= 1;
+    }
+    const selected = offsets.slice(start, requestedEnd).map((offset, localIndex) => ({
+      entryIndex: start + localIndex,
+      offset
+    }));
+    const entries = projectIndexedHistoryEntries({
+      file: chat.sessionPath,
+      selected,
+      toolResultEntryIndexes: chat.toolResultEntryIndexes,
+      deferredToolResults: chat.deferredToolResults,
+      options
+    });
     return {
       chat: cloneChat(chat),
       entries,
@@ -111,6 +134,35 @@ export class CanonicalChatIndex {
         totalEntries: offsets.length
       }
     };
+  }
+
+  searchToolResults(canonicalChatId, query, limit) {
+    const chat = this.record.chats[String(canonicalChatId || "").trim()];
+    if (!chat) return null;
+    return searchIndexedToolResults(
+      chat.sessionPath,
+      chat.deferredToolResults || [],
+      chat.entryOffsets || [],
+      query,
+      limit
+    );
+  }
+
+  entryBody(canonicalChatId, ref = {}) {
+    const chat = this.record.chats[String(canonicalChatId || "").trim()];
+    if (!chat) return null;
+    const entryIndex = Number(ref.entryIndex);
+    if (!Number.isSafeInteger(entryIndex) || entryIndex < 0) throw new Error("Historical tool output reference is invalid.");
+    const record = findRecordByEntryIndex(chat.deferredToolResults || [], entryIndex);
+    validateHistoryBodyRef(record, ref);
+    const offset = chat.entryOffsets?.[entryIndex];
+    const hydrated = readIndexedHistoryRecord(chat.sessionPath, offset);
+    if (
+      !hydrated
+      || String(hydrated.entry?.id || "") !== record.entryId
+      || hydrated.entrySha256 !== record.entrySha256
+    ) throw new Error("Historical tool output reference is stale.");
+    return { entry: hydrated.entry };
   }
 
   snapshot() {
@@ -128,7 +180,9 @@ function scanSessionFile(file, storageProject, current, stats) {
     && current.fileSize <= stats.size
     && Number.isSafeInteger(current.scanOffset)
     && current.scanOffset <= stats.size
-    && Array.isArray(current.entryOffsets);
+    && Array.isArray(current.entryOffsets)
+    && Array.isArray(current.toolResultEntryIndexes)
+    && Array.isArray(current.deferredToolResults);
   const record = canAppend
     ? structuredClone(current)
     : {
@@ -151,6 +205,8 @@ function scanSessionFile(file, storageProject, current, stats) {
         pathEvidence: {},
         entryCount: 0,
         entryOffsets: [],
+        toolResultEntryIndexes: [],
+        deferredToolResults: [],
         scanOffset: 0
       };
   const start = canAppend ? record.scanOffset : 0;
@@ -215,7 +271,16 @@ function consumeLine(record, line, offset, byteLength) {
     return;
   }
 
+  const entryIndex = record.entryOffsets.length;
   record.entryOffsets.push([offset, byteLength]);
+  const toolResult = inspectToolResultEntry(entry, entryIndex, byteLength, {
+    canonicalChatId: record.canonicalChatId,
+    rawLine: line
+  });
+  if (toolResult) {
+    record.toolResultEntryIndexes.push(entryIndex);
+    if (isDeferrableHistoryRecord(toolResult)) record.deferredToolResults.push(toolResult);
+  }
   if (entry.type === "session_info") {
     record.title = normalizeTitle(entry.name, record.firstMessage);
   }
@@ -240,27 +305,6 @@ function consumeLine(record, line, offset, byteLength) {
       record.titleCandidates.push(userText);
     }
   }
-}
-
-function readEntries(file, offsets) {
-  if (!existsSync(file) || offsets.length === 0) return [];
-  const fd = openSync(file, "r");
-  const entries = [];
-  try {
-    for (const pair of offsets) {
-      const offset = Number(pair?.[0]);
-      const length = Number(pair?.[1]);
-      if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || length <= 0) continue;
-      const buffer = Buffer.allocUnsafe(length);
-      const bytesRead = readSync(fd, buffer, 0, length, offset);
-      if (bytesRead !== length) continue;
-      try { entries.push(JSON.parse(buffer.toString("utf8"))); }
-      catch {}
-    }
-  } finally {
-    closeSync(fd);
-  }
-  return entries;
 }
 
 function collectPathEvidence(record, entry) {
@@ -338,8 +382,33 @@ function normalizeTitle(value, fallback) {
 }
 
 function cloneChat(chat) {
-  const { entryOffsets, scanOffset, fileSize, fileMtimeMs, indexedAt, firstMessage, titleCandidates, pathEvidence, ...publicChat } = chat;
+  const {
+    entryOffsets,
+    toolResultEntryIndexes,
+    deferredToolResults,
+    scanOffset,
+    fileSize,
+    fileMtimeMs,
+    indexedAt,
+    firstMessage,
+    titleCandidates,
+    pathEvidence,
+    ...publicChat
+  } = chat;
   return structuredClone(publicChat);
+}
+
+function includesSortedNumber(values, target) {
+  let low = 0;
+  let high = values.length - 1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    const candidate = values[middle];
+    if (candidate === target) return true;
+    if (candidate < target) low = middle + 1;
+    else high = middle - 1;
+  }
+  return false;
 }
 
 function findBySessionPath(chats, sessionPath) {
