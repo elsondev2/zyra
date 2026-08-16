@@ -137,13 +137,15 @@ for (const file of packagedMachOFiles.filter((entry) => entry.architecture === '
 const outsideCheckout = mkdtempSync(path.join(os.tmpdir(), 'zyra-packaged-runtime-contract-'))
 try {
     const sdkUrl = pathToFileURL(path.join(runtimeRoot, 'src', 'zyra-sdk.mjs')).href
+    const memoryUrl = pathToFileURL(path.join(runtimeRoot, 'src', 'zyra-memory.mjs')).href
+    const dataRoot = path.join(outsideCheckout, 'writable-data')
     const result = spawnSync(process.execPath, [
         '--input-type=module',
         '--eval',
-        `const sdk = await import(${JSON.stringify(sdkUrl)}); if (sdk.defaults.root !== ${JSON.stringify(runtimeRoot)}) process.exit(17);`
+        `const fs = await import('node:fs'); const sdk = await import(${JSON.stringify(sdkUrl)}); const memory = await import(${JSON.stringify(memoryUrl)}); if (sdk.defaults.root !== ${JSON.stringify(runtimeRoot)}) process.exit(17); if (sdk.defaults.dataRoot !== ${JSON.stringify(dataRoot)}) process.exit(18); memory.ensureZyraMemory(sdk.defaults.dataRoot); if (!fs.existsSync(${JSON.stringify(path.join(dataRoot, '.zyra', 'memory'))})) process.exit(19);`
     ], {
         cwd: outsideCheckout,
-        env: { ...process.env, ZYRA_ROOT: runtimeRoot },
+        env: { ...process.env, ZYRA_ROOT: runtimeRoot, ZYRA_DATA_ROOT: dataRoot },
         encoding: 'utf8'
     })
     assert.equal(

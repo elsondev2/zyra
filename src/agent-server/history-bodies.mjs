@@ -32,7 +32,7 @@ export function inspectToolResultEntry(entry, entryIndex, byteLength, identity =
   };
 }
 
-export async function searchIndexedToolResults(file, records, offsets, query, limit = 100) {
+export async function searchIndexedToolResults(file, records, offsets, query, limit = 100, signal) {
   const needle = String(query || "").trim().toLowerCase();
   if (!needle || !existsSync(file)) return [];
   const matchLimit = Math.max(1, Math.min(200, Number(limit) || 100));
@@ -40,15 +40,20 @@ export async function searchIndexedToolResults(file, records, offsets, query, li
   const handle = await openFile(file, "r");
   try {
     for (let index = records.length - 1; index >= 0 && matches.length < matchLimit; index -= 1) {
+      if (signal?.aborted) break;
       const record = records[index];
+      if (record.imageCount > 0 && record.bodyBytes > 1024 * 1024) continue;
       const pair = offsets[record.entryIndex];
       const offset = Number(pair?.[0]);
       const length = Number(pair?.[1]);
       if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || length <= 0) continue;
       const buffer = Buffer.allocUnsafe(length);
       const { bytesRead } = await handle.read(buffer, 0, length, offset);
-      if (bytesRead !== length) continue;
-      if (!buffer.toString("utf8").toLowerCase().includes(needle)) continue;
+      if (bytesRead !== length || signal?.aborted) continue;
+      let entry;
+      try { entry = JSON.parse(buffer.toString("utf8")); }
+      catch { continue; }
+      if (!toolResultMatches(entry, needle)) continue;
       matches.push({
         entryIndex: record.entryIndex,
         entryId: record.entryId,
@@ -208,6 +213,33 @@ function readSelectedEntries(file, selected, replacement) {
     closeSync(fd);
   }
   return entries;
+}
+
+export function toolResultMatches(entry, needle) {
+  const message = entry?.type === "message" ? entry.message : null;
+  if (message?.role !== "toolResult") return false;
+  const content = message.content;
+  if (typeof content === "string" && content.toLowerCase().includes(needle)) return true;
+  if (Array.isArray(content)) {
+    for (const part of content) {
+      if (part?.type === "text" && String(part.text || "").toLowerCase().includes(needle)) return true;
+    }
+  }
+  return searchableValueMatches(message.details, needle)
+    || searchableValueMatches(message.output, needle)
+    || searchableValueMatches(message.result, needle)
+    || searchableValueMatches(message.rawResult, needle);
+}
+
+function searchableValueMatches(value, needle, depth = 0) {
+  if (depth > 4 || value == null) return false;
+  if (typeof value === "string") return value.toLowerCase().includes(needle);
+  if (Array.isArray(value)) return value.some((entry) => searchableValueMatches(entry, needle, depth + 1));
+  if (typeof value !== "object") return false;
+  return Object.entries(value).some(([key, entry]) => {
+    if (/^(?:data|image|base64|bytes)$/i.test(key)) return false;
+    return searchableValueMatches(entry, needle, depth + 1);
+  });
 }
 
 function contentTypes(content) {

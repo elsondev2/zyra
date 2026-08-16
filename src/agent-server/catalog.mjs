@@ -9,6 +9,7 @@ import {
   HISTORY_TOOL_RESULT_BODY_POLICY,
   inspectToolResultEntry,
   projectLoadedHistoryEntries,
+  toolResultMatches,
   validateHistoryBodyRef
 } from "./history-bodies.mjs";
 
@@ -140,7 +141,7 @@ export class CanonicalChatCatalog {
     for (let entryIndex = entries.length - 1; entryIndex >= 0 && matches.length < limit; entryIndex -= 1) {
       const entry = entries[entryIndex];
       const message = entry?.type === "message" ? entry.message : null;
-      if (message?.role !== "toolResult" || !JSON.stringify(entry).toLowerCase().includes(needle)) continue;
+      if (!toolResultMatches(entry, needle)) continue;
       matches.push({
         entryIndex,
         entryId: String(entry.id || ""),

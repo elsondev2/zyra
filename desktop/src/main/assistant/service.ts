@@ -17,6 +17,7 @@ import type {
     AssistantDomainEvent,
     AssistantGetHistoryPageInput,
     AssistantHistoryBody,
+    AssistantHistoryBodyRef,
     AssistantHydrateHistoryBodyInput,
     AssistantGetSessionTurnUsageInput,
     AssistantIngestRealtimeVoiceEventInput,
@@ -314,7 +315,16 @@ export class AssistantService {
         this.runtime.on('runtime', (event) => {
             this.handleRuntimeEvent(event)
         })
-        this.runtime.on('catalog.changed', () => {
+        this.runtime.on('catalog.changed', (value) => {
+            const change = asCanonicalRecord(value)
+            const canonicalChatId = String(change?.['canonicalChatId'] || '').trim()
+            const transcriptChanged = !change
+                || change['canonicalMessage'] === true
+                || !change['presence'] && !change['metadata'] && !change['title'] && !change['project']
+            if (transcriptChanged) {
+                if (canonicalChatId) this.canonicalReviewHistoryState.delete(canonicalChatId)
+                else this.canonicalReviewHistoryState.clear()
+            }
             void this.queueCanonicalChatImport()
         })
         this.realtimeVoiceRuntime.on('event', (event) => {
@@ -552,8 +562,8 @@ export class AssistantService {
         const owner = findThreadRecord(this.state.snapshot, canonicalChatId)
         if (!owner) throw new Error('Historical tool output does not belong to a known Assistant thread.')
         const storedActivity = await this.persistence.readActivity(owner.thread.id, activityId)
-        const storedRef = asCanonicalRecord(storedActivity?.payload?.['historyBodyRef'])
-        if (!storedActivity || String(storedRef?.['entrySha256'] || '') !== entrySha256) {
+        const storedRef = parseAssistantHistoryBodyRef(storedActivity?.payload?.['historyBodyRef'])
+        if (!storedActivity || !storedRef || !historyBodyRefsMatch(ref, storedRef)) {
             throw new Error('Historical tool output does not match the stored activity.')
         }
         const cacheKey = `${canonicalChatId}:${entryIndex}:${entrySha256}`
@@ -563,14 +573,14 @@ export class AssistantService {
             this.canonicalHistoryBodyCache.set(cacheKey, cached)
             return { success: true as const, body: cached.body }
         }
-        const result = await this.runtime.readCanonicalHistoryEntryBody(canonicalChatId, undefined, ref as unknown as Record<string, unknown>)
+        const result = await this.runtime.readCanonicalHistoryEntryBody(canonicalChatId, undefined, storedRef as unknown as Record<string, unknown>)
         const entry = asCanonicalRecord(result?.['entry'])
         const message = entry?.['type'] === 'message' ? asCanonicalRecord(entry['message']) : null
         if (!message || message['role'] !== 'toolResult' || String(entry?.['id'] || '') !== entryId) {
             throw new Error('Historical tool output no longer matches its canonical entry.')
         }
         const toolCallId = String(message['toolCallId'] || message['tool_call_id'] || '').trim()
-        if (ref.toolCallId && toolCallId !== ref.toolCallId) throw new Error('Historical tool output no longer matches its tool call.')
+        if (storedRef.toolCallId && toolCallId !== storedRef.toolCallId) throw new Error('Historical tool output no longer matches its tool call.')
         if (toolCallId && activityId !== `zyra-tool-${toolCallId}`) throw new Error('Historical tool output does not belong to this activity.')
         const content = canonicalContentParts(message['content'])
         const messageId = String(message['id'] || entryId)
@@ -594,7 +604,10 @@ export class AssistantService {
                 imageAttachments: projected.imageAttachments
             }
         }
-        const bodyBytes = Math.max(0, Number(ref.bodyBytes) || Buffer.byteLength(projected.output, 'utf8'))
+        const declaredBodyBytes = Math.max(0, Number(storedRef.bodyBytes) || 0)
+        const bodyBytes = declaredBodyBytes > MAX_SINGLE_CACHED_HISTORY_BODY_BYTES
+            ? declaredBodyBytes
+            : Buffer.byteLength(JSON.stringify(body), 'utf8')
         if (bodyBytes <= MAX_SINGLE_CACHED_HISTORY_BODY_BYTES) {
             this.canonicalHistoryBodyCache.set(cacheKey, { body, bytes: bodyBytes })
             this.canonicalHistoryBodyCacheBytes += bodyBytes
@@ -650,8 +663,19 @@ export class AssistantService {
 
     async getTurnDetail(threadId: string, turnId: string) {
         await this.ensureReady()
-        const localThreadId = requireThread(this.state.snapshot, threadId).id
-        return { success: true as const, detail: await this.persistence.readTurnDetail(localThreadId, turnId) }
+        const record = findThreadRecord(this.state.snapshot, threadId)
+        if (!record) throw new Error(`Assistant thread not found: ${threadId}`)
+        const canonicalChatId = record.thread.providerThreadId
+        if (canonicalChatId && !this.canonicalReviewHistoryState.has(canonicalChatId)) {
+            await this.ensureCanonicalReviewHistoryIndexed(record.session, record.thread)
+        }
+        const detail = await this.persistence.readTurnDetail(record.thread.id, turnId)
+        const hydratedFileChanges = await this.hydrateDeferredFileChanges(detail.activities)
+        if (hydratedFileChanges.length > 0) {
+            const byId = new Map(hydratedFileChanges.map((activity) => [activity.id, activity]))
+            detail.activities = detail.activities.map((activity) => byId.get(activity.id) || activity)
+        }
+        return { success: true as const, detail }
     }
 
     async renameSession(sessionId: string, title: string) {
@@ -1927,7 +1951,39 @@ export class AssistantService {
             removedMessageIds,
             removedActivityIds
         })
+        const hydratedFileChanges = await this.hydrateDeferredFileChanges(projection.activities)
+        if (hydratedFileChanges.length > 0) {
+            await this.persistence.projectCanonicalReviewTimeline({
+                threadId: thread.id,
+                messages: [],
+                activities: hydratedFileChanges
+            })
+        }
         this.canonicalReviewHistoryState.set(canonicalChatId, { threadId: thread.id, totalEntries, modifiedAt })
+    }
+
+    private async hydrateDeferredFileChanges(activities: AssistantActivity[]): Promise<AssistantActivity[]> {
+        const hydratedFileChanges: AssistantActivity[] = []
+        for (const activity of activities) {
+            const ref = activity.kind === 'file-change'
+                ? parseAssistantHistoryBodyRef(activity.payload?.['historyBodyRef'])
+                : null
+            if (!ref) continue
+            try {
+                const hydrated = await this.hydrateHistoryBody({ activityId: activity.id, ref })
+                hydratedFileChanges.push({
+                    ...activity,
+                    payload: { ...(activity.payload || {}), ...hydrated.body.payload }
+                })
+            } catch (error) {
+                log.warn('[Assistant] Failed to hydrate a deferred Review file change', {
+                    canonicalChatId: ref.canonicalChatId,
+                    activityId: activity.id,
+                    error
+                })
+            }
+        }
+        return hydratedFileChanges
     }
 
     private async recoverSelectedSessionTitle(): Promise<void> {
@@ -2677,6 +2733,19 @@ function canonicalImageAttachment(
 
 function serializeCanonicalAttachments(body: string, attachments: string[]): string {
     return `${body.trimEnd()}\n\nAttached files (${attachments.length}):\n${attachments.join('\n\n')}`.trimStart()
+}
+
+function historyBodyRefsMatch(left: AssistantHistoryBodyRef, right: AssistantHistoryBodyRef): boolean {
+    return left.version === right.version
+        && left.canonicalChatId === right.canonicalChatId
+        && left.entryIndex === right.entryIndex
+        && left.entryId === right.entryId
+        && left.entrySha256 === right.entrySha256
+        && (left.toolCallId || null) === (right.toolCallId || null)
+        && (left.toolName || null) === (right.toolName || null)
+        && (left.bodyBytes ?? null) === (right.bodyBytes ?? null)
+        && JSON.stringify(left.contentTypes || []) === JSON.stringify(right.contentTypes || [])
+        && (left.imageCount ?? null) === (right.imageCount ?? null)
 }
 
 function projectCanonicalToolResult(input: {

@@ -148,7 +148,9 @@ function runtimeSessionSnapshot(runtime) {
   const sessionManager = runtime?.session?.sessionManager;
   const sessionFile = sessionManager?.getSessionFile?.();
   const header = sessionFile ? readSessionHeader(sessionFile) : {};
-  const entries = Array.isArray(sessionManager?.getEntries?.()) ? sessionManager.getEntries() : readSessionEntries(sessionFile);
+  const fileEntries = sessionFile && existsSync(sessionFile) ? readSessionEntries(sessionFile) : [];
+  const managerEntries = sessionManager?.getEntries?.();
+  const entries = fileEntries.length > 0 ? fileEntries : Array.isArray(managerEntries) ? managerEntries : [];
   const sessionId = sessionManager?.getSessionId?.() ?? header.id ?? sessionIdFromPath(sessionFile);
   const sourceUpdatedAt = sessionFile && existsSync(sessionFile) ? statSync(sessionFile).mtime.toISOString() : new Date().toISOString();
   return {

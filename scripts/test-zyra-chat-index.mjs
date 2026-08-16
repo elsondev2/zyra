@@ -125,6 +125,7 @@ try {
   assert.match(hydrated.entry.message.content[0].text, /^file contents$|^output-/, "an indexed body reference must hydrate the exact canonical entry");
   const hydratedImage = index.entryBody("canonical:test", deferredImageEntry.historyBodyRef);
   assert.equal(hydratedImage.entry.message.content[1].data, "fixture-image-0", "on-demand hydration preserves canonical image bodies exactly");
+  assert.equal((await index.searchToolResults("canonical:test", "fixture-image-0")).length, 0, "deferred search skips image payload bytes");
   assert.throws(
     () => index.entryBody("canonical:test", { ...deferredEntries[0].historyBodyRef, entryId: "wrong-entry" }),
     /does not match|stale/,

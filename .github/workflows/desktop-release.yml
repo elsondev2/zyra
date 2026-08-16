@@ -66,12 +66,13 @@ jobs:
           ZYRA_MACOS_NOTARIZATION_API_KEY: ${{ secrets.ZYRA_MACOS_NOTARIZATION_API_KEY }}
           ZYRA_MACOS_NOTARIZATION_KEY_ID: ${{ secrets.ZYRA_MACOS_NOTARIZATION_KEY_ID }}
           ZYRA_MACOS_NOTARIZATION_ISSUER_ID: ${{ secrets.ZYRA_MACOS_NOTARIZATION_ISSUER_ID }}
+          EXPECTED_VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
             node desktop/scripts/release/preflight.mjs --mode=tag --tag="${GITHUB_REF_NAME}"
           else
-            node desktop/scripts/release/preflight.mjs --mode=rehearsal --ref-name="${GITHUB_REF_NAME}" --expected-version="${{ inputs.version }}"
+            node desktop/scripts/release/preflight.mjs --mode=rehearsal --ref-name="${GITHUB_REF_NAME}" --expected-version="${EXPECTED_VERSION}"
           fi
 
       - name: Run focused release contracts

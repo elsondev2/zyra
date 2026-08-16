@@ -236,7 +236,25 @@ async function runMemoryWorkerConsolidationRegression() {
     ensureZyraMemory(root);
     const sessionFile = path.join(root, ".zyra", "sessions", "current.jsonl");
     mkdirSync(path.dirname(sessionFile), { recursive: true });
-    writeFileSync(sessionFile, "", "utf8");
+    writeFileSync(sessionFile, [
+      JSON.stringify({ type: "session", id: "current-worker-thread", cwd: root, timestamp: "2026-05-24T00:00:00.000Z" }),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-05-24T00:00:00.000Z",
+        message: { role: "user", content: "remember that consolidation must be internal, not visible chat" },
+      }),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-05-24T00:00:00.500Z",
+        message: { role: "toolResult", toolCallId: "memory-read", toolName: "read", content: [{ type: "text", text: "canonical tool evidence survives attach projection" }] },
+      }),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-05-24T00:00:01.000Z",
+        message: { role: "assistant", content: [{ type: "text", text: "I will run the memory worker internally." }] },
+      }),
+      "",
+    ].join("\n"), "utf8");
     const runtime = {
       root,
       project: root,
@@ -268,6 +286,7 @@ async function runMemoryWorkerConsolidationRegression() {
         assert.equal(prep.threadId, "current-worker-thread");
         assert.match(prompt, /internal Memory Writing Agent: Phase 1/);
         assert.match(prompt, /consolidation must be internal/);
+        assert.match(prompt, /canonical tool evidence survives attach projection/);
         return [
           "```json",
           JSON.stringify({

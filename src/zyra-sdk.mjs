@@ -97,6 +97,7 @@ const commandCache = new Map();
 export const defaults = {
   piPackage: "@earendil-works/pi-coding-agent",
   root: ROOT,
+  dataRoot: path.resolve(process.env.ZYRA_DATA_ROOT || ROOT),
   project: path.resolve(process.env.ZYRA_CALLER_CWD ?? process.cwd()),
   prompt: path.join(ROOT, "prompts/zyra_system_prompt.md"),
   profileDir: path.join(ROOT, "prompts/profiles"),
@@ -745,16 +746,16 @@ export async function createZyraSession(options = {}) {
     injectZyraGuide(result.session, readPrompt(defaults.prompt));
   }
   injectSurfaceGuide(result.session, options.surface);
-  ensureZyraMemory(ROOT);
+  ensureZyraMemory(defaults.dataRoot);
   const memoryStartup = options.skipMemoryStartup
     ? { claimed: 0, prepared: 0, pruned: 0, claims: [], preparedJobs: [], prunedThreadIds: [], skipped: true }
-    : runZyraMemoryStartup(ROOT, {
+    : runZyraMemoryStartup(defaults.dataRoot, {
       project,
       sessions,
       session: result.session,
     }, { maxClaimed: options.memoryStartupMaxClaimed ?? 2 });
   if (!options.skipMemoryInjection) {
-    injectLayeredMemory(result.session, ROOT);
+    injectLayeredMemory(result.session, defaults.dataRoot);
   }
   if (!options.skipProfileInjection) {
     injectActiveProfile(result.session, profile, project);
@@ -1837,16 +1838,16 @@ export function buildZyraConsolidationPrompt(runtime) {
 }
 
 export async function runZyraMemoryConsolidation(runtime, options = {}) {
-  const root = path.resolve(options.root ?? defaults.root);
+  const root = path.resolve(options.root ?? defaults.dataRoot);
   return memoryRunner(root).runConsolidation(runtime, { ...options, root });
 }
 
 export function startZyraMemoryBackgroundStartup(runtime, options = {}) {
-  return memoryRunner(defaults.root).startBackgroundStartup(runtime, options);
+  return memoryRunner(defaults.dataRoot).startBackgroundStartup(runtime, options);
 }
 
 export function createZyraMemoryController(runtime, options = {}) {
-  const root = path.resolve(options.root ?? defaults.root);
+  const root = path.resolve(options.root ?? defaults.dataRoot);
   return createMemoryController({
     root,
     runtime,

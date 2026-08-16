@@ -8,6 +8,9 @@ export const ASSISTANT_TRUNCATED_ACTIVITY_PAYLOAD_ESTIMATED_CHARACTERS = 160
 const COMPACT_PAYLOAD_KEYS = [
     'status',
     'toolName',
+    'toolCallId',
+    'canonicalMessageId',
+    'historyBodyRef',
     'args',
     'paths',
     'fileCount',
@@ -30,6 +33,8 @@ const COMPACT_PAYLOAD_KEYS = [
     'source',
     'authoritative',
     'revision',
+    'additions',
+    'deletions',
     'createdPaths',
     'diffUnavailableReason'
 ] as const

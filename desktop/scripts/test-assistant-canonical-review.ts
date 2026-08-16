@@ -61,15 +61,27 @@ const firstTurn = [
     },
     {
         type: 'message',
+        id: 'entry:review-edit-result',
         timestamp: '2026-08-04T08:00:02.000Z',
+        historyBodyRef: {
+            version: 1,
+            canonicalChatId,
+            entryIndex: 2,
+            entryId: 'entry:review-edit-result',
+            entrySha256: 'c'.repeat(64),
+            toolCallId: 'review-edit-call',
+            toolName: 'edit',
+            bodyBytes: 900_000,
+            contentTypes: ['text'],
+            imageCount: 0
+        },
         message: {
+            id: 'message:review-edit-result',
             role: 'toolResult',
             timestamp: 1_785_830_402_000,
             toolCallId: 'review-edit-call',
             toolName: 'edit',
-            isError: false,
-            content: [{ type: 'text', text: 'Successfully replaced 1 block.' }],
-            details: { diff: patch, patch }
+            isError: false
         }
     },
     {
@@ -173,11 +185,20 @@ ZyraPiRuntime.prototype.searchCanonicalToolOutputs = async (_session, _project, 
 ZyraPiRuntime.prototype.readCanonicalHistoryEntryBody = async (_session, _project, ref) => {
     historyBodyReads += 1
     const isEdit = ref.entryId === 'entry:deferred-edit-result'
+    const isReviewEdit = ref.entryId === 'entry:review-edit-result'
     return {
         entry: {
             type: 'message',
-            id: isEdit ? 'entry:deferred-edit-result' : 'entry:deferred-read-result',
-            message: isEdit ? {
+            id: isReviewEdit ? 'entry:review-edit-result' : isEdit ? 'entry:deferred-edit-result' : 'entry:deferred-read-result',
+            message: isReviewEdit ? {
+                id: 'message:review-edit-result',
+                role: 'toolResult',
+                toolCallId: 'review-edit-call',
+                toolName: 'edit',
+                isError: false,
+                content: [{ type: 'text', text: 'Successfully replaced 1 block.' }],
+                details: { patch, diff: patch }
+            } : isEdit ? {
                 id: 'message:deferred-edit-result',
                 role: 'toolResult',
                 toolCallId: 'deferred-edit-call',
@@ -248,6 +269,10 @@ try {
     assert.equal(hydratedBody.body.payload.output, 'deferred file contents')
     await service.hydrateHistoryBody({ activityId: deferredActivity!.id, ref: deferredActivity!.payload!.historyBodyRef as any })
     assert.equal(historyBodyReads, 1, 'the main process retains only recently requested historical bodies in its LRU cache')
+    await assert.rejects(() => service.hydrateHistoryBody({
+        activityId: deferredActivity!.id,
+        ref: { ...(deferredActivity!.payload!.historyBodyRef as any), bodyBytes: 1 }
+    }), /does not match the stored activity/, 'renderer metadata cannot bypass canonical cache accounting')
 
     const deferredEditProjection = projectCanonicalTimeline([
         {
@@ -308,6 +333,7 @@ try {
     assert.equal(firstReview.index.turns[0]?.changes[0]?.filePath.replace(/\\/g, '/').endsWith('/src/review-index.ts'), true)
     assert.equal(firstReview.index.turns[0]?.changes[0]?.additions, 1)
     assert.equal(firstReview.index.turns[0]?.changes[0]?.deletions, 1)
+    assert.equal(historyBodyReads, 3, 'Review hydrates deferred file changes without loading unrelated historical output')
     assert.deepEqual(historyRequests.map((request) => request.before), [null, '2'], 'Review must read every canonical page on first open')
     const indexedEditActivity = await (service as any).persistence.readActivity(thread.id, 'zyra-tool-review-edit-call')
     assert.equal(indexedEditActivity?.turnId, firstReview.index.turns[0]!.id)
@@ -319,11 +345,18 @@ try {
 
     const firstTurnDetail = await service.getTurnDetail(thread.id, firstReview.index.turns[0]!.id)
     assert.deepEqual(firstTurnDetail.detail.messages.map((message) => message.text), ['Review this file', 'Review complete'])
-    assert.equal(firstTurnDetail.detail.activities.some((activity) => activity.kind === 'file-change'), true)
+    const reviewedFileChange = firstTurnDetail.detail.activities.find((activity) => activity.kind === 'file-change')
+    assert.equal(reviewedFileChange?.payload?.patch, patch, 'deferred Review file changes retain their authoritative patch')
+    assert.equal(reviewedFileChange?.payload?.authoritative, true)
 
     await service.getReviewIndex(thread.id)
     assert.equal(historyRequests.length, 3, 'an unchanged Review refresh checks only the latest canonical page')
 
+    const runtime = (service as any).runtime
+    runtime.emit('catalog.changed', { canonicalChatId, presence: true })
+    assert.equal((service as any).canonicalReviewHistoryState.size, 1, 'presence-only catalog changes do not trigger history backfills')
+    runtime.emit('catalog.changed', { canonicalChatId })
+    assert.equal((service as any).canonicalReviewHistoryState.size, 0, 'cross-surface transcript changes invalidate Review/search history state')
     timelineVersion = 1
     const updatedReview = await service.getReviewIndex(thread.id)
     assert.equal(updatedReview.index.totalTurns, 2)

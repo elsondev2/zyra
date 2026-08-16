@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { getAgentServerPaths } from "./paths.mjs";
 import {
@@ -18,6 +19,7 @@ export class ZyraAgentServerClient extends EventEmitter {
     super();
     this.root = path.resolve(options.root || path.resolve(import.meta.dirname, "../.."));
     this.paths = getAgentServerPaths(options);
+    this.dataRoot = path.resolve(options.dataRoot || process.env.ZYRA_DATA_ROOT || (process.versions.electron ? os.homedir() : this.root));
     this.clientId = String(options.clientId || `agent-client:${process.pid}`);
     this.surface = String(options.surface || "unknown");
     this.authorities = Array.isArray(options.authorities) ? [...new Set(options.authorities)] : [];
@@ -170,7 +172,8 @@ export class ZyraAgentServerClient extends EventEmitter {
       stdio: "ignore",
       env: {
         ...process.env,
-        ZYRA_ROOT: this.root
+        ZYRA_ROOT: this.root,
+        ZYRA_DATA_ROOT: this.dataRoot
       }
     });
     child.once("error", (error) => this.emit("server-start-error", error));

@@ -1608,7 +1608,7 @@ export class ZyraPiRuntime extends EventEmitter {
     private getAgentServerConnection(root: string): DesktopAgentServerConnection {
         if (!this.agentServerConnection) {
             this.agentServerConnection = new DesktopAgentServerConnection(root)
-            this.unsubscribeCatalogChanged = this.agentServerConnection.onCatalogChanged(() => this.emit('catalog.changed'))
+            this.unsubscribeCatalogChanged = this.agentServerConnection.onCatalogChanged((change) => this.emit('catalog.changed', change))
         }
         return this.agentServerConnection
     }

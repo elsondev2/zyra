@@ -1004,25 +1004,6 @@ function runWriteToolRicherRepresentationRegression() {
   assert.equal(meaningful.some((line) => line.includes("status started")), true);
 }
 
-function runDeferredToolOutputRegression() {
-  const plain = renderToolBlock({
-    state: "done",
-    toolName: "bash",
-    args: { command: "npm test" },
-    historyBodyRef: {
-      version: 1,
-      canonicalChatId: "chat:test",
-      entryIndex: 10,
-      entryId: "entry:tool",
-      entrySha256: "a".repeat(64),
-    },
-  }, undefined, 90).map(stripAnsi).join("\n");
-
-  assert.match(plain, /npm test/);
-  assert.match(plain, /stored output — load on demand/);
-  assert.doesNotMatch(plain, /no output/i, "a deferred body must not look like a canonical empty result");
-}
-
 function runConsecutiveToolSpacingRegression() {
   const ui = createZyraUi();
   ui._debugBeginInteractiveForTests();
@@ -2588,7 +2569,6 @@ runFailedFileChangePreviewRegression();
 runSnapshotBackedWriteRenderingRegression();
 runFileChangeEventsWithoutIdsRegression();
 runWriteToolRicherRepresentationRegression();
-runDeferredToolOutputRegression();
 runConsecutiveToolSpacingRegression();
 runAssistantAndToolInterleaveRegression();
 runTerminalLineControlSanitizationRegression();

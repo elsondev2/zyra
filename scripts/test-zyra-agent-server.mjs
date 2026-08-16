@@ -320,9 +320,8 @@ try {
     "a later TUI attachment must synchronize its explicit max setting to the shared worker"
   );
   assert.equal(tuiRuntime.history.events()[0].message.content[0].text, "hello");
-  const deferredTuiTool = tuiRuntime.history.events().find((event) => event.historyBodyRef);
-  assert.ok(deferredTuiTool, "the TUI history projection must retain an on-demand body reference");
-  assert.equal((await tuiRuntime.history.loadToolResult(deferredTuiTool.historyBodyRef)).output, "historical output 0");
+  const historicalTuiTool = tuiRuntime.history.events().find((event) => event.toolCallId === "tool:0");
+  assert.equal(historicalTuiTool.result.content[0].text, "historical output 0", "TUI history remains complete until its UI has an interactive hydration path");
   const remoteEvents = [];
   tuiRuntime.session.subscribe((event) => remoteEvents.push(event));
 
