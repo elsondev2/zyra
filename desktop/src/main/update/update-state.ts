@@ -69,12 +69,17 @@ export function shouldBroadcastDownloadProgress(
 export function getAutoUpdateDisabledReason(args: {
     isPackaged: boolean
     disabledByEnv: boolean
+    platform?: NodeJS.Platform
+    appImagePath?: string | null
 }): string | null {
     if (!args.isPackaged) {
         return 'Automatic updates are only available in packaged production builds.'
     }
     if (args.disabledByEnv) {
         return 'Automatic updates are disabled by the DEVSCOPE_DISABLE_AUTO_UPDATE setting.'
+    }
+    if (args.platform === 'linux' && !args.appImagePath?.trim()) {
+        return 'Automatic updates require the AppImage build on Linux. Open the release page to update this installation.'
     }
     return null
 }

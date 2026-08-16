@@ -184,10 +184,32 @@ try {
         0,
         `packaged agent server must start without system Node on PATH\nstdout: ${agentSmoke.stdout}\nstderr: ${agentSmoke.stderr}`
     )
-    const descriptor = JSON.parse(readFileSync(path.join(agentState, 'agent-server-packaged-smoke.json'), 'utf8'))
-    try { process.kill(Number(descriptor.pid)) } catch {}
+    if (process.platform === 'win32') {
+        assert.equal(readdirSync(path.join(dataRoot, '.zyra', 'runtime')).some((name) => /^node-.*\.exe$/i.test(name)), true, 'Windows runs the detached server from a writable versioned Node cache')
+    }
+    const descriptorName = readdirSync(agentState).find((name) => /^agent-server-v\d+-packaged-smoke\.json$/.test(name))
+    assert(descriptorName, 'packaged smoke writes a protocol-versioned descriptor')
+    const descriptor = JSON.parse(readFileSync(path.join(agentState, descriptorName), 'utf8'))
+    const serverPid = Number(descriptor.pid)
+    try { process.kill(serverPid) } catch {}
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+        try {
+            process.kill(serverPid, 0)
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50)
+        } catch {
+            break
+        }
+    }
 } finally {
-    rmSync(outsideCheckout, { recursive: true, force: true })
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+        try {
+            rmSync(outsideCheckout, { recursive: true, force: true })
+            break
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'EACCES' || attempt === 99) throw error
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100)
+        }
+    }
 }
 
 console.log('Zyra packaged runtime resource contract: ok')

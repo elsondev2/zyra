@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync } from "node:fs";
+import { constants as fsConstants, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -162,7 +162,7 @@ export class ZyraAgentServerClient extends EventEmitter {
     // Electron's Windows executable exits immediately when launched detached with
     // ignored stdio, so Windows carries Node. Signed macOS/Linux Electron binaries
     // run the same entrypoint with ELECTRON_RUN_AS_NODE.
-    const { executable, electronAsNode } = resolveAgentServerNodeLaunch();
+    const { executable, electronAsNode } = resolveAgentServerNodeLaunch(this.dataRoot);
     const child = spawn(executable, [entry, "--channel", this.paths.channel], {
       cwd: this.root,
       detached: true,
@@ -250,13 +250,33 @@ export class ZyraAgentServerClient extends EventEmitter {
   }
 }
 
-function resolveAgentServerNodeLaunch() {
+function resolveAgentServerNodeLaunch(dataRoot) {
   if (!process.versions.electron) return { executable: process.execPath, electronAsNode: false };
   const configured = String(process.env.ZYRA_NODE_EXECUTABLE || "");
   if (configured) return { executable: configured, electronAsNode: false };
   if (process.platform !== "win32") return { executable: process.execPath, electronAsNode: true };
   const packaged = process.resourcesPath ? path.join(process.resourcesPath, "zyra-node", "node.exe") : "";
-  return { executable: packaged && existsSync(packaged) ? packaged : "node", electronAsNode: false };
+  return {
+    executable: packaged && existsSync(packaged) ? cachePackagedWindowsNode(packaged, dataRoot) : "node",
+    electronAsNode: false
+  };
+}
+
+function cachePackagedWindowsNode(source, dataRoot) {
+  const sourceSize = statSync(source).size;
+  const directory = path.join(dataRoot, ".zyra", "runtime");
+  const target = path.join(directory, `node-${process.versions.node}-${sourceSize}.exe`);
+  if (!existsSync(target) || statSync(target).size !== sourceSize) {
+    mkdirSync(directory, { recursive: true });
+    try { copyFileSync(source, target, fsConstants.COPYFILE_EXCL); }
+    catch (error) { if (error?.code !== "EEXIST") throw error; }
+  }
+  if (!existsSync(target) || statSync(target).size !== sourceSize) throw new Error("Cached Node runtime is incomplete.");
+  for (const name of readdirSync(directory)) {
+    if (name === path.basename(target) || !/^node-.*\.exe$/i.test(name)) continue;
+    try { rmSync(path.join(directory, name), { force: true }); } catch {}
+  }
+  return target;
 }
 
 function readDescriptor(file) {

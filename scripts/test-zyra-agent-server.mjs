@@ -7,6 +7,8 @@ import { CanonicalChatCatalog } from "../src/agent-server/catalog.mjs";
 import { ZyraAgentServerClient } from "../src/agent-server/client.mjs";
 import { ZyraAgentServer } from "../src/agent-server/server.mjs";
 import { AgentEventJournal } from "../src/agent-server/event-journal.mjs";
+import { getAgentServerPaths } from "../src/agent-server/paths.mjs";
+import { AGENT_SERVER_PROTOCOL_VERSION } from "../src/agent-server/protocol.mjs";
 import { createZyraTuiClientRuntime } from "../src/agent-server/tui-runtime.mjs";
 import { syncZyraThinkingLevel } from "../src/zyra-sdk.mjs";
 
@@ -72,6 +74,8 @@ class FakeWorker extends EventEmitter {
 
 const stateDirectory = mkdtempSync(path.join(os.tmpdir(), "zyra-agent-server-test-"));
 const channel = `test-${process.pid}-${Date.now()}`;
+assert.ok(AGENT_SERVER_PROTOCOL_VERSION >= 2);
+assert.match(getAgentServerPaths({ stateDirectory, channel }).descriptorFile, new RegExp(`agent-server-v${AGENT_SERVER_PROTOCOL_VERSION}-`));
 const project = path.join(stateDirectory, "project");
 const sessionPath = path.join(project, ".zyra", "sessions", "chat-test.jsonl");
 const fakeSessions = [{
