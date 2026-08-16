@@ -24,7 +24,6 @@ export class CanonicalChatIndex {
     this.file = path.join(this.paths.stateDirectory, "chat-index-v3.json");
     this.record = readIndex(this.file);
     this.projectScans = new Map();
-    this.toolOutputSearches = new Map();
   }
 
   async listProjects(projects = []) {
@@ -138,24 +137,15 @@ export class CanonicalChatIndex {
   }
 
   async searchToolResults(canonicalChatId, query, limit) {
-    const id = String(canonicalChatId || "").trim();
-    const chat = this.record.chats[id];
+    const chat = this.record.chats[String(canonicalChatId || "").trim()];
     if (!chat) return null;
-    this.toolOutputSearches.get(id)?.abort();
-    const controller = new AbortController();
-    this.toolOutputSearches.set(id, controller);
-    try {
-      return await searchIndexedToolResults(
-        chat.sessionPath,
-        chat.deferredToolResults || [],
-        chat.entryOffsets || [],
-        query,
-        limit,
-        controller.signal
-      );
-    } finally {
-      if (this.toolOutputSearches.get(id) === controller) this.toolOutputSearches.delete(id);
-    }
+    return searchIndexedToolResults(
+      chat.sessionPath,
+      chat.deferredToolResults || [],
+      chat.entryOffsets || [],
+      query,
+      limit
+    );
   }
 
   entryBody(canonicalChatId, ref = {}) {

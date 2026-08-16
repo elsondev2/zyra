@@ -11,7 +11,7 @@ import {
   verifyOpenAIApiKey,
 } from "../src/auth-methods.mjs";
 import { promptSecret } from "../src/secret-input.mjs";
-import { switchZyraAuthMethod } from "../src/zyra-sdk.mjs";
+import { loginZyraAuth, switchZyraAuthMethod } from "../src/zyra-sdk.mjs";
 import { getSlashSuggestions } from "../src/slash-suggestions.mjs";
 import { handleSlash } from "../src/slash-command-handlers.mjs";
 
@@ -83,6 +83,27 @@ function testStatusAndRemoval() {
   removeZyraAuthMethod(auth, "api");
   assert.equal(auth.hasAuth("openai"), false);
   assert.equal(normalizeZyraAuthMethod("chatgpt"), "subscription");
+}
+
+async function testSubscriptionLoginCallbacks() {
+  let selected;
+  const authStorage = {
+    async login(_provider, callbacks) {
+      selected = await callbacks.onSelect({
+        message: "Choose login",
+        options: [{ id: "device", label: "Device code" }, { id: "browser", label: "Browser callback" }],
+      });
+      assert.equal(typeof callbacks.onManualCodeInput, "function");
+    },
+    getAuthStatus: () => ({ configured: true, source: "stored" }),
+  };
+  const result = await loginZyraAuth("openai-codex", {
+    authStorage,
+    onMessage: () => undefined,
+    onPrompt: async () => "manual-code",
+  });
+  assert.equal(selected, "browser");
+  assert.equal(result.status.configured, true);
 }
 
 async function testSecretPromptMasksInput() {
@@ -200,6 +221,7 @@ await testVerificationAndStorage();
 await testInvalidKeyIsNotStored();
 await testValidKeyWithoutLunaFallsBack();
 testStatusAndRemoval();
+await testSubscriptionLoginCallbacks();
 await testSecretPromptMasksInput();
 await testRuntimeSwitchesToVerifiedApiModel();
 testAuthMethodSuggestions();

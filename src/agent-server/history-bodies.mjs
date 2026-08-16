@@ -32,7 +32,7 @@ export function inspectToolResultEntry(entry, entryIndex, byteLength, identity =
   };
 }
 
-export async function searchIndexedToolResults(file, records, offsets, query, limit = 100, signal) {
+export async function searchIndexedToolResults(file, records, offsets, query, limit = 100) {
   const needle = String(query || "").trim().toLowerCase();
   if (!needle || !existsSync(file)) return [];
   const matchLimit = Math.max(1, Math.min(200, Number(limit) || 100));
@@ -40,7 +40,6 @@ export async function searchIndexedToolResults(file, records, offsets, query, li
   const handle = await openFile(file, "r");
   try {
     for (let index = records.length - 1; index >= 0 && matches.length < matchLimit; index -= 1) {
-      if (signal?.aborted) break;
       const record = records[index];
       if (record.imageCount > 0 && record.bodyBytes > 1024 * 1024) continue;
       const pair = offsets[record.entryIndex];
@@ -49,7 +48,7 @@ export async function searchIndexedToolResults(file, records, offsets, query, li
       if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || length <= 0) continue;
       const buffer = Buffer.allocUnsafe(length);
       const { bytesRead } = await handle.read(buffer, 0, length, offset);
-      if (bytesRead !== length || signal?.aborted) continue;
+      if (bytesRead !== length) continue;
       let entry;
       try { entry = JSON.parse(buffer.toString("utf8")); }
       catch { continue; }

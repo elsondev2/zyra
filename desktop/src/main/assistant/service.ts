@@ -609,6 +609,8 @@ export class AssistantService {
             ? declaredBodyBytes
             : Buffer.byteLength(JSON.stringify(body), 'utf8')
         if (bodyBytes <= MAX_SINGLE_CACHED_HISTORY_BODY_BYTES) {
+            const replaced = this.canonicalHistoryBodyCache.get(cacheKey)
+            if (replaced) this.canonicalHistoryBodyCacheBytes -= replaced.bytes
             this.canonicalHistoryBodyCache.set(cacheKey, { body, bytes: bodyBytes })
             this.canonicalHistoryBodyCacheBytes += bodyBytes
             while (this.canonicalHistoryBodyCache.size > MAX_CACHED_HISTORY_BODIES || this.canonicalHistoryBodyCacheBytes > MAX_CACHED_HISTORY_BODY_BYTES) {

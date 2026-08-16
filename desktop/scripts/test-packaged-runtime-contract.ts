@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { closeSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync } from 'node:fs'
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -16,6 +16,14 @@ const runtimeRoot = path.join(desktopRoot, '.release', 'zyra-runtime')
 
 assert.equal(rootPackage.version, desktopPackage.version, 'Desktop and root versions must be lockstep')
 await validateRuntimeStage(runtimeRoot, { expectedVersion: rootPackage.version, requireDependencies: true })
+const stagedSdkSource = readFileSync(path.join(runtimeRoot, 'src', 'zyra-sdk.mjs'), 'utf8')
+assert.equal(
+    /(?:ensureZyraMemory|runZyraMemoryStartup|injectLayeredMemory|markZyraThreadMemoryPolluted|buildRecommendedPrompts)\(defaults\.root/.test(stagedSdkSource),
+    false,
+    'packaged memory operations must use the writable data root'
+)
+assert.equal(stagedSdkSource.includes('memoryRunner(root = defaults.root)'), false)
+assert.equal(stagedSdkSource.includes('buildConsolidationPrompt({ ...runtime, root: defaults.root }'), false)
 
 const resourcesPath = path.dirname(runtimeRoot)
 const processWithResources = process as NodeJS.Process & { resourcesPath?: string }
@@ -153,6 +161,31 @@ try {
         0,
         `staged SDK must import without a neighboring source checkout\nstdout: ${result.stdout}\nstderr: ${result.stderr}`
     )
+
+    if (process.platform === 'win32') {
+        assert.equal(existsSync(path.join(resourcesPath, 'zyra-node', 'node.exe')), true, 'Windows resources include a pinned Node executable')
+    } else {
+        assert.equal(existsSync(path.join(resourcesPath, 'zyra-node', 'electron-run-as-node.txt')), true, 'Unix resources declare the signed Electron Node runtime')
+    }
+    const agentState = path.join(outsideCheckout, 'agent-state')
+    const clientUrl = pathToFileURL(path.join(runtimeRoot, 'src', 'agent-server', 'client.mjs')).href
+    const agentSmoke = spawnSync(process.execPath, [
+        '--input-type=module',
+        '--eval',
+        `Object.defineProperty(process.versions, 'electron', { value: 'packaged-test', configurable: true }); Object.defineProperty(process, 'resourcesPath', { value: ${JSON.stringify(resourcesPath)}, configurable: true }); const { ZyraAgentServerClient } = await import(${JSON.stringify(clientUrl)}); const client = new ZyraAgentServerClient({ root: ${JSON.stringify(runtimeRoot)}, stateDirectory: ${JSON.stringify(agentState)}, channel: 'packaged-smoke' }); await client.connect(); const status = await client.request('server.status'); if (!status.pid) process.exit(21); client.close();`
+    ], {
+        cwd: outsideCheckout,
+        env: { ...process.env, PATH: '', ZYRA_DATA_ROOT: dataRoot },
+        encoding: 'utf8',
+        timeout: 45_000
+    })
+    assert.equal(
+        agentSmoke.status,
+        0,
+        `packaged agent server must start without system Node on PATH\nstdout: ${agentSmoke.stdout}\nstderr: ${agentSmoke.stderr}`
+    )
+    const descriptor = JSON.parse(readFileSync(path.join(agentState, 'agent-server-packaged-smoke.json'), 'utf8'))
+    try { process.kill(Number(descriptor.pid)) } catch {}
 } finally {
     rmSync(outsideCheckout, { recursive: true, force: true })
 }

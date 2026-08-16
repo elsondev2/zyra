@@ -15,6 +15,7 @@ const build = desktopPackage.build
 
 assert.equal(rootPackage.version, '0.6.0')
 assert.equal(desktopPackage.version, rootPackage.version, 'root and Desktop versions must be lockstep')
+assert(JSON.stringify(build.extraResources || []).includes('.release/zyra-node'), 'desktop packages the pinned Node runtime')
 assert.equal(rootLock.version, rootPackage.version)
 assert.equal(rootLock.packages[''].version, rootPackage.version)
 assert.equal(desktopLock.version, desktopPackage.version)
