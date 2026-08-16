@@ -199,6 +199,10 @@ export class ZyraAgentServer extends EventEmitter {
   }
 
   getDesktopAuthorityHash() {
+    try {
+      const persisted = readFileSync(this.paths.desktopAuthorityFile, "utf8").trim();
+      if (persisted) this.desktopAuthorityHash = persisted;
+    } catch {}
     return this.desktopAuthorityHash;
   }
 

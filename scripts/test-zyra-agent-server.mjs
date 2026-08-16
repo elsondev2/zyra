@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CanonicalChatCatalog } from "../src/agent-server/catalog.mjs";
@@ -123,6 +124,16 @@ durableJournal.append({
 const reopenedDurableJournal = new AgentEventJournal(path.join(stateDirectory, "journal-test"), "chat:journal");
 assert.equal(reopenedDurableJournal.replay(0).length, 1, "token-level message updates must stay live-only instead of synchronously hitting the durable journal");
 assert.equal(reopenedDurableJournal.latestSequence(), 1, "transient stream updates must not advance durable replay state");
+
+const lateAuthorityChannel = `${channel}-late-authority`;
+const lateAuthorityPaths = getAgentServerPaths({ stateDirectory, channel: lateAuthorityChannel });
+const lateAuthorityServer = new ZyraAgentServer({ stateDirectory, channel: lateAuthorityChannel, endpoint: 0, catalog });
+await lateAuthorityServer.start();
+assert.equal(lateAuthorityServer.getDesktopAuthorityHash(), null);
+const lateAuthorityHash = createHash("sha256").update("late-desktop-proof").digest("base64url");
+writeFileSync(lateAuthorityPaths.desktopAuthorityFile, lateAuthorityHash, { encoding: "utf8", mode: 0o600 });
+assert.equal(lateAuthorityServer.getDesktopAuthorityHash(), lateAuthorityHash, "a TUI-first server reloads Desktop authority created after startup");
+await lateAuthorityServer.stop();
 
 const workers = [];
 const server = new ZyraAgentServer({
