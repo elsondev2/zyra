@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { performance } from 'node:perf_hooks'
 import initSqlJs from 'sql.js/dist/sql-asm.js'
 import { createAssistantLongHistoryFixture } from './fixtures/assistant-long-history-fixture'
-import { readAssistantHistoryPage, readAssistantReviewIndex } from '../src/main/assistant/persistence-history'
+import { INITIAL_ASSISTANT_HISTORY_TURN_LIMIT, readAssistantHistoryPage, readAssistantReviewIndex } from '../src/main/assistant/persistence-history'
 import { initializeAssistantPersistenceSchema } from '../src/main/assistant/persistence-utils'
 import { replaceAssistantSnapshot } from '../src/main/assistant/persistence-write'
 import { toAssistantShellSnapshot } from '../src/main/assistant/persistence-snapshot'
@@ -32,6 +32,10 @@ const pageStart = performance.now()
 const page = readAssistantHistoryPage(db, { threadId: thread.id })
 const pageReadMs = performance.now() - pageStart
 const pagePayloadBytes = JSON.stringify(page).length
+const previousBudgetPageStart = performance.now()
+const previousBudgetPage = readAssistantHistoryPage(db, { threadId: thread.id, turnLimit: 20 })
+const previousBudgetPageReadMs = performance.now() - previousBudgetPageStart
+const previousBudgetPayloadBytes = JSON.stringify(previousBudgetPage).length
 
 const projectionRowsStart = performance.now()
 const projectionRows = readAssistantTimelineProjectionRows(db, thread.id)
@@ -49,7 +53,9 @@ const deriveMs = performance.now() - deriveStart
 
 assert.equal(fullMessageRows.length, 2000)
 assert.equal(fullActivityRows.length, 4000)
-assert.equal(page.messages.filter((message) => message.role === 'user').length, 20)
+assert.equal(page.messages.filter((message) => message.role === 'user').length, INITIAL_ASSISTANT_HISTORY_TURN_LIMIT)
+assert.ok(previousBudgetPage.messages.filter((message) => message.role === 'user').length > INITIAL_ASSISTANT_HISTORY_TURN_LIMIT)
+assert.ok(pagePayloadBytes < previousBudgetPayloadBytes, 'the optimized first-paint page is smaller than an expanded 20-turn request')
 assert.equal(page.pageInfo.hasOlder, true)
 assert.ok(shellPayloadBytes < fullPayloadBytes / 20, 'shell payload should exclude history bodies')
 assert.ok(pagePayloadBytes < fullPayloadBytes / 10, 'initial page payload should remain bounded')
@@ -65,11 +71,12 @@ assert.doesNotMatch(assistantPageSource, /requestIdleCallback\(preload/, 'the 80
 
 console.log(JSON.stringify({
     fixture: { messages: fullMessageRows.length, activities: fullActivityRows.length },
-    payloadBytes: { fullSnapshot: fullPayloadBytes, shell: shellPayloadBytes, initialPage: pagePayloadBytes, projectionRows: projectionRowsPayloadBytes, reviewIndex: reviewIndexPayloadBytes },
+    payloadBytes: { fullSnapshot: fullPayloadBytes, shell: shellPayloadBytes, expanded20TurnRequest: previousBudgetPayloadBytes, initialPage: pagePayloadBytes, projectionRows: projectionRowsPayloadBytes, reviewIndex: reviewIndexPayloadBytes },
     timingsMs: {
         shellProjection: Number(shellMs.toFixed(2)),
         fullHistoryRead: Number(fullReadMs.toFixed(2)),
         initialPageRead: Number(pageReadMs.toFixed(2)),
+        expanded20TurnRequestRead: Number(previousBudgetPageReadMs.toFixed(2)),
         projectionRowsRead: Number(projectionRowsReadMs.toFixed(2)),
         reviewIndexRead: Number(reviewIndexReadMs.toFixed(2)),
         initialPageDerivation: Number(deriveMs.toFixed(2))

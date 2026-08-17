@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import type { DevScopeWindowRuntimeInfo } from '@shared/contracts/devscope-api'
 import { resolveZyraWindowChromePolicy, type ZyraClientPlatform } from '@shared/platform-window-chrome'
 
@@ -23,27 +23,60 @@ function createInitialRuntimeInfo(): DevScopeWindowRuntimeInfo {
     }
 }
 
-export function useWindowChrome() {
-    const [runtime, setRuntime] = useState<DevScopeWindowRuntimeInfo>(createInitialRuntimeInfo)
-    const [isMaximized, setIsMaximized] = useState(false)
+type WindowChromeSnapshot = {
+    runtime: DevScopeWindowRuntimeInfo
+    isMaximized: boolean
+}
 
-    useEffect(() => {
-        let active = true
-        void window.devscope.window.getRuntimeInfo().then((value) => {
-            if (active) setRuntime(value)
-        }).catch(() => undefined)
-        void window.devscope.window.isMaximized().then((value) => {
-            if (active) setIsMaximized(value)
-        }).catch(() => undefined)
-        const unsubscribe = window.devscope.window.onMaximizedChange((value) => {
-            if (active) setIsMaximized(value)
+let snapshot: WindowChromeSnapshot = {
+    runtime: createInitialRuntimeInfo(),
+    isMaximized: false
+}
+let runtimeLoaded = false
+let retainCount = 0
+let unsubscribeMaximized: (() => void) | null = null
+const listeners = new Set<() => void>()
+
+function emit(next: Partial<WindowChromeSnapshot>): void {
+    const runtime = next.runtime || snapshot.runtime
+    const isMaximized = next.isMaximized ?? snapshot.isMaximized
+    if (runtime === snapshot.runtime && isMaximized === snapshot.isMaximized) return
+    snapshot = { runtime, isMaximized }
+    for (const listener of listeners) listener()
+}
+
+function subscribe(listener: () => void): () => void {
+    listeners.add(listener)
+    return () => listeners.delete(listener)
+}
+
+function startWindowChromeRuntime(): void {
+    if (!runtimeLoaded) {
+        runtimeLoaded = true
+        void window.devscope.window.getRuntimeInfo().then((runtime) => emit({ runtime })).catch(() => {
+            runtimeLoaded = false
         })
-        return () => {
-            active = false
-            unsubscribe()
-        }
-    }, [])
+    }
+    void window.devscope.window.isMaximized().then((isMaximized) => emit({ isMaximized })).catch(() => undefined)
+    if (!unsubscribeMaximized) {
+        unsubscribeMaximized = window.devscope.window.onMaximizedChange((isMaximized) => emit({ isMaximized }))
+    }
+}
 
-    const policy = useMemo(() => resolveZyraWindowChromePolicy(runtime.platform), [runtime.platform])
-    return { runtime, policy, isMaximized }
+function retainWindowChromeRuntime(): () => void {
+    retainCount += 1
+    if (retainCount === 1) startWindowChromeRuntime()
+    return () => {
+        retainCount = Math.max(0, retainCount - 1)
+        if (retainCount > 0) return
+        unsubscribeMaximized?.()
+        unsubscribeMaximized = null
+    }
+}
+
+export function useWindowChrome() {
+    useEffect(retainWindowChromeRuntime, [])
+    const current = useSyncExternalStore(subscribe, () => snapshot, () => snapshot)
+    const policy = useMemo(() => resolveZyraWindowChromePolicy(current.runtime.platform), [current.runtime.platform])
+    return { runtime: current.runtime, policy, isMaximized: current.isMaximized }
 }

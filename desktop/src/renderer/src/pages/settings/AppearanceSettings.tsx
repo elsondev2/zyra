@@ -1,6 +1,7 @@
 import { RotateCcw } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import type { DevScopeManagedFont } from '@shared/contracts/font-contracts'
+import { registerSettingsCacheClearer } from '@/lib/settings-cache-registry'
 import {
     APPEARANCE_CODE_FONTS,
     APPEARANCE_UI_FONTS,
@@ -30,7 +31,6 @@ import {
     SettingsSwitch
 } from './settings-layout'
 import { createSettingsRowTargetId, createSettingsSectionTargetId } from './settings-search'
-import { AppearanceFontManagerDialog } from './appearance/AppearanceFontManagerDialog'
 import { AppearanceThemeController } from './appearance/AppearanceThemeController'
 import { AppearanceThemeSelector } from './appearance/AppearanceThemeSelect'
 import {
@@ -39,10 +39,43 @@ import {
     AppearanceThemeCard
 } from './appearance/AppearancePreviews'
 
+const AppearanceFontManagerDialog = lazy(async () => ({
+    default: (await import('./appearance/AppearanceFontManagerDialog')).AppearanceFontManagerDialog
+}))
+let cachedManagedFonts: DevScopeManagedFont[] | null = null
+let cachedManagedFontsAt = 0
+let pendingManagedFonts: Promise<DevScopeManagedFont[]> | null = null
+let managedFontGeneration = 0
+
+function loadManagedFonts(): Promise<DevScopeManagedFont[]> {
+    if (cachedManagedFonts && Date.now() - cachedManagedFontsAt < 5 * 60_000) return Promise.resolve(cachedManagedFonts)
+    if (pendingManagedFonts) return pendingManagedFonts
+    const generation = managedFontGeneration
+    const request = listAppearanceManagedFonts().then((fonts) => {
+        if (generation === managedFontGeneration) {
+            cachedManagedFonts = fonts
+            cachedManagedFontsAt = Date.now()
+        }
+        return fonts
+    })
+    pendingManagedFonts = request
+    void request.finally(() => {
+        if (pendingManagedFonts === request) pendingManagedFonts = null
+    }).catch(() => undefined)
+    return request
+}
+
+registerSettingsCacheClearer('settings-managed-fonts', () => {
+    managedFontGeneration += 1
+    cachedManagedFonts = null
+    cachedManagedFontsAt = 0
+    pendingManagedFonts = null
+})
+
 export default function AppearanceSettings() {
     const { settings, updateSettings } = useSettings()
     const [fontManagerTarget, setFontManagerTarget] = useState<'ui' | 'code' | null>(null)
-    const [managedFonts, setManagedFonts] = useState<DevScopeManagedFont[]>([])
+    const [managedFonts, setManagedFonts] = useState<DevScopeManagedFont[]>(() => cachedManagedFonts || [])
     const baseSelectedTheme = THEMES.find((theme) => theme.id === settings.theme) || THEMES[0]
     const defaultLightTheme = THEMES.find((theme) => theme.id === 'light') || THEMES[0]
     const defaultDarkTheme = THEMES.find((theme) => theme.id === 'dark') || THEMES[0]
@@ -55,7 +88,7 @@ export default function AppearanceSettings() {
         : baseSelectedTheme
     useEffect(() => {
         let active = true
-        void listAppearanceManagedFonts().then((fonts) => {
+        void loadManagedFonts().then((fonts) => {
             if (active) setManagedFonts(fonts)
         }).catch(() => undefined)
         return () => { active = false }
@@ -280,27 +313,35 @@ export default function AppearanceSettings() {
                 />
             </SettingsSection>
 
-            <AppearanceFontManagerDialog
-                open={fontManagerTarget !== null}
-                target={fontManagerTarget || 'ui'}
-                managedFonts={managedFonts}
-                currentFont={fontManagerTarget === 'code' ? settings.appearanceCodeFont : settings.appearanceUiFont}
-                usedManagedFontIds={[
-                    getAppearanceManagedFontId(settings.appearanceUiFont),
-                    getAppearanceManagedFontId(settings.appearanceCodeFont),
-                    settings.appearanceCustomTheme ? getAppearanceManagedFontId(settings.appearanceCustomTheme.uiFont) : null,
-                    settings.appearanceCustomTheme ? getAppearanceManagedFontId(settings.appearanceCustomTheme.codeFont) : null
-                ].filter((fontId): fontId is string => Boolean(fontId))}
-                onManagedFontsChange={setManagedFonts}
-                onSelect={(font) => {
-                    if (fontManagerTarget === 'code') {
-                        saveCustomTheme(selectedTheme.tokens, settings.accentColor, settings.appearanceUiFont, font as AppearanceCodeFont)
-                    } else {
-                        saveCustomTheme(selectedTheme.tokens, settings.accentColor, font as AppearanceUiFont)
-                    }
-                }}
-                onClose={() => setFontManagerTarget(null)}
-            />
+            {fontManagerTarget ? (
+                <Suspense fallback={null}>
+                    <AppearanceFontManagerDialog
+                        open
+                        target={fontManagerTarget}
+                        managedFonts={managedFonts}
+                        currentFont={fontManagerTarget === 'code' ? settings.appearanceCodeFont : settings.appearanceUiFont}
+                        usedManagedFontIds={[
+                            getAppearanceManagedFontId(settings.appearanceUiFont),
+                            getAppearanceManagedFontId(settings.appearanceCodeFont),
+                            settings.appearanceCustomTheme ? getAppearanceManagedFontId(settings.appearanceCustomTheme.uiFont) : null,
+                            settings.appearanceCustomTheme ? getAppearanceManagedFontId(settings.appearanceCustomTheme.codeFont) : null
+                        ].filter((fontId): fontId is string => Boolean(fontId))}
+                        onManagedFontsChange={(fonts) => {
+                            cachedManagedFonts = fonts
+                            cachedManagedFontsAt = Date.now()
+                            setManagedFonts(fonts)
+                        }}
+                        onSelect={(font) => {
+                            if (fontManagerTarget === 'code') {
+                                saveCustomTheme(selectedTheme.tokens, settings.accentColor, settings.appearanceUiFont, font as AppearanceCodeFont)
+                            } else {
+                                saveCustomTheme(selectedTheme.tokens, settings.accentColor, font as AppearanceUiFont)
+                            }
+                        }}
+                        onClose={() => setFontManagerTarget(null)}
+                    />
+                </Suspense>
+            ) : null}
         </SettingsPageContainer>
     )
 }

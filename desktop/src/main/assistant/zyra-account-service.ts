@@ -57,8 +57,13 @@ export class ZyraAccountService {
 
     constructor(private readonly loadAccountModule: ChatGptAccountModuleLoader = loadChatGptAccountModule) {}
 
-    getOverview(): Promise<AssistantAccountOverview> {
-        if (this.overviewPromise) return this.overviewPromise
+    async getOverview(forceRefresh = false): Promise<AssistantAccountOverview> {
+        if (this.overviewPromise) {
+            if (!forceRefresh) return this.overviewPromise
+            const pending = this.overviewPromise
+            await pending.catch(() => undefined)
+            if (this.overviewPromise && this.overviewPromise !== pending) return this.overviewPromise
+        }
         const request = this.loadOverview()
         this.overviewPromise = request
         const clearRequest = () => {

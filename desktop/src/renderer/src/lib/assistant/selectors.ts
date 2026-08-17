@@ -217,15 +217,15 @@ export function getAssistantBackgroundActivitySessions(
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id))
 }
 
+const assistantDateTimeFormatter = new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+})
+
 export function formatAssistantDateTime(value: string): string {
     const timestamp = Date.parse(value)
-    if (!Number.isFinite(timestamp)) return value
-
-    return new Intl.DateTimeFormat(undefined, {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit'
-    }).format(new Date(timestamp))
+    return Number.isFinite(timestamp) ? assistantDateTimeFormatter.format(timestamp) : value
 }

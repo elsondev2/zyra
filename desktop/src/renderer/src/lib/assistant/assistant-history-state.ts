@@ -10,16 +10,25 @@ import type {
     AssistantThreadDetail,
     AssistantThreadHistoryState
 } from '@shared/assistant/contracts'
+import { getAssistantThreadHydrationRevision } from './assistant-thread-hydration-revision'
 import { compareAssistantTimelineOrderKeys, getAssistantTimelineOrderKey, type AssistantTimelineRecordKind } from '@shared/assistant/timeline-order'
 
 const DETAIL_IDLE_TTL_MS = 5 * 60_000
-const DETAIL_CACHE_LIMIT = 20
+const DETAIL_CACHE_LIMIT = 12
 
-export type AssistantRetainedHistory = AssistantThreadHistoryState & { lastUsedAt: number }
+export type AssistantRetainedHistory = AssistantThreadHistoryState & { lastUsedAt: number; shellRevision: string }
 export type AssistantHistoryByThreadId = Record<string, AssistantRetainedHistory>
 
-export function isAssistantRetainedHistoryFresh(history: AssistantRetainedHistory | undefined, now = Date.now()): boolean {
-    return Boolean(history && now - history.lastUsedAt <= DETAIL_IDLE_TTL_MS)
+export function isAssistantRetainedHistoryFresh(
+    history: AssistantRetainedHistory | undefined,
+    thread?: AssistantThread | null,
+    now = Date.now()
+): boolean {
+    return Boolean(
+        history
+        && now - history.lastUsedAt <= DETAIL_IDLE_TTL_MS
+        && (!thread || history.shellRevision === getAssistantThreadHydrationRevision(thread))
+    )
 }
 
 export function hasRenderableAssistantRetainedHistory(history: AssistantRetainedHistory | undefined): boolean {
@@ -117,24 +126,34 @@ export function applyAssistantThreadDetail(
     detail: AssistantThreadDetail
 ): { snapshot: AssistantSnapshot; history: AssistantRetainedHistory } {
     const now = Date.now()
-    let mergedHistory: AssistantRetainedHistory = { ...detail.history, lastUsedAt: now }
+    let mergedHistory: AssistantRetainedHistory = { ...detail.history, lastUsedAt: now, shellRevision: '' }
     const nextSnapshot = patchThread(snapshot, detail.threadId, (thread) => {
         const messages = mergeById('message', thread.messages, detail.history.messages)
         const activities = mergeById('activity', thread.activities, detail.history.activities)
         const proposedPlans = mergeById('plan', thread.proposedPlans, detail.history.proposedPlans)
-        mergedHistory = { ...detail.history, messages, activities, proposedPlans, lastUsedAt: now }
-        return {
+        const pendingApprovals = mergePending(thread.pendingApprovals, detail.pendingApprovals)
+        const pendingUserInputs = mergePending(thread.pendingUserInputs, detail.pendingUserInputs)
+        const nextThread = {
             ...thread,
             activePlan: detail.activePlan,
             hasActivePlan: Boolean(detail.activePlan),
             messages,
             activities,
             proposedPlans,
-            pendingApprovals: mergePending(thread.pendingApprovals, detail.pendingApprovals),
-            pendingUserInputs: mergePending(thread.pendingUserInputs, detail.pendingUserInputs),
-            hasPendingApprovals: detail.pendingApprovals.some((entry) => entry.status === 'pending'),
-            hasPendingUserInputs: detail.pendingUserInputs.some((entry) => entry.status === 'pending')
+            pendingApprovals,
+            pendingUserInputs,
+            hasPendingApprovals: pendingApprovals.some((entry) => entry.status === 'pending'),
+            hasPendingUserInputs: pendingUserInputs.some((entry) => entry.status === 'pending')
         }
+        mergedHistory = {
+            ...detail.history,
+            messages,
+            activities,
+            proposedPlans,
+            lastUsedAt: now,
+            shellRevision: getAssistantThreadHydrationRevision(nextThread)
+        }
+        return nextThread
     })
     return { snapshot: nextSnapshot, history: mergedHistory }
 }
@@ -150,6 +169,39 @@ export function applyAssistantRetainedHistory(
         activities: mergeById('activity', thread.activities, history.activities),
         proposedPlans: mergeById('plan', thread.proposedPlans, history.proposedPlans)
     }))
+}
+
+export function dematerializeAssistantHistories(
+    snapshot: AssistantSnapshot,
+    retainedThreadIds: ReadonlySet<string>
+): AssistantSnapshot {
+    let snapshotChanged = false
+    const sessions = snapshot.sessions.map((session) => {
+        let sessionChanged = false
+        const threads = session.threads.map((thread) => {
+            if (
+                retainedThreadIds.has(thread.id)
+                || (
+                    !thread.activePlan
+                    && thread.messages.length === 0
+                    && thread.activities.length === 0
+                    && thread.proposedPlans.length === 0
+                )
+            ) return thread
+            sessionChanged = true
+            return {
+                ...thread,
+                activePlan: null,
+                messages: [],
+                activities: [],
+                proposedPlans: []
+            }
+        })
+        if (!sessionChanged) return session
+        snapshotChanged = true
+        return { ...session, threads }
+    })
+    return snapshotChanged ? { ...snapshot, sessions } : snapshot
 }
 
 export function applyAssistantHistoryPage(

@@ -1,5 +1,6 @@
 import {
     applyCachedSessionSelection,
+    hasCachedSessionSelection,
     type CachedHydratedThreadState
 } from './session-hydration-cache'
 import {
@@ -60,33 +61,16 @@ export async function selectAssistantStoreSession(
     const targetThreadId = selectedSession.activeThreadId || null
     const targetThread = selectedSession.threads.find((thread) => thread.id === targetThreadId) || null
     const transitionKey = `${sessionId}:${targetThreadId || ''}`
+    const canHydrateFromCache = hasCachedSessionSelection(
+        context.state.snapshot,
+        sessionId,
+        targetThreadId,
+        context.hydratedThreadCache
+    )
     let selectionRequestId = 0
 
-    // This update carries no timeline arrays. It lets React replace the old chat
-    // with the target chat shell before cached rows or IPC work begins.
     context.setState((current) => {
         selectionRequestId = current.selectionRequestId + 1
-        const snapshot = current.snapshot.selectedSessionId === sessionId
-            ? current.snapshot
-            : { ...current.snapshot, selectedSessionId: sessionId }
-        return {
-            error: null,
-            commandPending: true,
-            selectionRequestId,
-            selectionRequestSessionId: sessionId,
-            selectionTransitionKey: transitionKey,
-            snapshot,
-            status: deriveAssistantRuntimeStatus(snapshot, current.status)
-        }
-    })
-
-    await waitForSelectionShellPaint()
-    if (context.getState().selectionRequestId !== selectionRequestId) {
-        return { success: true as const, snapshot: context.getState().snapshot }
-    }
-
-    context.setState((current) => {
-        if (current.selectionRequestId !== selectionRequestId) return {}
         const snapshot = applyCachedSessionSelection(
             current.snapshot,
             sessionId,
@@ -94,11 +78,45 @@ export async function selectAssistantStoreSession(
             context.hydratedThreadCache
         )
         return {
-            selectionTransitionKey: null,
+            error: null,
+            commandPending: !canHydrateFromCache,
+            selectionRequestId,
+            selectionRequestSessionId: sessionId,
+            selectionTransitionKey: canHydrateFromCache ? null : transitionKey,
             snapshot,
             status: deriveAssistantRuntimeStatus(snapshot, current.status)
         }
     })
+
+    if (!canHydrateFromCache) {
+        void context.requestSessionHydration(sessionId, targetThreadId)
+        await waitForSelectionShellPaint()
+        if (context.getState().selectionRequestId !== selectionRequestId) {
+            return { success: true as const, snapshot: context.getState().snapshot }
+        }
+
+        context.setState((current) => {
+            if (current.selectionRequestId !== selectionRequestId) return {}
+            const snapshot = applyCachedSessionSelection(
+                current.snapshot,
+                sessionId,
+                targetThreadId,
+                context.hydratedThreadCache
+            )
+            return {
+                selectionTransitionKey: null,
+                snapshot,
+                status: deriveAssistantRuntimeStatus(snapshot, current.status)
+            }
+        })
+    }
+
+    if (canHydrateFromCache) {
+        await Promise.resolve()
+        if (context.getState().selectionRequestId !== selectionRequestId) {
+            return { success: true as const, snapshot: context.getState().snapshot }
+        }
+    }
 
     const restorePreviousSelection = (message: string) => {
         context.setState((current) => {

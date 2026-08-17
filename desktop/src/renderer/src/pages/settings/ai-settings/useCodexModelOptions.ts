@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ModelOption } from './aiSettingsConfig'
+import { loadSettingsModels, readCachedSettingsModels } from '../settings-model-catalog-cache'
 
 export function useCodexModelOptions(effectiveCodexModels: string[]) {
-    const [codexModelOptions, setCodexModelOptions] = useState<ModelOption[]>([])
+    const [codexModelOptions, setCodexModelOptions] = useState<ModelOption[]>(readCachedSettingsModels)
     const [codexModelsError, setCodexModelsError] = useState('')
 
     useEffect(() => {
@@ -10,12 +11,9 @@ export function useCodexModelOptions(effectiveCodexModels: string[]) {
 
         async function loadCodexModels() {
             try {
-                const result = await window.devscope.assistant.listModels(false)
-                if (!result.success) {
-                    throw new Error(result.error || 'Failed to load ChatGPT models.')
-                }
+                const models = await loadSettingsModels(false)
                 if (cancelled) return
-                setCodexModelOptions(Array.isArray(result.models) ? result.models : [])
+                setCodexModelOptions(models)
                 setCodexModelsError('')
             } catch (error) {
                 if (!cancelled) {

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import type { DevScopeInstalledPackageRuntime, DevScopePackageRuntimeId } from '@shared/contracts/devscope-api'
 import { useSettings, type PackageRuntimePreference } from '@/lib/settings'
+import { registerSettingsCacheClearer } from '@/lib/settings-cache-registry'
 import { useWindowChrome } from '@/lib/useWindowChrome'
 import {
     SettingsButton,
@@ -13,6 +14,38 @@ import {
     SettingsSelect,
     SettingsSwitch
 } from './settings-layout'
+
+let cachedPackageRuntimes: DevScopeInstalledPackageRuntime[] | null = null
+let pendingPackageRuntimes: { generation: number; promise: Promise<DevScopeInstalledPackageRuntime[]> } | null = null
+let packageRuntimeGeneration = 0
+
+async function loadPackageRuntimes(forceRefresh = false): Promise<DevScopeInstalledPackageRuntime[]> {
+    if (!forceRefresh && cachedPackageRuntimes) return cachedPackageRuntimes
+    const previous = pendingPackageRuntimes
+    if (previous) {
+        if (!forceRefresh && previous.generation === packageRuntimeGeneration) return previous.promise
+        await previous.promise.catch(() => undefined)
+        if (pendingPackageRuntimes === previous) pendingPackageRuntimes = null
+    }
+    const generation = packageRuntimeGeneration
+    const request = window.devscope.listInstalledPackageRuntimes().then((result) => {
+        if (!result.success) throw new Error(result.error || 'Runtime detection failed.')
+        if (generation === packageRuntimeGeneration) cachedPackageRuntimes = result.runtimes
+        return result.runtimes
+    })
+    const pending = { generation, promise: request }
+    pendingPackageRuntimes = pending
+    void request.finally(() => {
+        if (pendingPackageRuntimes === pending) pendingPackageRuntimes = null
+    }).catch(() => undefined)
+    return request
+}
+
+registerSettingsCacheClearer('settings-package-runtimes', () => {
+    packageRuntimeGeneration += 1
+    cachedPackageRuntimes = null
+    pendingPackageRuntimes = null
+})
 
 const RUNTIME_OPTIONS: Array<{ value: PackageRuntimePreference; runtimeId?: DevScopePackageRuntimeId; label: string }> = [
     { value: 'auto', label: 'Auto (project lockfile)' },
@@ -26,17 +59,15 @@ const RUNTIME_OPTIONS: Array<{ value: PackageRuntimePreference; runtimeId?: DevS
 export default function TerminalRuntimeSettings() {
     const { settings, updateSettings } = useSettings()
     const { runtime } = useWindowChrome()
-    const [runtimes, setRuntimes] = useState<DevScopeInstalledPackageRuntime[]>([])
+    const [runtimes, setRuntimes] = useState<DevScopeInstalledPackageRuntime[]>(() => cachedPackageRuntimes || [])
     const [runtimeLoading, setRuntimeLoading] = useState(false)
     const [runtimeError, setRuntimeError] = useState<string | null>(null)
 
-    const refreshRuntimes = async () => {
-        setRuntimeLoading(true)
+    const refreshRuntimes = async (forceRefresh = false) => {
+        setRuntimeLoading(!cachedPackageRuntimes || forceRefresh)
         setRuntimeError(null)
         try {
-            const result = await window.devscope.listInstalledPackageRuntimes()
-            if (!result.success) throw new Error(result.error || 'Runtime detection failed.')
-            setRuntimes(result.runtimes)
+            setRuntimes(await loadPackageRuntimes(forceRefresh))
         } catch (error) {
             setRuntimeError(error instanceof Error ? error.message : 'Runtime detection failed.')
         } finally {
@@ -67,7 +98,7 @@ export default function TerminalRuntimeSettings() {
                 <SettingsRow title="Preview panel height" description="Default height, in pixels, for the file-preview terminal panel." control={<SettingsInput type="number" min={140} max={720} value={settings.filePreviewTerminalPanelHeight} onChange={(event) => updateSettings({ filePreviewTerminalPanelHeight: Math.max(140, Math.min(720, Number(event.target.value) || 220)) })} className="sm:w-24" aria-label="Terminal panel height" />} />
             </SettingsSection>
 
-            <SettingsSection title="Package runtime" headerAction={<SettingsButton variant="ghost" onClick={() => void refreshRuntimes()} disabled={runtimeLoading}><RefreshCw size={12} className={runtimeLoading ? 'animate-spin' : ''} />Refresh</SettingsButton>}>
+            <SettingsSection title="Package runtime" headerAction={<SettingsButton variant="ghost" onClick={() => void refreshRuntimes(true)} disabled={runtimeLoading}><RefreshCw size={12} className={runtimeLoading ? 'animate-spin' : ''} />Refresh</SettingsButton>}>
                 <SettingsRow
                     title="Project script runner"
                     description="Choose the runtime used by project script actions. Auto follows project lockfiles."

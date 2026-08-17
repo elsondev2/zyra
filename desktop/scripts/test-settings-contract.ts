@@ -315,6 +315,7 @@ const accountResetCreditsSource = readFileSync(resolve(import.meta.dir, '../src/
 const connectionsSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/ConnectionsSettings.tsx'), 'utf8')
 const browserControlSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/BrowserControlSettings.tsx'), 'utf8')
 const settingsNavigationSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/settings-navigation.tsx'), 'utf8')
+const settingsRouteLoadersSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/settings-route-loaders.ts'), 'utf8')
 const appSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/App.tsx'), 'utf8')
 assert.match(
     assistantSettingsSource,
@@ -373,6 +374,10 @@ assert.match(
 )
 assert.match(settingsNavigationSource, /label: 'Account'[\s\S]{0,220}to: '\/settings\/account'/, 'Account must be a real top-level Settings destination')
 assert.match(appSource, /<Route path="account" element=\{<AccountSettings \/>\}/, 'the Account navigation destination must render the real account page')
+assert.match(appSource, /const AccountSettings = lazy\(loadAccountSettings\)/, 'Settings lazy routes must reuse the same preloadable module loader')
+assert.match(settingsShellSource, /<Suspense fallback=\{<SettingsRouteFallback \/>\}>[\s\S]{0,100}<Outlet \/>/, 'first-visit page loading must preserve the Settings sidebar and shell')
+assert.match(settingsShellSource, /onPointerEnter=\{\(\) => preloadSettingsRoute\(item\.to\)\}[\s\S]{0,160}onFocus=\{\(\) => preloadSettingsRoute\(item\.to\)\}/, 'Settings destinations must preload from mouse and keyboard intent')
+assert.match(settingsRouteLoadersSource, /'\/settings\/account': loadAccountSettings[\s\S]*'\/settings\/about': loadAboutSettings/, 'every Settings destination must participate in intent preloading')
 assert.match(settingsNavigationSource, /label: 'Connections'[\s\S]{0,260}to: '\/settings\/connections'/, 'Connections must be a real top-level Settings destination')
 assert.match(appSource, /<Route path="connections" element=\{<ConnectionsSettings \/>\}/, 'the Connections destination must render the real connection page')
 assert.match(connectionsSettingsSource, /copyToClipboard\(BROWSER_CLIENT_HOST_ORIGIN\)/, 'Connections must expose a working local-browser Copy link action')
@@ -382,7 +387,9 @@ assert.match(connectionsSettingsSource, /title="Trusted devices"[\s\S]{0,260}Con
 assert.doesNotMatch(browserControlSettingsSource, /BROWSER_CLIENT_HOST_ORIGIN|Local browser client|openLocalBrowserClient/, 'Browser & control must stay focused on integrated-browser state after the link moves to Connections')
 assert.doesNotMatch(assistantSettingsSource, /getAccountOverview|AccountResetCreditsSection/, 'Assistant settings must not fetch or render account data')
 assert.doesNotMatch(`${accountSettingsSource}\n${accountResetCreditsSource}`, /Zyra subscription|subscription account|subscription-backed/, 'Account UI must not imply that Zyra owns the user’s ChatGPT plan')
-assert.match(accountSettingsSource, /useState\(true\)[\s\S]{0,180}overviewError/, 'the Account page must enter its loading state before the first account request')
+assert.match(accountSettingsSource, /overviewLoading, setOverviewLoading\] = useState\(\(\) => !accountSettingsCache\.overview\)/, 'the first Account visit loads while a recent in-memory snapshot makes repeat visits immediate')
+assert.match(accountSettingsSource, /ACCOUNT_POLL_INTERVAL_MS = 60_000[\s\S]{0,900}isAccountCacheFresh/, 'Account refreshes must use a bounded freshness window instead of aggressive remount polling')
+assert.doesNotMatch(accountSettingsSource.split('const loadConnectionState')[1]?.split('const applyAccountOverview')[0] || '', /listModels/, 'Account connection status must not discover models during page entry')
 assert.match(accountSettingsSource, /initialAccountLoading = overviewLoading && !overview/, 'background refreshes must preserve already-loaded account values')
 assert.match(accountSettingsSource, /initialAccountLoading \? 'Checking…'/, 'unresolved account values must say Checking instead of showing unavailable placeholders')
 assert.match(accountSettingsSource, /title="Usage windows"[\s\S]{0,180}status="Checking"/, 'usage limits must expose a clear initial loading row')
@@ -433,5 +440,6 @@ assert.match(settingsCss, /\.zyra-settings-section-body > \* \+ \*/, 'Every Sett
 assert.doesNotMatch(settingsCss, /\.zyra-settings-footer::before/, 'Back to chats must not retain the old gradient-only divider')
 assert.match(settingsLayoutSource, /max-h-\[calc\(100vh-2\.5rem\)\][\s\S]{0,120}flex-col overflow-hidden/, 'Settings dialogs must remain viewport bounded')
 assert.match(settingsLayoutSource, /min-h-0 overflow-y-auto space-y-3/, 'Settings dialog bodies must scroll independently between fixed header and footer')
+assert.match(settingsLayoutSource, /content-visibility:auto[\s\S]{0,100}contain-intrinsic-size:auto_68px/, 'offscreen Settings rows must skip layout and paint work')
 
 console.log('settings contract: ok')

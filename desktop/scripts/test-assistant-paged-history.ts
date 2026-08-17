@@ -4,7 +4,7 @@ import initSqlJs from 'sql.js/dist/sql-asm.js'
 import type { AssistantActivity, AssistantMessage, AssistantProposedPlan, AssistantSession, AssistantThread } from '../src/shared/assistant/contracts'
 import { compareAssistantTimelineOrderKeys, getAssistantTimelineOrderKey } from '../src/shared/assistant/timeline-order'
 import {
-    ASSISTANT_HISTORY_PAGE_MAX_CHARACTERS,
+    INITIAL_ASSISTANT_HISTORY_PAGE_MAX_CHARACTERS,
     INITIAL_ASSISTANT_HISTORY_PAGE_MAX_RECORDS,
     readAssistantHistoryPage,
     readAssistantReviewIndex,
@@ -23,12 +23,15 @@ import { createDefaultSnapshot } from '../src/main/assistant/projector'
 import { toAssistantShellSnapshot } from '../src/main/assistant/persistence-snapshot'
 import {
     applyAssistantRetainedHistory,
+    dematerializeAssistantHistories,
     hasRenderableAssistantRetainedHistory,
+    isAssistantRetainedHistoryFresh,
     formatAssistantHistoryLoadError,
     hasAssistantPersistedThreadContent,
     shouldShowAssistantThreadHistoryLoader
 } from '../src/renderer/src/lib/assistant/assistant-history-state'
 import { computeStableAssistantTimelineRows } from '../src/renderer/src/pages/assistant/assistant-virtual-timeline-rows'
+import { getAssistantThreadHydrationRevision } from '../src/renderer/src/lib/assistant/assistant-thread-hydration-revision'
 import type { TimelineDisplayRow } from '../src/renderer/src/pages/assistant/assistant-timeline-helpers'
 
 const at = (minute: number) => new Date(Date.parse('2026-07-16T10:00:00.000Z') + minute * 60_000).toISOString()
@@ -189,7 +192,17 @@ const shellSnapshot = {
         }]
     }]
 }
-const retainedHistory = { ...readAssistantThreadDetail(db, thread.id).history, lastUsedAt: Date.now() }
+const retainedHistory = {
+    ...readAssistantThreadDetail(db, thread.id).history,
+    lastUsedAt: Date.now(),
+    shellRevision: getAssistantThreadHydrationRevision(shellSnapshot.sessions[0]!.threads[0]!)
+}
+assert.equal(isAssistantRetainedHistoryFresh(retainedHistory, shellSnapshot.sessions[0]!.threads[0]!), true)
+assert.equal(isAssistantRetainedHistoryFresh(retainedHistory, {
+    ...shellSnapshot.sessions[0]!.threads[0]!,
+    updatedAt: at(6),
+    messageCount: thread.messageCount - 1
+}), false, 'shell revisions invalidate retained rows after external deletion or replacement')
 const restoredFromRetainedHistory = applyAssistantRetainedHistory(shellSnapshot, thread.id, retainedHistory)
 assert.equal(hasRenderableAssistantRetainedHistory(retainedHistory), true)
 assert.equal(
@@ -202,6 +215,10 @@ assert.equal(
     retainedHistory.activities.length,
     'retained activity rows must survive a shell refresh alongside chat messages'
 )
+const dematerializedSnapshot = dematerializeAssistantHistories(restoredFromRetainedHistory, new Set())
+assert.equal(dematerializedSnapshot.sessions[0]!.threads[0]!.messages.length, 0, 'evicted inactive history releases message payloads from the renderer snapshot')
+assert.equal(dematerializedSnapshot.sessions[0]!.threads[0]!.activities.length, 0, 'evicted inactive history releases activity payloads from the renderer snapshot')
+assert.equal(dematerializedSnapshot.sessions[0]!.threads[0]!.messageCount, thread.messageCount, 'history eviction preserves shell counters for the chat rail')
 assert.equal(
     hasRenderableAssistantRetainedHistory({
         ...retainedHistory,
@@ -296,10 +313,10 @@ for (let index = 1; index <= 6; index += 1) {
     db.run(`INSERT INTO assistant_messages (id, thread_id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at) VALUES (?, ?, 'assistant', ?, ?, 0, ?, ?, ?)`, [`budget-assistant-${index}`, thread.id, `Budget response ${index}`, `budget-turn-${index}`, sequenceBase + 71, createdAt, createdAt])
 }
 const budgetedPage = readAssistantHistoryPage(db, { threadId: thread.id, turnLimit: 20 })
-assert.equal(budgetedPage.pageInfo.turnCount, 2, 'initial history keeps complete newest turns within its smaller first-paint budget')
-assert.equal(budgetedPage.messages.some((message) => message.id === 'budget-user-4'), false, 'the oldest over-budget turn remains on the next page')
+assert.equal(budgetedPage.pageInfo.turnCount, 1, 'initial history keeps complete newest turns within its smaller first-paint budget')
+assert.equal(budgetedPage.messages.some((message) => message.id === 'budget-user-5'), false, 'the oldest over-budget turn remains on the next page')
 assert.equal(budgetedPage.messages.some((message) => message.id === 'budget-user-6'), true, 'the newest turn is always retained')
-assert.equal(budgetedPage.messages.reduce((total, message) => total + message.text.length, 0) <= ASSISTANT_HISTORY_PAGE_MAX_CHARACTERS, true)
+assert.equal(budgetedPage.messages.reduce((total, message) => total + message.text.length, 0) <= INITIAL_ASSISTANT_HISTORY_PAGE_MAX_CHARACTERS, true)
 assert.equal(budgetedPage.messages.length + budgetedPage.activities.length + budgetedPage.proposedPlans.length <= INITIAL_ASSISTANT_HISTORY_PAGE_MAX_RECORDS, true)
 assert.equal(budgetedPage.pageInfo.hasOlder, true)
 
@@ -338,10 +355,13 @@ assert.equal(parsedCompactedPayload.toolCallId, 'oversized-read')
 assert.equal('result' in parsedCompactedPayload, false, 'payload compaction removes the embedded result body')
 
 const serviceSource = readFileSync(new URL('../src/main/assistant/service.ts', import.meta.url), 'utf8')
+const assistantStoreSource = readFileSync(new URL('../src/renderer/src/lib/assistant/assistant-store-core.ts', import.meta.url), 'utf8')
 const detailBootstrapSource = serviceSource.split('async getThreadDetailBootstrap')[1]?.split('async getHistoryPage')[0] || ''
 assert.ok(detailBootstrapSource.indexOf('const detail = await this.persistence.readThreadDetail') < detailBootstrapSource.indexOf('void this.ensureCanonicalHistoryLoaded'), 'chat bootstrap must return bounded local history before canonical reconciliation')
 assert.doesNotMatch(serviceSource.split('async selectSession')[1]?.split('async selectThread')[0] || '', /await this\.refreshSelectedCanonicalPresence/, 'session selection cannot wait for remote presence refresh')
 assert.doesNotMatch(serviceSource.split('async selectThread')[1]?.split('async getThreadDetailBootstrap')[0] || '', /await this\.refreshSelectedCanonicalPresence/, 'thread selection cannot wait for remote presence refresh')
+assert.match(assistantStoreSource, /const requestedRevision = currentHistory\.shellRevision[\s\S]{0,2200}getAssistantThreadHydrationRevision\(latestThread\) !== requestedRevision/, 'older-page responses are rejected when the thread revision changes in flight')
+assert.match(assistantStoreSource, /if \(revisionChanged\)[\s\S]{0,240}requestSessionHydration/, 'stale older-page work converges through a fresh bounded hydration')
 
 const virtualTimelineSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantVirtualTimeline.tsx', import.meta.url), 'utf8')
 assert.equal(virtualTimelineSource.includes('initialScrollAtEnd'), true, 'LegendList owns initial positioning at the newest row')

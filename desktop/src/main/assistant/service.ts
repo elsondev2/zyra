@@ -25,6 +25,7 @@ import type {
     AssistantEventStreamPayload,
     AssistantActivity,
     AssistantMessage,
+    AssistantModelInfo,
     AssistantRealtimeVoiceEvent,
     AssistantRuntimeStatus,
     AssistantSendPromptOptions,
@@ -135,6 +136,16 @@ const MAX_REALTIME_BRIDGE_EVENT_BYTES = 256 * 1024
 const MAX_CACHED_HISTORY_BODIES = 15
 const MAX_CACHED_HISTORY_BODY_BYTES = 16 * 1024 * 1024
 const MAX_SINGLE_CACHED_HISTORY_BODY_BYTES = 8 * 1024 * 1024
+
+function areAssistantModelListsEqual(left: readonly AssistantModelInfo[], right: readonly AssistantModelInfo[]): boolean {
+    return left.length === right.length && left.every((model, index) => {
+        const candidate = right[index]
+        return candidate?.id === model.id
+            && candidate.label === model.label
+            && candidate.description === model.description
+            && (candidate.supportedEfforts || []).join('|') === (model.supportedEfforts || []).join('|')
+    })
+}
 const CANONICAL_ZYRA_VOICE_INSTRUCTIONS = `You are Zyra's realtime foreground voice for the current canonical Assistant conversation.
 Continue naturally from the supplied canonical history. Keep responses concise, conversational, and honest about uncertainty.
 You own the user-facing conversation while Voice is active. The same primary agent selected in Chat performs commands and file work; you narrate only the verified task state and result supplied by the controller. You cannot grant approvals or invent tool progress.
@@ -210,6 +221,7 @@ export class AssistantService {
     private activeCanonicalVoice: ActiveCanonicalVoice | null = null
     private pendingCanonicalVoiceStart: PendingCanonicalVoiceStart | null = null
     private canonicalVoiceStopPromise: Promise<void> | null = null
+    private navigationSelectionGeneration = 0
     private readonly voiceTransitioningThreadIds = new Set<string>()
     private readonly activeVoiceStrongTasks = new Map<string, ActiveVoiceStrongTask>()
     private readonly queuedVoiceStrongRequests = new Map<string, CompletedRealtimeUserTranscriptEvent[]>()
@@ -440,9 +452,11 @@ export class AssistantService {
 
     async listModels(forceRefresh = false) {
         await this.ensureReady()
-        const models = await this.runtime.listModels(forceRefresh)
-        this.state.snapshot.knownModels = models
-        this.persistence.updateMetadata(this.state.snapshot)
+        const { models, authoritative } = await this.runtime.listModelsWithProvenance(forceRefresh)
+        if (authoritative && !areAssistantModelListsEqual(this.state.snapshot.knownModels, models)) {
+            this.state.snapshot.knownModels = models
+            this.persistence.updateMetadata(this.state.snapshot)
+        }
         return { success: true as const, models }
     }
 
@@ -489,11 +503,11 @@ export class AssistantService {
         return { success: true as const, result }
     }
 
-    async getAccountOverview() {
+    async getAccountOverview(forceRefresh = false) {
         await this.ensureReady()
         return {
             success: true as const,
-            overview: await this.accountService.getOverview()
+            overview: await this.accountService.getOverview(forceRefresh)
         }
     }
 
@@ -528,16 +542,20 @@ export class AssistantService {
     }
 
     async selectSession(sessionId: string) {
+        const generation = ++this.navigationSelectionGeneration
         if (this.activeCanonicalVoice?.sessionId !== sessionId) await this.stopCanonicalVoiceForNavigation()
+        if (generation !== this.navigationSelectionGeneration) return { success: true as const, sessionId }
         const result = await selectAssistantSessionAction(this.actionDeps, sessionId)
-        void this.refreshSelectedCanonicalPresence(sessionId)
+        if (generation === this.navigationSelectionGeneration) void this.refreshSelectedCanonicalPresence(sessionId)
         return result
     }
 
     async selectThread(sessionId: string, threadId: string) {
+        const generation = ++this.navigationSelectionGeneration
         if (this.activeCanonicalVoice?.localThreadId !== threadId) await this.stopCanonicalVoiceForNavigation()
+        if (generation !== this.navigationSelectionGeneration) return { success: true as const, sessionId, threadId }
         const result = await selectAssistantThreadAction(this.actionDeps, sessionId, threadId)
-        void this.refreshSelectedCanonicalPresence(sessionId)
+        if (generation === this.navigationSelectionGeneration) void this.refreshSelectedCanonicalPresence(sessionId)
         return result
     }
 

@@ -48,6 +48,25 @@ Raw local benchmark output lives under ignored `tmp/perf-20260817/` and must not
 
 The heaviest measured thread exposed 12,300 historical records while returning only the newest bounded page (7 messages and 27 activities). Final frozen-build verification produced a 4.18 s warm-files useful surface, 315 ms chat detail, 643 MiB working set, 465 MiB private memory, and 0.74% of one core after settling. One fresh-build/host-contention outlier reached 8.87 s, so p95 cold-launch work remains open even though the measured median is inside budget.
 
+### Interaction switching pass
+
+A second production-renderer pass targeted the same two aged-profile chats before and after the interaction work. DOM-ready time was observed from route intent through the target timeline mutation; warm values exclude the first cold switch.
+
+| Path | Before | Optimized | Change |
+| --- | ---: | ---: | ---: |
+| Rich-Markdown chat, warm median | 308 ms | 37 ms | 88.0% faster |
+| Rich-Markdown chat, first cold switch | 1,278 ms | 358 ms | 72.0% faster |
+| 12,300-record chat, warm median | 155 ms | 26 ms | 83.4% faster |
+| Warm Settings route sweep, median | 23.6 ms | 6.7 ms | 71.8% faster |
+| Warm Settings route sweep, slowest page | 184.5 ms | 20.8 ms | 88.7% faster |
+| Account repeat switch, median | 22.3 ms plus remount reads | 10.0 ms with cached values | 55.2% faster plus zero repeat reads |
+
+The rich chat's mounted timeline fell from 67 rendered rows, 15 Markdown roots, and 2,409 live DOM nodes to 6 rows, 2 Markdown roots, and 491 nodes. The second heavy chat fell from 12 rows, 5 Markdown roots, and 823 nodes to 2 rows, 1 Markdown root, and 375 nodes. No >50 ms renderer long task remained in the optimized warm switches; the prior rich-chat switches spent 235–355 ms in one long task.
+
+Intent-prefetched first visits across all Settings destinations had a 36.8 ms median. Twelve of fourteen measured pages opened within 58 ms; Providers took 85 ms and the first Archived chats visit took 165 ms. Once loaded, all fourteen destinations opened within 21 ms. Three Account leave/re-enter cycles inside the freshness window caused zero overview, connection-status, or model IPC requests. Visible Account polling moved from 15 seconds to 60 seconds, reducing its normal connected-account request cadence by 75%.
+
+After the complete Settings/chat sweep and settlement, the full production process tree measured 543 MiB working set, 461 MiB private memory, 0.62% of one CPU core, and 0.12% GPU-process CPU. Renderer private memory was 78 MiB. A post-GC renderer retention probe moved from 71.5 MiB to 18.7 MiB JavaScript heap and from 34,202 to 952 retained DOM nodes; treat that retention comparison as directional because the older window had accumulated more prior interaction cycles.
+
 ### Paired startup phase trace
 
 | Main-process phase | Before | Optimized | Change |

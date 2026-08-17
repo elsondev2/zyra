@@ -1,4 +1,7 @@
 import type { AssistantSnapshot, AssistantThread } from '@shared/assistant/contracts'
+import { getAssistantThreadHydrationRevision } from './assistant-thread-hydration-revision'
+
+const HYDRATED_THREAD_CACHE_LIMIT = 12
 
 export type CachedHydratedThreadState = Pick<
     AssistantThread,
@@ -6,6 +9,7 @@ export type CachedHydratedThreadState = Pick<
 > & {
     sessionId: string
     threadId: string
+    revision: string
 }
 
 function hasHydratedThreadState(thread: AssistantThread): boolean {
@@ -23,6 +27,7 @@ function areCachedThreadStatesReferentiallyEqual(
 ): boolean {
     return left?.sessionId === right.sessionId
         && left?.threadId === right.threadId
+        && left.revision === right.revision
         && left.activePlan === right.activePlan
         && left.messages === right.messages
         && left.proposedPlans === right.proposedPlans
@@ -42,7 +47,13 @@ export function cacheHydratedThreads(
             presentThreadIds.add(thread.id)
             if (!hasHydratedThreadState(thread)) {
                 const cached = cache.get(thread.id)
-                if (cached?.sessionId && cached.sessionId !== session.id) {
+                if (
+                    cached
+                    && (
+                        cached.sessionId !== session.id
+                        || cached.revision !== getAssistantThreadHydrationRevision(thread)
+                    )
+                ) {
                     cache.delete(thread.id)
                 } else if ((thread.messageCount || 0) === 0 && !thread.latestTurn) {
                     cache.delete(thread.id)
@@ -53,6 +64,7 @@ export function cacheHydratedThreads(
             const nextCachedState: CachedHydratedThreadState = {
                 sessionId: session.id,
                 threadId: thread.id,
+                revision: getAssistantThreadHydrationRevision(thread),
                 activePlan: thread.activePlan,
                 messages: thread.messages,
                 proposedPlans: thread.proposedPlans,
@@ -64,14 +76,29 @@ export function cacheHydratedThreads(
             const previousCachedState = cache.get(thread.id)
             if (areCachedThreadStatesReferentiallyEqual(previousCachedState, nextCachedState)) continue
 
+            cache.delete(thread.id)
             cache.set(thread.id, nextCachedState)
         }
     }
 
     for (const threadId of [...cache.keys()]) {
-        if (!presentThreadIds.has(threadId)) {
-            cache.delete(threadId)
-        }
+        if (!presentThreadIds.has(threadId)) cache.delete(threadId)
+    }
+
+    const protectedThreadIds = new Set(snapshot.sessions.flatMap((session) => session.threads
+        .filter((thread) => (
+            (session.id === snapshot.selectedSessionId && thread.id === session.activeThreadId)
+            || ['starting', 'running', 'waiting', 'background'].includes(thread.state)
+            || thread.hasActivePlan
+            || thread.hasPendingApprovals
+            || thread.hasPendingUserInputs
+            || thread.pendingApprovals.length > 0
+            || thread.pendingUserInputs.length > 0
+        ))
+        .map((thread) => thread.id)))
+    for (const threadId of [...cache.keys()]) {
+        if (cache.size <= HYDRATED_THREAD_CACHE_LIMIT) break
+        if (!protectedThreadIds.has(threadId)) cache.delete(threadId)
     }
 }
 
@@ -84,7 +111,19 @@ export function applyCachedSessionSelection(
     const sessionIndex = snapshot.sessions.findIndex((entry) => entry.id === sessionId)
     const session = sessionIndex >= 0 ? snapshot.sessions[sessionIndex] : null
     const targetThreadId = threadId || session?.activeThreadId || null
-    const cached = targetThreadId ? cache.get(targetThreadId) : null
+    const targetThread = targetThreadId ? session?.threads.find((thread) => thread.id === targetThreadId) || null : null
+    const candidate = targetThreadId ? cache.get(targetThreadId) : null
+    const cached = candidate
+        && targetThread
+        && candidate.sessionId === sessionId
+        && candidate.revision === getAssistantThreadHydrationRevision(targetThread)
+        ? candidate
+        : null
+    if (targetThreadId && candidate && !cached) cache.delete(targetThreadId)
+    if (targetThreadId && cached) {
+        cache.delete(targetThreadId)
+        cache.set(targetThreadId, cached)
+    }
     let nextSession = session
 
     if (session && targetThreadId && session.activeThreadId !== targetThreadId) {
@@ -141,6 +180,13 @@ export function hasCachedSessionSelection(
         return false
     }
 
+    const thread = session.threads.find((entry) => entry.id === targetThreadId) || null
     const cached = cache.get(targetThreadId)
-    return Boolean(cached && cached.sessionId === sessionId && cached.threadId === targetThreadId)
+    return Boolean(
+        thread
+        && cached
+        && cached.sessionId === sessionId
+        && cached.threadId === targetThreadId
+        && cached.revision === getAssistantThreadHydrationRevision(thread)
+    )
 }

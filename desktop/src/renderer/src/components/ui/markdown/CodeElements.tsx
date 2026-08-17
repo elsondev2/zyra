@@ -9,8 +9,8 @@ const MermaidDiagram = lazy(async () => ({
     default: (await import('./MermaidDiagram')).MermaidDiagram
 }))
 
-const MAX_HIGHLIGHT_CACHE_ENTRIES = 240
-const MAX_HIGHLIGHT_CACHE_CHARACTERS = 3_000_000
+const MAX_HIGHLIGHT_CACHE_ENTRIES = 160
+const MAX_HIGHLIGHT_CACHE_CHARACTERS = 2_000_000
 const highlightedCodeCache = new Map<string, { source: string; node: ReactNode }>()
 let highlightedCodeCharacters = 0
 let codeHighlightCompilationCount = 0

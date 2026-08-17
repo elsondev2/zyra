@@ -486,13 +486,18 @@ export function areMessagesEqual(left: AssistantMessage, right: AssistantMessage
         && left.updatedAt === right.updatedAt
 }
 
+const activityCommandCache = new WeakMap<AssistantActivity, string>()
+
 export function getActivityCommand(activity: AssistantActivity): string {
+    const cached = activityCommandCache.get(activity)
+    if (cached !== undefined) return cached
+
     const payload = activity.payload || {}
     const surface = getActivityAgentSurface(activity)
     const toolName = readActivityToolName(payload)
     const paths = readActivityPathsFromPayload(payload, activity.detail)
     const isReadTool = /\b(read|open|cat|view)\b/i.test(toolName) && !/\b(thread|message)\b/i.test(toolName)
-    return readActivityCommandFromPayload(payload, activity.detail)
+    const command = readActivityCommandFromPayload(payload, activity.detail)
         || surface?.command
         || readActivityString(payload.query)
         || (isReadTool ? paths[0] : '')
@@ -500,6 +505,8 @@ export function getActivityCommand(activity: AssistantActivity): string {
         || paths[0]
         || readActivityString(activity.detail)
         || activity.summary
+    activityCommandCache.set(activity, command)
+    return command
 }
 
 function groupAdjacentTimelineActivities(entries: TimelineEntry[]): TimelineEntry[] {

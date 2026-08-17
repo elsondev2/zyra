@@ -124,21 +124,33 @@ export function MarkdownInteractionLayer({
         const root = rootRef.current
         if (!root) return
         let disposed = false
-        const interactiveTargets = Array.from(
-            root.querySelectorAll(MARKDOWN_INTERACTIVE_TARGET_SELECTOR)
-        ) as MarkdownLinkElement[]
+        let availabilityIdleId: number | null = null
+        let availabilityTimerId: number | null = null
+        const inspectVisibleLinks = () => {
+            availabilityIdleId = null
+            availabilityTimerId = null
+            if (disposed) return
+            const interactiveTargets = Array.from(
+                root.querySelectorAll(MARKDOWN_INTERACTIVE_TARGET_SELECTOR)
+            ) as MarkdownLinkElement[]
 
-        for (const target of interactiveTargets) {
-            const href = getTargetHref(target)
-            if (href.startsWith('#')) continue
-            clearLinkState(target)
-            const resolvedTarget = resolveMarkdownLinkTarget(href, filePath)
-            if (!resolvedTarget) continue
-            applyLinkState(target, 'checking', resolvedTarget.path)
-            void inspectMarkdownLinkAvailability(href, filePath, searchRootPath).then((result) => {
-                if (disposed || !result || !root.contains(target)) return
-                applyLinkState(target, result.availability, result.path, result.targetKind)
-            })
+            for (const target of interactiveTargets) {
+                const href = getTargetHref(target)
+                if (href.startsWith('#')) continue
+                const resolvedTarget = resolveMarkdownLinkTarget(href, filePath)
+                if (!resolvedTarget) continue
+                clearLinkState(target)
+                applyLinkState(target, 'checking', resolvedTarget.path)
+                void inspectMarkdownLinkAvailability(href, filePath, searchRootPath).then((result) => {
+                    if (disposed || !result || !root.contains(target)) return
+                    applyLinkState(target, result.availability, result.path, result.targetKind)
+                })
+            }
+        }
+        if (typeof window.requestIdleCallback === 'function') {
+            availabilityIdleId = window.requestIdleCallback(inspectVisibleLinks, { timeout: 800 })
+        } else {
+            availabilityTimerId = window.setTimeout(inspectVisibleLinks, 0)
         }
 
         const handleClick = async (event: MouseEvent) => {
@@ -217,6 +229,8 @@ export function MarkdownInteractionLayer({
         root.addEventListener('dragstart', handleDragStart)
         return () => {
             disposed = true
+            if (availabilityIdleId !== null) window.cancelIdleCallback(availabilityIdleId)
+            if (availabilityTimerId !== null) window.clearTimeout(availabilityTimerId)
             root.removeEventListener('click', handleClick)
             root.removeEventListener('keydown', handleKeyDown)
             root.removeEventListener('dragstart', handleDragStart)

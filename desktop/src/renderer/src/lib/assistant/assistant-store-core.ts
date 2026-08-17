@@ -27,6 +27,7 @@ import { rendererVisibility } from '../renderer-visibility'
 import { applyCachedSessionSelection, cacheHydratedThreads, hasCachedSessionSelection, type CachedHydratedThreadState } from './session-hydration-cache'
 import { deriveAssistantRuntimeStatus, INITIAL_ASSISTANT_RUNTIME_STATUS, type AssistantStoreState } from './assistant-store-runtime'
 import { shouldAutoReconnectAssistantOnStartup } from './assistant-runtime-preferences'
+import { getAssistantThreadHydrationRevision } from './assistant-thread-hydration-revision'
 import { runAssistantStoreAction } from './assistant-store-action-runner'
 import { selectAssistantStoreSession } from './assistant-store-session-selection'
 import { preserveAssistantClientRoute } from './assistant-client-route'
@@ -38,6 +39,7 @@ import {
     applyAssistantHistoryPage,
     applyAssistantRetainedHistory,
     applyAssistantThreadDetail,
+    dematerializeAssistantHistories,
     formatAssistantHistoryLoadError,
     hasRenderableAssistantRetainedHistory,
     isAssistantRetainedHistoryFresh,
@@ -95,7 +97,7 @@ class AssistantStore {
     private pendingAssistantEvents: AssistantDomainEvent[] = []
     private pendingAssistantEventFlushFrame: number | null = null
     private pendingAssistantEventFlushTimeout: number | null = null
-    private readonly pendingSelectionHydrations = new Set<string>()
+    private readonly pendingSelectionHydrations = new Map<string, Promise<void>>()
     private readonly pendingOlderLoads = new Map<string, Promise<void>>()
 
     subscribe = (listener: () => void) => {
@@ -416,6 +418,7 @@ class AssistantStore {
         if (!currentHistory.pageInfo.hasOlder || !currentHistory.pageInfo.oldestCursor) return
 
         const requestedCursor = currentHistory.pageInfo.oldestCursor
+        const requestedRevision = currentHistory.shellRevision
         this.setState((current) => ({
             historyByThreadId: {
                 ...current.historyByThreadId,
@@ -423,6 +426,7 @@ class AssistantStore {
             }
         }))
         const promise = (async () => {
+            let revisionChanged = false
             try {
                 const result = await window.devscope.assistant.getHistoryPage({
                     threadId: targetThreadId,
@@ -432,6 +436,21 @@ class AssistantStore {
                 this.setState((current) => {
                     const latest = current.historyByThreadId[targetThreadId]
                     if (!latest || latest.pageInfo.oldestCursor !== requestedCursor) return {}
+                    const latestThread = current.snapshot.sessions
+                        .flatMap((session) => session.threads)
+                        .find((thread) => thread.id === targetThreadId) || null
+                    if (
+                        latest.shellRevision !== requestedRevision
+                        || (latestThread && getAssistantThreadHydrationRevision(latestThread) !== requestedRevision)
+                    ) {
+                        revisionChanged = true
+                        return {
+                            historyByThreadId: {
+                                ...current.historyByThreadId,
+                                [targetThreadId]: { ...latest, loadingOlder: false, loadOlderError: null, lastUsedAt: Date.now() }
+                            }
+                        }
+                    }
                     const applied = applyAssistantHistoryPage(current.snapshot, latest, result.page)
                     return {
                         snapshot: applied.snapshot,
@@ -443,6 +462,21 @@ class AssistantStore {
                 this.setState((current) => {
                     const latest = current.historyByThreadId[targetThreadId]
                     if (!latest) return {}
+                    const latestThread = current.snapshot.sessions
+                        .flatMap((session) => session.threads)
+                        .find((thread) => thread.id === targetThreadId) || null
+                    if (
+                        latest.shellRevision !== requestedRevision
+                        || (latestThread && getAssistantThreadHydrationRevision(latestThread) !== requestedRevision)
+                    ) {
+                        revisionChanged = true
+                        return {
+                            historyByThreadId: {
+                                ...current.historyByThreadId,
+                                [targetThreadId]: { ...latest, loadingOlder: false, loadOlderError: null, lastUsedAt: Date.now() }
+                            }
+                        }
+                    }
                     return {
                         historyByThreadId: {
                             ...current.historyByThreadId,
@@ -452,6 +486,11 @@ class AssistantStore {
                 })
             } finally {
                 this.pendingOlderLoads.delete(targetThreadId)
+            }
+            if (revisionChanged) {
+                const sessionId = this.state.snapshot.sessions
+                    .find((session) => session.threads.some((thread) => thread.id === targetThreadId))?.id
+                if (sessionId) await this.requestSessionHydration(sessionId, targetThreadId)
             }
         })()
         this.pendingOlderLoads.set(targetThreadId, promise)
@@ -477,20 +516,27 @@ class AssistantStore {
     async selectThread(input: AssistantSelectThreadInput, options?: { force?: boolean }) {
         const force = options?.force === true
         const selectedSession = this.state.snapshot.sessions.find((session) => session.id === input.sessionId) || null
-        if (!selectedSession) {
-            return { success: false as const, error: 'Assistant session not found.' }
+        const targetThread = selectedSession?.threads.find((thread) => thread.id === input.threadId) || null
+        if (!selectedSession || !targetThread) {
+            return { success: false as const, error: 'Assistant thread not found.' }
         }
         if (!force && this.state.snapshot.selectedSessionId === input.sessionId && selectedSession.activeThreadId === input.threadId) {
             return { success: true as const, snapshot: this.state.snapshot }
         }
 
+        const previousSessionId = this.state.snapshot.selectedSessionId
+        const previousSession = this.state.snapshot.sessions.find((session) => session.id === previousSessionId) || null
+        const previousThreadId = previousSession?.activeThreadId || null
         const canHydrateFromCache = hasCachedSessionSelection(
             this.state.snapshot,
             input.sessionId,
             input.threadId,
             this.hydratedThreadCache
         )
+        const transitionKey = `${input.sessionId}:${input.threadId}`
+        let selectionRequestId = 0
         this.setState((current) => {
+            selectionRequestId = current.selectionRequestId + 1
             const snapshot = applyCachedSessionSelection(
                 current.snapshot,
                 input.sessionId,
@@ -500,33 +546,82 @@ class AssistantStore {
             return {
                 error: null,
                 commandPending: !canHydrateFromCache,
+                selectionRequestId,
+                selectionRequestSessionId: input.sessionId,
+                selectionTransitionKey: canHydrateFromCache ? null : transitionKey,
                 snapshot,
                 status: deriveAssistantRuntimeStatus(snapshot, current.status)
             }
         })
 
+        const hydration = canHydrateFromCache
+            ? null
+            : this.requestSessionHydration(input.sessionId, input.threadId)
+        await Promise.resolve()
+        if (this.state.selectionRequestId !== selectionRequestId) {
+            return { success: true as const, snapshot: this.state.snapshot }
+        }
+
+        const authoritativeSelection = window.devscope.assistant.selectThread(input)
+        if (hydration) {
+            await hydration
+            if (this.state.selectionRequestId === selectionRequestId) {
+                this.setState({ selectionTransitionKey: null })
+            }
+        }
+
+        const restorePreviousSelection = (message: string) => {
+            this.setState((current) => {
+                if (current.selectionRequestId !== selectionRequestId) return {}
+                const snapshot = previousSessionId
+                    ? applyCachedSessionSelection(
+                        current.snapshot,
+                        previousSessionId,
+                        previousThreadId,
+                        this.hydratedThreadCache
+                    )
+                    : current.snapshot
+                return {
+                    error: message,
+                    commandPending: false,
+                    selectionTransitionKey: null,
+                    selectionRequestSessionId: null,
+                    snapshot,
+                    status: deriveAssistantRuntimeStatus(snapshot, current.status)
+                }
+            })
+            if (previousSessionId && previousThreadId) {
+                void this.requestSessionHydration(previousSessionId, previousThreadId)
+            }
+        }
+
         try {
-            const result = await window.devscope.assistant.selectThread(input)
+            const result = await authoritativeSelection
+            if (this.state.selectionRequestId !== selectionRequestId) return result
             if (!result.success) {
-                this.setState({ error: result.error })
+                restorePreviousSelection(result.error)
                 return result
             }
             const snapshot = result.snapshot
             if (snapshot) {
-                this.setState((current) => ({
+                this.setState((current) => current.selectionRequestId === selectionRequestId ? {
                     snapshot,
                     status: deriveAssistantRuntimeStatus(snapshot, current.status)
-                }))
-            } else {
+                } : {})
+            } else if (canHydrateFromCache) {
                 void this.requestSessionHydration(input.sessionId, input.threadId)
             }
             return result
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Assistant command failed.'
-            this.setState({ error: message })
+            restorePreviousSelection(message)
             return { success: false as const, error: message }
         } finally {
-            this.setState({ commandPending: false })
+            this.setState((current) => current.selectionRequestId === selectionRequestId ? {
+                commandPending: false,
+                selectionTransitionKey: null,
+                selectionRequestSessionId: null
+            } : {})
         }
     }
 
@@ -876,13 +971,13 @@ class AssistantStore {
         return `${sessionId}:${threadId || ''}`
     }
 
-    private async requestSessionHydration(sessionId: string, threadId: string | null): Promise<void> {
+    private async requestSessionHydration(sessionId: string, threadId: string | null, retryAttempt = 0): Promise<void> {
         if (!sessionId || !threadId) return
         const retainedHistory = this.state.historyByThreadId[threadId]
-        if (isAssistantRetainedHistoryFresh(retainedHistory)) {
-            const currentThread = this.state.snapshot.sessions
-                .flatMap((session) => session.threads)
-                .find((thread) => thread.id === threadId) || null
+        const currentThread = this.state.snapshot.sessions
+            .flatMap((session) => session.threads)
+            .find((thread) => thread.id === threadId) || null
+        if (isAssistantRetainedHistoryFresh(retainedHistory, currentThread)) {
             const retainedHasRows = hasRenderableAssistantRetainedHistory(retainedHistory)
             const renderedHasRows = Boolean(
                 currentThread?.messages.length
@@ -897,47 +992,109 @@ class AssistantStore {
         }
 
         const hydrationKey = this.buildSelectionHydrationKey(sessionId, threadId)
-        if (this.pendingSelectionHydrations.has(hydrationKey)) return
+        const existing = this.pendingSelectionHydrations.get(hydrationKey)
+        if (existing) return existing
 
-        this.pendingSelectionHydrations.add(hydrationKey)
-        this.setState({ selectionHydrationKey: hydrationKey })
-        try {
-            const result = await window.devscope.assistant.getThreadDetailBootstrap(threadId)
-            if (!result.success) {
-                this.setState({ error: result.error })
-                return
-            }
-
-            this.setState((current) => {
-                const applied = applyAssistantThreadDetail(current.snapshot, result.detail)
-                const selectedThreadId = current.snapshot.sessions
-                    .find((session) => session.id === current.snapshot.selectedSessionId)?.activeThreadId || null
-                const runningThreadIds = new Set(current.snapshot.sessions.flatMap((session) => (
-                    session.threads.filter((thread) => thread.state === 'starting' || thread.state === 'running' || thread.state === 'waiting').map((thread) => thread.id)
-                )))
-                if (selectedThreadId) runningThreadIds.add(selectedThreadId)
-                const historyByThreadId = pruneAssistantHistoryCache({
-                    ...current.historyByThreadId,
-                    [threadId]: applied.history
-                }, runningThreadIds)
-                return {
-                    snapshot: applied.snapshot,
-                    historyByThreadId,
-                    status: deriveAssistantRuntimeStatus(applied.snapshot, current.status),
-                    error: null
+        const requestedRevision = currentThread ? getAssistantThreadHydrationRevision(currentThread) : null
+        let request!: Promise<void>
+        request = (async () => {
+            let revisionChanged = false
+            this.setState({ selectionHydrationKey: hydrationKey })
+            try {
+                const result = await window.devscope.assistant.getThreadDetailBootstrap(threadId)
+                if (!result.success) {
+                    const latestThread = this.state.snapshot.sessions
+                        .flatMap((session) => session.threads)
+                        .find((thread) => thread.id === threadId) || null
+                    if (
+                        requestedRevision
+                        && latestThread
+                        && getAssistantThreadHydrationRevision(latestThread) !== requestedRevision
+                    ) {
+                        revisionChanged = true
+                        return
+                    }
+                    const selectedThreadId = this.state.snapshot.sessions
+                        .find((session) => session.id === this.state.snapshot.selectedSessionId)?.activeThreadId || null
+                    if (selectedThreadId === threadId) this.setState({ error: result.error })
+                    return
                 }
-            })
-        } catch (error) {
-            const message = error instanceof Error ? error.message : 'Failed to load assistant history.'
-            this.setState({ error: message })
-        } finally {
-            this.pendingSelectionHydrations.delete(hydrationKey)
-            this.setState((current) => (
-                current.selectionHydrationKey === hydrationKey
-                    ? { selectionHydrationKey: null }
-                    : {}
-            ))
-        }
+
+                this.setState((current) => {
+                    const latestThread = current.snapshot.sessions
+                        .flatMap((session) => session.threads)
+                        .find((thread) => thread.id === threadId) || null
+                    if (
+                        requestedRevision
+                        && latestThread
+                        && getAssistantThreadHydrationRevision(latestThread) !== requestedRevision
+                    ) {
+                        revisionChanged = true
+                        return {}
+                    }
+                    const applied = applyAssistantThreadDetail(current.snapshot, result.detail)
+                    const selectedThreadId = current.snapshot.sessions
+                        .find((session) => session.id === current.snapshot.selectedSessionId)?.activeThreadId || null
+                    const runningThreadIds = new Set(current.snapshot.sessions.flatMap((session) => (
+                        session.threads.filter((thread) => (
+                            ['starting', 'running', 'waiting', 'background'].includes(thread.state)
+                            || thread.hasPendingApprovals
+                            || thread.hasPendingUserInputs
+                            || thread.hasActivePlan
+                            || thread.pendingApprovals.length > 0
+                            || thread.pendingUserInputs.length > 0
+                            || Boolean(thread.activePlan)
+                        )).map((thread) => thread.id)
+                    )))
+                    if (selectedThreadId) runningThreadIds.add(selectedThreadId)
+                    const historyByThreadId = pruneAssistantHistoryCache({
+                        ...current.historyByThreadId,
+                        [threadId]: applied.history
+                    }, runningThreadIds)
+                    const snapshot = dematerializeAssistantHistories(
+                        applied.snapshot,
+                        new Set(Object.keys(historyByThreadId))
+                    )
+                    return {
+                        snapshot,
+                        historyByThreadId,
+                        status: deriveAssistantRuntimeStatus(snapshot, current.status),
+                        ...(selectedThreadId === threadId ? { error: null } : {})
+                    }
+                })
+            } catch (error) {
+                const latestThread = this.state.snapshot.sessions
+                    .flatMap((session) => session.threads)
+                    .find((thread) => thread.id === threadId) || null
+                if (
+                    requestedRevision
+                    && latestThread
+                    && getAssistantThreadHydrationRevision(latestThread) !== requestedRevision
+                ) {
+                    revisionChanged = true
+                } else {
+                    const selectedThreadId = this.state.snapshot.sessions
+                        .find((session) => session.id === this.state.snapshot.selectedSessionId)?.activeThreadId || null
+                    if (selectedThreadId === threadId) {
+                        this.setState({ error: error instanceof Error ? error.message : 'Failed to load assistant history.' })
+                    }
+                }
+            } finally {
+                if (this.pendingSelectionHydrations.get(hydrationKey) === request) {
+                    this.pendingSelectionHydrations.delete(hydrationKey)
+                }
+                this.setState((current) => (
+                    current.selectionHydrationKey === hydrationKey
+                        ? { selectionHydrationKey: null }
+                        : {}
+                ))
+            }
+            if (revisionChanged && retryAttempt < 2) {
+                await this.requestSessionHydration(sessionId, threadId, retryAttempt + 1)
+            }
+        })()
+        this.pendingSelectionHydrations.set(hydrationKey, request)
+        return request
     }
 
     private applyPlaygroundState(playground: AssistantPlaygroundState) {

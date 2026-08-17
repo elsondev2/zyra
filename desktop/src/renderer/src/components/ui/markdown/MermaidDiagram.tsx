@@ -113,7 +113,7 @@ export const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: s
                     throw renderError
                 })
 
-            mermaidRenderPromiseCache.set(chart, renderPromise)
+            mermaidRenderPromiseCache.set(cacheKey, renderPromise)
             return renderPromise
         }
 

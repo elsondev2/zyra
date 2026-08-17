@@ -3,6 +3,7 @@ import { RefreshCw } from 'lucide-react'
 import type { AssistantVoiceTranscriptionState } from '@shared/assistant/contracts'
 import { useSettings } from '@/lib/settings'
 import { readFullAccessConfirmSuppressed, writeFullAccessConfirmSuppressed } from '../assistant/assistant-safety-preferences'
+import { loadSettingsModels, readCachedSettingsModels } from './settings-model-catalog-cache'
 import {
     SettingsButton,
     SettingsDialog,
@@ -19,7 +20,7 @@ type ModelOption = { id: string; label: string; description?: string }
 
 export default function AssistantSettings() {
     const { settings, updateSettings } = useSettings()
-    const [models, setModels] = useState<ModelOption[]>([])
+    const [models, setModels] = useState<ModelOption[]>(readCachedSettingsModels)
     const [modelsLoading, setModelsLoading] = useState(false)
     const [modelsError, setModelsError] = useState<string | null>(null)
     const [transcriptionState, setTranscriptionState] = useState<AssistantVoiceTranscriptionState | null>(null)
@@ -33,9 +34,7 @@ export default function AssistantSettings() {
         setModelsLoading(true)
         setModelsError(null)
         try {
-            const result = await window.devscope.assistant.listModels(forceRefresh)
-            if (!result.success) throw new Error(result.error || 'Could not load assistant models.')
-            setModels(result.models)
+            setModels(await loadSettingsModels(forceRefresh))
         } catch (error) {
             setModelsError(error instanceof Error ? error.message : 'Could not load assistant models.')
         } finally {
@@ -59,8 +58,12 @@ export default function AssistantSettings() {
 
     useEffect(() => {
         void loadModels(false)
+    }, [loadModels])
+
+    useEffect(() => {
+        if (!settings.assistantTranscriptionEnabled || settings.assistantTranscriptionEngine !== 'codex') return
         void loadTranscriptionState()
-    }, [loadModels, loadTranscriptionState])
+    }, [loadTranscriptionState, settings.assistantTranscriptionEnabled, settings.assistantTranscriptionEngine])
 
     const setPermissionMode = (assistantDefaultRuntimeMode: 'approval-required' | 'full-access') => {
         if (assistantDefaultRuntimeMode === 'full-access' && settings.assistantDefaultRuntimeMode !== 'full-access') {

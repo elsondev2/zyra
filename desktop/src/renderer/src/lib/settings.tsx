@@ -7,6 +7,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, Re
 import { dispatchZyraThemeChanged } from './theme-events'
 import { clearProjectViewCaches } from './projectViewCache'
 import { clearRecentProjects } from './recentProjects'
+import { clearSettingsRuntimeCaches } from './settings-cache-registry'
 import type { AssistantReasoningEffort } from '@shared/assistant/contracts'
 import {
     loadLegacyAssistantComposerDefaults,
@@ -1044,6 +1045,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     const clearCache = useCallback(() => {
         clearProjectViewCaches()
         clearRecentProjects()
+        clearSettingsRuntimeCaches()
         window.dispatchEvent(new CustomEvent('devscope:cache-cleared'))
     }, [])
 

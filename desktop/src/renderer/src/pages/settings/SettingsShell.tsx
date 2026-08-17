@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { ArrowLeft, PanelLeftOpen, Pin, Search, X } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useSettings } from '@/lib/settings'
@@ -10,6 +10,7 @@ import {
     writeAssistantBubblePreviewPinned
 } from '../assistant/assistant-sidebar-preview-state'
 import { findSettingsNavigationItem, SETTINGS_NAVIGATION_GROUPS, type SettingsNavigationItem } from './settings-navigation'
+import { preloadSettingsRoute } from './settings-route-loaders'
 import {
     findSettingsSearchTargets,
     getSettingsSearchTarget,
@@ -39,6 +40,21 @@ function groupSettingsSearchTargets(targets: SettingsSearchTarget[]): Array<{ se
         groups.set(target.section, entries)
     }
     return [...groups].map(([section, entries]) => ({ section, targets: entries }))
+}
+
+function SettingsRouteFallback() {
+    return (
+        <div className="mx-auto w-full max-w-[680px] px-5 pb-16 pt-8 sm:px-10 sm:pt-10" aria-busy="true" aria-label="Opening settings page">
+            <div className="space-y-10">
+                {[0, 1].map((section) => (
+                    <div key={section} className="space-y-2.5">
+                        <div className="h-4 w-28 animate-pulse rounded bg-[var(--settings-text-faint)]/12 motion-reduce:animate-none" />
+                        <div className="h-28 animate-pulse rounded-xl border border-[var(--settings-border)] bg-[var(--settings-section)] motion-reduce:animate-none" />
+                    </div>
+                ))}
+            </div>
+        </div>
+    )
 }
 
 export default function SettingsShell() {
@@ -91,22 +107,19 @@ export default function SettingsShell() {
         const fallbackTargetId = searchTarget?.sectionTargetId || null
         let frameId = 0
         let clearTimer = 0
+        let observer: MutationObserver | null = null
         let highlighted: HTMLElement | null = null
-        let attempts = 0
 
         const findTarget = (targetId: string | null) => targetId
             ? scrollContainer.querySelector<HTMLElement>(`[data-settings-search-target="${targetId}"]`)
             : null
-        const focusTarget = () => {
+        const focusTarget = (): boolean => {
             const exactTarget = findTarget(requestedSearchTarget)
             const fallbackTarget = exactTarget ? null : findTarget(fallbackTargetId)
             const target = exactTarget || fallbackTarget
-            if (!target) {
-                attempts += 1
-                if (attempts < 120) frameId = window.requestAnimationFrame(focusTarget)
-                return
-            }
+            if (!target) return false
             highlighted = target
+            observer?.disconnect()
             target.classList.add('zyra-settings-search-target')
             target.focus({ preventScroll: true })
             target.scrollIntoView({
@@ -114,12 +127,18 @@ export default function SettingsShell() {
                 behavior: settings.accessibilityReduceMotion ? 'auto' : 'smooth'
             })
             clearTimer = window.setTimeout(() => target.classList.remove('zyra-settings-search-target'), 2_200)
+            return true
         }
 
-        frameId = window.requestAnimationFrame(focusTarget)
+        frameId = window.requestAnimationFrame(() => {
+            if (focusTarget()) return
+            observer = new MutationObserver(() => focusTarget())
+            observer.observe(scrollContainer, { childList: true, subtree: true })
+        })
         return () => {
             window.cancelAnimationFrame(frameId)
             window.clearTimeout(clearTimer)
+            observer?.disconnect()
             highlighted?.classList.remove('zyra-settings-search-target')
         }
     }, [activeItem.id, location.key, requestedSearchTarget, settings.accessibilityReduceMotion])
@@ -238,8 +257,7 @@ export default function SettingsShell() {
     }, [])
 
     const sidebarLayoutStyle = {
-        width: settings.sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
-        willChange: 'width'
+        width: settings.sidebarCollapsed ? '0px' : `${sidebarWidth}px`
     } as const
     const sidebarSurfaceStyle = settings.sidebarCollapsed
         ? {
@@ -247,16 +265,14 @@ export default function SettingsShell() {
             opacity: previewOpen ? 1 : 0,
             pointerEvents: previewOpen ? 'auto' : 'none',
             transform: previewOpen ? 'translate3d(0, 0, 0)' : 'translate3d(-18px, 0, 0)',
-            transformOrigin: 'left center',
-            willChange: 'opacity, transform'
+            transformOrigin: 'left center'
         } as const
         : {
             width: `${sidebarWidth}px`,
             opacity: 1,
             pointerEvents: 'auto',
             transform: 'translate3d(0, 0, 0)',
-            transformOrigin: 'left center',
-            willChange: 'width, opacity'
+            transformOrigin: 'left center'
         } as const
 
     return (
@@ -375,6 +391,9 @@ export default function SettingsShell() {
                                             <NavLink
                                                 to={item.to}
                                                 aria-current={isActive ? 'page' : undefined}
+                                                onPointerEnter={() => preloadSettingsRoute(item.to)}
+                                                onPointerDown={() => preloadSettingsRoute(item.to)}
+                                                onFocus={() => preloadSettingsRoute(item.to)}
                                                 className={cn(
                                                     'group flex min-h-8 items-center gap-2 rounded-md px-2 text-[12px] transition-colors duration-100',
                                                     isActive
@@ -403,6 +422,9 @@ export default function SettingsShell() {
                                                                             key={`${target.section}:${target.label}`}
                                                                             to={`${item.to}?setting=${encodeURIComponent(target.targetId)}`}
                                                                             state={{ settingsSearchRequest: target.targetId }}
+                                                                            onPointerEnter={() => preloadSettingsRoute(item.to)}
+                                                                            onPointerDown={() => preloadSettingsRoute(item.to)}
+                                                                            onFocus={() => preloadSettingsRoute(item.to)}
                                                                             aria-current={targetActive ? 'location' : undefined}
                                                                             className={cn(
                                                                                 'group/result flex min-h-7 items-center gap-2 rounded-md px-2 py-1 text-[11px] leading-4 transition-colors',
@@ -459,7 +481,9 @@ export default function SettingsShell() {
 
             <section ref={contentScrollRef} className="settings-content-scrollbar min-w-0 flex-1 overflow-y-auto overscroll-contain bg-[var(--settings-bg)]" aria-labelledby="settings-active-page-title">
                 <h2 id="settings-active-page-title" className="sr-only">{activeItem.label}</h2>
-                <Outlet />
+                <Suspense fallback={<SettingsRouteFallback />}>
+                    <Outlet />
+                </Suspense>
             </section>
         </div>
     )

@@ -8,6 +8,7 @@ import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
 import { useLoadingScreenActive } from '@/components/ui/LoadingState'
 import { cn } from '@/lib/utils'
+import { preloadSettingsRoute } from '../settings/settings-route-loaders'
 import type { AssistantToastInput } from './AssistantPageHelpers'
 import { AssistantAgentInboxSidebar } from './AssistantAgentInboxSidebar'
 import { RenameSessionModal } from './AssistantSessionsRailDialogs'
@@ -904,6 +905,8 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                 <div className="mt-auto shrink-0 border-t border-[var(--surface-divider)] pt-2">
                     <button
                         type="button"
+                        onPointerEnter={() => preloadSettingsRoute('/settings/general')}
+                        onFocus={() => preloadSettingsRoute('/settings/general')}
                         onClick={() => navigate('/settings')}
                         className={cn(
                             'group flex h-8 w-full cursor-pointer items-center text-sparkle-text-secondary transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]/35',

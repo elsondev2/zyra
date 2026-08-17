@@ -499,9 +499,18 @@ type CompactLiveNarrationSnapshot = {
     text: string
 }
 
+const COMPACT_LIVE_NARRATION_MAX_CHARACTERS = 1_600
+
+function compactLiveNarrationText(value: string): string {
+    const text = value.trim()
+    return text.length <= COMPACT_LIVE_NARRATION_MAX_CHARACTERS
+        ? text
+        : `${text.slice(0, COMPACT_LIVE_NARRATION_MAX_CHARACTERS).trimEnd()}…`
+}
+
 function getSettledLiveNarration(message: AssistantMessage): CompactLiveNarrationSnapshot | null {
     if (message.role !== 'assistant' || message.streaming) return null
-    const text = stripProposedPlanBlocks(message.text || '').trim()
+    const text = compactLiveNarrationText(stripProposedPlanBlocks(message.text || ''))
     if (!text) return null
     return {
         key: `${message.id}:${message.updatedAt}:${text.length}`,
@@ -667,7 +676,7 @@ export const TimelineMessage = memo(({
                         <div className="block w-full rounded-sm text-left">
                             <div className="line-clamp-3 [overflow-wrap:anywhere]">
                                 <StreamingAssistantMarkdown
-                                    content={renderedAssistantText || ' '}
+                                    content={compactLiveNarrationText(renderedAssistantText) || ' '}
                                     cacheKey={`${message.id}:compact-stream`}
                                     className="assistant-live-narration-muted text-[11px] leading-5 [&_p]:mb-0 [&_li]:leading-5"
                                 />

@@ -99,8 +99,8 @@ const MARKDOWN_SANITIZE_SCHEMA = {
 
 const RAW_HTML_TAG_REGEX = /<\/?[A-Za-z][^>\n]*>/
 const DEFERRED_MARKDOWN_LENGTH = 120_000
-const MAX_COMPILED_ENTRIES = 320
-const MAX_COMPILED_CONTENT_LENGTH = 6_000_000
+const MAX_COMPILED_ENTRIES = 192
+const MAX_COMPILED_CONTENT_LENGTH = 4_000_000
 const compiledMarkdown = new Map<string, CompiledMarkdownEntry>()
 let compiledContentLength = 0
 let markdownCompilationCount = 0

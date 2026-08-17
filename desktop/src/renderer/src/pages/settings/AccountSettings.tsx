@@ -5,9 +5,11 @@ import type { OnboardingAuthMethod, OpenAIConnectionMethodStatus, OpenAIConnecti
 import { useSettings } from '@/lib/settings'
 import { isElectronRendererRuntime } from '@/lib/browser-file-url'
 import { cn } from '@/lib/utils'
+import { registerSettingsCacheClearer } from '@/lib/settings-cache-registry'
 import { ConfirmModal } from '@/components/ui/ConfirmModal'
 import { buildRateLimitCards, formatFetchedAt, formatPlan } from './assistant-account-rate-limits'
 import { AccountResetCreditsSection } from './AccountResetCreditsSection'
+import { invalidateSettingsModels, loadSettingsModels } from './settings-model-catalog-cache'
 import {
     SettingsButton,
     SettingsDialog,
@@ -19,7 +21,97 @@ import {
     SettingsSegmented
 } from './settings-layout'
 
-const ACCOUNT_POLL_INTERVAL_MS = 15_000
+const ACCOUNT_POLL_INTERVAL_MS = 60_000
+const ACCOUNT_CACHE_TTL_MS = 45_000
+
+const accountSettingsCache: {
+    overview: AssistantAccountOverview | null
+    overviewAt: number
+    connections: OpenAIConnectionsStatus | null
+    connectionsAt: number
+} = {
+    overview: null,
+    overviewAt: 0,
+    connections: null,
+    connectionsAt: 0
+}
+
+let accountCacheGeneration = 0
+let pendingAccountOverview: { generation: number; promise: Promise<AssistantAccountOverview> } | null = null
+let pendingConnectionStatus: { generation: number; promise: Promise<OpenAIConnectionsStatus> } | null = null
+
+function isAccountCacheFresh(updatedAt: number): boolean {
+    return updatedAt > 0 && Date.now() - updatedAt < ACCOUNT_CACHE_TTL_MS
+}
+
+function invalidateAccountRuntimeCache(options: {
+    overview?: boolean
+    connections?: boolean
+    clearOverview?: boolean
+    clearConnections?: boolean
+} = {}): void {
+    accountCacheGeneration += 1
+    if (options.overview !== false) accountSettingsCache.overviewAt = 0
+    if (options.connections !== false) accountSettingsCache.connectionsAt = 0
+    if (options.clearOverview) accountSettingsCache.overview = null
+    if (options.clearConnections) accountSettingsCache.connections = null
+}
+
+registerSettingsCacheClearer('settings-account', () => invalidateAccountRuntimeCache({ clearOverview: true, clearConnections: true }))
+
+async function requestAccountOverview(forceRefresh = false): Promise<AssistantAccountOverview> {
+    if (!forceRefresh && accountSettingsCache.overview && isAccountCacheFresh(accountSettingsCache.overviewAt)) {
+        return accountSettingsCache.overview
+    }
+    const previous = pendingAccountOverview
+    if (previous) {
+        if (previous.generation === accountCacheGeneration && !forceRefresh) return previous.promise
+        await previous.promise.catch(() => undefined)
+        if (pendingAccountOverview === previous) pendingAccountOverview = null
+    }
+    const generation = accountCacheGeneration
+    const request = window.devscope.assistant.getAccountOverview(forceRefresh).then((result) => {
+        if (!result.success) throw new Error(result.error || 'Could not load ChatGPT account information.')
+        if (generation === accountCacheGeneration) {
+            accountSettingsCache.overview = result.overview
+            accountSettingsCache.overviewAt = Date.now()
+        }
+        return result.overview
+    })
+    const pending = { generation, promise: request }
+    pendingAccountOverview = pending
+    void request.finally(() => {
+        if (pendingAccountOverview === pending) pendingAccountOverview = null
+    }).catch(() => undefined)
+    return request
+}
+
+async function requestConnectionStatus(forceRefresh = false): Promise<OpenAIConnectionsStatus> {
+    if (!forceRefresh && accountSettingsCache.connections && isAccountCacheFresh(accountSettingsCache.connectionsAt)) {
+        return accountSettingsCache.connections
+    }
+    const previous = pendingConnectionStatus
+    if (previous) {
+        if (previous.generation === accountCacheGeneration && !forceRefresh) return previous.promise
+        await previous.promise.catch(() => undefined)
+        if (pendingConnectionStatus === previous) pendingConnectionStatus = null
+    }
+    const generation = accountCacheGeneration
+    const request = window.devscope.onboarding.getConnectionsStatus().then((result) => {
+        if (!result.success) throw new Error(result.error || 'Could not load OpenAI connections.')
+        if (generation === accountCacheGeneration) {
+            accountSettingsCache.connections = result.status
+            accountSettingsCache.connectionsAt = Date.now()
+        }
+        return result.status
+    })
+    const pending = { generation, promise: request }
+    pendingConnectionStatus = pending
+    void request.finally(() => {
+        if (pendingConnectionStatus === pending) pendingConnectionStatus = null
+    }).catch(() => undefined)
+    return request
+}
 
 function resolvePreferredPlanType(overview: AssistantAccountOverview | null): AssistantAccountPlanType | null {
     const accountPlanType = overview?.account?.planType ?? null
@@ -50,28 +142,32 @@ function firstModelForMethod(method: OnboardingAuthMethod, models: AssistantMode
 
 export default function AccountSettings() {
     const { settings, updateSettings } = useSettings()
-    const [overview, setOverview] = useState<AssistantAccountOverview | null>(null)
-    const [overviewLoading, setOverviewLoading] = useState(true)
+    const [overview, setOverview] = useState<AssistantAccountOverview | null>(() => accountSettingsCache.overview)
+    const [overviewLoading, setOverviewLoading] = useState(() => !accountSettingsCache.overview)
     const [overviewError, setOverviewError] = useState<string | null>(null)
     const overviewRequestIdRef = useRef(0)
     const desktopHost = isElectronRendererRuntime()
-    const [connections, setConnections] = useState<OpenAIConnectionsStatus | null>(null)
+    const [connections, setConnections] = useState<OpenAIConnectionsStatus | null>(() => accountSettingsCache.connections)
     const [connectionError, setConnectionError] = useState<string | null>(null)
     const [connectionAction, setConnectionAction] = useState<'refresh' | 'chatgpt' | 'api-key' | 'switch' | 'disconnect' | null>(null)
-    const [knownModels, setKnownModels] = useState<AssistantModelInfo[]>([])
     const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false)
     const [apiKeyDraft, setApiKeyDraft] = useState('')
     const [disconnectMethod, setDisconnectMethod] = useState<OnboardingAuthMethod | null>(null)
 
-    const loadOverview = useCallback(async () => {
+    const loadOverview = useCallback(async (forceRefresh = false) => {
+        if (!forceRefresh && accountSettingsCache.overview && isAccountCacheFresh(accountSettingsCache.overviewAt)) {
+            setOverview(accountSettingsCache.overview)
+            setOverviewError(null)
+            setOverviewLoading(false)
+            return
+        }
         const requestId = ++overviewRequestIdRef.current
         setOverviewLoading(true)
         setOverviewError(null)
         try {
-            const result = await window.devscope.assistant.getAccountOverview()
-            if (!result.success) throw new Error(result.error || 'Could not load ChatGPT account information.')
+            const nextOverview = await requestAccountOverview(forceRefresh)
             if (requestId !== overviewRequestIdRef.current) return
-            setOverview(result.overview)
+            setOverview(nextOverview)
         } catch (error) {
             if (requestId !== overviewRequestIdRef.current) return
             setOverviewError(error instanceof Error ? error.message : 'Could not load ChatGPT account information.')
@@ -80,16 +176,17 @@ export default function AccountSettings() {
         }
     }, [])
 
-    const loadConnectionState = useCallback(async (forceModels = false) => {
+    const loadConnectionState = useCallback(async (forceRefresh = false) => {
         if (!desktopHost) return
+        if (!forceRefresh && accountSettingsCache.connections && isAccountCacheFresh(accountSettingsCache.connectionsAt)) {
+            setConnections(accountSettingsCache.connections)
+            setConnectionError(null)
+            return
+        }
         setConnectionAction((current) => current || 'refresh')
         setConnectionError(null)
         try {
-            const result = await window.devscope.onboarding.getConnectionsStatus()
-            if (!result.success) throw new Error(result.error || 'Could not load OpenAI connections.')
-            setConnections(result.status)
-            const modelResult = await window.devscope.assistant.listModels(forceModels).catch(() => null)
-            if (modelResult?.success) setKnownModels(modelResult.models)
+            setConnections(await requestConnectionStatus(forceRefresh))
         } catch (error) {
             setConnectionError(error instanceof Error ? error.message : 'Could not load OpenAI connections.')
         } finally {
@@ -99,21 +196,34 @@ export default function AccountSettings() {
 
     const applyAccountOverview = useCallback((nextOverview: AssistantAccountOverview) => {
         overviewRequestIdRef.current += 1
+        invalidateAccountRuntimeCache({ connections: false })
+        accountSettingsCache.overview = nextOverview
+        accountSettingsCache.overviewAt = Date.now()
         setOverview(nextOverview)
         setOverviewError(null)
         setOverviewLoading(false)
     }, [])
 
     useEffect(() => {
-        void loadOverview()
-        const interval = window.setInterval(() => void loadOverview(), ACCOUNT_POLL_INTERVAL_MS)
+        let pollTimer = 0
+        const schedulePoll = () => {
+            window.clearTimeout(pollTimer)
+            pollTimer = window.setTimeout(() => {
+                if (document.visibilityState === 'visible') {
+                    void loadOverview(true).finally(schedulePoll)
+                    return
+                }
+                schedulePoll()
+            }, ACCOUNT_POLL_INTERVAL_MS)
+        }
+        void loadOverview().finally(schedulePoll)
         const handleVisibility = () => {
             if (document.visibilityState === 'visible') void loadOverview()
         }
         document.addEventListener('visibilitychange', handleVisibility)
         return () => {
             overviewRequestIdRef.current += 1
-            window.clearInterval(interval)
+            window.clearTimeout(pollTimer)
             document.removeEventListener('visibilitychange', handleVisibility)
         }
     }, [loadOverview])
@@ -123,7 +233,7 @@ export default function AccountSettings() {
     }, [desktopHost, loadConnectionState])
 
     const refreshAll = useCallback(async () => {
-        await Promise.all([loadOverview(), loadConnectionState(true)])
+        await Promise.all([loadOverview(true), loadConnectionState(true)])
     }, [loadConnectionState, loadOverview])
 
     const connectChatGpt = useCallback(async () => {
@@ -132,7 +242,12 @@ export default function AccountSettings() {
         try {
             const result = await window.devscope.onboarding.connectChatGpt()
             if (!result.success || !result.status.verified) throw new Error(result.success ? result.status.detail || 'ChatGPT could not be verified.' : result.error)
-            await Promise.all([loadConnectionState(true), loadOverview()])
+            invalidateSettingsModels()
+            invalidateAccountRuntimeCache({ clearOverview: true, clearConnections: true })
+            setOverview(null)
+            setOverviewLoading(true)
+            setConnections(null)
+            await Promise.all([loadConnectionState(true), loadOverview(true)])
         } catch (error) {
             setConnectionError(error instanceof Error ? error.message : 'ChatGPT connection failed.')
         } finally {
@@ -149,6 +264,9 @@ export default function AccountSettings() {
         try {
             const result = await window.devscope.onboarding.connectApiKey(key)
             if (!result.success || !result.status.verified) throw new Error(result.success ? result.status.detail || 'The API key could not be verified.' : result.error)
+            invalidateSettingsModels()
+            invalidateAccountRuntimeCache({ overview: false, clearConnections: true })
+            setConnections(null)
             setApiKeyDialogOpen(false)
             await loadConnectionState(true)
         } catch (error) {
@@ -162,15 +280,7 @@ export default function AccountSettings() {
         setConnectionAction('switch')
         setConnectionError(null)
         try {
-            let models = knownModels
-            let target = firstModelForMethod(method, models)
-            if (!target) {
-                const result = await window.devscope.assistant.listModels(true)
-                if (!result.success) throw new Error(result.error || 'Could not load OpenAI models.')
-                models = result.models
-                setKnownModels(models)
-                target = firstModelForMethod(method, models)
-            }
+            const target = firstModelForMethod(method, await loadSettingsModels(true))
             if (!target) throw new Error(method === 'chatgpt'
                 ? 'Pi did not report an available ChatGPT subscription model.'
                 : 'This API key did not report a supported OpenAI API model.')
@@ -180,7 +290,7 @@ export default function AccountSettings() {
         } finally {
             setConnectionAction(null)
         }
-    }, [knownModels, updateSettings])
+    }, [updateSettings])
 
     const disconnect = useCallback(async () => {
         if (!disconnectMethod || connectionAction === 'disconnect') return
@@ -189,9 +299,22 @@ export default function AccountSettings() {
         try {
             const result = await window.devscope.onboarding.disconnectOpenAI({ method: disconnectMethod, confirmed: true })
             if (!result.success) throw new Error(result.error || 'Could not disconnect OpenAI.')
+            invalidateSettingsModels()
+            const identityChanged = disconnectMethod === 'chatgpt'
+            invalidateAccountRuntimeCache({
+                overview: identityChanged,
+                clearOverview: identityChanged,
+                clearConnections: true
+            })
+            if (identityChanged) {
+                setOverview(null)
+                setOverviewLoading(true)
+            }
+            accountSettingsCache.connections = result.status
+            accountSettingsCache.connectionsAt = Date.now()
             setConnections(result.status)
             setDisconnectMethod(null)
-            await loadOverview()
+            await loadOverview(true)
         } catch (error) {
             setConnectionError(error instanceof Error ? error.message : 'Could not disconnect OpenAI.')
         } finally {
@@ -278,7 +401,7 @@ export default function AccountSettings() {
                 />
             </SettingsSection>
 
-            <SettingsSection title="ChatGPT account" headerAction={<SettingsButton variant="ghost" onClick={() => void loadOverview()} disabled={overviewLoading}><RefreshCw size={12} className={overviewLoading ? 'animate-spin motion-reduce:animate-none' : ''} />Refresh</SettingsButton>}>
+            <SettingsSection title="ChatGPT account" headerAction={<SettingsButton variant="ghost" onClick={() => void loadOverview(true)} disabled={overviewLoading}><RefreshCw size={12} className={overviewLoading ? 'animate-spin motion-reduce:animate-none' : ''} />Refresh</SettingsButton>}>
                 {overviewError ? <SettingsNotice tone="error">{overviewError}</SettingsNotice> : null}
                 {overview?.requiresOpenaiAuth ? <SettingsNotice tone="warning">Connect your ChatGPT account through Zyra to view its identity, plan, usage limits, and banked resets.</SettingsNotice> : null}
                 <SettingsRow

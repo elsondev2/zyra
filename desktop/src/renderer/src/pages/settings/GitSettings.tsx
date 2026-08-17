@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { FolderOpen } from 'lucide-react'
 import { useSettings } from '@/lib/settings'
+import { registerSettingsCacheClearer } from '@/lib/settings-cache-registry'
 import {
     SettingsButton,
     SettingsDialog,
@@ -15,10 +16,22 @@ import {
     SettingsTextarea
 } from './settings-layout'
 
+type GlobalGitAuthor = { name: string; email: string }
+const GLOBAL_GIT_AUTHOR_TTL_MS = 2 * 60_000
+let cachedGlobalGitAuthor: GlobalGitAuthor | null = null
+let cachedGlobalGitAuthorAt = 0
+let globalGitAuthorGeneration = 0
+
+registerSettingsCacheClearer('settings-git-author', () => {
+    globalGitAuthorGeneration += 1
+    cachedGlobalGitAuthor = null
+    cachedGlobalGitAuthorAt = 0
+})
+
 export default function GitSettings() {
     const { settings, updateSettings } = useSettings()
-    const [globalAuthorDraft, setGlobalAuthorDraft] = useState({ name: '', email: '' })
-    const [savedGlobalAuthor, setSavedGlobalAuthor] = useState({ name: '', email: '' })
+    const [globalAuthorDraft, setGlobalAuthorDraft] = useState<GlobalGitAuthor>(() => cachedGlobalGitAuthor || { name: '', email: '' })
+    const [savedGlobalAuthor, setSavedGlobalAuthor] = useState<GlobalGitAuthor>(() => cachedGlobalGitAuthor || { name: '', email: '' })
     const [globalAuthorMessage, setGlobalAuthorMessage] = useState('')
     const [globalAuthorLoading, setGlobalAuthorLoading] = useState(false)
     const [editDialog, setEditDialog] = useState<'target-branch' | 'global-guide' | 'initial-branch' | 'identity' | null>(null)
@@ -26,10 +39,16 @@ export default function GitSettings() {
 
     useEffect(() => {
         let cancelled = false
+        const generation = globalGitAuthorGeneration
+        if (cachedGlobalGitAuthor && Date.now() - cachedGlobalGitAuthorAt < GLOBAL_GIT_AUTHOR_TTL_MS) return
         setGlobalAuthorLoading(true)
         void window.devscope.getGlobalGitUser().then((result) => {
             if (cancelled) return
             const nextAuthor = result?.success && result.user ? { name: String(result.user.name || ''), email: String(result.user.email || '') } : { name: '', email: '' }
+            if (result?.success && generation === globalGitAuthorGeneration) {
+                cachedGlobalGitAuthor = nextAuthor
+                cachedGlobalGitAuthorAt = Date.now()
+            }
             setGlobalAuthorDraft(nextAuthor)
             setSavedGlobalAuthor(nextAuthor)
             setGlobalAuthorMessage(result?.success ? '' : result?.error || 'Could not read the global Git author.')
@@ -54,6 +73,8 @@ export default function GitSettings() {
         try {
             const result = await window.devscope.setGlobalGitUser({ name, email })
             if (!result?.success) throw new Error(result?.error || 'Could not save the global Git author.')
+            cachedGlobalGitAuthor = { name, email }
+            cachedGlobalGitAuthorAt = Date.now()
             setSavedGlobalAuthor({ name, email })
             setGlobalAuthorMessage('Global Git author updated.')
             setEditDialog(null)

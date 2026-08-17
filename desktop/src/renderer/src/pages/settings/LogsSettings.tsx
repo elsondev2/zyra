@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Check, Copy, RefreshCw, Trash2 } from 'lucide-react'
+import { registerSettingsCacheClearer } from '@/lib/settings-cache-registry'
 import {
     SettingsButton,
     SettingsNotice,
@@ -10,6 +11,8 @@ import {
 } from './settings-layout'
 
 type ProviderFilter = 'all' | 'groq' | 'gemini' | 'codex'
+const LOGS_CACHE_TTL_MS = 10_000
+
 type AiDebugLogEntry = {
     id: string
     timestamp: number
@@ -26,8 +29,28 @@ type AiDebugLogEntry = {
     metadata?: Record<string, string | number | boolean | null>
 }
 
+let cachedLogs: AiDebugLogEntry[] | null = null
+let cachedLogsAt = 0
+let logsCacheTimer = 0
+
+function rememberLogs(logs: AiDebugLogEntry[]): void {
+    cachedLogs = logs
+    cachedLogsAt = Date.now()
+    window.clearTimeout(logsCacheTimer)
+    logsCacheTimer = window.setTimeout(() => {
+        cachedLogs = null
+        cachedLogsAt = 0
+    }, LOGS_CACHE_TTL_MS)
+}
+
+registerSettingsCacheClearer('settings-diagnostics', () => {
+    window.clearTimeout(logsCacheTimer)
+    cachedLogs = null
+    cachedLogsAt = 0
+})
+
 export default function LogsSettings() {
-    const [logs, setLogs] = useState<AiDebugLogEntry[]>([])
+    const [logs, setLogs] = useState<AiDebugLogEntry[]>(() => cachedLogs || [])
     const [loading, setLoading] = useState(false)
     const [clearing, setClearing] = useState(false)
     const [error, setError] = useState<string | null>(null)
@@ -35,13 +58,19 @@ export default function LogsSettings() {
     const [copiedKey, setCopiedKey] = useState<string | null>(null)
     const [expandedId, setExpandedId] = useState<string | null>(null)
 
-    const loadLogs = async () => {
+    const loadLogs = async (forceRefresh = false) => {
+        if (!forceRefresh && cachedLogs && Date.now() - cachedLogsAt < LOGS_CACHE_TTL_MS) {
+            setLogs(cachedLogs)
+            return
+        }
         setLoading(true)
         setError(null)
         try {
             const result = await window.devscope.getAiDebugLogs(200)
             if (!result?.success) throw new Error(result?.error || 'Could not load AI debug logs.')
-            setLogs(Array.isArray(result.logs) ? result.logs : [])
+            const nextLogs = Array.isArray(result.logs) ? result.logs : []
+            rememberLogs(nextLogs)
+            setLogs(nextLogs)
         } catch (loadError) {
             setError(loadError instanceof Error ? loadError.message : 'Could not load AI debug logs.')
             setLogs([])
@@ -74,6 +103,7 @@ export default function LogsSettings() {
         try {
             const result = await window.devscope.clearAiDebugLogs()
             if (!result?.success) throw new Error(result?.error || 'Could not clear AI debug logs.')
+            rememberLogs([])
             setLogs([])
         } catch (clearError) {
             setError(clearError instanceof Error ? clearError.message : 'Could not clear AI debug logs.')
@@ -82,11 +112,9 @@ export default function LogsSettings() {
         }
     }
 
-    const visiblePayload = filteredLogs.map(formatLogEntry).join('\n\n====================\n\n')
-
     return (
         <SettingsPageContainer>
-            <SettingsSection title="Diagnostics" headerAction={<div className="flex gap-1"><SettingsButton variant="ghost" onClick={() => void loadLogs()} disabled={loading}><RefreshCw size={12} className={loading ? 'animate-spin' : ''} />Refresh</SettingsButton><SettingsButton variant="ghost" onClick={() => void copyText('visible', visiblePayload)} disabled={filteredLogs.length === 0}>{copiedKey === 'visible' ? <Check size={12} /> : <Copy size={12} />}Copy visible</SettingsButton></div>}>
+            <SettingsSection title="Diagnostics" headerAction={<div className="flex gap-1"><SettingsButton variant="ghost" onClick={() => void loadLogs(true)} disabled={loading}><RefreshCw size={12} className={loading ? 'animate-spin' : ''} />Refresh</SettingsButton><SettingsButton variant="ghost" onClick={() => void copyText('visible', filteredLogs.map(formatLogEntry).join('\n\n====================\n\n'))} disabled={filteredLogs.length === 0}>{copiedKey === 'visible' ? <Check size={12} /> : <Copy size={12} />}Copy visible</SettingsButton></div>}>
                 {error ? <SettingsNotice tone="error">{error}</SettingsNotice> : null}
                 <SettingsRow title="AI debug logs" description="Local provider requests and responses retained for Git AI troubleshooting." control={<span className="font-mono text-xs tabular-nums text-sparkle-text-secondary">{logs.length}</span>} />
                 <SettingsRow title="Provider filter" description="Limit the visible log records by provider." control={<SettingsSegmented value={filter} options={[{ value: 'all', label: 'All' }, { value: 'groq', label: 'Groq' }, { value: 'gemini', label: 'Gemini' }, { value: 'codex', label: 'ChatGPT' }]} onChange={setFilter} label="AI log provider filter" />} />
@@ -96,7 +124,7 @@ export default function LogsSettings() {
             <SettingsSection title="AI provider records">
                 {filteredLogs.length === 0 ? <SettingsNotice>{loading ? 'Loading logs…' : 'No matching debug records.'}</SettingsNotice> : filteredLogs.map((entry) => {
                     const expanded = expandedId === entry.id
-                    const payload = formatLogEntry(entry)
+                    const payload = expanded ? formatLogEntry(entry) : ''
                     return (
                         <SettingsRow
                             key={entry.id}
@@ -104,7 +132,7 @@ export default function LogsSettings() {
                             description={entry.error || entry.finalMessage || entry.candidateMessage || entry.promptPreview || 'No summary available.'}
                             status={`${entry.status} · ${new Date(entry.timestamp).toLocaleString()}${entry.model ? ` · ${entry.model}` : ''}`}
                             statusTone={entry.status === 'success' ? 'ready' : 'danger'}
-                            control={<div className="flex gap-1"><SettingsButton variant="ghost" onClick={() => setExpandedId(expanded ? null : entry.id)}>{expanded ? 'Hide' : 'Details'}</SettingsButton><SettingsButton variant="ghost" onClick={() => void copyText(entry.id, payload)}>{copiedKey === entry.id ? <Check size={12} /> : <Copy size={12} />}</SettingsButton></div>}
+                            control={<div className="flex gap-1"><SettingsButton variant="ghost" onClick={() => setExpandedId(expanded ? null : entry.id)}>{expanded ? 'Hide' : 'Details'}</SettingsButton><SettingsButton variant="ghost" onClick={() => void copyText(entry.id, formatLogEntry(entry))}>{copiedKey === entry.id ? <Check size={12} /> : <Copy size={12} />}</SettingsButton></div>}
                         >
                             {expanded ? <pre className="mt-3 max-h-[420px] overflow-auto whitespace-pre-wrap border-t border-[var(--settings-border)] py-4 font-mono text-[11px] leading-relaxed text-sparkle-text-secondary">{payload}</pre> : null}
                         </SettingsRow>

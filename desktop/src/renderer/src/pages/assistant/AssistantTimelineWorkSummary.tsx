@@ -22,21 +22,23 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
     completedAt,
     running = false,
     outcome = null,
-    children,
+    renderChildren,
     renderLiveNarration
 }: {
     startedAt: string
     completedAt: string | null
     running?: boolean
     outcome?: 'completed' | 'interrupted' | 'failed' | 'no-response' | null
-    children: ReactNode
+    renderChildren: () => ReactNode
     renderLiveNarration?: (expanded: boolean) => ReactNode
 }) {
     const [expanded, setExpanded] = useState(running)
+    const [contentMounted, setContentMounted] = useState(running)
     const panelId = useId()
     const triggerRef = useRef<HTMLButtonElement | null>(null)
     const statusTextRef = useRef<HTMLSpanElement | null>(null)
     const previousRunningRef = useRef(running)
+    const completionUnmountTimerRef = useRef<number | null>(null)
     const statusText = formatWorkSummaryStatus(startedAt, completedAt, running)
     useEffect(() => {
         const updateStatusText = () => {
@@ -57,6 +59,11 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
                 ? 'No response'
                 : null
     const setWorkExpanded = (nextExpanded: boolean, anchor: HTMLElement | null) => {
+        if (completionUnmountTimerRef.current !== null) {
+            window.clearTimeout(completionUnmountTimerRef.current)
+            completionUnmountTimerRef.current = null
+        }
+        if (nextExpanded) setContentMounted(true)
         requestAssistantTimelineDisclosureAnchor(anchor, WORK_SUMMARY_MOTION_MS, nextExpanded)
         setExpanded(nextExpanded)
     }
@@ -64,10 +71,25 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
     useEffect(() => {
         const wasRunning = previousRunningRef.current
         previousRunningRef.current = running
+        if (!wasRunning && running) {
+            if (completionUnmountTimerRef.current !== null) window.clearTimeout(completionUnmountTimerRef.current)
+            completionUnmountTimerRef.current = null
+            setContentMounted(true)
+            setExpanded(true)
+            return
+        }
         if (!wasRunning || running) return
         requestAssistantTimelineDisclosureAnchor(triggerRef.current, WORK_SUMMARY_MOTION_MS, false)
         setExpanded(false)
+        completionUnmountTimerRef.current = window.setTimeout(() => {
+            completionUnmountTimerRef.current = null
+            setContentMounted(false)
+        }, WORK_SUMMARY_MOTION_MS)
     }, [running])
+
+    useEffect(() => () => {
+        if (completionUnmountTimerRef.current !== null) window.clearTimeout(completionUnmountTimerRef.current)
+    }, [])
 
     return (
         <div className="max-w-4xl py-0.5">
@@ -104,9 +126,11 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
                 <div className="h-px w-full bg-white/[0.07]" aria-hidden="true" />
             </div>
             <AnimatedHeight isOpen={expanded} duration={WORK_SUMMARY_MOTION_MS} crispContent>
-                <div id={panelId} className="pt-2">
-                    {children}
-                </div>
+                {contentMounted ? (
+                    <div id={panelId} className="pt-2">
+                        {renderChildren()}
+                    </div>
+                ) : null}
             </AnimatedHeight>
             {renderLiveNarration ? renderLiveNarration(expanded) : null}
         </div>

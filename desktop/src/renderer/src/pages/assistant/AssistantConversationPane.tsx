@@ -126,6 +126,8 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
 
     const isThreadWorking = isAssistantThreadActivelyWorking(controller.activeThread)
     const selectedSessionId = controller.selectedSession?.id || null
+    const activeThreadId = controller.activeThread?.id || null
+    const handleLoadOlderHistory = useCallback(() => actions.loadOlderHistory(activeThreadId || undefined), [actions, activeThreadId])
     const canonicalVoiceBinding = useMemo(() => (
         selectedSessionId && controller.activeThread?.id
             ? { conversationId: controller.activeThread.id, sessionId: selectedSessionId }
@@ -974,7 +976,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                             hasOlder={controller.history?.pageInfo.hasOlder || false}
                             loadingOlder={controller.history?.loadingOlder || false}
                             loadOlderError={controller.history?.loadOlderError || null}
-                            onLoadOlder={() => actions.loadOlderHistory(controller.activeThread?.id)}
+                            onLoadOlder={handleLoadOlderHistory}
                             showScrollToBottom={showScrollToBottom}
                             elevateScrollToBottom={bottomComposerOverlayActive}
                             onScrollTimeline={handleTimelineScrollEvent}

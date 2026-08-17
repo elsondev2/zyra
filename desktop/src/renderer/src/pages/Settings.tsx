@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useSettings } from '@/lib/settings'
 import { useOnboarding } from '@/lib/onboarding'
 import { isElectronRendererRuntime } from '@/lib/browser-file-url'
+import { registerSettingsCacheClearer } from '@/lib/settings-cache-registry'
 import {
     SettingsButton,
     SettingsNotice,
@@ -10,6 +11,16 @@ import {
     SettingsSection,
     SettingsSwitch
 } from './settings/settings-layout'
+
+let cachedStartupSettings: { openAtLogin: boolean; openAsHidden: boolean } | null = null
+let cachedStartupSettingsAt = 0
+let startupSettingsGeneration = 0
+
+registerSettingsCacheClearer('settings-startup', () => {
+    startupSettingsGeneration += 1
+    cachedStartupSettings = null
+    cachedStartupSettingsAt = 0
+})
 
 export default function GeneralSettings() {
     const { settings, updateSettings, clearCache } = useSettings()
@@ -20,7 +31,18 @@ export default function GeneralSettings() {
 
     useEffect(() => {
         if (!desktopHost) return
+        const applyStartupSettings = (startup: { openAtLogin?: boolean; openAsHidden?: boolean }) => {
+            const startWithWindows = startup.openAtLogin === true
+            const startMinimized = startup.openAsHidden === true
+            if (settings.startWithWindows === startWithWindows && settings.startMinimized === startMinimized) return
+            updateSettings({ startWithWindows, startMinimized })
+        }
+        if (cachedStartupSettings && Date.now() - cachedStartupSettingsAt < 2 * 60_000) {
+            applyStartupSettings(cachedStartupSettings)
+            return
+        }
         let mounted = true
+        const generation = startupSettingsGeneration
         void window.devscope.getStartupSettings().then((result) => {
             if (!mounted || !result.success) return
             const payload = result as typeof result & {
@@ -29,10 +51,18 @@ export default function GeneralSettings() {
                 openAsHidden?: boolean
             }
             const startup = payload.settings ?? payload
-            updateSettings({ startWithWindows: startup.openAtLogin === true, startMinimized: startup.openAsHidden === true })
+            const nextStartupSettings = {
+                openAtLogin: startup.openAtLogin === true,
+                openAsHidden: startup.openAsHidden === true
+            }
+            if (generation === startupSettingsGeneration) {
+                cachedStartupSettings = nextStartupSettings
+                cachedStartupSettingsAt = Date.now()
+            }
+            applyStartupSettings(nextStartupSettings)
         }).catch(() => {})
         return () => { mounted = false }
-    }, [desktopHost, updateSettings])
+    }, [desktopHost, settings.startMinimized, settings.startWithWindows, updateSettings])
 
     const reviewSetup = async () => {
         const revision = onboarding.snapshot?.record?.revision
@@ -49,6 +79,8 @@ export default function GeneralSettings() {
         try {
             const result = await window.devscope.setStartupSettings({ openAtLogin, openAsHidden })
             if (!result.success) throw new Error(result.error || 'Startup update failed.')
+            cachedStartupSettings = { openAtLogin, openAsHidden }
+            cachedStartupSettingsAt = Date.now()
             updateSettings({ startWithWindows: openAtLogin, startMinimized: openAsHidden })
             setStartupStatus('Saved')
         } catch (error) {

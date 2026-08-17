@@ -471,7 +471,7 @@ export class BrowserAssistantBridge {
             case 'agentAction': return service.runFleetOperation('agents', args[0] as any)
             case 'workflowAction': return service.runFleetOperation('workflows', args[0] as any)
             case 'getStatus': return service.getStatus()
-            case 'getAccountOverview': return service.getAccountOverview()
+            case 'getAccountOverview': return service.getAccountOverview(args[0] === true)
             case 'redeemAccountReset': return service.redeemAccountReset(args[0] as any)
             case 'getSessionTurnUsage': return service.getSessionTurnUsage(args[0] as any)
             case 'listModels': return service.listModels(args[0] === true)

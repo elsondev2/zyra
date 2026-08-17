@@ -378,10 +378,11 @@ assert.equal(
 const workSummaryMarkup = renderToStaticMarkup(createElement(TimelineTurnWorkSummary, {
     startedAt: iso(0),
     completedAt: iso(60_000),
-    children: createElement('div', null, 'Chronological work')
+    renderChildren: () => createElement('div', null, 'Chronological work')
 }))
 assert.equal(workSummaryMarkup.includes('Worked for 1m'), true)
 assert.equal(workSummaryMarkup.includes('data-state="closed"'), true, 'completed work is collapsed by default')
+assert.equal(workSummaryMarkup.includes('Chronological work'), false, 'collapsed work does not mount hidden tool and Markdown trees')
 assert.equal(workSummaryMarkup.includes('transition-duration:320ms'), true, 'work disclosure uses the calmer long-form motion timing')
 assert.equal(workSummaryMarkup.includes('Collapse work'), false, 'work uses one disclosure control instead of repeating a footer action')
 const workSummarySource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimelineWorkSummary.tsx', import.meta.url), 'utf8')
@@ -394,10 +395,11 @@ const runningWorkSummaryMarkup = renderToStaticMarkup(createElement(TimelineTurn
     startedAt: new Date().toISOString(),
     completedAt: null,
     running: true,
-    children: createElement('div', null, 'Live implementation work')
+    renderChildren: () => createElement('div', null, 'Live implementation work')
 }))
 assert.equal(runningWorkSummaryMarkup.includes('Working for'), true, 'the shared disclosure presents its live elapsed state')
 assert.equal(runningWorkSummaryMarkup.includes('data-state="open"'), true, 'live work starts expanded and remains user-collapsible')
+assert.equal(runningWorkSummaryMarkup.includes('Live implementation work'), true, 'active work still mounts its live details immediately')
 
 const interruptedTurnId = 'turn-interrupted-without-final'
 const interruptedPrompt: AssistantMessage = {
@@ -441,7 +443,7 @@ const interruptedMarkup = renderToStaticMarkup(createElement(TimelineTurnWorkSum
     startedAt: interruptedPrompt.createdAt,
     completedAt: iso(1800),
     outcome: 'interrupted',
-    children: createElement('div', null, 'Interrupted work')
+    renderChildren: () => createElement('div', null, 'Interrupted work')
 }))
 assert.equal(interruptedMarkup.includes('Worked for'), true)
 assert.equal(interruptedMarkup.includes('Interrupted'), true)
@@ -588,7 +590,7 @@ const activeWorkMarkup = renderToStaticMarkup(createElement(TimelineTurnWorkSumm
     startedAt: messages[0].createdAt,
     completedAt: null,
     running: true,
-    children: createElement('div', null, 'Active work'),
+    renderChildren: () => createElement('div', null, 'Active work'),
     renderLiveNarration: () => createElement(TimelineMessage, {
         message: messages[1],
         compactLiveNarration: true
@@ -917,6 +919,7 @@ const completedTimedCommand = {
 }
 assert.equal(getActivityElapsed(completedTimedCommand, iso(9000)), '3.5s', 'completed command elapsed time freezes at the runtime duration')
 const toolCardSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimelineToolCallCard.tsx', import.meta.url), 'utf8')
+const toolCallListSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimelineToolCalls.tsx', import.meta.url), 'utf8')
 const inlineDiffPreviewSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantInlineDiffPreview.tsx', import.meta.url), 'utf8')
 const inlineDiffSyntaxSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantInlineDiffSyntax.tsx', import.meta.url), 'utf8')
 const animatedHeightSource = readFileSync(new URL('../src/renderer/src/components/ui/AnimatedHeight.tsx', import.meta.url), 'utf8')
@@ -1011,6 +1014,8 @@ assert.equal(toolCardSource.includes('LazyPatchDiffViewer'), false, 'timeline ca
 assert.equal(toolCardSource.includes("duration={activity.kind === 'file-change' ? 220 : 240}"), true, 'inline diffs retain a short expand and collapse animation')
 assert.equal(toolCardSource.includes("crispContent={activity.kind === 'file-change'}"), true, 'file diffs request the crisp disclosure path')
 assert.equal(animatedHeightSource.includes("'grid transition-[grid-template-rows] ease-[cubic-bezier(0.2,0.8,0.2,1)]"), true, 'crisp disclosures animate grid height without opacity or transforms')
+assert.equal(animatedHeightSource.includes('inert={!isOpen ? true : undefined}'), true, 'closed disclosures remove hidden controls from keyboard navigation')
+assert.match(toolCallListSource, /setExpanded\(false\)[\s\S]{0,260}setOlderMounted\(false\)/, 'older tool cards unmount after their closing animation')
 assert.equal(toolCardSource.includes('className="shrink-0 font-mono text-[9px]'), true, 'file elapsed time no longer reserves an oversized fixed-width gap')
 assert.equal(inlineDiffPreviewSource.includes('MAX_INLINE_DIFF_ROWS = 100'), true, 'inline diff DOM work is capped at 100 lines')
 assert.equal(inlineDiffPreviewSource.includes("[text-rendering:auto] [-webkit-font-smoothing:auto]"), true, 'inline diff text uses native crisp rendering')
@@ -1131,7 +1136,8 @@ assert.equal(
 const markdownRendererSource = readFileSync(new URL('../src/renderer/src/components/ui/MarkdownRenderer.tsx', import.meta.url), 'utf8')
 assert.equal(markdownRendererSource.includes('const compiledMarkdown = new Map'), true, 'completed Markdown survives virtual-row remounts in a bounded compiled cache')
 assert.equal(markdownRendererSource.includes('window.requestIdleCallback(drainMarkdownPreparation)'), true, 'newly loaded history prewarms immutable Markdown outside the scrolling hot path')
-assert.equal(markdownRendererSource.includes('MAX_COMPILED_ENTRIES = 320'), true, 'the compiled Markdown cache has an explicit retention bound')
+assert.equal(markdownRendererSource.includes('MAX_COMPILED_ENTRIES = 192'), true, 'the compiled Markdown cache has a tighter explicit retention bound')
+assert.equal(timelineSource.includes('items.length < 6'), true, 'idle Markdown prewarming stays bounded to the recent visible conversation window')
 assert.equal(mountedVirtualTimelineSource.includes('markAssistantTimelineMotion'), false, 'scrolling does not downgrade or delay formatted Markdown')
 
 const assistantPageHelpersSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantPageHelpers.tsx', import.meta.url), 'utf8')

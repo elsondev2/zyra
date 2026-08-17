@@ -5,8 +5,9 @@ import {
     type AssistantStoreState
 } from '../src/renderer/src/lib/assistant/assistant-store-runtime'
 import { selectAssistantStoreSession } from '../src/renderer/src/lib/assistant/assistant-store-session-selection'
-import type { CachedHydratedThreadState } from '../src/renderer/src/lib/assistant/session-hydration-cache'
+import { cacheHydratedThreads, hasCachedSessionSelection, type CachedHydratedThreadState } from '../src/renderer/src/lib/assistant/session-hydration-cache'
 import { resolveAssistantThreadStatusPill } from '../src/renderer/src/pages/assistant/assistant-sessions-rail-utils'
+import { getAssistantThreadHydrationRevision } from '../src/renderer/src/lib/assistant/assistant-thread-hydration-revision'
 
 function thread(id: string, messageText: string) {
     return {
@@ -104,6 +105,7 @@ for (const selectedSession of sessions) {
     hydratedThreadCache.set(activeThread.id, {
         sessionId: selectedSession.id,
         threadId: activeThread.id,
+        revision: getAssistantThreadHydrationRevision(activeThread),
         activePlan: activeThread.activePlan,
         messages: activeThread.messages,
         proposedPlans: activeThread.proposedPlans,
@@ -183,13 +185,14 @@ try {
     const selectB = selectAssistantStoreSession(createContext(), 'b')
     assert.equal(state.snapshot.selectedSessionId, 'b', 'the target chat becomes selected in the click task')
     assert.equal(state.snapshot.sessions, originalSessions, 'the immediate shell switch does not clone or scan timeline collections')
-    assert.equal(state.selectionTransitionKey, 'b:thread-b', 'the target chat gets an explicit pre-paint transition key')
+    assert.equal(state.selectionTransitionKey, null, 'a cached target chat renders without an intervening empty-shell paint')
     const switchingThread = state.snapshot.sessions.find((entry) => entry.id === 'b')!.threads[0]
+    assert.equal(switchingThread.messages[0]?.text, 'content-b', 'cached target rows are available in the click task')
     const switchingPill = resolveAssistantThreadStatusPill(switchingThread, true, undefined, {
         connecting: Boolean(state.commandPending && !['starting', 'running', 'waiting'].includes(switchingThread.state))
     })
     assert.notEqual(switchingPill?.label, 'Connecting', 'selecting an idle chat must not classify it as active work')
-    assert.deepEqual(selectionCalls, [], 'IPC waits until the target shell has had a paint opportunity')
+    assert.deepEqual(selectionCalls, [], 'authoritative selection waits one microtask so a same-task newer click can supersede it')
     await selectB
     assert.deepEqual(selectionCalls, ['b'], 'the selected chat is persisted after the shell transition')
     assert.deepEqual(connectionCalls, [], 'opening a settled chat does not attach or start its provider runtime')
@@ -218,14 +221,45 @@ try {
     const coreSource = readFileSync(new URL('../src/renderer/src/lib/assistant/assistant-store-core.ts', import.meta.url), 'utf8')
     const agentInboxSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantAgentInboxSidebar.tsx', import.meta.url), 'utf8')
     const legacyRailSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantChatSessionsRail.tsx', import.meta.url), 'utf8')
+    const serviceSource = readFileSync(new URL('../src/main/assistant/service.ts', import.meta.url), 'utf8')
     assert.equal(hookSource.includes('timelineMessages: selectionTransitioning ? []'), true, 'the old timeline is removed during the urgent shell render')
     assert.equal(hookSource.includes('activityFeed: selectionTransitioning ? []'), true, 'old activity rows cannot remain visible during chat switching')
     assert.equal(pageSource.includes('messages: selectionTransitioning ? EMPTY_ASSISTANT_MESSAGES'), true, 'Inspector projections also drop stale chat data immediately')
     assert.equal(coreSource.includes('current.selectionRequestSessionId'), true, 'delayed domain events preserve the newest local chat selection')
     assert.equal(coreSource.includes('previousState.snapshot.sessions !== mergedState.snapshot.sessions'), true, 'selection-only snapshots skip full hydrated-thread cache scans')
+    const threadSelectionSource = coreSource.split('async selectThread')[1]?.split('async deletePlaygroundLab')[0] || ''
+    assert.match(threadSelectionSource, /selectionRequestId[\s\S]{0,6000}restorePreviousSelection/, 'sub-thread selection uses a latest-intent transaction with rollback')
+    assert.match(serviceSource, /navigationSelectionGeneration[\s\S]{0,1200}generation !== this\.navigationSelectionGeneration/, 'main-process navigation rejects a superseded selection after asynchronous Voice cleanup')
     assert.equal(agentInboxSource.includes('props.commandPending && !isThreadBusy'), false, 'Agent Inbox selection pending cannot masquerade as active work')
     assert.equal(agentInboxSource.includes('if (item.active || item.status !== \'ready\') return false'), false, 'opening a settled chat cannot remove it from Settled without new activity')
     assert.equal(legacyRailSource.includes('commandPending && !isThreadBusy'), false, 'legacy sidebar selection pending cannot masquerade as active work')
+
+    const manySessions = Array.from({ length: 16 }, (_, index) => session(`cache-${index}`))
+    const boundedCache = new Map<string, CachedHydratedThreadState>()
+    cacheHydratedThreads(boundedCache, {
+        ...state.snapshot,
+        selectedSessionId: manySessions[15]!.id,
+        sessions: manySessions
+    })
+    assert.equal(boundedCache.size, 12, 'hydrated renderer history uses a bounded recent-chat cache')
+    assert.equal(boundedCache.has(manySessions[15]!.activeThreadId), true, 'the selected chat is protected from history-cache eviction')
+
+    const staleCache = new Map(hydratedThreadCache)
+    const staleSessionB = state.snapshot.sessions.find((entry) => entry.id === 'b')!
+    const staleThreadB = {
+        ...staleSessionB.threads[0]!,
+        updatedAt: '2026-07-24T10:01:00.000Z',
+        messageCount: 0,
+        messages: []
+    }
+    const staleSnapshot = {
+        ...state.snapshot,
+        sessions: state.snapshot.sessions.map((entry) => entry.id === 'b'
+            ? { ...entry, threads: [staleThreadB] }
+            : entry)
+    }
+    cacheHydratedThreads(staleCache, staleSnapshot)
+    assert.equal(hasCachedSessionSelection(staleSnapshot, 'b', staleThreadB.id, staleCache), false, 'newer shell metadata invalidates stale hydrated rows')
 
     console.log('Assistant immediate session switching contract: ok')
 } finally {

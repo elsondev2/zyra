@@ -16,28 +16,47 @@ import {
     ASSISTANT_LEFT_SIDEBAR_WIDTH_STORAGE_KEY,
     resolveStoredAssistantLeftSidebarWidth
 } from './pages/assistant/assistant-pane-layout'
+import {
+    loadAboutSettings,
+    loadAccountSettings,
+    loadAppearanceSettings,
+    loadArchivedChatsSettings,
+    loadAssistantSettings,
+    loadBrowserControlSettings,
+    loadConnectionsSettings,
+    loadDiagnosticsSettings,
+    loadFilesEditorSettings,
+    loadGeneralSettings,
+    loadMemorySettings,
+    loadProjectsSettings,
+    loadProviderSettings,
+    loadSettingsShell,
+    loadSourceControlSettings,
+    loadTerminalRuntimeSettings,
+    loadVoiceSettings
+} from './pages/settings/settings-route-loaders'
 
 const loadAssistantRoute = () => import('./pages/Assistant')
 const Assistant = lazy(loadAssistantRoute)
 const InstructorVoiceLab = lazy(() => import('./pages/assistant/InstructorVoiceLab'))
 const Explorer = lazy(() => import('./pages/Explorer'))
-const SettingsShell = lazy(() => import('./pages/settings/SettingsShell'))
-const GeneralSettings = lazy(() => import('./pages/Settings'))
-const AppearanceSettings = lazy(() => import('./pages/settings/AppearanceSettings'))
-const VoiceSettings = lazy(() => import('./pages/settings/VoiceSettings'))
-const ConnectionsSettings = lazy(() => import('./pages/settings/ConnectionsSettings'))
-const BrowserControlSettings = lazy(() => import('./pages/settings/BrowserControlSettings'))
-const FilesEditorSettings = lazy(() => import('./pages/settings/FilesEditorSettings'))
-const TerminalRuntimeSettings = lazy(() => import('./pages/settings/TerminalRuntimeSettings'))
-const AssistantSettings = lazy(() => import('./pages/settings/AssistantSettings'))
-const AccountSettings = lazy(() => import('./pages/settings/AccountSettings'))
-const AISettings = lazy(() => import('./pages/settings/AISettings'))
-const GitSettings = lazy(() => import('./pages/settings/GitSettings'))
-const ProjectsSettings = lazy(() => import('./pages/settings/ProjectsSettings'))
-const MemorySettings = lazy(() => import('./pages/settings/MemorySettings'))
-const ArchivedChatsSettings = lazy(() => import('./pages/settings/ArchivedChatsSettings'))
-const LogsSettings = lazy(() => import('./pages/settings/LogsSettings'))
-const AboutSettings = lazy(() => import('./pages/settings/AboutSettings'))
+const SettingsShell = lazy(loadSettingsShell)
+const GeneralSettings = lazy(loadGeneralSettings)
+const AppearanceSettings = lazy(loadAppearanceSettings)
+const VoiceSettings = lazy(loadVoiceSettings)
+const ConnectionsSettings = lazy(loadConnectionsSettings)
+const BrowserControlSettings = lazy(loadBrowserControlSettings)
+const FilesEditorSettings = lazy(loadFilesEditorSettings)
+const TerminalRuntimeSettings = lazy(loadTerminalRuntimeSettings)
+const AssistantSettings = lazy(loadAssistantSettings)
+const AccountSettings = lazy(loadAccountSettings)
+const AISettings = lazy(loadProviderSettings)
+const GitSettings = lazy(loadSourceControlSettings)
+const ProjectsSettings = lazy(loadProjectsSettings)
+const MemorySettings = lazy(loadMemorySettings)
+const ArchivedChatsSettings = lazy(loadArchivedChatsSettings)
+const LogsSettings = lazy(loadDiagnosticsSettings)
+const AboutSettings = lazy(loadAboutSettings)
 
 interface TerminalContextType {
     isOpen: boolean

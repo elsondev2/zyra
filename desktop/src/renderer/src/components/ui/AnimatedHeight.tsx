@@ -27,6 +27,7 @@ export const AnimatedHeight: React.FC<AnimatedHeightProps> = ({
             <div
                 data-state={isOpen ? 'open' : 'closed'}
                 aria-hidden={!isOpen}
+                inert={!isOpen ? true : undefined}
                 className={cn(
                     'grid transition-[grid-template-rows] ease-[cubic-bezier(0.2,0.8,0.2,1)] motion-reduce:transition-none',
                     isOpen ? 'grid-rows-[1fr]' : 'pointer-events-none grid-rows-[0fr]',
@@ -45,6 +46,7 @@ export const AnimatedHeight: React.FC<AnimatedHeightProps> = ({
         <div
             data-state={isOpen ? 'open' : 'closed'}
             aria-hidden={!isOpen}
+            inert={!isOpen ? true : undefined}
             className={cn(
                 'grid ease-[cubic-bezier(0.2,0.8,0.2,1)] motion-reduce:transition-none',
                 'will-change-[grid-template-rows,opacity] transition-[grid-template-rows,opacity]',

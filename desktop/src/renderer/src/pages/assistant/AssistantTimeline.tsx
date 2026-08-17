@@ -127,19 +127,21 @@ function AssistantTimelineImpl({
     onLoadOlder,
     onScrollContainer
 }: AssistantTimelineProps) {
-    useEffect(
-        () => prewarmMarkdownRenders(messages.flatMap((message) => {
-            if (message.role !== 'assistant' || message.streaming) return []
+    useEffect(() => {
+        const items: Parameters<typeof prewarmMarkdownRenders>[0] = []
+        for (let index = messages.length - 1; index >= 0 && items.length < 6; index -= 1) {
+            const message = messages[index]!
+            if (message.role !== 'assistant' || message.streaming) continue
             const content = stripProposedPlanBlocks(message.text || '')
-            if (!content.trim()) return []
-            return [{
+            if (!content.trim()) continue
+            items.unshift({
                 content,
                 cacheKey: `${message.id}:${message.updatedAt}:${content.length}`,
                 filePath: assistantMessageFilePath || undefined
-            }]
-        })),
-        [assistantMessageFilePath, messages]
-    )
+            })
+        }
+        return prewarmMarkdownRenders(items)
+    }, [assistantMessageFilePath, messages])
 
     const entries = useAssistantTimelineEntries(messages, activities, proposedPlans)
     const listRef = useRef<LegendListRef | null>(null)
@@ -247,6 +249,11 @@ function AssistantTimelineImpl({
                     completedAt={row.completedAt}
                     running={row.running}
                     outcome={row.outcome}
+                    renderChildren={() => (
+                        <div className="[&>*:last-child]:pb-0">
+                            {row.rows.map((workRow) => renderRowContainer(workRow, renderRow(workRow)))}
+                        </div>
+                    )}
                     renderLiveNarration={row.liveNarrationRow
                         ? (expanded) => (
                             <div
@@ -262,11 +269,7 @@ function AssistantTimelineImpl({
                             </div>
                         )
                         : undefined}
-                >
-                    <div className="[&>*:last-child]:pb-0">
-                        {row.rows.map((workRow) => renderRowContainer(workRow, renderRow(workRow)))}
-                    </div>
-                </TimelineTurnWorkSummary>
+                />
             )
         }
         if (row.kind === 'work-trace-group') {

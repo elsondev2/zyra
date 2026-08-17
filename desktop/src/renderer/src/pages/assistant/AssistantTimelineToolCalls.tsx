@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { AssistantActivity } from '@shared/assistant/contracts'
 import type { AssistantToolOutputDefaultMode } from '@/lib/settings'
 import { cn } from '@/lib/utils'
@@ -15,6 +15,7 @@ import { TimelineToolCallCard } from './AssistantTimelineToolCallCard'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 
 export const COLLAPSED_TOOL_CALL_COUNT = 5
+const TOOL_CALL_DISCLOSURE_MS = 280
 
 function normalizeTimelineFilePath(value: string): string {
     return value.trim().replace(/\\/g, '/').replace(/\/+/g, '/').toLowerCase()
@@ -81,6 +82,8 @@ export const TimelineToolCallList = memo(({
     onViewDiff?: (target: AssistantDiffTarget) => void
 }) => {
     const [expanded, setExpanded] = useState(false)
+    const [olderMounted, setOlderMounted] = useState(false)
+    const olderUnmountTimerRef = useRef<number | null>(null)
     const displayActivities = useMemo(() => buildDisplayActivityList(activities), [activities])
     const localRunningCommandCount = useMemo(() => countRunningCommandActivities(displayActivities), [displayActivities])
     const activeRunningCommandCount = runningCommandCount ?? localRunningCommandCount
@@ -100,6 +103,25 @@ export const TimelineToolCallList = memo(({
         () => hasMore ? displayActivities.slice(-COLLAPSED_TOOL_CALL_COUNT) : displayActivities,
         [displayActivities, hasMore]
     )
+    useEffect(() => () => {
+        if (olderUnmountTimerRef.current !== null) window.clearTimeout(olderUnmountTimerRef.current)
+    }, [])
+    const toggleOlderActivities = () => {
+        if (olderUnmountTimerRef.current !== null) {
+            window.clearTimeout(olderUnmountTimerRef.current)
+            olderUnmountTimerRef.current = null
+        }
+        if (!expanded) {
+            setOlderMounted(true)
+            setExpanded(true)
+            return
+        }
+        setExpanded(false)
+        olderUnmountTimerRef.current = window.setTimeout(() => {
+            olderUnmountTimerRef.current = null
+            setOlderMounted(false)
+        }, TOOL_CALL_DISCLOSURE_MS)
+    }
     const renderActivity = (activity: AssistantActivity) => (
         <div key={activity.id}>
             {isSubagentActivity(activity) ? (
@@ -129,7 +151,7 @@ export const TimelineToolCallList = memo(({
                     {hasMore ? (
                         <button
                             type="button"
-                            onClick={() => setExpanded((current) => !current)}
+                            onClick={toggleOlderActivities}
                             className="rounded border border-white/10 bg-white/[0.03] px-1.5 py-0.5 text-[9px] text-white/40 transition-colors hover:border-white/20 hover:bg-white/[0.05] hover:text-white/60"
                             title={expanded ? `Show last ${COLLAPSED_TOOL_CALL_COUNT}` : 'Show all'}
                         >
@@ -138,8 +160,8 @@ export const TimelineToolCallList = memo(({
                     ) : null}
                 </div>
                 <div>
-                    <AnimatedHeight isOpen={expanded}>
-                        <div>{olderActivities.map(renderActivity)}</div>
+                    <AnimatedHeight isOpen={expanded} duration={TOOL_CALL_DISCLOSURE_MS}>
+                        {olderMounted ? <div>{olderActivities.map(renderActivity)}</div> : null}
                     </AnimatedHeight>
                     {recentActivities.map(renderActivity)}
                 </div>

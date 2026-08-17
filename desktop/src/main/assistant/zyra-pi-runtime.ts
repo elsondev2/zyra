@@ -966,31 +966,45 @@ export class ZyraPiRuntime extends EventEmitter {
     private warmPromise: Promise<AssistantModelInfo[]> | null = null
     private warmWorkerKey: string | null = null
     private modelCache: AssistantModelInfo[] = []
+    private availabilityCache: { root: string; checkedAt: number; result: { available: boolean; reason: string | null } } | null = null
     private agentServerConnection: DesktopAgentServerConnection | null = null
     private unsubscribeCatalogChanged: (() => void) | null = null
     private readonly privateVoiceThreadTargets = new Map<string, string>()
     private readonly privateVoiceWorkers = new Map<string, ZyraPiWorker>()
     private readonly privateApprovalWorkers = new Map<string, ZyraPiWorker>()
 
-    async checkAvailability(): Promise<{ available: boolean; reason: string | null }> {
+    async checkAvailability(forceRefresh = false): Promise<{ available: boolean; reason: string | null }> {
         const root = resolveZyraRoot()
+        if (
+            !forceRefresh
+            && this.availabilityCache?.root === root
+            && (
+                this.availabilityCache.result.available
+                || Date.now() - this.availabilityCache.checkedAt < 30_000
+            )
+        ) return this.availabilityCache.result
+
+        const remember = (result: { available: boolean; reason: string | null }) => {
+            this.availabilityCache = { root, checkedAt: Date.now(), result }
+            return result
+        }
         const sdkPath = join(root, 'src', 'zyra-sdk.mjs')
         if (!existsSync(sdkPath)) {
-            return { available: false, reason: `Zyra SDK not found at ${sdkPath}` }
+            return remember({ available: false, reason: `Zyra SDK not found at ${sdkPath}` })
         }
         const bridgePath = resolveBridgePath(root)
         if (!existsSync(bridgePath)) {
-            return { available: false, reason: `Zyra UI bridge not found at ${bridgePath}` }
+            return remember({ available: false, reason: `Zyra UI bridge not found at ${bridgePath}` })
         }
         const agentServerClientPath = join(root, 'src', 'agent-server', 'client.mjs')
         if (!existsSync(agentServerClientPath)) {
-            return { available: false, reason: `Zyra agent-server client not found at ${agentServerClientPath}` }
+            return remember({ available: false, reason: `Zyra agent-server client not found at ${agentServerClientPath}` })
         }
         const nodeLaunchError = checkNodeLaunch()
         if (nodeLaunchError) {
-            return { available: false, reason: `Node runtime for Zyra bridge is unavailable: ${nodeLaunchError}` }
+            return remember({ available: false, reason: `Node runtime for Zyra bridge is unavailable: ${nodeLaunchError}` })
         }
-        return { available: true, reason: null }
+        return remember({ available: true, reason: null })
     }
 
     async listCanonicalChats(): Promise<CanonicalAgentChat[]> {
@@ -1057,26 +1071,32 @@ export class ZyraPiRuntime extends EventEmitter {
         await this.getAgentServerConnection(resolveZyraRoot()).updateCanonicalChat(normalizedThreadId, patch)
     }
 
-    async listModels(forceRefresh = false): Promise<AssistantModelInfo[]> {
-        const availability = await this.checkAvailability()
-        if (!availability.available) return fallbackZyraModels()
-
+    async listModelsWithProvenance(forceRefresh = false): Promise<{ models: AssistantModelInfo[]; authoritative: boolean }> {
         try {
-            const models = await this.prewarm(forceRefresh)
-            return models.length > 0 ? models : fallbackZyraModels()
+            const availability = await this.checkAvailability(forceRefresh)
+            if (!availability.available) return { models: fallbackZyraModels(), authoritative: false }
+            const values = await this.getAgentServerConnection(resolveZyraRoot()).listModels(forceRefresh)
+            const normalized = values.map(normalizeModelInfo).filter((model): model is AssistantModelInfo => Boolean(model))
+            if (normalized.length > 0) {
+                this.modelCache = normalized
+                return { models: normalized, authoritative: true }
+            }
+            return {
+                models: this.modelCache.length > 0 ? this.modelCache : fallbackZyraModels(),
+                authoritative: false
+            }
         } catch (error) {
             log.warn('[ZyraPiRuntime] failed to list Pi models', error)
-            return fallbackZyraModels()
+            return { models: fallbackZyraModels(), authoritative: false }
         }
     }
 
+    async listModels(forceRefresh = false): Promise<AssistantModelInfo[]> {
+        return (await this.listModelsWithProvenance(forceRefresh)).models
+    }
+
     async prewarm(forceRefresh = false): Promise<AssistantModelInfo[]> {
-        const availability = await this.checkAvailability()
-        if (!availability.available) return fallbackZyraModels()
-        const models = await this.getAgentServerConnection(resolveZyraRoot()).listModels(forceRefresh)
-        const normalized = models.map(normalizeModelInfo).filter((model): model is AssistantModelInfo => Boolean(model))
-        if (normalized.length > 0) this.modelCache = normalized
-        return normalized.length > 0 ? normalized : this.modelCache
+        return this.listModels(forceRefresh)
     }
 
     async generateText(

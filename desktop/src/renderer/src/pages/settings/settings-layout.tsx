@@ -24,7 +24,7 @@ export function SettingsSection({ title, headerAction, children, className }: {
     const searchTargetId = createSettingsSectionTargetId(title)
     return (
         <section
-            className={cn('space-y-2.5', className)}
+            className={cn('space-y-2.5 [content-visibility:auto] [contain-intrinsic-size:auto_220px]', className)}
             data-settings-search-target={searchTargetId}
             tabIndex={-1}
         >
@@ -80,7 +80,7 @@ export function SettingsRow({ title, description, status, statusTone = 'muted', 
             {...props}
             data-settings-search-target={searchTargetId || undefined}
             tabIndex={searchTargetId ? -1 : props.tabIndex}
-            className={cn('zyra-settings-row px-4 transition-colors duration-100 hover:bg-[var(--settings-row-hover)]', children ? 'pb-2.5 pt-3.5' : 'py-3.5', className)}
+            className={cn('zyra-settings-row px-4 transition-colors duration-100 hover:bg-[var(--settings-row-hover)] [content-visibility:auto] [contain-intrinsic-size:auto_68px]', children ? 'pb-2.5 pt-3.5' : 'py-3.5', className)}
         >
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-6">
                 <div className="min-w-0 space-y-1">
