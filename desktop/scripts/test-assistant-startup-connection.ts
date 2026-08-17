@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import type {
     AssistantRuntimeStatus,
     AssistantSnapshot,
@@ -20,6 +21,11 @@ import { deriveAssistantComposerCapabilities } from '../src/renderer/src/pages/a
 import { getAssistantThreadLastMessageAt, resolveAssistantThreadStatusPill } from '../src/renderer/src/pages/assistant/assistant-sessions-rail-utils'
 import { mergeCanonicalPresenceLatestTurn, resolveCanonicalPresenceAttention, resolveCanonicalPresenceThreadState } from '../src/main/assistant/service-canonical-presence'
 import { resolveAssistantComposerLaunchConfiguration } from '../src/renderer/src/pages/assistant/assistant-new-chat-composer-config'
+
+const storeSource = readFileSync(new URL('../src/renderer/src/lib/assistant/assistant-store-core.ts', import.meta.url), 'utf8')
+const composerEffectsSource = readFileSync(new URL('../src/renderer/src/pages/assistant/useAssistantComposerControllerEffects.ts', import.meta.url), 'utf8')
+assert.doesNotMatch(storeSource, /if \(!hasKnownModels\)[\s\S]*refreshModels/, 'an empty model cache must not launch provider discovery during startup')
+assert.doesNotMatch(composerEffectsSource, /didAutoRefreshModelsRef/, 'the composer refreshes models only after the user opens its model controls')
 
 const now = '2026-07-10T08:00:00.000Z'
 const sessionId = 'startup-session'

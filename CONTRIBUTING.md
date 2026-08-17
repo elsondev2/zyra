@@ -54,6 +54,14 @@ Changes that widen tools, permissions, retention, network exposure, control auth
 - Prefer official primary sources and include access dates for time-sensitive provider facts.
 - Add or supersede an ADR for load-bearing architecture changes.
 
+## Branch flow
+
+- `master` is the stable integration and release line. It only accepts a tested patch, a release-ready minor/major batch, or an approved emergency fix.
+- `dev` is the ongoing integration branch for normal iteration. Short-lived `feat/*`, `fix/*`, and `perf/*` branches target `dev` first.
+- Release candidates may use `release/vX.Y.Z` while native packaging, signing, and publication gates are being completed.
+- Promote a coherent batch from `dev` or a release branch to `master` through a pull request after its required checks pass. Failed CI, signing, notarization, updater, or publication gates are never bypassed.
+- Keep ordinary experiments off `master`; do not use `dev` as an updater-visible release channel.
+
 ## Pull requests
 
 A useful pull request states:

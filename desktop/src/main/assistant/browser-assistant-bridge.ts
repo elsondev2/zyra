@@ -116,10 +116,6 @@ export class BrowserAssistantBridge {
             ) return
             this.devscopeEventStream.broadcast(event)
         })
-        const initialService = this.resolveAssistantService()
-        if (initialService && this.dependencies.isOnboardingComplete?.() !== false) {
-            this.bindAssistantService(initialService)
-        }
         this.realtimeVoiceEventStream.setClientCountListener((clientId, count) => {
             if (count > 0) {
                 if (this.browserRealtimeVoiceOwnerClientId === clientId) this.clearBrowserVoiceDisconnectTimer()

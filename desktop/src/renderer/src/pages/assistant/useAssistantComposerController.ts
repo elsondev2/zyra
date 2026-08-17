@@ -159,7 +159,6 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
     const mentionMenuRef = useRef<HTMLDivElement>(null)
     const mentionListRef = useRef<HTMLDivElement>(null)
     const traitsDropdownRef = useRef<HTMLDivElement>(null)
-    const didAutoRefreshModelsRef = useRef(false)
     const persistedSessionStateRef = useRef<AssistantComposerSessionState>(initialComposerSessionState)
     const initializedSessionIdRef = useRef<string | null | undefined>(undefined)
     const persistTimeoutRef = useRef<number | null>(null)
@@ -289,11 +288,9 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         previewAttachment,
         availableModelOptionsLength: rawAvailableModelOptionsLength,
         firstAvailableModelId: preferredAvailableModelId || null,
-        onRefreshModels,
         initializedSessionIdRef,
         persistedSessionStateRef,
         persistTimeoutRef,
-        didAutoRefreshModelsRef,
         composerRootRef,
         modelDropdownRef,
         modelListRef,

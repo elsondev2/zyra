@@ -3,7 +3,7 @@
  * Main Process Entry Point
  */
 
-import { app, BrowserWindow, Menu, shell, ipcMain, nativeTheme, protocol, globalShortcut, session, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, Menu, dialog, shell, ipcMain, nativeTheme, protocol, globalShortcut, session, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { isAbsolute, join } from 'path'
 import { existsSync, statSync } from 'fs'
 import { writeFile } from 'node:fs/promises'
@@ -83,6 +83,8 @@ let quickPreviewWindow: BrowserWindow | null = null
 let browserClientRuntime: BrowserClientRuntime | null = null
 let hasRegisteredIpcHandlers = false
 let normalDesktopRuntimeStarted = false
+let quitCleanupStarted = false
+let quitCleanupComplete = false
 const pendingShellLaunchTargets: ShellLaunchTarget[] = []
 const FILE_PROTOCOL = 'zyra'
 const QUICK_PREVIEW_ROUTE = '/quick-open'
@@ -631,7 +633,7 @@ function startNormalDesktopRuntime(): void {
 function stopNormalDesktopRuntimeForSetup(): void {
     if (!normalDesktopRuntimeStarted) return
     normalDesktopRuntimeStarted = false
-    disposeAssistantService()
+    void disposeAssistantService()
     disposeUpdater()
 }
 
@@ -791,23 +793,40 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
     if (process.platform === 'darwin') return
-
-    void browserClientRuntime?.stop()
-    browserClientRuntime = null
-    disposeAssistantService()
-    disposeUpdater()
-    void disposeAgentControlBroker()
     app.quit()
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+    if (quitCleanupComplete) return
+    event.preventDefault()
+    if (quitCleanupStarted) return
+    quitCleanupStarted = true
     globalShortcut.unregisterAll()
-    void browserClientRuntime?.stop()
+    const browserRuntime = browserClientRuntime
     browserClientRuntime = null
-    disposeAssistantService()
     disposeUpdater()
-    void setupServices.auth.dispose()
-    void disposeAgentControlBroker()
+    void Promise.all([
+        browserRuntime?.stop().catch((error) => log.warn('[Shutdown] Browser runtime cleanup failed', error)),
+        disposeAssistantService(),
+        setupServices.auth.dispose().catch((error) => log.warn('[Shutdown] OpenAI auth worker cleanup failed', error)),
+        disposeAgentControlBroker().catch((error) => log.warn('[Shutdown] Agent Control cleanup failed', error))
+    ]).then(() => {
+        quitCleanupComplete = true
+        app.quit()
+    }).catch((error) => {
+        quitCleanupStarted = false
+        log.error('[Shutdown] Zyra kept running because Assistant state could not be committed.', error)
+        if (!mainWindow || mainWindow.isDestroyed()) {
+            mainWindow = createWindow(true)
+            ensureIpcHandlersRegistered(mainWindow)
+        } else if (!mainWindow.isVisible()) {
+            mainWindow.show()
+        }
+        dialog.showErrorBox(
+            'Zyra could not finish saving',
+            'Zyra is still running so your pending chat state is not discarded. Free some disk space or fix the storage error, then quit again.'
+        )
+    })
 })
 
 // Handle window control IPC

@@ -37,9 +37,10 @@ assert.equal(mainSource.includes('new BrowserClientRuntime'), true, 'Desktop mus
 assert.equal(mainSource.includes("log.info('[BrowserClientHost] ready'"), true, 'the stable local browser URL must be discoverable in Desktop logs')
 assert.match(
     mainSource,
-    /app\.on\('window-all-closed', \(\) => \{\s*if \(process\.platform === 'darwin'\) return\s*void browserClientRuntime\?\.stop\(\)/,
+    /app\.on\('window-all-closed', \(\) => \{\s*if \(process\.platform === 'darwin'\) return\s*app\.quit\(\)/,
     'closing the last macOS window must keep the browser runtime alive until the app actually quits'
 )
+assert.match(mainSource, /app\.on\('before-quit', \(event\) => \{[\s\S]*event\.preventDefault\(\)[\s\S]*Promise\.all\([\s\S]*disposeAssistantService\(\)[\s\S]*Zyra kept running because Assistant state could not be committed/, 'Desktop quit waits for Assistant persistence and refuses to discard a failed batch')
 assert.equal(assistantHandlersSource.includes('withDesktopAssistantSelectionLease(() => getAssistantService().connect(options))'), true, 'Desktop auto-reconnect must not steal a browser-routed chat')
 assert.equal(preloadRelaySource.includes('Object.prototype.hasOwnProperty.call'), true, 'the generic relay must only invoke methods owned by the exposed Desktop adapter')
 assert.equal(preloadRelaySource.includes("relayEvent('previewTerminal'"), true, 'terminal output must cross the browser event relay')
@@ -125,6 +126,7 @@ const bridge = new BrowserAssistantBridge({
 })
 
 const address = await bridge.start()
+assert.equal(eventListener, null, 'starting the local Browser listener must not eagerly bind or construct Assistant')
 const descriptor = JSON.parse(readFileSync(descriptorPath, 'utf8'))
 assert.equal(descriptor.port, address.port)
 assert.equal(descriptor.capability, capability, 'bridge discovery must use a per-process capability outside browser code')
@@ -147,6 +149,7 @@ try {
     const bootstrap = await bootstrapResponse.json() as any
     assert.equal(bootstrap.ok, true)
     assert.equal(bootstrap.value.snapshot.sessions[0].title, 'Shared browser session', 'browser bootstrap must use the live AssistantService')
+    assert.equal(typeof eventListener, 'function', 'the first protected Browser request binds live Assistant events')
     assert.equal(bootstrapResponse.headers.get('access-control-allow-origin'), allowedOrigin)
 
     const devscopeResponse = await fetch(`${baseUrl}${BROWSER_DEVSCOPE_BRIDGE_INVOKE_PATH}`, {

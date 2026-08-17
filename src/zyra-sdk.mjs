@@ -6,6 +6,10 @@ import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { normalizeOpeningTheme, pickOpeningTheme } from "./banner.mjs";
 import { createBrowserOAuthLoginCallbacks } from "./oauth-login-callbacks.mjs";
+import {
+  getProjectDataDir as resolveProjectDataDirectory,
+  getProjectSessionsDir as resolveProjectSessionsDirectory,
+} from "./project-paths.mjs";
 export {
   buildChatGptAccountStatus,
   buildZyraAuthAccountStatus,
@@ -125,12 +129,11 @@ const ZYRA_RUNTIME_MODEL_OVERRIDES = [
 export const CODEX_MODES = ["normal", "fast", "cheap", "auto"];
 
 export function getProjectSessionsDir(project = defaults.project) {
-  const root = resolveProjectDataDir(project);
-  return path.join(root, "sessions");
+  return resolveProjectSessionsDirectory(project);
 }
 
 export function getProjectDataDir(project = defaults.project) {
-  return path.join(path.resolve(project), PROJECT_DATA_DIR);
+  return resolveProjectDataDirectory(project);
 }
 
 export function resolveZyraStartupPreferences(project = defaults.project, options = {}, preferences = readProjectPreferences(project)) {

@@ -117,6 +117,7 @@ import {
     handleAssistantRuntimeEvent
 } from './service-runtime-events'
 import { mergeCanonicalPresenceLatestTurn, resolveCanonicalPresenceAttention, resolveCanonicalPresenceThreadState } from './service-canonical-presence'
+import { CanonicalHistoryRefreshTracker, shouldRefreshCanonicalHistory } from './canonical-history-refresh-policy'
 import { TrailingAsyncReconciler } from './trailing-async-reconciler'
 import {
     type AssistantStateRecord,
@@ -267,6 +268,7 @@ export class AssistantService {
     private readonly assistantTextBuffers = new Map<string, string>()
     private readonly suppressedAssistantTextTurns = new Set<string>()
     private readonly readyPromise: Promise<void>
+    private disposePromise: Promise<void> | null = null
     private readonly actionDeps: AssistantServiceActionDeps
 
     private state: AssistantStateRecord = {
@@ -280,6 +282,8 @@ export class AssistantService {
     private readonly canonicalReviewIndexPromises = new Map<string, Promise<void>>()
     private readonly canonicalHistoryBodyCache = new Map<string, { body: AssistantHistoryBody; bytes: number }>()
     private canonicalHistoryBodyCacheBytes = 0
+    private readonly canonicalHistoryLoadPromises = new Map<string, Promise<void>>()
+    private readonly canonicalHistoryRefresh = new CanonicalHistoryRefreshTracker()
     private readonly canonicalHistoryState = new Map<string, {
         before: string | null
         hasOlder: boolean
@@ -322,8 +326,17 @@ export class AssistantService {
                 || change['canonicalMessage'] === true
                 || !change['presence'] && !change['metadata'] && !change['title'] && !change['project']
             if (transcriptChanged) {
-                if (canonicalChatId) this.canonicalReviewHistoryState.delete(canonicalChatId)
-                else this.canonicalReviewHistoryState.clear()
+                if (canonicalChatId) {
+                    this.canonicalReviewHistoryState.delete(canonicalChatId)
+                    this.markCanonicalHistoryDirty(canonicalChatId)
+                } else {
+                    this.canonicalReviewHistoryState.clear()
+                    for (const session of this.state.snapshot.sessions) {
+                        for (const thread of session.threads) {
+                            if (thread.providerThreadId) this.markCanonicalHistoryDirty(thread.providerThreadId)
+                        }
+                    }
+                }
             }
             void this.queueCanonicalChatImport()
         })
@@ -517,14 +530,14 @@ export class AssistantService {
     async selectSession(sessionId: string) {
         if (this.activeCanonicalVoice?.sessionId !== sessionId) await this.stopCanonicalVoiceForNavigation()
         const result = await selectAssistantSessionAction(this.actionDeps, sessionId)
-        await this.refreshSelectedCanonicalPresence(sessionId)
+        void this.refreshSelectedCanonicalPresence(sessionId)
         return result
     }
 
     async selectThread(sessionId: string, threadId: string) {
         if (this.activeCanonicalVoice?.localThreadId !== threadId) await this.stopCanonicalVoiceForNavigation()
         const result = await selectAssistantThreadAction(this.actionDeps, sessionId, threadId)
-        await this.refreshSelectedCanonicalPresence(sessionId)
+        void this.refreshSelectedCanonicalPresence(sessionId)
         return result
     }
 
@@ -532,11 +545,11 @@ export class AssistantService {
         await this.ensureReady()
         const record = findThreadRecord(this.state.snapshot, threadId)
         if (!record) throw new Error(`Assistant thread not found: ${threadId}`)
-        await this.ensureCanonicalHistoryLoaded(record.session, record.thread)
-        return {
-            success: true as const,
-            detail: await this.persistence.readThreadDetail(record.thread.id)
-        }
+        const detail = await this.persistence.readThreadDetail(record.thread.id)
+        void this.ensureCanonicalHistoryLoaded(record.session, record.thread).catch((error) => {
+            log.warn('[Assistant] Failed to refresh canonical history after local bootstrap', error)
+        })
+        return { success: true as const, detail }
     }
 
     async getHistoryPage(input: AssistantGetHistoryPageInput) {
@@ -1003,7 +1016,8 @@ export class AssistantService {
         return declinePendingPlaygroundLabRequestAction(this.actionDeps, input)
     }
 
-    dispose() {
+    dispose(): Promise<void> {
+        if (this.disposePromise) return this.disposePromise
         this.externalEventSubscribers.clear()
         this.externalRealtimeVoiceSubscribers.clear()
         this.assistantTextDeltaBuffer.dispose()
@@ -1017,6 +1031,8 @@ export class AssistantService {
         this.typedVoiceResponseQueues.clear()
         this.canonicalHistoryBodyCache.clear()
         this.canonicalHistoryBodyCacheBytes = 0
+        this.canonicalHistoryLoadPromises.clear()
+        this.canonicalHistoryRefresh.clear()
         this.activeCanonicalVoice = null
         this.canonicalVoiceCommitter?.dispose()
         this.canonicalVoiceUnsubscribe?.()
@@ -1024,8 +1040,17 @@ export class AssistantService {
         this.canonicalRealtimeAdapter?.dispose()
         this.realtimeVoiceRuntime.dispose()
         this.runtime.dispose()
-        void this.persistence.flush()
-        void this.readyPromise.finally(() => this.foregroundPersistence?.close())
+        const pending = (async () => {
+            await this.readyPromise.catch(() => undefined)
+            await this.persistence.close()
+            this.foregroundPersistence?.close()
+        })()
+        const tracked = pending.catch((error) => {
+            if (this.disposePromise === tracked) this.disposePromise = null
+            throw error
+        })
+        this.disposePromise = tracked
+        return tracked
     }
 
     private async initialize() {
@@ -1048,9 +1073,6 @@ export class AssistantService {
                 this.state.snapshot.fleetByThreadId[thread.id] = fleet
             }
         }
-        void this.runtime.prewarm(false).catch((error) => {
-            log.warn('[Assistant] Zyra runtime prewarm failed', error)
-        })
     }
 
     private async initializeCanonicalVoiceController(): Promise<void> {
@@ -1649,6 +1671,12 @@ export class AssistantService {
             const messageCount = Math.max(0, Number(chat.displayMessageCount ?? chat.messageCount) || 0)
             const activityCount = Math.max(0, Number(chat.toolCallCount || 0) + Number(chat.errorCount || 0))
             if (existing) {
+                if (shouldRefreshCanonicalHistory({
+                    canonicalModifiedAt: updatedAt,
+                    persistedCanonicalModifiedAt: existing.thread.canonicalHistoryModifiedAt,
+                    canonicalEntryCount: chat.entryCount,
+                    persistedCanonicalEntryCount: existing.thread.canonicalHistoryEntryCount
+                })) this.markCanonicalHistoryDirty(chat.canonicalChatId)
                 const sessionPatch: Record<string, unknown> = {}
                 if (chat.title && chat.title !== existing.session.title) sessionPatch['title'] = chat.title
                 if (chat.project && chat.project !== existing.session.projectPath) sessionPatch['projectPath'] = chat.project
@@ -1714,6 +1742,7 @@ export class AssistantService {
                 }
                 continue
             }
+            this.markCanonicalHistoryDirty(chat.canonicalChatId)
             const key = createHash('sha256').update(chat.canonicalChatId).digest('hex').slice(0, 24)
             const sessionId = `assistant-session:shared:${key}`
             const threadId = `assistant-thread:shared:${key}`
@@ -1743,11 +1772,19 @@ export class AssistantService {
         }
     }
 
+    private markCanonicalHistoryDirty(canonicalChatId: string): number {
+        return this.canonicalHistoryRefresh.mark(canonicalChatId)
+    }
+
     private async ensureCanonicalHistoryLoaded(session: AssistantSession, thread: AssistantThread): Promise<void> {
         const canonicalChatId = thread.providerThreadId
-        if (!canonicalChatId || this.canonicalHistoryState.has(canonicalChatId)) return
+        if (!canonicalChatId) return
+        const refreshGeneration = this.canonicalHistoryRefresh.current(canonicalChatId)
+        if (refreshGeneration === 0) return
+        const existing = this.canonicalHistoryLoadPromises.get(canonicalChatId)
+        if (existing) return existing
         const key = createHash('sha256').update(canonicalChatId).digest('hex').slice(0, 24)
-        await this.loadCanonicalHistoryPage({
+        const pending = this.loadCanonicalHistoryPage({
             canonicalChatId,
             project: session.projectPath || thread.cwd || process.cwd(),
             key,
@@ -1755,7 +1792,18 @@ export class AssistantService {
             threadId: thread.id,
             before: null,
             fallbackCreatedAt: thread.createdAt
+        }).then((loaded) => {
+            if (loaded) this.canonicalHistoryRefresh.clearIfCurrent(canonicalChatId, refreshGeneration)
+        }).finally(() => {
+            if (this.canonicalHistoryLoadPromises.get(canonicalChatId) === pending) {
+                this.canonicalHistoryLoadPromises.delete(canonicalChatId)
+            }
+            if (this.canonicalHistoryRefresh.current(canonicalChatId) > refreshGeneration) {
+                void this.ensureCanonicalHistoryLoaded(session, thread)
+            }
         })
+        this.canonicalHistoryLoadPromises.set(canonicalChatId, pending)
+        return pending
     }
 
     private async loadOlderCanonicalHistory(canonicalChatId: string): Promise<void> {
@@ -1782,14 +1830,14 @@ export class AssistantService {
         threadId: string
         before: string | null
         fallbackCreatedAt: string
-    }): Promise<void> {
+    }): Promise<boolean> {
         try {
             const history = await this.runtime.readCanonicalChatHistory(input.canonicalChatId, input.project, {
                 before: input.before,
                 limit: 500,
                 toolResultBodies: 'lazy-v1'
             })
-            if (!history) return
+            if (!history) return false
             const projection = projectCanonicalTimeline(
                 history.entries || [],
                 input.canonicalChatId,
@@ -1799,6 +1847,8 @@ export class AssistantService {
                 history.chat.cwd || input.project
             )
             const record = findThreadRecord(this.state.snapshot, input.threadId)
+            const canonicalHistoryModifiedAt = normalizeCatalogDate(history.chat.modifiedAt, record?.thread.updatedAt || input.fallbackCreatedAt)
+            const canonicalHistoryEntryCount = Math.max(0, Number(history.chat.entryCount ?? history.pageInfo?.totalEntries) || 0)
             if (record && (projection.messages.length > 0 || projection.activities.length > 0)) {
                 const persistedTimeline = await this.persistence.readTimelineProjectionRows(input.threadId)
                 const removedMessageIds = [...new Set([
@@ -1822,6 +1872,8 @@ export class AssistantService {
                 this.appendEvent('thread.updated', normalizeCatalogDate(history.chat.modifiedAt, record.thread.updatedAt), {
                     threadId: input.threadId,
                     patch: {
+                        canonicalHistoryModifiedAt,
+                        canonicalHistoryEntryCount,
                         messages: projection.messages,
                         activities: projection.activities,
                         messageCount: countMergedCanonicalRecords(persistedTimeline.messages, projection.messages, removedMessageIds),
@@ -1829,6 +1881,11 @@ export class AssistantService {
                     },
                     removedMessageIds,
                     removedActivityIds
+                }, input.sessionId, input.threadId)
+            } else if (record) {
+                this.appendEvent('thread.updated', canonicalHistoryModifiedAt, {
+                    threadId: input.threadId,
+                    patch: { canonicalHistoryModifiedAt, canonicalHistoryEntryCount }
                 }, input.sessionId, input.threadId)
             }
             this.canonicalHistoryState.set(input.canonicalChatId, {
@@ -1839,8 +1896,10 @@ export class AssistantService {
                 sessionId: input.sessionId,
                 threadId: input.threadId
             })
+            return true
         } catch (error) {
             log.warn('[Assistant] Failed to import canonical chat history page', { canonicalChatId: input.canonicalChatId, error })
+            return false
         }
     }
 

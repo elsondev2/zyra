@@ -52,11 +52,9 @@ export function useAssistantComposerControllerEffects(input: {
     previewAttachment: ComposerContextFile | null
     availableModelOptionsLength: number
     firstAvailableModelId: string | null
-    onRefreshModels?: () => void
     initializedSessionIdRef: MutableRefObject<string | null | undefined>
     persistedSessionStateRef: MutableRefObject<AssistantComposerSessionState>
     persistTimeoutRef: MutableRefObject<number | null>
-    didAutoRefreshModelsRef: MutableRefObject<boolean>
     composerRootRef: RefObject<HTMLDivElement | null>
     modelDropdownRef: RefObject<HTMLDivElement | null>
     modelListRef: RefObject<HTMLDivElement | null>
@@ -118,11 +116,9 @@ export function useAssistantComposerControllerEffects(input: {
         previewAttachment,
         availableModelOptionsLength,
         firstAvailableModelId,
-        onRefreshModels,
         initializedSessionIdRef,
         persistedSessionStateRef,
         persistTimeoutRef,
-        didAutoRefreshModelsRef,
         composerRootRef,
         modelDropdownRef,
         modelListRef,
@@ -341,14 +337,4 @@ export function useAssistantComposerControllerEffects(input: {
         observer.observe(element)
         return () => observer.disconnect()
     }, [compact, composerRootRef, setIsCompactFooter])
-
-    useEffect(() => {
-        if (availableModelOptionsLength > 0) {
-            didAutoRefreshModelsRef.current = false
-            return
-        }
-        if (didAutoRefreshModelsRef.current || modelsLoading || !onRefreshModels) return
-        didAutoRefreshModelsRef.current = true
-        onRefreshModels()
-    }, [availableModelOptionsLength, didAutoRefreshModelsRef, modelsLoading, onRefreshModels])
 }

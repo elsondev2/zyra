@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { getProjectSessionsDir } from "../zyra-sdk.mjs";
+import { getProjectSessionsDir } from "../project-paths.mjs";
 import { CanonicalChatIndex } from "./chat-index.mjs";
 import { getAgentServerPaths } from "./paths.mjs";
 import { appendCanonicalMessage, findCanonicalMessageReceipt } from "./canonical-message-ledger.mjs";

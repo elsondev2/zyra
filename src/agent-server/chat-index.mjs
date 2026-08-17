@@ -1,7 +1,7 @@
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { getProjectSessionsDir } from "../zyra-sdk.mjs";
+import { getProjectSessionsDir } from "../project-paths.mjs";
 import { getAgentServerPaths } from "./paths.mjs";
 import {
   findRecordByEntryIndex,
@@ -177,7 +177,7 @@ export class CanonicalChatIndex {
 
 function scanSessionFile(file, storageProject, current, stats) {
   const canAppend = current
-    && current.fileSize <= stats.size
+    && current.fileSize < stats.size
     && Number.isSafeInteger(current.scanOffset)
     && current.scanOffset <= stats.size
     && Array.isArray(current.entryOffsets)
@@ -235,9 +235,8 @@ function scanSessionFile(file, storageProject, current, stats) {
       pending = Buffer.from(pending.subarray(lineStart));
     }
     if (pending.length > 0 && position >= stats.size) {
-      consumeLine(record, decoder.end(pending), absoluteOffset, pending.length);
-      absoluteOffset += pending.length;
-      pending = Buffer.alloc(0);
+      const tail = decoder.end(pending);
+      if (consumeLine(record, tail, absoluteOffset, pending.length)) absoluteOffset += pending.length;
     }
   } finally {
     closeSync(fd);
@@ -258,17 +257,17 @@ function scanSessionFile(file, storageProject, current, stats) {
 
 function consumeLine(record, line, offset, byteLength) {
   const trimmed = String(line || "").trim();
-  if (!trimmed) return;
+  if (!trimmed) return true;
   let entry;
   try { entry = JSON.parse(trimmed); }
-  catch { return; }
+  catch { return false; }
 
   collectPathEvidence(record, entry);
   if (entry.type === "session") {
     if (entry.id) record.canonicalChatId = String(entry.id);
     if (entry.cwd) record.cwd = normalizePath(entry.cwd);
     if (entry.timestamp) record.createdAt = toIso(entry.timestamp, record.createdAt);
-    return;
+    return true;
   }
 
   const entryIndex = record.entryOffsets.length;
@@ -284,7 +283,7 @@ function consumeLine(record, line, offset, byteLength) {
   if (entry.type === "session_info") {
     record.title = normalizeTitle(entry.name, record.firstMessage);
   }
-  if (entry.type !== "message") return;
+  if (entry.type !== "message") return true;
   record.messageCount += 1;
   const message = entry.message && typeof entry.message === "object" ? entry.message : {};
   if (["user", "assistant", "system"].includes(message.role)) record.displayMessageCount = (record.displayMessageCount || 0) + 1;
@@ -305,6 +304,7 @@ function consumeLine(record, line, offset, byteLength) {
       record.titleCandidates.push(userText);
     }
   }
+  return true;
 }
 
 function collectPathEvidence(record, entry) {

@@ -141,17 +141,6 @@ export default function AssistantPage() {
     useEffect(() => {
         if (inspectorOpen) setInspectorMounted(true)
     }, [inspectorOpen])
-    useEffect(() => {
-        const preload = () => {
-            void loadAssistantDiffPanel().catch(() => undefined)
-        }
-        if (typeof window.requestIdleCallback === 'function') {
-            const idleId = window.requestIdleCallback(preload, { timeout: 4_000 })
-            return () => window.cancelIdleCallback(idleId)
-        }
-        const timerId = window.setTimeout(preload, 1_500)
-        return () => window.clearTimeout(timerId)
-    }, [])
     const revealBrowserInspector = useCallback(() => setRightPanelMode('review'), [setRightPanelMode])
     const resizeBrowserInspector = useCallback((width: number) => {
         setRightPanelMode('review')

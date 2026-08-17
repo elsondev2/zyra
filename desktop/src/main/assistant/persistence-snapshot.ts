@@ -34,6 +34,8 @@ export function toAssistantThreadShell(thread: AssistantThread): AssistantThread
         webSearch: thread.webSearch ?? null,
         webFetch: thread.webFetch ?? null,
         state: thread.state,
+        canonicalHistoryModifiedAt: thread.canonicalHistoryModifiedAt ?? null,
+        canonicalHistoryEntryCount: thread.canonicalHistoryEntryCount ?? null,
         canonicalPresence: thread.canonicalPresence ? {
             ...thread.canonicalPresence,
             clients: thread.canonicalPresence.clients.map((client) => ({ ...client }))

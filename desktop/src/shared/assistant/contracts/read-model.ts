@@ -160,6 +160,8 @@ export interface AssistantThreadShell {
     webSearch?: boolean | null
     webFetch?: boolean | null
     state: AssistantThreadState
+    canonicalHistoryModifiedAt?: string | null
+    canonicalHistoryEntryCount?: number | null
     canonicalPresence?: {
         state: 'detached' | 'ready' | 'running' | 'background'
         activeTurnId: string | null

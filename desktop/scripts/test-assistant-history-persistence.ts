@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import initSqlJs from 'sql.js/dist/sql-asm.js'
 import type { AssistantActivity, AssistantDomainEvent, AssistantMessage, AssistantSession, AssistantThread } from '../src/shared/assistant/contracts'
 import { initializeAssistantPersistenceSchema } from '../src/main/assistant/persistence-utils'
-import { readAssistantTimelineProjectionRows } from '../src/main/assistant/persistence-read'
+import { readAssistantPersistenceRecord, readAssistantTimelineProjectionRows } from '../src/main/assistant/persistence-read'
 import { persistAssistantEvent, replaceAssistantSnapshot } from '../src/main/assistant/persistence-write'
 import { createDefaultSnapshot } from '../src/main/assistant/projector'
 import { applyAssistantDomainEvent } from '../src/shared/assistant/projector'
@@ -47,7 +48,7 @@ const currentActivity: AssistantActivity = {
 
 const thread: AssistantThread = {
     id: 'thread-history',
-    providerThreadId: null,
+    providerThreadId: 'canonical:history',
     source: 'root',
     parentThreadId: null,
     providerParentThreadId: null,
@@ -61,6 +62,8 @@ const thread: AssistantThread = {
     runtimeMode: 'approval-required',
     interactionMode: 'default',
     state: 'ready',
+    canonicalHistoryModifiedAt: '2026-07-15T12:01:00.000Z',
+    canonicalHistoryEntryCount: 42,
     lastError: null,
     createdAt,
     updatedAt: currentMessage.updatedAt,
@@ -94,6 +97,9 @@ const SQL = await initSqlJs()
 const db = new SQL.Database()
 initializeAssistantPersistenceSchema(db)
 replaceAssistantSnapshot(db, snapshot)
+const persistedThread = readAssistantPersistenceRecord(db).snapshot.sessions[0]?.threads[0]
+assert.equal(persistedThread?.canonicalHistoryModifiedAt, thread.canonicalHistoryModifiedAt)
+assert.equal(persistedThread?.canonicalHistoryEntryCount, thread.canonicalHistoryEntryCount)
 const persistedVoiceMessage = readAssistantTimelineProjectionRows(db, thread.id).messages.find((message) => message.id === currentMessage.id)
 assert.equal(persistedVoiceMessage?.providerItemId, currentMessage.providerItemId, 'Voice provider identity must survive Assistant SQLite hydration')
 assert.equal(persistedVoiceMessage?.modality, 'voice', 'Voice modality must survive Assistant SQLite hydration')
@@ -215,6 +221,11 @@ assert.equal(projectedUnloadedDelete.sessions[0]?.threads[0]?.messages.length, 0
 persistAssistantEvent(db, unloadedDeleteEvent, partialSnapshot)
 assert.equal(db.exec("SELECT COUNT(*) FROM assistant_messages WHERE thread_id = 'thread-history'")[0]?.values[0]?.[0], 0, 'persistence deletes unloaded messages from exact IDs without renderer history bodies')
 assert.equal(db.exec("SELECT COUNT(*) FROM assistant_activities WHERE thread_id = 'thread-history'")[0]?.values[0]?.[0], 0, 'persistence deletes unloaded activities from exact IDs without renderer history bodies')
+
+const persistenceSource = readFileSync(new URL('../src/main/assistant/persistence.ts', import.meta.url), 'utf8')
+assert.match(persistenceSource, /this\.pendingEvents\.unshift\(\.\.\.eventsToPersist\)/, 'a failed persistence batch remains queued for retry')
+assert.match(persistenceSource, /async close\(\): Promise<void>[\s\S]*await this\.flush\(\)[\s\S]*this\.db\?\.close\(\)/, 'Assistant shutdown flushes pending events before closing SQLite')
+assert.match(persistenceSource, /if \(databaseWriteError\) throw databaseWriteError/, 'SQL.js shutdown cannot report success after its database export fails')
 
 db.close()
 console.log('Assistant history persistence contract: ok')

@@ -19,7 +19,9 @@ export function peekAssistantService(): AssistantService | null {
     return assistantService
 }
 
-export function disposeAssistantService(): void {
-    assistantService?.dispose()
-    assistantService = null
+export async function disposeAssistantService(): Promise<void> {
+    const service = assistantService
+    if (!service) return
+    await service.dispose()
+    if (assistantService === service) assistantService = null
 }

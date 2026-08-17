@@ -19,9 +19,10 @@ import type {
     FleetSnapshot
 } from '../../shared/assistant/contracts'
 import { is } from '../utils'
+import { backupAssistantDatabaseSet } from './assistant-database-files'
 import { createDefaultSnapshot, recoverPersistedSnapshot } from './projector'
 import { mergeAssistantSearchTurnIds, readAssistantActivity, readAssistantHistoryPage, readAssistantReviewIndex, readAssistantThreadDetail, readAssistantTurnDetail, searchAssistantTurns } from './persistence-history'
-import { hydrateSnapshotThreads } from './persistence-snapshot'
+import { hydrateSnapshotThreads, summarizeThread } from './persistence-snapshot'
 import { deleteFleetProjection, projectFleetSnapshot, readFleetSnapshot } from './fleet-persistence'
 import {
     readHydratedThreadDetails,
@@ -51,7 +52,6 @@ import {
 
 const PERSISTENCE_EVENT_BATCH_DELAY_MS = 240
 const FORCE_ASSISTANT_DB_RESET_ENV = 'DEVSCOPE_RESET_ASSISTANT_DB'
-
 function isRecoverableSqlitePersistenceError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error || '')
     const normalized = message.toLowerCase()
@@ -71,15 +71,37 @@ function shouldForceAssistantDbReset(): boolean {
     return is.dev && process.env[FORCE_ASSISTANT_DB_RESET_ENV] === '1'
 }
 
+function shouldUseNativeAssistantPersistence(): boolean {
+    return Boolean(process.versions.electron)
+        && process.env['ZYRA_ASSISTANT_PERSISTENCE_BACKEND'] !== 'sqljs'
+}
+
+function createAssistantFallbackSnapshot(snapshot: AssistantSnapshot): AssistantSnapshot {
+    return {
+        ...snapshot,
+        playground: structuredClone(snapshot.playground),
+        knownModels: structuredClone(snapshot.knownModels),
+        fleetByThreadId: structuredClone(snapshot.fleetByThreadId || {}),
+        sessions: snapshot.sessions.map((session) => ({
+            ...session,
+            threadIds: [...session.threadIds],
+            threads: session.threads.map(summarizeThread)
+        }))
+    }
+}
+
 export class AssistantPersistence {
     private readonly filePath: string
     private readonly legacyFilePath: string
     private db: SqlDatabase | null = null
+    private databaseBackend: 'native' | 'sqljs' = 'sqljs'
     private initPromise: Promise<void> | null = null
     private operationQueue: Promise<void> = Promise.resolve()
     private writeTimer: NodeJS.Timeout | null = null
     private pendingEvents: PendingAssistantPersistenceEvent[] = []
     private pendingEventTimer: NodeJS.Timeout | null = null
+    private pendingProcessingPromise: Promise<void> | null = null
+    private fallbackSnapshotSource: AssistantSnapshot | null = null
     private readonly activeStreamingThreadIds = new Set<string>()
     private diskFlushDeferred = false
 
@@ -94,14 +116,15 @@ export class AssistantPersistence {
 
     async load(): Promise<{ version: number; snapshot: AssistantSnapshot; events: AssistantDomainEvent[] }> {
         await this.ensureInitialized()
-        return this.enqueue(async () => {
+        return this.enqueue(() => {
             const record = readAssistantPersistenceRecord(this.requireDb())
-            await this.flushNow()
+            this.fallbackSnapshotSource = record.snapshot
             return record
         })
     }
 
     appendEvent(event: AssistantDomainEvent, snapshot: AssistantSnapshot): void {
+        this.fallbackSnapshotSource = snapshot
         this.pendingEvents.push({ event, snapshot })
         this.schedulePendingEventProcessing()
     }
@@ -128,6 +151,7 @@ export class AssistantPersistence {
     }
 
     replaceSnapshot(snapshot: AssistantSnapshot): void {
+        this.fallbackSnapshotSource = snapshot
         this.pendingEvents = []
         this.clearPendingEventTimer()
         void this.enqueue(() => {
@@ -139,6 +163,7 @@ export class AssistantPersistence {
     }
 
     updateMetadata(snapshot: AssistantSnapshot): void {
+        this.fallbackSnapshotSource = snapshot
         void this.enqueue(() => {
             persistAssistantSnapshotMeta(this.requireDb(), snapshot)
             this.scheduleFlush()
@@ -271,7 +296,22 @@ export class AssistantPersistence {
     async flush(): Promise<void> {
         await this.ensureInitialized()
         this.clearPendingEventTimer()
-        await this.processPendingEvents()
+        let lastPersistenceError: unknown = null
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+            try {
+                await this.processPendingEvents()
+                lastPersistenceError = null
+                break
+            } catch (error) {
+                lastPersistenceError = error
+                if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)))
+            }
+        }
+        if (lastPersistenceError || this.pendingEvents.length > 0 || this.pendingProcessingPromise) {
+            throw lastPersistenceError instanceof Error
+                ? lastPersistenceError
+                : new Error('Assistant persistence still has an uncommitted event batch.')
+        }
         await this.enqueue(async () => {
             if (this.writeTimer) {
                 clearTimeout(this.writeTimer)
@@ -279,6 +319,14 @@ export class AssistantPersistence {
             }
             this.diskFlushDeferred = false
             await this.flushNow()
+        })
+    }
+
+    async close(): Promise<void> {
+        await this.flush()
+        await this.enqueue(() => {
+            this.db?.close()
+            this.db = null
         })
     }
 
@@ -290,12 +338,21 @@ export class AssistantPersistence {
 
     private async initialize(): Promise<void> {
         try {
-            const SQL = await initSqlJs()
-            const dbBytes = existsSync(this.filePath) ? readFileSync(this.filePath) : null
-            this.db = dbBytes ? new SQL.Database(dbBytes) : new SQL.Database()
+            const hadDatabase = existsSync(this.filePath)
+            let SQL: Awaited<ReturnType<typeof initSqlJs>> | undefined
+            if (shouldUseNativeAssistantPersistence()) {
+                this.databaseBackend = 'native'
+                const { openNativeAssistantDatabase } = await import('./native-sqlite-adapter')
+                this.db = await openNativeAssistantDatabase(this.filePath)
+            } else {
+                this.databaseBackend = 'sqljs'
+                SQL = await initSqlJs()
+                const dbBytes = hadDatabase ? readFileSync(this.filePath) : null
+                this.db = dbBytes ? new SQL.Database(dbBytes) : new SQL.Database()
+            }
             initializeAssistantPersistenceSchema(this.requireDb())
 
-            const storedVersion = dbBytes ? readAssistantPersistenceVersion(this.requireDb()) : PERSISTENCE_VERSION
+            const storedVersion = hadDatabase ? readAssistantPersistenceVersion(this.requireDb()) : PERSISTENCE_VERSION
             if (shouldForceAssistantDbReset()) {
                 log.warn('[AssistantPersistence] Forced dev assistant DB reset requested.')
                 await this.rebuildDatabase({
@@ -307,7 +364,7 @@ export class AssistantPersistence {
                 return
             }
 
-            if (dbBytes && is.dev && storedVersion !== PERSISTENCE_VERSION) {
+            if (hadDatabase && is.dev && storedVersion !== PERSISTENCE_VERSION) {
                 log.warn(`[AssistantPersistence] Dev assistant DB version mismatch (${storedVersion ?? 'unknown'} -> ${PERSISTENCE_VERSION}). Resetting dev assistant database.`)
                 await this.rebuildDatabase({
                     sql: SQL,
@@ -320,7 +377,7 @@ export class AssistantPersistence {
 
             upsertAssistantMeta(this.requireDb(), 'persistenceVersion', String(PERSISTENCE_VERSION))
 
-            if (!dbBytes && existsSync(this.legacyFilePath)) {
+            if (!hadDatabase && existsSync(this.legacyFilePath)) {
                 this.importLegacyJson()
                 await this.flushNow()
             }
@@ -357,23 +414,23 @@ export class AssistantPersistence {
         importLegacyJson: boolean
         backupLegacyJson: boolean
     }): Promise<void> {
+        let closeError: unknown = null
         try {
             this.db?.close()
-        } catch {
-            // Ignore close failures while recovering a corrupt database.
+        } catch (error) {
+            closeError = error
         }
         this.db = null
 
         const timestamp = Date.now()
-        if (existsSync(this.filePath)) {
-            const backupPath = `${this.filePath}.${options.backupReason}-${timestamp}.bak`
-            try {
-                renameSync(this.filePath, backupPath)
-                log.warn(`[AssistantPersistence] Backed up assistant database to ${backupPath}`)
-            } catch (backupError) {
-                log.error('[AssistantPersistence] Failed to back up assistant database.', backupError)
-                throw backupError
-            }
+        const backupPath = `${this.filePath}.${options.backupReason}-${timestamp}.bak`
+        try {
+            const preservedDatabaseFiles = backupAssistantDatabaseSet(this.filePath, backupPath)
+            if (preservedDatabaseFiles.length > 0) log.warn(`[AssistantPersistence] Backed up assistant database set to ${backupPath}`)
+            if (closeError) log.warn('[AssistantPersistence] Database close failed; the complete database/WAL set was preserved before recovery.', closeError)
+        } catch (backupError) {
+            log.error('[AssistantPersistence] Failed to back up the complete assistant database set.', backupError)
+            throw backupError
         }
 
         if (options.backupLegacyJson && existsSync(this.legacyFilePath)) {
@@ -387,8 +444,13 @@ export class AssistantPersistence {
             }
         }
 
-        const SQL = options.sql || await initSqlJs()
-        this.db = new SQL.Database()
+        if (this.databaseBackend === 'native') {
+            const { openNativeAssistantDatabase } = await import('./native-sqlite-adapter')
+            this.db = await openNativeAssistantDatabase(this.filePath)
+        } else {
+            const SQL = options.sql || await initSqlJs()
+            this.db = new SQL.Database()
+        }
         initializeAssistantPersistenceSchema(this.requireDb())
         upsertAssistantMeta(this.requireDb(), 'persistenceVersion', String(PERSISTENCE_VERSION))
 
@@ -399,12 +461,15 @@ export class AssistantPersistence {
         await this.flushNow()
     }
 
-    private schedulePendingEventProcessing(): void {
+    private schedulePendingEventProcessing(delayMs = PERSISTENCE_EVENT_BATCH_DELAY_MS): void {
         if (this.pendingEventTimer) return
         this.pendingEventTimer = setTimeout(() => {
             this.pendingEventTimer = null
-            void this.processPendingEvents()
-        }, PERSISTENCE_EVENT_BATCH_DELAY_MS)
+            void this.processPendingEvents().catch((error) => {
+                log.error('[AssistantPersistence] Failed to persist assistant event batch; retry remains queued.', error)
+                this.schedulePendingEventProcessing(1_000)
+            })
+        }, delayMs)
         this.pendingEventTimer.unref?.()
     }
 
@@ -414,20 +479,36 @@ export class AssistantPersistence {
         this.pendingEventTimer = null
     }
 
-    private async processPendingEvents(): Promise<void> {
-        if (this.pendingEvents.length === 0) return
-        const eventsToPersist = coalesceAssistantPersistenceEvents(
-            this.pendingEvents.splice(0, this.pendingEvents.length)
-        )
-
-        await this.enqueue(() => {
-            for (const entry of eventsToPersist) {
-                persistAssistantEvent(this.requireDb(), entry.event, entry.snapshot)
+    private processPendingEvents(): Promise<void> {
+        if (this.pendingProcessingPromise) return this.pendingProcessingPromise
+        if (this.pendingEvents.length === 0) return Promise.resolve()
+        const pending = (async () => {
+            while (this.pendingEvents.length > 0) {
+                const eventsToPersist = coalesceAssistantPersistenceEvents(
+                    this.pendingEvents.splice(0, this.pendingEvents.length)
+                )
+                try {
+                    await this.enqueue(() => {
+                        for (const entry of eventsToPersist) {
+                            persistAssistantEvent(this.requireDb(), entry.event, entry.snapshot)
+                        }
+                        this.scheduleFlush()
+                    })
+                } catch (error) {
+                    this.pendingEvents.unshift(...eventsToPersist)
+                    try {
+                        await this.writeFallbackSnapshot()
+                    } catch (fallbackError) {
+                        log.error('[AssistantPersistence] Failed to preserve fallback state after an event write error.', fallbackError)
+                    }
+                    throw error
+                }
             }
-            this.scheduleFlush()
-        }).catch((error) => {
-            log.error('[AssistantPersistence] Failed to persist assistant event batch.', error)
+        })().finally(() => {
+            if (this.pendingProcessingPromise === pending) this.pendingProcessingPromise = null
         })
+        this.pendingProcessingPromise = pending
+        return pending
     }
 
     private scheduleFlush(): void {
@@ -455,20 +536,31 @@ export class AssistantPersistence {
 
     private async flushNow(): Promise<void> {
         const db = this.requireDb()
+        let databaseWriteError: unknown = null
 
-        try {
-            const bytes = Buffer.from(db.export())
-            await writeFileAtomically(this.filePath, bytes)
-        } catch (error) {
-            log.error('[AssistantPersistence] Failed to write SQLite assistant state.', error)
+        if (this.databaseBackend === 'sqljs') {
+            try {
+                const bytes = Buffer.from(db.export())
+                await writeFileAtomically(this.filePath, bytes)
+            } catch (error) {
+                databaseWriteError = error
+                log.error('[AssistantPersistence] Failed to write SQLite assistant state.', error)
+            }
         }
 
         try {
-            const snapshot = readAssistantPersistenceRecord(db).snapshot
-            await writeFileAtomically(this.legacyFilePath, JSON.stringify({ snapshot }, null, 2))
+            await this.writeFallbackSnapshot()
         } catch (error) {
             log.error('[AssistantPersistence] Failed to write JSON assistant fallback state.', error)
         }
+        if (databaseWriteError) throw databaseWriteError
+    }
+
+    private async writeFallbackSnapshot(): Promise<void> {
+        const snapshot = this.fallbackSnapshotSource
+            ? createAssistantFallbackSnapshot(this.fallbackSnapshotSource)
+            : readAssistantPersistenceRecord(this.requireDb()).snapshot
+        await writeFileAtomically(this.legacyFilePath, JSON.stringify({ snapshot }, null, 2))
     }
 
     private enqueue<T>(work: () => T | Promise<T>): Promise<T> {

@@ -371,8 +371,7 @@ try {
     assert.equal(updatedReview.index.turns[1]?.changes.length, 1, 'incremental canonical refresh retains older indexed changes')
     assert.equal(historyRequests.length, 4, 'a later TUI turn is indexed from the latest page without rereading older pages')
 } finally {
-    service.dispose()
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    await service.dispose()
     rmSync(userDataPath, { recursive: true, force: true })
 }
 

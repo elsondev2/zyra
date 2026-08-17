@@ -10,7 +10,7 @@
     "ask": "node bin/zyra.mjs ask",
     "doctor": "node bin/zyra.mjs doctor",
     "test:file-change-streaming": "node scripts/test-zyra-write-diff.mjs && node scripts/test-zyra-ui-render.mjs && bun run --cwd desktop test:file-change-lifecycle && bun run --cwd desktop test:pi-assistant-lifecycle && bun run --cwd desktop test:assistant-diff",
-    "precheck": "node --check src/auth-methods.mjs && node --check src/oauth-login-callbacks.mjs && node --check src/desktop-openai-auth.mjs && node --check src/desktop-openai-auth-worker.mjs && node --check src/secret-input.mjs && node --check scripts/test-zyra-auth.mjs && node scripts/test-zyra-auth.mjs",
+    "precheck": "node --check src/auth-methods.mjs && node --check src/project-paths.mjs && node --check src/oauth-login-callbacks.mjs && node --check src/desktop-openai-auth.mjs && node --check src/desktop-openai-auth-worker.mjs && node --check src/secret-input.mjs && node --check scripts/test-zyra-auth.mjs && node scripts/test-zyra-auth.mjs",
     "test:agent-surface": "node scripts/test-agent-surface-contract.mjs && bun run --cwd desktop test:agent-surface",
     "test:subagents-workflows": "node scripts/test-zyra-subagents.mjs && node scripts/test-zyra-workflows.mjs && node scripts/test-zyra-fleet-ui.mjs && bun run --cwd desktop test:assistant-fleet",
     "test:agent-control": "bun run --cwd desktop test:agent-control && npm --prefix extensions/zyra-browser-control test && dotnet build native/zyra-computer-use/tests/Zyra.ComputerUse.Tests/Zyra.ComputerUse.Tests.csproj && dotnet run --project native/zyra-computer-use/tests/Zyra.ComputerUse.Tests/Zyra.ComputerUse.Tests.csproj --no-build",

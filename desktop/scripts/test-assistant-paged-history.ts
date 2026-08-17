@@ -17,6 +17,7 @@ import {
     serializeAssistantActivityPayload
 } from '../src/main/assistant/persistence-activity-payload'
 import { initializeAssistantPersistenceSchema } from '../src/main/assistant/persistence-utils'
+import { CanonicalHistoryRefreshTracker, shouldRefreshCanonicalHistory } from '../src/main/assistant/canonical-history-refresh-policy'
 import { replaceAssistantSnapshot, upsertAssistantCanonicalTimelineProjection } from '../src/main/assistant/persistence-write'
 import { createDefaultSnapshot } from '../src/main/assistant/projector'
 import { toAssistantShellSnapshot } from '../src/main/assistant/persistence-snapshot'
@@ -31,6 +32,16 @@ import { computeStableAssistantTimelineRows } from '../src/renderer/src/pages/as
 import type { TimelineDisplayRow } from '../src/renderer/src/pages/assistant/assistant-timeline-helpers'
 
 const at = (minute: number) => new Date(Date.parse('2026-07-16T10:00:00.000Z') + minute * 60_000).toISOString()
+assert.equal(shouldRefreshCanonicalHistory({ canonicalModifiedAt: at(1), persistedCanonicalModifiedAt: at(1), canonicalEntryCount: 50, persistedCanonicalEntryCount: 50 }), false, 'an up-to-date persisted chat must not rescan canonical history on every launch')
+assert.equal(shouldRefreshCanonicalHistory({ canonicalModifiedAt: at(2), persistedCanonicalModifiedAt: at(1), canonicalEntryCount: 50, persistedCanonicalEntryCount: 50 }), true, 'a newer canonical transcript requests background reconciliation')
+assert.equal(shouldRefreshCanonicalHistory({ canonicalModifiedAt: at(1), persistedCanonicalModifiedAt: at(1), canonicalEntryCount: 49, persistedCanonicalEntryCount: 50 }), true, 'canonical truncation requests background reconciliation even when local counters include extra activity kinds')
+assert.equal(shouldRefreshCanonicalHistory({ canonicalModifiedAt: at(1), persistedCanonicalModifiedAt: null, canonicalEntryCount: 50, persistedCanonicalEntryCount: null }), true, 'legacy threads reconcile once to persist an explicit canonical revision')
+const refreshTracker = new CanonicalHistoryRefreshTracker()
+const firstRefreshGeneration = refreshTracker.mark('canonical:test')
+const secondRefreshGeneration = refreshTracker.mark('canonical:test')
+assert.equal(refreshTracker.clearIfCurrent('canonical:test', firstRefreshGeneration), false, 'an older in-flight refresh cannot erase a newer transcript change')
+assert.equal(refreshTracker.current('canonical:test'), secondRefreshGeneration)
+assert.equal(refreshTracker.clearIfCurrent('canonical:test', secondRefreshGeneration), true)
 const messages: AssistantMessage[] = []
 const activities: AssistantActivity[] = []
 const proposedPlans: AssistantProposedPlan[] = []
@@ -325,6 +336,12 @@ assert.deepEqual(parsedCompactedPayload.paths, ['assets/large-image.png'], 'payl
 assert.equal(parsedCompactedPayload.historyBodyRef.entryId, 'entry:oversized-read', 'payload compaction preserves deferred-output hydration identity')
 assert.equal(parsedCompactedPayload.toolCallId, 'oversized-read')
 assert.equal('result' in parsedCompactedPayload, false, 'payload compaction removes the embedded result body')
+
+const serviceSource = readFileSync(new URL('../src/main/assistant/service.ts', import.meta.url), 'utf8')
+const detailBootstrapSource = serviceSource.split('async getThreadDetailBootstrap')[1]?.split('async getHistoryPage')[0] || ''
+assert.ok(detailBootstrapSource.indexOf('const detail = await this.persistence.readThreadDetail') < detailBootstrapSource.indexOf('void this.ensureCanonicalHistoryLoaded'), 'chat bootstrap must return bounded local history before canonical reconciliation')
+assert.doesNotMatch(serviceSource.split('async selectSession')[1]?.split('async selectThread')[0] || '', /await this\.refreshSelectedCanonicalPresence/, 'session selection cannot wait for remote presence refresh')
+assert.doesNotMatch(serviceSource.split('async selectThread')[1]?.split('async getThreadDetailBootstrap')[0] || '', /await this\.refreshSelectedCanonicalPresence/, 'thread selection cannot wait for remote presence refresh')
 
 const virtualTimelineSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantVirtualTimeline.tsx', import.meta.url), 'utf8')
 assert.equal(virtualTimelineSource.includes('initialScrollAtEnd'), true, 'LegendList owns initial positioning at the newest row')

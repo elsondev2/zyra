@@ -370,7 +370,9 @@ function readAssistantSessionSummaries(db: SqlDatabase, playground: AssistantSna
             created_at,
             updated_at,
             latest_turn_json,
-            active_plan_json
+            active_plan_json,
+            canonical_history_modified_at,
+            canonical_history_entry_count
         FROM assistant_threads
         ORDER BY session_id ASC, updated_at DESC, id DESC
     `)[0]?.values || []
@@ -404,6 +406,8 @@ function readAssistantSessionSummaries(db: SqlDatabase, playground: AssistantSna
             webSearch: typeof row[17] === 'number' ? row[17] === 1 : null,
             webFetch: typeof row[18] === 'number' ? row[18] === 1 : null,
             state: String(row[19] || 'idle') as AssistantThread['state'],
+            canonicalHistoryModifiedAt: toNullableString(row[26]),
+            canonicalHistoryEntryCount: typeof row[27] === 'number' ? row[27] : null,
             canonicalPresence: parseJson(row[20], undefined),
             lastError: toNullableString(row[21]),
             createdAt: String(row[22] || new Date(0).toISOString()),

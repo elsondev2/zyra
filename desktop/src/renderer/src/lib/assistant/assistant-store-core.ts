@@ -143,7 +143,6 @@ class AssistantStore {
             try {
                 const bootstrap = await window.devscope.assistant.bootstrap()
                 const bootstrapSnapshot = materializeAssistantShellSnapshot(bootstrap.snapshot)
-                const hasKnownModels = bootstrapSnapshot.knownModels.length > 0
                 let clientSnapshot = bootstrapSnapshot
                 let clientStatus = bootstrap.status
 
@@ -157,7 +156,7 @@ class AssistantStore {
                     return {
                         snapshot: clientSnapshot,
                         status: clientStatus,
-                        modelsLoading: !hasKnownModels,
+                        modelsLoading: false,
                         error: null
                     }
                 })
@@ -179,7 +178,7 @@ class AssistantStore {
                     status: clientStatus,
                     hydrating: false,
                     hydrated: true,
-                    modelsLoading: !hasKnownModels,
+                    modelsLoading: false,
                     error: null
                 })
 
@@ -188,10 +187,6 @@ class AssistantStore {
                     if (shouldRestoreConnection) {
                         this.warmSessionConnection(selectedSessionId, activeThreadId, true)
                     }
-                }
-
-                if (!hasKnownModels) {
-                    void this.refreshModels(false)
                 }
             } catch (error) {
                 const message = error instanceof Error ? error.message : 'Failed to load assistant.'

@@ -16,6 +16,7 @@ Status words used below:
 - [Model support](guides/model-support.md) — **Current.** Supported providers/models and deferred compatibility work.
 - [Agent-control security and operations](security/agent-control.md) — **Current.** Authority, approval, transport, and incident boundaries.
 - [Parallel agent build runbook](runbooks/parallel-agent-build.md) — **Current.** Procedure still consumed by the autonomous coordinator scripts.
+- [Desktop performance budget](performance/desktop-resource-budget.md) — **Current.** Reproducible startup, chat latency, CPU, memory, and profile-growth budgets with the latest measured baseline.
 
 ## Architecture
 

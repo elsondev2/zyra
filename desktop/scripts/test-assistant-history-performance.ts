@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { performance } from 'node:perf_hooks'
 import initSqlJs from 'sql.js/dist/sql-asm.js'
 import { createAssistantLongHistoryFixture } from './fixtures/assistant-long-history-fixture'
@@ -59,6 +60,8 @@ assert.equal(reviewIndex.turns[0]?.response?.text.includes('Fixture result 1000'
 assert.deepEqual(reviewIndex.turns[0]?.changes.map((change) => change.filePath), ['src/fixture-1000.ts'])
 assert.ok(reviewIndexPayloadBytes < fullPayloadBytes / 2, 'Review index payload must stay far smaller than the full transcript and tool history')
 assert.ok(entries.length > 0)
+const assistantPageSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantPage.tsx', import.meta.url), 'utf8')
+assert.doesNotMatch(assistantPageSource, /requestIdleCallback\(preload/, 'the 800 KiB Review inspector must stay lazy until the user opens it')
 
 console.log(JSON.stringify({
     fixture: { messages: fullMessageRows.length, activities: fullActivityRows.length },

@@ -297,9 +297,10 @@ function upsertAssistantThreadSummary(db: SqlDatabase, sessionId: string, thread
         INSERT INTO assistant_threads (
             id, session_id, provider_thread_id, source, parent_thread_id, provider_parent_thread_id, subagent_depth, agent_nickname, agent_role,
             model, thinking, profile, cwd, message_count, last_seen_completed_turn_id,
-            runtime_mode, interaction_mode, web_search, web_fetch, state, canonical_presence_json, last_error, created_at, updated_at, latest_turn_json, active_plan_json
+            runtime_mode, interaction_mode, web_search, web_fetch, state, canonical_presence_json, last_error, created_at, updated_at, latest_turn_json, active_plan_json,
+            canonical_history_modified_at, canonical_history_entry_count
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             session_id = excluded.session_id,
             provider_thread_id = excluded.provider_thread_id,
@@ -325,7 +326,9 @@ function upsertAssistantThreadSummary(db: SqlDatabase, sessionId: string, thread
             created_at = excluded.created_at,
             updated_at = excluded.updated_at,
             latest_turn_json = excluded.latest_turn_json,
-            active_plan_json = excluded.active_plan_json
+            active_plan_json = excluded.active_plan_json,
+            canonical_history_modified_at = excluded.canonical_history_modified_at,
+            canonical_history_entry_count = excluded.canonical_history_entry_count
     `, [
         thread.id,
         sessionId,
@@ -352,7 +355,9 @@ function upsertAssistantThreadSummary(db: SqlDatabase, sessionId: string, thread
         thread.createdAt,
         thread.updatedAt,
         jsonStringify(thread.latestTurn),
-        jsonStringify(thread.activePlan)
+        jsonStringify(thread.activePlan),
+        thread.canonicalHistoryModifiedAt || null,
+        Number.isFinite(thread.canonicalHistoryEntryCount) ? thread.canonicalHistoryEntryCount! : null
     ])
 }
 

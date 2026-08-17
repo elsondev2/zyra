@@ -43,6 +43,8 @@ const packageScript = readFileSync(path.join(desktopRoot, 'scripts', 'release', 
 const packagedValidator = readFileSync(path.join(desktopRoot, 'scripts', 'release', 'validate-packaged-app.mjs'), 'utf8')
 const signatureVerifier = readFileSync(path.join(desktopRoot, 'scripts', 'release', 'verify-platform-signature.mjs'), 'utf8')
 const preflightSource = readFileSync(path.join(desktopRoot, 'scripts', 'release', 'preflight.mjs'), 'utf8')
+const persistenceSource = readFileSync(path.join(desktopRoot, 'src', 'main', 'assistant', 'persistence.ts'), 'utf8')
+const nativeSqliteSource = readFileSync(path.join(desktopRoot, 'src', 'main', 'assistant', 'native-sqlite-adapter.ts'), 'utf8')
 assert(packageScript.includes('validate-packaged-app.mjs'), 'every native package must validate its installed resource layout')
 assert(packageScript.includes('`--version=${version}`'), 'signature verification must receive the exact release version')
 assert(signatureVerifier.includes('platformReleaseContract(version, platform)'), 'signature verification must use the canonical artifact name')
@@ -52,6 +54,9 @@ assert(packagedValidator.includes("ZYRA_PACKAGED_SMOKE: '1'"), 'packaged launch 
 assert(preflightSource.includes("const taggedPublication = mode === 'tag'"), 'every public tag must enter the signing gate')
 assert(preflightSource.includes("require_signing=${taggedPublication ? 'true' : 'false'}"), 'alpha, beta, and stable tags must all require native signing')
 assert(!preflightSource.includes('stablePublication'), 'prerelease tags must not bypass signing/notarization')
+assert.match(persistenceSource, /Boolean\(process\.versions\.electron\)[\s\S]*openNativeAssistantDatabase/, 'Electron production persistence must use disk-backed native SQLite')
+assert.match(nativeSqliteSource, /node:sqlite[\s\S]*journal_mode = WAL/, 'native Assistant persistence must use Electron’s bundled SQLite with WAL durability')
+assert(desktopPackage.scripts['test:native-sqlite'].includes('test-native-sqlite-adapter.mjs'))
 
 const globalResources = build.extraResources
 assert(globalResources.some((entry: { from: string; to: string }) => entry.from === '../LICENSE' && entry.to === 'LICENSE'))

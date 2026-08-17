@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CanonicalChatCatalog } from "../src/agent-server/catalog.mjs";
 import { CanonicalChatIndex } from "../src/agent-server/chat-index.mjs";
 import { MAX_EAGER_HISTORY_TOOL_RESULT_BYTES, projectLoadedHistoryEntries } from "../src/agent-server/history-bodies.mjs";
-import { getProjectSessionsDir } from "../src/zyra-sdk.mjs";
+import { getProjectSessionsDir } from "../src/project-paths.mjs";
+
+const catalogSource = readFileSync(new URL('../src/agent-server/catalog.mjs', import.meta.url), 'utf8');
+const chatIndexSource = readFileSync(new URL('../src/agent-server/chat-index.mjs', import.meta.url), 'utf8');
+assert.doesNotMatch(catalogSource, /zyra-sdk\.mjs/, 'catalog startup must not import the full Zyra runtime');
+assert.doesNotMatch(chatIndexSource, /zyra-sdk\.mjs/, 'chat indexing must keep its project path helper narrow');
 
 const root = mkdtempSync(path.join(os.tmpdir(), "zyra-chat-index-test-"));
 const project = path.join(root, "project");
@@ -13,7 +18,15 @@ const reassignedProject = path.join(root, "reassigned-project");
 const stateDirectory = path.join(root, "state");
 const sessionsDirectory = getProjectSessionsDir(project);
 const sessionPath = path.join(sessionsDirectory, "canonical.jsonl");
+const partialProject = path.join(root, "partial-project");
+const partialSessionsDirectory = getProjectSessionsDir(partialProject);
+const partialSessionPath = path.join(partialSessionsDirectory, "partial.jsonl");
+const rewriteProject = path.join(root, "rewrite-project");
+const rewriteSessionsDirectory = getProjectSessionsDir(rewriteProject);
+const rewriteSessionPath = path.join(rewriteSessionsDirectory, "rewrite.jsonl");
 mkdirSync(sessionsDirectory, { recursive: true });
+mkdirSync(partialSessionsDirectory, { recursive: true });
+mkdirSync(rewriteSessionsDirectory, { recursive: true });
 mkdirSync(reassignedProject, { recursive: true });
 
 const oversizedRecent = projectLoadedHistoryEntries([{
@@ -82,6 +95,27 @@ try {
   const appended = await index.listProjects([project]);
   assert.equal(appended[0].messageCount, 4);
   assert.equal(appended[0].errorCount, 1);
+
+  const partialSession = JSON.stringify({ type: 'session', id: 'canonical:partial', timestamp: '2026-07-01T00:00:00.000Z', cwd: partialProject });
+  const partialMessage = JSON.stringify({ type: 'message', id: 'entry:partial', message: { id: 'message:partial', role: 'user', content: [{ type: 'text', text: 'completed later' }] } });
+  const partialSplit = Math.floor(partialMessage.length / 2);
+  writeFileSync(partialSessionPath, `${partialSession}\n${partialMessage.slice(0, partialSplit)}`);
+  let partial = await index.listProjects([partialProject]);
+  assert.equal(partial[0].messageCount, 0, 'an unterminated partial JSONL tail is retained for the next scan');
+  appendFileSync(partialSessionPath, `${partialMessage.slice(partialSplit)}\n`);
+  partial = await index.listProjects([partialProject]);
+  assert.equal(partial[0].messageCount, 1, 'completing a partial JSONL tail indexes the entry exactly once');
+
+  const rewriteSession = JSON.stringify({ type: 'session', id: 'canonical:rewrite', timestamp: '2026-07-01T00:00:00.000Z', cwd: rewriteProject });
+  const rewriteLine = (text) => JSON.stringify({ type: 'message', id: 'entry:rewrite', message: { id: 'message:rewrite', role: 'user', content: [{ type: 'text', text }] } });
+  writeFileSync(rewriteSessionPath, `${rewriteSession}\n${rewriteLine('AAAA')}\n`);
+  let rewritten = await index.listProjects([rewriteProject]);
+  assert.equal(rewritten[0].title, 'AAAA');
+  writeFileSync(rewriteSessionPath, `${rewriteSession}\n${rewriteLine('BBBB')}\n`);
+  const rewriteTime = new Date(Date.now() + 2_000);
+  utimesSync(rewriteSessionPath, rewriteTime, rewriteTime);
+  rewritten = await index.listProjects([rewriteProject]);
+  assert.equal(rewritten[0].title, 'BBBB', 'a same-size transcript rewrite forces a complete rescan');
 
   const catalog = new CanonicalChatCatalog({ stateDirectory });
   catalog.registerProject(project);
