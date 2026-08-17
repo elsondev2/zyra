@@ -15,6 +15,8 @@ import type {
     AssistantFleetOperationResultPayload,
     AssistantFleetSnapshotPayload,
     AssistantGetHistoryPageInput,
+    AssistantHistoryBodyResultPayload,
+    AssistantHydrateHistoryBodyInput,
     AssistantGetReviewIndexInput,
     AssistantGetSessionTurnUsageInput,
     AssistantGetTurnDetailInput,
@@ -439,6 +441,7 @@ export interface DevScopeAssistantApi {
     selectThread: (input: AssistantSelectThreadInput) => Promise<DevScopeResult<{ sessionId: string; threadId: string; snapshot?: AssistantSnapshot }>>
     getThreadDetailBootstrap: (threadId: string) => Promise<DevScopeResult<AssistantThreadDetailResultPayload>>
     getHistoryPage: (input: AssistantGetHistoryPageInput) => Promise<DevScopeResult<AssistantHistoryPageResultPayload>>
+    hydrateHistoryBody: (input: AssistantHydrateHistoryBodyInput) => Promise<DevScopeResult<AssistantHistoryBodyResultPayload>>
     getReviewIndex: (input: AssistantGetReviewIndexInput) => Promise<DevScopeResult<AssistantReviewIndexResultPayload>>
     getTurnDetail: (input: AssistantGetTurnDetailInput) => Promise<DevScopeResult<AssistantTurnDetailResultPayload>>
     searchTurns: (input: AssistantSearchTurnsInput) => Promise<DevScopeResult<AssistantSearchTurnsResultPayload>>

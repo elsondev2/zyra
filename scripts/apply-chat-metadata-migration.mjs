@@ -12,6 +12,7 @@ import {
 import path from "node:path";
 import os from "node:os";
 import { DatabaseSync, backup as sqliteBackup } from "node:sqlite";
+import { getAgentServerPaths } from "../src/agent-server/paths.mjs";
 
 const CONFIRMATION = "APPLY_VERIFIED_CHAT_MIGRATION";
 const args = parseArgs(process.argv.slice(2));
@@ -386,7 +387,7 @@ function activityText(row, payload) {
 
 function assertIdleWindow({ liveDbPath, stateDirectory }) {
   if (!existsSync(liveDbPath)) throw new Error(`Live Desktop database is missing: ${liveDbPath}`);
-  const descriptorPath = path.join(stateDirectory, "agent-server-default.json");
+  const descriptorPath = getAgentServerPaths({ stateDirectory, channel: "default" }).descriptorFile;
   if (existsSync(descriptorPath)) {
     try {
       const descriptor = JSON.parse(readFileSync(descriptorPath, "utf8"));

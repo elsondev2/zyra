@@ -38,6 +38,7 @@ import {
     DesktopAgentServerConnection,
     type CanonicalAgentChat,
     type CanonicalAgentChatHistory,
+    type CanonicalAgentChatHistoryOptions,
     type ZyraWorkerEventMetadata,
     type ZyraWorkerLike
 } from './zyra-agent-server-worker'
@@ -1003,9 +1004,26 @@ export class ZyraPiRuntime extends EventEmitter {
     async readCanonicalChatHistory(
         session: string,
         project?: string,
-        options: { before?: string | null; limit?: number } = {}
+        options: CanonicalAgentChatHistoryOptions = {}
     ): Promise<CanonicalAgentChatHistory | null> {
         return this.getAgentServerConnection(resolveZyraRoot()).readCanonicalChatHistory(session, project, options)
+    }
+
+    async readCanonicalHistoryEntryBody(
+        session: string,
+        project: string | undefined,
+        ref: Record<string, unknown>
+    ): Promise<Record<string, unknown> | null> {
+        return this.getAgentServerConnection(resolveZyraRoot()).readCanonicalHistoryEntryBody(session, project, ref)
+    }
+
+    async searchCanonicalToolOutputs(
+        session: string,
+        project: string | undefined,
+        query: string,
+        limit?: number
+    ): Promise<Array<Record<string, unknown>>> {
+        return this.getAgentServerConnection(resolveZyraRoot()).searchCanonicalToolOutputs(session, project, query, limit)
     }
 
     async appendCanonicalMessage(
@@ -1590,7 +1608,7 @@ export class ZyraPiRuntime extends EventEmitter {
     private getAgentServerConnection(root: string): DesktopAgentServerConnection {
         if (!this.agentServerConnection) {
             this.agentServerConnection = new DesktopAgentServerConnection(root)
-            this.unsubscribeCatalogChanged = this.agentServerConnection.onCatalogChanged(() => this.emit('catalog.changed'))
+            this.unsubscribeCatalogChanged = this.agentServerConnection.onCatalogChanged((change) => this.emit('catalog.changed', change))
         }
         return this.agentServerConnection
     }

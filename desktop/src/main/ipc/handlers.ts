@@ -38,6 +38,7 @@ import {
     handleAssistantGetAccountOverview,
     handleAssistantGetFleetSnapshot,
     handleAssistantGetHistoryPage,
+    handleAssistantHydrateHistoryBody,
     handleAssistantGetReviewIndex,
     handleAssistantGetSessionTurnUsage,
     handleAssistantGetThreadDetailBootstrap,
@@ -310,6 +311,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(ASSISTANT_IPC.selectThread, requireCompletedSetup(handleAssistantSelectThread))
     ipcMain.handle(ASSISTANT_IPC.getThreadDetailBootstrap, requireCompletedSetup(handleAssistantGetThreadDetailBootstrap))
     ipcMain.handle(ASSISTANT_IPC.getHistoryPage, requireCompletedSetup(handleAssistantGetHistoryPage))
+    ipcMain.handle(ASSISTANT_IPC.hydrateHistoryBody, requireCompletedSetup(handleAssistantHydrateHistoryBody))
     ipcMain.handle(ASSISTANT_IPC.getReviewIndex, requireCompletedSetup(handleAssistantGetReviewIndex))
     ipcMain.handle(ASSISTANT_IPC.getTurnDetail, requireCompletedSetup(handleAssistantGetTurnDetail))
     ipcMain.handle(ASSISTANT_IPC.searchTurns, requireCompletedSetup(handleAssistantSearchTurns))

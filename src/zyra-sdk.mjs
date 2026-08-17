@@ -98,6 +98,7 @@ const commandCache = new Map();
 export const defaults = {
   piPackage: "@earendil-works/pi-coding-agent",
   root: ROOT,
+  dataRoot: path.resolve(process.env.ZYRA_DATA_ROOT || ROOT),
   project: path.resolve(process.env.ZYRA_CALLER_CWD ?? process.cwd()),
   prompt: path.join(ROOT, "prompts/zyra_system_prompt.md"),
   profileDir: path.join(ROOT, "prompts/profiles"),
@@ -562,11 +563,11 @@ function injectSurfaceGuide(session, surface) {
 function refreshZyraPromptContext(runtime, options = {}) {
   injectZyraGuide(runtime.session, readPrompt(defaults.prompt));
   injectSurfaceGuide(runtime.session, runtime.surface);
-  ensureZyraMemory(defaults.root);
+  ensureZyraMemory(defaults.dataRoot);
   if (options.runMemoryStartup) {
-    runtime.memoryStartup = runZyraMemoryStartup(defaults.root, runtime, { maxClaimed: 2 });
+    runtime.memoryStartup = runZyraMemoryStartup(defaults.dataRoot, runtime, { maxClaimed: 2 });
   }
-  injectLayeredMemory(runtime.session, defaults.root);
+  injectLayeredMemory(runtime.session, defaults.dataRoot);
   injectActiveProfile(runtime.session, runtime.profile ?? detectDefaultProfile(), runtime.project);
   runtime.projectMemory = injectProjectMemory(runtime.session, runtime.project);
 }
@@ -746,16 +747,16 @@ export async function createZyraSession(options = {}) {
     injectZyraGuide(result.session, readPrompt(defaults.prompt));
   }
   injectSurfaceGuide(result.session, options.surface);
-  ensureZyraMemory(ROOT);
+  ensureZyraMemory(defaults.dataRoot);
   const memoryStartup = options.skipMemoryStartup
     ? { claimed: 0, prepared: 0, pruned: 0, claims: [], preparedJobs: [], prunedThreadIds: [], skipped: true }
-    : runZyraMemoryStartup(ROOT, {
+    : runZyraMemoryStartup(defaults.dataRoot, {
       project,
       sessions,
       session: result.session,
     }, { maxClaimed: options.memoryStartupMaxClaimed ?? 2 });
   if (!options.skipMemoryInjection) {
-    injectLayeredMemory(result.session, ROOT);
+    injectLayeredMemory(result.session, defaults.dataRoot);
   }
   if (!options.skipProfileInjection) {
     injectActiveProfile(result.session, profile, project);
@@ -872,9 +873,17 @@ export async function loginZyraAuth(provider = "openai-codex", options = {}) {
   const tell = typeof options.onMessage === "function" ? options.onMessage : console.log;
   const handleAuth = typeof options.onAuth === "function" ? options.onAuth : null;
   const handleProgress = typeof options.onProgress === "function" ? options.onProgress : (message) => tell(message);
+  const manualCodePrompt = "Paste the authorization code or redirect URL:";
   const handlePrompt = typeof options.onPrompt === "function"
     ? options.onPrompt
-    : async (prompt) => askTerminal(prompt.message || "Paste the authorization code or redirect URL:");
+    : async (prompt) => askTerminal(prompt.message || manualCodePrompt);
+  const handleSelect = typeof options.onSelect === "function"
+    ? options.onSelect
+    : async (prompt) => {
+      const choices = Array.isArray(prompt?.options) ? prompt.options : [];
+      const preferred = choices.find((choice) => /browser|callback/i.test(`${choice.id} ${choice.label}`)) ?? choices[0];
+      return preferred?.id;
+    };
 
   await authStorage.login(provider, createBrowserOAuthLoginCallbacks({
     onAuth: (info) => {
@@ -896,8 +905,10 @@ export async function loginZyraAuth(provider = "openai-codex", options = {}) {
         },
     onPrompt: handlePrompt,
     onProgress: handleProgress,
-    onManualCodeInput: options.onManualCodeInput,
-    onSelect: options.onSelect,
+    onManualCodeInput: typeof options.onManualCodeInput === "function" ? options.onManualCodeInput : () => handlePrompt({
+      message: manualCodePrompt,
+    }),
+    onSelect: handleSelect,
     signal: options.signal,
   }));
 
@@ -1281,7 +1292,7 @@ async function preferDefaultModel(session, selector, options = {}) {
 
 async function createZyraMemoryWorkerSession({ model } = {}) {
   const worker = await createZyraSession({
-    project: defaults.root,
+    project: defaults.dataRoot,
     noSession: true,
     skipGuide: true,
     skipMemoryStartup: true,
@@ -1300,7 +1311,7 @@ async function createZyraMemoryWorkerSession({ model } = {}) {
   return worker;
 }
 
-function memoryRunner(root = defaults.root) {
+function memoryRunner(root = defaults.dataRoot) {
   return createZyraMemoryRunner({
     root,
     defaultModel: defaults.model,
@@ -1311,7 +1322,7 @@ function memoryRunner(root = defaults.root) {
 export async function runZyraPrompt(runtime, prompt, options = {}) {
   const beforeEntryCount = sessionEntries(runtime).length;
   const expanded = expandFileMentions(runtime, prompt);
-  injectLayeredMemory(runtime.session, defaults.root, expanded.text);
+  injectLayeredMemory(runtime.session, defaults.dataRoot, expanded.text);
   try {
     await runtime.session.prompt(expanded.text, { source: "interactive", images: options.images });
   } finally {
@@ -1323,7 +1334,7 @@ export async function runZyraPrompt(runtime, prompt, options = {}) {
 export async function queueZyraMidRunInput(runtime, prompt, options = {}) {
   const mode = normalizeInterruptModePreference(options.mode) ?? runtime.interruptMode ?? "steer";
   const expanded = expandFileMentions(runtime, prompt);
-  injectLayeredMemory(runtime.session, defaults.root, expanded.text);
+  injectLayeredMemory(runtime.session, defaults.dataRoot, expanded.text);
   if (mode === "queue") {
     await runtime.session.followUp(expanded.text, options.images);
   } else {
@@ -1345,7 +1356,7 @@ export async function runZyraBackgroundTextPrompt(runtime, prompt) {
 export async function runZyraPrintPrompt(runtime, prompt, options = {}) {
   const beforeEntryCount = sessionEntries(runtime).length;
   const expanded = expandFileMentions(runtime, prompt);
-  injectLayeredMemory(runtime.session, defaults.root, expanded.text);
+  injectLayeredMemory(runtime.session, defaults.dataRoot, expanded.text);
   try {
     await runtime.session.prompt(expanded.text, { source: "print", images: options.images });
   } finally {
@@ -1377,7 +1388,7 @@ export function markRuntimeMemoryPollutedFromTurn(runtime, expanded = {}, option
   if (!threadId || !sessionFile) {
     return { changed: false, reason: "no persisted thread" };
   }
-  return markZyraThreadMemoryPolluted(defaults.root, threadId, [...new Set(reasons)].join(", "));
+  return markZyraThreadMemoryPolluted(defaults.dataRoot, threadId, [...new Set(reasons)].join(", "));
 }
 
 function externalContextReasons(runtime, expanded = {}, options = {}, beforeEntryCount = 0) {
@@ -1488,7 +1499,7 @@ export function describeRuntime(runtime) {
     contextUsage,
     projectMemory: runtime.projectMemory ?? [],
     memoryOverview: createZyraMemoryController(runtime).overview(),
-    recommendedPrompts: buildRecommendedPrompts(defaults.root),
+    recommendedPrompts: buildRecommendedPrompts(defaults.dataRoot),
     customCommands: listCustomCommands(runtime),
     terminalTheme: runtime.terminalTheme?.name ?? DEFAULT_TERMINAL_THEME,
     themes: listZyraThemes(runtime),
@@ -1841,20 +1852,20 @@ function projectPreferencesFile(project) {
 }
 
 export function buildZyraConsolidationPrompt(runtime) {
-  return buildConsolidationPrompt({ ...runtime, root: defaults.root }, findProjectMemoryFiles(runtime.project));
+  return buildConsolidationPrompt({ ...runtime, root: defaults.dataRoot }, findProjectMemoryFiles(runtime.project));
 }
 
 export async function runZyraMemoryConsolidation(runtime, options = {}) {
-  const root = path.resolve(options.root ?? defaults.root);
+  const root = path.resolve(options.root ?? defaults.dataRoot);
   return memoryRunner(root).runConsolidation(runtime, { ...options, root });
 }
 
 export function startZyraMemoryBackgroundStartup(runtime, options = {}) {
-  return memoryRunner(defaults.root).startBackgroundStartup(runtime, options);
+  return memoryRunner(defaults.dataRoot).startBackgroundStartup(runtime, options);
 }
 
 export function createZyraMemoryController(runtime, options = {}) {
-  const root = path.resolve(options.root ?? defaults.root);
+  const root = path.resolve(options.root ?? defaults.dataRoot);
   return createMemoryController({
     root,
     runtime,

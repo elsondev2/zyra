@@ -975,6 +975,33 @@ assert.match(partialReadMarkup, />Read<\/span>/, 'collapsed Read rows identify t
 assert.equal(partialReadMarkup.includes('4ms'), false, 'Read rows do not spend their quiet right edge on millisecond timing')
 assert.equal(toolCardSource.includes('buildAssistantReadPreview(authoritativeRawOutput)'), true, 'expanded Read output uses the bounded specialized preview')
 assert.equal(toolCardSource.includes('Showing first ${readPreview.displayedLines} of ${readPreview.totalReadLines} lines returned by Read.'), true, 'expanded long reads explain the 50-line presentation cap')
+const deferredReadActivity = activity({ id: 'deferred-read', turnId: 'read-presentation', millisecond: 1693 })
+deferredReadActivity.kind = 'file-read'
+deferredReadActivity.summary = 'Read file'
+deferredReadActivity.detail = 'src/deferred.ts'
+deferredReadActivity.payload = {
+    status: 'completed',
+    toolName: 'read',
+    paths: ['src/deferred.ts'],
+    historyBodyRef: {
+        version: 1,
+        canonicalChatId: 'canonical:test',
+        entryIndex: 10,
+        entryId: 'entry:deferred',
+        entrySha256: 'a'.repeat(64),
+        toolCallId: 'tool:deferred',
+        toolName: 'read',
+        bodyBytes: 500_000,
+        contentTypes: ['text'],
+        imageCount: 0
+    }
+}
+const deferredReadMarkup = renderToStaticMarkup(createElement(TimelineToolCallCard, { activity: deferredReadActivity }))
+assert.equal(deferredReadMarkup.includes('src/deferred.ts'), true, 'deferred reads retain their compact metadata row')
+assert.equal(deferredReadMarkup.includes('data-state="closed"'), true, 'deferred bodies stay closed until the user asks for them')
+assert.equal(deferredReadMarkup.includes('no output'), false, 'a deferred body is not mislabeled as an empty tool result')
+assert.equal(toolCardSource.includes('assistant.hydrateHistoryBody'), true, 'expanding a deferred tool card requests its canonical body on demand')
+assert.equal(toolCardSource.includes('Loading historical output…'), true, 'deferred tool expansion has an explicit loading state')
 assert.equal(toolCardSource.includes('bg-sky-400 shadow-'), false, 'new-file blue dots are removed')
 assert.equal(toolCardSource.includes('TimelineEditedFileRow'), false, 'expanded file changes do not add a duplicate file row')
 assert.equal(toolCardSource.includes('Diff preview'), false, 'expanded file changes do not add a wrapper heading above the native diff header')

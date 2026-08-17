@@ -7,6 +7,10 @@ import {
     selectGitHubReleaseFeed,
     type GitHubRelease
 } from '../src/main/update/github-release-feed'
+import { getAutoUpdateDisabledReason } from '../src/main/update/update-state'
+
+assert.match(getAutoUpdateDisabledReason({ isPackaged: true, disabledByEnv: false, platform: 'linux', appImagePath: null }) || '', /AppImage/)
+assert.equal(getAutoUpdateDisabledReason({ isPackaged: true, disabledByEnv: false, platform: 'linux', appImagePath: '/tmp/Zyra.AppImage' }), null)
 
 function release(
     version: string,

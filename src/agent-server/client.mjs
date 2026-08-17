@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { constants as fsConstants, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { getAgentServerPaths } from "./paths.mjs";
 import {
@@ -18,6 +19,7 @@ export class ZyraAgentServerClient extends EventEmitter {
     super();
     this.root = path.resolve(options.root || path.resolve(import.meta.dirname, "../.."));
     this.paths = getAgentServerPaths(options);
+    this.dataRoot = path.resolve(options.dataRoot || process.env.ZYRA_DATA_ROOT || os.homedir());
     this.clientId = String(options.clientId || `agent-client:${process.pid}`);
     this.surface = String(options.surface || "unknown");
     this.authorities = Array.isArray(options.authorities) ? [...new Set(options.authorities)] : [];
@@ -158,11 +160,9 @@ export class ZyraAgentServerClient extends EventEmitter {
   startServer() {
     const entry = path.join(this.root, "src", "agent-server", "main.mjs");
     // Electron's Windows executable exits immediately when launched detached with
-    // ignored stdio, even with ELECTRON_RUN_AS_NODE. The normal Node executable
-    // keeps the shared agent server alive independently of the desktop window.
-    const executable = process.versions.electron
-      ? String(process.env.ZYRA_NODE_EXECUTABLE || "node")
-      : process.execPath;
+    // ignored stdio, so Windows carries Node. Signed macOS/Linux Electron binaries
+    // run the same entrypoint with ELECTRON_RUN_AS_NODE.
+    const { executable, electronAsNode } = resolveAgentServerNodeLaunch(this.dataRoot);
     const child = spawn(executable, [entry, "--channel", this.paths.channel], {
       cwd: this.root,
       detached: true,
@@ -170,7 +170,10 @@ export class ZyraAgentServerClient extends EventEmitter {
       stdio: "ignore",
       env: {
         ...process.env,
-        ZYRA_ROOT: this.root
+        ZYRA_ROOT: this.root,
+        ZYRA_DATA_ROOT: this.dataRoot,
+        ZYRA_STATE_DIR: this.paths.stateDirectory,
+        ...(electronAsNode ? { ELECTRON_RUN_AS_NODE: "1" } : {})
       }
     });
     child.once("error", (error) => this.emit("server-start-error", error));
@@ -245,6 +248,36 @@ export class ZyraAgentServerClient extends EventEmitter {
     }
     this.pending.clear();
   }
+}
+
+function resolveAgentServerNodeLaunch(dataRoot) {
+  if (!process.versions.electron) return { executable: process.execPath, electronAsNode: false };
+  const configured = String(process.env.ZYRA_NODE_EXECUTABLE || "");
+  if (configured) return { executable: configured, electronAsNode: false };
+  if (process.platform !== "win32") return { executable: process.execPath, electronAsNode: true };
+  const packaged = process.resourcesPath ? path.join(process.resourcesPath, "zyra-node", "node.exe") : "";
+  return {
+    executable: packaged && existsSync(packaged) ? cachePackagedWindowsNode(packaged, dataRoot) : "node",
+    electronAsNode: false
+  };
+}
+
+function cachePackagedWindowsNode(source, dataRoot) {
+  const sourceSize = statSync(source).size;
+  const directory = path.join(dataRoot, ".zyra", "runtime");
+  const target = path.join(directory, `node-${process.versions.node}-${sourceSize}.exe`);
+  if (existsSync(target) && statSync(target).size !== sourceSize) rmSync(target, { force: true });
+  if (!existsSync(target)) {
+    mkdirSync(directory, { recursive: true });
+    try { copyFileSync(source, target, fsConstants.COPYFILE_EXCL); }
+    catch (error) { if (error?.code !== "EEXIST") throw error; }
+  }
+  if (!existsSync(target) || statSync(target).size !== sourceSize) throw new Error("Cached Node runtime is incomplete.");
+  for (const name of readdirSync(directory)) {
+    if (name === path.basename(target) || !/^node-.*\.exe$/i.test(name)) continue;
+    try { rmSync(path.join(directory, name), { force: true }); } catch {}
+  }
+  return target;
 }
 
 function readDescriptor(file) {

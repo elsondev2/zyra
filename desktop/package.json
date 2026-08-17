@@ -180,6 +180,13 @@
                 ]
             },
             {
+                "from": ".release/zyra-node",
+                "to": "zyra-node",
+                "filter": [
+                    "**/*"
+                ]
+            },
+            {
                 "from": "../extensions/zyra-browser-control/dist/unpacked",
                 "to": "zyra-browser-control-extension",
                 "filter": [

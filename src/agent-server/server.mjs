@@ -199,6 +199,10 @@ export class ZyraAgentServer extends EventEmitter {
   }
 
   getDesktopAuthorityHash() {
+    try {
+      const persisted = readFileSync(this.paths.desktopAuthorityFile, "utf8").trim();
+      if (persisted) this.desktopAuthorityHash = persisted;
+    } catch {}
     return this.desktopAuthorityHash;
   }
 
@@ -227,6 +231,14 @@ export class ZyraAgentServer extends EventEmitter {
     }
     if (method === "catalog.history") {
       return { history: await this.catalog.history(params.session, params) };
+    }
+    if (method === "catalog.entry.body") {
+      const body = await this.catalog.historyEntryBody(params.session, params.ref, params);
+      return { body };
+    }
+    if (method === "catalog.tool-output.search") {
+      const matches = await this.catalog.searchToolResults(params.session, params.query, params);
+      return { matches };
     }
     if (method === "catalog.message.append" || method === "catalog.message.find") {
       if (!client.canControl) {
@@ -567,8 +579,8 @@ class ServerOwnedSession {
     if (!this.connectPromise) {
       this.connectPromise = this.worker.request("connect", payload, { timeoutMs: BRIDGE_CONNECT_TIMEOUT_MS })
         .then((result) => {
-          this.connectedResult = result;
-          return result;
+          this.connectedResult = projectConnectedResult(result);
+          return this.connectedResult;
         })
         .catch((error) => {
           this.connectPromise = null;
@@ -856,4 +868,12 @@ class ServerOwnedSession {
     this.clients.clear();
     this.controlOwners.clear();
   }
+}
+
+function projectConnectedResult(connectedResult) {
+  if (!Array.isArray(connectedResult?.messages)) return connectedResult;
+  return {
+    ...connectedResult,
+    messages: connectedResult.messages.filter((message) => message?.role !== "toolResult")
+  };
 }

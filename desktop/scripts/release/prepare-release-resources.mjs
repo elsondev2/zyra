@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { access, readFile, rm } from 'node:fs/promises'
+import { access, copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { normalizeReleasePlatform } from './release-contract.mjs'
@@ -46,6 +46,17 @@ await requireFile(path.join(extensionRoot, 'dist', 'unpacked', 'manifest.json'),
 await requireFile(path.join(extensionRoot, 'dist', 'zyra-browser-control.zip'), 'Browser extension ZIP')
 
 await run(process.execPath, [path.join(scriptDirectory, 'stage-zyra-runtime.mjs')], desktopRoot)
+
+const nodeRuntimeDirectory = path.join(desktopRoot, '.release', 'zyra-node')
+await rm(nodeRuntimeDirectory, { recursive: true, force: true })
+await mkdir(nodeRuntimeDirectory, { recursive: true })
+if (process.platform === 'win32') {
+    const nodeRuntimePath = path.join(nodeRuntimeDirectory, 'node.exe')
+    await copyFile(process.execPath, nodeRuntimePath)
+    await requireFile(nodeRuntimePath, 'Pinned Windows Node runtime')
+} else {
+    await writeFile(path.join(nodeRuntimeDirectory, 'electron-run-as-node.txt'), 'Unix packages use the signed Electron executable with ELECTRON_RUN_AS_NODE=1.\n', 'utf8')
+}
 
 const sidecarOutput = path.join(desktopRoot, '.release', 'zyra-computer-use', 'win-x64')
 await rm(path.join(desktopRoot, '.release', 'zyra-computer-use'), { recursive: true, force: true })

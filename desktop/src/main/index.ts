@@ -665,6 +665,12 @@ if (!hasSingleInstanceLock) {
     app.quit()
 }
 
+app.on('open-file', (event, filePath) => {
+    event.preventDefault()
+    const shellLaunchTarget = resolveShellLaunchTarget(filePath)
+    if (shellLaunchTarget) handleShellLaunchTarget(shellLaunchTarget)
+})
+
 app.on('second-instance', (_event, argv) => {
     const shellLaunchTarget = extractShellLaunchTargetFromArgv(argv)
     if (shellLaunchTarget) {

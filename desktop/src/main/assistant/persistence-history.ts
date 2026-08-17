@@ -147,6 +147,11 @@ function readActivities(db: SqlDatabase, threadId: string, lower: AssistantTimel
     return descending ? records.reverse() : records
 }
 
+export function readAssistantActivity(db: SqlDatabase, threadId: string, activityId: string): AssistantActivity | null {
+    const row = db.exec(`SELECT id, kind, tone, summary, detail, turn_id, timeline_sequence, created_at, ${assistantActivityPayloadColumns()} FROM assistant_activities WHERE thread_id = ? AND id = ? LIMIT 1`, [threadId, activityId])[0]?.values?.[0]
+    return row ? mapActivity(row) : null
+}
+
 function readPlans(db: SqlDatabase, threadId: string, lower: AssistantTimelineOrderKey | null, upper: AssistantTimelineOrderKey | null, limit?: number): AssistantProposedPlan[] {
     const range = keyRangeSql('plan', lower, upper)
     const descending = typeof limit === 'number'
@@ -560,6 +565,39 @@ export function searchAssistantTurns(db: SqlDatabase, threadId: string, query: s
         ORDER BY assistant_turns.requested_at DESC, assistant_turns.id DESC
         LIMIT ?
     `, [threadId, like, like, like, limit])[0]?.values || []
+    return { threadId, turnIds: rows.map((row) => String(row[0] || '')).filter(Boolean) }
+}
+
+export function mergeAssistantSearchTurnIds(
+    db: SqlDatabase,
+    threadId: string,
+    existingTurnIds: string[],
+    activityIds: string[],
+    requestedLimit?: number
+): AssistantSearchTurnsResult {
+    if (activityIds.length === 0) return { threadId, turnIds: existingTurnIds }
+    const limit = Math.max(1, Math.min(200, Math.floor(requestedLimit || 100)))
+    const turnPlaceholders = existingTurnIds.map(() => '?').join(', ')
+    const activityPlaceholders = activityIds.map(() => '?').join(', ')
+    const existingCandidates = existingTurnIds.length > 0
+        ? `UNION SELECT id FROM assistant_turns WHERE thread_id = ? AND id IN (${turnPlaceholders})`
+        : ''
+    const rows = db.exec(`
+        WITH candidates(turn_id) AS (
+            SELECT turn_id FROM assistant_activities
+            WHERE thread_id = ? AND id IN (${activityPlaceholders}) AND turn_id IS NOT NULL
+            ${existingCandidates}
+        )
+        SELECT turn_id
+        FROM candidates
+        ORDER BY COALESCE(
+            (SELECT requested_at FROM assistant_turns WHERE assistant_turns.id = candidates.turn_id LIMIT 1),
+            (SELECT MIN(created_at) FROM assistant_messages WHERE assistant_messages.thread_id = ? AND assistant_messages.turn_id = candidates.turn_id),
+            (SELECT MIN(created_at) FROM assistant_activities WHERE assistant_activities.thread_id = ? AND assistant_activities.turn_id = candidates.turn_id),
+            ''
+        ) DESC, turn_id DESC
+        LIMIT ?
+    `, [threadId, ...activityIds, ...(existingTurnIds.length > 0 ? [threadId, ...existingTurnIds] : []), threadId, threadId, limit])[0]?.values || []
     return { threadId, turnIds: rows.map((row) => String(row[0] || '')).filter(Boolean) }
 }
 

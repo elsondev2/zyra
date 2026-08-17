@@ -825,6 +825,7 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
                 return detail ? ok({ detail }) : unavailable('Assistant thread not found.')
             },
             getHistoryPage: () => unavailable('No older browser-preview history is available.'),
+            hydrateHistoryBody: () => unavailable('No deferred browser-preview tool output is available.'),
             searchTurns: (input: { threadId: string; query: string }) => {
                 const detail = getBrowserThreadDetail(input.threadId)
                 const query = input.query.trim().toLowerCase()

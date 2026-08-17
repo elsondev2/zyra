@@ -153,7 +153,7 @@ $channel = if ($env:ZYRA_AGENT_SERVER_CHANNEL) { $env:ZYRA_AGENT_SERVER_CHANNEL 
 if ($channel -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$') {
     throw "Invalid Zyra agent-server channel: $channel"
 }
-$descriptorPath = Join-Path $stateDirectory "agent-server-$channel.json"
+$descriptorPath = Join-Path $stateDirectory "agent-server-v2-$channel.json"
 $lockPath = Join-Path $stateDirectory "agent-server-$channel.lock"
 
 $targets = @(Get-ZyraDevProcessTargets -ComparableRepoRoot $comparableRepo)

@@ -94,22 +94,24 @@ async function testBrowserFirstOAuthContract() {
     assert.equal(typeof callbacks.onDeviceCode, "function");
     assert.equal(typeof callbacks.onManualCodeInput, "function");
     assert.equal(await callbacks.onSelect({
+      message: "Choose login",
       options: [
-        { id: "browser", label: "Browser login (default)" },
-        { id: "device_code", label: "Device code login (headless)" },
+        { id: "device", label: "Device code" },
+        { id: "browser", label: "Browser callback" },
       ],
     }), "browser");
     auth.set(provider, { type: "oauth" });
     callbackContractChecked = true;
   };
-  await loginZyraAuth("openai-codex", {
+  const result = await loginZyraAuth("openai-codex", {
     authStorage: auth,
     onAuth: () => {},
     onMessage: () => {},
-    onPrompt: async () => "",
+    onPrompt: async () => "manual-code",
   });
   assert.equal(callbackContractChecked, true);
   assert.equal(auth.hasAuth("openai-codex"), true);
+  assert.equal(result.status.configured, true);
 }
 
 async function testSecretPromptMasksInput() {

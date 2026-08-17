@@ -57,7 +57,7 @@ function errorMessage(error: unknown): string {
 function isUsableSubscription(status: ChatGptStatusResult): boolean {
     if (status.status?.configured !== true) return false
     if (status.usage && !status.usageError) return true
-    if (!status.tokenExpiresAt || status.usageError) return false
+    if (!status.tokenExpiresAt) return false
     const expiresAt = Date.parse(status.tokenExpiresAt)
     return Number.isFinite(expiresAt) && expiresAt > Date.now() + 60_000
 }

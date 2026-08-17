@@ -1502,9 +1502,9 @@ handleAssistantRuntimeEvent({
     payload: { state: 'error', error: backgroundConnectError, message: backgroundConnectError }
 }, projectedDeps)
 const backgroundConnectThread = findProjectedRecord(projectedThread.id)?.thread
-assert.equal(backgroundConnectThread?.lastError, backgroundLifecycleThreadBefore.lastError)
-assert.equal(backgroundConnectThread?.state, backgroundLifecycleThreadBefore.state)
-assert.equal(backgroundConnectThread?.updatedAt, backgroundLifecycleThreadBefore.updatedAt)
+assert.equal(backgroundConnectThread?.lastError, backgroundConnectError)
+assert.equal(backgroundConnectThread?.state, 'error')
+assert.equal(backgroundConnectThread?.updatedAt, '2026-07-10T17:00:00.000Z')
 assert.equal(
     backgroundConnectThread?.activities.length,
     backgroundLifecycleActivityCount,
@@ -1518,8 +1518,11 @@ handleAssistantRuntimeEvent({
     providerThreadId: projectedThread.providerThreadId || undefined,
     payload: { state: 'stopped', message: 'Zyra session disconnected.' }
 }, projectedDeps)
+const disconnectedBackgroundThread = findProjectedRecord(projectedThread.id)?.thread
+assert.equal(disconnectedBackgroundThread?.state, 'stopped')
+assert.equal(disconnectedBackgroundThread?.lastError, null)
 assert.equal(
-    findProjectedRecord(projectedThread.id)?.thread.activities.length,
+    disconnectedBackgroundThread?.activities.length,
     backgroundLifecycleActivityCount,
     'navigation disconnects must not become durable Agent Inbox timeline work'
 )

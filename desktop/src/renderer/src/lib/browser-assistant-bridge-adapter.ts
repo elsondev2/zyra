@@ -324,6 +324,7 @@ export function createBrowserAssistantBridgeAdapter(): DevScopeApi['assistant'] 
         selectThread: remoteAssistantMethod('selectThread'),
         getThreadDetailBootstrap: remoteAssistantMethod('getThreadDetailBootstrap'),
         getHistoryPage: remoteAssistantMethod('getHistoryPage'),
+        hydrateHistoryBody: remoteAssistantMethod('hydrateHistoryBody'),
         getReviewIndex: remoteAssistantMethod('getReviewIndex'),
         getTurnDetail: remoteAssistantMethod('getTurnDetail'),
         searchTurns: remoteAssistantMethod('searchTurns'),

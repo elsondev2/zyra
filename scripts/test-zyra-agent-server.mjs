@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CanonicalChatCatalog } from "../src/agent-server/catalog.mjs";
 import { ZyraAgentServerClient } from "../src/agent-server/client.mjs";
 import { ZyraAgentServer } from "../src/agent-server/server.mjs";
 import { AgentEventJournal } from "../src/agent-server/event-journal.mjs";
+import { getAgentServerPaths } from "../src/agent-server/paths.mjs";
+import { AGENT_SERVER_PROTOCOL_VERSION } from "../src/agent-server/protocol.mjs";
 import { createZyraTuiClientRuntime } from "../src/agent-server/tui-runtime.mjs";
 import { syncZyraThinkingLevel } from "../src/zyra-sdk.mjs";
 
@@ -22,7 +25,15 @@ class FakeWorker extends EventEmitter {
   isAlive() { return !this.disposed; }
   request(type, payload = {}) {
     this.requests.push({ type, payload });
-    if (type === "connect") return Promise.resolve({ threadId: "chat:test", providerThreadId: sessionPath, events: [] });
+    if (type === "connect") return Promise.resolve({
+      threadId: "chat:test",
+      providerThreadId: sessionPath,
+      events: [],
+      messages: [
+        { id: "connected:user", role: "user", content: "connected user" },
+        { id: "connected:tool", role: "toolResult", toolCallId: "connected:call", content: [{ type: "text", text: "connected historical output" }] }
+      ]
+    });
     if (type === "prompt") return new Promise((resolve) => { this.activePrompt = resolve; });
     if (type === "generate_text") {
       return Promise.resolve({ success: true, text: "Utility text result", model: payload.model || "openai-codex/test" });
@@ -64,6 +75,8 @@ class FakeWorker extends EventEmitter {
 
 const stateDirectory = mkdtempSync(path.join(os.tmpdir(), "zyra-agent-server-test-"));
 const channel = `test-${process.pid}-${Date.now()}`;
+assert.ok(AGENT_SERVER_PROTOCOL_VERSION >= 2);
+assert.match(getAgentServerPaths({ stateDirectory, channel }).descriptorFile, new RegExp(`agent-server-v${AGENT_SERVER_PROTOCOL_VERSION}-`));
 const project = path.join(stateDirectory, "project");
 const sessionPath = path.join(project, ".zyra", "sessions", "chat-test.jsonl");
 const fakeSessions = [{
@@ -76,12 +89,25 @@ const fakeSessions = [{
   messageCount: 8,
   firstMessage: "hello"
 }];
+const injectedHistoryEntries = [
+  { type: "message", id: "entry:user", message: { role: "user", content: "hello" } },
+  ...Array.from({ length: 16 }, (_, index) => ({
+    type: "message",
+    id: `entry:tool:${index}`,
+    message: {
+      role: "toolResult",
+      toolCallId: `tool:${index}`,
+      toolName: "read",
+      content: [{ type: "text", text: `historical output ${index}` }]
+    }
+  }))
+];
 const catalog = new CanonicalChatCatalog({
   stateDirectory,
   channel,
   loadSessionManager: async () => ({
     list: async () => fakeSessions,
-    open: () => ({ getEntries: () => [{ type: "message", message: { role: "user", content: "hello" } }] })
+    open: () => ({ getEntries: () => injectedHistoryEntries })
   })
 });
 const durableJournal = new AgentEventJournal(path.join(stateDirectory, "journal-test"), "chat:journal");
@@ -98,6 +124,16 @@ durableJournal.append({
 const reopenedDurableJournal = new AgentEventJournal(path.join(stateDirectory, "journal-test"), "chat:journal");
 assert.equal(reopenedDurableJournal.replay(0).length, 1, "token-level message updates must stay live-only instead of synchronously hitting the durable journal");
 assert.equal(reopenedDurableJournal.latestSequence(), 1, "transient stream updates must not advance durable replay state");
+
+const lateAuthorityChannel = `${channel}-late-authority`;
+const lateAuthorityPaths = getAgentServerPaths({ stateDirectory, channel: lateAuthorityChannel });
+const lateAuthorityServer = new ZyraAgentServer({ stateDirectory, channel: lateAuthorityChannel, endpoint: 0, catalog });
+await lateAuthorityServer.start();
+assert.equal(lateAuthorityServer.getDesktopAuthorityHash(), null);
+const lateAuthorityHash = createHash("sha256").update("late-desktop-proof").digest("base64url");
+writeFileSync(lateAuthorityPaths.desktopAuthorityFile, lateAuthorityHash, { encoding: "utf8", mode: 0o600 });
+assert.equal(lateAuthorityServer.getDesktopAuthorityHash(), lateAuthorityHash, "a TUI-first server reloads Desktop authority created after startup");
+await lateAuthorityServer.stop();
 
 const workers = [];
 const server = new ZyraAgentServer({
@@ -123,6 +159,26 @@ try {
   assert.equal(listed.chats[0].presence.state, "detached");
   const history = await desktop.request("catalog.history", { session: "chat:test", project });
   assert.equal(history.history.entries[0].message.content, "hello");
+  const lazyHistory = await desktop.request("catalog.history", {
+    session: "chat:test",
+    project,
+    toolResultBodies: "lazy-v1"
+  });
+  const deferredHistoryEntry = lazyHistory.history.entries.find((entry) => entry.historyBodyRef);
+  assert.ok(deferredHistoryEntry, "the server history contract must expose deferred tool body references");
+  assert.equal("content" in deferredHistoryEntry.message, false);
+  const hydratedHistoryBody = await desktop.request("catalog.entry.body", {
+    session: "chat:test",
+    project,
+    ref: deferredHistoryEntry.historyBodyRef
+  });
+  assert.equal(hydratedHistoryBody.body.entry.message.content[0].text, "historical output 0");
+  const searchedToolOutput = await desktop.request("catalog.tool-output.search", {
+    session: "chat:test",
+    project,
+    query: "historical output 0"
+  });
+  assert.equal(searchedToolOutput.matches[0].toolCallId, "tool:0", "explicit search scans deferred canonical output without rehydrating every history page");
   const archived = await desktop.request("catalog.update", { session: "chat:test", archived: true });
   assert.equal(archived.chat.archived, true);
   assert.equal((await tui.request("catalog.list", {})).chats.length, 0, "archived chats must be hidden by default");
@@ -157,8 +213,10 @@ try {
 
   const desktopAttached = await desktop.attach({ project, cwd: project, session: "chat:test", localThreadId: "assistant-thread:desktop" });
   assert.equal(desktopAttached.canonicalChatId, "chat:test");
+  assert.equal(desktopAttached.connected.messages.some((message) => message.role === "toolResult"), false, "Desktop attach must not duplicate historical tool bodies before paged history loads");
   const tuiAttached = await tui.attach({ project, cwd: project, session: "assistant-thread:desktop", localThreadId: "tui:local" });
   assert.equal(tuiAttached.canonicalChatId, "chat:test");
+  assert.equal(tuiAttached.connected.messages.some((message) => message.role === "toolResult"), false, "TUI attach must not duplicate historical tool bodies before paged history loads");
   assert.equal(workers.length, 1, "desktop and TUI must share one server worker");
   const attachedList = await desktop.request("catalog.list", {});
   const attachedSingle = await desktop.request("catalog.get", { session: "chat:test", project });
@@ -277,6 +335,8 @@ try {
     "a later TUI attachment must synchronize its explicit max setting to the shared worker"
   );
   assert.equal(tuiRuntime.history.events()[0].message.content[0].text, "hello");
+  const historicalTuiTool = tuiRuntime.history.events().find((event) => event.toolCallId === "tool:0");
+  assert.equal(historicalTuiTool.result.content[0].text, "historical output 0", "TUI history remains complete until its UI has an interactive hydration path");
   const remoteEvents = [];
   tuiRuntime.session.subscribe((event) => remoteEvents.push(event));
 

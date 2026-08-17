@@ -66,15 +66,22 @@ let isInstallingUpdate = false
 let updaterConfigured = false
 let updaterInitialized = false
 let configuredFeedTagName: string | null = null
+
+function currentAutoUpdateDisabledReason(): string | null {
+    return getAutoUpdateDisabledReason({
+        isPackaged: app.isPackaged,
+        disabledByEnv: process.env.ZYRA_DISABLE_AUTO_UPDATE === '1' || process.env.DEVSCOPE_DISABLE_AUTO_UPDATE === '1',
+        platform: process.platform,
+        appImagePath: process.env.APPIMAGE
+    })
+}
+
 let updateState: DevScopeUpdateState = createInitialUpdateState(
     app.getVersion(),
     releaseRepository,
     false,
     releasePageUrl,
-    getAutoUpdateDisabledReason({
-        isPackaged: app.isPackaged,
-        disabledByEnv: process.env.ZYRA_DISABLE_AUTO_UPDATE === '1' || process.env.DEVSCOPE_DISABLE_AUTO_UPDATE === '1'
-    })
+    currentAutoUpdateDisabledReason()
 )
 
 async function loadAutoUpdater(): Promise<AutoUpdater> {
@@ -268,10 +275,7 @@ async function performUpdaterInitialization(): Promise<void> {
     if (updaterInitialized) return
     updaterInitialized = true
 
-    const disabledReason = getAutoUpdateDisabledReason({
-        isPackaged: app.isPackaged,
-        disabledByEnv: process.env.DEVSCOPE_DISABLE_AUTO_UPDATE === '1'
-    })
+    const disabledReason = currentAutoUpdateDisabledReason()
     const enabled = disabledReason === null
     updateState = createInitialUpdateState(
         app.getVersion(),

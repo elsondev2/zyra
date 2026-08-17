@@ -296,6 +296,17 @@ const oversizedCreatedAt = at(40)
 const oversizedPayload = JSON.stringify({
     status: 'completed',
     toolName: 'read',
+    toolCallId: 'oversized-read',
+    historyBodyRef: {
+        version: 1,
+        canonicalChatId: 'canonical:oversized',
+        entryIndex: 20,
+        entryId: 'entry:oversized-read',
+        entrySha256: 'd'.repeat(64),
+        toolCallId: 'oversized-read',
+        toolName: 'read',
+        bodyBytes: ASSISTANT_ACTIVITY_PAYLOAD_MAX_CHARACTERS * 3
+    },
     paths: ['assets/large-image.png'],
     surface: { version: 1, kind: 'file-read', lifecycle: 'completed' },
     result: { content: [{ type: 'image', data: 'a'.repeat(ASSISTANT_ACTIVITY_PAYLOAD_MAX_CHARACTERS * 3) }] }
@@ -308,9 +319,12 @@ assert.deepEqual(oversizedPage.messages.map((message) => message.id), ['oversize
 assert.equal(oversizedPage.activities[0]?.payload?.persistencePayloadTruncated, true, 'historical reads omit oversized embedded result bodies before SQL.js materializes them')
 assert.equal(oversizedPage.activities[0]?.payload?.originalPayloadCharacters, oversizedPayload.length)
 const compactedPayload = serializeAssistantActivityPayload(JSON.parse(oversizedPayload))
+const parsedCompactedPayload = JSON.parse(compactedPayload)
 assert.equal(compactedPayload.length < ASSISTANT_ACTIVITY_PAYLOAD_MAX_CHARACTERS, true, 'new oversized activity payloads are compacted before persistence')
-assert.deepEqual(JSON.parse(compactedPayload).paths, ['assets/large-image.png'], 'payload compaction preserves useful file metadata')
-assert.equal('result' in JSON.parse(compactedPayload), false, 'payload compaction removes the embedded result body')
+assert.deepEqual(parsedCompactedPayload.paths, ['assets/large-image.png'], 'payload compaction preserves useful file metadata')
+assert.equal(parsedCompactedPayload.historyBodyRef.entryId, 'entry:oversized-read', 'payload compaction preserves deferred-output hydration identity')
+assert.equal(parsedCompactedPayload.toolCallId, 'oversized-read')
+assert.equal('result' in parsedCompactedPayload, false, 'payload compaction removes the embedded result body')
 
 const virtualTimelineSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantVirtualTimeline.tsx', import.meta.url), 'utf8')
 assert.equal(virtualTimelineSource.includes('initialScrollAtEnd'), true, 'LegendList owns initial positioning at the newest row')

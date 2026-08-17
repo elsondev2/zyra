@@ -42,6 +42,7 @@ export const BROWSER_ASSISTANT_BRIDGE_METHODS = [
     'selectThread',
     'getThreadDetailBootstrap',
     'getHistoryPage',
+    'hydrateHistoryBody',
     'getReviewIndex',
     'getTurnDetail',
     'searchTurns',

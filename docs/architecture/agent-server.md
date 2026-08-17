@@ -33,9 +33,9 @@ TUI client ────┘                                  ├─ chat catalog
                                                    └─ fleet/workflow recovery
 ```
 
-The server runs as a detached local user process. It binds only a per-user named pipe on Windows or a user-owned Unix socket elsewhere. A random descriptor token is stored in a mode-0600 local file and is required during the handshake. Desktop control additionally requires proof of a random secret retained through Electron `safeStorage`; the server keeps only its SHA-256 verifier. Declaring a Desktop surface or capability in the handshake is insufficient.
+The server runs as a detached local user process. Protocol v2 namespaces its descriptor, lock, and endpoint so an upgraded app never attaches to stale v1 code; an old process may finish independently. It binds only a per-user named pipe on Windows or a user-owned Unix socket elsewhere. A random descriptor token is stored in a mode-0600 local file and is required during the handshake. Desktop control additionally requires proof of a random secret retained through Electron `safeStorage`; the server keeps only its SHA-256 verifier. Declaring a Desktop surface or capability in the handshake is insufficient.
 
-The existing `src/zyra-ui-bridge.mjs` remains the first worker implementation. Moving it behind the server gives Zyra durable process ownership without rewriting the Pi adapter and UI projection simultaneously.
+The existing `src/zyra-ui-bridge.mjs` remains the first worker implementation. Moving it behind the server gives Zyra durable process ownership without rewriting the Pi adapter and UI projection simultaneously. Packaged Desktop launches pass a writable `ZYRA_DATA_ROOT` (the user home) separately from the immutable staged runtime, so memory consolidation never writes into an app bundle or AppImage. Windows packages carry a pinned Node executable for the detached server; signed macOS/Linux packages use Electron's Node mode without depending on system `PATH`.
 
 ## Client Lifetime
 
@@ -68,6 +68,14 @@ The server records known project roots and scans each project’s `.zyra/session
 Both Desktop and TUI query the same catalog. Opening a catalog entry attaches to its canonical chat ID and session file regardless of which surface created it.
 
 Catalog registration is additive and local. It never copies, rewrites, or deletes session JSONL files.
+
+### Lazy historical tool bodies
+
+Pi session JSONL remains complete and unchanged. The rebuildable chat-index sidecar stores entry offsets, byte lengths, hashes, and lightweight envelopes; it never copies tool-output bodies. Clients may request `catalog.history` with `toolResultBodies: "lazy-v1"`. The server keeps the latest 15 tool results eager and replaces older results with a validated `historyBodyRef` containing the canonical chat ID, entry index/ID, SHA-256, tool identity, byte count, and content metadata.
+
+An expanded historical tool card resolves that reference through `catalog.entry.body`. The server checks the indexed chat, exact entry offset, entry ID, hash, tool call ID, and tool name before returning the canonical entry. Desktop keeps a byte-bounded LRU cache; SQLite stores the lightweight reference, while the renderer merges hydrated payloads for expanded cards and Review persists authoritative file-change metadata when requested. Deferred bodies remain distinguishable from genuinely empty outputs. Worker attach snapshots also omit historical tool-result messages so the same bodies are not serialized once during connection and again during catalog paging. TUI catalog pages remain eager until the terminal surface has a real interactive expansion path.
+
+This policy applies only to UI/catalog projection and transport. It does not truncate Pi `SessionManager` state, model context, compaction input, branching, exports, search, Review, or canonical JSONL. Explicit Review search scans deferred tool-result lines through the offset index and merges matching tool calls back into persisted turn results without hydrating every output. A future Pi runtime optimization requires an upstream-supported lazy session reader or a separately proven compatibility layer.
 
 ## Implemented Migration
 

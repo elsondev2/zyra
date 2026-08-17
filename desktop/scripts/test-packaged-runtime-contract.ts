@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { closeSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -16,6 +16,14 @@ const runtimeRoot = path.join(desktopRoot, '.release', 'zyra-runtime')
 
 assert.equal(rootPackage.version, desktopPackage.version, 'Desktop and root versions must be lockstep')
 await validateRuntimeStage(runtimeRoot, { expectedVersion: rootPackage.version, requireDependencies: true })
+const stagedSdkSource = readFileSync(path.join(runtimeRoot, 'src', 'zyra-sdk.mjs'), 'utf8')
+assert.equal(
+    /(?:ensureZyraMemory|runZyraMemoryStartup|injectLayeredMemory|markZyraThreadMemoryPolluted|buildRecommendedPrompts)\(defaults\.root/.test(stagedSdkSource),
+    false,
+    'packaged memory operations must use the writable data root'
+)
+assert.equal(stagedSdkSource.includes('memoryRunner(root = defaults.root)'), false)
+assert.equal(stagedSdkSource.includes('buildConsolidationPrompt({ ...runtime, root: defaults.root }'), false)
 
 const resourcesPath = path.dirname(runtimeRoot)
 const processWithResources = process as NodeJS.Process & { resourcesPath?: string }
@@ -137,13 +145,15 @@ for (const file of packagedMachOFiles.filter((entry) => entry.architecture === '
 const outsideCheckout = mkdtempSync(path.join(os.tmpdir(), 'zyra-packaged-runtime-contract-'))
 try {
     const sdkUrl = pathToFileURL(path.join(runtimeRoot, 'src', 'zyra-sdk.mjs')).href
+    const memoryUrl = pathToFileURL(path.join(runtimeRoot, 'src', 'zyra-memory.mjs')).href
+    const dataRoot = path.join(outsideCheckout, 'writable-data')
     const result = spawnSync(process.execPath, [
         '--input-type=module',
         '--eval',
-        `const sdk = await import(${JSON.stringify(sdkUrl)}); if (sdk.defaults.root !== ${JSON.stringify(runtimeRoot)}) process.exit(17);`
+        `const fs = await import('node:fs'); const sdk = await import(${JSON.stringify(sdkUrl)}); const memory = await import(${JSON.stringify(memoryUrl)}); if (sdk.defaults.root !== ${JSON.stringify(runtimeRoot)}) process.exit(17); if (sdk.defaults.dataRoot !== ${JSON.stringify(dataRoot)}) process.exit(18); memory.ensureZyraMemory(sdk.defaults.dataRoot); if (!fs.existsSync(${JSON.stringify(path.join(dataRoot, '.zyra', 'memory'))})) process.exit(19);`
     ], {
         cwd: outsideCheckout,
-        env: { ...process.env, ZYRA_ROOT: runtimeRoot },
+        env: { ...process.env, ZYRA_ROOT: runtimeRoot, ZYRA_DATA_ROOT: dataRoot },
         encoding: 'utf8'
     })
     assert.equal(
@@ -151,8 +161,64 @@ try {
         0,
         `staged SDK must import without a neighboring source checkout\nstdout: ${result.stdout}\nstderr: ${result.stderr}`
     )
+
+    if (process.platform === 'win32') {
+        assert.equal(existsSync(path.join(resourcesPath, 'zyra-node', 'node.exe')), true, 'Windows resources include a pinned Node executable')
+    } else {
+        assert.equal(existsSync(path.join(resourcesPath, 'zyra-node', 'electron-run-as-node.txt')), true, 'Unix resources declare the signed Electron Node runtime')
+    }
+    const agentState = path.join(outsideCheckout, 'agent-state')
+    let expectedCachedNode: string | null = null
+    if (process.platform === 'win32') {
+        const stagedNode = path.join(resourcesPath, 'zyra-node', 'node.exe')
+        const runtimeDirectory = path.join(dataRoot, '.zyra', 'runtime')
+        mkdirSync(runtimeDirectory, { recursive: true })
+        expectedCachedNode = path.join(runtimeDirectory, `node-${process.versions.node}-${statSync(stagedNode).size}.exe`)
+        writeFileSync(expectedCachedNode, 'partial')
+    }
+    const clientUrl = pathToFileURL(path.join(runtimeRoot, 'src', 'agent-server', 'client.mjs')).href
+    const agentSmoke = spawnSync(process.execPath, [
+        '--input-type=module',
+        '--eval',
+        `Object.defineProperty(process.versions, 'electron', { value: 'packaged-test', configurable: true }); Object.defineProperty(process, 'resourcesPath', { value: ${JSON.stringify(resourcesPath)}, configurable: true }); const { ZyraAgentServerClient } = await import(${JSON.stringify(clientUrl)}); const client = new ZyraAgentServerClient({ root: ${JSON.stringify(runtimeRoot)}, stateDirectory: ${JSON.stringify(agentState)}, channel: 'packaged-smoke' }); await client.connect(); const status = await client.request('server.status'); if (!status.pid) process.exit(21); client.close();`
+    ], {
+        cwd: outsideCheckout,
+        env: { ...process.env, PATH: '', ZYRA_DATA_ROOT: dataRoot },
+        encoding: 'utf8',
+        timeout: 45_000
+    })
+    assert.equal(
+        agentSmoke.status,
+        0,
+        `packaged agent server must start without system Node on PATH\nstdout: ${agentSmoke.stdout}\nstderr: ${agentSmoke.stderr}`
+    )
+    if (process.platform === 'win32') {
+        assert(expectedCachedNode)
+        assert.equal(statSync(expectedCachedNode).size, statSync(path.join(resourcesPath, 'zyra-node', 'node.exe')).size, 'Windows repairs an incomplete cached Node runtime')
+    }
+    const descriptorName = readdirSync(agentState).find((name) => /^agent-server-v\d+-packaged-smoke\.json$/.test(name))
+    assert(descriptorName, 'packaged smoke writes a protocol-versioned descriptor')
+    const descriptor = JSON.parse(readFileSync(path.join(agentState, descriptorName), 'utf8'))
+    const serverPid = Number(descriptor.pid)
+    try { process.kill(serverPid) } catch {}
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+        try {
+            process.kill(serverPid, 0)
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50)
+        } catch {
+            break
+        }
+    }
 } finally {
-    rmSync(outsideCheckout, { recursive: true, force: true })
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+        try {
+            rmSync(outsideCheckout, { recursive: true, force: true })
+            break
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'EACCES' || attempt === 99) throw error
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100)
+        }
+    }
 }
 
 console.log('Zyra packaged runtime resource contract: ok')

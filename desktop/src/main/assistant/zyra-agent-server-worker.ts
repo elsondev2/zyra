@@ -76,6 +76,12 @@ export type CanonicalAgentChat = {
     presence?: CanonicalAgentChatPresence
 }
 
+export type CanonicalAgentChatHistoryOptions = {
+    before?: string | null
+    limit?: number
+    toolResultBodies?: 'lazy-v1'
+}
+
 export type CanonicalAgentChatHistory = {
     chat: CanonicalAgentChat
     entries: unknown[]
@@ -100,7 +106,7 @@ export class DesktopAgentServerConnection {
     private readonly workers = new Map<string, Set<ZyraAgentServerWorker>>()
     private readonly controlWorkers = new Map<string, ZyraAgentServerWorker>()
     private readonly pendingEvents = new Map<string, ReplayEntry[]>()
-    private readonly catalogChangedListeners = new Set<() => void>()
+    private readonly catalogChangedListeners = new Set<(change: Record<string, unknown> | null) => void>()
     private disposed = false
 
     constructor(
@@ -108,7 +114,7 @@ export class DesktopAgentServerConnection {
         private readonly options: DesktopAgentServerConnectionOptions = {}
     ) {}
 
-    onCatalogChanged(listener: () => void): () => void {
+    onCatalogChanged(listener: (change: Record<string, unknown> | null) => void): () => void {
         this.catalogChangedListeners.add(listener)
         return () => this.catalogChangedListeners.delete(listener)
     }
@@ -143,16 +149,38 @@ export class DesktopAgentServerConnection {
     async readCanonicalChatHistory(
         session: string,
         project?: string,
-        options: { before?: string | null; limit?: number } = {}
+        options: CanonicalAgentChatHistoryOptions = {}
     ): Promise<CanonicalAgentChatHistory | null> {
         const client = await this.getClient()
         const result = await client.request('catalog.history', {
             session,
             project,
             before: options.before,
-            limit: options.limit || 1000
+            limit: options.limit || 1000,
+            toolResultBodies: options.toolResultBodies
         }, { timeoutMs: 35_000 })
         return asRecord(result['history']) as CanonicalAgentChatHistory | null
+    }
+
+    async readCanonicalHistoryEntryBody(
+        session: string,
+        project: string | undefined,
+        ref: Record<string, unknown>
+    ): Promise<Record<string, unknown> | null> {
+        const client = await this.getClient()
+        const result = await client.request('catalog.entry.body', { session, project, ref }, { timeoutMs: 35_000 })
+        return asRecord(result['body'])
+    }
+
+    async searchCanonicalToolOutputs(
+        session: string,
+        project: string | undefined,
+        query: string,
+        limit?: number
+    ): Promise<Array<Record<string, unknown>>> {
+        const client = await this.getClient()
+        const result = await client.request('catalog.tool-output.search', { session, project, query, limit }, { timeoutMs: 35_000 })
+        return Array.isArray(result['matches']) ? result['matches'].map(asRecord).filter((value): value is Record<string, unknown> => Boolean(value)) : []
     }
 
     async appendCanonicalMessage(session: string, message: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -332,8 +360,9 @@ export class DesktopAgentServerConnection {
         })
         client.on('session-event', (message: Record<string, unknown>) => this.handleSessionEvent(message))
         client.on('disconnect', () => this.handleClientDisconnect())
-        client.on('catalog-changed', () => {
-            for (const listener of this.catalogChangedListeners) listener()
+        client.on('catalog-changed', (message: Record<string, unknown>) => {
+            const change = asRecord(message['change'])
+            for (const listener of this.catalogChangedListeners) listener(change)
         })
         await client.connect()
         return client

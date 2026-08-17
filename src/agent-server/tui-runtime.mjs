@@ -681,8 +681,7 @@ function projectHistoryEntries(entries) {
         type: "tool_execution_end",
         toolCallId,
         toolName: asString(message.toolName) || started.toolName || "tool",
-        result: historyContentText(content),
-        output: historyContentText(content),
+        result: { content },
         isError: message.isError === true,
         historical: true
       });
@@ -695,14 +694,6 @@ function normalizeHistoryContent(value) {
   if (typeof value === "string") return [{ type: "text", text: value }];
   if (!Array.isArray(value)) return [];
   return value.filter((part) => part && typeof part === "object").map((part) => ({ ...part }));
-}
-
-function historyContentText(content) {
-  return content.flatMap((part, index) => {
-    if (part?.type === "text") return [String(part.text || "")];
-    if (part?.type === "image") return [`[Image ${index + 1}: ${part.mimeType || part.mime_type || "image"}]`];
-    return [];
-  }).join("\n");
 }
 
 function asRecord(value) {
