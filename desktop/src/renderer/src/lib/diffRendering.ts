@@ -1,6 +1,6 @@
 import { parsePatchFiles } from '@pierre/diffs'
 import type { FileDiffMetadata, ParsedPatch } from '@pierre/diffs/react'
-import type { Theme } from '@/lib/settings'
+import { getThemeAppearance, type Theme } from '@/lib/settings'
 
 export interface FileDiffSummary {
     path: string
@@ -35,7 +35,7 @@ interface PatchFileScanResult {
 }
 
 export function resolveDiffThemeType(theme: Theme): 'light' | 'dark' {
-    return theme === 'light' ? 'light' : 'dark'
+    return getThemeAppearance(theme)
 }
 
 export function resolveDiffThemeName(theme: Theme): 'pierre-light' | 'pierre-dark' {

@@ -5,6 +5,7 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { normalizeOpeningTheme, pickOpeningTheme } from "./banner.mjs";
+import { createBrowserOAuthLoginCallbacks } from "./oauth-login-callbacks.mjs";
 export {
   buildChatGptAccountStatus,
   buildZyraAuthAccountStatus,
@@ -867,8 +868,7 @@ export async function listZyraSessions(options = {}) {
 }
 
 export async function loginZyraAuth(provider = "openai-codex", options = {}) {
-  const AuthStorage = await loadPiAuthStorage();
-  const authStorage = options.authStorage ?? AuthStorage.create();
+  const authStorage = options.authStorage ?? (await loadPiAuthStorage()).create();
   const tell = typeof options.onMessage === "function" ? options.onMessage : console.log;
   const handleAuth = typeof options.onAuth === "function" ? options.onAuth : null;
   const handleProgress = typeof options.onProgress === "function" ? options.onProgress : (message) => tell(message);
@@ -876,7 +876,7 @@ export async function loginZyraAuth(provider = "openai-codex", options = {}) {
     ? options.onPrompt
     : async (prompt) => askTerminal(prompt.message || "Paste the authorization code or redirect URL:");
 
-  await authStorage.login(provider, {
+  await authStorage.login(provider, createBrowserOAuthLoginCallbacks({
     onAuth: (info) => {
       if (handleAuth) {
         handleAuth(info);
@@ -889,9 +889,17 @@ export async function loginZyraAuth(provider = "openai-codex", options = {}) {
       openBrowserUrl(info.url);
       tell("Waiting for the browser callback... You are done when this terminal says login is complete.");
     },
-    onProgress: handleProgress,
+    onDeviceCode: typeof options.onDeviceCode === "function"
+      ? options.onDeviceCode
+      : (info) => {
+          tell(`Open ${info.verificationUri} and enter code ${info.userCode}.`);
+        },
     onPrompt: handlePrompt,
-  });
+    onProgress: handleProgress,
+    onManualCodeInput: options.onManualCodeInput,
+    onSelect: options.onSelect,
+    signal: options.signal,
+  }));
 
   const status = authStorage.getAuthStatus(provider);
   tell("Login complete. Auth is saved for this Windows/macOS/Linux user account.");

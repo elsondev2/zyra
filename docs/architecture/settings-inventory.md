@@ -50,7 +50,7 @@ Settings controls must have a verified consumer. A persisted field with no behav
 - `betaSettingsEnabled`: toggling it changes nothing.
 - `gitConfirmPartialPushRange`: no push-flow consumer.
 - `assistantPlaygroundTerminalAccessDefault`: no chat-creation consumer.
-- `lastDarkTheme`: no theme-switch consumer.
+- `lastDarkTheme`: legacy migration alias only; it seeds `appearanceDarkTheme` and is never shown as a separate setting.
 - Legacy Beta controls for Explorer home, project presentation, and Explorer content layout: the referenced fields do not exist in the settings schema and have no product consumers.
 
 Old persisted values may be ignored during migration; they must not be treated as active settings.

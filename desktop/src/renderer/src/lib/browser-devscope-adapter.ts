@@ -741,6 +741,7 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
             connectChatGpt: () => unavailable('OpenAI setup requires Zyra Desktop.'),
             connectApiKey: () => unavailable('OpenAI setup requires Zyra Desktop.'),
             disconnectOpenAI: () => unavailable('OpenAI account changes require Zyra Desktop.'),
+            updateAppearance: () => unavailable('Setup changes require Zyra Desktop.'),
             commitStep: () => unavailable('Setup changes require Zyra Desktop.'),
             navigate: () => unavailable('Setup changes require Zyra Desktop.'),
             beginReview: () => unavailable('Setup review requires Zyra Desktop.'),

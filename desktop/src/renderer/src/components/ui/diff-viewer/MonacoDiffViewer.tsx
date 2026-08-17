@@ -21,8 +21,8 @@ function readThemeVariable(name: string, fallback: string): string {
     return value || fallback
 }
 
-function applyMonacoDiffTheme(theme: string) {
-    const isLightTheme = theme === 'light'
+function applyMonacoDiffTheme(appearance: 'light' | 'dark') {
+    const isLightTheme = appearance === 'light'
     const text = readThemeVariable('--color-text', isLightTheme ? '#1e293b' : '#e2e8f0')
     const textDark = readThemeVariable('--color-text-dark', isLightTheme ? '#475569' : '#cbd5e1')
     const textSecondary = readThemeVariable('--color-text-secondary', isLightTheme ? '#64748b' : '#94a3b8')
@@ -190,12 +190,12 @@ export default function MonacoDiffViewer({ filePath, diff, height = '100%', rend
 
     useEffect(() => {
         try {
-            applyMonacoDiffTheme(settings.theme)
+            applyMonacoDiffTheme(settings.appearanceResolvedMode)
         } catch (err) {
             console.error('Failed to apply Monaco theme:', err)
             setError('Failed to initialize theme')
         }
-    }, [settings.theme, settings.accentColor.primary, themeRevision])
+    }, [settings.theme, settings.appearanceResolvedMode, settings.accentColor.primary, themeRevision])
 
     useEffect(() => {
         if (typeof window === 'undefined') return

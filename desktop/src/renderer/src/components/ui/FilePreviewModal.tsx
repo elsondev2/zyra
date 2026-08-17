@@ -282,7 +282,7 @@ export function FilePreviewModal({
     } = useFilePreviewModalInteractions({
         file,
         mediaItems: effectiveMediaItems,
-        settingsTheme: settings.theme,
+        settingsTheme: settings.appearanceResolvedMode,
         resolvedActivePreviewTabId,
         createDestinationDirectory,
         canCreateSiblingFile,

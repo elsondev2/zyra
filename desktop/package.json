@@ -162,6 +162,10 @@
                 "to": "LICENSE"
             },
             {
+                "from": "../THIRD_PARTY_NOTICES.md",
+                "to": "THIRD_PARTY_NOTICES.md"
+            },
+            {
                 "from": ".release/zyra-runtime",
                 "to": "zyra-runtime",
                 "filter": [

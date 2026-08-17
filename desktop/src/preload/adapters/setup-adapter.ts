@@ -6,7 +6,8 @@ import {
     type CommitOnboardingStepInput,
     type DisconnectOpenAIInput,
     type NavigateOnboardingInput,
-    type OnboardingSnapshot
+    type OnboardingSnapshot,
+    type UpdateOnboardingAppearanceInput
 } from '../../shared/onboarding/contracts'
 import {
     DEVICE_PREFERENCES_IPC,
@@ -41,6 +42,7 @@ export function createSetupAdapter() {
             connectChatGpt: () => ipcRenderer.invoke(ONBOARDING_IPC.connectChatGpt),
             connectApiKey: (apiKey: string) => ipcRenderer.invoke(ONBOARDING_IPC.connectApiKey, apiKey),
             disconnectOpenAI: (input: DisconnectOpenAIInput) => ipcRenderer.invoke(ONBOARDING_IPC.disconnectOpenAI, input),
+            updateAppearance: (input: UpdateOnboardingAppearanceInput) => ipcRenderer.invoke(ONBOARDING_IPC.updateAppearance, input),
             commitStep: (input: CommitOnboardingStepInput) => ipcRenderer.invoke(ONBOARDING_IPC.commitStep, input),
             navigate: (input: NavigateOnboardingInput) => ipcRenderer.invoke(ONBOARDING_IPC.navigate, input),
             beginReview: (input: BeginOnboardingReviewInput) => ipcRenderer.invoke(ONBOARDING_IPC.beginReview, input),

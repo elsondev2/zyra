@@ -6,7 +6,8 @@ import {
     type CommitOnboardingStepInput,
     type DisconnectOpenAIInput,
     type NavigateOnboardingInput,
-    type OnboardingSnapshot
+    type OnboardingSnapshot,
+    type UpdateOnboardingAppearanceInput
 } from '../../../shared/onboarding/contracts'
 import {
     DEVICE_PREFERENCES_IPC,
@@ -27,6 +28,7 @@ const PRE_ONBOARDING_SETUP_CHANNELS = new Set<string>([
     ONBOARDING_IPC.getAuthStatus,
     ONBOARDING_IPC.connectChatGpt,
     ONBOARDING_IPC.connectApiKey,
+    ONBOARDING_IPC.updateAppearance,
     ONBOARDING_IPC.commitStep,
     ONBOARDING_IPC.navigate
 ])
@@ -95,6 +97,9 @@ export function registerSetupIpcHandlers(services: DesktopSetupServices): void {
     })))
     ipcMain.handle(ONBOARDING_IPC.connectApiKey, (_event, apiKey: string) => result(async () => ({
         status: await services.onboarding.connectApiKey(apiKey)
+    })))
+    ipcMain.handle(ONBOARDING_IPC.updateAppearance, (_event, input: UpdateOnboardingAppearanceInput) => result(async () => ({
+        snapshot: await services.onboarding.updateAppearance(input)
     })))
     ipcMain.handle(ONBOARDING_IPC.disconnectOpenAI, (_event, input: DisconnectOpenAIInput) => result(async () => {
         if (input?.confirmed !== true) {

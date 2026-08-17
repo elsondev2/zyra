@@ -4,13 +4,20 @@ Zyra Desktop has one runtime theme contract for the app shell and specialized re
 
 ## Source of truth
 
-- Theme catalog: `desktop/src/renderer/src/lib/settings-theme-catalog.ts`
+- Shared light/dark theme IDs and validators: `desktop/src/shared/preferences/theme-contract.ts`
+- Theme definitions and catalog projections: `desktop/src/renderer/src/lib/settings-theme-catalog.ts`
 - Accessible semantic resolver: `desktop/src/renderer/src/lib/settings-theme-semantics.ts`
 - Runtime application: `desktop/src/renderer/src/lib/settings.tsx`
 - CSS surface aliases: `desktop/src/renderer/src/styles/theme-tokens.css`
 - Legacy utility compatibility: `desktop/tailwind.config.js`
 
-`applyTheme()` resolves the selected catalog theme and accent before writing variables to both `<html>` and `<body>`. It also synchronizes `light`/`dark`, `color-scheme`, RGB channels, semantic status colors, and the `zyra:theme-change` event.
+Appearance mode and palette identity are separate. Main owns `appearanceLightTheme` and `appearanceDarkTheme`; each renderer resolves System mode from its local OS color scheme and applies the corresponding half. `theme` and `appearanceResolvedMode` are renderer-derived. `applyTheme()` resolves that catalog palette and accent before writing variables to both `<html>` and `<body>`. It also synchronizes `light`/`dark`, `color-scheme`, RGB channels, semantic status colors, and the `zyra:theme-changed` event.
+
+Settings and onboarding share one compact selector. It shows the light or dark catalog that matches the currently resolved appearance and projects every Zyra color token into each dropdown row. Switching mode exposes the other catalog; System switches between the saved halves automatically. Menus portal beyond clipped scroll regions, use a short frame, and center the active option when opened.
+
+## Palette provenance
+
+T3Code's MIT-licensed parser and palette-preview architecture were inspected as design references. The separate `t3-themes` community registry does not publish a repository-wide license, so Zyra imports none of its JSON or preview assets. Every catalog entry in Zyra is an independently authored, token-complete semantic adaptation maintained under this repository's Apache-2.0 license.
 
 ## Shell surfaces
 
@@ -18,7 +25,7 @@ The app title bar and chat sidebar both use `--surface-chrome`. Settings uses on
 
 ## Accessibility guarantees
 
-`npm run test:themes` checks all 46 themes against all 16 accent choices. It enforces:
+`npm run test:themes` checks all 72 themes (27 light and 45 dark) against all 16 accent choices. It enforces:
 
 - primary and supporting text contrast,
 - readable interactive accents and accent foregrounds,
@@ -31,7 +38,7 @@ Tailwind color families are compatibility aliases over semantic accent and statu
 
 ## Specialized renderers
 
-Monaco editors and diffs, xterm terminals, inline syntax diffs, PatchDiffViewer, Mermaid, CSV previews, and Browser annotation read the active semantic variables. Renderers that cache derived output subscribe to `zyra:theme-change` or include the active theme in their cache key.
+Monaco editors and diffs, xterm terminals, inline syntax diffs, PatchDiffViewer, Mermaid, CSV previews, and Browser annotation read the active semantic variables. Renderers that cache derived output subscribe to `zyra:theme-changed` or include the active theme and resolved appearance in their cache key.
 
 Media controls are the intentional exception: `media-white` and `media-black` are fixed because they sit over arbitrary image/video content rather than the app canvas.
 

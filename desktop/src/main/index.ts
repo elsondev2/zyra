@@ -699,6 +699,11 @@ app.whenReady().then(async () => {
     await setupServices.onboarding.initialize().catch((error) => {
         log.error('[Onboarding] failed to hydrate mandatory setup state', error)
     })
+    if (setupServices.onboarding.shouldShowOnboarding()) {
+        void setupServices.auth.prewarm().catch((error) => {
+            log.warn('[Onboarding] OpenAI connection prewarm failed', error)
+        })
+    }
     configureAssistantService({
         getNewChatExecutionDefaults: () => setupServices.preferences.getNewChatWebDefaults()
     })
@@ -795,6 +800,7 @@ app.on('before-quit', () => {
     browserClientRuntime = null
     disposeAssistantService()
     disposeUpdater()
+    void setupServices.auth.dispose()
     void disposeAgentControlBroker()
 })
 

@@ -64,7 +64,7 @@ function buildDiffViewerUnsafeCss(
   -webkit-font-smoothing: auto;
   text-rendering: optimizeLegibility;
   --diffs-font-family: var(--font-code, 'JetBrains Mono', Consolas, Monaco, 'Courier New', monospace);
-  --diffs-header-font-family: var(--font-ui, 'Hanken Grotesk Variable', 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', 'Segoe UI', system-ui, sans-serif);
+  --diffs-header-font-family: var(--font-ui, 'Bricolage Grotesque', 'Hanken Grotesk Variable', 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', 'Segoe UI', system-ui, sans-serif);
   --diffs-font-size: 12px;
   --diffs-line-height: 20px;
   --diffs-gap-inline: 12px;

@@ -1,3 +1,16 @@
+import {
+    DARK_THEME_IDS,
+    LIGHT_THEME_IDS,
+    getThemeAppearance,
+    isDarkThemeId,
+    isLightThemeId,
+    isThemeId,
+    type DarkThemeId,
+    type LightThemeId,
+    type ThemeAppearance,
+    type ThemeId
+} from '@shared/preferences/theme-contract'
+
 export interface ThemeTokens {
     bg: string
     text: string
@@ -970,9 +983,9 @@ export const THEMES = [
     },
     {
         id: 'light',
-        name: 'Light',
+        name: 'Zyra Light',
         color: '#f9fafb',
-        description: 'Light mode with minimal guarantees',
+        description: 'Clean neutral light with crisp blue accents',
         accentColor: 'Blue',
         tokens: {
             bg: '#f9fafb',
@@ -988,27 +1001,576 @@ export const THEMES = [
             secondary: '#2dac7d',
             accent: '#f1f5f9'
         }
+    },
+    {
+        id: 'paper-light',
+        name: 'Paper',
+        color: '#f7f3ea',
+        description: 'Warm editorial paper with earthy accents',
+        accentColor: 'Orange',
+        tokens: {
+            bg: '#f7f3ea',
+            text: '#302d28',
+            textDark: '#454038',
+            textDarker: '#625b50',
+            textSecondary: '#766d60',
+            textMuted: '#a39989',
+            card: '#fffdf8',
+            border: '#ded7c8',
+            borderSecondary: '#c9bfad',
+            primary: '#9a5b31',
+            secondary: '#4e7a68',
+            accent: '#eee6d8'
+        }
+    },
+    {
+        id: 'notion-light',
+        name: 'Notion Light',
+        color: '#f7f7f5',
+        description: 'Soft workspace neutrals with measured contrast',
+        accentColor: 'Blue',
+        tokens: {
+            bg: '#f7f7f5',
+            text: '#202020',
+            textDark: '#373737',
+            textDarker: '#555555',
+            textSecondary: '#6b6b6b',
+            textMuted: '#9b9a97',
+            card: '#ffffff',
+            border: '#e3e2df',
+            borderSecondary: '#cecdc9',
+            primary: '#2f7dd1',
+            secondary: '#9065b0',
+            accent: '#efefed'
+        }
+    },
+    {
+        id: 'github-light',
+        name: 'GitHub Light',
+        color: '#ffffff',
+        description: 'Developer-focused gray canvas with GitHub blue',
+        accentColor: 'Blue',
+        tokens: {
+            bg: '#ffffff',
+            text: '#1f2328',
+            textDark: '#30363d',
+            textDarker: '#59636e',
+            textSecondary: '#636c76',
+            textMuted: '#8c959f',
+            card: '#f6f8fa',
+            border: '#d0d7de',
+            borderSecondary: '#afb8c1',
+            primary: '#0969da',
+            secondary: '#1a7f37',
+            accent: '#ddf4ff'
+        }
+    },
+    {
+        id: 'solarized-light',
+        name: 'Solarized Light',
+        color: '#fdf6e3',
+        description: 'Low-glare cream with balanced cyan and blue',
+        accentColor: 'Cyan',
+        tokens: {
+            bg: '#fdf6e3',
+            text: '#073642',
+            textDark: '#36545b',
+            textDarker: '#586e75',
+            textSecondary: '#657b83',
+            textMuted: '#93a1a1',
+            card: '#eee8d5',
+            border: '#d8cfb4',
+            borderSecondary: '#c2b99e',
+            primary: '#268bd2',
+            secondary: '#2aa198',
+            accent: '#eee8d5'
+        }
+    },
+    {
+        id: 'rose-pine-dawn',
+        name: 'Rosé Pine Dawn',
+        color: '#faf4ed',
+        description: 'Muted rose ivory with iris and pine accents',
+        accentColor: 'Violet',
+        tokens: {
+            bg: '#faf4ed',
+            text: '#575279',
+            textDark: '#5f5a7d',
+            textDarker: '#6e6a86',
+            textSecondary: '#797593',
+            textMuted: '#9893a5',
+            card: '#fffaf3',
+            border: '#dfdad9',
+            borderSecondary: '#cec7c5',
+            primary: '#907aa9',
+            secondary: '#286983',
+            accent: '#f2e9e1'
+        }
+    },
+    {
+        id: 'catppuccin-latte',
+        name: 'Catppuccin Latte',
+        color: '#eff1f5',
+        description: 'Cool pastel light with lavender energy',
+        accentColor: 'Violet',
+        tokens: {
+            bg: '#eff1f5',
+            text: '#4c4f69',
+            textDark: '#565a73',
+            textDarker: '#6c6f85',
+            textSecondary: '#7c7f93',
+            textMuted: '#9ca0b0',
+            card: '#e6e9ef',
+            border: '#ccd0da',
+            borderSecondary: '#bcc0cc',
+            primary: '#8839ef',
+            secondary: '#179299',
+            accent: '#dce0e8'
+        }
+    },
+    {
+        id: 'everforest-light',
+        name: 'Everforest Light',
+        color: '#fdf6e3',
+        description: 'Natural parchment with moss and jade accents',
+        accentColor: 'Lime',
+        tokens: {
+            bg: '#fdf6e3',
+            text: '#5c6a72',
+            textDark: '#4f5e65',
+            textDarker: '#697a80',
+            textSecondary: '#7a8478',
+            textMuted: '#9da9a0',
+            card: '#f4f0d9',
+            border: '#e0dcc7',
+            borderSecondary: '#c9c5b2',
+            primary: '#8da101',
+            secondary: '#35a77c',
+            accent: '#efebd4'
+        }
+    },
+    {
+        id: 'nord-snow',
+        name: 'Nord Snow',
+        color: '#eceff4',
+        description: 'Arctic gray with calm frost-blue accents',
+        accentColor: 'Sky',
+        tokens: {
+            bg: '#eceff4',
+            text: '#2e3440',
+            textDark: '#3b4252',
+            textDarker: '#4c566a',
+            textSecondary: '#5e6b7e',
+            textMuted: '#8793a5',
+            card: '#e5e9f0',
+            border: '#d8dee9',
+            borderSecondary: '#c5ccd8',
+            primary: '#5e81ac',
+            secondary: '#8fbcbb',
+            accent: '#d8dee9'
+        }
+    },
+    {
+        id: 'tokyo-day',
+        name: 'Tokyo Day',
+        color: '#e6e7ed',
+        description: 'Cool city daylight with saturated indigo',
+        accentColor: 'Indigo',
+        tokens: {
+            bg: '#e6e7ed',
+            text: '#343b59',
+            textDark: '#3f4765',
+            textDarker: '#565e78',
+            textSecondary: '#707280',
+            textMuted: '#9698a4',
+            card: '#f3f3f6',
+            border: '#c1c2c7',
+            borderSecondary: '#aeb0b8',
+            primary: '#2959aa',
+            secondary: '#166775',
+            accent: '#d6d8df'
+        }
+    },
+    {
+        id: 'vitesse-light',
+        name: 'Vitesse Light',
+        color: '#ffffff',
+        description: 'Crisp white with understated forest green',
+        accentColor: 'Emerald',
+        tokens: {
+            bg: '#ffffff',
+            text: '#393a34',
+            textDark: '#45463f',
+            textDarker: '#5f6058',
+            textSecondary: '#6d6e66',
+            textMuted: '#9a9b94',
+            card: '#f7f7f7',
+            border: '#e7e7e7',
+            borderSecondary: '#d2d2d2',
+            primary: '#1c6b48',
+            secondary: '#2f798a',
+            accent: '#f1f1f1'
+        }
+    },
+    {
+        id: 'blossom-light',
+        name: 'Blossom',
+        color: '#fff7fa',
+        description: 'Airy blossom pink with plum and violet accents',
+        accentColor: 'Rose',
+        tokens: {
+            bg: '#fff7fa',
+            text: '#4c2f3c',
+            textDark: '#5e3d4b',
+            textDarker: '#765564',
+            textSecondary: '#896b78',
+            textMuted: '#ad919d',
+            card: '#ffffff',
+            border: '#efdbe3',
+            borderSecondary: '#ddc2cd',
+            primary: '#c04478',
+            secondary: '#7a6aa6',
+            accent: '#f8e8ee'
+        }
+    },
+    {
+        id: 'ocean-mist',
+        name: 'Ocean Mist',
+        color: '#f2f8fb',
+        description: 'Blue-white coastal surfaces with teal depth',
+        accentColor: 'Cyan',
+        tokens: {
+            bg: '#f2f8fb',
+            text: '#19394a',
+            textDark: '#274b5c',
+            textDarker: '#456777',
+            textSecondary: '#5c7d8c',
+            textMuted: '#8aa5b1',
+            card: '#ffffff',
+            border: '#d2e4ec',
+            borderSecondary: '#b9d2dd',
+            primary: '#197ca5',
+            secondary: '#2f8f83',
+            accent: '#e3f1f6'
+        }
+    },
+    {
+        id: 'lavender-light',
+        name: 'Lavender',
+        color: '#f8f7fc',
+        description: 'Quiet lavender-gray with rich violet accents',
+        accentColor: 'Violet',
+        tokens: {
+            bg: '#f8f7fc',
+            text: '#343047',
+            textDark: '#45405b',
+            textDarker: '#5d5772',
+            textSecondary: '#716b86',
+            textMuted: '#9b95ad',
+            card: '#ffffff',
+            border: '#dfdbed',
+            borderSecondary: '#c9c3dc',
+            primary: '#6f5bd3',
+            secondary: '#9c4f8c',
+            accent: '#eeeafd'
+        }
+    },
+    {
+        id: 'gruvbox-light',
+        name: 'Gruvbox Light',
+        color: '#fbf1c7',
+        description: 'Retro warm canvas with ochre and olive accents',
+        accentColor: 'Amber',
+        tokens: {
+            bg: '#fbf1c7',
+            text: '#3c3836',
+            textDark: '#504945',
+            textDarker: '#665c54',
+            textSecondary: '#7c6f64',
+            textMuted: '#a89984',
+            card: '#f2e5bc',
+            border: '#d5c4a1',
+            borderSecondary: '#bdae93',
+            primary: '#b57614',
+            secondary: '#79740e',
+            accent: '#ebdbb2'
+        }
+    },
+    {
+        id: 'atom-one-light',
+        name: 'Atom One Light',
+        color: '#fafafa',
+        description: 'Crisp editor white with bright blue and green',
+        accentColor: 'Blue',
+        tokens: {
+            bg: '#fafafa',
+            text: '#282c34',
+            textDark: '#3b4048',
+            textDarker: '#505762',
+            textSecondary: '#5c6370',
+            textMuted: '#8b919e',
+            card: '#ffffff',
+            border: '#e2e4e8',
+            borderSecondary: '#c9cdd4',
+            primary: '#4078f2',
+            secondary: '#50a14f',
+            accent: '#f1f3f5'
+        }
+    },
+    {
+        id: 'bluloco-light',
+        name: 'Bluloco Light',
+        color: '#f5f7fb',
+        description: 'Cool tinted canvas with vivid cobalt focus',
+        accentColor: 'Indigo',
+        tokens: {
+            bg: '#f5f7fb',
+            text: '#1f2937',
+            textDark: '#334155',
+            textDarker: '#475569',
+            textSecondary: '#5b6472',
+            textMuted: '#8792a2',
+            card: '#ffffff',
+            border: '#dce2ec',
+            borderSecondary: '#bdc7d6',
+            primary: '#275efe',
+            secondary: '#008f8c',
+            accent: '#e7efff'
+        }
+    },
+    {
+        id: 'brackets-light',
+        name: 'Brackets Light',
+        color: '#f8f8f8',
+        description: 'Formal editor gray with restrained blue focus',
+        accentColor: 'Sky',
+        tokens: {
+            bg: '#f8f8f8',
+            text: '#2d2d2d',
+            textDark: '#414141',
+            textDarker: '#585858',
+            textSecondary: '#6c6c6c',
+            textMuted: '#969696',
+            card: '#ffffff',
+            border: '#dfdfdf',
+            borderSecondary: '#c5c5c5',
+            primary: '#007acc',
+            secondary: '#2b8a3e',
+            accent: '#e9f3f9'
+        }
+    },
+    {
+        id: 'quiet-light',
+        name: 'Quiet Light',
+        color: '#f5f5f5',
+        description: 'Low-noise neutral gray with gentle violet',
+        accentColor: 'Violet',
+        tokens: {
+            bg: '#f5f5f5',
+            text: '#333333',
+            textDark: '#444444',
+            textDarker: '#5a5a5a',
+            textSecondary: '#6b6b6b',
+            textMuted: '#969696',
+            card: '#ffffff',
+            border: '#dedede',
+            borderSecondary: '#c8c8c8',
+            primary: '#705697',
+            secondary: '#448c27',
+            accent: '#ece8f2'
+        }
+    },
+    {
+        id: 'hop-light',
+        name: 'Hop Light',
+        color: '#fff9fc',
+        description: 'Playful pastel shell with berry and lake accents',
+        accentColor: 'Rose',
+        tokens: {
+            bg: '#fff9fc',
+            text: '#342d38',
+            textDark: '#4a3f4e',
+            textDarker: '#62566a',
+            textSecondary: '#776a7d',
+            textMuted: '#a395a9',
+            card: '#ffffff',
+            border: '#eddde8',
+            borderSecondary: '#d9c3d3',
+            primary: '#c13a75',
+            secondary: '#357aa5',
+            accent: '#f9e9f1'
+        }
+    },
+    {
+        id: 'netbeans-light',
+        name: 'NetBeans Light',
+        color: '#f6f8fa',
+        description: 'Robust white workspace with selective color',
+        accentColor: 'Blue',
+        tokens: {
+            bg: '#f6f8fa',
+            text: '#202124',
+            textDark: '#34383d',
+            textDarker: '#51565c',
+            textSecondary: '#656b72',
+            textMuted: '#92989f',
+            card: '#ffffff',
+            border: '#dce1e6',
+            borderSecondary: '#c2c9d0',
+            primary: '#1675d1',
+            secondary: '#7a4eb0',
+            accent: '#e7f1fb'
+        }
+    },
+    {
+        id: 'github-light-high-contrast',
+        name: 'GitHub Light High Contrast',
+        color: '#ffffff',
+        description: 'Sharp white surfaces with reinforced boundaries',
+        accentColor: 'Blue',
+        tokens: {
+            bg: '#ffffff',
+            text: '#0d1117',
+            textDark: '#24292f',
+            textDarker: '#424a53',
+            textSecondary: '#57606a',
+            textMuted: '#6e7781',
+            card: '#ffffff',
+            border: '#8c959f',
+            borderSecondary: '#57606a',
+            primary: '#0550ae',
+            secondary: '#116329',
+            accent: '#ddf4ff'
+        }
+    },
+    {
+        id: 'ayu-light',
+        name: 'Ayu Light',
+        color: '#fafafa',
+        description: 'Warm minimal white with amber and sky accents',
+        accentColor: 'Orange',
+        tokens: {
+            bg: '#fafafa',
+            text: '#4f555b',
+            textDark: '#3d4248',
+            textDarker: '#565b61',
+            textSecondary: '#6f767e',
+            textMuted: '#9299a1',
+            card: '#ffffff',
+            border: '#e7e8e9',
+            borderSecondary: '#cfd2d5',
+            primary: '#c25f16',
+            secondary: '#2479a8',
+            accent: '#fff1e3'
+        }
+    },
+    {
+        id: 'kanagawa-lotus',
+        name: 'Kanagawa Lotus',
+        color: '#f2ecdd',
+        description: 'Japanese parchment with lotus and jade accents',
+        accentColor: 'Rose',
+        tokens: {
+            bg: '#f2ecdd',
+            text: '#4d4d5c',
+            textDark: '#3f3f4a',
+            textDarker: '#5d5a64',
+            textSecondary: '#6c6972',
+            textMuted: '#8e8a91',
+            card: '#faf6e9',
+            border: '#ded5c3',
+            borderSecondary: '#c6baa6',
+            primary: '#b53849',
+            secondary: '#4f716b',
+            accent: '#e7dfcf'
+        }
+    },
+    {
+        id: 'material-lighter',
+        name: 'Material Lighter',
+        color: '#fafafa',
+        description: 'Clean material surfaces with indigo and teal',
+        accentColor: 'Indigo',
+        tokens: {
+            bg: '#fafafa',
+            text: '#263238',
+            textDark: '#37474f',
+            textDarker: '#546e7a',
+            textSecondary: '#607d8b',
+            textMuted: '#8799a3',
+            card: '#ffffff',
+            border: '#e0e0e0',
+            borderSecondary: '#b0bec5',
+            primary: '#3f51b5',
+            secondary: '#00796b',
+            accent: '#eceff1'
+        }
+    },
+    {
+        id: 'light-owl',
+        name: 'Light Owl',
+        color: '#fbfbfb',
+        description: 'Soft white night-owl companion with cool blues',
+        accentColor: 'Blue',
+        tokens: {
+            bg: '#fbfbfb',
+            text: '#403f53',
+            textDark: '#4f4d63',
+            textDarker: '#625f77',
+            textSecondary: '#726f86',
+            textMuted: '#9895a8',
+            card: '#ffffff',
+            border: '#e3e1ea',
+            borderSecondary: '#cbc8d6',
+            primary: '#4876d6',
+            secondary: '#0b7f84',
+            accent: '#edf2ff'
+        }
+    },
+    {
+        id: 'alabaster-light',
+        name: 'Alabaster',
+        color: '#f7f7f7',
+        description: 'Nearly monochrome canvas with deliberate blue',
+        accentColor: 'Blue',
+        tokens: {
+            bg: '#f7f7f7',
+            text: '#181818',
+            textDark: '#2f2f2f',
+            textDarker: '#494949',
+            textSecondary: '#616161',
+            textMuted: '#858585',
+            card: '#ffffff',
+            border: '#dedede',
+            borderSecondary: '#bfbfbf',
+            primary: '#325cc0',
+            secondary: '#397b25',
+            accent: '#ececec'
+        }
     }
 ] as const satisfies readonly ThemeDefinition[]
 
-export type Theme = (typeof THEMES)[number]['id']
-export type DarkTheme = Exclude<Theme, 'light'>
+export type Theme = ThemeId
+export type LightTheme = LightThemeId
+export type DarkTheme = DarkThemeId
+export type { ThemeAppearance }
+export {
+    DARK_THEME_IDS,
+    LIGHT_THEME_IDS,
+    getThemeAppearance,
+    isDarkThemeId,
+    isLightThemeId,
+    isThemeId
+}
 
 export const THEME_CLASS_IDS = THEMES
     .map((theme) => theme.id)
     .filter((themeId): themeId is Exclude<Theme, 'dark'> => themeId !== 'dark')
 
 const THEME_LOOKUP = new Map<string, ThemeDefinition>(THEMES.map((theme) => [theme.id, theme]))
-const THEME_ID_SET = new Set<string>(THEMES.map((theme) => theme.id))
-const DARK_THEME_ID_SET = new Set<string>(THEMES.filter((theme) => theme.id !== 'light').map((theme) => theme.id))
 
-export function isThemeId(value: unknown): value is Theme {
-    return typeof value === 'string' && THEME_ID_SET.has(value)
-}
-
-export function isDarkThemeId(value: unknown): value is DarkTheme {
-    return typeof value === 'string' && DARK_THEME_ID_SET.has(value)
-}
+export const LIGHT_THEMES = THEMES.filter((theme): theme is (typeof THEMES)[number] & { id: LightTheme } => isLightThemeId(theme.id))
+export const DARK_THEMES = THEMES.filter((theme): theme is (typeof THEMES)[number] & { id: DarkTheme } => isDarkThemeId(theme.id))
 
 export function getThemeDefinition(themeId: Theme): ThemeDefinition {
     return THEME_LOOKUP.get(themeId) || THEMES[0]

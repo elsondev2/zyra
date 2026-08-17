@@ -58,7 +58,7 @@ export function ProjectDetailsFilesTab(props: ProjectDetailsFilesTabProps) {
     } = props
 
     const { settings } = useSettings()
-    const iconTheme = settings.theme === 'light' ? 'light' : 'dark'
+    const iconTheme = settings.appearanceResolvedMode
     const renderEntryIcon = (pathValue: string, kind: 'file' | 'directory') => (
         <VscodeEntryIcon pathValue={pathValue} kind={kind} theme={iconTheme} className="size-3.5 shrink-0" />
     )

@@ -105,7 +105,8 @@ import type {
     NavigateOnboardingInput,
     OnboardingAuthStatus,
     OnboardingSnapshot,
-    OpenAIConnectionsStatus
+    OpenAIConnectionsStatus,
+    UpdateOnboardingAppearanceInput
 } from '../onboarding/contracts'
 import type {
     DevicePreferencesChangedEvent,
@@ -372,6 +373,7 @@ export interface DevScopeOnboardingApi {
     connectChatGpt: () => Promise<DevScopeResult<{ status: OnboardingAuthStatus }>>
     connectApiKey: (apiKey: string) => Promise<DevScopeResult<{ status: OnboardingAuthStatus }>>
     disconnectOpenAI: (input: DisconnectOpenAIInput) => Promise<DevScopeResult<{ status: OpenAIConnectionsStatus }>>
+    updateAppearance: (input: UpdateOnboardingAppearanceInput) => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>
     commitStep: (input: CommitOnboardingStepInput) => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>
     navigate: (input: NavigateOnboardingInput) => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>
     beginReview: (input: BeginOnboardingReviewInput) => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>

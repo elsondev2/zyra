@@ -52,6 +52,7 @@ for (const required of [
     'ONBOARDING_IPC.getState',
     'ONBOARDING_IPC.connectChatGpt',
     'ONBOARDING_IPC.connectApiKey',
+    'ONBOARDING_IPC.updateAppearance',
     'ONBOARDING_IPC.commitStep'
 ]) {
     assert.ok(preOnboardingSetupAllowlist.includes(required), `${required} must remain available to mandatory setup`)

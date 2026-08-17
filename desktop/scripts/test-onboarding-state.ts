@@ -14,6 +14,14 @@ await mkdir(projectsPath)
 let connected = true
 let tick = Date.parse('2026-08-14T10:00:00.000Z')
 const now = () => new Date(tick += 1_000)
+const appearanceSelection = {
+    appearanceThemeMode: 'system' as const,
+    appearanceLightTheme: 'light',
+    appearanceDarkTheme: 'dark',
+    appearanceUiFont: 'hanken',
+    appearanceCodeFont: 'system-mono',
+    accessibilityReduceMotion: false
+}
 
 async function verifyOpenAiConnectionContract() {
     let apiConfigured = false
@@ -28,8 +36,8 @@ async function verifyOpenAiConnectionContract() {
         }),
         loadSdk: async () => ({
             loginZyraAuth: async () => undefined,
-            configureZyraOpenAIApiKey: async (key: string) => { apiConfigured = true; verifiedApiKey = key },
-            verifyZyraOpenAIApiAuth: async () => { verificationCalls += 1; return { ok: true } },
+            configureZyraOpenAIApiKey: async (key: string) => { apiConfigured = true; verifiedApiKey = key; verificationCalls += 1 },
+            verifyZyraOpenAIApiAuth: async () => ({ ok: true }),
             getZyraAuthStatus: async () => ({ provider: 'openai', status: { configured: apiConfigured } }),
             removeZyraAuth: async (method: 'subscription' | 'api') => {
                 if (method === 'api') apiConfigured = false
@@ -49,13 +57,19 @@ async function verifyOpenAiConnectionContract() {
 
     let chatConnected = false
     let openedUrl: string | null = null
+    let chatStatusCalls = 0
+    let chatStatusOptions: { includeUsage?: boolean; refreshCredential?: boolean } | undefined
     const chatAuth = new OpenAIConnectionService({
         now,
         openExternal: (url) => { openedUrl = url },
         loadAccount: async () => ({
-            buildChatGptAccountStatus: async () => chatConnected
-                ? { provider: 'openai-codex', status: { configured: true }, usage: {} }
-                : { provider: 'openai-codex', status: { configured: false } }
+            buildChatGptAccountStatus: async (_provider?: string, options?: { includeUsage?: boolean; refreshCredential?: boolean }) => {
+                chatStatusCalls += 1
+                chatStatusOptions = options
+                return chatConnected
+                    ? { provider: 'openai-codex', status: { configured: true }, usage: {} }
+                    : { provider: 'openai-codex', status: { configured: false } }
+            }
         }),
         loadSdk: async () => ({
             loginZyraAuth: async (_provider: string, options: Record<string, unknown>) => {
@@ -73,6 +87,10 @@ async function verifyOpenAiConnectionContract() {
     assert.equal(openedUrl, 'https://auth.openai.test/')
     assert.equal(chatStatus.method, 'chatgpt')
     assert.equal(chatStatus.verified, true)
+    assert.deepEqual(chatStatusOptions, { includeUsage: false, refreshCredential: false })
+    const callsAfterConnect = chatStatusCalls
+    assert.equal((await chatAuth.getStatus()).verified, true)
+    assert.equal(chatStatusCalls, callsAfterConnect, 'a just-verified connection must make the Continue checkpoint instant')
 }
 
 function createAuth() {
@@ -100,6 +118,7 @@ try {
     const service = new OnboardingService(onboardingPath, preferences, createAuth(), now)
     let snapshot = await service.initialize()
     assert.equal(snapshot.accessAllowed, false)
+    assert.equal(service.shouldShowOnboarding(), true)
     assert.equal(snapshot.record?.currentStep, 'welcome')
     assert.equal(snapshot.record?.revision, 0)
 
@@ -120,21 +139,22 @@ try {
     )
 
     snapshot = await service.commitStep({ expectedRevision: 1, step: 'connect-openai' })
-    snapshot = await service.commitStep({
+    snapshot = await service.updateAppearance({
         expectedRevision: 2,
-        step: 'appearance',
-        selection: {
-            appearanceThemeMode: 'system',
-            appearanceDarkTheme: 'dark',
-            appearanceUiFont: 'hanken',
-            appearanceCodeFont: 'system-mono',
-            accessibilityReduceMotion: false
-        }
+        selection: appearanceSelection
     })
+    assert.equal(snapshot.record?.currentStep, 'appearance', 'saving a theme must not advance setup')
+    assert.deepEqual(snapshot.record?.data.appearance, appearanceSelection, 'the selected theme must be resumable before Continue')
+    const appearanceCheckpoint = await new OnboardingService(onboardingPath, preferences, createAuth(), now).initialize()
+    assert.equal(appearanceCheckpoint.record?.currentStep, 'appearance', 'saving a theme must resume on the same setup page')
+    assert.deepEqual(appearanceCheckpoint.record?.data.appearance, appearanceSelection, 'a restart must retain the selected theme before Continue')
+    const savedAppearance = await preferences.get({ surface: 'desktop' })
+    assert.equal(savedAppearance.settings.appearanceLightTheme, appearanceSelection.appearanceLightTheme)
+    assert.equal(savedAppearance.settings.appearanceDarkTheme, appearanceSelection.appearanceDarkTheme)
     snapshot = await service.commitStep({
         expectedRevision: 3,
-        step: 'web-access',
-        selection: { webSearch: false, webFetch: true }
+        step: 'appearance',
+        selection: appearanceSelection
     })
     snapshot = await service.commitStep({
         expectedRevision: 4,
@@ -147,14 +167,15 @@ try {
     assert.equal(snapshot.showOnboarding, false)
     assert.equal(snapshot.record?.status, 'completed')
     assert.equal(snapshot.record?.revision, 6)
+    assert.equal(service.shouldShowOnboarding(), false)
 
     const stored = await readFile(onboardingPath, 'utf8')
     assert.equal(stored.includes('test-openai-key'), false, 'onboarding persistence must never contain a credential')
-    assert.equal(stored.includes('webSearch'), true)
+    assert.equal(stored.includes('webSearch'), false, 'web defaults must not be serialized as a setup decision')
     assert.equal((await readdir(join(root, 'setup'))).some((name) => name.includes('.tmp-')), false, 'atomic temp files must be cleaned up')
 
     const webDefaults = await preferences.getNewChatWebDefaults()
-    assert.deepEqual(webDefaults, { webSearch: false, webFetch: true })
+    assert.deepEqual(webDefaults, { webSearch: true, webFetch: true }, 'new installs enable both web tools without adding an onboarding step')
     assert.equal(await validateOnboardingProjectsFolder(projectsPath), await realpath(projectsPath))
     await assert.rejects(validateOnboardingProjectsFolder(join(root, 'missing')), /existing projects folder/)
     await assert.rejects(validateOnboardingProjectsFolder(parse(root).root), /bounded projects folder/)
@@ -168,16 +189,125 @@ try {
     assert.equal(review.accessAllowed, true, 'review mode must preserve completed access')
     assert.equal(review.showOnboarding, true)
     assert.equal(review.record?.reviewActive, true)
+    assert.equal(restarted.shouldShowOnboarding(), true)
     const resumedReview = new OnboardingService(onboardingPath, preferences, createAuth(), now)
     assert.equal((await resumedReview.initialize()).record?.reviewActive, true, 'review progress must resume after close')
     const cancelled = await resumedReview.cancelReview({ expectedRevision: 7 })
     assert.equal(cancelled.showOnboarding, false)
     assert.equal(cancelled.record?.status, 'completed')
+    assert.equal(resumedReview.shouldShowOnboarding(), false)
 
     await assert.rejects(
         resumedReview.beginReview({ expectedRevision: 8, invalidateCompletion: true }),
         /Explicit confirmation/
     )
+
+    const legacyCompletedRecord = {
+        schemaVersion: 1,
+        flowVersion: 1,
+        revision: 11,
+        status: 'completed',
+        currentStep: 'review',
+        completedSteps: ['welcome', 'connect-openai', 'appearance', 'web-access', 'projects', 'review'],
+        reviewActive: false,
+        startedAt: '2026-08-14T08:00:00.000Z',
+        updatedAt: '2026-08-14T09:00:00.000Z',
+        completedAt: '2026-08-14T09:00:00.000Z',
+        data: {
+            auth: { method: 'chatgpt', verifiedAt: '2026-08-14T08:10:00.000Z' },
+            appearance: appearanceSelection,
+            web: { webSearch: false, webFetch: true },
+            projects: { projectsFolder: projectsPath }
+        }
+    }
+    const legacyCompletedPath = join(root, 'setup', 'flow-v1-completed.json')
+    await writeFile(legacyCompletedPath, JSON.stringify(legacyCompletedRecord))
+    const migratedCompleted = await new OnboardingService(legacyCompletedPath, preferences, createAuth(), now).initialize()
+    assert.equal(migratedCompleted.accessAllowed, true, 'removing the web step must preserve completed devices')
+    assert.equal(migratedCompleted.record?.flowVersion, 2)
+    assert.equal(migratedCompleted.record?.revision, 12)
+    assert.equal(migratedCompleted.record?.completedAt, legacyCompletedRecord.completedAt)
+    assert.equal((migratedCompleted.record?.completedSteps as readonly string[] | undefined)?.includes('web-access'), false)
+    assert.equal(JSON.parse(await readFile(legacyCompletedPath, 'utf8')).flowVersion, 2, 'flow migration must persist atomically')
+    assert.equal((await new OnboardingService(legacyCompletedPath, preferences, createAuth(), now).initialize()).record?.revision, 12, 'flow migration must be idempotent after restart')
+
+    const { appearanceLightTheme: _removedLightTheme, ...pairlessAppearance } = appearanceSelection
+    const pairlessCurrentPath = join(root, 'setup', 'flow-v2-pairless.json')
+    await writeFile(pairlessCurrentPath, JSON.stringify({
+        ...legacyCompletedRecord,
+        flowVersion: 2,
+        revision: 20,
+        completedSteps: ['welcome', 'connect-openai', 'appearance', 'projects', 'review'],
+        data: { ...legacyCompletedRecord.data, appearance: pairlessAppearance }
+    }))
+    const pairlessCurrent = await new OnboardingService(pairlessCurrentPath, preferences, createAuth(), now).initialize()
+    assert.equal(pairlessCurrent.accessAllowed, true, 'existing v2 records without a light half must remain completed')
+    assert.equal(pairlessCurrent.record?.data.appearance?.appearanceLightTheme, 'light', 'missing light halves migrate in memory to Zyra Light')
+
+    const invalidPairPath = join(root, 'setup', 'flow-v2-invalid-theme-pair.json')
+    await writeFile(invalidPairPath, JSON.stringify({
+        ...legacyCompletedRecord,
+        flowVersion: 2,
+        revision: 21,
+        completedSteps: ['welcome', 'connect-openai', 'appearance', 'projects', 'review'],
+        data: {
+            ...legacyCompletedRecord.data,
+            appearance: { ...appearanceSelection, appearanceLightTheme: 'forest' }
+        }
+    }))
+    const invalidPair = await new OnboardingService(invalidPairPath, preferences, createAuth(), now).initialize()
+    assert.equal(invalidPair.accessAllowed, false, 'a dark theme cannot be trusted as the saved light half')
+    assert.equal(invalidPair.recovery?.reason, 'invalid-current-schema')
+
+    const legacyWebStepPath = join(root, 'setup', 'flow-v1-web-step.json')
+    await writeFile(legacyWebStepPath, JSON.stringify({
+        schemaVersion: 1,
+        flowVersion: 1,
+        revision: 4,
+        status: 'in-progress',
+        currentStep: 'web-access',
+        completedSteps: ['welcome', 'connect-openai', 'appearance'],
+        reviewActive: false,
+        startedAt: '2026-08-14T08:00:00.000Z',
+        updatedAt: '2026-08-14T08:20:00.000Z',
+        completedAt: null,
+        data: {
+            auth: { method: 'chatgpt', verifiedAt: '2026-08-14T08:10:00.000Z' },
+            appearance: appearanceSelection
+        }
+    }))
+    const migratedWebStep = await new OnboardingService(legacyWebStepPath, preferences, createAuth(), now).initialize()
+    assert.equal(migratedWebStep.record?.currentStep, 'projects', 'an unfinished removed web step must resume at the next useful decision')
+    assert.equal(migratedWebStep.record?.flowVersion, 2)
+    assert.equal(migratedWebStep.record?.revision, 5)
+
+    const legacyBacktrackedPath = join(root, 'setup', 'flow-v1-backtracked-web-step.json')
+    await writeFile(legacyBacktrackedPath, JSON.stringify({
+        ...legacyCompletedRecord,
+        revision: 8,
+        status: 'in-progress',
+        currentStep: 'web-access',
+        completedSteps: ['welcome', 'connect-openai', 'appearance', 'web-access', 'projects'],
+        completedAt: null
+    }))
+    const migratedBacktracked = await new OnboardingService(legacyBacktrackedPath, preferences, createAuth(), now).initialize()
+    assert.equal(migratedBacktracked.record?.currentStep, 'review', 'a backtracked removed step must not make the user repeat Projects')
+    assert.equal(migratedBacktracked.record?.revision, 9)
+
+    const invalidLegacyPath = join(root, 'setup', 'flow-v1-invalid-completed.json')
+    await writeFile(invalidLegacyPath, JSON.stringify({
+        ...legacyCompletedRecord,
+        revision: 14,
+        data: {
+            auth: legacyCompletedRecord.data.auth,
+            appearance: legacyCompletedRecord.data.appearance,
+            projects: legacyCompletedRecord.data.projects
+        }
+    }))
+    const invalidLegacy = await new OnboardingService(invalidLegacyPath, preferences, createAuth(), now).initialize()
+    assert.equal(invalidLegacy.accessAllowed, false, 'an invalid v1 completion must never be relaxed into a valid v2 completion')
+    assert.equal(invalidLegacy.recovery?.reason, 'invalid-current-schema')
+    assert.ok(invalidLegacy.recovery?.backupPath)
 
     const corruptPath = join(root, 'setup', 'corrupt-onboarding.json')
     await writeFile(corruptPath, '{not json')

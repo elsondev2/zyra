@@ -82,7 +82,7 @@ export default function AssistantAttachmentPreviewModal({
     onClose
 }: AssistantAttachmentPreviewModalProps) {
     const { settings } = useSettings()
-    const iconTheme = settings.theme === 'light' ? 'light' : 'dark'
+    const iconTheme = settings.appearanceResolvedMode
     const [copied, setCopied] = useState(false)
 
     useEffect(() => {

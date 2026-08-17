@@ -2,7 +2,14 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { ACCENT_COLORS } from '../src/renderer/src/lib/settings'
-import { THEMES } from '../src/renderer/src/lib/settings-theme-catalog'
+import {
+    DARK_THEMES,
+    DARK_THEME_IDS,
+    LIGHT_THEMES,
+    LIGHT_THEME_IDS,
+    THEMES,
+    getThemeAppearance
+} from '../src/renderer/src/lib/settings-theme-catalog'
 import {
     getContrastRatio,
     resolveAccentTokens,
@@ -22,8 +29,14 @@ const MINIMUMS = {
     surface: 1.04
 }
 
-assert.equal(THEMES.length, 46, 'Theme additions or removals must update the audited theme count')
+assert.equal(THEMES.length, 72, 'Theme additions or removals must update the audited theme count')
+assert.equal(LIGHT_THEMES.length, 27, 'the light catalog must keep its audited breadth')
+assert.equal(DARK_THEMES.length, 45, 'the dark catalog must keep its audited breadth')
 assert.equal(new Set(THEMES.map((theme) => theme.id)).size, THEMES.length, 'Theme ids must be unique')
+assert.ok(LIGHT_THEMES.every((theme) => getThemeAppearance(theme.id) === 'light'))
+assert.ok(DARK_THEMES.every((theme) => getThemeAppearance(theme.id) === 'dark'))
+assert.deepEqual(LIGHT_THEMES.map((theme) => theme.id), [...LIGHT_THEME_IDS], 'every shared light id must have one catalog definition')
+assert.deepEqual(DARK_THEMES.map((theme) => theme.id), [...DARK_THEME_IDS], 'every shared dark id must have one catalog definition')
 assert.equal(new Set(ACCENT_COLORS.map((accent) => accent.name)).size, ACCENT_COLORS.length, 'Accent names must be unique')
 
 for (const theme of THEMES) {

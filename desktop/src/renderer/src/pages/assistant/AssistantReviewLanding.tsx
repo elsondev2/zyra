@@ -41,7 +41,7 @@ export const AssistantReviewLanding = memo(function AssistantReviewLanding({
     onOpenTurnInTab: (turnId: string) => void
 }) {
     const { settings } = useSettings()
-    const iconTheme = settings.theme === 'light' ? 'light' : 'dark'
+    const iconTheme = settings.appearanceResolvedMode
     const [query, setQuery] = useState('')
     const deferredQuery = useDeferredValue(query)
     const [filter, setFilter] = useState<ReviewTurnFilter>('all')

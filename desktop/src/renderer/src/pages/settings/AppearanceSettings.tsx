@@ -2,19 +2,22 @@ import { RotateCcw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { DevScopeManagedFont } from '@shared/contracts/font-contracts'
 import {
-    ACCENT_COLORS,
     APPEARANCE_CODE_FONTS,
     APPEARANCE_UI_FONTS,
+    DEFAULT_APPEARANCE_UI_FONT,
     THEMES,
     getAppearanceLocalFontFamily,
     getAppearanceManagedFontId,
     getSystemAppearanceTheme,
+    getThemeAppearance,
+    getThemePresetAccent,
+    resolveAppearanceTheme,
     useSettings,
     type AppearanceCodeFont,
     type AppearanceThemeMode,
     type AppearanceUiFont,
     type DarkTheme,
-    type Theme
+    type LightTheme
 } from '@/lib/settings'
 import type { ThemeTokens } from '@/lib/settings-theme-catalog'
 import { listAppearanceManagedFonts } from '@/lib/appearance-font-runtime'
@@ -29,6 +32,7 @@ import {
 import { createSettingsRowTargetId, createSettingsSectionTargetId } from './settings-search'
 import { AppearanceFontManagerDialog } from './appearance/AppearanceFontManagerDialog'
 import { AppearanceThemeController } from './appearance/AppearanceThemeController'
+import { AppearanceThemeSelector } from './appearance/AppearanceThemeSelect'
 import {
     AppearanceCodePreview,
     AppearanceSystemThemeCard,
@@ -40,8 +44,9 @@ export default function AppearanceSettings() {
     const [fontManagerTarget, setFontManagerTarget] = useState<'ui' | 'code' | null>(null)
     const [managedFonts, setManagedFonts] = useState<DevScopeManagedFont[]>([])
     const baseSelectedTheme = THEMES.find((theme) => theme.id === settings.theme) || THEMES[0]
-    const lightTheme = THEMES.find((theme) => theme.id === 'light') || THEMES[0]
+    const defaultLightTheme = THEMES.find((theme) => theme.id === 'light') || THEMES[0]
     const defaultDarkTheme = THEMES.find((theme) => theme.id === 'dark') || THEMES[0]
+    const selectedLightTheme = THEMES.find((theme) => theme.id === settings.appearanceLightTheme) || defaultLightTheme
     const selectedDarkTheme = THEMES.find((theme) => theme.id === settings.appearanceDarkTheme) || defaultDarkTheme
     const customThemeActive = settings.appearanceCustomThemeActive
         && settings.appearanceCustomTheme?.baseTheme === settings.theme
@@ -65,68 +70,70 @@ export default function AppearanceSettings() {
     }
 
     const paletteChanged = settings.appearanceThemeMode !== 'system'
+        || settings.appearanceLightTheme !== 'light'
         || settings.appearanceDarkTheme !== 'dark'
         || settings.appearanceCustomThemeActive
-        || settings.appearanceUiFont !== 'hanken'
+        || settings.appearanceUiFont !== DEFAULT_APPEARANCE_UI_FONT
         || settings.appearanceCodeFont !== 'system-mono'
-        || settings.accentColor.name !== 'Blue'
 
-    const getPresetAccent = (theme: Theme) => {
-        const definition = THEMES.find((entry) => entry.id === theme)
-        return ACCENT_COLORS.find((accent) => accent.name === definition?.accentColor) || ACCENT_COLORS[0]
-    }
+    const getPresetAccent = getThemePresetAccent
+
+    const resolvedAppearance = settings.appearanceThemeMode === 'system'
+        ? getSystemAppearanceTheme()
+        : settings.appearanceThemeMode
 
     const selectThemeMode = (appearanceThemeMode: AppearanceThemeMode) => {
-        const theme: Theme = appearanceThemeMode === 'system'
-            ? getSystemAppearanceTheme()
-            : appearanceThemeMode === 'light'
-                ? 'light'
-                : settings.appearanceDarkTheme
+        const theme = resolveAppearanceTheme(
+            appearanceThemeMode,
+            settings.appearanceLightTheme,
+            settings.appearanceDarkTheme
+        )
         updateSettings({
             appearanceThemeMode,
             theme,
             appearanceCustomThemeActive: false,
-            appearanceUiFont: 'hanken',
-            appearanceCodeFont: 'system-mono',
             accentColor: getPresetAccent(theme)
         })
     }
 
-    const selectThemePreset = (theme: Theme | 'custom') => {
-        if (theme === 'custom') {
-            const customTheme = settings.appearanceCustomTheme
-            if (!customTheme) return
-            const isLight = customTheme.baseTheme === 'light'
-            updateSettings({
-                appearanceThemeMode: isLight ? 'light' : 'dark',
-                appearanceDarkTheme: isLight ? settings.appearanceDarkTheme : customTheme.baseTheme as DarkTheme,
-                appearanceCustomThemeActive: true,
-                appearanceUiFont: customTheme.uiFont,
-                appearanceCodeFont: customTheme.codeFont,
-                theme: customTheme.baseTheme,
-                accentColor: customTheme.accentColor
-            })
-            return
-        }
-        if (theme === 'light') {
-            updateSettings({
-                appearanceThemeMode: 'light',
-                appearanceCustomThemeActive: false,
-                appearanceUiFont: 'hanken',
-                appearanceCodeFont: 'system-mono',
-                theme,
-                accentColor: getPresetAccent(theme)
-            })
-            return
-        }
+    const selectLightTheme = (appearanceLightTheme: LightTheme) => {
+        const active = resolvedAppearance === 'light'
         updateSettings({
-            appearanceThemeMode: 'dark',
-            appearanceDarkTheme: theme as DarkTheme,
-            appearanceCustomThemeActive: false,
-            appearanceUiFont: 'hanken',
-            appearanceCodeFont: 'system-mono',
-            theme,
-            accentColor: getPresetAccent(theme)
+            appearanceLightTheme,
+            ...(active ? {
+                theme: appearanceLightTheme,
+                appearanceCustomThemeActive: false,
+                accentColor: getPresetAccent(appearanceLightTheme)
+            } : {})
+        })
+    }
+
+    const selectDarkTheme = (appearanceDarkTheme: DarkTheme) => {
+        const active = resolvedAppearance === 'dark'
+        updateSettings({
+            appearanceDarkTheme,
+            ...(active ? {
+                theme: appearanceDarkTheme,
+                appearanceCustomThemeActive: false,
+                accentColor: getPresetAccent(appearanceDarkTheme)
+            } : {})
+        })
+    }
+
+    const useSavedCustomTheme = () => {
+        const customTheme = settings.appearanceCustomTheme
+        if (!customTheme) return
+        const appearance = getThemeAppearance(customTheme.baseTheme)
+        updateSettings({
+            appearanceThemeMode: appearance,
+            ...(appearance === 'light'
+                ? { appearanceLightTheme: customTheme.baseTheme as LightTheme }
+                : { appearanceDarkTheme: customTheme.baseTheme as DarkTheme }),
+            appearanceCustomThemeActive: true,
+            appearanceUiFont: customTheme.uiFont,
+            appearanceCodeFont: customTheme.codeFont,
+            theme: customTheme.baseTheme,
+            accentColor: customTheme.accentColor
         })
     }
 
@@ -137,10 +144,12 @@ export default function AppearanceSettings() {
         codeFont: AppearanceCodeFont = settings.appearanceCodeFont
     ) => {
         const baseTheme = settings.theme
-        const isLight = baseTheme === 'light'
+        const appearance = getThemeAppearance(baseTheme)
         updateSettings({
-            appearanceThemeMode: isLight ? 'light' : 'dark',
-            appearanceDarkTheme: isLight ? settings.appearanceDarkTheme : baseTheme as DarkTheme,
+            appearanceThemeMode: appearance,
+            ...(appearance === 'light'
+                ? { appearanceLightTheme: baseTheme as LightTheme }
+                : { appearanceDarkTheme: baseTheme as DarkTheme }),
             appearanceCustomTheme: { baseTheme, tokens, accentColor, uiFont, codeFont },
             appearanceCustomThemeActive: true,
             appearanceUiFont: uiFont,
@@ -150,14 +159,18 @@ export default function AppearanceSettings() {
     }
 
     const resetTheme = () => {
+        const appearanceLightTheme: LightTheme = 'light'
+        const appearanceDarkTheme: DarkTheme = 'dark'
+        const theme = resolveAppearanceTheme('system', appearanceLightTheme, appearanceDarkTheme)
         updateSettings({
             appearanceThemeMode: 'system',
-            appearanceDarkTheme: 'dark',
+            appearanceLightTheme,
+            appearanceDarkTheme,
             appearanceCustomThemeActive: false,
-            appearanceUiFont: 'hanken',
+            appearanceUiFont: DEFAULT_APPEARANCE_UI_FONT,
             appearanceCodeFont: 'system-mono',
-            theme: getSystemAppearanceTheme(),
-            accentColor: ACCENT_COLORS[0]
+            theme,
+            accentColor: getPresetAccent(theme)
         })
     }
 
@@ -191,22 +204,35 @@ export default function AppearanceSettings() {
                     tabIndex={-1}
                 >
                     <AppearanceSystemThemeCard
-                        darkTheme={defaultDarkTheme}
-                        lightTheme={lightTheme}
+                        darkTheme={selectedDarkTheme}
+                        lightTheme={selectedLightTheme}
                         selected={settings.appearanceThemeMode === 'system'}
                         onSelect={() => selectThemeMode('system')}
                     />
                     <AppearanceThemeCard
-                        theme={customThemeActive && settings.theme === 'light' ? selectedTheme : lightTheme}
+                        theme={customThemeActive && settings.appearanceResolvedMode === 'light' ? selectedTheme : selectedLightTheme}
                         label="Light"
                         selected={settings.appearanceThemeMode === 'light'}
                         onSelect={() => selectThemeMode('light')}
                     />
                     <AppearanceThemeCard
-                        theme={customThemeActive && settings.theme !== 'light' ? selectedTheme : selectedDarkTheme}
+                        theme={customThemeActive && settings.appearanceResolvedMode === 'dark' ? selectedTheme : selectedDarkTheme}
                         label="Dark"
                         selected={settings.appearanceThemeMode === 'dark'}
                         onSelect={() => selectThemeMode('dark')}
+                    />
+                </div>
+
+                <div
+                    data-settings-search-target={createSettingsRowTargetId('Theme', 'Light and dark themes')}
+                    tabIndex={-1}
+                >
+                    <AppearanceThemeSelector
+                        appearance={settings.appearanceResolvedMode}
+                        lightTheme={settings.appearanceLightTheme}
+                        darkTheme={settings.appearanceDarkTheme}
+                        onLightThemeChange={selectLightTheme}
+                        onDarkThemeChange={selectDarkTheme}
                     />
                 </div>
 
@@ -222,7 +248,7 @@ export default function AppearanceSettings() {
                     codeFont={settings.appearanceCodeFont}
                     uiFontLabel={resolveFontLabel(settings.appearanceUiFont)}
                     codeFontLabel={resolveFontLabel(settings.appearanceCodeFont)}
-                    onPresetChange={selectThemePreset}
+                    onUseCustom={useSavedCustomTheme}
                     onTokensChange={(tokens) => saveCustomTheme(tokens)}
                     onAccentChange={(accentColor) => saveCustomTheme(selectedTheme.tokens, accentColor)}
                     onUiFontChange={(uiFont) => saveCustomTheme(selectedTheme.tokens, settings.accentColor, uiFont)}

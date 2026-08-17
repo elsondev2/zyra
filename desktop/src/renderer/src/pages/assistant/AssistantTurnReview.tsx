@@ -172,7 +172,7 @@ export const AssistantTurnReview = memo(function AssistantTurnReview({
     onLoadingChange?: (loading: boolean) => void
 }) {
     const { settings } = useSettings()
-    const iconTheme = settings.theme === 'light' ? 'light' : 'dark'
+    const iconTheme = settings.appearanceResolvedMode
     const rootRef = useRef<HTMLElement | null>(null)
     const diffSurfaceRef = useRef<HTMLElement | null>(null)
     const resizeFrameRef = useRef<number | null>(null)

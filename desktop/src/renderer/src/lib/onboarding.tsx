@@ -5,7 +5,8 @@ import type {
     CommitOnboardingStepInput,
     NavigateOnboardingInput,
     OnboardingAuthStatus,
-    OnboardingSnapshot
+    OnboardingSnapshot,
+    UpdateOnboardingAppearanceInput
 } from '@shared/onboarding/contracts'
 
 type OnboardingContextValue = {
@@ -16,6 +17,7 @@ type OnboardingContextValue = {
     getAuthStatus: () => Promise<OnboardingAuthStatus>
     connectChatGpt: () => Promise<OnboardingAuthStatus>
     connectApiKey: (apiKey: string) => Promise<OnboardingAuthStatus>
+    updateAppearance: (input: UpdateOnboardingAppearanceInput) => Promise<OnboardingSnapshot>
     commitStep: (input: CommitOnboardingStepInput) => Promise<OnboardingSnapshot>
     navigate: (input: NavigateOnboardingInput) => Promise<OnboardingSnapshot>
     beginReview: (input: BeginOnboardingReviewInput) => Promise<OnboardingSnapshot>
@@ -89,6 +91,10 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
             if (!result.success) throw requestError(result, 'Could not connect OpenAI.')
             return result.status
         },
+        updateAppearance: (input) => applySnapshotResult(
+            window.devscope.onboarding.updateAppearance(input),
+            'Could not save this appearance.'
+        ),
         commitStep: (input) => applySnapshotResult(
             window.devscope.onboarding.commitStep(input),
             'Could not save this setup step.'

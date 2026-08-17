@@ -1,4 +1,4 @@
-import { getThemeDefinition, type Theme } from '@/lib/settings-theme-catalog'
+import { getThemeAppearance, getThemeDefinition, type Theme } from '@/lib/settings-theme-catalog'
 
 const MIN_ICON_CONTRAST_RATIO = 2.8
 
@@ -97,7 +97,7 @@ export function resolveReadableLogoColor(color: string | undefined, theme: Theme
     const adjustedColor = mixHexColors(
         normalizedColor,
         preferredTone,
-        theme === 'light' ? 0.72 : 0.62
+        getThemeAppearance(theme) === 'light' ? 0.72 : 0.62
     )
 
     if (getContrastRatio(adjustedColor, surfaceHex) >= MIN_ICON_CONTRAST_RATIO) {

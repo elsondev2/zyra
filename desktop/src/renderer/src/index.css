@@ -11,7 +11,7 @@
    ============================================================================ */
 @layer base {
   html {
-    font-family: var(--font-ui, "Hanken Grotesk Variable", "Hanken Grotesk", -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", "Segoe UI", system-ui, sans-serif);
+    font-family: var(--font-ui, "Bricolage Grotesque", "Hanken Grotesk Variable", "Hanken Grotesk", -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", "Segoe UI", system-ui, sans-serif);
   }
 
   body {
@@ -33,7 +33,7 @@
 }
 
 .font-sans {
-  font-family: var(--font-ui, "Hanken Grotesk Variable", "Hanken Grotesk", "Segoe UI", system-ui, sans-serif);
+  font-family: var(--font-ui, "Bricolage Grotesque", "Hanken Grotesk Variable", "Hanken Grotesk", "Segoe UI", system-ui, sans-serif);
 }
 
 .font-mono {

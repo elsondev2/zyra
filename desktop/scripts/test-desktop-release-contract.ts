@@ -54,6 +54,8 @@ assert(!preflightSource.includes('stablePublication'), 'prerelease tags must not
 
 const globalResources = build.extraResources
 assert(globalResources.some((entry: { from: string; to: string }) => entry.from === '../LICENSE' && entry.to === 'LICENSE'))
+assert(globalResources.some((entry: { from: string; to: string }) => entry.from === '../THIRD_PARTY_NOTICES.md' && entry.to === 'THIRD_PARTY_NOTICES.md'))
+assert.match(readFileSync(path.join(repositoryRoot, 'THIRD_PARTY_NOTICES.md'), 'utf8'), /OpenAI logo from SVGL[\s\S]*MIT License/)
 assert(globalResources.some((entry: { from: string; to: string }) => entry.from === '.release/zyra-runtime' && entry.to === 'zyra-runtime'))
 assert(
     globalResources.some((entry: { from: string; to: string }) =>

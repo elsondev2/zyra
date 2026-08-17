@@ -1,11 +1,12 @@
+import type { DarkThemeId, LightThemeId } from '../preferences/theme-contract'
+
 export const ONBOARDING_SCHEMA_VERSION = 1 as const
-export const ONBOARDING_FLOW_VERSION = 1 as const
+export const ONBOARDING_FLOW_VERSION = 2 as const
 
 export const ONBOARDING_STEPS = [
     'welcome',
     'connect-openai',
     'appearance',
-    'web-access',
     'projects',
     'review'
 ] as const
@@ -16,13 +17,14 @@ export type OnboardingAuthMethod = 'chatgpt' | 'api-key'
 
 export type OnboardingAppearanceSelection = {
     appearanceThemeMode: 'system' | 'light' | 'dark'
-    appearanceDarkTheme: string
+    appearanceLightTheme: LightThemeId
+    appearanceDarkTheme: DarkThemeId
     appearanceUiFont: string
     appearanceCodeFont: string
     accessibilityReduceMotion: boolean
 }
 
-export type OnboardingWebSelection = {
+export type LegacyOnboardingWebSelection = {
     webSearch: boolean
     webFetch: boolean
 }
@@ -48,7 +50,7 @@ export type OnboardingRecord = {
             verifiedAt: string
         }
         appearance?: OnboardingAppearanceSelection
-        web?: OnboardingWebSelection
+        web?: LegacyOnboardingWebSelection
         projects?: OnboardingProjectsSelection
     }
 }
@@ -99,11 +101,15 @@ export type DisconnectOpenAIInput = {
     confirmed: true
 }
 
+export type UpdateOnboardingAppearanceInput = {
+    expectedRevision: number
+    selection: OnboardingAppearanceSelection
+}
+
 export type CommitOnboardingStepInput =
     | { expectedRevision: number; step: 'welcome' }
     | { expectedRevision: number; step: 'connect-openai' }
     | { expectedRevision: number; step: 'appearance'; selection: OnboardingAppearanceSelection }
-    | { expectedRevision: number; step: 'web-access'; selection: OnboardingWebSelection }
     | { expectedRevision: number; step: 'projects'; selection: OnboardingProjectsSelection }
     | { expectedRevision: number; step: 'review' }
 
@@ -129,6 +135,7 @@ export const ONBOARDING_IPC = {
     connectChatGpt: 'zyra:onboarding:connect-chatgpt',
     connectApiKey: 'zyra:onboarding:connect-api-key',
     disconnectOpenAI: 'zyra:account:disconnect-openai',
+    updateAppearance: 'zyra:onboarding:update-appearance',
     commitStep: 'zyra:onboarding:commit-step',
     navigate: 'zyra:onboarding:navigate',
     beginReview: 'zyra:onboarding:begin-review',

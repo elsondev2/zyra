@@ -47,7 +47,7 @@ export default {
                 }
             },
             fontFamily: {
-                sans: ['var(--font-ui)', 'Hanken Grotesk Variable', 'Hanken Grotesk', '-apple-system', 'BlinkMacSystemFont', 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', 'Segoe UI', 'system-ui', 'sans-serif'],
+                sans: ['var(--font-ui)', 'Bricolage Grotesque', 'Hanken Grotesk Variable', 'Hanken Grotesk', '-apple-system', 'BlinkMacSystemFont', 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', 'Segoe UI', 'system-ui', 'sans-serif'],
                 mono: ['var(--font-code)', 'ui-monospace', 'SFMono-Regular', 'Consolas', 'Liberation Mono', 'monospace']
             },
             borderRadius: {

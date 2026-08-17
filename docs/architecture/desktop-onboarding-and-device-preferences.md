@@ -11,15 +11,28 @@ A fresh Zyra Desktop install cannot mount normal routes until the main process r
 The setup sequence is fixed and ordered:
 
 1. Welcome
-2. Connect OpenAI
+2. Connect ChatGPT or an OpenAI API key
 3. Appearance
-4. Web access
-5. Projects folder
-6. Review
+4. Projects folder
+5. Review
 
-Each successful Continue writes the next checkpoint. Closing, restarting, or crashing resumes at `currentStep`; forward navigation cannot skip an unfinished step. Back navigation is limited to completed steps.
+Each successful Continue writes the next checkpoint. Closing, restarting, or crashing resumes at `currentStep`; forward navigation cannot skip an unfinished step. Back navigation is limited to completed steps. Back and Continue remain in a fixed viewport action dock while only the step body scrolls. Appearance keeps mode separate from palette: the user selects System, Light, or Dark and configures one validated light theme and one validated dark theme. System follows the local OS appearance and switches between those saved halves. One dropdown is shown for the currently resolved appearance; switching the mode exposes the other catalog without crowding the page. Every option row projects the complete Zyra token palette. Theme changes save immediately through the constrained onboarding API without advancing the step, so a restart or review exit retains the selection. Fresh installs and Appearance reset use Bricolage Grotesque for the interface while explicit existing font and accent choices remain intact.
+
+Web access is not an onboarding decision. New installs start with both search and page fetching enabled; users can change the new-chat default later in Settings → Assistant. Existing explicit settings remain authoritative.
 
 A completed device remains completed if its OpenAI credential later expires. Normal connection handling can ask the user to reconnect, but auth expiry does not recreate the first-run gate.
+
+### Interaction design evidence
+
+| Reference | Evidence role | Applied anatomy |
+| --- | --- | --- |
+| [Linear onboarding screenshots](https://www.saasui.design/pattern/onboarding/linear) | Visual-only, seven real screens | One meaningful decision per screen, narrow content, restrained hierarchy, low-position progress |
+| [Raycast onboarding flow](https://www.lazyweb.com/flow/raycast/onboarding) | Visual-only, current multi-screen flow | Clear primary action and advanced choices kept secondary; mobile geometry was not copied |
+| [Linear](https://supademo.com/user-flow-examples/linear) and [Notion](https://supademo.com/user-flow-examples/notion) onboarding analyses | Sequence/category evidence | Optional configuration should not block activation; setup should reduce decisions before first value |
+| [T3 Themes](https://t3themes.com/) and its [public registry source](https://github.com/SunkenInTime/t3-themes) | Schema/category evidence inspected at `4935154c023d8539b83160af5fbdca48245be58f` | Separate appearance support from palette identity; show palette evidence at selection time |
+| [T3Code theme halves](https://github.com/pingdotgg/t3code) | MIT-licensed architecture reference | Store independent light/dark halves and resolve System locally rather than treating one literal theme ID as all light mode |
+
+The T3 Themes gallery has no repository-wide license, so Zyra does not redistribute its community JSON themes or gallery code. The paired model informed an independent implementation using Zyra's semantic tokens and original light palettes. Zyra retains its ASCII mark, window chrome, and mandatory main-owned checkpoints.
 
 ## Main-owned files
 
@@ -30,7 +43,7 @@ All paths are relative to Electron's `app.getPath('userData')`:
 | `setup/onboarding.json` | Schema/flow version, revision, status, exact step, completed steps, timestamps, and non-secret selections | Never contains API keys, OAuth tokens, or encrypted credential blobs |
 | `setup/device-preferences.json` | Versioned shared preferences and separate Desktop/Browser surface buckets | Secret and OS-owned keys are rejected |
 | `setup/device-secrets.bin` | Groq/Gemini hosted-provider keys encrypted by Electron `safeStorage` | Browser relay cannot invoke this API |
-| Existing Pi auth storage | ChatGPT OAuth and OpenAI API-key credentials | Reused through `src/zyra-sdk.mjs`; onboarding stores only method and verification time |
+| Existing Pi auth storage | ChatGPT OAuth and OpenAI API-key credentials | Reused through the narrow `src/desktop-openai-auth.mjs` boundary; onboarding stores only method and verification time |
 
 ### Atomicity and concurrency
 
@@ -41,6 +54,7 @@ Onboarding and preference mutations are serialized in the main process. Callers 
 ### Corruption and newer versions
 
 - Invalid or malformed current onboarding data is renamed to `onboarding.json.<reason>-<timestamp>.bak`, and setup starts again from Welcome.
+- Flow version 1 records migrate atomically to flow version 2. Completed devices remain completed, and an unfinished removed `web-access` step resumes at Projects.
 - A newer onboarding schema or flow version is left byte-for-byte untouched. Desktop stays gated and asks for a newer Zyra version.
 - A newer preference schema is also left untouched. The renderer reports the load failure and does not fall back to writable renderer state.
 - Unreadable secret data fails closed; it is never copied into plaintext storage.
@@ -60,12 +74,14 @@ The application menu is suppressed during setup. The custom setup title bar expo
 
 ## OpenAI verification
 
-The OpenAI step uses Pi's real auth machinery:
+The OpenAI step uses Pi's real auth machinery through a narrow Desktop boundary:
 
-- **ChatGPT:** `loginZyraAuth('openai-codex')` opens the provider URL through Electron and waits for Pi's callback flow. Completion is accepted only when account status has usable live usage or a still-valid token.
-- **API key:** `configureZyraOpenAIApiKey` writes through Pi auth storage, then `verifyZyraOpenAIApiAuth` performs a real provider request.
+- **ChatGPT:** `loginZyraAuth('openai-codex')` supplies Pi's complete OAuth callback contract, selects its browser method through `onSelect`, opens the provider URL through Electron, waits for Pi's browser callback, and saves the returned OAuth credential in Pi auth storage. A previously completed browser login is accepted when its stored token is still valid; onboarding does not block on the slower ChatGPT usage endpoint.
+- **API key:** `configureZyraOpenAIApiKey` verifies the key with OpenAI before writing it through Pi auth storage. A previously stored key is verified with the provider before it is accepted.
 
-The connection is checked when leaving the OpenAI step and again at final completion. A renderer success flag alone cannot complete setup.
+Pi auth imports, token work, and provider verification run in `desktop-openai-auth-worker.mjs`, outside Electron's main and renderer event loops. The worker is prewarmed only while mandatory setup or setup review is visible, and bounded non-login requests fail with a recoverable timeout. Desktop never imports the full `zyra-sdk.mjs` runtime for these account actions.
+
+The connection is checked when leaving the OpenAI step and again at final completion. A short main-owned cache reuses a just-verified result so an immediate Continue does not repeat the same work. A renderer success flag alone cannot complete setup.
 
 After completion, Desktop Account Settings reuses the same main-owned auth service for Connect, Replace, Retry, Disconnect, and new-chat provider switching. Disconnecting an expired or unwanted credential opens account recovery without replaying onboarding. Browser shows the connection state but deliberately directs credential mutations to Desktop. Destructive OpenAI disconnects and encrypted hosted-key removal carry explicit confirmation through the main-process contract; renderer-only confirmation state is insufficient.
 
@@ -75,7 +91,7 @@ After completion, Desktop Account Settings reuses the same main-owned auth servi
 
 ### Shared across Desktop and Browser
 
-Appearance intent, fonts, accessibility, project roots, editor/terminal defaults, Git defaults, Assistant creation defaults, and the new-chat web defaults (`assistantDefaultWebSearch`, `assistantDefaultWebFetch`). A write from either surface publishes a revision event; both surfaces refresh from main.
+Appearance intent, the validated `appearanceLightTheme`/`appearanceDarkTheme` pair, fonts, accessibility, project roots, editor/terminal defaults, Git defaults, Assistant creation defaults, and the new-chat web defaults (`assistantDefaultWebSearch`, `assistantDefaultWebFetch`). A write from either surface publishes a revision event; both surfaces refresh from main. Desktop and Browser may resolve different active halves when their local system appearances differ.
 
 ### Surface-local
 
@@ -91,7 +107,7 @@ Window/layout and presentation choices such as sidebars, Browser view/content la
 
 ### Derived
 
-`settingsSchemaVersion` and resolved `theme` are compatibility/derived values, not independently persisted main-owned preferences.
+`settingsSchemaVersion`, resolved `theme`, and `appearanceResolvedMode` are compatibility/derived values, not independently persisted main-owned preferences.
 
 ## Desktop v4 migration
 
@@ -109,7 +125,7 @@ The settings are creation defaults rather than live global switches:
 4. Runtime connect and prompt payloads carry the per-thread values through the Desktop worker and shared agent server.
 5. `src/zyra-ui-bridge.mjs` applies and stores them in canonical chat config.
 
-Changing Settings affects later chats only. Existing chats reload their persisted thread/canonical configuration. Null values identify legacy chats whose canonical runtime remains authoritative.
+When no explicit preference exists, both web defaults resolve to `true`. Changing Settings affects later chats only. Existing chats reload their persisted thread/canonical configuration. Null values identify legacy chats whose canonical runtime remains authoritative.
 
 ## Reviewing setup
 

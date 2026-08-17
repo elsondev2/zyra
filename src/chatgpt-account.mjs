@@ -59,7 +59,7 @@ async function loadPiAuthStorage() {
   return piAuthStoragePromise;
 }
 
-export async function buildChatGptAccountStatus(provider = CHATGPT_ACCOUNT_PROVIDER) {
+export async function buildChatGptAccountStatus(provider = CHATGPT_ACCOUNT_PROVIDER, options = {}) {
   const AuthStorage = await loadPiAuthStorage();
   const authStorage = AuthStorage.create();
   const status = authStorage.getAuthStatus(provider);
@@ -67,14 +67,20 @@ export async function buildChatGptAccountStatus(provider = CHATGPT_ACCOUNT_PROVI
   let claims = extractOpenAiCodexClaims(credential?.access);
 
   if (provider === CHATGPT_ACCOUNT_PROVIDER && status.configured) {
-    const access = await authStorage.getApiKey(provider, { includeFallback: false }).catch(() => undefined);
-    credential = authStorage.get(provider) ?? credential;
-    claims = extractOpenAiCodexClaims(credential?.access ?? access) ?? claims;
+    const expiresAt = normalizeResetAt(credential?.expires);
+    const credentialNeedsRefresh = !credential?.access
+      || !expiresAt
+      || Date.parse(expiresAt) <= Date.now() + 60_000;
+    if (options.refreshCredential !== false || credentialNeedsRefresh) {
+      const access = await authStorage.getApiKey(provider, { includeFallback: false }).catch(() => undefined);
+      credential = authStorage.get(provider) ?? credential;
+      claims = extractOpenAiCodexClaims(credential?.access ?? access) ?? claims;
+    }
   }
 
   let usage;
   let usageError;
-  if (provider === CHATGPT_ACCOUNT_PROVIDER && status.configured) {
+  if (provider === CHATGPT_ACCOUNT_PROVIDER && status.configured && options.includeUsage !== false) {
     try {
       usage = await fetchCodexUsageStats();
     } catch (error) {

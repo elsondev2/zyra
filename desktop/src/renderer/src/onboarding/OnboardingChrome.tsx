@@ -12,13 +12,11 @@ export function OnboardingChrome({ reviewActive = false, onExitReview }: {
     return (
         <header
             className={cn(
-                'fixed inset-x-0 top-0 z-50 flex h-[34px] items-center border-b border-[var(--surface-divider)] bg-[var(--surface-topbar)] px-3 text-[12px] text-sparkle-text-secondary',
+                'fixed inset-x-0 top-0 z-50 flex h-[34px] items-center px-3 text-[12px] text-sparkle-text-secondary',
                 policy.reserveMacTrafficLights && 'pl-[78px]'
             )}
             style={{ WebkitAppRegion: draggable ? 'drag' : undefined } as CSSProperties}
         >
-            <span className="font-semibold tracking-[-0.01em]">Zyra</span>
-            <span className="ml-2 text-sparkle-text-muted">Setup</span>
             <div className="flex-1" />
             {reviewActive && onExitReview ? (
                 <button

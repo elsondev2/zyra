@@ -77,7 +77,7 @@ export function PreviewNavigationSidebar({
     onRevealTargetHandled
 }: PreviewNavigationSidebarProps) {
     const { settings, updateSettings } = useSettings()
-    const iconTheme = settings.theme === 'light' ? 'light' : 'dark'
+    const iconTheme = settings.appearanceResolvedMode
     const nameLayout = settings.filePreviewExplorerNameLayout
     const [explorerOpen, setExplorerOpen] = useState(true)
     const [collapseAllRequest, setCollapseAllRequest] = useState(0)

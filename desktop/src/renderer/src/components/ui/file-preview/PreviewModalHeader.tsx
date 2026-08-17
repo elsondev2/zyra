@@ -162,7 +162,7 @@ function PreviewWindowedHeader({
     onPythonRunModeChange
 }: PreviewModalHeaderProps) {
     const { settings } = useSettings()
-    const iconTheme = settings.theme === 'light' ? 'light' : 'dark'
+    const iconTheme = settings.appearanceResolvedMode
     const isHtml = file.type === 'html'
     const isCsv = file.type === 'csv'
     const isMediaFile = file.type === 'image' || file.type === 'video' || file.type === 'audio'

@@ -82,7 +82,7 @@ export function CreateFileTypeModal({
     onCancel
 }: CreateFileTypeModalProps) {
     const { settings } = useSettings()
-    const iconTheme = settings.theme === 'light' ? 'light' : 'dark'
+    const iconTheme = settings.appearanceResolvedMode
     const iconPathOverrides: Record<string, string> = {
         env: '.env',
         gitignore: '.gitignore',

@@ -86,7 +86,7 @@ export default function GeneralSettings() {
                 <SettingsSection title="Setup">
                     <SettingsRow
                         title="Review device setup"
-                        description="Revisit OpenAI, appearance, web, and project choices. Your completed status stays valid unless you explicitly choose a future reset action."
+                        description="Revisit your OpenAI connection, appearance, and projects folder. Your completed status stays valid while you review."
                         status={onboarding.snapshot?.record?.completedAt ? 'Completed' : null}
                         statusTone="ready"
                         control={<SettingsButton onClick={() => void reviewSetup()}>Review setup</SettingsButton>}

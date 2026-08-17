@@ -145,7 +145,7 @@ export function PreviewExpandedHeaderBar({
     onCreateSiblingFile
 }: PreviewExpandedHeaderBarProps) {
     const { settings } = useSettings()
-    const iconTheme = settings.theme === 'light' ? 'light' : 'dark'
+    const iconTheme = settings.appearanceResolvedMode
     const containerRef = useRef<HTMLDivElement | null>(null)
     const pythonRunModeMenuRef = useRef<HTMLDivElement | null>(null)
     const [headerWidth, setHeaderWidth] = useState(1280)

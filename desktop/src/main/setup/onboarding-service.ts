@@ -16,8 +16,10 @@ import {
     type OnboardingRecord,
     type OnboardingRecovery,
     type OnboardingSnapshot,
-    type OnboardingStep
+    type OnboardingStep,
+    type UpdateOnboardingAppearanceInput
 } from '../../shared/onboarding/contracts'
+import { isDarkThemeId, isLightThemeId } from '../../shared/preferences/theme-contract'
 import type { DevicePreferencesService } from './device-preferences-service'
 import type { OpenAIConnectionService } from './openai-connection-service'
 import { RevisionConflictError, writeJsonAtomically } from './atomic-json'
@@ -53,18 +55,23 @@ function validTimestamp(value: unknown): value is string {
 function sanitizeAppearanceSelection(value: unknown): OnboardingAppearanceSelection | null {
     if (!isRecord(value)) return null
     const appearanceThemeMode = value.appearanceThemeMode
-    const appearanceDarkTheme = typeof value.appearanceDarkTheme === 'string' ? value.appearanceDarkTheme.trim().slice(0, 64) : ''
+    const appearanceLightTheme = value.appearanceLightTheme === undefined
+        ? 'light'
+        : isLightThemeId(value.appearanceLightTheme) ? value.appearanceLightTheme : null
+    const appearanceDarkTheme = isDarkThemeId(value.appearanceDarkTheme) ? value.appearanceDarkTheme : null
     const appearanceUiFont = typeof value.appearanceUiFont === 'string' ? value.appearanceUiFont.trim().slice(0, 128) : ''
     const appearanceCodeFont = typeof value.appearanceCodeFont === 'string' ? value.appearanceCodeFont.trim().slice(0, 128) : ''
     if (
         (appearanceThemeMode !== 'system' && appearanceThemeMode !== 'light' && appearanceThemeMode !== 'dark')
-        || !appearanceDarkTheme
+        || appearanceLightTheme === null
+        || appearanceDarkTheme === null
         || !appearanceUiFont
         || !appearanceCodeFont
         || typeof value.accessibilityReduceMotion !== 'boolean'
     ) return null
     return {
         appearanceThemeMode,
+        appearanceLightTheme,
         appearanceDarkTheme,
         appearanceUiFont,
         appearanceCodeFont,
@@ -89,13 +96,17 @@ function parseRecord(value: unknown): OnboardingRecord | null {
         : undefined
     const appearance: OnboardingRecord['data']['appearance'] = isRecord(data.appearance)
         && (data.appearance.appearanceThemeMode === 'system' || data.appearance.appearanceThemeMode === 'light' || data.appearance.appearanceThemeMode === 'dark')
-        && typeof data.appearance.appearanceDarkTheme === 'string'
+        && (data.appearance.appearanceLightTheme === undefined || isLightThemeId(data.appearance.appearanceLightTheme))
+        && isDarkThemeId(data.appearance.appearanceDarkTheme)
         && typeof data.appearance.appearanceUiFont === 'string'
         && typeof data.appearance.appearanceCodeFont === 'string'
         && typeof data.appearance.accessibilityReduceMotion === 'boolean'
         ? {
             appearanceThemeMode: data.appearance.appearanceThemeMode as 'system' | 'light' | 'dark',
-            appearanceDarkTheme: data.appearance.appearanceDarkTheme.slice(0, 64),
+            appearanceLightTheme: data.appearance.appearanceLightTheme === undefined
+                ? 'light'
+                : data.appearance.appearanceLightTheme,
+            appearanceDarkTheme: data.appearance.appearanceDarkTheme,
             appearanceUiFont: data.appearance.appearanceUiFont.slice(0, 128),
             appearanceCodeFont: data.appearance.appearanceCodeFont.slice(0, 128),
             accessibilityReduceMotion: data.appearance.accessibilityReduceMotion
@@ -114,7 +125,7 @@ function parseRecord(value: unknown): OnboardingRecord | null {
     if (value.status === 'completed') {
         const reviewing = value.reviewActive === true
         const hasEveryStep = ONBOARDING_STEPS.every((step) => completedSteps.includes(step))
-        if ((!reviewing && !hasEveryStep) || !completedAt || !auth || !appearance || !web || !projects) return null
+        if ((!reviewing && !hasEveryStep) || !completedAt || !auth || !appearance || !projects) return null
     }
 
     return {
@@ -130,6 +141,47 @@ function parseRecord(value: unknown): OnboardingRecord | null {
         completedAt,
         data: { auth, appearance, web, projects }
     }
+}
+
+const FLOW_V1_STEPS = ['welcome', 'connect-openai', 'appearance', 'web-access', 'projects', 'review'] as const
+type FlowV1Step = typeof FLOW_V1_STEPS[number]
+
+function isFlowV1Step(value: unknown): value is FlowV1Step {
+    return typeof value === 'string' && (FLOW_V1_STEPS as readonly string[]).includes(value)
+}
+
+function migrateFlowV1Record(value: Record<string, unknown>, now: string): OnboardingRecord | null {
+    if (value.schemaVersion !== ONBOARDING_SCHEMA_VERSION || value.flowVersion !== 1) return null
+    if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 0 || Number(value.revision) >= Number.MAX_SAFE_INTEGER) return null
+    if (value.status !== 'in-progress' && value.status !== 'completed') return null
+    if (!isFlowV1Step(value.currentStep)) return null
+    if (!validTimestamp(value.startedAt) || !validTimestamp(value.updatedAt)) return null
+    if (!Array.isArray(value.completedSteps) || !value.completedSteps.every(isFlowV1Step)) return null
+
+    const legacyCompletedSteps = [...new Set(value.completedSteps)] as FlowV1Step[]
+    const data = isRecord(value.data) ? value.data : {}
+    const validLegacyWebSelection = isRecord(data.web)
+        && typeof data.web.webSearch === 'boolean'
+        && typeof data.web.webFetch === 'boolean'
+    const completedAt = value.completedAt === null || validTimestamp(value.completedAt) ? value.completedAt : null
+    if (value.status === 'completed') {
+        const reviewing = value.reviewActive === true
+        const hasEveryLegacyStep = FLOW_V1_STEPS.every((step) => legacyCompletedSteps.includes(step))
+        if ((!reviewing && !hasEveryLegacyStep) || !completedAt || !validLegacyWebSelection) return null
+    }
+
+    const completedSteps = legacyCompletedSteps.filter((step): step is OnboardingStep => step !== 'web-access')
+    const currentStep: OnboardingStep = value.currentStep === 'web-access'
+        ? legacyCompletedSteps.includes('projects') ? 'review' : 'projects'
+        : value.currentStep
+    return parseRecord({
+        ...value,
+        flowVersion: ONBOARDING_FLOW_VERSION,
+        revision: Number(value.revision) + 1,
+        currentStep,
+        completedSteps,
+        updatedAt: now
+    })
 }
 
 function withRevision(record: OnboardingRecord, now: string, patch: Partial<OnboardingRecord>): OnboardingRecord {
@@ -212,6 +264,11 @@ export class OnboardingService {
         return this.hydrated?.kind === 'ready' && this.hydrated.record.status === 'completed'
     }
 
+    shouldShowOnboarding(): boolean {
+        return this.hydrated?.kind === 'ready'
+            && (this.hydrated.record.status !== 'completed' || this.hydrated.record.reviewActive)
+    }
+
     async getState(): Promise<OnboardingSnapshot> {
         const hydrated = await this.hydrate()
         if (hydrated.kind === 'future') {
@@ -238,6 +295,22 @@ export class OnboardingService {
 
     connectApiKey(apiKey: string): Promise<OnboardingAuthStatus> {
         return this.auth.connectApiKey(apiKey)
+    }
+
+    updateAppearance(input: UpdateOnboardingAppearanceInput): Promise<OnboardingSnapshot> {
+        return this.enqueue(async () => {
+            const record = await this.requireReadyRecord()
+            requireRevision(record, input?.expectedRevision)
+            requireCurrentStep(record, 'appearance')
+            const selection = sanitizeAppearanceSelection(input?.selection)
+            if (!selection) throw new Error('Choose a valid light and dark theme pair.')
+            await this.preferences.updateSharedFromMain(selection)
+            const next = withRevision(record, this.now().toISOString(), {
+                data: { ...record.data, appearance: selection }
+            })
+            await this.persist(next)
+            return this.emitSnapshot(next)
+        })
     }
 
     commitStep(input: CommitOnboardingStepInput): Promise<OnboardingSnapshot> {
@@ -277,24 +350,8 @@ export class OnboardingService {
                     await this.preferences.updateSharedFromMain(selection)
                     next = withRevision(record, now, {
                         completedSteps: markStepCompleted(record, input.step),
-                        currentStep: 'web-access',
-                        data: { ...record.data, appearance: selection }
-                    })
-                    break
-                }
-                case 'web-access': {
-                    const selection = input.selection
-                    if (!selection || typeof selection.webSearch !== 'boolean' || typeof selection.webFetch !== 'boolean') {
-                        throw new Error('Choose how new chats may use the web.')
-                    }
-                    await this.preferences.updateSharedFromMain({
-                        assistantDefaultWebSearch: selection.webSearch,
-                        assistantDefaultWebFetch: selection.webFetch
-                    })
-                    next = withRevision(record, now, {
-                        completedSteps: markStepCompleted(record, input.step),
                         currentStep: 'projects',
-                        data: { ...record.data, web: { ...selection } }
+                        data: { ...record.data, appearance: selection }
                     })
                     break
                 }
@@ -315,7 +372,7 @@ export class OnboardingService {
                     if (!requiredSteps.every((step) => record.completedSteps.includes(step))) {
                         throw new Error('Finish every setup step before opening Zyra.')
                     }
-                    if (!record.data.appearance || !record.data.web || !record.data.projects) {
+                    if (!record.data.appearance || !record.data.projects) {
                         throw new Error('Setup choices are incomplete. Go back and review them.')
                     }
                     const authStatus = await this.auth.getStatus()
@@ -461,6 +518,13 @@ export class OnboardingService {
             && flowVersion > ONBOARDING_FLOW_VERSION
         ) {
             return { kind: 'future', detectedVersion: flowVersion }
+        }
+        if (schemaVersion === ONBOARDING_SCHEMA_VERSION && flowVersion === 1 && isRecord(value)) {
+            const migrated = migrateFlowV1Record(value, now)
+            if (migrated) {
+                await writeJsonAtomically(this.filePath, migrated)
+                return { kind: 'ready', record: migrated }
+            }
         }
         const record = parseRecord(value)
         if (record) return { kind: 'ready', record }

@@ -4,6 +4,7 @@ import type { DevScopeManagedFont } from '@shared/contracts/font-contracts'
 import {
     createAppearanceLocalFont,
     createAppearanceManagedFont,
+    DEFAULT_APPEARANCE_UI_FONT,
     getAppearanceManagedFontId,
     type AppearanceCodeFont,
     type AppearanceUiFont
@@ -166,7 +167,7 @@ export function AppearanceFontManagerDialog({
             if (!result.success) throw new Error(result.error)
             forgetAppearanceManagedFont(font.id)
             onManagedFontsChange(managedFonts.filter((entry) => entry.id !== font.id))
-            if (getAppearanceManagedFontId(currentFont) === font.id) onSelect(target === 'code' ? 'system-mono' : 'hanken')
+            if (getAppearanceManagedFontId(currentFont) === font.id) onSelect(target === 'code' ? 'system-mono' : DEFAULT_APPEARANCE_UI_FONT)
             if (openRef.current) setStatus({ tone: 'success', message: `${font.family} was removed from Zyra’s font cache.` })
         } catch (error) {
             if (openRef.current) setStatus({ tone: 'error', message: error instanceof Error ? error.message : 'Failed to remove the font.' })

@@ -130,7 +130,7 @@ export default function ProjectIcon({
     const themeColor = frameworkData?.themeColor || typeData?.themeColor
     const readableThemeColor = resolveReadableLogoColor(themeColor, settings.theme)
     const displayName = frameworkData?.displayName || typeData?.displayName || projectType || 'Project'
-    const iconShadow = `drop-shadow(0 0 1px ${withAlpha(readableThemeColor, settings.theme === 'light' ? 0.14 : 0.24)})`
+    const iconShadow = `drop-shadow(0 0 1px ${withAlpha(readableThemeColor, settings.appearanceResolvedMode === 'light' ? 0.14 : 0.24)})`
 
     if (customIconPath && !customImgError) {
         return (
@@ -211,8 +211,8 @@ export function FrameworkBadge({ framework, size = 'sm', showLabel = true, class
     const iconSize = size === 'sm' ? 12 : size === 'md' ? 16 : 20
     const textSize = size === 'sm' ? 'text-[10px]' : size === 'md' ? 'text-xs' : 'text-sm'
     const readableThemeColor = resolveReadableLogoColor(frameworkData.themeColor, settings.theme)
-    const backgroundAlpha = settings.theme === 'light' ? 0.08 : 0.14
-    const borderAlpha = settings.theme === 'light' ? 0.18 : 0.26
+    const backgroundAlpha = settings.appearanceResolvedMode === 'light' ? 0.08 : 0.14
+    const borderAlpha = settings.appearanceResolvedMode === 'light' ? 0.18 : 0.26
 
     return (
         <span

@@ -4,14 +4,12 @@ import {
     ACCENT_COLORS,
     APPEARANCE_CODE_FONTS,
     APPEARANCE_UI_FONTS,
-    THEMES,
     getAppearanceCodeFontStack,
     getAppearanceUiFontStack,
     type AccentColor,
     type AppearanceCodeFont,
     type AppearanceThemeMode,
-    type AppearanceUiFont,
-    type Theme
+    type AppearanceUiFont
 } from '@/lib/settings'
 import type { ThemeDefinition, ThemeTokens } from '@/lib/settings-theme-catalog'
 import { SettingsButton, SettingsSelect } from '../settings-layout'
@@ -101,7 +99,7 @@ export function AppearanceThemeController({
     codeFontLabel,
     customActive,
     customAvailable,
-    onPresetChange,
+    onUseCustom,
     onTokensChange,
     onAccentChange,
     onUiFontChange,
@@ -117,7 +115,7 @@ export function AppearanceThemeController({
     codeFontLabel: string
     customActive: boolean
     customAvailable: boolean
-    onPresetChange: (theme: Theme | 'custom') => void
+    onUseCustom: () => void
     onTokensChange: (tokens: ThemeTokens) => void
     onAccentChange: (accent: AccentColor) => void
     onUiFontChange: (font: AppearanceUiFont) => void
@@ -137,8 +135,6 @@ export function AppearanceThemeController({
         entry.primary.toLowerCase() === accent.primary.toLowerCase()
         && entry.secondary.toLowerCase() === accent.secondary.toLowerCase()
     ))
-    const presetValue = customActive ? 'custom' : theme.id
-
     const copyTheme = async () => {
         try {
             await navigator.clipboard.writeText(JSON.stringify({
@@ -160,7 +156,7 @@ export function AppearanceThemeController({
         <div className="overflow-visible rounded-xl border border-[var(--settings-border)] bg-[var(--settings-section)] text-[var(--settings-text)] shadow-[inset_0_1px_0_var(--settings-section-highlight)]">
             <div
                 className="flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between"
-                data-settings-search-target={createSettingsRowTargetId('Theme', 'Theme preset')}
+                data-settings-search-target={createSettingsRowTargetId('Theme', 'Custom theme')}
                 tabIndex={-1}
             >
                 <div className="min-w-0">
@@ -168,19 +164,13 @@ export function AppearanceThemeController({
                     <p className="mt-0.5 truncate text-[11px] text-[var(--settings-text-muted)]">{modeDescription}</p>
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5">
+                    {customAvailable && !customActive ? (
+                        <SettingsButton variant="ghost" onClick={onUseCustom}>Use saved custom</SettingsButton>
+                    ) : null}
                     <SettingsButton variant="ghost" onClick={() => void copyTheme()}>
                         {copied ? <Check size={12} /> : <Copy size={12} />}
                         {copied ? 'Copied' : 'Copy values'}
                     </SettingsButton>
-                    <SettingsSelect
-                        value={presetValue}
-                        onChange={(event) => onPresetChange(event.target.value as Theme | 'custom')}
-                        aria-label="Theme preset"
-                        className="!min-w-[150px] !w-[150px]"
-                    >
-                        {customAvailable ? <option value="custom">Custom theme</option> : null}
-                        {THEMES.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
-                    </SettingsSelect>
                 </div>
             </div>
 

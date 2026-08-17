@@ -9,7 +9,8 @@ import {
 } from '../src/shared/preferences/contracts'
 import {
     DevicePreferencesService,
-    partitionDevicePreferencePatch
+    partitionDevicePreferencePatch,
+    sanitizeDevicePreferenceValue
 } from '../src/main/setup/device-preferences-service'
 import { DeviceSecretsService } from '../src/main/setup/device-secrets-service'
 
@@ -20,6 +21,7 @@ const now = () => new Date(tick += 1_000)
 try {
     const partitioned = partitionDevicePreferencePatch({
         appearanceThemeMode: 'dark',
+        appearanceLightTheme: 'paper-light',
         assistantDefaultWebSearch: false,
         browserViewMode: 'grid',
         startWithWindows: true,
@@ -29,17 +31,27 @@ try {
     }, 'desktop')
     assert.deepEqual(partitioned.shared, {
         appearanceThemeMode: 'dark',
+        appearanceLightTheme: 'paper-light',
         assistantDefaultWebSearch: false
     })
     assert.deepEqual(partitioned.surface, { browserViewMode: 'grid' })
     assert.equal(getDevicePreferenceOwnership('startWithWindows'), 'os')
     assert.equal(getDevicePreferenceOwnership('groqApiKey'), 'secret')
+    assert.equal(sanitizeDevicePreferenceValue('appearanceLightTheme', 'forest'), undefined, 'dark themes cannot enter the light half')
+    assert.equal(sanitizeDevicePreferenceValue('appearanceDarkTheme', 'paper-light'), undefined, 'light themes cannot enter the dark half')
+    assert.equal(sanitizeDevicePreferenceValue('appearanceLightTheme', 'paper-light'), 'paper-light')
+    assert.equal(sanitizeDevicePreferenceValue('appearanceDarkTheme', 'forest'), 'forest')
 
     const allOwned = new Set([...SHARED_DEVICE_PREFERENCE_KEYS, ...SURFACE_DEVICE_PREFERENCE_KEYS])
     assert.equal(allOwned.size, SHARED_DEVICE_PREFERENCE_KEYS.length + SURFACE_DEVICE_PREFERENCE_KEYS.length, 'shared and surface preference keys must not overlap')
 
     const path = join(root, 'device-preferences.json')
     const service = new DevicePreferencesService(path, now)
+    assert.deepEqual(
+        await service.getNewChatWebDefaults(),
+        { webSearch: true, webFetch: true },
+        'ordinary new installs start with both web tools enabled'
+    )
     const browserBeforeDesktop = await service.get({
         surface: 'browser',
         legacySettings: {
@@ -58,6 +70,8 @@ try {
         legacySettings: {
             settingsSchemaVersion: 4,
             appearanceThemeMode: 'light',
+            appearanceLightTheme: 'paper-light',
+            appearanceDarkTheme: 'forest',
             assistantDefaultWebSearch: false,
             assistantDefaultWebFetch: true,
             browserViewMode: 'grid',
@@ -69,6 +83,8 @@ try {
     })
     assert.equal(desktop.desktopLegacyMigrationComplete, true)
     assert.equal(desktop.settings.appearanceThemeMode, 'light')
+    assert.equal(desktop.settings.appearanceLightTheme, 'paper-light')
+    assert.equal(desktop.settings.appearanceDarkTheme, 'forest')
     assert.equal(desktop.settings.browserViewMode, 'grid')
     assert.equal(desktop.settings.assistantAutoReconnect, false)
     assert.equal('startWithWindows' in desktop.settings, false)
@@ -76,6 +92,8 @@ try {
 
     const browser = await service.get({ surface: 'browser' })
     assert.equal(browser.settings.appearanceThemeMode, 'light', 'shared Desktop choices must reach the browser')
+    assert.equal(browser.settings.appearanceLightTheme, 'paper-light', 'the selected light half must sync across surfaces')
+    assert.equal(browser.settings.appearanceDarkTheme, 'forest', 'the selected dark half must sync across surfaces')
     assert.equal(browser.settings.assistantDefaultWebSearch, false)
     assert.equal('browserViewMode' in browser.settings, false, 'Desktop layout must not overwrite browser layout')
     assert.equal('assistantAutoReconnect' in browser.settings, false, 'surface reconnect behavior must remain local')

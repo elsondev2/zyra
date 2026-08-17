@@ -47,12 +47,15 @@ export const SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly SettingsS
             'Chat rail': 'sidebar collapsed navigation surface',
             'Agent Inbox sidebar': 'sidebar active work recent settled'
         }),
-        row('Setup', 'Review device setup', 'onboarding openai appearance web projects review'),
+        row('Setup', 'Review device setup', 'onboarding openai chatgpt appearance projects review'),
         row('Local maintenance', 'Cached UI data', 'clear cache renderer local maintenance')
     ],
     appearance: [
         row('Theme', 'Appearance mode', 'system default windows light dark'),
-        row('Theme', 'Theme preset', 'theme palette custom midnight graphite light dark'),
+        row('Theme', 'Light and dark themes', 'theme pair palettes variants halves catalog'),
+        row('Theme', 'Light theme', 'day bright paper dawn latte snow mist palette'),
+        row('Theme', 'Dark theme', 'night midnight graphite forest ocean palette'),
+        row('Theme', 'Custom theme', 'edit saved custom colors typography copy values'),
         row('Theme', 'Accent preset', 'accent colors palette'),
         row('Theme', 'Accent primary', 'accent color hex'),
         row('Theme', 'Accent secondary', 'accent color hex'),
@@ -91,7 +94,7 @@ export const SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly SettingsS
         row('Trusted devices', 'Other devices', 'phone computer pair pairing remote lan tailscale revoke')
     ],
     assistant: [
-        ...rows('Assistant defaults', ['Model', 'Zyra profile', 'Permission mode', 'Full-access warning', 'Interaction mode', 'Reasoning effort', 'Fast service tier', 'Busy send behavior', 'Default prompt'], {
+        ...rows('Assistant defaults', ['Model', 'Zyra profile', 'Permission mode', 'Full-access warning', 'Interaction mode', 'Reasoning effort', 'Fast service tier', 'Web access', 'Busy send behavior', 'Default prompt'], {
             Model: 'default ai model chat',
             'Zyra profile': 'default builder instructions profile',
             'Permission mode': 'supervised approval full access security',
@@ -99,6 +102,7 @@ export const SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly SettingsS
             'Interaction mode': 'plan normal default',
             'Reasoning effort': 'thinking depth high low max',
             'Fast service tier': 'priority fast provider',
+            'Web access': 'search fetch pages internet tools new chat default',
             'Busy send behavior': 'queue next interrupt active turn',
             'Default prompt': 'template instructions new chat'
         }),

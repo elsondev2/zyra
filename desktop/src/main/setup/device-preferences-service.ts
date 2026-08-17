@@ -13,6 +13,7 @@ import {
     type ManagedDevicePreferenceKey,
     type UpdateDevicePreferencesInput
 } from '../../shared/preferences/contracts'
+import { isDarkThemeId, isLightThemeId } from '../../shared/preferences/theme-contract'
 import { FutureSchemaError, RevisionConflictError, writeJsonAtomically } from './atomic-json'
 
 type PreferenceBucket = Record<string, unknown>
@@ -50,7 +51,6 @@ const BOOLEAN_KEYS = new Set<string>([
 ])
 
 const STRING_LIMITS: Record<string, number> = {
-    appearanceDarkTheme: 64,
     appearanceUiFont: 128,
     appearanceCodeFont: 128,
     explorerHomePath: MAX_PATH_LENGTH,
@@ -160,6 +160,8 @@ function sanitizeJson(value: unknown, depth = 0): unknown {
 }
 
 export function sanitizeDevicePreferenceValue(key: string, value: unknown): unknown {
+    if (key === 'appearanceLightTheme') return isLightThemeId(value) ? value : undefined
+    if (key === 'appearanceDarkTheme') return isDarkThemeId(value) ? value : undefined
     if (BOOLEAN_KEYS.has(key)) return typeof value === 'boolean' ? value : undefined
     if (Object.prototype.hasOwnProperty.call(STRING_LIMITS, key)) {
         return sanitizeString(value, STRING_LIMITS[key]!, key === 'assistantDefaultPromptTemplate')

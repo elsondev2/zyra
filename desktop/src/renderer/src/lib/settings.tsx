@@ -14,14 +14,40 @@ import {
     sanitizeAssistantDefaultInteractionMode,
     sanitizeAssistantDefaultRuntimeMode
 } from './settings-assistant-defaults'
-import { getThemeDefinition, isDarkThemeId, isThemeId, THEME_CLASS_IDS, THEMES, type DarkTheme, type Theme, type ThemeTokens } from './settings-theme-catalog'
+import {
+    DARK_THEMES,
+    LIGHT_THEMES,
+    THEME_CLASS_IDS,
+    THEMES,
+    getThemeAppearance,
+    getThemeDefinition,
+    isDarkThemeId,
+    isLightThemeId,
+    isThemeId,
+    type DarkTheme,
+    type LightTheme,
+    type Theme,
+    type ThemeAppearance,
+    type ThemeTokens
+} from './settings-theme-catalog'
 import { resolveAccentTokens, resolveStatusTokens, resolveThemeTokens, toRgbChannels } from './settings-theme-semantics'
 import { getDevicePreferenceOwnership, type DevicePreferenceSurface, type DevicePreferencesSnapshot } from '@shared/preferences/contracts'
 import type { UpdateHostedAiSecretsInput } from '@shared/preferences/secrets-contracts'
 import { isElectronRendererRuntime } from './browser-file-url'
 import { setCanonicalAssistantAutoReconnectPreference } from './assistant/assistant-runtime-preferences'
 
-export { THEMES, type DarkTheme, type Theme } from './settings-theme-catalog'
+export {
+    DARK_THEMES,
+    LIGHT_THEMES,
+    THEMES,
+    getThemeAppearance,
+    isDarkThemeId,
+    isLightThemeId,
+    type DarkTheme,
+    type LightTheme,
+    type Theme,
+    type ThemeAppearance
+} from './settings-theme-catalog'
 export {
     getAssistantBusyMessageModeLabel,
     getAssistantDefaultEffortLabel,
@@ -90,9 +116,11 @@ export interface AppearanceCustomTheme {
     codeFont: AppearanceCodeFont
 }
 
+export const DEFAULT_APPEARANCE_UI_FONT: AppearanceUiFont = 'bricolage'
+
 export const APPEARANCE_UI_FONTS: ReadonlyArray<{ id: AppearanceUiFont; label: string; stack: string }> = [
-    { id: 'hanken', label: 'Hanken Grotesk', stack: '"Hanken Grotesk Variable", "Hanken Grotesk", "Segoe UI", system-ui, sans-serif' },
     { id: 'bricolage', label: 'Bricolage Grotesque', stack: '"Bricolage Grotesque", "Hanken Grotesk", "Segoe UI", system-ui, sans-serif' },
+    { id: 'hanken', label: 'Hanken Grotesk', stack: '"Hanken Grotesk Variable", "Hanken Grotesk", "Segoe UI", system-ui, sans-serif' },
     { id: 'segoe', label: 'Segoe UI', stack: '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif' },
     { id: 'system', label: 'System UI', stack: '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif' }
 ]
@@ -169,11 +197,23 @@ export const ACCENT_COLORS: AccentColor[] = [
     { name: 'Sky', primary: '#0ea5e9', secondary: '#38bdf8' }
 ]
 
+function accentsEqual(left: AccentColor, right: AccentColor): boolean {
+    return left.primary.toLowerCase() === right.primary.toLowerCase()
+        && left.secondary.toLowerCase() === right.secondary.toLowerCase()
+}
+
+export function getThemePresetAccent(theme: Theme): AccentColor {
+    const definition = getThemeDefinition(theme)
+    return ACCENT_COLORS.find((accent) => accent.name === definition.accentColor) || ACCENT_COLORS[0]
+}
+
 export interface Settings {
     settingsSchemaVersion: 4
     theme: Theme
     appearanceThemeMode: AppearanceThemeMode
+    appearanceLightTheme: LightTheme
     appearanceDarkTheme: DarkTheme
+    appearanceResolvedMode: ThemeAppearance
     appearanceCustomTheme: AppearanceCustomTheme | null
     appearanceCustomThemeActive: boolean
     appearanceUiFont: AppearanceUiFont
@@ -255,10 +295,12 @@ const DEFAULT_SETTINGS: Settings = {
     settingsSchemaVersion: 4,
     theme: 'dark',
     appearanceThemeMode: 'system',
+    appearanceLightTheme: 'light',
     appearanceDarkTheme: 'dark',
+    appearanceResolvedMode: 'dark',
     appearanceCustomTheme: null,
     appearanceCustomThemeActive: false,
-    appearanceUiFont: 'hanken',
+    appearanceUiFont: DEFAULT_APPEARANCE_UI_FONT,
     appearanceCodeFont: 'system-mono',
     accentColor: ACCENT_COLORS[0],
     compactMode: false,
@@ -378,7 +420,9 @@ function sanitizeDynamicAppearanceFont(value: unknown): AppearanceManagedFont | 
 function sanitizeAppearanceUiFont(value: unknown): AppearanceUiFont {
     const dynamicFont = sanitizeDynamicAppearanceFont(value)
     if (dynamicFont) return dynamicFont
-    return value === 'bricolage' || value === 'segoe' || value === 'system' ? value : 'hanken'
+    return value === 'hanken' || value === 'bricolage' || value === 'segoe' || value === 'system'
+        ? value
+        : DEFAULT_APPEARANCE_UI_FONT
 }
 
 function sanitizeAppearanceCodeFont(value: unknown): AppearanceCodeFont {
@@ -444,10 +488,14 @@ export function getSystemAppearanceTheme(): 'light' | 'dark' {
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
-function resolveAppearanceTheme(mode: AppearanceThemeMode, darkTheme: DarkTheme): Theme {
-    if (mode === 'light') return 'light'
+export function resolveAppearanceTheme(
+    mode: AppearanceThemeMode,
+    lightTheme: LightTheme,
+    darkTheme: DarkTheme
+): Theme {
+    if (mode === 'light') return lightTheme
     if (mode === 'dark') return darkTheme
-    return getSystemAppearanceTheme()
+    return getSystemAppearanceTheme() === 'dark' ? darkTheme : lightTheme
 }
 
 function sanitizePullRequestGuideConfig(value: unknown): PullRequestGuideConfig {
@@ -507,7 +555,19 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
             const candidate = { ...DEFAULT_SETTINGS, ...legacyAssistantDefaults, ...parsed } as Record<string, any>
             const legacyCodexModel = typeof candidate.codexModel === 'string' ? candidate.codexModel.trim() : ''
             const storedTheme = isThemeId(candidate.theme) ? candidate.theme : DEFAULT_SETTINGS.theme
-            const requestedDarkTheme = parsed.appearanceDarkTheme ?? parsed.lastDarkTheme
+            const appearanceCustomTheme = sanitizeAppearanceCustomTheme(parsed.appearanceCustomTheme)
+            const requestedLightTheme = parsed.appearanceLightTheme
+                ?? (parsed.appearanceCustomThemeActive === true && appearanceCustomTheme && isLightThemeId(appearanceCustomTheme.baseTheme)
+                    ? appearanceCustomTheme.baseTheme
+                    : undefined)
+            const appearanceLightTheme = isLightThemeId(requestedLightTheme)
+                ? requestedLightTheme
+                : isLightThemeId(storedTheme) ? storedTheme : DEFAULT_SETTINGS.appearanceLightTheme
+            const requestedDarkTheme = parsed.appearanceDarkTheme
+                ?? parsed.lastDarkTheme
+                ?? (parsed.appearanceCustomThemeActive === true && appearanceCustomTheme && isDarkThemeId(appearanceCustomTheme.baseTheme)
+                    ? appearanceCustomTheme.baseTheme
+                    : undefined)
             const appearanceDarkTheme = isDarkThemeId(requestedDarkTheme)
                 ? requestedDarkTheme
                 : isDarkThemeId(storedTheme) ? storedTheme : DEFAULT_SETTINGS.appearanceDarkTheme
@@ -517,9 +577,9 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
                 ? parsed.appearanceThemeMode
                 : parsed.theme === undefined
                     ? DEFAULT_SETTINGS.appearanceThemeMode
-                    : storedTheme === 'light' ? 'light' : 'dark'
-            const theme = resolveAppearanceTheme(appearanceThemeMode, appearanceDarkTheme)
-            const appearanceCustomTheme = sanitizeAppearanceCustomTheme(parsed.appearanceCustomTheme)
+                    : getThemeAppearance(storedTheme)
+            const theme = resolveAppearanceTheme(appearanceThemeMode, appearanceLightTheme, appearanceDarkTheme)
+            const appearanceResolvedMode = getThemeAppearance(theme)
             const appearanceCustomThemeActive = parsed.appearanceCustomThemeActive === true
                 && appearanceThemeMode !== 'system'
                 && appearanceCustomTheme?.baseTheme === theme
@@ -529,6 +589,16 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
             const appearanceCodeFont = appearanceCustomThemeActive && appearanceCustomTheme
                 ? appearanceCustomTheme.codeFont
                 : sanitizeAppearanceCodeFont(candidate.appearanceCodeFont)
+            const storedAccent = sanitizeAccentColor(candidate.accentColor)
+            const activeThemeAccent = getThemePresetAccent(theme)
+            const inactiveTheme = appearanceResolvedMode === 'light' ? appearanceDarkTheme : appearanceLightTheme
+            const inactiveThemeAccent = getThemePresetAccent(inactiveTheme)
+            const staleSystemAccent = appearanceThemeMode === 'system'
+                && !accentsEqual(activeThemeAccent, inactiveThemeAccent)
+                && accentsEqual(storedAccent, inactiveThemeAccent)
+            const accentColor = appearanceCustomThemeActive && appearanceCustomTheme
+                ? appearanceCustomTheme.accentColor
+                : staleSystemAccent ? activeThemeAccent : storedAccent
             const gitCommitCodexModel = typeof candidate.gitCommitCodexModel === 'string'
                 ? candidate.gitCommitCodexModel.trim()
                 : legacyCodexModel
@@ -546,12 +616,14 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
                 settingsSchemaVersion: 4,
                 theme,
                 appearanceThemeMode,
+                appearanceLightTheme,
                 appearanceDarkTheme,
+                appearanceResolvedMode,
                 appearanceCustomTheme,
                 appearanceCustomThemeActive,
                 appearanceUiFont,
                 appearanceCodeFont,
-                accentColor: sanitizeAccentColor(candidate.accentColor),
+                accentColor,
                 compactMode: candidate.compactMode === true,
                 sidebarCollapsed: candidate.sidebarCollapsed === true,
                 assistantAgentInboxSidebarEnabled: candidate.assistantAgentInboxSidebarEnabled === true,
@@ -682,9 +754,15 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
             ? loadLegacyAssistantComposerDefaults(LEGACY_ASSISTANT_COMPOSER_PREFERENCES_STORAGE_KEY, DEFAULT_SETTINGS)
             : {})
     }
+    const theme = resolveAppearanceTheme(
+        defaults.appearanceThemeMode,
+        defaults.appearanceLightTheme,
+        defaults.appearanceDarkTheme
+    )
     return {
         ...defaults,
-        theme: resolveAppearanceTheme(defaults.appearanceThemeMode, defaults.appearanceDarkTheme)
+        theme,
+        appearanceResolvedMode: getThemeAppearance(theme)
     }
 }
 
@@ -749,9 +827,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     const applyPreferenceSnapshot = useCallback((snapshot: DevicePreferencesSnapshot) => {
         revisionRef.current = snapshot.revision
         replaceSettings((current) => {
-            const canonical = loadSettings({ settingsSchemaVersion: 4, ...snapshot.settings })
-            return {
-                ...canonical,
+            const loaded = loadSettings({ settingsSchemaVersion: 4, ...snapshot.settings })
+            const canonical = {
+                ...loaded,
                 // Startup is owned by Electron's OS integration; hosted keys are OS-encrypted.
                 startMinimized: current.startMinimized,
                 startWithWindows: current.startWithWindows,
@@ -760,6 +838,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
                 groqApiKeyConfigured: current.groqApiKeyConfigured,
                 geminiApiKeyConfigured: current.geminiApiKeyConfigured
             }
+            return canonical
         })
     }, [replaceSettings])
 
@@ -833,11 +912,21 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         const syncSystemTheme = () => {
             replaceSettings((current) => {
                 if (current.appearanceThemeMode !== 'system') return current
-                const theme: Theme = colorScheme.matches ? 'dark' : 'light'
-                if (current.theme === theme) return current
-                const definition = getThemeDefinition(theme)
-                const accentColor = ACCENT_COLORS.find((accent) => accent.name === definition.accentColor) || ACCENT_COLORS[0]
-                return { ...current, theme, accentColor, appearanceCustomThemeActive: false }
+                const appearanceResolvedMode: ThemeAppearance = colorScheme.matches ? 'dark' : 'light'
+                const theme: Theme = appearanceResolvedMode === 'dark'
+                    ? current.appearanceDarkTheme
+                    : current.appearanceLightTheme
+                const previousThemeAccent = getThemePresetAccent(current.theme)
+                const nextThemeAccent = getThemePresetAccent(theme)
+                const accentColor = accentsEqual(current.accentColor, previousThemeAccent)
+                    ? nextThemeAccent
+                    : current.accentColor
+                if (
+                    current.theme === theme
+                    && current.appearanceResolvedMode === appearanceResolvedMode
+                    && accentsEqual(current.accentColor, accentColor)
+                ) return current
+                return { ...current, theme, appearanceResolvedMode, accentColor, appearanceCustomThemeActive: false }
             })
         }
         syncSystemTheme()
@@ -975,18 +1064,19 @@ export function useSettings() {
 
 function applyTheme(theme: Theme, accent: AccentColor, customTokens?: ThemeTokens) {
     const themeDefinition = getThemeDefinition(theme)
+    const appearance = getThemeAppearance(theme)
     const tokens = resolveThemeTokens(customTokens || themeDefinition.tokens)
     const roots = [document.documentElement, document.body]
     for (const target of roots) {
         target.classList.remove(...THEME_CLASS_IDS)
-        target.classList.toggle('dark', theme !== 'light')
-        target.classList.toggle('light', theme === 'light')
+        target.classList.toggle('dark', appearance === 'dark')
+        target.classList.toggle('light', appearance === 'light')
         if (theme !== 'dark' && theme !== 'light') target.classList.add(theme)
     }
     document.body.classList.add('theme-adaptive')
 
     const root = document.documentElement
-    root.style.colorScheme = theme === 'light' ? 'light' : 'dark'
+    root.style.colorScheme = appearance
     root.style.setProperty('--color-bg', tokens.bg)
     root.style.setProperty('--color-text', tokens.text)
     root.style.setProperty('--theme-background-rgb', toRgbChannels(tokens.bg))

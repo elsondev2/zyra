@@ -83,7 +83,7 @@ export function WorkingChangesView({
     const [branchGuardError, setBranchGuardError] = useState('')
     const [isCreatingBranchForStackedFlow, setIsCreatingBranchForStackedFlow] = useState(false)
     const dangerMenuRef = useRef<HTMLDivElement | null>(null)
-    const iconTheme = settings?.theme === 'light' ? 'light' : 'dark'
+    const iconTheme = settings?.appearanceResolvedMode || 'dark'
     const resolvedProvider = resolvePreferredGitTextProvider(settings)
     const hasProviderForAutoCommit = Boolean(resolvedProvider)
     const hasOnlyStagedChanges = stagedFiles.length > 0 && unstagedFiles.length === 0

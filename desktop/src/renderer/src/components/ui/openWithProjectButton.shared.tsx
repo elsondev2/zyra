@@ -32,9 +32,9 @@ export function AssistantIdeLogo({ ide }: { ide: DevScopeInstalledIde }) {
     const localIconUrl = IDE_ICON_ASSETS[ide.icon] || IDE_ICON_ASSETS[ide.id]
     const fallbackLabel = ide.name.split(/\s+/).map((segment) => segment[0]).join('').slice(0, 2).toUpperCase()
     const readableColor = resolveReadableLogoColor(ide.color, settings.theme)
-    const backgroundAlpha = settings.theme === 'light' ? 0.08 : 0.16
-    const borderAlpha = settings.theme === 'light' ? 0.16 : 0.26
-    const iconShadow = `drop-shadow(0 0 1px ${withAlpha(readableColor, settings.theme === 'light' ? 0.14 : 0.24)})`
+    const backgroundAlpha = settings.appearanceResolvedMode === 'light' ? 0.08 : 0.16
+    const borderAlpha = settings.appearanceResolvedMode === 'light' ? 0.16 : 0.26
+    const iconShadow = `drop-shadow(0 0 1px ${withAlpha(readableColor, settings.appearanceResolvedMode === 'light' ? 0.14 : 0.24)})`
 
     return (
         <span
@@ -70,9 +70,9 @@ function AssistantIdeGlyph({ ide }: { ide: DevScopeInstalledIde }) {
     const localIconUrl = IDE_ICON_ASSETS[ide.icon] || IDE_ICON_ASSETS[ide.id]
     const fallbackLabel = ide.name.split(/\s+/).map((segment) => segment[0]).join('').slice(0, 2).toUpperCase()
     const readableColor = resolveReadableLogoColor(ide.color, settings.theme)
-    const backgroundAlpha = settings.theme === 'light' ? 0.08 : 0.16
-    const borderAlpha = settings.theme === 'light' ? 0.16 : 0.26
-    const iconShadow = `drop-shadow(0 0 1px ${withAlpha(readableColor, settings.theme === 'light' ? 0.14 : 0.24)})`
+    const backgroundAlpha = settings.appearanceResolvedMode === 'light' ? 0.08 : 0.16
+    const borderAlpha = settings.appearanceResolvedMode === 'light' ? 0.16 : 0.26
+    const iconShadow = `drop-shadow(0 0 1px ${withAlpha(readableColor, settings.appearanceResolvedMode === 'light' ? 0.14 : 0.24)})`
 
     if (imageFailed || !localIconUrl) {
         return (

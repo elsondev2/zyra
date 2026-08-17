@@ -26,13 +26,15 @@ type ZyraSdkAuthModule = {
 }
 
 type ChatGptAccountModule = {
-    buildChatGptAccountStatus(provider?: string): Promise<ChatGptStatusResult>
+    buildChatGptAccountStatus(provider?: string, options?: { includeUsage?: boolean; refreshCredential?: boolean }): Promise<ChatGptStatusResult>
 }
 
 export type OpenAIConnectionServiceDependencies = {
     loadSdk?: () => Promise<ZyraSdkAuthModule>
     loadAccount?: () => Promise<ChatGptAccountModule>
     openExternal: (url: string) => Promise<unknown> | unknown
+    prewarm?: () => Promise<void>
+    dispose?: () => Promise<unknown> | unknown
     now?: () => Date
 }
 
@@ -41,7 +43,7 @@ function moduleUrl(relativePath: string): string {
 }
 
 function loadSdkModule(): Promise<ZyraSdkAuthModule> {
-    return import(/* @vite-ignore */ moduleUrl('src/zyra-sdk.mjs')) as Promise<ZyraSdkAuthModule>
+    return import(/* @vite-ignore */ moduleUrl('src/desktop-openai-auth.mjs')) as Promise<ZyraSdkAuthModule>
 }
 
 function loadAccountModule(): Promise<ChatGptAccountModule> {
@@ -62,6 +64,7 @@ function isUsableSubscription(status: ChatGptStatusResult): boolean {
 
 export class OpenAIConnectionService {
     private operation: Promise<OnboardingAuthStatus> | null = null
+    private verifiedCache: { status: OnboardingAuthStatus; expiresAt: number } | null = null
     private readonly loadSdk: () => Promise<ZyraSdkAuthModule>
     private readonly loadAccount: () => Promise<ChatGptAccountModule>
     private readonly now: () => Date
@@ -72,8 +75,19 @@ export class OpenAIConnectionService {
         this.now = dependencies.now || (() => new Date())
     }
 
+    prewarm(): Promise<void> {
+        return this.dependencies.prewarm?.() || Promise.resolve()
+    }
+
+    async dispose(): Promise<void> {
+        await this.dependencies.dispose?.()
+    }
+
     getStatus(): Promise<OnboardingAuthStatus> {
         if (this.operation) return this.operation
+        if (this.verifiedCache && this.verifiedCache.expiresAt > this.now().getTime()) {
+            return Promise.resolve({ ...this.verifiedCache.status, checkedAt: this.now().toISOString() })
+        }
         return this.track(this.verifyConnections())
     }
 
@@ -89,6 +103,7 @@ export class OpenAIConnectionService {
     async disconnect(method: OnboardingAuthMethod): Promise<OpenAIConnectionsStatus> {
         if (method !== 'chatgpt' && method !== 'api-key') throw new Error('Choose a valid OpenAI connection to disconnect.')
         if (this.operation) throw new Error('Wait for the current OpenAI connection action to finish.')
+        this.verifiedCache = null
         const sdk = await this.loadSdk()
         await sdk.removeZyraAuth(method === 'chatgpt' ? 'subscription' : 'api')
         return this.getConnectionsStatus()
@@ -123,7 +138,6 @@ export class OpenAIConnectionService {
             if (!key || /\s/.test(key) || key.length > 4_096) throw new Error('Enter a valid OpenAI API key.')
             const sdk = await this.loadSdk()
             await sdk.configureZyraOpenAIApiKey(key)
-            await sdk.verifyZyraOpenAIApiAuth()
             return {
                 checking: false,
                 verified: true,
@@ -137,19 +151,25 @@ export class OpenAIConnectionService {
     }
 
     private track(request: Promise<OnboardingAuthStatus>): Promise<OnboardingAuthStatus> {
-        this.operation = request
+        const tracked = request.then((status) => {
+            this.verifiedCache = status.verified
+                ? { status, expiresAt: this.now().getTime() + 60_000 }
+                : null
+            return status
+        })
+        this.operation = tracked
         const clear = () => {
-            if (this.operation === request) this.operation = null
+            if (this.operation === tracked) this.operation = null
         }
-        void request.then(clear, clear)
-        return request
+        void tracked.then(clear, clear)
+        return tracked
     }
 
     private async readChatGptConnection(): Promise<OpenAIConnectionMethodStatus> {
         const checkedAt = this.now().toISOString()
         try {
             const account = await this.loadAccount()
-            const status = await account.buildChatGptAccountStatus('openai-codex')
+            const status = await account.buildChatGptAccountStatus('openai-codex', { includeUsage: false, refreshCredential: false })
             const configured = status.status?.configured === true
             const verified = configured && isUsableSubscription(status)
             return {
@@ -218,7 +238,7 @@ export class OpenAIConnectionService {
     private async verifyChatGptConnection(): Promise<OnboardingAuthStatus> {
         const checkedAt = this.now().toISOString()
         const account = await this.loadAccount()
-        const status = await account.buildChatGptAccountStatus('openai-codex')
+        const status = await account.buildChatGptAccountStatus('openai-codex', { includeUsage: false, refreshCredential: false })
         if (!isUsableSubscription(status)) {
             throw new Error(status.usageError || 'OpenAI sign-in completed but the ChatGPT connection could not be verified.')
         }
@@ -238,7 +258,7 @@ export class OpenAIConnectionService {
         let subscriptionError: string | null = null
         try {
             const account = await this.loadAccount()
-            const status = await account.buildChatGptAccountStatus('openai-codex')
+            const status = await account.buildChatGptAccountStatus('openai-codex', { includeUsage: false, refreshCredential: false })
             if (isUsableSubscription(status)) {
                 return {
                     checking: false,

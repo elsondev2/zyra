@@ -4,7 +4,7 @@ import type { AssistantComposerController } from './useAssistantComposerControll
 type AssistantComposerViewStateInput = {
     capabilities: AssistantComposerController['capabilities']
     controller: AssistantComposerController
-    settings: Pick<Settings, 'assistantTranscriptionEngine' | 'theme'>
+    settings: Pick<Settings, 'assistantTranscriptionEngine' | 'appearanceResolvedMode'>
 }
 
 type AssistantComposerRealtimeVoicePrimaryActionInput = {
@@ -46,7 +46,7 @@ export function deriveAssistantComposerViewState({
     controller,
     settings
 }: AssistantComposerViewStateInput) {
-    const iconTheme: 'light' | 'dark' = settings.theme === 'light' ? 'light' : 'dark'
+    const iconTheme: 'light' | 'dark' = settings.appearanceResolvedMode
     const voiceBusy = controller.voiceInput.isStarting || controller.voiceInput.isRecording || controller.voiceInput.isTranscribing
     const composerStatusToneClass = capabilities.tone === 'warning'
         ? 'text-amber-200'

@@ -4,6 +4,7 @@ export type DevicePreferenceSurface = 'desktop' | 'browser'
 
 export const SHARED_DEVICE_PREFERENCE_KEYS = [
     'appearanceThemeMode',
+    'appearanceLightTheme',
     'appearanceDarkTheme',
     'appearanceCustomTheme',
     'appearanceCustomThemeActive',
@@ -91,7 +92,8 @@ export const SECRET_DEVICE_PREFERENCE_KEYS = [
 
 export const DERIVED_DEVICE_PREFERENCE_KEYS = [
     'settingsSchemaVersion',
-    'theme'
+    'theme',
+    'appearanceResolvedMode'
 ] as const
 
 export type SharedDevicePreferenceKey = typeof SHARED_DEVICE_PREFERENCE_KEYS[number]

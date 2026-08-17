@@ -51,7 +51,7 @@ export function FileDiffDetailModal({
     onClose
 }: FileDiffDetailModalProps) {
     const { settings, updateSettings } = useSettings()
-    const iconTheme = settings?.theme === 'light' ? 'light' : 'dark'
+    const iconTheme = settings?.appearanceResolvedMode || 'dark'
     const [copied, setCopied] = useState(false)
     const renderMode = settings.fileDiffRenderMode
     const [parsedDiff, setParsedDiff] = useState(() => parsePatchForRendering('', 'file-detail:initial'))

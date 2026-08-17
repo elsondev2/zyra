@@ -18,7 +18,7 @@ import { FileDiffDetailModal } from './FileDiffDetailModal'
 
 export function CommitDiffModal({ commit, diff, loading, onClose }: { commit: GitCommit, diff: string, loading: boolean, onClose: () => void }) {
     const { settings } = useSettings()
-    const iconTheme = settings?.theme === 'light' ? 'light' : 'dark'
+    const iconTheme = settings?.appearanceResolvedMode || 'dark'
     const FILES_PER_PAGE = 15
     const [showCommitInfo, setShowCommitInfo] = useState(false)
     const [copiedHash, setCopiedHash] = useState(false)
