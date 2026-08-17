@@ -258,6 +258,7 @@ assert.equal(migrated.assistantAgentInboxSidebarEnabled, false)
 assert.equal(migrated.fileDiffRenderMode, 'split')
 assert.equal(migrated.assistantProductProfile, 'builder')
 assert.equal(migrated.assistantDefaultModel, 'legacy-model')
+assert.equal(migrated.assistantTitleModel, 'openai-codex/gpt-5.6-luna')
 assert.equal(migrated.assistantDefaultRuntimeMode, 'full-access')
 assert.equal(migrated.assistantDefaultInteractionMode, 'plan')
 assert.equal(migrated.assistantDefaultEffort, 'high')
@@ -265,11 +266,13 @@ assert.equal(migrated.assistantDefaultFastMode, true)
 
 storage.setItem('devscope-settings', JSON.stringify({
     assistantDefaultModel: 'central-model',
+    assistantTitleModel: 'openai-codex/gpt-5.6-terra',
     fileDiffRenderMode: 'stacked',
     assistantProductProfile: 'default'
 }))
 const centralWins = loadSettings()
 assert.equal(centralWins.assistantDefaultModel, 'central-model')
+assert.equal(centralWins.assistantTitleModel, 'openai-codex/gpt-5.6-terra')
 assert.equal(centralWins.fileDiffRenderMode, 'stacked')
 assert.equal(centralWins.assistantProductProfile, 'default')
 
@@ -290,6 +293,7 @@ assert.equal(findSettingsSearchTargets('appearance', 'midnight')[0]?.label, 'Dar
 assert.equal(findSettingsSearchTargets('terminal-runtime', 'font size')[0]?.targetId, createSettingsRowTargetId('Terminal', 'Font size'), 'search results must identify the exact section-aware row target')
 assert.equal(findSettingsSearchTargets('connections', 'phone')[0]?.label, 'Other devices', 'Settings keywords must locate future-facing device controls')
 assert.equal(findSettingsSearchTargets('assistant', 'web access')[0]?.label, 'Web access', 'Settings search must locate the web default after it leaves onboarding')
+assert.equal(findSettingsSearchTargets('assistant', 'luna')[0]?.label, 'Chat title model', 'Settings search must locate the independent chat-title model')
 
 const settingsShellSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/SettingsShell.tsx'), 'utf8')
 assert.match(
@@ -310,6 +314,16 @@ assert.match(settingsShellSource, /target\.scrollIntoView\(\{[\s\S]{0,140}block:
 assert.match(settingsShellSource, /target\.classList\.add\('zyra-settings-search-target'\)/, 'the selected setting must receive a visible arrival highlight')
 
 const assistantSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/AssistantSettings.tsx'), 'utf8')
+assert.match(
+    assistantSettingsSource,
+    /title="Chat title model"[\s\S]{0,520}updateSettings\(\{ assistantTitleModel: event\.target\.value \}\)/,
+    'Assistant Settings must expose the persisted chat-title model selector'
+)
+assert.match(
+    assistantSettingsSource,
+    /Names new chats without adding the title request to the conversation\./,
+    'the title-model row must explain that utility prompts stay out of the chat timeline'
+)
 const accountSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/AccountSettings.tsx'), 'utf8')
 const accountResetCreditsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/AccountResetCreditsSection.tsx'), 'utf8')
 const connectionsSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/ConnectionsSettings.tsx'), 'utf8')

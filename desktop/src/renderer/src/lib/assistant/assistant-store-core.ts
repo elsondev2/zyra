@@ -68,7 +68,7 @@ function isReusableEmptySession(session: AssistantSession, input?: AssistantCrea
     return true
 }
 
-class AssistantStore {
+export class AssistantStore {
     private state: AssistantStoreState = {
         snapshot: createDefaultAssistantSnapshot(),
         historyByThreadId: {},
@@ -836,10 +836,10 @@ class AssistantStore {
     }
 
     private getExpectedSnapshotSequence() {
-        if (this.pendingAssistantEvents.length > 0) {
-            return this.pendingAssistantEvents[this.pendingAssistantEvents.length - 1].sequence
-        }
-        return this.state.snapshot.snapshotSequence
+        const pendingSequence = this.pendingAssistantEvents.length > 0
+            ? this.pendingAssistantEvents[this.pendingAssistantEvents.length - 1].sequence
+            : 0
+        return Math.max(this.state.snapshot.snapshotSequence, pendingSequence)
     }
 
     private getProjectedAssistantMessageText(event: AssistantDomainEvent): string {

@@ -94,8 +94,9 @@ export const SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly SettingsS
         row('Trusted devices', 'Other devices', 'phone computer pair pairing remote lan tailscale revoke')
     ],
     assistant: [
-        ...rows('Assistant defaults', ['Model', 'Zyra profile', 'Permission mode', 'Full-access warning', 'Interaction mode', 'Reasoning effort', 'Fast service tier', 'Web access', 'Busy send behavior', 'Default prompt'], {
+        ...rows('Assistant defaults', ['Model', 'Chat title model', 'Zyra profile', 'Permission mode', 'Full-access warning', 'Interaction mode', 'Reasoning effort', 'Fast service tier', 'Web access', 'Busy send behavior', 'Default prompt'], {
             Model: 'default ai model chat',
+            'Chat title model': 'name naming generation luna utility',
             'Zyra profile': 'default builder instructions profile',
             'Permission mode': 'supervised approval full access security',
             'Full-access warning': 'confirmation suppressed restore',

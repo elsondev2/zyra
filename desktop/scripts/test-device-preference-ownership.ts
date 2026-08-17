@@ -23,6 +23,7 @@ try {
         appearanceThemeMode: 'dark',
         appearanceLightTheme: 'paper-light',
         assistantDefaultWebSearch: false,
+        assistantTitleModel: 'openai-codex/gpt-5.6-luna',
         browserViewMode: 'grid',
         startWithWindows: true,
         groqApiKey: 'must-not-migrate',
@@ -32,7 +33,8 @@ try {
     assert.deepEqual(partitioned.shared, {
         appearanceThemeMode: 'dark',
         appearanceLightTheme: 'paper-light',
-        assistantDefaultWebSearch: false
+        assistantDefaultWebSearch: false,
+        assistantTitleModel: 'openai-codex/gpt-5.6-luna'
     })
     assert.deepEqual(partitioned.surface, { browserViewMode: 'grid' })
     assert.equal(getDevicePreferenceOwnership('startWithWindows'), 'os')
@@ -41,6 +43,7 @@ try {
     assert.equal(sanitizeDevicePreferenceValue('appearanceDarkTheme', 'paper-light'), undefined, 'light themes cannot enter the dark half')
     assert.equal(sanitizeDevicePreferenceValue('appearanceLightTheme', 'paper-light'), 'paper-light')
     assert.equal(sanitizeDevicePreferenceValue('appearanceDarkTheme', 'forest'), 'forest')
+    assert.equal(sanitizeDevicePreferenceValue('assistantTitleModel', 56), undefined, 'the title model rejects malformed non-string values')
 
     const allOwned = new Set([...SHARED_DEVICE_PREFERENCE_KEYS, ...SURFACE_DEVICE_PREFERENCE_KEYS])
     assert.equal(allOwned.size, SHARED_DEVICE_PREFERENCE_KEYS.length + SURFACE_DEVICE_PREFERENCE_KEYS.length, 'shared and surface preference keys must not overlap')
@@ -51,6 +54,11 @@ try {
         await service.getNewChatWebDefaults(),
         { webSearch: true, webFetch: true },
         'ordinary new installs start with both web tools enabled'
+    )
+    assert.equal(
+        await service.getAssistantTitleModel(),
+        'openai-codex/gpt-5.6-luna',
+        'ordinary new installs use GPT-5.6 Luna for chat titles'
     )
     const browserBeforeDesktop = await service.get({
         surface: 'browser',
@@ -105,18 +113,22 @@ try {
             browserViewMode: 'finder',
             assistantHistoryPrefetch: true,
             assistantDefaultWebSearch: true,
+            assistantTitleModel: 'openai-codex/gpt-5.6-terra',
             groqApiKey: 'still-secret'
         }
     })
     assert.equal(updated.settings.browserViewMode, 'finder')
     assert.equal(updated.settings.assistantHistoryPrefetch, true)
     assert.equal(updated.settings.assistantDefaultWebSearch, true)
+    assert.equal(updated.settings.assistantTitleModel, 'openai-codex/gpt-5.6-terra')
+    assert.equal(await service.getAssistantTitleModel(), 'openai-codex/gpt-5.6-terra')
     assert.equal(events.at(-1)?.revision, updated.revision, 'preference writes must publish a typed revision event')
     assert.ok(events.at(-1)?.changedKeys.includes('assistantDefaultWebSearch'))
 
     const desktopAfterBrowser = await service.get({ surface: 'desktop' })
     assert.equal(desktopAfterBrowser.settings.browserViewMode, 'grid', 'browser surface updates must not alter Desktop view')
     assert.equal(desktopAfterBrowser.settings.assistantDefaultWebSearch, true, 'shared updates must sync live across surfaces')
+    assert.equal(desktopAfterBrowser.settings.assistantTitleModel, 'openai-codex/gpt-5.6-terra', 'the title-model preference must remain shared across Desktop and Browser')
 
     await assert.rejects(
         service.update({ surface: 'desktop', expectedRevision: desktop.revision, patch: { compactMode: true } }),

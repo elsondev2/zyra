@@ -1,5 +1,6 @@
 import log from 'electron-log'
 import type { AssistantDomainEvent, AssistantSession } from '../../shared/assistant/contracts'
+import { DEFAULT_ASSISTANT_TITLE_MODEL } from '../../shared/assistant/title-generation'
 import {
     getSerializedAttachmentDisplayName,
     isSerializedClipboardAttachment,
@@ -135,9 +136,10 @@ function normalizeTitleModel(model?: string | null): string | null {
 
 export function getTitleGenerationModelCandidates(preferredModel?: string | null): string[] {
     return [...new Set([
-        normalizeTitleModel(preferredModel),
+        normalizeTitleModel(preferredModel) || DEFAULT_ASSISTANT_TITLE_MODEL,
+        DEFAULT_ASSISTANT_TITLE_MODEL,
         TITLE_GENERATION_FALLBACK_MODEL
-    ].filter((model): model is string => Boolean(model)))]
+    ])]
 }
 
 function firstUserMessageText(session: AssistantSession): string | null {

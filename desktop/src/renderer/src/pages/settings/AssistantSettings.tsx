@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import type { AssistantVoiceTranscriptionState } from '@shared/assistant/contracts'
+import { DEFAULT_ASSISTANT_TITLE_MODEL, DEFAULT_ASSISTANT_TITLE_MODEL_LABEL } from '@shared/assistant/title-generation'
 import { useSettings } from '@/lib/settings'
 import { readFullAccessConfirmSuppressed, writeFullAccessConfirmSuppressed } from '../assistant/assistant-safety-preferences'
 import { loadSettingsModels, readCachedSettingsModels } from './settings-model-catalog-cache'
@@ -82,6 +83,16 @@ export default function AssistantSettings() {
         setPromptTemplateOpen(false)
     }
 
+    const titleModelOptions = useMemo(() => {
+        const options: ModelOption[] = [
+            { id: DEFAULT_ASSISTANT_TITLE_MODEL, label: DEFAULT_ASSISTANT_TITLE_MODEL_LABEL },
+            ...models
+        ]
+        if (settings.assistantTitleModel && !options.some((model) => model.id === settings.assistantTitleModel)) {
+            options.unshift({ id: settings.assistantTitleModel, label: settings.assistantTitleModel })
+        }
+        return options.filter((model, index) => options.findIndex((candidate) => candidate.id === model.id) === index)
+    }, [models, settings.assistantTitleModel])
     const browserSpeechAvailable = typeof window !== 'undefined'
         && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)
     const webDefaultMode = settings.assistantDefaultWebSearch
@@ -116,6 +127,15 @@ export default function AssistantSettings() {
                         <SettingsSelect value={settings.assistantDefaultModel} onChange={(event) => updateSettings({ assistantDefaultModel: event.target.value })} aria-label="Default assistant model">
                             <option value="">Provider default</option>
                             {models.map((model) => <option key={model.id} value={model.id}>{model.label || model.id}</option>)}
+                        </SettingsSelect>
+                    )}
+                />
+                <SettingsRow
+                    title="Chat title model"
+                    description="Names new chats without adding the title request to the conversation."
+                    control={(
+                        <SettingsSelect value={settings.assistantTitleModel} onChange={(event) => updateSettings({ assistantTitleModel: event.target.value })} aria-label="Chat title model">
+                            {titleModelOptions.map((model) => <option key={model.id} value={model.id}>{model.label || model.id}</option>)}
                         </SettingsSelect>
                     )}
                 />

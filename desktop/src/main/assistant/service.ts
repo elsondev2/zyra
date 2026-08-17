@@ -197,6 +197,7 @@ type PendingCanonicalVoiceStart = {
 
 export type AssistantServiceOptions = {
     getNewChatExecutionDefaults?: () => Promise<{ webSearch: boolean; webFetch: boolean }>
+    getTitleGenerationModel?: () => Promise<string | null>
 }
 
 export class AssistantService {
@@ -317,6 +318,7 @@ export class AssistantService {
             getFirstUserMessageText: (sessionId: string) => this.persistence.readFirstUserMessageText(sessionId),
             getNewChatExecutionDefaults: () => this.options.getNewChatExecutionDefaults?.()
                 || Promise.resolve({ webSearch: true, webFetch: true }),
+            getTitleGenerationModel: () => this.options.getTitleGenerationModel?.() || Promise.resolve(null),
             appendEvent: (type, occurredAt, payload, sessionId, threadId) => {
                 this.appendEvent(type, occurredAt, payload, sessionId, threadId)
             },
@@ -2072,13 +2074,14 @@ export class AssistantService {
         const latestUserMessage = await this.persistence.readLatestUserMessageText(session.id)
         if (!latestUserMessage) return
 
+        const titleModel = await this.options.getTitleGenerationModel?.().catch(() => null) || null
         await queueGeneratedSessionTitle({
             sessionId: session.id,
             threadId: thread.id,
             messageText: latestUserMessage,
             seedTitle: session.title,
             cwd: this.getSessionRuntimeCwd(session, thread),
-            preferredModel: thread.model || null,
+            preferredModel: titleModel,
             generateText: (titlePrompt, titleOptions) => this.runtime.generateText(titlePrompt, titleOptions),
             getSnapshot: () => this.state.snapshot,
             appendEvent: (type, occurredAt, payload, sessionId, threadId) => {

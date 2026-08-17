@@ -215,6 +215,8 @@ export function createDefaultAssistantSnapshot(): AssistantSnapshot {
 }
 
 function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: AssistantDomainEvent): AssistantSnapshot {
+    if (event.sequence <= snapshot.snapshotSequence) return snapshot
+
     const previousSessions = snapshot.sessions
     let next: AssistantSnapshot = {
         ...snapshot,
@@ -234,6 +236,7 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
         }
         case 'session.created': {
             const session = normalizeAssistantSessionRoute(event.payload['session'] as AssistantSession)
+            if (previousSessions.some((existing) => existing.id === session.id)) break
             next.sessions = [...previousSessions, session]
             next.selectedSessionId = session.id
             shouldSortSessions = true

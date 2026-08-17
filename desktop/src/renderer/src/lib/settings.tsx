@@ -9,6 +9,7 @@ import { clearProjectViewCaches } from './projectViewCache'
 import { clearRecentProjects } from './recentProjects'
 import { clearSettingsRuntimeCaches } from './settings-cache-registry'
 import type { AssistantReasoningEffort } from '@shared/assistant/contracts'
+import { DEFAULT_ASSISTANT_TITLE_MODEL } from '@shared/assistant/title-generation'
 import {
     loadLegacyAssistantComposerDefaults,
     sanitizeAssistantDefaultEffort,
@@ -273,6 +274,7 @@ export interface Settings {
     assistantTextStreamingMode: AssistantTextStreamingMode
     assistantToolOutputDefaultMode: AssistantToolOutputDefaultMode
     assistantDefaultModel: string
+    assistantTitleModel: string
     assistantDefaultPromptTemplate: string
     assistantProductProfile: AssistantProductProfile
     assistantDefaultRuntimeMode: AssistantDefaultRuntimeMode
@@ -361,6 +363,7 @@ const DEFAULT_SETTINGS: Settings = {
     assistantTextStreamingMode: 'stream',
     assistantToolOutputDefaultMode: 'minimized',
     assistantDefaultModel: '',
+    assistantTitleModel: DEFAULT_ASSISTANT_TITLE_MODEL,
     assistantDefaultPromptTemplate: '',
     assistantProductProfile: 'default',
     assistantDefaultRuntimeMode: 'approval-required',
@@ -719,6 +722,7 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
                     ? 'expanded'
                     : 'minimized',
                 assistantDefaultModel: sanitizeString(candidate.assistantDefaultModel, 256),
+                assistantTitleModel: sanitizeString(candidate.assistantTitleModel, 256) || DEFAULT_ASSISTANT_TITLE_MODEL,
                 assistantDefaultPromptTemplate: sanitizeString(candidate.assistantDefaultPromptTemplate, 32_000, false),
                 assistantProductProfile: parsed.assistantProductProfile === 'builder'
                     || (parsed.assistantProductProfile === undefined && legacyProductProfile === ['e', 'lson'].join(''))

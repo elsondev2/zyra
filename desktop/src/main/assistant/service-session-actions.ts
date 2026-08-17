@@ -490,6 +490,12 @@ export async function sendAssistantPromptAction(
         ? null
         : await deps.getFirstUserMessageText(session.id)
     const shouldGenerateTitle = shouldGenerateSessionTitleForPrompt(session, persistedFirstUserMessage)
+    const titleModelPromise = shouldGenerateTitle
+        ? deps.getTitleGenerationModel().catch((error) => {
+            log.warn('[Assistant] Failed to read the chat-title model preference', error)
+            return null
+        })
+        : null
     const title = isDefaultSessionTitle(session.title) ? deriveSessionTitleFromPrompt(input) : session.title
     if (title !== session.title) {
         deps.appendEvent('session.updated', occurredAt, {
@@ -544,14 +550,14 @@ export async function sendAssistantPromptAction(
         })
         const latestTurn = createRunningLatestTurn(result.turnId, occurredAt, options)
         deps.appendEvent('thread.latest-turn.updated', occurredAt, { threadId: thread.id, latestTurn }, session.id, thread.id)
-        if (shouldGenerateTitle) {
-            void queueGeneratedSessionTitle({
+        if (shouldGenerateTitle && titleModelPromise) {
+            void titleModelPromise.then((preferredModel) => queueGeneratedSessionTitle({
                 sessionId: session.id,
                 threadId: thread.id,
                 messageText: input,
                 seedTitle: title,
                 cwd: runtimeCwd,
-                preferredModel: options?.model || thread.model || null,
+                preferredModel,
                 generateText: (titlePrompt, titleOptions) => deps.runtime.generateText(titlePrompt, titleOptions),
                 getSnapshot: deps.getSnapshot,
                 appendEvent: deps.appendEvent,
@@ -559,6 +565,8 @@ export async function sendAssistantPromptAction(
                     result.providerThreadId || thread.providerThreadId || runtimeThreadId,
                     { title: nextTitle }
                 )
+            })).catch((error) => {
+                log.warn('[Assistant] Session title generation task failed:', error)
             })
         }
         return { success: true as const, sessionId: session.id, threadId: thread.id, turnId: result.turnId }

@@ -557,7 +557,7 @@ async function generateAndPersistSessionTitle(prompt, cwd) {
   if (!seed) return;
   const result = await handleGenerateText({
     cwd: cwd || runtime.project,
-    model: "openai-codex/gpt-5.4-mini",
+    model: "openai-codex/gpt-5.6-luna",
     thinking: "low",
     prompt: [
       "Write a concise title for this coding-assistant chat.",

@@ -47,6 +47,7 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
     loadOlderError: string | null
     onLoadOlder?: () => void
     onScrollContainer?: (element: HTMLDivElement) => void
+    onInitialLayout?: () => void
     renderRow: (row: TimelineDisplayRow) => ReactNode
 }) {
     const visibilitySnapshot = useRendererVisibilitySnapshot()
@@ -54,13 +55,17 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
     const disclosureTimerRef = useRef(0)
     const completionFollowTimerRef = useRef(0)
     const endAlignmentFrameRef = useRef<number | null>(null)
+    const disclosureAnchorFrameRef = useRef<number | null>(null)
     const touchStartYRef = useRef<number | null>(null)
+    const previousScrollTopRef = useRef(0)
+    const userNavigationAwayRef = useRef(false)
     const previousRowsRef = useRef(props.rows)
     const previousCompletionWindowKeyRef = useRef(props.windowKey)
     const scrollModeRef = useRef<AssistantTimelineScrollMode>('following-end')
     const completionFollowActiveRef = useRef(false)
     const handledResumeRevisionRef = useRef(visibilitySnapshot.resumeRevision)
     const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null)
+    const [scrollMode, setScrollMode] = useState<AssistantTimelineScrollMode>('following-end')
     const [disclosureLayoutActive, setDisclosureLayoutActive] = useState(false)
     const [settledWindowKey, setSettledWindowKey] = useState<string | null>(null)
     const [olderLoadIntentWindowKey, setOlderLoadIntentWindowKey] = useState<string | null>(null)
@@ -72,6 +77,12 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
         if (endAlignmentFrameRef.current === null) return
         window.cancelAnimationFrame(endAlignmentFrameRef.current)
         endAlignmentFrameRef.current = null
+    }, [])
+
+    const cancelDisclosureAnchor = useCallback(() => {
+        if (disclosureAnchorFrameRef.current === null) return
+        window.cancelAnimationFrame(disclosureAnchorFrameRef.current)
+        disclosureAnchorFrameRef.current = null
     }, [])
 
     const requestEndAlignment = useCallback(() => {
@@ -98,11 +109,17 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
         completionFollowTimerRef.current = 0
     }, [])
 
+    const updateScrollMode = useCallback((nextMode: AssistantTimelineScrollMode) => {
+        scrollModeRef.current = nextMode
+        setScrollMode((current) => current === nextMode ? current : nextMode)
+    }, [])
+
     const stopFollowingForUserNavigation = useCallback(() => {
         clearCompletionEndFollow()
         cancelEndAlignment()
-        scrollModeRef.current = 'free-scrolling'
-    }, [cancelEndAlignment, clearCompletionEndFollow])
+        userNavigationAwayRef.current = true
+        updateScrollMode('free-scrolling')
+    }, [cancelEndAlignment, clearCompletionEndFollow, updateScrollMode])
 
     useLayoutEffect(() => {
         const shouldSnap = shouldSnapRendererPresentation(
@@ -121,12 +138,14 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
         setDisclosureLayoutActive(false)
 
         if (!shouldFollowEnd) return
-        scrollModeRef.current = 'following-end'
+        userNavigationAwayRef.current = false
+        updateScrollMode('following-end')
         void props.listRef.current?.scrollToEnd({ animated: false })
     }, [
         cancelEndAlignment,
         clearCompletionEndFollow,
         props.listRef,
+        updateScrollMode,
         visibilitySnapshot.resumeRevision,
         visibilitySnapshot.visible
     ])
@@ -143,23 +162,50 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
     }, [props.onLoadOlder])
 
     const handleInitialLoad = useCallback(() => {
-        scrollModeRef.current = 'following-end'
+        userNavigationAwayRef.current = false
+        previousScrollTopRef.current = props.scrollContainerRef?.current?.scrollTop || 0
+        updateScrollMode('following-end')
         setOlderLoadIntentWindowKey(null)
         setSettledWindowKey(props.windowKey)
-    }, [props.windowKey])
+        props.onInitialLayout?.()
+    }, [props.onInitialLayout, props.scrollContainerRef, props.windowKey, updateScrollMode])
 
     useEffect(() => {
         if (!scrollElement) return
         const handleDisclosureToggle = (event: Event) => {
             const detail = (event as CustomEvent<AssistantTimelineDisclosureToggleDetail>).detail
+            const anchor = detail?.anchor
+            const anchorTop = anchor?.getBoundingClientRect().top ?? null
             beginDisclosureLayout(detail?.duration)
+            cancelDisclosureAnchor()
+            if (!anchor || anchorTop === null) return
+            const settleUntil = performance.now() + Math.max(0, detail?.duration || 0) + DISCLOSURE_SETTLE_PADDING_MS
+            const preserveAnchor = () => {
+                disclosureAnchorFrameRef.current = null
+                if (!anchor.isConnected || !scrollElement.contains(anchor)) return
+                const delta = anchor.getBoundingClientRect().top - anchorTop
+                if (Math.abs(delta) >= 0.5) scrollElement.scrollBy({ top: delta, behavior: 'auto' })
+                if (performance.now() < settleUntil) {
+                    disclosureAnchorFrameRef.current = window.requestAnimationFrame(preserveAnchor)
+                }
+            }
+            disclosureAnchorFrameRef.current = window.requestAnimationFrame(preserveAnchor)
         }
         const handleTimelinePointerDown = (event: PointerEvent) => {
             const target = event.target
             if (!(target instanceof Element)) return
-            stopFollowingForUserNavigation()
-            const button = target.closest('button')
+            if (target === scrollElement) {
+                const bounds = scrollElement.getBoundingClientRect()
+                const scrollbarGutter = Math.max(12, scrollElement.offsetWidth - scrollElement.clientWidth)
+                if (event.clientX < bounds.right - scrollbarGutter) return
+                cancelDisclosureAnchor()
+                stopFollowingForUserNavigation()
+                return
+            }
+            const button = target.closest('button[aria-expanded]')
             if (!button || !scrollElement.contains(button) || !button.closest('[data-assistant-timeline-row-id]')) return
+            cancelDisclosureAnchor()
+            stopFollowingForUserNavigation()
             beginDisclosureLayout()
         }
         const handleKeyboardClick = (event: MouseEvent) => {
@@ -171,12 +217,19 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
             setOlderLoadIntentWindowKey(props.windowKey)
         }
         const handleWheel = (event: WheelEvent) => {
+            cancelDisclosureAnchor()
+            if (event.deltaY > 0 && resolveAssistantTimelineScrollMode(scrollElement) === 'following-end') {
+                userNavigationAwayRef.current = false
+                updateScrollMode('following-end')
+                return
+            }
             stopFollowingForUserNavigation()
             armOlderLoading(event.deltaY < 0)
         }
         const handleKeyDown = (event: KeyboardEvent) => {
             const upwardIntent = ['ArrowUp', 'PageUp', 'Home'].includes(event.key)
             if (!upwardIntent) return
+            cancelDisclosureAnchor()
             stopFollowingForUserNavigation()
             armOlderLoading(true)
         }
@@ -187,12 +240,16 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
             const nextY = event.touches[0]?.clientY ?? null
             const previousY = touchStartYRef.current
             if (nextY !== null && previousY !== null && Math.abs(nextY - previousY) > 4) {
+                cancelDisclosureAnchor()
                 stopFollowingForUserNavigation()
                 armOlderLoading(nextY > previousY)
             }
             touchStartYRef.current = nextY
         }
-        const handleUserJump = () => stopFollowingForUserNavigation()
+        const handleUserJump = () => {
+            cancelDisclosureAnchor()
+            stopFollowingForUserNavigation()
+        }
         scrollElement.addEventListener(ASSISTANT_TIMELINE_DISCLOSURE_TOGGLE_EVENT, handleDisclosureToggle)
         scrollElement.addEventListener(ASSISTANT_TIMELINE_USER_JUMP_EVENT, handleUserJump)
         scrollElement.addEventListener('pointerdown', handleTimelinePointerDown, { passive: true })
@@ -211,7 +268,7 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
             scrollElement.removeEventListener('touchstart', handleTouchStart)
             scrollElement.removeEventListener('touchmove', handleTouchMove)
         }
-    }, [beginDisclosureLayout, props.windowKey, scrollElement, startupSettled, stopFollowingForUserNavigation])
+    }, [beginDisclosureLayout, cancelDisclosureAnchor, props.windowKey, scrollElement, startupSettled, stopFollowingForUserNavigation, updateScrollMode])
 
     useLayoutEffect(() => {
         if (previousCompletionWindowKeyRef.current !== props.windowKey) {
@@ -219,7 +276,8 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
             previousRowsRef.current = props.rows
             clearCompletionEndFollow()
             cancelEndAlignment()
-            scrollModeRef.current = 'following-end'
+            userNavigationAwayRef.current = false
+            updateScrollMode('following-end')
             return
         }
 
@@ -253,14 +311,16 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
         props.rows,
         props.windowKey,
         requestEndAlignment,
-        scrollElement
+        scrollElement,
+        updateScrollMode
     ])
 
     useEffect(() => () => {
         window.clearTimeout(disclosureTimerRef.current)
+        cancelDisclosureAnchor()
         clearCompletionEndFollow()
         cancelEndAlignment()
-    }, [cancelEndAlignment, clearCompletionEndFollow])
+    }, [cancelDisclosureAnchor, cancelEndAlignment, clearCompletionEndFollow])
 
     const renderItem = useCallback(({ item }: LegendListRenderItemProps<TimelineDisplayRow>) => (
         <div
@@ -305,16 +365,17 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
             renderItem={renderItem}
             estimatedItemSize={90}
             initialScrollAtEnd
+            alignItemsAtEnd
             onLoad={handleInitialLoad}
             maintainVisibleContentPosition={{ data: true, size: false }}
-            maintainScrollAtEnd={{
+            maintainScrollAtEnd={scrollMode === 'following-end' ? {
                 animated: false,
                 on: {
                     dataChange: true,
                     itemLayout: !disclosureLayoutActive,
                     layout: !disclosureLayoutActive
                 }
-            }}
+            } : false}
             maintainScrollAtEndThreshold={0.12}
             contentInsetEndAdjustment={props.contentInsetEndAdjustment}
             ListHeaderComponent={header}
@@ -325,7 +386,18 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
                 const element = props.scrollContainerRef?.current || scrollElement
                 if (!element) return
                 if (!completionFollowActiveRef.current) {
-                    scrollModeRef.current = resolveAssistantTimelineScrollMode(element)
+                    const resolvedMode = resolveAssistantTimelineScrollMode(element)
+                    const movingTowardEnd = element.scrollTop >= previousScrollTopRef.current - 0.5
+                    if (
+                        userNavigationAwayRef.current
+                        && resolvedMode === 'following-end'
+                        && movingTowardEnd
+                        && !disclosureLayoutActive
+                    ) {
+                        userNavigationAwayRef.current = false
+                    }
+                    updateScrollMode(userNavigationAwayRef.current ? 'free-scrolling' : resolvedMode)
+                    previousScrollTopRef.current = element.scrollTop
                 }
                 props.onScrollContainer?.(element)
             }}

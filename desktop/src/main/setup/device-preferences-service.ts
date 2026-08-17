@@ -13,6 +13,7 @@ import {
     type ManagedDevicePreferenceKey,
     type UpdateDevicePreferencesInput
 } from '../../shared/preferences/contracts'
+import { DEFAULT_ASSISTANT_TITLE_MODEL } from '../../shared/assistant/title-generation'
 import { isDarkThemeId, isLightThemeId } from '../../shared/preferences/theme-contract'
 import { FutureSchemaError, RevisionConflictError, writeJsonAtomically } from './atomic-json'
 
@@ -60,6 +61,7 @@ const STRING_LIMITS: Record<string, number> = {
     gitCommitCodexModel: 256,
     gitPullRequestCodexModel: 256,
     assistantDefaultModel: 256,
+    assistantTitleModel: 256,
     assistantDefaultPromptTemplate: MAX_PROMPT_LENGTH
 }
 
@@ -307,6 +309,14 @@ export class DevicePreferencesService {
             webSearch: record.shared.assistantDefaultWebSearch !== false,
             webFetch: record.shared.assistantDefaultWebFetch !== false
         }
+    }
+
+    async getAssistantTitleModel(): Promise<string> {
+        const record = await this.requireReadyRecord()
+        const configured = typeof record.shared.assistantTitleModel === 'string'
+            ? record.shared.assistantTitleModel.trim()
+            : ''
+        return configured || DEFAULT_ASSISTANT_TITLE_MODEL
     }
 
     private migrateDesktopLegacy(legacySettings: Record<string, unknown>): Promise<void> {

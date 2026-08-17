@@ -37,6 +37,8 @@ export interface MarkdownRendererProps {
     codeBlockMaxLines?: number
     lightweight?: boolean
     cacheKey?: string
+    /** Idle prewarming may compile the tree without also highlighting fenced code. */
+    prewarmCodeBlocks?: boolean
     /** Compile this changing fragment without retaining every intermediate version. */
     transient?: boolean
     linkSearchRoot?: string
@@ -320,7 +322,7 @@ function drainMarkdownPreparation(deadline: IdleDeadline): void {
         if (!next) break
         pendingPreparation.delete(next[0])
         prepareMarkdownRender(next[1])
-        if (!next[1].lightweight) prewarmFencedCodeBlocks(next[1])
+        if (!next[1].lightweight && next[1].prewarmCodeBlocks !== false) prewarmFencedCodeBlocks(next[1])
         prepared += 1
     }
     if (pendingPreparation.size > 0) schedulePreparationDrain()

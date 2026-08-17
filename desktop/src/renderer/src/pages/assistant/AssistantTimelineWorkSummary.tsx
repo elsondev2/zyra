@@ -1,11 +1,10 @@
-import { memo, useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { memo, startTransition, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
-import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { cn } from '@/lib/utils'
 import { formatWorkingTimer } from './assistant-timeline-helpers'
 import { requestAssistantTimelineDisclosureAnchor } from './assistant-timeline-scroll-events'
 
-const WORK_SUMMARY_MOTION_MS = 320
+const WORK_SUMMARY_LAYOUT_SETTLE_MS = 180
 
 function formatWorkSummaryStatus(startedAt: string, completedAt: string | null, running: boolean): string {
     const elapsed = formatWorkingTimer(
@@ -38,7 +37,7 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
     const triggerRef = useRef<HTMLButtonElement | null>(null)
     const statusTextRef = useRef<HTMLSpanElement | null>(null)
     const previousRunningRef = useRef(running)
-    const completionUnmountTimerRef = useRef<number | null>(null)
+    const contentMountFrameRef = useRef<number | null>(null)
     const statusText = formatWorkSummaryStatus(startedAt, completedAt, running)
     useEffect(() => {
         const updateStatusText = () => {
@@ -59,36 +58,43 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
                 ? 'No response'
                 : null
     const setWorkExpanded = (nextExpanded: boolean, anchor: HTMLElement | null) => {
-        if (completionUnmountTimerRef.current !== null) {
-            window.clearTimeout(completionUnmountTimerRef.current)
-            completionUnmountTimerRef.current = null
+        if (contentMountFrameRef.current !== null) {
+            window.cancelAnimationFrame(contentMountFrameRef.current)
+            contentMountFrameRef.current = null
         }
-        if (nextExpanded) setContentMounted(true)
-        requestAssistantTimelineDisclosureAnchor(anchor, WORK_SUMMARY_MOTION_MS, nextExpanded)
         setExpanded(nextExpanded)
+        if (nextExpanded) {
+            contentMountFrameRef.current = window.requestAnimationFrame(() => {
+                contentMountFrameRef.current = null
+                requestAssistantTimelineDisclosureAnchor(anchor, WORK_SUMMARY_LAYOUT_SETTLE_MS, true)
+                startTransition(() => setContentMounted(true))
+            })
+        } else {
+            requestAssistantTimelineDisclosureAnchor(anchor, WORK_SUMMARY_LAYOUT_SETTLE_MS, false)
+            setContentMounted(false)
+        }
     }
 
     useEffect(() => {
         const wasRunning = previousRunningRef.current
         previousRunningRef.current = running
         if (!wasRunning && running) {
-            if (completionUnmountTimerRef.current !== null) window.clearTimeout(completionUnmountTimerRef.current)
-            completionUnmountTimerRef.current = null
+            if (contentMountFrameRef.current !== null) window.cancelAnimationFrame(contentMountFrameRef.current)
+            contentMountFrameRef.current = null
             setContentMounted(true)
             setExpanded(true)
             return
         }
         if (!wasRunning || running) return
-        requestAssistantTimelineDisclosureAnchor(triggerRef.current, WORK_SUMMARY_MOTION_MS, false)
+        if (contentMountFrameRef.current !== null) window.cancelAnimationFrame(contentMountFrameRef.current)
+        contentMountFrameRef.current = null
+        requestAssistantTimelineDisclosureAnchor(triggerRef.current, WORK_SUMMARY_LAYOUT_SETTLE_MS, false)
         setExpanded(false)
-        completionUnmountTimerRef.current = window.setTimeout(() => {
-            completionUnmountTimerRef.current = null
-            setContentMounted(false)
-        }, WORK_SUMMARY_MOTION_MS)
+        setContentMounted(false)
     }, [running])
 
     useEffect(() => () => {
-        if (completionUnmountTimerRef.current !== null) window.clearTimeout(completionUnmountTimerRef.current)
+        if (contentMountFrameRef.current !== null) window.cancelAnimationFrame(contentMountFrameRef.current)
     }, [])
 
     return (
@@ -120,18 +126,16 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
                     <ChevronRight
                         size={12}
                         aria-hidden="true"
-                        className={cn('shrink-0 text-white/20 transition-[transform,color] duration-[320ms] ease-[cubic-bezier(0.2,0.8,0.2,1)] group-hover/work:text-white/35', expanded && 'rotate-90')}
+                        className={cn('shrink-0 text-white/20 transition-[transform,color] duration-150 ease-out group-hover/work:text-white/35 motion-reduce:transition-none', expanded && 'rotate-90')}
                     />
                 </button>
                 <div className="h-px w-full bg-white/[0.07]" aria-hidden="true" />
             </div>
-            <AnimatedHeight isOpen={expanded} duration={WORK_SUMMARY_MOTION_MS} crispContent>
-                {contentMounted ? (
-                    <div id={panelId} className="pt-2">
-                        {renderChildren()}
-                    </div>
-                ) : null}
-            </AnimatedHeight>
+            {expanded && contentMounted ? (
+                <div id={panelId} className="pt-2">
+                    {renderChildren()}
+                </div>
+            ) : null}
             {renderLiveNarration ? renderLiveNarration(expanded) : null}
         </div>
     )

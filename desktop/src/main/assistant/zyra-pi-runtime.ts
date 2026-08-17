@@ -1710,7 +1710,8 @@ export class ZyraPiRuntime extends EventEmitter {
                 runtimeMode: context.runtimeMode,
                 webSearch: context.webSearch ?? undefined,
                 webFetch: context.webFetch ?? undefined,
-                images: options?.images
+                images: options?.images,
+                skipTitleGeneration: true
             })
             if (context.activeTurnId !== turnId) return
             if (context.worker.serverOwnedLifecycle) return

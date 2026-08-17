@@ -713,7 +713,8 @@ app.whenReady().then(async () => {
         })
     }
     configureAssistantService({
-        getNewChatExecutionDefaults: () => setupServices.preferences.getNewChatWebDefaults()
+        getNewChatExecutionDefaults: () => setupServices.preferences.getNewChatWebDefaults(),
+        getTitleGenerationModel: () => setupServices.preferences.getAssistantTitleModel()
     })
     configureApplicationMenu(setupServices.onboarding.isAccessAllowed())
     setupServices.onboarding.subscribe((snapshot) => {

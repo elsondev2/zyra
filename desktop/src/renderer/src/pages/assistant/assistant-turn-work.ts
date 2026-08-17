@@ -253,7 +253,7 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
                 ? turnUsageById?.get(activeTurnId)?.startedAt || turnUsageById?.get(activeTurnId)?.requestedAt
                 : null
 
-            activeRange = activeEndIndex >= userIndex + 1 ? {
+            activeRange = activeEndIndex >= userIndex + 1 && workRows.length > 0 ? {
                 startIndex: userIndex + 1,
                 endIndex: activeEndIndex,
                 summary: {

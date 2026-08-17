@@ -62,6 +62,7 @@ export interface AssistantServiceActionDeps {
     hydrateSelectedSession(sessionId: string): Promise<void>
     getFirstUserMessageText(sessionId: string): Promise<string | null>
     getNewChatExecutionDefaults(): Promise<AssistantNewChatExecutionDefaults>
+    getTitleGenerationModel(): Promise<string | null>
     appendEvent(
         type: AssistantDomainEvent['type'],
         occurredAt: string,

@@ -1061,8 +1061,13 @@ assert.deepEqual(
 )
 assert.deepEqual(
     getTitleGenerationModelCandidates('openai-codex/gpt-5.6-sol'),
-    ['openai-codex/gpt-5.6-sol', 'openai-codex/gpt-5.4-mini'],
-    'title generation should use the active Pi model before the stable mini fallback'
+    ['openai-codex/gpt-5.6-sol', 'openai-codex/gpt-5.6-luna', 'openai-codex/gpt-5.4-mini'],
+    'an explicit title model should retain Luna and mini fallbacks'
+)
+assert.deepEqual(
+    getTitleGenerationModelCandidates(),
+    ['openai-codex/gpt-5.6-luna', 'openai-codex/gpt-5.4-mini'],
+    'new title generation defaults to GPT-5.6 Luna without inheriting the conversation model'
 )
 assert.equal(getAssistantCanonicalThreadId(projectedThread), 'provider-lifecycle')
 assert.equal(getAssistantCanonicalThreadId({ ...projectedThread, providerThreadId: null }), projectedThread.id)
@@ -1543,6 +1548,7 @@ assert.equal(
 
 const failedTurnRuntime = new ZyraPiRuntime()
 const failedTurnEvents: AssistantRuntimeEvent[] = []
+let failedPromptPayload: Record<string, unknown> | null = null
 failedTurnRuntime.on('runtime', (event: AssistantRuntimeEvent) => failedTurnEvents.push(event))
 const failedTurnId = 'turn-provider-error'
 const failedTurnContext = {
@@ -1550,7 +1556,10 @@ const failedTurnContext = {
     providerThreadId: 'provider-error',
     resumeProviderThreadId: 'provider-error',
     worker: {
-        request: async () => { throw new Error('Codex error: The usage limit has been reached') },
+        request: async (_type: string, payload?: Record<string, unknown>) => {
+            failedPromptPayload = payload || null
+            throw new Error('Codex error: The usage limit has been reached')
+        },
         isAlive: () => true
     },
     connected: true,
@@ -1588,6 +1597,7 @@ assert.equal(
     'a provider request failure must keep a live bridge connected'
 )
 assert.equal(failedTurnContext.activeTurnId, null)
+assert.equal(failedPromptPayload?.['skipTitleGeneration'], true, 'Desktop prompt transport must suppress the bridge worker\'s duplicate title request')
 
 const transportFailureRuntime = new ZyraPiRuntime()
 const transportFailureEvents: AssistantRuntimeEvent[] = []

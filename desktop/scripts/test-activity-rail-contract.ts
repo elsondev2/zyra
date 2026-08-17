@@ -188,6 +188,19 @@ assert.equal(completedRows.some((row) => row.kind === 'working'), false)
 
 const workingRows = buildTimelineRows(entries.slice(0, -1), true, iso(0))
 assert.equal(workingRows[1]?.kind, 'working', 'active work places its timer directly after the user request and before live work')
+const waitingForFirstWorkRows = buildTimelineRows(getTimelineEntries([messages[0]], []), true, iso(0))
+const waitingForFirstWorkDisplayRows = groupTimelineRowsIntoWorkSummaries({
+    rows: waitingForFirstWorkRows,
+    messages: [messages[0]],
+    latestAssistantMessageId: null,
+    latestTurnStartedAt: iso(0),
+    isWorking: true
+})
+assert.deepEqual(
+    waitingForFirstWorkDisplayRows.map((row) => row.kind),
+    ['message', 'working'],
+    'a first send keeps the lightweight working indicator visible until real work exists instead of rendering an empty disclosure'
+)
 const activeTurnRows = groupTimelineRowsIntoWorkSummaries({
     rows: workingRows,
     messages: messages.slice(0, -1),
@@ -310,18 +323,13 @@ const rowsAfterSendingNextMessage = groupTimelineRowsIntoWorkSummaries({
     isWorking: true
 })
 const summariesAfterSendingNextMessage = rowsAfterSendingNextMessage.filter((row) => row.kind === 'turn-work-summary')
-assert.equal(summariesAfterSendingNextMessage.length, 2, 'sending a new message keeps the previous Worked for disclosure mounted beside the new working disclosure')
-assert.equal(new Set(summariesAfterSendingNextMessage.map((row) => row.id)).size, 2, 'the pending turn cannot reuse the previous completed work summary identity')
+assert.equal(summariesAfterSendingNextMessage.length, 1, 'sending a new message keeps the previous Worked for disclosure without creating an empty working disclosure')
 assert.equal(
     summariesAfterSendingNextMessage[0]?.kind === 'turn-work-summary' ? summariesAfterSendingNextMessage[0].turnId : null,
     turnId,
     'the preserved historical disclosure remains attached to its completed turn'
 )
-assert.equal(
-    summariesAfterSendingNextMessage[1]?.kind === 'turn-work-summary' ? summariesAfterSendingNextMessage[1].turnId : 'unexpected',
-    null,
-    'an optimistic user message waits for its own turn ID instead of borrowing the previous turn ID'
-)
+assert.equal(rowsAfterSendingNextMessage.at(-1)?.kind, 'working', 'the optimistic next turn uses the responsive standalone working indicator until real work arrives')
 
 const freshTurnId = 'turn-after-stale-running-ledger'
 const freshTurnStartedAt = iso(900)
@@ -355,18 +363,12 @@ const rowsWithStaleRunningLedger = groupTimelineRowsIntoWorkSummaries({
     latestTurnStartedAt: freshTurnStartedAt,
     isWorking: true
 })
-const summaryAfterStaleRunningLedger = rowsWithStaleRunningLedger.find((row) => (
-    row.kind === 'turn-work-summary' && row.running
-))
+const freshWorkingIndicator = rowsWithStaleRunningLedger.find((row) => row.kind === 'working')
+assert.equal(freshWorkingIndicator?.kind === 'working' ? freshWorkingIndicator.createdAt : null, freshTurnStartedAt, 'the newest visible prompt must outrank a stale running turn ledger entry')
 assert.equal(
-    summaryAfterStaleRunningLedger?.kind === 'turn-work-summary' ? summaryAfterStaleRunningLedger.turnId : null,
-    freshTurnId,
-    'the newest visible prompt must outrank a stale running turn ledger entry'
-)
-assert.equal(
-    summaryAfterStaleRunningLedger?.kind === 'turn-work-summary' ? summaryAfterStaleRunningLedger.startedAt : null,
-    freshTurnStartedAt,
-    'a new prompt timer must not inherit the stale turn start time'
+    rowsWithStaleRunningLedger.some((row) => row.kind === 'turn-work-summary' && row.running),
+    false,
+    'a new prompt does not create a running disclosure until real work arrives'
 )
 assert.equal(
     rowsWithStaleRunningLedger.some((row) => (
@@ -381,15 +383,19 @@ const workSummaryMarkup = renderToStaticMarkup(createElement(TimelineTurnWorkSum
     renderChildren: () => createElement('div', null, 'Chronological work')
 }))
 assert.equal(workSummaryMarkup.includes('Worked for 1m'), true)
-assert.equal(workSummaryMarkup.includes('data-state="closed"'), true, 'completed work is collapsed by default')
+assert.equal(workSummaryMarkup.includes('aria-expanded="false"'), true, 'completed work is collapsed by default')
 assert.equal(workSummaryMarkup.includes('Chronological work'), false, 'collapsed work does not mount hidden tool and Markdown trees')
-assert.equal(workSummaryMarkup.includes('transition-duration:320ms'), true, 'work disclosure uses the calmer long-form motion timing')
+assert.equal(workSummaryMarkup.includes('grid-template-rows'), false, 'work disclosure avoids layout-thrashing height animation')
 assert.equal(workSummaryMarkup.includes('Collapse work'), false, 'work uses one disclosure control instead of repeating a footer action')
 const workSummarySource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimelineWorkSummary.tsx', import.meta.url), 'utf8')
 assert.equal(workSummarySource.includes("expanded && 'sticky top-0 z-10 bg-sparkle-bg/95 backdrop-blur-md'"), true, 'the expanded work header remains reachable while scrolling through long work')
 assert.equal(workSummarySource.includes('if (!wasRunning || running) return'), true, 'work auto-collapses exactly when a running turn completes')
 assert.equal(workSummarySource.includes('statusTextRef.current.textContent = formatWorkSummaryStatus'), true, 'the live work timer updates its own text without reconciling the expanded work subtree')
-assert.equal(workSummarySource.includes('duration={WORK_SUMMARY_MOTION_MS} crispContent'), true, 'large work disclosures animate height without fading and compositing the complete work subtree')
+assert.equal(workSummarySource.includes('<AnimatedHeight'), false, 'large work disclosures avoid frame-by-frame height layout while scrolling')
+assert.equal(workSummarySource.includes('window.requestAnimationFrame(() =>'), true, 'manual expansion gets one paint before mounting the heavier work subtree')
+const manualExpansionSource = workSummarySource.slice(workSummarySource.indexOf('const setWorkExpanded'), workSummarySource.indexOf('useEffect(() => {', workSummarySource.indexOf('const setWorkExpanded')))
+assert.equal(manualExpansionSource.indexOf('window.requestAnimationFrame') < manualExpansionSource.indexOf('requestAssistantTimelineDisclosureAnchor(anchor'), true, 'the anchor baseline is captured immediately before deferred work content mounts')
+assert.equal(workSummarySource.includes('startTransition(() => setContentMounted(true))'), true, 'the heavier work subtree remains interruptible while the user scrolls')
 assert.equal(workSummarySource.includes('setNowIso'), false, 'the shared work disclosure does not schedule a React render every second')
 const runningWorkSummaryMarkup = renderToStaticMarkup(createElement(TimelineTurnWorkSummary, {
     startedAt: new Date().toISOString(),
@@ -398,7 +404,7 @@ const runningWorkSummaryMarkup = renderToStaticMarkup(createElement(TimelineTurn
     renderChildren: () => createElement('div', null, 'Live implementation work')
 }))
 assert.equal(runningWorkSummaryMarkup.includes('Working for'), true, 'the shared disclosure presents its live elapsed state')
-assert.equal(runningWorkSummaryMarkup.includes('data-state="open"'), true, 'live work starts expanded and remains user-collapsible')
+assert.equal(runningWorkSummaryMarkup.includes('aria-expanded="true"'), true, 'live work starts expanded and remains user-collapsible')
 assert.equal(runningWorkSummaryMarkup.includes('Live implementation work'), true, 'active work still mounts its live details immediately')
 
 const interruptedTurnId = 'turn-interrupted-without-final'
@@ -447,7 +453,8 @@ const interruptedMarkup = renderToStaticMarkup(createElement(TimelineTurnWorkSum
 }))
 assert.equal(interruptedMarkup.includes('Worked for'), true)
 assert.equal(interruptedMarkup.includes('Interrupted'), true)
-assert.equal(interruptedMarkup.includes('data-state="closed"'), true)
+assert.equal(interruptedMarkup.includes('aria-expanded="false"'), true)
+assert.equal(interruptedMarkup.includes('Interrupted work'), false)
 
 const projectedInterruptedTurnId = 'shared-turn:canonical-chat:stopped-user-message'
 const projectedInterruptedUser = message({
@@ -1137,7 +1144,8 @@ const markdownRendererSource = readFileSync(new URL('../src/renderer/src/compone
 assert.equal(markdownRendererSource.includes('const compiledMarkdown = new Map'), true, 'completed Markdown survives virtual-row remounts in a bounded compiled cache')
 assert.equal(markdownRendererSource.includes('window.requestIdleCallback(drainMarkdownPreparation)'), true, 'newly loaded history prewarms immutable Markdown outside the scrolling hot path')
 assert.equal(markdownRendererSource.includes('MAX_COMPILED_ENTRIES = 192'), true, 'the compiled Markdown cache has a tighter explicit retention bound')
-assert.equal(timelineSource.includes('items.length < 6'), true, 'idle Markdown prewarming stays bounded to the recent visible conversation window')
+assert.equal(timelineSource.includes('ASSISTANT_MARKDOWN_PREWARM_MAX_LENGTH = 32_000'), true, 'idle Markdown prewarming skips large chat-entry bodies')
+assert.equal(timelineSource.includes('prewarmCodeBlocks: false'), true, 'chat-entry prewarming leaves syntax highlighting to visible code blocks')
 assert.equal(mountedVirtualTimelineSource.includes('markAssistantTimelineMotion'), false, 'scrolling does not downgrade or delay formatted Markdown')
 
 const assistantPageHelpersSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantPageHelpers.tsx', import.meta.url), 'utf8')

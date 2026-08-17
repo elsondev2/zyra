@@ -49,6 +49,7 @@ export const SHARED_DEVICE_PREFERENCE_KEYS = [
     'gitPullRequestCodexModel',
     'commitAIProvider',
     'assistantDefaultModel',
+    'assistantTitleModel',
     'assistantDefaultPromptTemplate',
     'assistantProductProfile',
     'assistantDefaultRuntimeMode',

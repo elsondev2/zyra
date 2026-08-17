@@ -76,4 +76,34 @@ const firstCreation = applyAssistantDomainEvent(createDefaultAssistantSnapshot()
 } as any)
 assert.equal(firstCreation.selectedSessionId, 'session-first', 'the first available chat should seed an otherwise empty client selection')
 
+const authoritativeSession = {
+    ...session('session-race', 'General greeting'),
+    projectPath: 'C:/workspace',
+    updatedAt: new Date(Date.now() + 1_000).toISOString()
+}
+const authoritativeSnapshot = {
+    ...createDefaultAssistantSnapshot(),
+    snapshotSequence: 10,
+    selectedSessionId: authoritativeSession.id,
+    sessions: [authoritativeSession]
+} as any
+const staleCreateEvent = {
+    eventId: 'event-create-race',
+    sequence: 10,
+    occurredAt: now,
+    type: 'session.created',
+    payload: { session: session(authoritativeSession.id, 'New Session') }
+} as any
+const afterStaleReplay = applyAssistantDomainEvent(authoritativeSnapshot, staleCreateEvent)
+assert.equal(afterStaleReplay.sessions.length, 1, 'a create event already represented by a refreshed snapshot must not duplicate the chat')
+assert.equal(afterStaleReplay.sessions[0]?.title, 'General greeting', 'a stale create replay must not replace the authoritative generated title')
+
+const afterDuplicateCreation = applyAssistantDomainEvent(authoritativeSnapshot, {
+    ...staleCreateEvent,
+    eventId: 'event-create-race-new-sequence',
+    sequence: 11
+})
+assert.equal(afterDuplicateCreation.sessions.length, 1, 'session creation remains idempotent even if a replay is assigned a newer sequence')
+assert.equal(afterDuplicateCreation.sessions[0]?.title, 'General greeting', 'a duplicate create never regresses an existing session shell')
+
 console.log('Assistant client-local selection: ok')

@@ -1,5 +1,5 @@
 import type { ReactNode, RefObject } from 'react'
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { LegendListRef } from '@legendapp/list/react'
 import type { AssistantActivity, AssistantMessage, AssistantProposedPlan, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
@@ -45,6 +45,8 @@ import {
 import { stripProposedPlanBlocks } from './assistant-proposed-plan'
 import { groupTimelineRowsIntoWorkSummaries } from './assistant-turn-work'
 import { useAssistantTimelineEntries } from './useAssistantTimelineEntries'
+
+const ASSISTANT_MARKDOWN_PREWARM_MAX_LENGTH = 32_000
 
 type AssistantTimelineProps = {
     messages: AssistantMessage[]
@@ -127,21 +129,28 @@ function AssistantTimelineImpl({
     onLoadOlder,
     onScrollContainer
 }: AssistantTimelineProps) {
+    const [initialLayoutWindowKey, setInitialLayoutWindowKey] = useState<string | null>(null)
     useEffect(() => {
+        if (initialLayoutWindowKey !== windowKey) return
         const items: Parameters<typeof prewarmMarkdownRenders>[0] = []
-        for (let index = messages.length - 1; index >= 0 && items.length < 6; index -= 1) {
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
             const message = messages[index]!
             if (message.role !== 'assistant' || message.streaming) continue
             const content = stripProposedPlanBlocks(message.text || '')
-            if (!content.trim()) continue
-            items.unshift({
+            if (!content.trim() || content.length > ASSISTANT_MARKDOWN_PREWARM_MAX_LENGTH) continue
+            items.push({
                 content,
                 cacheKey: `${message.id}:${message.updatedAt}:${content.length}`,
-                filePath: assistantMessageFilePath || undefined
+                filePath: assistantMessageFilePath || undefined,
+                prewarmCodeBlocks: false
             })
+            break
         }
         return prewarmMarkdownRenders(items)
-    }, [assistantMessageFilePath, messages])
+    }, [assistantMessageFilePath, initialLayoutWindowKey, messages, windowKey])
+    const handleInitialLayout = useCallback(() => {
+        setInitialLayoutWindowKey(windowKey)
+    }, [windowKey])
 
     const entries = useAssistantTimelineEntries(messages, activities, proposedPlans)
     const listRef = useRef<LegendListRef | null>(null)
@@ -434,6 +443,7 @@ function AssistantTimelineImpl({
             loadOlderError={loadOlderError}
             onLoadOlder={onLoadOlder}
             onScrollContainer={onScrollContainer}
+            onInitialLayout={handleInitialLayout}
             renderRow={renderRow}
         />
     )

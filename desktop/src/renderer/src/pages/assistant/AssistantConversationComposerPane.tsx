@@ -166,16 +166,8 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
                     )}
                     data-assistant-composer-hitbox="true"
                 >
-                    <div
-                        aria-hidden={placement !== 'center'}
-                        className={cn(
-                            'pointer-events-none grid px-2 text-center transition-[grid-template-rows,margin,opacity,transform] duration-[360ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
-                            placement === 'center'
-                                ? 'mb-5 grid-rows-[1fr] translate-y-0 opacity-100'
-                                : 'mb-0 grid-rows-[0fr] -translate-y-2 opacity-0'
-                        )}
-                    >
-                        <div className="min-h-0 overflow-hidden">
+                    {placement === 'center' ? (
+                        <div className="pointer-events-none mb-5 px-2 text-center">
                             <p
                                 className="mx-auto max-w-[680px] text-[30px] font-medium leading-[1.08] tracking-[-0.035em] text-sparkle-text/90"
                                 style={{ fontFamily: 'var(--font-ui, "Bricolage Grotesque", "Hanken Grotesk", system-ui, sans-serif)' }}
@@ -183,7 +175,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
                                 {props.newChatPrompt || ''}
                             </p>
                         </div>
-                    </div>
+                    ) : null}
                     <AssistantComposer
                         sessionId={props.selectedSessionId}
                         resetStateToken={props.resetComposerStateToken}
