@@ -365,7 +365,6 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
             renderItem={renderItem}
             estimatedItemSize={90}
             initialScrollAtEnd
-            alignItemsAtEnd
             onLoad={handleInitialLoad}
             maintainVisibleContentPosition={{ data: true, size: false }}
             maintainScrollAtEnd={scrollMode === 'following-end' ? {

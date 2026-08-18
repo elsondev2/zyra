@@ -76,7 +76,7 @@ assert.ok(incrementalMs < 100, 'a single tool lifecycle update remains bounded o
 const virtualTimelineSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantVirtualTimeline.tsx', import.meta.url), 'utf8')
 const timelineSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimeline.tsx', import.meta.url), 'utf8')
 assert.equal(virtualTimelineSource.includes('initialScrollAtEnd'), true, 'LegendList owns initial positioning at the newest row')
-assert.equal(virtualTimelineSource.includes('alignItemsAtEnd'), true, 'short and first-message chats stay attached to the composer instead of leaving an empty viewport')
+assert.equal(virtualTimelineSource.includes('alignItemsAtEnd'), false, 'short chats preserve the intended top-aligned conversation hierarchy')
 assert.equal(virtualTimelineSource.includes('onLoad={handleInitialLoad}'), true, 'history loading is armed only after LegendList reports initial layout and scrolling complete')
 assert.equal(timelineSource.includes('initialLayoutWindowKey !== windowKey'), true, 'Markdown prewarming waits until the current virtual window finishes initial layout')
 assert.equal(timelineSource.includes('ASSISTANT_MARKDOWN_PREWARM_MAX_LENGTH = 32_000'), true, 'chat-entry prewarming skips large Markdown bodies')
