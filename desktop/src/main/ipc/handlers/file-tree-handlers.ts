@@ -28,6 +28,7 @@ interface FileTreeNode {
     path: string
     type: 'file' | 'directory'
     size?: number
+    modifiedAt?: number
     children?: FileTreeNode[]
     childrenLoaded?: boolean
     isHidden: boolean
@@ -152,6 +153,7 @@ export async function handleGetFileTree(
                             path: fullPath,
                             type: 'file',
                             size: stats.size,
+                            modifiedAt: stats.mtimeMs,
                             isHidden: isHiddenEntry,
                             gitStatus: status
                         } satisfies FileTreeNode

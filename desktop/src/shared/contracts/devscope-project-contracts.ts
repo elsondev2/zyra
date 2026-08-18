@@ -57,6 +57,7 @@ export type DevScopeFileTreeNode = {
     path: string
     type: 'file' | 'directory'
     size?: number
+    modifiedAt?: number
     children?: DevScopeFileTreeNode[]
     childrenLoaded?: boolean
     isHidden: boolean

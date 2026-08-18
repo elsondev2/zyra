@@ -334,6 +334,7 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
     useAssistantComposerProjectData({
         projectPath,
         refreshToken: branchRefreshToken,
+        mentionActive: Boolean(mentionState),
         projectNodes,
         mentionChangedStateByPath,
         setIsGitRepo,

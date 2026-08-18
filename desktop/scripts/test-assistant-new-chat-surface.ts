@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { deriveAssistantConversationSurfaceMode } from '../src/renderer/src/pages/assistant/assistant-conversation-surface-mode'
+import { clearMentionIndex, getOrCreateMentionIndex } from '../src/renderer/src/pages/assistant/assistant-composer-mentions'
 
 assert.equal(
     deriveAssistantConversationSurfaceMode({
@@ -60,5 +61,51 @@ assert.match(projectChipSource, /data-assistant-new-chat-project-chip="true"/u, 
 assert.match(projectChipSource, /No project/u, 'detached New Chat context must be explicit')
 assert.match(projectChipSource, /Choose folder…/u, 'the project context menu must retain the real folder picker path')
 assert.match(composerSource, /surface-floating[\s\S]{0,260}shadow-\[0_22px_68px/u, 'the centered composer should use the raised floating-surface edge language')
+
+const originalWindow = (globalThis as { window?: unknown }).window
+let resolveFileTree: ((value: {
+    success: true
+    tree: Array<{ name: string; path: string; type: 'file'; isHidden: false; modifiedAt: number }>
+}) => void) | null = null
+let fileTreeRequests = 0
+;(globalThis as any).window = {
+    devscope: {
+        getFileTree: async () => {
+            fileTreeRequests += 1
+            return new Promise((resolve) => { resolveFileTree = resolve })
+        }
+    }
+}
+try {
+    clearMentionIndex()
+    const firstIndex = getOrCreateMentionIndex('C:/fixture-project')
+    const duplicateIndex = getOrCreateMentionIndex('C:/fixture-project')
+    assert.equal(fileTreeRequests, 1, 'simultaneous composer mounts must share one in-flight mention-index scan')
+    resolveFileTree?.({
+        success: true,
+        tree: [{
+            name: 'index.ts',
+            path: 'C:/fixture-project/index.ts',
+            type: 'file',
+            isHidden: false,
+            modifiedAt: 1234
+        }]
+    })
+    const [firstEntries, duplicateEntries] = await Promise.all([firstIndex, duplicateIndex])
+    assert.equal(firstEntries, duplicateEntries, 'deduplicated mention scans must reuse the same indexed entries')
+    assert.equal(firstEntries[0]?.modifiedAt, 1234, 'mention entries retain file-tree timestamps without opening file contents')
+} finally {
+    clearMentionIndex()
+    if (originalWindow === undefined) delete (globalThis as any).window
+    else (globalThis as any).window = originalWindow
+}
+
+const projectDataSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/assistant/useAssistantComposerProjectData.ts'), 'utf8')
+const mentionSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/assistant/assistant-composer-mentions.ts'), 'utf8')
+const fileTreeSource = readFileSync(resolve(import.meta.dir, '../src/main/ipc/handlers/file-tree-handlers.ts'), 'utf8')
+assert.match(projectDataSource, /mentionActive/u, 'composer file indexing waits for explicit mention intent')
+assert.doesNotMatch(projectDataSource, /readFileContent/u, 'mention recency must use file metadata rather than reading candidate contents')
+assert.match(mentionSource, /mentionIndexRequestCache/u, 'mention indexing deduplicates in-flight scans')
+assert.match(fileTreeSource, /modifiedAt: stats\.mtimeMs/u, 'file-tree metadata carries modification time from the existing stat call')
 
 console.log('Assistant new-chat surface: ok')

@@ -5,7 +5,6 @@ import { readProjectGitOverview } from '@/lib/projectGitOverview'
 import { getCachedProjectGitSnapshot } from '@/lib/projectViewCache'
 import {
     getOrCreateMentionIndex,
-    primeMentionIndex,
     searchMentionIndex,
     type MentionCandidate
 } from './assistant-composer-mentions'
@@ -16,6 +15,7 @@ type ChangedState = Record<string, 'staged' | 'unstaged' | 'both'>
 export function useAssistantComposerProjectData(args: {
     projectPath?: string | null
     refreshToken?: number
+    mentionActive: boolean
     projectNodes: MentionCandidate[]
     mentionChangedStateByPath: ChangedState
     setIsGitRepo: Dispatch<SetStateAction<boolean>>
@@ -26,7 +26,7 @@ export function useAssistantComposerProjectData(args: {
     setMentionChangedStateByPath: Dispatch<SetStateAction<ChangedState>>
     setMentionRecentModifiedAtByPath: Dispatch<SetStateAction<Record<string, number>>>
 }) {
-    const { projectPath, refreshToken = 0, projectNodes, mentionChangedStateByPath, setIsGitRepo, setBranches, setBranchesLoading, setProjectNodes, setMentionLoading, setMentionChangedStateByPath, setMentionRecentModifiedAtByPath } = args
+    const { projectPath, refreshToken = 0, mentionActive, projectNodes, mentionChangedStateByPath, setIsGitRepo, setBranches, setBranchesLoading, setProjectNodes, setMentionLoading, setMentionChangedStateByPath, setMentionRecentModifiedAtByPath } = args
 
     useEffect(() => {
         const trimmedPath = String(projectPath || '').trim()
@@ -65,14 +65,13 @@ export function useAssistantComposerProjectData(args: {
 
     useEffect(() => {
         const trimmedPath = String(projectPath || '').trim()
-        if (!trimmedPath) {
+        if (!trimmedPath || !mentionActive) {
             setProjectNodes([])
             setMentionLoading(false)
             return
         }
         let cancelled = false
         setMentionLoading(true)
-        primeMentionIndex(trimmedPath)
         void getOrCreateMentionIndex(trimmedPath).then((entries) => {
             if (!cancelled) setProjectNodes(entries)
         }).catch(() => {
@@ -81,11 +80,11 @@ export function useAssistantComposerProjectData(args: {
             if (!cancelled) setMentionLoading(false)
         })
         return () => { cancelled = true }
-    }, [projectPath, refreshToken, setMentionLoading, setProjectNodes])
+    }, [mentionActive, projectPath, refreshToken, setMentionLoading, setProjectNodes])
 
     useEffect(() => {
         const trimmedPath = String(projectPath || '').trim()
-        if (!trimmedPath) {
+        if (!trimmedPath || !mentionActive) {
             setMentionChangedStateByPath({})
             return
         }
@@ -139,52 +138,32 @@ export function useAssistantComposerProjectData(args: {
         }
         void loadChangedMentionFiles()
         return () => { cancelled = true }
-    }, [projectPath, refreshToken, setMentionChangedStateByPath])
+    }, [mentionActive, projectPath, refreshToken, setMentionChangedStateByPath])
 
     useEffect(() => {
         const trimmedPath = String(projectPath || '').trim()
-        if (!trimmedPath || projectNodes.length === 0) {
+        if (!trimmedPath || !mentionActive || projectNodes.length === 0) {
             setMentionRecentModifiedAtByPath({})
             return
         }
-        let cancelled = false
-        setMentionRecentModifiedAtByPath({})
-        const loadRecentMentionFiles = async () => {
-            const candidatesByKey = new Map<string, MentionCandidate>()
-            for (const candidate of projectNodes) {
-                if (candidate.type === 'file') candidatesByKey.set(normalizeMentionLookupPath(candidate.relativePath || candidate.path), candidate)
-            }
-            const recentPool: MentionCandidate[] = []
-            const seedCandidates = [
-                ...Object.keys(mentionChangedStateByPath).map((key) => candidatesByKey.get(key)).filter((candidate): candidate is MentionCandidate => Boolean(candidate)),
-                ...searchMentionIndex(projectNodes, '', 24)
-            ]
-            const seen = new Set<string>()
-            for (const candidate of seedCandidates) {
-                if (candidate.type !== 'file') continue
-                const key = normalizeMentionLookupPath(candidate.relativePath || candidate.path)
-                if (seen.has(key)) continue
-                seen.add(key)
-                recentPool.push(candidate)
-                if (recentPool.length >= 18) break
-            }
-            const results = await Promise.all(recentPool.map(async (candidate) => {
-                try {
-                    const result = await window.devscope.readFileContent(candidate.path)
-                    if (!result?.success || typeof result.modifiedAt !== 'number') return null
-                    return [normalizeMentionLookupPath(candidate.relativePath || candidate.path), result.modifiedAt] as const
-                } catch {
-                    return null
-                }
-            }))
-            if (cancelled) return
-            const nextRecentModifiedAtByPath: Record<string, number> = {}
-            for (const entry of results) {
-                if (entry) nextRecentModifiedAtByPath[entry[0]] = entry[1]
-            }
-            setMentionRecentModifiedAtByPath(nextRecentModifiedAtByPath)
+        const candidatesByKey = new Map<string, MentionCandidate>()
+        for (const candidate of projectNodes) {
+            if (candidate.type === 'file') candidatesByKey.set(normalizeMentionLookupPath(candidate.relativePath || candidate.path), candidate)
         }
-        void loadRecentMentionFiles()
-        return () => { cancelled = true }
-    }, [mentionChangedStateByPath, projectNodes, projectPath, refreshToken, setMentionRecentModifiedAtByPath])
+        const seedCandidates = [
+            ...Object.keys(mentionChangedStateByPath).map((key) => candidatesByKey.get(key)).filter((candidate): candidate is MentionCandidate => Boolean(candidate)),
+            ...searchMentionIndex(projectNodes, '', 24)
+        ]
+        const nextRecentModifiedAtByPath: Record<string, number> = {}
+        const seen = new Set<string>()
+        for (const candidate of seedCandidates) {
+            if (candidate.type !== 'file') continue
+            const key = normalizeMentionLookupPath(candidate.relativePath || candidate.path)
+            if (seen.has(key)) continue
+            seen.add(key)
+            if (typeof candidate.modifiedAt === 'number') nextRecentModifiedAtByPath[key] = candidate.modifiedAt
+            if (seen.size >= 18) break
+        }
+        setMentionRecentModifiedAtByPath(nextRecentModifiedAtByPath)
+    }, [mentionActive, mentionChangedStateByPath, projectNodes, projectPath, refreshToken, setMentionRecentModifiedAtByPath])
 }

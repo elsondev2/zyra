@@ -5,6 +5,7 @@ export type MentionCandidate = {
     name: string
     relativePath: string
     type: 'file' | 'directory'
+    modifiedAt?: number
 }
 
 type MentionIndexCacheEntry = {
@@ -16,6 +17,7 @@ type MentionIndexCacheEntry = {
 type MentionCandidateCategory = 'asset' | 'code' | 'config' | 'doc' | 'directory' | 'other'
 
 const mentionIndexCache = new Map<string, MentionIndexCacheEntry>()
+const mentionIndexRequestCache = new Map<string, Promise<MentionCandidate[]>>()
 const ASSET_EXTENSIONS = new Set([
     'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp', 'avif', 'apng', 'mp4', 'webm', 'mp3', 'wav', 'woff', 'woff2', 'ttf', 'otf'
 ])
@@ -47,7 +49,8 @@ function flattenFileTree(nodes: DevScopeFileTreeNode[], projectPath: string, buc
             path: normalizedPath,
             name: node.name,
             relativePath: normalizeRelativePath(relativePath || node.name),
-            type: node.type
+            type: node.type,
+            modifiedAt: node.modifiedAt
         })
         if (node.children?.length) flattenFileTree(node.children, normalizedProjectPath, bucket)
     }
@@ -205,21 +208,32 @@ export async function getOrCreateMentionIndex(projectPath: string): Promise<Ment
 
     const cached = mentionIndexCache.get(normalizedProjectPath)
     if (cached) return cached.entries
+    const inFlight = mentionIndexRequestCache.get(normalizedProjectPath)
+    if (inFlight) return inFlight
 
-    const result = await window.devscope.getFileTree(normalizedProjectPath, { maxDepth: 5, showHidden: false })
-    const entries = result.success ? flattenFileTree(result.tree || [], normalizedProjectPath) : []
-    mentionIndexCache.set(normalizedProjectPath, {
-        projectPath: normalizedProjectPath,
-        entries,
-        loadedAt: Date.now()
+    let request: Promise<MentionCandidate[]>
+    request = window.devscope.getFileTree(normalizedProjectPath, {
+        maxDepth: 5,
+        showHidden: false,
+        includeGitStatus: false,
+        includeFileSize: true
+    }).then((result) => {
+        const entries = result.success ? flattenFileTree(result.tree || [], normalizedProjectPath) : []
+        if (mentionIndexRequestCache.get(normalizedProjectPath) === request) {
+            mentionIndexCache.set(normalizedProjectPath, {
+                projectPath: normalizedProjectPath,
+                entries,
+                loadedAt: Date.now()
+            })
+        }
+        return entries
+    }).finally(() => {
+        if (mentionIndexRequestCache.get(normalizedProjectPath) === request) {
+            mentionIndexRequestCache.delete(normalizedProjectPath)
+        }
     })
-    return entries
-}
-
-export function primeMentionIndex(projectPath: string): void {
-    const normalizedProjectPath = normalizeProjectPath(String(projectPath || '').trim())
-    if (!normalizedProjectPath || mentionIndexCache.has(normalizedProjectPath)) return
-    void getOrCreateMentionIndex(normalizedProjectPath)
+    mentionIndexRequestCache.set(normalizedProjectPath, request)
+    return request
 }
 
 function scoreMentionCandidate(candidate: MentionCandidate, query: string): number {
@@ -258,7 +272,9 @@ export function clearMentionIndex(projectPath?: string): void {
     const normalizedProjectPath = normalizeProjectPath(String(projectPath || '').trim())
     if (!normalizedProjectPath) {
         mentionIndexCache.clear()
+        mentionIndexRequestCache.clear()
         return
     }
     mentionIndexCache.delete(normalizedProjectPath)
+    mentionIndexRequestCache.delete(normalizedProjectPath)
 }
