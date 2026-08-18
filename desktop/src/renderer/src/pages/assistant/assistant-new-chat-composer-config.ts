@@ -9,6 +9,7 @@ import type { Settings } from '@/lib/settings'
 type AssistantComposerConfigurationSettings = Pick<
     Settings,
     | 'assistantDefaultEffort'
+    | 'assistantDefaultFastMode'
     | 'assistantDefaultInteractionMode'
     | 'assistantDefaultModel'
     | 'assistantDefaultRuntimeMode'
@@ -17,6 +18,7 @@ type AssistantComposerConfigurationSettings = Pick<
 export type AssistantComposerLaunchConfiguration = {
     activeModel: string | undefined
     activeEffort: AssistantReasoningEffort | null
+    activeFastModeEnabled: boolean
     runtimeMode: AssistantRuntimeMode
     interactionMode: AssistantInteractionMode
     activeProfile: 'safe-dev' | 'yolo-fast'
@@ -34,6 +36,7 @@ export function resolveAssistantComposerLaunchConfiguration(input: {
         return {
             activeModel: input.settings.assistantDefaultModel.trim() || undefined,
             activeEffort: input.settings.assistantDefaultEffort,
+            activeFastModeEnabled: input.settings.assistantDefaultFastMode,
             runtimeMode,
             interactionMode: input.settings.assistantDefaultInteractionMode,
             activeProfile: runtimeMode === 'full-access' ? 'yolo-fast' : 'safe-dev'
@@ -44,6 +47,7 @@ export function resolveAssistantComposerLaunchConfiguration(input: {
     return {
         activeModel: input.thread?.model || input.fallbackModel || undefined,
         activeEffort: input.thread?.thinking || input.thread?.latestTurn?.effort || null,
+        activeFastModeEnabled: input.thread?.latestTurn?.serviceTier === 'fast',
         runtimeMode,
         interactionMode: input.interactionModeOverride || input.thread?.interactionMode || 'default',
         activeProfile: runtimeMode === 'full-access' ? 'yolo-fast' : 'safe-dev'

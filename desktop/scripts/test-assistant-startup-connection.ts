@@ -21,11 +21,54 @@ import { deriveAssistantComposerCapabilities } from '../src/renderer/src/pages/a
 import { getAssistantThreadLastMessageAt, resolveAssistantThreadStatusPill } from '../src/renderer/src/pages/assistant/assistant-sessions-rail-utils'
 import { mergeCanonicalPresenceLatestTurn, resolveCanonicalPresenceAttention, resolveCanonicalPresenceThreadState } from '../src/main/assistant/service-canonical-presence'
 import { resolveAssistantComposerLaunchConfiguration } from '../src/renderer/src/pages/assistant/assistant-new-chat-composer-config'
+import {
+    resolveAssistantComposerFallbackState,
+    resolveRetainedAssistantComposerModel
+} from '../src/renderer/src/pages/assistant/assistant-composer-controller-derived'
 
 const storeSource = readFileSync(new URL('../src/renderer/src/lib/assistant/assistant-store-core.ts', import.meta.url), 'utf8')
 const composerEffectsSource = readFileSync(new URL('../src/renderer/src/pages/assistant/useAssistantComposerControllerEffects.ts', import.meta.url), 'utf8')
+const composerControllerSource = readFileSync(new URL('../src/renderer/src/pages/assistant/useAssistantComposerController.ts', import.meta.url), 'utf8')
+const conversationPaneSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantConversationPane.tsx', import.meta.url), 'utf8')
 assert.doesNotMatch(storeSource, /if \(!hasKnownModels\)[\s\S]*refreshModels/, 'an empty model cache must not launch provider discovery during startup')
 assert.doesNotMatch(composerEffectsSource, /didAutoRefreshModelsRef/, 'the composer refreshes models only after the user opens its model controls')
+assert.match(composerEffectsSource, /areAssistantComposerConfigurationsEqual[\s\S]{0,300}writeAssistantComposerSessionState\(sessionId, currentComposerState\)/u, 'thread configuration choices persist immediately instead of being lost to the draft debounce')
+assert.match(conversationPaneSource, /useSettingsDefaults=\{selectedSessionIsDraft \|\| newChatHandoffActive\}/u, 'only a New Chat inherits global composer defaults')
+assert.match(composerControllerSource, /resolveRetainedAssistantComposerModel/u, 'model catalog refreshes preserve an explicit thread model')
+
+const canonicalThreadFallback = resolveAssistantComposerFallbackState({
+    useSettingsDefaults: false,
+    settingsDefaults: {
+        draft: 'new-chat template',
+        model: 'openai-codex/gpt-5.6-sol',
+        runtimeMode: 'approval-required',
+        interactionMode: 'default',
+        effort: 'medium',
+        fastModeEnabled: false
+    },
+    activeModel: 'openai-codex/gpt-5.6-terra',
+    runtimeMode: 'full-access',
+    interactionMode: 'plan',
+    activeEffort: 'high',
+    activeFastModeEnabled: true
+})
+assert.deepEqual(canonicalThreadFallback, {
+    model: 'openai-codex/gpt-5.6-terra',
+    runtimeMode: 'full-access',
+    interactionMode: 'plan',
+    effort: 'high',
+    fastModeEnabled: true
+}, 'an established thread restores its canonical configuration without inheriting new-chat defaults')
+assert.equal(
+    resolveRetainedAssistantComposerModel('openai-codex/thread-model', 'openai-codex/latest-model'),
+    'openai-codex/thread-model',
+    'a temporary catalog miss cannot replace an explicit thread model'
+)
+assert.equal(
+    resolveRetainedAssistantComposerModel('', 'openai-codex/latest-model'),
+    'openai-codex/latest-model',
+    'a genuinely empty model selection still receives an available fallback'
+)
 
 const now = '2026-07-10T08:00:00.000Z'
 const sessionId = 'startup-session'
@@ -63,6 +106,7 @@ assert.deepEqual(resolveAssistantComposerLaunchConfiguration({
     useSettingsDefaults: true,
     settings: {
         assistantDefaultModel: 'openai-codex/gpt-5.6-sol',
+        assistantDefaultFastMode: true,
         assistantDefaultRuntimeMode: 'full-access',
         assistantDefaultInteractionMode: 'plan',
         assistantDefaultEffort: 'xhigh'
@@ -72,6 +116,7 @@ assert.deepEqual(resolveAssistantComposerLaunchConfiguration({
 }), {
     activeModel: 'openai-codex/gpt-5.6-sol',
     activeEffort: 'xhigh',
+    activeFastModeEnabled: true,
     runtimeMode: 'full-access',
     interactionMode: 'plan',
     activeProfile: 'yolo-fast'
@@ -80,6 +125,7 @@ assert.deepEqual(resolveAssistantComposerLaunchConfiguration({
     useSettingsDefaults: false,
     settings: {
         assistantDefaultModel: 'openai-codex/gpt-5.6-sol',
+        assistantDefaultFastMode: true,
         assistantDefaultRuntimeMode: 'full-access',
         assistantDefaultInteractionMode: 'plan',
         assistantDefaultEffort: 'xhigh'
@@ -89,6 +135,7 @@ assert.deepEqual(resolveAssistantComposerLaunchConfiguration({
 }), {
     activeModel: 'openai-codex/gpt-5.5',
     activeEffort: null,
+    activeFastModeEnabled: false,
     runtimeMode: 'approval-required',
     interactionMode: 'default',
     activeProfile: 'safe-dev'

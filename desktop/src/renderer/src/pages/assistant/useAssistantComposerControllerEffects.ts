@@ -7,6 +7,7 @@ import {
     COMPOSER_SESSION_PERSIST_DEBOUNCE_MS
 } from './assistant-composer-controller-constants'
 import {
+    areAssistantComposerConfigurationsEqual,
     areAssistantComposerSessionStatesEqual,
     readAssistantComposerSessionState,
     writeAssistantComposerSessionState,
@@ -32,8 +33,7 @@ export function useAssistantComposerControllerEffects(input: {
     sessionId: string | null
     loadedSessionId: string | null
     currentComposerState: AssistantComposerSessionState
-    globalDefaultComposerState: AssistantComposerSessionState
-    legacyComposerSessionState: AssistantComposerSessionState
+    fallbackComposerState: AssistantComposerSessionState
     resolvedModel: string
     baseRuntimeMode: AssistantRuntimeMode
     baseInteractionMode: AssistantInteractionMode
@@ -96,8 +96,7 @@ export function useAssistantComposerControllerEffects(input: {
         sessionId,
         loadedSessionId,
         currentComposerState,
-        globalDefaultComposerState,
-        legacyComposerSessionState,
+        fallbackComposerState,
         resolvedModel,
         baseRuntimeMode,
         baseInteractionMode,
@@ -159,7 +158,7 @@ export function useAssistantComposerControllerEffects(input: {
         const initializationKey = `${sessionId || 'no-session'}:${resetStateToken || 'stable'}`
         if (initializedSessionIdRef.current === initializationKey) return
         initializedSessionIdRef.current = initializationKey
-        const nextState = readAssistantComposerSessionState(sessionId, globalDefaultComposerState)
+        const nextState = readAssistantComposerSessionState(sessionId, fallbackComposerState)
         persistedSessionStateRef.current = nextState
         setLoadedSessionId(null)
         setText(nextState.draft || '')
@@ -174,16 +173,15 @@ export function useAssistantComposerControllerEffects(input: {
         setSelectedModel(normalizeComposerDefaultModel(nextState.model || resolvedModel))
         setSelectedRuntimeMode(nextState.runtimeMode || baseRuntimeMode)
         setSelectedInteractionMode(nextState.interactionMode || baseInteractionMode)
-        setSelectedEffort(nextState.effort || globalDefaultComposerState.effort || 'medium')
-        setFastModeEnabled(nextState.fastModeEnabled ?? globalDefaultComposerState.fastModeEnabled ?? false)
+        setSelectedEffort(nextState.effort || fallbackComposerState.effort || 'medium')
+        setFastModeEnabled(nextState.fastModeEnabled ?? fallbackComposerState.fastModeEnabled ?? false)
         setComposerCursor(0)
         setLoadedSessionId(sessionId || null)
     }, [
         baseInteractionMode,
         baseRuntimeMode,
-        globalDefaultComposerState,
+        fallbackComposerState,
         initializedSessionIdRef,
-        legacyComposerSessionState,
         persistedSessionStateRef,
         resetStateToken,
         resolvedModel,
@@ -213,6 +211,12 @@ export function useAssistantComposerControllerEffects(input: {
         if (!firstAvailableModelId || availableModelOptionsLength <= 0) return
         setSelectedModel((current) => current || firstAvailableModelId)
     }, [availableModelOptionsLength, firstAvailableModelId, setSelectedModel])
+
+    useEffect(() => {
+        if (!sessionId || loadedSessionId !== sessionId) return
+        if (areAssistantComposerConfigurationsEqual(persistedSessionStateRef.current, currentComposerState)) return
+        persistedSessionStateRef.current = writeAssistantComposerSessionState(sessionId, currentComposerState)
+    }, [currentComposerState, loadedSessionId, persistedSessionStateRef, sessionId])
 
     useEffect(() => {
         if (!sessionId || loadedSessionId !== sessionId) return

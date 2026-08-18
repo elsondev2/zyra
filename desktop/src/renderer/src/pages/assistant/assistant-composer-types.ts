@@ -46,6 +46,7 @@ export type AssistantComposerDisabledReason = 'no-session' | 'project-required'
 
 export type AssistantComposerProps = {
     sessionId?: string | null
+    useSettingsDefaults?: boolean
     resetStateToken?: string | null
     placement?: 'bottom' | 'center'
     onSend: (prompt: string, contextFiles: ComposerContextFile[], options: AssistantComposerSendOptions) => Promise<boolean>
@@ -72,6 +73,7 @@ export type AssistantComposerProps = {
     isConnecting?: boolean
     activeModel?: string
     activeEffort?: AssistantReasoningEffort | null
+    activeFastModeEnabled?: boolean
     modelOptions?: AssistantModelInfo[]
     modelsLoading?: boolean
     modelsError?: string | null

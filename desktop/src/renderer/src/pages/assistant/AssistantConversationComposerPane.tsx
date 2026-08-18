@@ -29,6 +29,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
     onDeleteQueuedMessage?: (messageId: string) => Promise<void> | void
     onMoveQueuedMessage?: (messageId: string, targetMessageId: string) => Promise<void> | void
     selectedSessionId: string | null
+    useSettingsDefaults: boolean
     resetComposerStateToken?: string | null
     selectedSessionMode: 'work' | 'playground'
     assistantAvailable: boolean
@@ -41,6 +42,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
     availableModels: Array<{ id: string; label: string; description?: string }>
     activeModel: string | undefined
     activeEffort?: AssistantReasoningEffort | null
+    activeFastModeEnabled: boolean
     modelsLoading: boolean
     latestTurnUsage?: AssistantTurnUsage | null
     runtimeMode: 'approval-required' | 'full-access'
@@ -178,6 +180,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
                     ) : null}
                     <AssistantComposer
                         sessionId={props.selectedSessionId}
+                        useSettingsDefaults={props.useSettingsDefaults}
                         resetStateToken={props.resetComposerStateToken}
                         placement={placement}
                         disabled={Boolean(composerDisabledReason) || props.composerDisabled === true}
@@ -194,6 +197,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
                         isConnecting={isConnecting}
                         activeModel={props.activeModel}
                         activeEffort={props.activeEffort}
+                        activeFastModeEnabled={props.activeFastModeEnabled}
                         modelOptions={props.availableModels}
                         modelsLoading={props.modelsLoading}
                         modelsError={null}

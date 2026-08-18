@@ -107,14 +107,43 @@ function modelLooksLatest(model: ComposerModelOption, latestModelId: string | nu
     return Boolean(latestModelId && model.id === latestModelId)
 }
 
+export function resolveRetainedAssistantComposerModel(currentModel: string, fallbackModel: string): string {
+    return String(currentModel || '').trim() || String(fallbackModel || '').trim()
+}
+
+export function resolveAssistantComposerFallbackState(input: {
+    useSettingsDefaults: boolean
+    settingsDefaults: AssistantComposerSessionState
+    activeModel?: string
+    runtimeMode?: AssistantRuntimeMode
+    interactionMode?: AssistantInteractionMode
+    activeEffort?: AssistantComposerPreferenceEffort | null
+    activeFastModeEnabled?: boolean
+}): AssistantComposerSessionState {
+    const activeModel = String(input.activeModel || '').trim()
+    return {
+        ...(input.useSettingsDefaults ? input.settingsDefaults : {}),
+        ...(activeModel ? { model: activeModel } : {}),
+        ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
+        ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
+        ...(input.activeEffort ? { effort: input.activeEffort } : {}),
+        ...(typeof input.activeFastModeEnabled === 'boolean'
+            ? { fastModeEnabled: input.activeFastModeEnabled }
+            : {})
+    }
+}
+
 export function useAssistantComposerSessionDefaults(input: {
     settings: AssistantComposerSettingsDefaults
     activeProfile?: string
     runtimeMode?: AssistantRuntimeMode
     interactionMode?: AssistantInteractionMode
     activeModel?: string
+    activeEffort?: AssistantComposerPreferenceEffort | null
+    activeFastModeEnabled?: boolean
     modelOptions?: ComposerModelOption[]
     sessionId?: string | null
+    useSettingsDefaults: boolean
 }) {
     const {
         settings,
@@ -122,8 +151,11 @@ export function useAssistantComposerSessionDefaults(input: {
         runtimeMode,
         interactionMode,
         activeModel,
+        activeEffort,
+        activeFastModeEnabled,
         modelOptions,
-        sessionId
+        sessionId,
+        useSettingsDefaults
     } = input
 
     const legacyComposerSessionState = useMemo(() => readLegacyComposerSessionState(), [])
@@ -142,20 +174,33 @@ export function useAssistantComposerSessionDefaults(input: {
         settings.assistantDefaultPromptTemplate,
         settings.assistantDefaultRuntimeMode
     ])
-    const fallbackComposerState = useMemo<AssistantComposerSessionState>(() => ({
-        ...globalDefaultComposerState,
-        ...legacyComposerSessionState
-    }), [globalDefaultComposerState, legacyComposerSessionState])
+    const fallbackComposerState = useMemo<AssistantComposerSessionState>(() => resolveAssistantComposerFallbackState({
+        useSettingsDefaults,
+        settingsDefaults: {
+            ...globalDefaultComposerState,
+            ...legacyComposerSessionState
+        },
+        activeModel,
+        runtimeMode,
+        interactionMode,
+        activeEffort,
+        activeFastModeEnabled
+    }), [
+        activeEffort,
+        activeFastModeEnabled,
+        activeModel,
+        globalDefaultComposerState,
+        interactionMode,
+        legacyComposerSessionState,
+        runtimeMode,
+        useSettingsDefaults
+    ])
 
     const baseRuntimeMode: AssistantRuntimeMode =
         fallbackComposerState.runtimeMode
-        || runtimeMode
         || (activeProfile === 'yolo-fast' ? 'full-access' : 'approval-required')
-    const baseInteractionMode: AssistantInteractionMode =
-        fallbackComposerState.interactionMode
-        || interactionMode
-        || 'default'
-    const resolvedModel = String(fallbackComposerState.model || activeModel || '').trim()
+    const baseInteractionMode: AssistantInteractionMode = fallbackComposerState.interactionMode || 'default'
+    const resolvedModel = String(fallbackComposerState.model || '').trim()
     const rawAvailableModelOptions = (
         modelOptions?.length
             ? modelOptions
@@ -172,9 +217,7 @@ export function useAssistantComposerSessionDefaults(input: {
         baseInteractionMode,
         baseRuntimeMode,
         fallbackComposerState,
-        globalDefaultComposerState,
         initialComposerSessionState,
-        legacyComposerSessionState,
         rawAvailableModelOptionsLength: rawAvailableModelOptions.length,
         resolvedModel
     }

@@ -1022,6 +1022,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         onDeleteQueuedMessage={handleDeleteQueuedMessage}
                         onMoveQueuedMessage={handleMoveQueuedMessage}
                         selectedSessionId={visibleComposerSessionId}
+                        useSettingsDefaults={selectedSessionIsDraft || newChatHandoffActive}
                         resetComposerStateToken={resetComposerStateToken}
                         selectedSessionMode={selectedSessionMode}
                         assistantAvailable={controller.available}
@@ -1034,6 +1035,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         availableModels={availableModels}
                         activeModel={activeComposerConfiguration.activeModel}
                         activeEffort={activeComposerConfiguration.activeEffort}
+                        activeFastModeEnabled={activeComposerConfiguration.activeFastModeEnabled}
                         modelsLoading={controller.modelsLoading}
                         latestTurnUsage={controller.activeThread?.latestTurn?.usage || null}
                         runtimeMode={activeComposerConfiguration.runtimeMode}

@@ -18,7 +18,8 @@ import {
     useAssistantComposerCapabilitiesState,
     useAssistantComposerDerivedOptions,
     useAssistantComposerDirtyState,
-    useAssistantComposerSessionDefaults
+    useAssistantComposerSessionDefaults,
+    resolveRetainedAssistantComposerModel
 } from './assistant-composer-controller-derived'
 import { resetAssistantComposerDirtyState } from './assistant-composer-controller-reset'
 import {
@@ -34,6 +35,7 @@ import {
 } from './assistant-browser-annotation-composer'
 import { coerceAssistantReasoningEffortForModel, getAssistantModelReasoningEfforts } from '@shared/assistant/reasoning-efforts'
 import {
+    readAssistantComposerSessionOverrides,
     type AssistantComposerSessionState
 } from './assistant-composer-session-state'
 import type { AssistantComposerProps, AssistantQueuedComposerMessage, ComposerContextFile } from './assistant-composer-types'
@@ -52,6 +54,7 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
     const { settings } = useSettings()
     const {
         sessionId,
+        useSettingsDefaults = false,
         resetStateToken = null,
         placement = 'bottom',
         onSend,
@@ -72,6 +75,7 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         isConnecting = false,
         activeModel,
         activeEffort,
+        activeFastModeEnabled,
         modelOptions,
         modelsLoading = false,
         modelsError = null,
@@ -108,10 +112,20 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         baseRuntimeMode,
         fallbackComposerState,
         initialComposerSessionState,
-        legacyComposerSessionState,
         rawAvailableModelOptionsLength,
         resolvedModel
-    } = useAssistantComposerSessionDefaults({ settings, activeProfile, runtimeMode, interactionMode, activeModel, modelOptions, sessionId: normalizedSessionId })
+    } = useAssistantComposerSessionDefaults({
+        settings,
+        activeProfile,
+        runtimeMode,
+        interactionMode,
+        activeModel,
+        activeEffort,
+        activeFastModeEnabled,
+        modelOptions,
+        sessionId: normalizedSessionId,
+        useSettingsDefaults
+    })
     const [text, setText] = useState(initialComposerSessionState.draft || '')
     const [inlineMentionTags, setInlineMentionTags] = useState<InlineMentionTag[]>([])
     const [contextFiles, setContextFiles] = useState<ComposerContextFile[]>([])
@@ -202,18 +216,25 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
     const effortOptionsSignature = effortOptions.join('\n')
     useEffect(() => {
         const canonicalModel = normalizeComposerDefaultModel(activeModel)
-        if (canonicalModel) setSelectedModel(canonicalModel)
+        if (!canonicalModel || readAssistantComposerSessionOverrides(normalizedSessionId).model) return
+        setSelectedModel(canonicalModel)
     }, [activeModel, normalizedSessionId])
     useEffect(() => {
-        if (runtimeMode) setSelectedRuntimeMode(runtimeMode)
+        if (!runtimeMode || readAssistantComposerSessionOverrides(normalizedSessionId).runtimeMode) return
+        setSelectedRuntimeMode(runtimeMode)
     }, [normalizedSessionId, runtimeMode])
     useEffect(() => {
-        if (interactionMode) setSelectedInteractionMode(interactionMode)
+        if (!interactionMode || readAssistantComposerSessionOverrides(normalizedSessionId).interactionMode) return
+        setSelectedInteractionMode(interactionMode)
     }, [interactionMode, normalizedSessionId])
     useEffect(() => {
-        if (!activeEffort) return
+        if (!activeEffort || readAssistantComposerSessionOverrides(normalizedSessionId).effort) return
         setSelectedEffort(coerceAssistantReasoningEffortForModel(activeEffort, activeModel || selectedModel))
     }, [activeEffort, activeModel, normalizedSessionId])
+    useEffect(() => {
+        if (typeof activeFastModeEnabled !== 'boolean' || readAssistantComposerSessionOverrides(normalizedSessionId).fastModeEnabled !== undefined) return
+        setFastModeEnabled(activeFastModeEnabled)
+    }, [activeFastModeEnabled, normalizedSessionId])
     useEffect(() => {
         setSelectedEffort((current) => coerceAssistantReasoningEffortForModel(current, selectedModelOption))
     }, [effortOptionsSignature, selectedModel])
@@ -221,11 +242,10 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
     const preferredAvailableModelId = latestModelId || availableModelOptions[0]?.id || ''
     useEffect(() => {
         if (!preferredAvailableModelId || availableModelOptions.length === 0) return
-        const availableModelIds = new Set(availableModelOptions.map((model) => model.id))
-        setSelectedModel((current) => {
-            const normalizedCurrent = normalizeComposerDefaultModel(current)
-            return normalizedCurrent && availableModelIds.has(normalizedCurrent) ? normalizedCurrent : preferredAvailableModelId
-        })
+        setSelectedModel((current) => resolveRetainedAssistantComposerModel(
+            normalizeComposerDefaultModel(current),
+            preferredAvailableModelId
+        ))
     }, [availableModelIdSignature, availableModelOptions, preferredAvailableModelId])
     const { currentComposerState, isDirty } = useAssistantComposerDirtyState({
         text, selectedModel, selectedRuntimeMode, selectedInteractionMode, selectedEffort, fastModeEnabled,
@@ -268,8 +288,7 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         sessionId: normalizedSessionId,
         loadedSessionId,
         currentComposerState,
-        globalDefaultComposerState: fallbackComposerState,
-        legacyComposerSessionState,
+        fallbackComposerState,
         resolvedModel,
         baseRuntimeMode,
         baseInteractionMode,

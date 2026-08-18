@@ -18,17 +18,24 @@ const COMPOSER_SESSION_EVENT = 'devscope:assistant:composer-session-updated'
 const MAX_PERSISTED_ATTACHMENT_CONTENT_CHARS = 80_000
 const MAX_PERSISTED_ATTACHMENT_PREVIEW_DATA_URL_CHARS = 350_000
 
+export function areAssistantComposerConfigurationsEqual(
+    left: AssistantComposerSessionState,
+    right: AssistantComposerSessionState
+): boolean {
+    return left.model === right.model
+        && left.runtimeMode === right.runtimeMode
+        && left.interactionMode === right.interactionMode
+        && left.effort === right.effort
+        && left.fastModeEnabled === right.fastModeEnabled
+}
+
 export function areAssistantComposerSessionStatesEqual(
     left: AssistantComposerSessionState,
     right: AssistantComposerSessionState
 ): boolean {
     return left.draft === right.draft
         && areComposerContextFilesEqual(left.contextFiles, right.contextFiles)
-        && left.model === right.model
-        && left.runtimeMode === right.runtimeMode
-        && left.interactionMode === right.interactionMode
-        && left.effort === right.effort
-        && left.fastModeEnabled === right.fastModeEnabled
+        && areAssistantComposerConfigurationsEqual(left, right)
 }
 
 function sanitizeAssistantComposerSessionState(value: unknown): AssistantComposerSessionState {
@@ -59,17 +66,23 @@ function isAssistantComposerSessionStateEmpty(state: AssistantComposerSessionSta
         && state.fastModeEnabled === undefined
 }
 
+export function readAssistantComposerSessionOverrides(sessionId?: string | null): AssistantComposerSessionState {
+    if (!sessionId) return {}
+    try {
+        const raw = localStorage.getItem(getAssistantComposerSessionStorageKey(sessionId))
+        return raw ? sanitizeAssistantComposerSessionState(JSON.parse(raw)) : {}
+    } catch {
+        return {}
+    }
+}
+
 export function readAssistantComposerSessionState(
     sessionId?: string | null,
     fallback: AssistantComposerSessionState = {}
 ): AssistantComposerSessionState {
-    if (!sessionId) return { ...fallback }
-    try {
-        const raw = localStorage.getItem(getAssistantComposerSessionStorageKey(sessionId))
-        if (!raw) return { ...fallback }
-        return { ...fallback, ...sanitizeAssistantComposerSessionState(JSON.parse(raw)) }
-    } catch {
-        return { ...fallback }
+    return {
+        ...fallback,
+        ...readAssistantComposerSessionOverrides(sessionId)
     }
 }
 
