@@ -140,9 +140,12 @@ const getPreloadPath = (): string => {
 const getAppIconPath = (): string | undefined => {
     const family = runtimeIdentity.isDevRuntime ? 'dev' : 'prod'
     const theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
-    const variantName = `zyra-${family}-${theme}.png`
-    const masterName = `zyra-${family}.png`
-    const fallbackName = runtimeIdentity.isDevRuntime ? 'icon-dev.png' : 'icon.png'
+    const extension = process.platform === 'win32' ? 'ico' : 'png'
+    const variantName = `zyra-${family}-${theme}.${extension}`
+    const masterName = `zyra-${family}.${extension}`
+    const fallbackName = runtimeIdentity.isDevRuntime
+        ? `icon-dev.${extension}`
+        : `icon.${extension}`
     const candidates = [
         join(process.cwd(), 'resources/branding/icons', variantName),
         join(app.getAppPath(), 'resources/branding/icons', variantName),
