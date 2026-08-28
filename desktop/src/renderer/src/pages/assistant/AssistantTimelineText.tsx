@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import MarkdownRenderer, { prepareMarkdownRender } from '@/components/ui/MarkdownRenderer'
 import { useObservedElementWidth } from '@/lib/text-layout/useObservedElementWidth'
 import {
@@ -217,10 +217,24 @@ export const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBo
     content
 }: CollapsibleUserMessageBodyProps) {
     const { elementRef, width } = useObservedElementWidth<HTMLDivElement>()
+    const renderedBodyRef = useRef<HTMLDivElement | null>(null)
+    const [renderedBodyHeight, setRenderedBodyHeight] = useState(0)
     const [showFullUserBody, setShowFullUserBody] = useState(false)
 
     useEffect(() => {
         setShowFullUserBody(false)
+    }, [content])
+
+    useLayoutEffect(() => {
+        const node = renderedBodyRef.current
+        if (!node) return
+
+        const measure = () => setRenderedBodyHeight(Math.ceil(node.getBoundingClientRect().height))
+        measure()
+        if (typeof ResizeObserver === 'undefined') return
+        const observer = new ResizeObserver(measure)
+        observer.observe(node)
+        return () => observer.disconnect()
     }, [content])
 
     const bodyMetrics = useMemo(
@@ -232,23 +246,30 @@ export const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBo
         [content, width]
     )
 
-    const shouldCollapseUserBody = bodyMetrics.lineCount > USER_MESSAGE_COLLAPSED_LINE_COUNT
     const collapsedUserBodyMaxHeight = USER_MESSAGE_COLLAPSED_LINE_COUNT * TIMELINE_TEXT_LINE_HEIGHT
+    const expandedBodyHeight = Math.max(renderedBodyHeight, bodyMetrics.height)
+    const shouldCollapseUserBody = bodyMetrics.lineCount > USER_MESSAGE_COLLAPSED_LINE_COUNT
+        || renderedBodyHeight > collapsedUserBodyMaxHeight + 1
 
     return (
         <div ref={elementRef}>
-            <p
-                className="whitespace-pre-wrap break-words text-[13px] leading-6 text-sparkle-text [overflow-wrap:anywhere] motion-reduce:transition-none"
+            <div
+                className="motion-reduce:transition-none"
                 style={shouldCollapseUserBody
                     ? {
-                        maxHeight: `${showFullUserBody ? bodyMetrics.height : collapsedUserBodyMaxHeight}px`,
+                        maxHeight: `${showFullUserBody ? expandedBodyHeight : collapsedUserBodyMaxHeight}px`,
                         overflow: 'hidden',
                         transition: 'max-height 240ms cubic-bezier(0.16, 1, 0.3, 1)'
                     }
                     : undefined}
             >
-                {content}
-            </p>
+                <div ref={renderedBodyRef}>
+                    <MarkdownRenderer
+                        content={content}
+                        className="text-[13px] leading-6 text-sparkle-text [overflow-wrap:anywhere] [&_h1]:text-sparkle-text [&_h2]:text-sparkle-text [&_h3]:text-sparkle-text [&_li]:whitespace-pre-wrap [&_li]:leading-6 [&_li]:text-sparkle-text [&_p]:whitespace-pre-wrap [&_p]:leading-6 [&_p]:text-sparkle-text"
+                    />
+                </div>
+            </div>
             {shouldCollapseUserBody ? (
                 <button
                     type="button"

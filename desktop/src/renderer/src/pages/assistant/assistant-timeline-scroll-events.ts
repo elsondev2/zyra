@@ -61,6 +61,19 @@ export function resolveAssistantTimelineDisclosureAnchorMode(input: {
     return 'preserve-trigger'
 }
 
+export function resolveAssistantTimelineCompletionAnchor(trigger: HTMLElement | null): HTMLElement | null {
+    if (!trigger) return null
+    const currentRow = trigger.closest<HTMLElement>('[data-assistant-timeline-row-id]')
+    const timeline = trigger.closest<HTMLElement>('.assistant-chat-scrollbar')
+    if (!currentRow || !timeline) return trigger
+    const rows = Array.from(timeline.querySelectorAll<HTMLElement>('[data-assistant-timeline-row-id]'))
+    const currentIndex = rows.indexOf(currentRow)
+    const followingAssistantRow = currentIndex >= 0
+        ? rows.slice(currentIndex + 1).find((row) => row.dataset.assistantMessageRole === 'assistant')
+        : null
+    return followingAssistantRow || trigger
+}
+
 export function requestAssistantTimelineDisclosureAnchor(
     anchor: HTMLElement | null,
     duration: number,

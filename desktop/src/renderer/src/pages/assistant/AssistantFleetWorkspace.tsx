@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Bot, Workflow } from 'lucide-react'
 import type { FleetSnapshot } from '@shared/assistant/contracts'
+import type { AssistantUtilityAgentsStateCapsule } from '@shared/assistant/utility-window'
 import { cn } from '@/lib/utils'
 import { AssistantAgentDetailPage } from './AssistantAgentDetailPage'
 import { AssistantAgentDirectory } from './AssistantAgentDirectory'
@@ -19,12 +20,15 @@ interface AssistantFleetWorkspaceProps {
     onSelectWorkflow: (workflowRunId: string | null) => void
     onAgentAction?: (action: AssistantAgentAction, agentRunId: string) => void
     onWorkflowAction?: (action: AssistantWorkflowAction, workflowRunId: string) => void
+    stateCapsule?: AssistantUtilityAgentsStateCapsule
+    onStateCapsuleChange?: (capsule: AssistantUtilityAgentsStateCapsule) => void
 }
 
 export function AssistantFleetWorkspace(props: AssistantFleetWorkspaceProps) {
-    const [tab, setTab] = useState<'agents' | 'workflows'>('agents')
-    const [agentPage, setAgentPage] = useState(0)
-    const [workflowPage, setWorkflowPage] = useState(0)
+    const [tab, setTab] = useState<'agents' | 'workflows'>(props.stateCapsule?.section || 'agents')
+    const [agentPage, setAgentPage] = useState(props.stateCapsule?.agentPage || 0)
+    const [workflowPage, setWorkflowPage] = useState(props.stateCapsule?.workflowPage || 0)
+    const pendingHydrationRef = useRef(props.stateCapsule)
     const agents = useMemo(() => Object.values(props.snapshot?.agents ?? {}).sort(newestFirst), [props.snapshot])
     const workflows = useMemo(() => Object.values(props.snapshot?.workflows ?? {}).sort(newestFirst), [props.snapshot])
     const selectedAgent = agents.find((run) => run.agentRunId === props.selectedAgentRunId) ?? null
@@ -34,6 +38,37 @@ export function AssistantFleetWorkspace(props: AssistantFleetWorkspaceProps) {
         props.onSelectAgent(agentRunId)
         setTab('agents')
     }, [props.onSelectAgent])
+
+    useEffect(() => {
+        pendingHydrationRef.current = props.stateCapsule
+        if (!props.stateCapsule) return
+        setTab(props.stateCapsule.section || 'agents')
+        setAgentPage(props.stateCapsule.agentPage || 0)
+        setWorkflowPage(props.stateCapsule.workflowPage || 0)
+    }, [props.stateCapsule])
+
+    useEffect(() => {
+        const pendingHydration = pendingHydrationRef.current
+        if (pendingHydration) {
+            const hydrated = tab === (pendingHydration.section || 'agents')
+                && agentPage === (pendingHydration.agentPage || 0)
+                && workflowPage === (pendingHydration.workflowPage || 0)
+                && props.selectedAgentRunId === (pendingHydration.selectedAgentRunId || null)
+                && props.selectedWorkflowRunId === (pendingHydration.selectedWorkflowRunId || null)
+            if (!hydrated) return
+            pendingHydrationRef.current = undefined
+        }
+        props.onStateCapsuleChange?.({
+            version: 1,
+            workspace: 'agents',
+            section: tab,
+            agentPage,
+            workflowPage,
+            selectedAgentRunId: props.selectedAgentRunId || undefined,
+            selectedWorkflowRunId: props.selectedWorkflowRunId || undefined,
+            scrollAnchor: props.stateCapsule?.scrollAnchor
+        })
+    }, [agentPage, props.onStateCapsuleChange, props.selectedAgentRunId, props.selectedWorkflowRunId, props.stateCapsule?.scrollAnchor, tab, workflowPage])
 
     return (
         <section className="flex min-h-0 flex-1 flex-col bg-[color-mix(in_srgb,var(--color-bg)_96%,black)]" data-testid="assistant-fleet-workspace">

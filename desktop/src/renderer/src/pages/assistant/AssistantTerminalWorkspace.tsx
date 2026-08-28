@@ -11,7 +11,10 @@ import {
     Trash2,
     X
 } from 'lucide-react'
-import type { DevScopePreviewTerminalSessionSummary } from '@shared/contracts/devscope-api'
+import type {
+    DevScopePreviewTerminalSessionSummary,
+    DevScopePreviewTerminalWorkspaceOwner
+} from '@shared/contracts/devscope-api'
 import type { ITheme } from 'xterm'
 import type { Shell } from '@/lib/settings'
 import { getAppearanceCodeFontStack, useSettings } from '@/lib/settings'
@@ -56,11 +59,15 @@ function projectLabel(projectPath: string): string {
 export const AssistantTerminalWorkspace = memo(function AssistantTerminalWorkspace({
     workspaceKey,
     projectPath,
-    active
+    active,
+    terminalOwner,
+    onReady
 }: {
     workspaceKey: string
     projectPath: string | null
     active: boolean
+    terminalOwner?: DevScopePreviewTerminalWorkspaceOwner
+    onReady?: () => void
 }) {
     const { settings } = useSettings()
     const themeRevision = useThemeRevision()
@@ -74,14 +81,59 @@ export const AssistantTerminalWorkspace = memo(function AssistantTerminalWorkspa
     const [creating, setCreating] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [focusRequestId, setFocusRequestId] = useState(0)
+    const [workspaceCapability, setWorkspaceCapability] = useState<string | null | undefined>(
+        terminalOwner ? undefined : null
+    )
     const sessionsRef = useRef(sessions)
     const uiStateRef = useRef(uiState)
     const outputBuffersRef = useRef(new Map<string, string>())
     const creatingRef = useRef(false)
     const mountedRef = useRef(true)
+    const onReadyRef = useRef(onReady)
+    const terminalOwnerKind = terminalOwner?.kind || null
+    const terminalOwnerIdentity = terminalOwner?.kind === 'utility-tab'
+        ? terminalOwner.tabId
+        : terminalOwner?.runtimeId || null
 
     sessionsRef.current = sessions
+    onReadyRef.current = onReady
+
+    useEffect(() => {
+        if (!loading && !creating && !error) onReadyRef.current?.()
+    }, [creating, error, loading])
     uiStateRef.current = uiState
+
+    useEffect(() => {
+        if (!terminalOwnerKind || !terminalOwnerIdentity) {
+            setWorkspaceCapability(null)
+            return
+        }
+        let cancelled = false
+        let registeredCapability: string | null = null
+        setWorkspaceCapability(undefined)
+        setError(null)
+        const owner: DevScopePreviewTerminalWorkspaceOwner = terminalOwnerKind === 'utility-tab'
+            ? { kind: 'utility-tab', tabId: terminalOwnerIdentity }
+            : { kind: 'main-workspace', runtimeId: terminalOwnerIdentity }
+        void window.devscope.registerPreviewTerminalWorkspace(owner).then((result) => {
+            if (!result.success) {
+                if (!cancelled) setError(result.error || 'Failed to authorize terminal workspace.')
+                return
+            }
+            registeredCapability = result.workspaceCapability
+            if (cancelled) {
+                void window.devscope.releasePreviewTerminalWorkspace(result.workspaceCapability)
+                return
+            }
+            setWorkspaceCapability(result.workspaceCapability)
+        }).catch((registrationError: unknown) => {
+            if (!cancelled) setError(registrationError instanceof Error ? registrationError.message : 'Failed to authorize terminal workspace.')
+        })
+        return () => {
+            cancelled = true
+            if (registeredCapability) void window.devscope.releasePreviewTerminalWorkspace(registeredCapability)
+        }
+    }, [terminalOwnerIdentity, terminalOwnerKind])
 
     const terminalTheme = useMemo<ITheme>(() => {
         const accent = readCssVariable('--accent-primary', settings.accentColor.primary || '#38bdf8')
@@ -128,7 +180,10 @@ export const AssistantTerminalWorkspace = memo(function AssistantTerminalWorkspa
 
     const refreshSessions = useCallback(async (preferredSessionId?: string) => {
         if (!normalizedProjectPath) return []
-        const result = await window.devscope.listPreviewTerminalSessions({ targetPath: normalizedProjectPath })
+        const result = await window.devscope.listPreviewTerminalSessions({
+            targetPath: normalizedProjectPath,
+            workspaceCapability: workspaceCapability || undefined
+        })
         if (!result.success) {
             if (mountedRef.current) setError(result.error || 'Failed to load terminal sessions.')
             return []
@@ -155,7 +210,7 @@ export const AssistantTerminalWorkspace = memo(function AssistantTerminalWorkspa
         commitUiState(reconciled)
         setError(null)
         return nextSessions
-    }, [commitUiState, normalizedProjectPath])
+    }, [commitUiState, normalizedProjectPath, workspaceCapability])
 
     const createTerminal = useCallback(async (
         mode: 'new' | 'split' = 'new',
@@ -186,7 +241,8 @@ export const AssistantTerminalWorkspace = memo(function AssistantTerminalWorkspa
                 targetPath: normalizedProjectPath,
                 preferredShell,
                 cols: 80,
-                rows: 24
+                rows: 24,
+                workspaceCapability: workspaceCapability || undefined
             })
             if (!result.success) {
                 commitUiState(previousState)
@@ -205,10 +261,11 @@ export const AssistantTerminalWorkspace = memo(function AssistantTerminalWorkspa
             creatingRef.current = false
             if (mountedRef.current) setCreating(false)
         }
-    }, [commitUiState, newShell, normalizedProjectPath, refreshSessions])
+    }, [commitUiState, newShell, normalizedProjectPath, refreshSessions, workspaceCapability])
 
     useEffect(() => {
         mountedRef.current = true
+        if (workspaceCapability === undefined) return
         if (!normalizedProjectPath) {
             setSessions([])
             commitUiState(createEmptyAssistantTerminalWorkspaceState())
@@ -227,10 +284,11 @@ export const AssistantTerminalWorkspace = memo(function AssistantTerminalWorkspa
             cancelled = true
             mountedRef.current = false
         }
-    }, [commitUiState, createTerminal, normalizedProjectPath, refreshSessions, settings.defaultShell])
+    }, [commitUiState, createTerminal, normalizedProjectPath, refreshSessions, settings.defaultShell, workspaceCapability])
 
     useEffect(() => {
         if (!normalizedProjectPath) return
+        if (workspaceCapability === undefined) return
         const unsubscribe = window.devscope.onPreviewTerminalEvent((event) => {
             if (!event.sessionId) return
             if (event.type === 'output') {
@@ -291,9 +349,9 @@ export const AssistantTerminalWorkspace = memo(function AssistantTerminalWorkspa
             if (event.type === 'started' || event.type === 'exit' || event.type === 'error') {
                 void refreshSessions(event.sessionId)
             }
-        })
+        }, workspaceCapability || undefined)
         return () => unsubscribe()
-    }, [active, normalizedProjectPath, refreshSessions])
+    }, [active, normalizedProjectPath, refreshSessions, workspaceCapability])
 
     useEffect(() => {
         if (active) setFocusRequestId((requestId) => requestId + 1)
@@ -308,17 +366,23 @@ export const AssistantTerminalWorkspace = memo(function AssistantTerminalWorkspa
     }, [commitUiState])
 
     const closeTerminal = useCallback(async (terminalId: string) => {
-        await window.devscope.closePreviewTerminal(terminalId).catch(() => undefined)
+        await window.devscope.closePreviewTerminal({
+            sessionId: terminalId,
+            workspaceCapability: workspaceCapability || undefined
+        }).catch(() => undefined)
         outputBuffersRef.current.delete(terminalId)
         commitUiState(removeAssistantTerminalSession(uiStateRef.current, terminalId))
         await refreshSessions()
-    }, [commitUiState, refreshSessions])
+    }, [commitUiState, refreshSessions, workspaceCapability])
 
     const clearTerminal = useCallback(async (terminalId: string) => {
         outputBuffersRef.current.set(terminalId, '')
-        const result = await window.devscope.clearPreviewTerminal(terminalId)
+        const result = await window.devscope.clearPreviewTerminal({
+            sessionId: terminalId,
+            workspaceCapability: workspaceCapability || undefined
+        })
         if (!result.success) setError(result.error || 'Failed to clear terminal output.')
-    }, [])
+    }, [workspaceCapability])
 
     const restartTerminal = useCallback(async (session: TerminalSessionItem) => {
         setError(null)
@@ -329,7 +393,8 @@ export const AssistantTerminalWorkspace = memo(function AssistantTerminalWorkspa
             preferredShell: shellPreferenceFromSession(session, newShell),
             cols: 80,
             rows: 24,
-            title: session.title
+            title: session.title,
+            workspaceCapability: workspaceCapability || undefined
         })
         if (!result.success) {
             setError(result.error || 'Failed to restart terminal.')
@@ -337,7 +402,7 @@ export const AssistantTerminalWorkspace = memo(function AssistantTerminalWorkspa
         }
         await refreshSessions(session.sessionId)
         setFocusRequestId((requestId) => requestId + 1)
-    }, [newShell, normalizedProjectPath, refreshSessions])
+    }, [newShell, normalizedProjectPath, refreshSessions, workspaceCapability])
 
     if (!normalizedProjectPath) {
         return (
@@ -410,6 +475,7 @@ export const AssistantTerminalWorkspace = memo(function AssistantTerminalWorkspa
                                     >
                                         <AssistantTerminalViewport
                                             session={session}
+                                            workspaceCapability={workspaceCapability || undefined}
                                             initialOutput={outputBuffersRef.current.get(session.sessionId) || String(session.recentOutput || '')}
                                             theme={terminalTheme}
                                             fontFamily={getAppearanceCodeFontStack(settings.appearanceCodeFont)}

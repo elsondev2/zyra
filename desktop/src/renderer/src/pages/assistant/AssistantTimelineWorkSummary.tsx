@@ -3,10 +3,28 @@ import { ChevronRight } from 'lucide-react'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { cn } from '@/lib/utils'
 import { formatWorkingTimer } from './assistant-timeline-helpers'
-import { requestAssistantTimelineDisclosureAnchor } from './assistant-timeline-scroll-events'
+import {
+    requestAssistantTimelineDisclosureAnchor,
+    resolveAssistantTimelineCompletionAnchor
+} from './assistant-timeline-scroll-events'
 
 const WORK_SUMMARY_MOTION_MS = 260
 const WORK_SUMMARY_UNMOUNT_DELAY_MS = WORK_SUMMARY_MOTION_MS + 40
+const WORK_SUMMARY_EXPANDED_PREFERENCE_KEY = 'zyra:assistant-work-expanded:v1'
+
+function readWorkSummaryExpandedPreference(): boolean {
+    try {
+        return localStorage.getItem(WORK_SUMMARY_EXPANDED_PREFERENCE_KEY) !== 'false'
+    } catch {
+        return true
+    }
+}
+
+function writeWorkSummaryExpandedPreference(expanded: boolean): void {
+    try {
+        localStorage.setItem(WORK_SUMMARY_EXPANDED_PREFERENCE_KEY, String(expanded))
+    } catch {}
+}
 
 function formatWorkSummaryStatus(startedAt: string, completedAt: string | null, running: boolean): string {
     const elapsed = formatWorkingTimer(
@@ -22,24 +40,30 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
     startedAt,
     completedAt,
     running = false,
+    collapseForTerminalResponse = false,
     outcome = null,
-    renderChildren,
-    renderLiveNarration
+    renderChildren
 }: {
     startedAt: string
     completedAt: string | null
     running?: boolean
+    collapseForTerminalResponse?: boolean
     outcome?: 'completed' | 'interrupted' | 'failed' | 'no-response' | null
     renderChildren: () => ReactNode
-    renderLiveNarration?: (expanded: boolean) => ReactNode
 }) {
-    const [expanded, setExpanded] = useState(running)
-    const [contentMounted, setContentMounted] = useState(running)
-    const [contentVisible, setContentVisible] = useState(running)
+    const initialExpandedRef = useRef<boolean | null>(null)
+    if (initialExpandedRef.current === null) {
+        initialExpandedRef.current = running && readWorkSummaryExpandedPreference()
+    }
+    const initialExpanded = initialExpandedRef.current
+    const [expanded, setExpanded] = useState(initialExpanded)
+    const [contentMounted, setContentMounted] = useState(initialExpanded)
+    const [contentVisible, setContentVisible] = useState(false)
     const panelId = useId()
     const triggerRef = useRef<HTMLButtonElement | null>(null)
     const statusTextRef = useRef<HTMLSpanElement | null>(null)
     const previousRunningRef = useRef(running)
+    const previousTerminalResponseRef = useRef(collapseForTerminalResponse)
     const contentRevealFrameRef = useRef<number | null>(null)
     const contentUnmountTimerRef = useRef<number | null>(null)
     const pendingExpansionAnchorRef = useRef<HTMLElement | null>(null)
@@ -74,6 +98,7 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
     }
     const setWorkExpanded = (nextExpanded: boolean, anchor: HTMLElement | null) => {
         cancelPendingContentWork()
+        if (running) writeWorkSummaryExpandedPreference(nextExpanded)
         setExpanded(nextExpanded)
         if (nextExpanded) {
             pendingExpansionAnchorRef.current = anchor
@@ -111,34 +136,46 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
 
     useEffect(() => {
         const wasRunning = previousRunningRef.current
+        const runningChanged = wasRunning !== running
+        const terminalResponseBecameVisible = !previousTerminalResponseRef.current && collapseForTerminalResponse
         previousRunningRef.current = running
-        if (!wasRunning && running) {
-            cancelPendingContentWork()
-            pendingExpansionAnchorRef.current = triggerRef.current
-            setContentVisible(false)
-            setContentMounted(true)
-            setExpanded(true)
-            return
-        }
-        if (!wasRunning || running) return
+        previousTerminalResponseRef.current = collapseForTerminalResponse
+        if (!runningChanged && !terminalResponseBecameVisible) return
         cancelPendingContentWork()
         pendingExpansionAnchorRef.current = null
-        requestAssistantTimelineDisclosureAnchor(triggerRef.current, WORK_SUMMARY_MOTION_MS, false)
+        if (!wasRunning && running && !collapseForTerminalResponse) {
+            const restoreExpanded = readWorkSummaryExpandedPreference()
+            setExpanded(restoreExpanded)
+            setContentVisible(false)
+            setContentMounted(restoreExpanded)
+            return
+        }
+        requestAssistantTimelineDisclosureAnchor(
+            resolveAssistantTimelineCompletionAnchor(triggerRef.current),
+            WORK_SUMMARY_MOTION_MS,
+            false
+        )
         setExpanded(false)
         setContentVisible(false)
         contentUnmountTimerRef.current = window.setTimeout(() => {
             contentUnmountTimerRef.current = null
             setContentMounted(false)
         }, WORK_SUMMARY_UNMOUNT_DELAY_MS)
-    }, [running])
+    }, [collapseForTerminalResponse, running])
 
     useEffect(() => () => {
-        if (contentRevealFrameRef.current !== null) window.cancelAnimationFrame(contentRevealFrameRef.current)
-        if (contentUnmountTimerRef.current !== null) window.clearTimeout(contentUnmountTimerRef.current)
+        if (contentRevealFrameRef.current !== null) {
+            window.cancelAnimationFrame(contentRevealFrameRef.current)
+            contentRevealFrameRef.current = null
+        }
+        if (contentUnmountTimerRef.current !== null) {
+            window.clearTimeout(contentUnmountTimerRef.current)
+            contentUnmountTimerRef.current = null
+        }
     }, [])
 
     return (
-        <div className="max-w-4xl py-0.5">
+        <div className="max-w-4xl py-0.5" data-assistant-work-summary-shell="true">
             <div className={cn(
                 'transition-[background-color,backdrop-filter] duration-150',
                 expanded && 'sticky top-0 z-10 bg-sparkle-bg/95 backdrop-blur-md'
@@ -152,6 +189,13 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
                     className="group/work inline-flex min-h-7 items-center gap-1 rounded-sm pr-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
                     title={expanded ? 'Hide work' : 'Show work'}
                 >
+                    {running ? (
+                        <span data-assistant-working-dots="true" className="inline-flex shrink-0 items-center gap-[3px]" aria-hidden="true">
+                            <span className="h-1 w-1 rounded-full bg-white/25 motion-safe:animate-pulse" />
+                            <span className="h-1 w-1 rounded-full bg-white/25 motion-safe:animate-pulse [animation-delay:200ms]" />
+                            <span className="h-1 w-1 rounded-full bg-white/25 motion-safe:animate-pulse [animation-delay:400ms]" />
+                        </span>
+                    ) : null}
                     <span ref={statusTextRef} className="shrink-0 text-[11px] font-medium text-white/32 transition-colors group-hover/work:text-white/48">
                         {statusText}
                     </span>
@@ -180,7 +224,6 @@ export const TimelineTurnWorkSummary = memo(function TimelineTurnWorkSummary({
                     ) : null}
                 </AnimatedHeight>
             </div>
-            {renderLiveNarration ? renderLiveNarration(expanded) : null}
         </div>
     )
 })

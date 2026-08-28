@@ -45,6 +45,7 @@ export type TimelineTurnWorkSummaryRow = {
     startedAt: string
     completedAt: string | null
     running: boolean
+    terminalResponseVisible: boolean
     outcome: 'completed' | 'interrupted' | 'failed' | 'no-response' | null
     rows: TimelineRenderRow[]
     liveNarrationRow: TimelineRenderRow | null
@@ -574,13 +575,12 @@ export function getActivityOutput(activity: AssistantActivity): string {
 export function getActivityPatch(activity: AssistantActivity): string | null {
     const rawPatch = readActivityString(activity.payload?.patch)
         || readActivityString(activity.payload?.previewPatch)
-    if (!rawPatch) return null
-    if (activity.kind !== 'file-change') return rawPatch
+    if (activity.kind !== 'file-change') return rawPatch || null
     return buildRenderableFileChangePatch(
         rawPatch,
         activity.payload?.changes,
         readActivityPathsFromPayload(activity.payload || {}, activity.detail)
-    ) || rawPatch
+    ) || rawPatch || null
 }
 
 export function areActivitiesEquivalent(left: AssistantActivity, right: AssistantActivity): boolean {
@@ -716,6 +716,35 @@ function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry): numb
         || compareAssistantTimelineStrings(getTimelineEntryRecordId(left), getTimelineEntryRecordId(right))
 }
 
+function mergeOrderedTimelineEntryStreams(streams: TimelineEntry[][]): TimelineEntry[] {
+    const ordered = streams.every((stream) => {
+        for (let index = 1; index < stream.length; index += 1) {
+            if (compareTimelineEntries(stream[index - 1]!, stream[index]!) > 0) return false
+        }
+        return true
+    })
+    if (!ordered) return streams.flat().sort(compareTimelineEntries)
+
+    const positions = new Uint32Array(streams.length)
+    const merged: TimelineEntry[] = []
+    while (true) {
+        let selectedStream = -1
+        let selectedEntry: TimelineEntry | null = null
+        for (let streamIndex = 0; streamIndex < streams.length; streamIndex += 1) {
+            const entry = streams[streamIndex]![positions[streamIndex]!]
+            if (!entry) continue
+            if (!selectedEntry || compareTimelineEntries(entry, selectedEntry) < 0) {
+                selectedEntry = entry
+                selectedStream = streamIndex
+            }
+        }
+        if (!selectedEntry || selectedStream < 0) break
+        merged.push(selectedEntry)
+        positions[selectedStream] += 1
+    }
+    return merged
+}
+
 export function getTimelineEntries(
     messages: AssistantMessage[],
     activities: AssistantActivity[],
@@ -724,38 +753,56 @@ export function getTimelineEntries(
     const renderedMessages = messages.filter(shouldRenderMessage)
     const renderedActivities = activities.filter(shouldRenderActivity)
     const chronologicalActivities = [...renderedActivities].reverse()
-    const sortedEntries: TimelineEntry[] = [
-        ...renderedMessages.map((message) => ({
-            id: getAssistantTimelineMessageEntryId(message),
-            createdAt: message.createdAt,
-            timelineSequence: message.timelineSequence,
-            type: 'message' as const,
-            message
-        })),
-        ...chronologicalActivities.map((activity) => ({
-            id: activity.id,
-            createdAt: activity.createdAt,
-            timelineSequence: activity.timelineSequence,
-            type: 'activity' as const,
-            activity
-        })),
-        ...proposedPlans.map((plan, index) => {
-            const hasLaterMessage = renderedMessages.some((message) => {
-                if (message.turnId && plan.turnId && message.turnId === plan.turnId) return false
-                return compareTimelinePosition(plan.createdAt, message.createdAt, plan.timelineSequence, message.timelineSequence) < 0
-            })
-            return {
-                id: `plan-${plan.id}-${index}`,
-                createdAt: plan.createdAt,
-                timelineSequence: plan.timelineSequence,
-                type: 'plan' as const,
-                plan,
-                canImplement: !hasLaterMessage
-            }
-        })
-    ].sort(compareTimelineEntries)
-
-    return groupAdjacentTimelineActivities(sortedEntries)
+    const latestMessagesByDistinctTurn: AssistantMessage[] = []
+    const seenLatestTurnIds = new Set<string>()
+    for (let index = renderedMessages.length - 1; index >= 0 && latestMessagesByDistinctTurn.length < 2; index -= 1) {
+        const message = renderedMessages[index]!
+        const key = message.turnId || `message:${message.id}`
+        if (seenLatestTurnIds.has(key)) continue
+        seenLatestTurnIds.add(key)
+        latestMessagesByDistinctTurn.push(message)
+    }
+    const messageEntries: TimelineEntry[] = renderedMessages.map((message) => ({
+        id: getAssistantTimelineMessageEntryId(message),
+        createdAt: message.createdAt,
+        timelineSequence: message.timelineSequence,
+        type: 'message' as const,
+        message
+    }))
+    const activityEntries: TimelineEntry[] = chronologicalActivities.map((activity) => ({
+        id: activity.id,
+        createdAt: activity.createdAt,
+        timelineSequence: activity.timelineSequence,
+        type: 'activity' as const,
+        activity
+    }))
+    const planEntries: TimelineEntry[] = proposedPlans.map((plan, index) => {
+        const latestOtherTurnMessage = latestMessagesByDistinctTurn.find((message) => (
+            !message.turnId || !plan.turnId || message.turnId !== plan.turnId
+        ))
+        const hasLaterMessage = Boolean(
+            latestOtherTurnMessage
+            && compareTimelinePosition(
+                plan.createdAt,
+                latestOtherTurnMessage.createdAt,
+                plan.timelineSequence,
+                latestOtherTurnMessage.timelineSequence
+            ) < 0
+        )
+        return {
+            id: `plan-${plan.id}-${index}`,
+            createdAt: plan.createdAt,
+            timelineSequence: plan.timelineSequence,
+            type: 'plan' as const,
+            plan,
+            canImplement: !hasLaterMessage
+        }
+    })
+    return groupAdjacentTimelineActivities(mergeOrderedTimelineEntryStreams([
+        messageEntries,
+        activityEntries,
+        planEntries
+    ]))
 }
 
 export function buildTimelineRows(entries: TimelineEntry[], isWorking: boolean, activeWorkStartedAt: string | null): TimelineRenderRow[] {
@@ -827,6 +874,8 @@ export function buildTimelineRows(entries: TimelineEntry[], isWorking: boolean, 
 
     const groupedRows: TimelineRenderRow[] = []
     let traceRun: TimelineRenderRow[] = []
+    let traceRunActivities: AssistantActivity[] = []
+    let traceRunTurnId: string | null = null
 
     const getTraceActivities = (row: TimelineRenderRow): AssistantActivity[] | null => {
         if (row.kind === 'thought-group' || row.kind === 'command-checkpoint-group') return row.activities
@@ -839,20 +888,21 @@ export function buildTimelineRows(entries: TimelineEntry[], isWorking: boolean, 
 
     const flushTraceRun = () => {
         if (traceRun.length === 0) return
-        const activities = traceRun.flatMap((traceRow) => getTraceActivities(traceRow) || [])
-        const hasThought = activities.some(isInternalAssistantActivity)
-        const hasCheckpoint = activities.some(isCommandCheckpointActivity)
+        const hasThought = traceRunActivities.some(isInternalAssistantActivity)
+        const hasCheckpoint = traceRunActivities.some(isCommandCheckpointActivity)
         if (hasThought && hasCheckpoint) {
             groupedRows.push({
                 kind: 'work-trace-group',
-                id: `work-trace-group-${traceRun[0]?.id || activities[0]?.id || 'trace'}`,
-                createdAt: traceRun[0]?.createdAt || activities[0]?.createdAt || '',
-                activities
+                id: `work-trace-group-${traceRun[0]?.id || traceRunActivities[0]?.id || 'trace'}`,
+                createdAt: traceRun[0]?.createdAt || traceRunActivities[0]?.createdAt || '',
+                activities: traceRunActivities
             })
         } else {
             groupedRows.push(...traceRun)
         }
         traceRun = []
+        traceRunActivities = []
+        traceRunTurnId = null
     }
 
     for (const row of rows) {
@@ -864,17 +914,22 @@ export function buildTimelineRows(entries: TimelineEntry[], isWorking: boolean, 
         }
 
         const rowTurnId = activities[0]?.turnId || null
-        const runActivities = traceRun.flatMap((traceRow) => getTraceActivities(traceRow) || [])
-        const runTurnId = runActivities[0]?.turnId || null
-        if (traceRun.length > 0 && rowTurnId !== runTurnId) flushTraceRun()
+        if (traceRun.length > 0 && rowTurnId !== traceRunTurnId) flushTraceRun()
+        if (traceRun.length === 0) traceRunTurnId = rowTurnId
         traceRun.push(row)
+        traceRunActivities.push(...activities)
     }
     flushTraceRun()
 
     if (isWorking && entries.length > 0) {
-        const latestUserMessageId = [...entries].reverse().find((entry) => (
-            entry.type === 'message' && entry.message.role === 'user'
-        ))?.id
+        let latestUserMessageId: string | undefined
+        for (let index = entries.length - 1; index >= 0; index -= 1) {
+            const entry = entries[index]
+            if (entry.type === 'message' && entry.message.role === 'user') {
+                latestUserMessageId = entry.id
+                break
+            }
+        }
         const latestUserRowIndex = latestUserMessageId
             ? groupedRows.findIndex((row) => row.kind === 'message' && row.id === latestUserMessageId)
             : -1

@@ -1,4 +1,5 @@
 export const ASSISTANT_BUBBLE_PREVIEW_PINNED_KEY = 'assistant:bubble-preview-pinned:v1'
+export const ASSISTANT_BUBBLE_SIDEBAR_WIDTH = 322
 export const ASSISTANT_SIDEBAR_PREVIEW_CLOSE_MS = 180
 export const ASSISTANT_SIDEBAR_COLLAPSE_MORPH_MS = 1_100
 

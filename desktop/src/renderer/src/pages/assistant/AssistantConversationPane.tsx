@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { AssistantApprovalDecision, AssistantMessage, AssistantProposedPlan, AssistantSession, AssistantSessionTurnUsageEntry, AssistantVoiceExecutionConfiguration } from '@shared/assistant/contracts'
+import type { AssistantApprovalDecision, AssistantMessage, AssistantProposedPlan, AssistantSession, AssistantVoiceExecutionConfiguration } from '@shared/assistant/contracts'
+import { reconcileAssistantMessageReplays } from '@shared/assistant/message-reconciliation'
 import { isAssistantSessionProjectLocked } from '@shared/assistant/session-project'
 import { useSettings, type AssistantProductProfile } from '@/lib/settings'
 import {
@@ -12,6 +13,8 @@ import { usePublishAssistantTitleBarContent } from '@/lib/assistant/assistant-ti
 import { hasAssistantPersistedThreadContent, shouldShowAssistantThreadHistoryLoader } from '@/lib/assistant/assistant-history-state'
 import { isAssistantThreadActivelyWorking } from '@/lib/assistant/selectors'
 import { cn } from '@/lib/utils'
+import { resolveAssistantComposerContextUsage } from './assistant-composer-context-usage'
+import { buildAssistantTurnUsageIndex } from './assistant-turn-usage-index'
 import { buildPromptImageInputs, buildPromptWithContextFiles } from './assistant-composer-utils'
 import { clearAssistantComposerSessionState } from './assistant-composer-session-state'
 import { projectVoiceLiveTimelineMessages } from './assistant-voice-live-timeline'
@@ -79,6 +82,14 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const visibilitySnapshot = useRendererVisibilitySnapshot()
     const composerPaneRef = useRef<HTMLDivElement | null>(null)
     const [zyraProfileOverride, setZyraProfileOverride] = useState<AssistantProductProfile | null>(null)
+    const [optimisticPromptStartedAt, setOptimisticPromptStartedAt] = useState<string | null>(null)
+    const [optimisticPromptSending, setOptimisticPromptSending] = useState(false)
+    const [optimisticPromptBoundary, setOptimisticPromptBoundary] = useState<{
+        sessionId: string
+        threadId: string | null
+        previousUserMessageId: string | null
+        startedAt: string
+    } | null>(null)
     const [voicePreferences] = useState(readInstructorVoicePreferences)
     const synchronizedZyraProfile = controller.activeThread?.profile === 'builder'
         ? 'builder'
@@ -121,13 +132,13 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const showScrollToBottomRef = useRef(false)
     const scrollButtonRafRef = useRef<number | null>(null)
     const newChatHandoffUntilRef = useRef(0)
-    const prefetchedHistoryThreadIdsRef = useRef(new Set<string>())
     const voiceExecutionConfigurationRef = useRef<AssistantVoiceExecutionConfiguration | null>(null)
 
     const isThreadWorking = isAssistantThreadActivelyWorking(controller.activeThread)
     const selectedSessionId = controller.selectedSession?.id || null
     const activeThreadId = controller.activeThread?.id || null
-    const handleLoadOlderHistory = useCallback(() => actions.loadOlderHistory(activeThreadId || undefined), [actions, activeThreadId])
+    const handleLoadOlderHistory = useCallback((turnLimit = 1) => actions.loadOlderHistory(activeThreadId || undefined, turnLimit), [actions, activeThreadId])
+    const handleLoadNewerHistory = useCallback((turnLimit = 1) => actions.loadNewerHistory(activeThreadId || undefined, turnLimit), [actions, activeThreadId])
     const canonicalVoiceBinding = useMemo(() => (
         selectedSessionId && controller.activeThread?.id
             ? { conversationId: controller.activeThread.id, sessionId: selectedSessionId }
@@ -160,6 +171,11 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     }
     const newChatHandoffActive = isCreatingFreshChat || newChatHandoffUntilRef.current > Date.now()
     const activeComposerSessionId = newChatHandoffActive ? null : selectedSessionId
+    useEffect(() => {
+        setOptimisticPromptSending(false)
+        setOptimisticPromptStartedAt(null)
+        setOptimisticPromptBoundary(null)
+    }, [activeComposerSessionId])
     const queueSessionStates = useAssistantStoreSelector((state) => (
         state.snapshot.sessions.map((session) => {
             const activeThread = session.threads.find((thread) => thread.id === session.activeThreadId) || null
@@ -213,39 +229,50 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         enabled: Boolean(activeComposerSessionId),
         refreshKey: `${controller.activeThread?.latestTurn?.id || ''}:${controller.activeThread?.latestTurn?.completedAt || ''}:${controller.activeThread?.latestTurn?.state || ''}`
     })
-    const turnUsageById = useMemo(() => {
-        const next = new Map<string, AssistantSessionTurnUsageEntry>()
-        for (const turn of sessionTurnUsage?.turns || []) {
-            next.set(turn.id, turn)
-        }
-        return next
-    }, [sessionTurnUsage])
+    const turnUsageById = useMemo(
+        () => buildAssistantTurnUsageIndex(controller.timelineMessages, sessionTurnUsage?.turns || []),
+        [controller.timelineMessages, sessionTurnUsage?.turns]
+    )
+    const composerContextUsage = useMemo(() => controller.selectionHydrating
+        ? null
+        : resolveAssistantComposerContextUsage({
+            liveUsage: controller.activeThread?.latestTurn?.usage,
+            sessionTurns: sessionTurnUsage?.turns,
+            threadId: controller.activeThread?.id
+        }), [controller.activeThread?.id, controller.activeThread?.latestTurn?.usage, controller.selectionHydrating, sessionTurnUsage?.turns])
 
-    useEffect(() => {
-        const threadId = controller.activeThread?.id || null
-        if (
-            !settings.assistantHistoryPrefetch
-            || !threadId
-            || !controller.history?.pageInfo.hasOlder
-            || controller.history.loadingOlder
-            || prefetchedHistoryThreadIdsRef.current.has(threadId)
-        ) return
-
-        prefetchedHistoryThreadIdsRef.current.add(threadId)
-        void actions.loadOlderHistory(threadId)
-    }, [actions, controller.activeThread?.id, controller.history?.loadingOlder, controller.history?.pageInfo.hasOlder, settings.assistantHistoryPrefetch])
-    const timelineIsWorking = isThreadWorking && !voiceVisible
-    const shouldShowWorkingIndicator = timelineIsWorking
+    const timelineIsWorking = (isThreadWorking || optimisticPromptSending)
+        && !voiceVisible
+        && !controller.history?.pageInfo.hasNewer
+    const latestCanonicalUserMessageId = [...controller.timelineMessages].reverse().find((message) => message.role === 'user')?.id || null
+    const optimisticBoundaryBelongsToThread = Boolean(
+        optimisticPromptBoundary
+        && optimisticPromptBoundary.sessionId === selectedSessionId
+        && optimisticPromptBoundary.threadId === activeThreadId
+    )
+    const optimisticPromptAwaitingUserMessage = Boolean(
+        optimisticBoundaryBelongsToThread
+        && latestCanonicalUserMessageId === optimisticPromptBoundary?.previousUserMessageId
+    )
+    const timelinePresentationIsWorking = timelineIsWorking && !optimisticPromptAwaitingUserMessage
+    const shouldShowWorkingIndicator = timelinePresentationIsWorking
         && !controller.timelineMessages.some((message) => message.role === 'assistant' && message.streaming)
+    const canonicalLatestTurnStartedAt = controller.activeThread?.latestTurn?.startedAt || null
+    const effectiveLatestTurnStartedAt = optimisticBoundaryBelongsToThread
+        && optimisticPromptBoundary
+        && (!canonicalLatestTurnStartedAt || canonicalLatestTurnStartedAt < optimisticPromptBoundary.startedAt)
+        ? optimisticPromptBoundary.startedAt
+        : canonicalLatestTurnStartedAt || optimisticPromptStartedAt
     const displayedTimelineMessages = useMemo((): AssistantMessage[] => {
-        if (!voiceVisible || voice.transcript.length === 0) return controller.timelineMessages
+        const canonicalMessages = reconcileAssistantMessageReplays(controller.timelineMessages)
+        if (!voiceVisible || voice.transcript.length === 0) return canonicalMessages
         const anchorKey = `${controller.activeThread?.id || 'no-thread'}:${voice.startedAt || 'not-started'}`
         if (voiceTimelineAnchorsRef.current.key !== anchorKey) {
             voiceTimelineAnchorsRef.current = { key: anchorKey, anchors: new Map() }
         }
         const projection = projectVoiceLiveTimelineMessages({
             transcript: voice.transcript,
-            canonicalMessages: controller.timelineMessages,
+            canonicalMessages,
             activities: controller.activityFeed,
             proposedPlans: controller.activeThread?.proposedPlans || [],
             voiceStartedAt: voice.startedAt,
@@ -253,8 +280,8 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         })
         voiceTimelineAnchorsRef.current.anchors = projection.anchors
         return projection.messages.length > 0
-            ? [...controller.timelineMessages, ...projection.messages]
-            : controller.timelineMessages
+            ? [...canonicalMessages, ...projection.messages]
+            : canonicalMessages
     }, [
         controller.activeThread?.id,
         controller.activeThread?.proposedPlans,
@@ -306,7 +333,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         latestTimelineActivityId: latestTimelineActivity?.id || null,
         latestTimelineActivityCreatedAt: latestTimelineActivity?.createdAt || null,
         shouldShowWorkingIndicator,
-        latestTurnStartedAt: controller.activeThread?.latestTurn?.startedAt || null,
+        latestTurnStartedAt: effectiveLatestTurnStartedAt,
         latestTurnState: controller.activeThread?.latestTurn?.state || null,
         threadState: controller.activeThread?.state || null
     })
@@ -638,6 +665,11 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         connectionRecovery.reconnect()
     }, [connectionRecovery])
 
+    const handleComposerSendingChange = useCallback((sending: boolean) => {
+        setOptimisticPromptSending(sending)
+        setOptimisticPromptStartedAt((current) => sending ? current || new Date().toISOString() : null)
+    }, [])
+
     const handleDispatchPrompt = useCallback(async (
         sessionId: string,
         prompt: string,
@@ -645,6 +677,15 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         options: AssistantComposerSendOptions
     ) => {
         if (!sessionId) return false
+        const startedAt = new Date().toISOString()
+        const previousUserMessageId = [...controller.timelineMessages].reverse().find((message) => message.role === 'user')?.id || null
+        setOptimisticPromptBoundary({
+            sessionId,
+            threadId: controller.activeThread?.id || null,
+            previousUserMessageId,
+            startedAt
+        })
+        setOptimisticPromptStartedAt((current) => current || startedAt)
         const images = buildPromptImageInputs(contextFiles)
         const result = await actions.sendPromptResult(buildPromptWithContextFiles(prompt, contextFiles), {
             sessionId,
@@ -656,11 +697,12 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
             profile: activeRuntimeZyraProfile,
             images: images.length > 0 ? images : undefined
         })
-        if (!result.success && images.length > 0) {
-            props.onShowToast?.(`Could not send image: ${result.error}`, 'error')
+        if (!result.success) {
+            setOptimisticPromptBoundary((current) => current?.sessionId === sessionId ? null : current)
+            if (images.length > 0) props.onShowToast?.(`Could not send image: ${result.error}`, 'error')
         }
         return result.success
-    }, [actions, activeRuntimeZyraProfile, props.onShowToast])
+    }, [actions, activeRuntimeZyraProfile, controller.activeThread?.id, controller.timelineMessages, props.onShowToast])
     const isAssistantBusy = !newChatHandoffActive && (controller.commandPending || isThreadWorking)
     const {
         sendingComposerPrompt,
@@ -678,6 +720,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         isThreadWorking: !newChatHandoffActive && isThreadWorking,
         activeTurnId: newChatHandoffActive ? null : controller.activeThread?.latestTurn?.id || null,
         busyMessageMode: settings.assistantBusyMessageMode,
+        onSendingChange: handleComposerSendingChange,
         dispatchPrompt: handleDispatchPrompt,
         interruptTurn: (turnId, sessionId) => actions.interruptTurn(turnId, sessionId)
     })
@@ -859,6 +902,11 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         || activeThreadIsSubagent
         || isThreadWorking
         || controller.commandPending
+    const handlePrepareCanonicalVoice = useCallback((executionConfiguration: AssistantVoiceExecutionConfiguration) => {
+        if (canonicalVoiceDisabled || (voice.status !== 'idle' && voice.status !== 'error')) return
+        voiceExecutionConfigurationRef.current = executionConfiguration
+        actions.warmSelectedSessionConnection(executionConfiguration)
+    }, [actions, canonicalVoiceDisabled, voice.status])
     const handleStartCanonicalVoice = useCallback((executionConfiguration?: AssistantVoiceExecutionConfiguration) => {
         if (canonicalVoiceDisabled || (voice.status !== 'idle' && voice.status !== 'error')) return
         const selectedConfiguration = executionConfiguration || voiceExecutionConfigurationRef.current
@@ -874,6 +922,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
             showRightSidebarToggle={props.showRightSidebarToggle}
             latestProjectLabel={latestProjectLabel}
             selectedSessionTitle={selectedSessionTitle}
+            titleGenerating={controller.selectedSession?.titleGenerating === true}
             canonicalThreadId={controller.activeThread?.providerThreadId || controller.activeThread?.id || null}
             canonicalPresence={settings.assistantShowStatusDetails || settings.assistantShowDiagnostics ? controller.activeThread?.canonicalPresence : null}
             showPresenceBadge={settings.assistantShowStatusDetails}
@@ -891,6 +940,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
             onArchiveChat={handleArchiveChat}
             onDeleteChat={handleOpenDeleteChat}
             onToggleRightSidebar={handleToggleDetailsPanel}
+            onShowToast={props.onShowToast}
         />
     ) : null, [
         activeThreadIsSubagent,
@@ -900,6 +950,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         controller.activeThread?.id,
         controller.activeThread?.providerThreadId,
         controller.commandPending,
+        controller.selectedSession?.titleGenerating,
         displayProjectPath,
         handleArchiveChat,
         handleChooseHeaderProject,
@@ -911,6 +962,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         headerActionPending,
         latestProjectLabel,
         projectDirectoryLocked,
+        props.onShowToast,
         props.rightPanelMode,
         props.rightPanelOpen,
         props.showRightSidebarToggle,
@@ -924,7 +976,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
     const effectiveInteractionMode = activeComposerConfiguration.interactionMode
 
     return (
-        <section className="assistant-conversation-pane relative flex min-w-0 flex-1 flex-col overflow-x-hidden">
+        <section className="assistant-conversation-pane relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             <div className={cn(
                 'flex min-h-0 flex-1 flex-col transition-[filter,opacity] duration-200',
                 showChatOnboardingOverlay && 'pointer-events-none select-none blur-[2px] opacity-55'
@@ -956,12 +1008,12 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                             projectTitle={displayProjectPath || null}
                             assistantMessageFilePath={assistantMessageFilePath}
                             windowKey={`${controller.selectedSession?.id || 'no-session'}:${controller.activeThread?.id || 'no-thread'}`}
-                            isWorking={timelineIsWorking}
+                            isWorking={timelinePresentationIsWorking}
                             activeStatusLabel={activeStatusLabel}
-                            isConnecting={isThreadConnecting}
-                            activeWorkStartedAt={controller.activeThread?.latestTurn?.startedAt || null}
+                            isConnecting={isThreadConnecting && !voiceVisible}
+                            activeWorkStartedAt={effectiveLatestTurnStartedAt}
                             latestAssistantMessageId={controller.activeThread?.latestTurn?.assistantMessageId || null}
-                            latestTurnStartedAt={controller.activeThread?.latestTurn?.startedAt || null}
+                            latestTurnStartedAt={effectiveLatestTurnStartedAt}
                             turnUsageById={turnUsageById}
                             deletingMessageId={props.deletingMessageId}
                             loadingChats={isLoadingSelectedChat}
@@ -974,9 +1026,13 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                             )}
                             scrollButtonBottomOverride={voiceVisible ? VOICE_SCROLL_BUTTON_BOTTOM_PX : undefined}
                             hasOlder={controller.history?.pageInfo.hasOlder || false}
+                            hasNewer={controller.history?.pageInfo.hasNewer || false}
                             loadingOlder={controller.history?.loadingOlder || false}
+                            loadingNewer={controller.history?.loadingNewer || false}
                             loadOlderError={controller.history?.loadOlderError || null}
+                            loadNewerError={controller.history?.loadNewerError || null}
                             onLoadOlder={handleLoadOlderHistory}
+                            onLoadNewer={handleLoadNewerHistory}
                             showScrollToBottom={showScrollToBottom}
                             elevateScrollToBottom={bottomComposerOverlayActive}
                             onScrollTimeline={handleTimelineScrollEvent}
@@ -1037,7 +1093,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         activeEffort={activeComposerConfiguration.activeEffort}
                         activeFastModeEnabled={activeComposerConfiguration.activeFastModeEnabled}
                         modelsLoading={controller.modelsLoading}
-                        latestTurnUsage={controller.activeThread?.latestTurn?.usage || null}
+                        latestTurnUsage={composerContextUsage}
                         runtimeMode={activeComposerConfiguration.runtimeMode}
                         interactionMode={effectiveInteractionMode}
                         activeProfile={activeComposerConfiguration.activeProfile}
@@ -1049,11 +1105,13 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         onOverflowWheel={handleComposerOverflowWheel}
                         onStop={handleStopTurn}
                         onReconnect={handleReconnectAssistant}
+                        onPrepareRealtimeVoice={handlePrepareCanonicalVoice}
                         onStartRealtimeVoice={handleStartCanonicalVoice}
                         realtimeVoiceDisabled={canonicalVoiceDisabled}
                         onBlockedSend={(message) => props.onShowToast?.(message, 'info')}
                         onOpenAttachmentPreview={props.onOpenAttachmentPreview}
                         onAttachmentShelfBoundsChange={handleAttachmentShelfBoundsChange}
+                        onDraftStarted={actions.warmSelectedSessionConnection}
                         sendPrompt={newChatHandoffActive ? async () => false : handleSendPrompt}
                         refreshModels={handleRefreshModels}
                         respondApproval={handleRespondApproval}

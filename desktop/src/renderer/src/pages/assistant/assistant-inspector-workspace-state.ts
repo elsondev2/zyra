@@ -27,6 +27,66 @@ const SINGLETON_TABS = {
     agents: { id: 'agents', kind: 'agents' }
 } as const
 
+export function reorderAssistantInspectorWorkspaceTabs(
+    tabs: AssistantInspectorWorkspaceTab[],
+    draggedTabId: string,
+    targetTabId: string
+): AssistantInspectorWorkspaceTab[] {
+    const fromIndex = tabs.findIndex((tab) => tab.id === draggedTabId)
+    const targetIndex = tabs.findIndex((tab) => tab.id === targetTabId)
+    if (fromIndex < 0 || targetIndex < 0 || fromIndex === targetIndex) return tabs
+    const next = tabs.slice()
+    const [draggedTab] = next.splice(fromIndex, 1)
+    next.splice(targetIndex, 0, draggedTab)
+    return next
+}
+
+export function reconcileAssistantInspectorBrowserTabs(
+    tabs: AssistantInspectorWorkspaceTab[],
+    browserTabIds: readonly string[],
+    pendingBrowserTabIds: readonly string[] = []
+): AssistantInspectorWorkspaceTab[] {
+    const orderedBrowserIds = [...new Set(browserTabIds.filter((id) => id.startsWith('browser:')))]
+    const validBrowserIds = new Set([...orderedBrowserIds, ...pendingBrowserTabIds.filter((id) => id.startsWith('browser:'))])
+    const next = tabs.filter((tab) => tab.kind !== 'browser' || validBrowserIds.has(tab.browserTabId))
+    const retainedIds = new Set(next.filter((tab) => tab.kind === 'browser').map((tab) => tab.browserTabId))
+
+    for (let browserIndex = 0; browserIndex < orderedBrowserIds.length; browserIndex += 1) {
+        const browserTabId = orderedBrowserIds[browserIndex]
+        if (retainedIds.has(browserTabId) || next.length >= ASSISTANT_INSPECTOR_TAB_LIMIT) continue
+        let insertionIndex = next.length
+        for (let previousIndex = browserIndex - 1; previousIndex >= 0; previousIndex -= 1) {
+            const previousPosition = next.findIndex((tab) => tab.kind === 'browser' && tab.browserTabId === orderedBrowserIds[previousIndex])
+            if (previousPosition >= 0) {
+                insertionIndex = previousPosition + 1
+                break
+            }
+        }
+        if (insertionIndex === next.length) {
+            for (let followingIndex = browserIndex + 1; followingIndex < orderedBrowserIds.length; followingIndex += 1) {
+                const followingPosition = next.findIndex((tab) => tab.kind === 'browser' && tab.browserTabId === orderedBrowserIds[followingIndex])
+                if (followingPosition >= 0) {
+                    insertionIndex = followingPosition
+                    break
+                }
+            }
+        }
+        next.splice(insertionIndex, 0, { id: browserTabId, kind: 'browser', browserTabId })
+        retainedIds.add(browserTabId)
+    }
+
+    return next.length === tabs.length && next.every((tab, index) => tab.id === tabs[index]?.id) ? tabs : next
+}
+
+export function ensureAssistantInspectorBrowserTab(
+    tabs: AssistantInspectorWorkspaceTab[],
+    browserTabId: string
+): AssistantInspectorWorkspaceTab[] {
+    if (!browserTabId.startsWith('browser:') || tabs.some((tab) => tab.id === browserTabId)) return tabs
+    if (tabs.length >= ASSISTANT_INSPECTOR_TAB_LIMIT) return tabs
+    return [...tabs, { id: browserTabId, kind: 'browser', browserTabId }]
+}
+
 function normalizeTab(candidate: unknown): AssistantInspectorWorkspaceTab | null {
     if (!candidate || typeof candidate !== 'object') return null
     const input = candidate as Record<string, unknown>

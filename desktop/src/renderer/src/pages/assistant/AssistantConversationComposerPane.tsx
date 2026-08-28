@@ -55,6 +55,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
     reconnectPending?: boolean
     onStop?: () => Promise<void> | void
     onReconnect?: () => Promise<void> | void
+    onPrepareRealtimeVoice?: (configuration: AssistantVoiceExecutionConfiguration) => void
     onStartRealtimeVoice?: (configuration: AssistantVoiceExecutionConfiguration) => void
     realtimeVoiceDisabled?: boolean
     onOverflowWheel?: (deltaY: number) => void
@@ -65,6 +66,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
         options?: PreviewOpenOptions
     ) => Promise<void> | void
     onAttachmentShelfBoundsChange?: (bounds: AssistantElementBounds | null) => void
+    onDraftStarted?: () => void
     sendPrompt: (
         prompt: string,
         contextFiles: ComposerContextFile[],
@@ -213,12 +215,14 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
                         onSelectProject={props.onSelectProject}
                         onChooseProjectFolder={props.onChooseProjectFolder}
                         onReconnect={props.onReconnect}
+                        onPrepareRealtimeVoice={props.onPrepareRealtimeVoice}
                         onStartRealtimeVoice={props.onStartRealtimeVoice}
                         realtimeVoiceDisabled={props.realtimeVoiceDisabled}
                         onOverflowWheel={props.onOverflowWheel}
                         onBlockedSend={props.onBlockedSend}
                         onOpenAttachmentPreview={props.onOpenAttachmentPreview}
                         onAttachmentShelfBoundsChange={props.onAttachmentShelfBoundsChange}
+                        onDraftStarted={props.onDraftStarted}
                         onRefreshModels={props.refreshModels}
                         onStop={props.onStop}
                         onSend={props.sendPrompt}

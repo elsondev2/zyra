@@ -58,7 +58,7 @@ function isValidClientCommand(event: AssistantRealtimeVoiceClientCommandEvent): 
     if (!Number.isSafeInteger(event.realtimeSessionGeneration) || event.realtimeSessionGeneration < 1) return false
     if (!Array.isArray(event.messages) || event.messages.length === 0 || event.messages.length > MAX_COMMAND_MESSAGES) return false
     return event.messages.every((message) => {
-        if (message.type === 'response.create' || message.type === 'session.close') return true
+        if (message.type === 'session.close') return true
         if (message.type !== 'session.context.append'
             || (message.channel !== 'speakable' && message.channel !== 'commentary')
             || !Array.isArray(message.content)

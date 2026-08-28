@@ -74,7 +74,7 @@ export function AssistantAgentDirectory({
             data-testid="assistant-agent-directory"
             data-agent-page-size={ASSISTANT_AGENT_DIRECTORY_PAGE_SIZE}
         >
-            <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-3 py-3 [scrollbar-gutter:stable]">
+            <div data-assistant-capsule-scroll="agents-directory" className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-3 py-3 [scrollbar-gutter:stable]">
                 <div className="mx-auto w-full max-w-[52rem]">
                     <header className="mb-3 flex flex-wrap items-end justify-between gap-2 border-b border-white/[0.04] pb-3">
                         <div>

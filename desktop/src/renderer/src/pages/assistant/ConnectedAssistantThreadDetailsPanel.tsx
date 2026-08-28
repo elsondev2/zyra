@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import type {
     AssistantActivity,
     AssistantAccountOverview,
@@ -48,10 +48,12 @@ type ThreadDetailsSelection = {
     selectedSessionMode: 'work' | 'playground'
     selectedSessionUpdatedAt: string | null
     activeThreadId: string | null
+    selectionHydrating: boolean
     selectedProjectPath: string
     selectedPlaygroundLabId: string | null
     selectedPlaygroundLabTitle: string | null
     activeThreadModel: string
+    activeThreadThinking: AssistantLatestTurn['effort']
     activeThreadRuntimeMode: 'approval-required' | 'full-access'
     latestTurn: AssistantLatestTurn | null
     activityFeed: AssistantActivity[]
@@ -67,10 +69,12 @@ const CLOSED_THREAD_DETAILS_SELECTION: ThreadDetailsSelection = {
     selectedSessionMode: 'work',
     selectedSessionUpdatedAt: null,
     activeThreadId: null,
+    selectionHydrating: false,
     selectedProjectPath: '',
     selectedPlaygroundLabId: null,
     selectedPlaygroundLabTitle: null,
     activeThreadModel: '',
+    activeThreadThinking: null,
     activeThreadRuntimeMode: 'approval-required',
     latestTurn: null,
     activityFeed: [],
@@ -94,7 +98,9 @@ function areLatestTurnsEqual(left: AssistantLatestTurn | null, right: AssistantL
         && left.usage?.outputTokens === right.usage?.outputTokens
         && left.usage?.reasoningOutputTokens === right.usage?.reasoningOutputTokens
         && left.usage?.cachedInputTokens === right.usage?.cachedInputTokens
+        && left.usage?.cacheWriteTokens === right.usage?.cacheWriteTokens
         && left.usage?.modelContextWindow === right.usage?.modelContextWindow
+        && left.usage?.costUsd === right.usage?.costUsd
 }
 
 function getActivitySignature(activities: AssistantActivity[]): string {
@@ -118,10 +124,12 @@ function areThreadDetailsSelectionsEqual(left: ThreadDetailsSelection, right: Th
         && left.selectedSessionMode === right.selectedSessionMode
         && left.selectedSessionUpdatedAt === right.selectedSessionUpdatedAt
         && left.activeThreadId === right.activeThreadId
+        && left.selectionHydrating === right.selectionHydrating
         && left.selectedProjectPath === right.selectedProjectPath
         && left.selectedPlaygroundLabId === right.selectedPlaygroundLabId
         && left.selectedPlaygroundLabTitle === right.selectedPlaygroundLabTitle
         && left.activeThreadModel === right.activeThreadModel
+        && left.activeThreadThinking === right.activeThreadThinking
         && left.activeThreadRuntimeMode === right.activeThreadRuntimeMode
         && left.pendingApprovalsCount === right.pendingApprovalsCount
         && left.pendingUserInputsCount === right.pendingUserInputsCount
@@ -144,6 +152,11 @@ export function ConnectedAssistantThreadDetailsPanel(props: {
         const selectedLab = selectedSession?.playgroundLabId
             ? (state.snapshot.playground.labs.find((lab) => lab.id === selectedSession.playgroundLabId) || null)
             : null
+        const activeSelectionKey = selectedSession && activeThread ? `${selectedSession.id}:${activeThread.id}` : null
+        const selectionHydrating = Boolean(activeSelectionKey && (
+            state.selectionTransitionKey === activeSelectionKey
+            || state.selectionHydrationKey === activeSelectionKey
+        ))
 
         return {
             assistantConnected: state.status.connected,
@@ -153,10 +166,12 @@ export function ConnectedAssistantThreadDetailsPanel(props: {
             selectedSessionMode: selectedSession?.mode || 'work',
             selectedSessionUpdatedAt: selectedSession?.updatedAt || null,
             activeThreadId: activeThread?.id || null,
+            selectionHydrating,
             selectedProjectPath: selectedSession ? resolveSessionProjectPath(selectedSession) : '',
             selectedPlaygroundLabId: selectedSession?.playgroundLabId || null,
             selectedPlaygroundLabTitle: selectedLab?.title || null,
             activeThreadModel: String(activeThread?.model || '').trim(),
+            activeThreadThinking: activeThread?.thinking || null,
             activeThreadRuntimeMode: activeThread?.runtimeMode || 'approval-required',
             latestTurn: activeThread?.latestTurn || null,
             activityFeed: getAssistantActivityFeed(activeThread),
@@ -187,7 +202,7 @@ export function ConnectedAssistantThreadDetailsPanel(props: {
         refreshKey: `${selection.latestTurn?.id || ''}:${selection.latestTurn?.completedAt || ''}:${selection.latestTurn?.state || ''}`
     })
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         setComposerSessionState(readAssistantComposerSessionState(selection.selectedSessionId))
     }, [selection.selectedSessionId])
 
@@ -243,11 +258,11 @@ export function ConnectedAssistantThreadDetailsPanel(props: {
         : ''
     const displayProjectPath = showFullProjectPath ? selectedProjectPathWithTilde : selectedProjectLabel
 
-    const latestTurnUsage = selection.latestTurn?.usage || null
+    const latestTurnUsage = selection.selectionHydrating ? null : selection.latestTurn?.usage || null
     const contextUsedTokens = latestTurnUsage?.totalTokens ?? null
     const contextWindowTokens = latestTurnUsage?.modelContextWindow ?? null
-    const contextUsedDisplay = contextUsedTokens != null ? formatCompactMetric(contextUsedTokens) : selection.latestTurn ? 'Not reported' : 'No turn yet'
-    const contextAvailableDisplay = contextWindowTokens != null ? formatCompactMetric(contextWindowTokens) : selection.latestTurn ? 'Not reported' : 'No turn yet'
+    const contextUsedDisplay = selection.selectionHydrating ? 'Syncing…' : contextUsedTokens != null ? formatCompactMetric(contextUsedTokens) : selection.latestTurn ? 'Not reported' : 'No turn yet'
+    const contextAvailableDisplay = selection.selectionHydrating ? 'Syncing…' : contextWindowTokens != null ? formatCompactMetric(contextWindowTokens) : selection.latestTurn ? 'Not reported' : 'No turn yet'
     const contextPercentage = contextUsedTokens != null && contextWindowTokens != null && contextWindowTokens > 0
         ? Math.round((contextUsedTokens / contextWindowTokens) * 100)
         : null
@@ -255,10 +270,18 @@ export function ConnectedAssistantThreadDetailsPanel(props: {
         ? contextPercentage >= 90 ? 'text-red-300' : contextPercentage >= 70 ? 'text-amber-300' : 'text-emerald-300'
         : 'text-sparkle-text'
 
-    const sidebarSelectedModel = formatAssistantModelLabel(composerSessionState.model || selection.activeThreadModel || '')
-    const selectedThinkingLabel = SIDEBAR_EFFORT_LABELS[composerSessionState.effort || 'high']
-    const selectedSpeedLabel = composerSessionState.fastModeEnabled ? 'Fast' : 'Standard'
-    const selectedRuntimeLabel = selection.activeThreadRuntimeMode === 'full-access' ? 'Full access' : 'Supervised'
+    const sidebarSelectedModel = selection.selectionHydrating
+        ? 'Syncing…'
+        : formatAssistantModelLabel(selection.activeThreadModel || composerSessionState.model || '')
+    const selectedThinkingLabel = selection.selectionHydrating
+        ? 'Syncing…'
+        : SIDEBAR_EFFORT_LABELS[selection.latestTurn?.effort || selection.activeThreadThinking || composerSessionState.effort || 'high']
+    const selectedSpeedLabel = selection.selectionHydrating
+        ? 'Syncing…'
+        : (selection.latestTurn?.serviceTier === 'fast' || (selection.latestTurn?.serviceTier == null && composerSessionState.fastModeEnabled) ? 'Fast' : 'Standard')
+    const selectedRuntimeLabel = selection.selectionHydrating
+        ? 'Syncing…'
+        : selection.activeThreadRuntimeMode === 'full-access' ? 'Full access' : 'Supervised'
     const activeSessionTurnUsage = sessionTurnUsage?.sessionId === selection.selectedSessionId ? sessionTurnUsage : null
     const sessionCostEstimate = useMemo(
         () => estimateAssistantSessionCostUsd(activeSessionTurnUsage?.turns || []),

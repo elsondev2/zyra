@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Check, Copy, X } from 'lucide-react'
 import ImagePreviewContent from '@/components/ui/file-preview/ImagePreviewContent'
 import SyntaxPreview from '@/components/ui/file-preview/SyntaxPreview'
-import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { detectCodeLanguage } from '@/components/ui/file-preview/utils'
 import { useSettings } from '@/lib/settings'
 import type { ComposerContextFile } from './assistant-composer-types'
@@ -140,7 +140,7 @@ export default function AssistantAttachmentPreviewModal({
             >
                 <div className="flex shrink-0 items-stretch justify-between gap-2 border-b border-white/5 bg-white/[0.02] py-1 pl-3.5 pr-0">
                     <div className="flex min-w-0 items-center gap-2">
-                        <VscodeEntryIcon
+                        <FileEntryIcon
                             pathValue={file.path || meta.name}
                             kind="file"
                             theme={iconTheme}

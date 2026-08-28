@@ -1,0 +1,2672 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-19T20:38:34.163651+00:00",
+  "categories": {
+    "forest-paths": "Forest Trails",
+    "mountain-highs": "Peak Season",
+    "ocean-moods": "Ocean Mood",
+    "desert-dreams": "Desert Glow",
+    "water-in-motion": "Water in Motion",
+    "wildflower-party": "Flower Power",
+    "animal-cameos": "Wild Encounters",
+    "ice-aurora": "Polar Light",
+    "earth-above": "Orbital Views"
+  },
+  "assets": [
+    {
+      "id": "forest-paths-01",
+      "category": "forest-paths",
+      "categoryLabel": "Forest Trails",
+      "file": "forest-paths-01.webp",
+      "title": "Woodland path through a conifer forest - geograph.org.uk - 5928776",
+      "alt": "Woodland path through a conifer forest",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#5a625f"
+      },
+      "output": {
+        "width": 1600,
+        "height": 900,
+        "bytes": 314936,
+        "sha256": "8eeba6f379aa264780c0c6bcb32cdbe74c92280f701462a8ac811a02e83e9e9f"
+      },
+      "thumbnail": {
+        "file": "thumbs/forest-paths-01.webp",
+        "width": 480,
+        "height": 270,
+        "bytes": 29302,
+        "sha256": "8002bf100cff8678df48d88d0a9eff0e91fdc8628f4c63d9e9900c7f7adb2d20"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Woodland path through a conifer forest - geograph.org.uk - 5928776.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Woodland_path_through_a_conifer_forest_-_geograph.org.uk_-_5928776.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/9/91/Woodland_path_through_a_conifer_forest_-_geograph.org.uk_-_5928776.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 940396866,
+        "sourceChecksum": "8e045ee6fc88fb43ac84104d34425af525693743",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "John P Reeves",
+          "url": "https://www.geograph.org.uk/profile/127024"
+        },
+        "credit": "Geograph Britain and Ireland"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 2.0",
+        "name": "CC BY-SA 2.0",
+        "url": "https://creativecommons.org/licenses/by-sa/2.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×900",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Woodland path through a conifer forest - geograph.org.uk - 5928776” by John P Reeves, CC BY-SA 2.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "forest-paths-02",
+      "category": "forest-paths",
+      "categoryLabel": "Forest Trails",
+      "file": "forest-paths-02.webp",
+      "title": "Forest track in Leanachan Forest - geograph.org.uk - 5823312",
+      "alt": "Forest track in Leanachan Forest",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#707657"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1067,
+        "bytes": 241866,
+        "sha256": "7f8468f473f3312f804502261c20bc6dc381f016632b1de7073e8a156aed84e9"
+      },
+      "thumbnail": {
+        "file": "thumbs/forest-paths-02.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 24572,
+        "sha256": "92e41cb9372c2a29c6e8a808007b333dc0252d9add759a29dfe619ba9a80361d"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Forest track in Leanachan Forest - geograph.org.uk - 5823312.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Forest_track_in_Leanachan_Forest_-_geograph.org.uk_-_5823312.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/d/d3/Forest_track_in_Leanachan_Forest_-_geograph.org.uk_-_5823312.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1257381060,
+        "sourceChecksum": "fc8917b4e8b5e6ad9ec6644d30e4f45342858115",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Graham Robson",
+          "url": "https://www.geograph.org.uk/profile/8664"
+        },
+        "credit": "Geograph Britain and Ireland"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 2.0",
+        "name": "CC BY-SA 2.0",
+        "url": "https://creativecommons.org/licenses/by-sa/2.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1067",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Forest track in Leanachan Forest - geograph.org.uk - 5823312” by Graham Robson, CC BY-SA 2.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "forest-paths-03",
+      "category": "forest-paths",
+      "categoryLabel": "Forest Trails",
+      "file": "forest-paths-03.webp",
+      "title": "Woodland Path in Dunwich Forest - geograph.org.uk - 3744288",
+      "alt": "Woodland Path in Dunwich Forest",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#605f4f"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1200,
+        "bytes": 547074,
+        "sha256": "774168e71384d48b4dbda008f36bbd329c8666e58d6a65531e3600fa8efa13c3"
+      },
+      "thumbnail": {
+        "file": "thumbs/forest-paths-03.webp",
+        "width": 480,
+        "height": 360,
+        "bytes": 39660,
+        "sha256": "460eaae9c244b3d49c62ae9f814909d630ecec6256ee6c0658b6168dc48c2c33"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Woodland Path in Dunwich Forest - geograph.org.uk - 3744288.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Woodland_Path_in_Dunwich_Forest_-_geograph.org.uk_-_3744288.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/5/50/Woodland_Path_in_Dunwich_Forest_-_geograph.org.uk_-_3744288.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 969096320,
+        "sourceChecksum": "f1551c15975be7eb93be96920a9eba34a22a23a6",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Geographer",
+          "url": "https://www.geograph.org.uk/profile/2639"
+        },
+        "credit": "Geograph Britain and Ireland"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 2.0",
+        "name": "CC BY-SA 2.0",
+        "url": "https://creativecommons.org/licenses/by-sa/2.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1200",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Woodland Path in Dunwich Forest - geograph.org.uk - 3744288” by Geographer, CC BY-SA 2.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "forest-paths-04",
+      "category": "forest-paths",
+      "categoryLabel": "Forest Trails",
+      "file": "forest-paths-04.webp",
+      "title": "Forest track on northern edge of Broxa Forest - geograph.org.uk - 4377779",
+      "alt": "Forest track on northern edge of Broxa Forest",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#6b7c8c"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1200,
+        "bytes": 309166,
+        "sha256": "2d01494004b098144b4ebcd4805bffb68e8b35ac78c01a9bb2ecc19d2a1cdf42"
+      },
+      "thumbnail": {
+        "file": "thumbs/forest-paths-04.webp",
+        "width": 480,
+        "height": 360,
+        "bytes": 25966,
+        "sha256": "f22ee64433adb54c8cdabd2d7f3c2194d1eea6ca70e45e871a3af40ea1d16ab4"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Forest track on northern edge of Broxa Forest - geograph.org.uk - 4377779.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Forest_track_on_northern_edge_of_Broxa_Forest_-_geograph.org.uk_-_4377779.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/a/a6/Forest_track_on_northern_edge_of_Broxa_Forest_-_geograph.org.uk_-_4377779.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1257386489,
+        "sourceChecksum": "1895d814e97addfa25007f30767b11242e6091e1",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Martin Dawes",
+          "url": "https://www.geograph.org.uk/profile/30816"
+        },
+        "credit": "Geograph Britain and Ireland"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 2.0",
+        "name": "CC BY-SA 2.0",
+        "url": "https://creativecommons.org/licenses/by-sa/2.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1200",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Forest track on northern edge of Broxa Forest - geograph.org.uk - 4377779” by Martin Dawes, CC BY-SA 2.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "forest-paths-05",
+      "category": "forest-paths",
+      "categoryLabel": "Forest Trails",
+      "file": "forest-paths-05.webp",
+      "title": "Forest track in Coire Ardrain - geograph.org.uk - 6082898",
+      "alt": "Forest track in Coire Ardrain",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#72726f"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1066,
+        "bytes": 212168,
+        "sha256": "ef1e01336af748fef89f6364574addd64b81d2e8309626d83d65dd13642c26ec"
+      },
+      "thumbnail": {
+        "file": "thumbs/forest-paths-05.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 17024,
+        "sha256": "d8ae7a5f9aba16dc0bd973a8390e0a3b8022f0a524685fa5d03af9c46b2bf15c"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Forest track in Coire Ardrain - geograph.org.uk - 6082898.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Forest_track_in_Coire_Ardrain_-_geograph.org.uk_-_6082898.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/3/39/Forest_track_in_Coire_Ardrain_-_geograph.org.uk_-_6082898.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1153234205,
+        "sourceChecksum": "311f739bb24a9025bfb683fef18ccce5682141ad",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Jim Barton",
+          "url": "https://www.geograph.org.uk/profile/26362"
+        },
+        "credit": "Geograph Britain and Ireland"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 2.0",
+        "name": "CC BY-SA 2.0",
+        "url": "https://creativecommons.org/licenses/by-sa/2.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1066",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Forest track in Coire Ardrain - geograph.org.uk - 6082898” by Jim Barton, CC BY-SA 2.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "mountain-highs-01",
+      "category": "mountain-highs",
+      "categoryLabel": "Peak Season",
+      "file": "mountain-highs-01.webp",
+      "title": "Landscape Arnisee-region",
+      "alt": "View from Arni to Chli Windgällen (2986m, in front) and the Groß Windgällen (3188m, behind) in the Canton of Uri/Switzerland",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#6b6d5e"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1064,
+        "bytes": 301162,
+        "sha256": "242a6d705fbbe84d0f525b3dd38b6065d52d218debe18f0dc0fb9745b29f5b2d"
+      },
+      "thumbnail": {
+        "file": "thumbs/mountain-highs-01.webp",
+        "width": 480,
+        "height": 319,
+        "bytes": 18900,
+        "sha256": "f6d14e4de8b1b1e01ad4532b123b2f136bcbc5c0169034a91a72bb4f31dac9b1"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Landscape Arnisee-region.JPG",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Landscape_Arnisee-region.JPG",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/1/14/Landscape_Arnisee-region.JPG?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1073833374,
+        "sourceChecksum": "07f05d8aeb5e2d3a09001d79b83ce73c87da9696",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Simon Koopmann",
+          "url": "https://commons.wikimedia.org/wiki/User:Simonizer"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 2.5",
+        "name": "CC BY-SA 2.5",
+        "url": "https://creativecommons.org/licenses/by-sa/2.5",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1064",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Landscape Arnisee-region” by Simon Koopmann, CC BY-SA 2.5; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "mountain-highs-02",
+      "category": "mountain-highs",
+      "categoryLabel": "Peak Season",
+      "file": "mountain-highs-02.webp",
+      "title": "Frosty Raftsundet landscape with Trolltindan in morning, 2012 October",
+      "alt": "A morning view towards Raftsundet and Trolltindan from a bay of Tennfjorden in 2012 October. The ground is covered with hoar frost due to cold weather. The frost severity has been somewhere between slight and severe frost.",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#737982"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1060,
+        "bytes": 318580,
+        "sha256": "9f4d5e47300c280f75076680e98ecf4f4db5edae636c49c88c8f7f05bba8e9fe"
+      },
+      "thumbnail": {
+        "file": "thumbs/mountain-highs-02.webp",
+        "width": 480,
+        "height": 318,
+        "bytes": 24022,
+        "sha256": "aab2ea8baa32d76194b72f5090c6d62fec4cf754ffbc5ffb6e08d9fc1ba0d663"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Frosty Raftsundet landscape with Trolltindan in morning, 2012 October.JPG",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Frosty_Raftsundet_landscape_with_Trolltindan_in_morning,_2012_October.JPG",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/7/78/Frosty_Raftsundet_landscape_with_Trolltindan_in_morning%2C_2012_October.JPG?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1262339857,
+        "sourceChecksum": "72e0aeaf337ec5a286ce9c323296f9e6fd0a5aa9",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Ximonic (Simo Räsänen)",
+          "url": "https://commons.wikimedia.org/wiki/User:Ximonic"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 3.0",
+        "name": "CC BY-SA 3.0",
+        "url": "https://creativecommons.org/licenses/by-sa/3.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1060",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Frosty Raftsundet landscape with Trolltindan in morning, 2012 October” by Ximonic (Simo Räsänen), CC BY-SA 3.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "mountain-highs-03",
+      "category": "mountain-highs",
+      "categoryLabel": "Peak Season",
+      "file": "mountain-highs-03.webp",
+      "title": "Mountain and tundra landscape in Ivvavik National Park, YT",
+      "alt": "A peak at the eastern end of the British Mountains in Canada's Ivvavik National Park , seen from near the Firth River",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#466871"
+      },
+      "output": {
+        "width": 1600,
+        "height": 986,
+        "bytes": 372524,
+        "sha256": "9427d49e0ffcb57a4e54ef708b6f8017e032344bf7251d7418d190a5e82d9b5d"
+      },
+      "thumbnail": {
+        "file": "thumbs/mountain-highs-03.webp",
+        "width": 480,
+        "height": 296,
+        "bytes": 22116,
+        "sha256": "0741397f4594d533fd50ce0445de84e8a2f0ac7f38224ae65cda7e43c0deaae7"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Mountain and tundra landscape in Ivvavik National Park, YT.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Mountain_and_tundra_landscape_in_Ivvavik_National_Park,_YT.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/8/86/Mountain_and_tundra_landscape_in_Ivvavik_National_Park%2C_YT.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1012355898,
+        "sourceChecksum": "7403684dc6fd97a55ecfdf7389a625ee83976a4f",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Daniel Case",
+          "url": "https://commons.wikimedia.org/wiki/User:Daniel_Case"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 3.0",
+        "name": "CC BY-SA 3.0",
+        "url": "https://creativecommons.org/licenses/by-sa/3.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×986",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Mountain and tundra landscape in Ivvavik National Park, YT” by Daniel Case, CC BY-SA 3.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "mountain-highs-04",
+      "category": "mountain-highs",
+      "categoryLabel": "Peak Season",
+      "file": "mountain-highs-04.webp",
+      "title": "Castle Mountain",
+      "alt": "Castle Mountain from the Bow River bank, Banff National Park, Alberta, Canada",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#585b5b"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1060,
+        "bytes": 321196,
+        "sha256": "70b9969835045d23aa43d9f7dc5ca0a8a2e86b53dc1bd4c8171107ae00baf29e"
+      },
+      "thumbnail": {
+        "file": "thumbs/mountain-highs-04.webp",
+        "width": 480,
+        "height": 318,
+        "bytes": 27862,
+        "sha256": "99d255263b430329aeb212036951b6cebb4c0f259d0584a8c719b6fcad87e534"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Castle Mountain.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Castle_Mountain.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/c/c0/Castle_Mountain.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1117164864,
+        "sourceChecksum": "3feb6b6e268348faa94d031c1c7e1002ff1850be",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Jakub Fryš",
+          "url": "https://commons.wikimedia.org/wiki/User:JakubFrys"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 4.0",
+        "name": "CC BY-SA 4.0",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1060",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Castle Mountain” by Jakub Fryš, CC BY-SA 4.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "mountain-highs-05",
+      "category": "mountain-highs",
+      "categoryLabel": "Peak Season",
+      "file": "mountain-highs-05.webp",
+      "title": "Mountains in snow, Mountain lake, Chola Valley, Nepal, Himalayas",
+      "alt": "Mountains in snow. Mountain lake. View to the east on descending from Cho La Pass into Chola Valley, 5,200 metres (17,100 ft) a. s. l. Glacial lake, rocks covered with snow, Ama Dablam (6,810 metres (22,343 ft)) and other Himalayan peaks to the south of the Great Himalayan Range in Mahalangur Himal.",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#7e97ae"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1067,
+        "bytes": 263090,
+        "sha256": "c05a5a348d8c6629b9443301b5d67293dec152e59c7dce4e7446ad2403b7964e"
+      },
+      "thumbnail": {
+        "file": "thumbs/mountain-highs-05.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 28470,
+        "sha256": "c16c0c5563c2121fed924ec1efc09bcdabdfe2809059cd9e9248e29bc9bd3cc0"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Mountains in snow, Mountain lake, Chola Valley, Nepal, Himalayas.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Mountains_in_snow,_Mountain_lake,_Chola_Valley,_Nepal,_Himalayas.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/5/5a/Mountains_in_snow%2C_Mountain_lake%2C_Chola_Valley%2C_Nepal%2C_Himalayas.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1241404356,
+        "sourceChecksum": "54d5ea95e3a8b24613de89b714f85192eb527f23",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Vyacheslav Argenberg",
+          "url": "https://commons.wikimedia.org/wiki/User:Argenberg"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY 4.0",
+        "name": "CC BY 4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1067",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Mountains in snow, Mountain lake, Chola Valley, Nepal, Himalayas” by Vyacheslav Argenberg, CC BY 4.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "ocean-moods-01",
+      "category": "ocean-moods",
+      "categoryLabel": "Ocean Mood",
+      "file": "ocean-moods-01.webp",
+      "title": "Dyrhólaey, Suðurland, Islandia, 2014-08-17, DD 140",
+      "alt": "Dyrhólaey Arch, Suðurland, Iceland. The ocean has worn the black basalt here into a 120 meters (394 ft) high arch which also serves as a bird sanctuary.",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#9a9d9a"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1067,
+        "bytes": 247484,
+        "sha256": "61104c923c9cad088d194ef1bd035ba9aa84f5101e2c5cb43e34178628c05469"
+      },
+      "thumbnail": {
+        "file": "thumbs/ocean-moods-01.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 15622,
+        "sha256": "b96221f857baad2f473355d4307a473f05145169691c278d238a0ed59807ab6e"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Dyrhólaey, Suðurland, Islandia, 2014-08-17, DD 140.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Dyrh%C3%B3laey,_Su%C3%B0urland,_Islandia,_2014-08-17,_DD_140.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/0/05/Dyrh%C3%B3laey%2C_Su%C3%B0urland%2C_Islandia%2C_2014-08-17%2C_DD_140.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1216416145,
+        "sourceChecksum": "c6b938cb113c3ef9cc6432568917da171d77d809",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Diego Delso",
+          "url": "https://www.wikidata.org/wiki/Q28147777"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 4.0",
+        "name": "CC BY-SA 4.0",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1067",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Dyrhólaey, Suðurland, Islandia, 2014-08-17, DD 140” by Diego Delso, CC BY-SA 4.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "ocean-moods-02",
+      "category": "ocean-moods",
+      "categoryLabel": "Ocean Mood",
+      "file": "ocean-moods-02.webp",
+      "title": "Komos site baie Crète",
+      "alt": "The archaeological site, and the bay of Komos, the ancient harbor of Phaïstos, Crete, Greece.",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#7d9796"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1025,
+        "bytes": 254786,
+        "sha256": "8eb82bd7289025f0e2c0ef4c06cc0a6afb53fcf78068e6a51cbf12f32b279fff"
+      },
+      "thumbnail": {
+        "file": "thumbs/ocean-moods-02.webp",
+        "width": 480,
+        "height": 308,
+        "bytes": 19060,
+        "sha256": "0941f759e011e3fb83e143987b491d4ca089343b76d1dbcce043decb776710bb"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Komos site baie Crète.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Komos_site_baie_Cr%C3%A8te.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/3/3f/Komos_site_baie_Cr%C3%A8te.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1149507979,
+        "sourceChecksum": "cb2a0cfaa915a9e53818d4085524a0fd0ce3e761",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Jebulon",
+          "url": "https://commons.wikimedia.org/wiki/User:Jebulon"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC0",
+        "name": "CC0",
+        "url": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1025",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Komos site baie Crète” by Jebulon, CC0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "ocean-moods-03",
+      "category": "ocean-moods",
+      "categoryLabel": "Ocean Mood",
+      "file": "ocean-moods-03.webp",
+      "title": "Peterborough (AU), Port Campbell National Park, Worm Bay -- 2019 -- 0863",
+      "alt": "Worm Bay at Port Campbell National Park , Peterborough, Victoria , Australia Port Campbell National Park is located on the south coast of Victoria along the Great Ocean Road and protects a spectacular coastal landscape of limestone, cliffs, caves , and natural bridges. Its geological formation dates",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#ac9c89"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1067,
+        "bytes": 208904,
+        "sha256": "7159bed7adde6bc70b42c7a7ff191fda77cc313fc5deabe39cbee2c5c13e85be"
+      },
+      "thumbnail": {
+        "file": "thumbs/ocean-moods-03.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 14786,
+        "sha256": "5e62e8f8df119a70f6bae8a3937e56f9f9b4088be0962808090e501d8f7142d6"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Peterborough (AU), Port Campbell National Park, Worm Bay -- 2019 -- 0863.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Peterborough_(AU),_Port_Campbell_National_Park,_Worm_Bay_--_2019_--_0863.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/e/e2/Peterborough_%28AU%29%2C_Port_Campbell_National_Park%2C_Worm_Bay_--_2019_--_0863.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1262698124,
+        "sourceChecksum": "83136c8c9e17ae97b5df668e0014b0a2b10c2d98",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Dietmar Rabich",
+          "url": "https://www.wikidata.org/wiki/Q34788025"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 4.0",
+        "name": "CC BY-SA 4.0",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1067",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Peterborough (AU), Port Campbell National Park, Worm Bay -- 2019 -- 0863” by Dietmar Rabich, CC BY-SA 4.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "ocean-moods-04",
+      "category": "ocean-moods",
+      "categoryLabel": "Ocean Mood",
+      "file": "ocean-moods-04.webp",
+      "title": "Princetown (AU), Port Campbell National Park, Twelve Apostles -- 2019 -- 0930",
+      "alt": "Twelve Apostles at Port Campbell National Park , Princetown, Victoria , Australia Port Campbell National Park is located on the south coast of Victoria along the Great Ocean Road and protects a spectacular coastal landscape of limestone, cliffs, caves , and natural bridges. Its geological formation ",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "dark",
+        "dominantColor": "#afa39a"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1067,
+        "bytes": 253122,
+        "sha256": "5b82648f6e8708cb14d9d444efc42b470c31caaf43f2847670e82942f5b2f4d2"
+      },
+      "thumbnail": {
+        "file": "thumbs/ocean-moods-04.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 18066,
+        "sha256": "0312cbd664a519bd578f5be5075ca5ac96470c5d070bffbc5f8a3e6bad109e4b"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Princetown (AU), Port Campbell National Park, Twelve Apostles -- 2019 -- 0930.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Princetown_(AU),_Port_Campbell_National_Park,_Twelve_Apostles_--_2019_--_0930.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/7/7c/Princetown_%28AU%29%2C_Port_Campbell_National_Park%2C_Twelve_Apostles_--_2019_--_0930.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1262811414,
+        "sourceChecksum": "172d13ec2a03945e44c4ca7a62e31b4862d67b78",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Dietmar Rabich",
+          "url": "https://www.wikidata.org/wiki/Q34788025"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 4.0",
+        "name": "CC BY-SA 4.0",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1067",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Princetown (AU), Port Campbell National Park, Twelve Apostles -- 2019 -- 0930” by Dietmar Rabich, CC BY-SA 4.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "ocean-moods-05",
+      "category": "ocean-moods",
+      "categoryLabel": "Ocean Mood",
+      "file": "ocean-moods-05.webp",
+      "title": "Waves at La Corniche",
+      "alt": "Waves on rocks at sunset in Corniche (Sète, France)",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#707274"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1068,
+        "bytes": 273582,
+        "sha256": "0c218666dc275c9ace10a1478834f986eb925739a8b79b2caa3412c6f368af8e"
+      },
+      "thumbnail": {
+        "file": "thumbs/ocean-moods-05.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 23490,
+        "sha256": "b37be527b181803a483fbd00b10d9ed367327e4ae2c984cda0b2f26fca4c54a4"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Waves at La Corniche.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Waves_at_La_Corniche.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/7/71/Waves_at_La_Corniche.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1258884480,
+        "sourceChecksum": "c07bcebe7f23f6e78d6a7d2820b1309597214fc8",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Christian Ferrer",
+          "url": "https://commons.wikimedia.org/wiki/User:Christian_Ferrer"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY 4.0",
+        "name": "CC BY 4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1068",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Waves at La Corniche” by Christian Ferrer, CC BY 4.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "desert-dreams-01",
+      "category": "desert-dreams",
+      "categoryLabel": "Desert Glow",
+      "file": "desert-dreams-01.webp",
+      "title": "Utah Dunes Landscape - West Desert District",
+      "alt": "Little Sahara Recreation Area",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#9a8991"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1051,
+        "bytes": 190896,
+        "sha256": "1be2e81aafd3085b58ebaed9049428738f9d75cfb787bc721c792efc3617418b"
+      },
+      "thumbnail": {
+        "file": "thumbs/desert-dreams-01.webp",
+        "width": 480,
+        "height": 315,
+        "bytes": 13926,
+        "sha256": "2a0bf5dddc5c698f6708638eed9cae54750bc914dd1217cd36c739880abfbc74"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Utah Dunes Landscape - West Desert District.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Utah_Dunes_Landscape_-_West_Desert_District.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/c/cb/Utah_Dunes_Landscape_-_West_Desert_District.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1199085242,
+        "sourceChecksum": "74ab899dd443dd19c0ffb31dd618be3debf05694",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Bureau of Land Management - Utah/Bob Wick",
+          "url": null
+        },
+        "credit": "https://www.flickr.com/photos/blmutah/49992112532/"
+      },
+      "rights": {
+        "kind": "public-domain",
+        "id": "Public domain",
+        "name": "Public domain",
+        "url": "https://commons.wikimedia.org/wiki/File:Utah_Dunes_Landscape_-_West_Desert_District.jpg",
+        "attributionRequired": false,
+        "copyrightNotice": "False",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1051",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Utah Dunes Landscape - West Desert District” by Bureau of Land Management - Utah/Bob Wick, public domain; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "desert-dreams-02",
+      "category": "desert-dreams",
+      "categoryLabel": "Desert Glow",
+      "file": "desert-dreams-02.webp",
+      "title": "Milky Way over dunes in Great Sand Dunes National Park, Colorado, United States",
+      "alt": "Milky Way over dunes in Great Sand Dunes National Park , Colorado, United States",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#121d32"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1200,
+        "bytes": 300876,
+        "sha256": "8415d4bc91b1995e547e9113fa4d40d584555c7eaf089dd55dabd86e5dbaa4e3"
+      },
+      "thumbnail": {
+        "file": "thumbs/desert-dreams-02.webp",
+        "width": 480,
+        "height": 360,
+        "bytes": 19554,
+        "sha256": "5ba4eb2964a4e998ec9e95ec25bdb88fbdff109f9d28f814e7dbd5aeae2dbda2"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Milky Way over dunes in Great Sand Dunes National Park, Colorado, United States.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Milky_Way_over_dunes_in_Great_Sand_Dunes_National_Park,_Colorado,_United_States.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/2/29/Milky_Way_over_dunes_in_Great_Sand_Dunes_National_Park%2C_Colorado%2C_United_States.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1117335031,
+        "sourceChecksum": "102da4f63fa2500f4aac0e763bfcddd6f679b873",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "NPS/Patrick Myers",
+          "url": null
+        },
+        "credit": "Flickr image by NPS employee"
+      },
+      "rights": {
+        "kind": "public-domain",
+        "id": "Public domain",
+        "name": "Public domain",
+        "url": "https://commons.wikimedia.org/wiki/File:Milky_Way_over_dunes_in_Great_Sand_Dunes_National_Park,_Colorado,_United_States.jpg",
+        "attributionRequired": false,
+        "copyrightNotice": "False",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1200",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Milky Way over dunes in Great Sand Dunes National Park, Colorado, United States” by NPS/Patrick Myers, public domain; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "desert-dreams-03",
+      "category": "desert-dreams",
+      "categoryLabel": "Desert Glow",
+      "file": "desert-dreams-03.webp",
+      "title": "Sossusvlei Dune Rippled cropped",
+      "alt": "Dune ripples in the Namib-Naukluft National Park, between Dead Vlei and Sossusvlei.",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#9f8a86"
+      },
+      "output": {
+        "width": 1600,
+        "height": 955,
+        "bytes": 171174,
+        "sha256": "c77adcfb33164c7a181afd30bcc9f2b8e7ed1c8e7506464a0e267d88330c1141"
+      },
+      "thumbnail": {
+        "file": "thumbs/desert-dreams-03.webp",
+        "width": 480,
+        "height": 286,
+        "bytes": 13174,
+        "sha256": "108b9ca83fc009fb4f083f0895e6b37e17ce87ea172d0d7ba52a6d225e92b297"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Sossusvlei Dune Rippled cropped.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Sossusvlei_Dune_Rippled_cropped.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/8/8a/Sossusvlei_Dune_Rippled_cropped.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 912746299,
+        "sourceChecksum": "172197c81004b1c73b6354137aa3d9459ebaaf26",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Daniel Kraft",
+          "url": "https://commons.wikimedia.org/wiki/User:Domob"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 3.0",
+        "name": "CC BY-SA 3.0",
+        "url": "https://creativecommons.org/licenses/by-sa/3.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×955",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Sossusvlei Dune Rippled cropped” by Daniel Kraft, CC BY-SA 3.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "desert-dreams-04",
+      "category": "desert-dreams",
+      "categoryLabel": "Desert Glow",
+      "file": "desert-dreams-04.webp",
+      "title": "Vietnam, Mui Ne sand dunes, trees on the sand",
+      "alt": "Mui Ne, a coastal fishing town in Vietnam.",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#90928f"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1067,
+        "bytes": 175346,
+        "sha256": "6a66b2b5805a85d715ff71326aa843cb97a66ba53f8ce6b96cac4ea3f1e4092e"
+      },
+      "thumbnail": {
+        "file": "thumbs/desert-dreams-04.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 16850,
+        "sha256": "bee5f69395f002d5644f875d9a4529d3f3268555af687eaaec1b4d305deb648f"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Vietnam, Mui Ne sand dunes, trees on the sand.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Vietnam,_Mui_Ne_sand_dunes,_trees_on_the_sand.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/e/e4/Vietnam%2C_Mui_Ne_sand_dunes%2C_trees_on_the_sand.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1236309823,
+        "sourceChecksum": "a8292f64f84f0d7f9790a040279c5a1b1a47ce82",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Vyacheslav Argenberg",
+          "url": "https://commons.wikimedia.org/wiki/User:Argenberg"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY 4.0",
+        "name": "CC BY 4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1067",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Vietnam, Mui Ne sand dunes, trees on the sand” by Vyacheslav Argenberg, CC BY 4.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "desert-dreams-05",
+      "category": "desert-dreams",
+      "categoryLabel": "Desert Glow",
+      "file": "desert-dreams-05.webp",
+      "title": "006 Dune 45 in Sossusvlei at sunrise Photo by Giles Laurent",
+      "alt": "Dune 45 in Sossusvlei (Namibia) at sunrise. Dune 45 is composed of iron-rich quartz sand, whose deepening red tones result from the gradual oxidation of iron over millions of years. The sand grains originated from sediments carried by the Orange River into the Atlantic Ocean and transported northwar",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#9b847e"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1067,
+        "bytes": 144504,
+        "sha256": "b8bd9ded8b4681e47ac404e53545f002a342fa2bbbcffd4adc2ec6a35b6f8387"
+      },
+      "thumbnail": {
+        "file": "thumbs/desert-dreams-05.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 8418,
+        "sha256": "5b1400356793627fb9e88656a98a7ee9e9dcd1765673dbbc8ada296b8cf11db4"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:006 Dune 45 in Sossusvlei at sunrise Photo by Giles Laurent.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:006_Dune_45_in_Sossusvlei_at_sunrise_Photo_by_Giles_Laurent.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/2/2e/006_Dune_45_in_Sossusvlei_at_sunrise_Photo_by_Giles_Laurent.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1242462103,
+        "sourceChecksum": "97e2b8fe994006555cb2ce8f896bfb23bf25efa2",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Giles Laurent",
+          "url": "https://commons.wikimedia.org/wiki/User:Giles_Laurent"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 4.0",
+        "name": "CC BY-SA 4.0",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1067",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“006 Dune 45 in Sossusvlei at sunrise Photo by Giles Laurent” by Giles Laurent, CC BY-SA 4.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "water-in-motion-01",
+      "category": "water-in-motion",
+      "categoryLabel": "Water in Motion",
+      "file": "water-in-motion-01.webp",
+      "title": "Elakala Waterfalls Swirling Pool Mossy Rocks",
+      "alt": "Beautiful Elakala Waterfalls in the Blackwater Falls State Park , West Virginia , USA .",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#3e4431"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1235,
+        "bytes": 376984,
+        "sha256": "e68be07d316cf170750608f62fa583e34febc3abbdecf343c0ff73acd9a240e2"
+      },
+      "thumbnail": {
+        "file": "thumbs/water-in-motion-01.webp",
+        "width": 480,
+        "height": 370,
+        "bytes": 29834,
+        "sha256": "784c06c1890a747c067a2772360db773accbeca1e9f5be9ea19f74daec50e6e4"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Elakala Waterfalls Swirling Pool Mossy Rocks.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Elakala_Waterfalls_Swirling_Pool_Mossy_Rocks.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/b/b3/Elakala_Waterfalls_Swirling_Pool_Mossy_Rocks.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1227194493,
+        "sourceChecksum": "68f49228eb2ed24b91f855e7bb5fc7431a43c5ab",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Forest Wander from Cross Lanes",
+          "url": "https://www.flickr.com/people/10922353@N03"
+        },
+        "credit": "Flickr : Elakala Waterfalls Swirling Pool Mossy Rocks"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 2.0",
+        "name": "CC BY-SA 2.0",
+        "url": "https://creativecommons.org/licenses/by-sa/2.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1235",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Elakala Waterfalls Swirling Pool Mossy Rocks” by Forest Wander from Cross Lanes, CC BY-SA 2.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "water-in-motion-02",
+      "category": "water-in-motion",
+      "categoryLabel": "Water in Motion",
+      "file": "water-in-motion-02.webp",
+      "title": "Klonglan waterfall 03",
+      "alt": "A digitally altered photo of Khlong Lan National Park, Khlong Lan National Park , Kamphaeng Phet Province , where leaves have been retouched to add autumn colors.",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#65574d"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1067,
+        "bytes": 480182,
+        "sha256": "bf7b3802309bd4b87d95d6a37726095083d4c1553f198da0b9d3b0283ff7902b"
+      },
+      "thumbnail": {
+        "file": "thumbs/water-in-motion-02.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 37172,
+        "sha256": "446457782a4d6a7f3a062c2a5d41c1774d4daf23f174e5200b6c08ad7ca2e6ef"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Klonglan waterfall 03.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Klonglan_waterfall_03.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/8/8c/Klonglan_waterfall_03.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1236638344,
+        "sourceChecksum": "8ae5fa9aad71c519219c1a954db996a974474178",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Khunkay",
+          "url": "https://commons.wikimedia.org/w/index.php?title=User:Khunkay&action=edit&redlink=1"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 3.0",
+        "name": "CC BY-SA 3.0",
+        "url": "https://creativecommons.org/licenses/by-sa/3.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1067",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Klonglan waterfall 03” by Khunkay, CC BY-SA 3.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "water-in-motion-03",
+      "category": "water-in-motion",
+      "categoryLabel": "Water in Motion",
+      "file": "water-in-motion-03.webp",
+      "title": "Waterfall in Russian Gulch State Park",
+      "alt": "Waterfall in Russian Gulch State Park, Mendocino County, California",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#585640"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1142,
+        "bytes": 621800,
+        "sha256": "edf7d8854b3b7c24047d71c7d0866bff13096556ba5aff743893a20392076990"
+      },
+      "thumbnail": {
+        "file": "thumbs/water-in-motion-03.webp",
+        "width": 480,
+        "height": 343,
+        "bytes": 42170,
+        "sha256": "9808783aac3b88606cc1932e88b8750d1bf5849f3919476e18af83038f61f462"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Waterfall in Russian Gulch State Park.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Waterfall_in_Russian_Gulch_State_Park.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/5/56/Waterfall_in_Russian_Gulch_State_Park.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1144874107,
+        "sourceChecksum": "77ff54131de56c337a12e252c30c0fc8603c1d16",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Frank Schulenburg",
+          "url": "https://www.wikidata.org/wiki/Q57175365"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 4.0",
+        "name": "CC BY-SA 4.0",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1142",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Waterfall in Russian Gulch State Park” by Frank Schulenburg, CC BY-SA 4.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "water-in-motion-04",
+      "category": "water-in-motion",
+      "categoryLabel": "Water in Motion",
+      "file": "water-in-motion-04.webp",
+      "title": "Bhorley waterfall of Dolakha and Tamakoshi river as seen from above",
+      "alt": "This is a photo of a natural site in Nepal identified by the ID",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#576f61"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1199,
+        "bytes": 513484,
+        "sha256": "b6e22739551c8ce03a3b9f19f4b7ffbf596fb886ea6e08f796a536b75dbbfb5b"
+      },
+      "thumbnail": {
+        "file": "thumbs/water-in-motion-04.webp",
+        "width": 480,
+        "height": 360,
+        "bytes": 38606,
+        "sha256": "6596afb453ba095c2a3dca607cbdc18d504cf86d4e68653534350f05a572db8a"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Bhorley waterfall of Dolakha and Tamakoshi river as seen from above.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Bhorley_waterfall_of_Dolakha_and_Tamakoshi_river_as_seen_from_above.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/d/d2/Bhorley_waterfall_of_Dolakha_and_Tamakoshi_river_as_seen_from_above.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1086066275,
+        "sourceChecksum": "de06707417268ea40b99e890ae589f9b916a477e",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Nammy Hang Kirat",
+          "url": "https://commons.wikimedia.org/w/index.php?title=User:NHkirat&action=edit&redlink=1"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 4.0",
+        "name": "CC BY-SA 4.0",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1199",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Bhorley waterfall of Dolakha and Tamakoshi river as seen from above” by Nammy Hang Kirat, CC BY-SA 4.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "water-in-motion-05",
+      "category": "water-in-motion",
+      "categoryLabel": "Water in Motion",
+      "file": "water-in-motion-05.webp",
+      "title": "Skógafoss Waterfall, Iceland, 20240720 1318 2975",
+      "alt": "Skógafoss Waterfall, Iceland",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#808463"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1068,
+        "bytes": 410616,
+        "sha256": "8cc28744b280bd670bc6e8f6e94a88f987ecd607ab30a3f620db6d2b1c41c801"
+      },
+      "thumbnail": {
+        "file": "thumbs/water-in-motion-05.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 21926,
+        "sha256": "fd3eed93faa4286907ee0f25d8744937e787cf836c7472e6817ac5309932ec3b"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Skógafoss Waterfall, Iceland, 20240720 1318 2975.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Sk%C3%B3gafoss_Waterfall,_Iceland,_20240720_1318_2975.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/7/70/Sk%C3%B3gafoss_Waterfall%2C_Iceland%2C_20240720_1318_2975.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1151640675,
+        "sourceChecksum": "932d251ae34449d76f1ab0569a45e7e520836c41",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Jakub Hałun",
+          "url": "https://commons.wikimedia.org/wiki/User:Jakubhal"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY 4.0",
+        "name": "CC BY 4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1068",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Skógafoss Waterfall, Iceland, 20240720 1318 2975” by Jakub Hałun, CC BY 4.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "wildflower-party-01",
+      "category": "wildflower-party",
+      "categoryLabel": "Flower Power",
+      "file": "wildflower-party-01.webp",
+      "title": "California Gold Field At Antelope Valley (8439055)",
+      "alt": "Lasthenia californica — California Goldfields . I think what's covering this landscape here at Antelope Valley is the appropriately named plant: California Goldfields . I went there hoping to see hillsides covered with orange poppies but the day I visited the winds were 30 or 40 miles per hour and a",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#8e8e77"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1200,
+        "bytes": 213556,
+        "sha256": "b2fc8a533651065d1aeea980c9aa05a9b485f814550688637c9a1f1072f67517"
+      },
+      "thumbnail": {
+        "file": "thumbs/wildflower-party-01.webp",
+        "width": 480,
+        "height": 360,
+        "bytes": 29386,
+        "sha256": "149d7ed387bfc46a52254589f8b83a35b25f241cf580ad5311493de55f60cd74"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:California Gold Field At Antelope Valley (8439055).jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:California_Gold_Field_At_Antelope_Valley_(8439055).jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/a/a2/California_Gold_Field_At_Antelope_Valley_%288439055%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1227168612,
+        "sourceChecksum": "48629dc6fea025dfda134dcb12dee730c322bea4",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Dawn Endico from Menlo Park, California",
+          "url": "https://www.flickr.com/people/51035743246@N01"
+        },
+        "credit": "California Gold Field At Antelope Valley Uploaded by Tim1357"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 2.0",
+        "name": "CC BY-SA 2.0",
+        "url": "https://creativecommons.org/licenses/by-sa/2.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1200",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“California Gold Field At Antelope Valley (8439055)” by Dawn Endico from Menlo Park, California, CC BY-SA 2.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "wildflower-party-02",
+      "category": "wildflower-party",
+      "categoryLabel": "Flower Power",
+      "file": "wildflower-party-02.webp",
+      "title": "Haltern am See, Westruper Heide -- 2015 -- 7965-9",
+      "alt": "Nature reserve “Westrup Heath” at the beginning of flowering of the heath, Haltern am See , North Rhine-Westphalia , Germany The Westrup Heath (sometimes referred to locally as the “Flaesheim Heath”) is a nature reserve in Haltern am See between the Haltern reservoir and the Westrup hamlet, from whi",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#797472"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1068,
+        "bytes": 405224,
+        "sha256": "a2d49b196643a3951fbd82d511b5e03b8e4dd57cdc81129871b3aec3d3fbcd95"
+      },
+      "thumbnail": {
+        "file": "thumbs/wildflower-party-02.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 32310,
+        "sha256": "fdd08cfb880851e437a8d718f68c860806f02cc557b69aecd559c97498b6bd0c"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Haltern am See, Westruper Heide -- 2015 -- 7965-9.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Haltern_am_See,_Westruper_Heide_--_2015_--_7965-9.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/3/3c/Haltern_am_See%2C_Westruper_Heide_--_2015_--_7965-9.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1263643442,
+        "sourceChecksum": "a548ca6d62a9b87b7408f9f817f9282a8c0b323b",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Dietmar Rabich",
+          "url": "https://www.wikidata.org/wiki/Q34788025"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 4.0",
+        "name": "CC BY-SA 4.0",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1068",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Haltern am See, Westruper Heide -- 2015 -- 7965-9” by Dietmar Rabich, CC BY-SA 4.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "wildflower-party-03",
+      "category": "wildflower-party",
+      "categoryLabel": "Flower Power",
+      "file": "wildflower-party-03.webp",
+      "title": "Field of yellow flowers in Laurensberg (DSCF5908)",
+      "alt": "Landscape featuring a field of yellow flowers in Laurensberg (Aachen, Germany)",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#839472"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1068,
+        "bytes": 378150,
+        "sha256": "fb833be523335a7944a51d1d0ab7a573675d5b5743e4c86fe7f3fc25658e6610"
+      },
+      "thumbnail": {
+        "file": "thumbs/wildflower-party-03.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 21648,
+        "sha256": "ed959263d80f4184375c874380380fe5b102b0cf6b2e3a49cbcc942c5ec4b696"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Field of yellow flowers in Laurensberg (DSCF5908).jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Field_of_yellow_flowers_in_Laurensberg_(DSCF5908).jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/9/99/Field_of_yellow_flowers_in_Laurensberg_%28DSCF5908%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1252276962,
+        "sourceChecksum": "4335448d7fe773b576b7b0e2e4d7aab21a67bff4",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Trougnouf (Benoit Brummer)",
+          "url": "https://commons.wikimedia.org/wiki/User:Trougnouf"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY 4.0",
+        "name": "CC BY 4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1068",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Field of yellow flowers in Laurensberg (DSCF5908)” by Trougnouf (Benoit Brummer), CC BY 4.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "wildflower-party-04",
+      "category": "wildflower-party",
+      "categoryLabel": "Flower Power",
+      "file": "wildflower-party-04.webp",
+      "title": "Custer-Gallatin National Forest, Emigrant Peak Trail, alpine wildflowers - Flickr - YellowstoneNPS",
+      "alt": "NPS / Jacob W. Frank",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#85838a"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1067,
+        "bytes": 375526,
+        "sha256": "f48789afcd4a195dda8416219b6bf5269e48cd5515c156f8fe33a9760b2befd5"
+      },
+      "thumbnail": {
+        "file": "thumbs/wildflower-party-04.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 38736,
+        "sha256": "b1950cc796b997ba4d1712e4f01a767ffba3a8f4a85cbfcdb5737da675c52198"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Custer-Gallatin National Forest, Emigrant Peak Trail, alpine wildflowers - Flickr - YellowstoneNPS.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Custer-Gallatin_National_Forest,_Emigrant_Peak_Trail,_alpine_wildflowers_-_Flickr_-_YellowstoneNPS.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/2/20/Custer-Gallatin_National_Forest%2C_Emigrant_Peak_Trail%2C_alpine_wildflowers_-_Flickr_-_YellowstoneNPS.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1219794339,
+        "sourceChecksum": "37d93b697c4c41eef717e3d40465f7a4ec148a41",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Yellowstone National Park",
+          "url": "https://www.flickr.com/people/80223459@N05"
+        },
+        "credit": "Custer-Gallatin National Forest, Emigrant Peak Trail: alpine wildflowers"
+      },
+      "rights": {
+        "kind": "public-domain",
+        "id": "Public domain",
+        "name": "Public domain",
+        "url": "https://commons.wikimedia.org/wiki/File:Custer-Gallatin_National_Forest,_Emigrant_Peak_Trail,_alpine_wildflowers_-_Flickr_-_YellowstoneNPS.jpg",
+        "attributionRequired": false,
+        "copyrightNotice": "False",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1067",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Custer-Gallatin National Forest, Emigrant Peak Trail, alpine wildflowers - Flickr - YellowstoneNPS” by Yellowstone National Park, public domain; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "wildflower-party-05",
+      "category": "wildflower-party",
+      "categoryLabel": "Flower Power",
+      "file": "wildflower-party-05.webp",
+      "title": "2013-07-14 13 26 56 Alpine wildflowers near the summit of Wheeler Peak in Great Basin National Park",
+      "alt": "Alpine wildflowers near the summit of Wheeler Peak in Great Basin National Park, Nevada",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#6b6868"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1200,
+        "bytes": 358864,
+        "sha256": "9e69373169c7ea41d31e8b970ae3b0f4c812d634ed103fc366c3bbbb98f2cd8a"
+      },
+      "thumbnail": {
+        "file": "thumbs/wildflower-party-05.webp",
+        "width": 480,
+        "height": 360,
+        "bytes": 33794,
+        "sha256": "5003f8279fe7a49bf86016c4970c1a8ff24efbb164404b5b809080ceec403b9e"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:2013-07-14 13 26 56 Alpine wildflowers near the summit of Wheeler Peak in Great Basin National Park.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:2013-07-14_13_26_56_Alpine_wildflowers_near_the_summit_of_Wheeler_Peak_in_Great_Basin_National_Park.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/7/76/2013-07-14_13_26_56_Alpine_wildflowers_near_the_summit_of_Wheeler_Peak_in_Great_Basin_National_Park.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1164415530,
+        "sourceChecksum": "3a0a1f9cd97ceb21bf3f58b56d58de363fbcb335",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Famartin",
+          "url": "https://commons.wikimedia.org/wiki/User:Famartin"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 3.0",
+        "name": "CC BY-SA 3.0",
+        "url": "https://creativecommons.org/licenses/by-sa/3.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1200",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“2013-07-14 13 26 56 Alpine wildflowers near the summit of Wheeler Peak in Great Basin National Park” by Famartin, CC BY-SA 3.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "animal-cameos-01",
+      "category": "animal-cameos",
+      "categoryLabel": "Wild Encounters",
+      "file": "animal-cameos-01.webp",
+      "title": "Red fox (Vulpes vulpes crucigera) Skalnate Pleso 2",
+      "alt": "Red fox ( Vulpes vulpes crucigera ), Skalnaté Pleso, Vysoké Tatry, Slovakia",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#72784c"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1067,
+        "bytes": 164498,
+        "sha256": "1d66875e904f29c665ede5b150609f9d8e81ce6dc157837fa13577c5bd5b8410"
+      },
+      "thumbnail": {
+        "file": "thumbs/animal-cameos-01.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 21470,
+        "sha256": "d7209b0a6da88267e703253f9b33475e7f115abcf205633d1c6a51c0d224fc3a"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Red fox (Vulpes vulpes crucigera) Skalnate Pleso 2.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Red_fox_(Vulpes_vulpes_crucigera)_Skalnate_Pleso_2.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/6/6c/Red_fox_%28Vulpes_vulpes_crucigera%29_Skalnate_Pleso_2.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1250533258,
+        "sourceChecksum": "47528cd55d830a16c2305e5ae6930164f97e3e34",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Charles J. Sharp",
+          "url": "https://www.wikidata.org/wiki/Q54800218"
+        },
+        "credit": "Own work , from Sharp Photography, sharpphotography.co.uk"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 4.0",
+        "name": "CC BY-SA 4.0",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1067",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Red fox (Vulpes vulpes crucigera) Skalnate Pleso 2” by Charles J. Sharp, CC BY-SA 4.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "animal-cameos-02",
+      "category": "animal-cameos",
+      "categoryLabel": "Wild Encounters",
+      "file": "animal-cameos-02.webp",
+      "title": "African bush elephants (Loxodonta africana) female with six-week-old baby",
+      "alt": "African bush elephants ( Loxodonta africana ) female with six-week-old baby, Matetsi Safari Area, Zimbabwe",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#68694f"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1067,
+        "bytes": 318360,
+        "sha256": "90ab6176d3b8c962efc0219f6e457e70d480b03db136d2e2747a058c5b50de29"
+      },
+      "thumbnail": {
+        "file": "thumbs/animal-cameos-02.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 32670,
+        "sha256": "19a9cd41de4ee715ee7bc413727c84a43d4f4a0739af175dda6b13cb16ebc354"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:African bush elephants (Loxodonta africana) female with six-week-old baby.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:African_bush_elephants_(Loxodonta_africana)_female_with_six-week-old_baby.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/d/d5/African_bush_elephants_%28Loxodonta_africana%29_female_with_six-week-old_baby.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1094288429,
+        "sourceChecksum": "eb4b7e9355f9900d677b500b40e78979becbaf1c",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Charles J. Sharp",
+          "url": "https://www.wikidata.org/wiki/Q54800218"
+        },
+        "credit": "Own work , from Sharp Photography, sharpphotography.co.uk"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 4.0",
+        "name": "CC BY-SA 4.0",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1067",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“African bush elephants (Loxodonta africana) female with six-week-old baby” by Charles J. Sharp, CC BY-SA 4.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "animal-cameos-03",
+      "category": "animal-cameos",
+      "categoryLabel": "Wild Encounters",
+      "file": "animal-cameos-03.webp",
+      "title": "European bee-eaters (Merops apiaster) with dragonflies",
+      "alt": "European bee-eaters ( Merops apiaster ) with dragonflies, near Kondor Tanya, Kecskemét, Hungary",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#28291b"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1067,
+        "bytes": 42078,
+        "sha256": "ddfecfdc6d3909f6ee07399de4623be0cf09c3658c3e6c0272d7a96415c3fb9b"
+      },
+      "thumbnail": {
+        "file": "thumbs/animal-cameos-03.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 4498,
+        "sha256": "4e1b0fb6b0359c43c5c15e3137b0a4ea93c9ab2a2397420818417fe5c3f02393"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:European bee-eaters (Merops apiaster) with dragonflies.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:European_bee-eaters_(Merops_apiaster)_with_dragonflies.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/6/63/European_bee-eaters_%28Merops_apiaster%29_with_dragonflies.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1239390537,
+        "sourceChecksum": "22f87a6cfdada882566dcd746ac335880487eec0",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Charles J. Sharp",
+          "url": "https://www.wikidata.org/wiki/Q54800218"
+        },
+        "credit": "Own work , from Sharp Photography, sharpphotography.co.uk"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 4.0",
+        "name": "CC BY-SA 4.0",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1067",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“European bee-eaters (Merops apiaster) with dragonflies” by Charles J. Sharp, CC BY-SA 4.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "animal-cameos-04",
+      "category": "animal-cameos",
+      "categoryLabel": "Wild Encounters",
+      "file": "animal-cameos-04.webp",
+      "title": "Humpback Whale amidst icebergs (6296029124)",
+      "alt": "In the Gerlache Strait, Antarctica.",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#8a9cb2"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1169,
+        "bytes": 106638,
+        "sha256": "f73d4866d0355569c1041d5452273ceed5797111c6151dc025023260df409725"
+      },
+      "thumbnail": {
+        "file": "thumbs/animal-cameos-04.webp",
+        "width": 480,
+        "height": 351,
+        "bytes": 11726,
+        "sha256": "86e171548bcf60d8a8a598457246823878495144963432854920fdc5abc57207"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Humpback Whale amidst icebergs (6296029124).jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Humpback_Whale_amidst_icebergs_(6296029124).jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/0/07/Humpback_Whale_amidst_icebergs_%286296029124%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1198546698,
+        "sourceChecksum": "0b4b14f26185e6877cee2ab0751840ad137aee99",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Liam Quinn from Canada",
+          "url": "https://www.flickr.com/people/59222181@N03"
+        },
+        "credit": "Humpback Whale amidst icebergs"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 2.0",
+        "name": "CC BY-SA 2.0",
+        "url": "https://creativecommons.org/licenses/by-sa/2.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1169",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Humpback Whale amidst icebergs (6296029124)” by Liam Quinn from Canada, CC BY-SA 2.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "animal-cameos-05",
+      "category": "animal-cameos",
+      "categoryLabel": "Wild Encounters",
+      "file": "animal-cameos-05.webp",
+      "title": "Whale Shark AdF",
+      "alt": "Whale Shark ( Rhincodon typus ). Face portrait of an 8-meter individual filter-feeding plankton at night. His eye is clearly visible. His upper lip shows recent scars – whale sharks steal food from fishermen nets and the fishermen hit them in the mouth to try to discourage them. Thaa Atoll, Maldives",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#10142b"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1067,
+        "bytes": 54808,
+        "sha256": "2ea3b3da295f01f2cc1bc09d0ed43e31dd89ca7e4261346a55d098ccd09fec35"
+      },
+      "thumbnail": {
+        "file": "thumbs/animal-cameos-05.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 6968,
+        "sha256": "df5db619c460334468c07aa62aa09408388b9c9dd6b9ce6f7a3a2f53c89415d7"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Whale Shark AdF.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Whale_Shark_AdF.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/c/c7/Whale_Shark_AdF.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1238619753,
+        "sourceChecksum": "b468f8161f7a7d04797c30ad82ee5555800b59c5",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Arturo de Frias Marques",
+          "url": "https://commons.wikimedia.org/wiki/User:Arturo_de_Frias_Marques"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 4.0",
+        "name": "CC BY-SA 4.0",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1067",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Whale Shark AdF” by Arturo de Frias Marques, CC BY-SA 4.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "ice-aurora-01",
+      "category": "ice-aurora",
+      "categoryLabel": "Polar Light",
+      "file": "ice-aurora-01.webp",
+      "title": "Aurora borealis over Eielson Air Force Base, Alaska",
+      "alt": "Eielson Air Force Base , Alaska — The Aurora Borealis , or Northern Lights, shines above Bear Lake",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#6a7f8f"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1042,
+        "bytes": 66922,
+        "sha256": "a1fa8797d1772fd3b2afb5a38fc8bacef7c86589431af362b01dba15fbefe3d5"
+      },
+      "thumbnail": {
+        "file": "thumbs/ice-aurora-01.webp",
+        "width": 480,
+        "height": 313,
+        "bytes": 7026,
+        "sha256": "e1c1ccfe73e69f060d10e934b2f3ba4a03c9e6f6c35eea2fce53792fd1e0e75a"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Aurora borealis over Eielson Air Force Base, Alaska.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Aurora_borealis_over_Eielson_Air_Force_Base,_Alaska.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/d/d3/Aurora_borealis_over_Eielson_Air_Force_Base%2C_Alaska.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1253020672,
+        "sourceChecksum": "6b0d77f86923b18b05aa8a69b86144226a79fb1a",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "United States Air Force photo by Senior Airman Joshua Strang",
+          "url": "https://commons.wikimedia.org/wiki/United_States_Air_Force"
+        },
+        "credit": "This image was released by the United States Air Force with the ID 050118-F-3488S-003 (next) . This tag does not indicate the copyright status of the attached work. A normal copyright tag is still required. See Commons:Licensing . العربية ∙ বাংলা ∙ Bahasa Indonesia ∙ Bahaso Jambi ∙ Deutsch ∙ Deutsch (Sie-Form) ∙ English ∙ español ∙ euskara ∙ فارسی ∙ français ∙ italiano ∙ 日本語 ∙ 한국어 ∙ македонски ∙ മലയാളം ∙ Plattdüütsch ∙ Nederlands ∙ polski ∙ پښتو ∙ português ∙ русский ∙ slovenščina ∙ svenska ∙ Tü"
+      },
+      "rights": {
+        "kind": "public-domain",
+        "id": "Public domain",
+        "name": "Public domain",
+        "url": "https://commons.wikimedia.org/wiki/File:Aurora_borealis_over_Eielson_Air_Force_Base,_Alaska.jpg",
+        "attributionRequired": false,
+        "copyrightNotice": "False",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1042",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Aurora borealis over Eielson Air Force Base, Alaska” by United States Air Force photo by Senior Airman Joshua Strang, public domain; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "ice-aurora-02",
+      "category": "ice-aurora",
+      "categoryLabel": "Polar Light",
+      "file": "ice-aurora-02.webp",
+      "title": "The aurora borealis blankets the Earth (iss072e159516)",
+      "alt": "iss072e159516 (Oct. 30, 2024) --- The aurora borealis blankets the Earth in this photograph from the International Space Station as it soared into an orbital sunrise 257 miles above Canada's province of Ontario.",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#3d393e"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1067,
+        "bytes": 109976,
+        "sha256": "24e559a5541304fb3609fd69e649f76b7215bb679a745e518a8106c160dbb6d5"
+      },
+      "thumbnail": {
+        "file": "thumbs/ice-aurora-02.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 4468,
+        "sha256": "be459d72a584468b83e5b79e7e7dc037882cdf16955982a55a8b1a45204cbb42"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:The aurora borealis blankets the Earth (iss072e159516).jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:The_aurora_borealis_blankets_the_Earth_(iss072e159516).jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/7/7a/The_aurora_borealis_blankets_the_Earth_%28iss072e159516%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1007063603,
+        "sourceChecksum": "1db88d27b534ac0b09e19213e10c4998a8201914",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "NASA Johnson Space Center",
+          "url": "https://www.nasa.gov/johnson/"
+        },
+        "credit": "This image or video was catalogued by Lyndon B. Johnson Space Center of the United States National Aeronautics and Space Administration (NASA) under Photo ID: iss072e159516 ."
+      },
+      "rights": {
+        "kind": "public-domain",
+        "id": "Public domain",
+        "name": "Public domain",
+        "url": "https://commons.wikimedia.org/wiki/File:The_aurora_borealis_blankets_the_Earth_(iss072e159516).jpg",
+        "attributionRequired": false,
+        "copyrightNotice": "False",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1067",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“The aurora borealis blankets the Earth (iss072e159516)” by NASA Johnson Space Center, public domain; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "ice-aurora-03",
+      "category": "ice-aurora",
+      "categoryLabel": "Polar Light",
+      "file": "ice-aurora-03.webp",
+      "title": "Aerial photography mountain glacier landscape with snow",
+      "alt": "Image title: Aerial photography mountain glacier landscape with snow Image from Public domain images website, http://www.public-domain-image.com/full-image/nature-landscapes-public-domain-images-pictures/mountain-public-domain-images-pictures/aerial-photography-mountain-glacier-landscape-with-snow.j",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#5a6d7e"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1065,
+        "bytes": 72676,
+        "sha256": "3834d53c0e10c1b458ed84a1f9580bf555fb42c013e67e1e742203260d1d3cf7"
+      },
+      "thumbnail": {
+        "file": "thumbs/ice-aurora-03.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 12806,
+        "sha256": "5fb0df10279d39ed8eab964062ab6dd23cf5b6a29f061332903e665f96512660"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Aerial photography mountain glacier landscape with snow.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Aerial_photography_mountain_glacier_landscape_with_snow.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/1/1f/Aerial_photography_mountain_glacier_landscape_with_snow.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 782647465,
+        "sourceChecksum": "1d6655306132f6354203517e9e0604320793c759",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Hillebrand Steve, U.S. Fish and Wildlife Service",
+          "url": null
+        },
+        "credit": "http://www.public-domain-image.com/public-domain-images-pictures-free-stock-photos/nature-landscapes-public-domain-images-pictures/mountain-public-domain-images-pictures/aerial-photography-mountain-glacier-landscape-with-snow.jpg"
+      },
+      "rights": {
+        "kind": "public-domain",
+        "id": "Public domain",
+        "name": "Public domain",
+        "url": "https://commons.wikimedia.org/wiki/File:Aerial_photography_mountain_glacier_landscape_with_snow.jpg",
+        "attributionRequired": false,
+        "copyrightNotice": "False",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1065",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Aerial photography mountain glacier landscape with snow” by Hillebrand Steve, U.S. Fish and Wildlife Service, public domain; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "ice-aurora-04",
+      "category": "ice-aurora",
+      "categoryLabel": "Polar Light",
+      "file": "ice-aurora-04.webp",
+      "title": "View of the glacier of Öræfajökull volcano in Hornafjörður municipality, Iceland, 20240719 1738 2793",
+      "alt": "View of the glacier of Öræfajökull volcano in Hornafjörður municipality, Iceland",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#91969a"
+      },
+      "output": {
+        "width": 1600,
+        "height": 879,
+        "bytes": 183352,
+        "sha256": "38b82e2feb1c87c1e080475ee952a265d0272f9fae265f4dd3d6a6257ce1307b"
+      },
+      "thumbnail": {
+        "file": "thumbs/ice-aurora-04.webp",
+        "width": 480,
+        "height": 264,
+        "bytes": 12658,
+        "sha256": "1c5624b3b7d34fbb23450636ae6d5591cb8574bac70ead15b8fbc16bccf9b2d4"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:View of the glacier of Öræfajökull volcano in Hornafjörður municipality, Iceland, 20240719 1738 2793.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:View_of_the_glacier_of_%C3%96r%C3%A6faj%C3%B6kull_volcano_in_Hornafj%C3%B6r%C3%B0ur_municipality,_Iceland,_20240719_1738_2793.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/1/17/View_of_the_glacier_of_%C3%96r%C3%A6faj%C3%B6kull_volcano_in_Hornafj%C3%B6r%C3%B0ur_municipality%2C_Iceland%2C_20240719_1738_2793.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1218156374,
+        "sourceChecksum": "7972105f0f55ddcda2ec113fe389b2d11e42619b",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Jakub Hałun",
+          "url": "https://commons.wikimedia.org/wiki/User:Jakubhal"
+        },
+        "credit": "Own work"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY 4.0",
+        "name": "CC BY 4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×879",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“View of the glacier of Öræfajökull volcano in Hornafjörður municipality, Iceland, 20240719 1738 2793” by Jakub Hałun, CC BY 4.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "ice-aurora-05",
+      "category": "ice-aurora",
+      "categoryLabel": "Polar Light",
+      "file": "ice-aurora-05.webp",
+      "title": "Towering Rows of Crevasses - Knik Glacier in Alaska",
+      "alt": "So many rows of cascading ice on the Knik Glacier. Viewed from the front out of a helicopter.",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "dark",
+        "dominantColor": "#a6c3d4"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1067,
+        "bytes": 232326,
+        "sha256": "1b89cbf9457755e9fc3f34fa63757ca053a8731f336150db4ff4ee12db4f3d55"
+      },
+      "thumbnail": {
+        "file": "thumbs/ice-aurora-05.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 20784,
+        "sha256": "3afb3d65c4c05a259f25218703f27640a0f2b132ef1eb1d70a2f326a4172cbf3"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Towering Rows of Crevasses - Knik Glacier in Alaska.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Towering_Rows_of_Crevasses_-_Knik_Glacier_in_Alaska.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/d/d2/Towering_Rows_of_Crevasses_-_Knik_Glacier_in_Alaska.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1183947419,
+        "sourceChecksum": "9f6bc0e2479f871f57459cd83cf3019670d43c6b",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Eric Kilby",
+          "url": null
+        },
+        "credit": "https://www.flickr.com/photos/8749778@N06/52149947762/"
+      },
+      "rights": {
+        "kind": "license",
+        "id": "CC BY-SA 2.0",
+        "name": "CC BY-SA 2.0",
+        "url": "https://creativecommons.org/licenses/by-sa/2.0",
+        "attributionRequired": true,
+        "copyrightNotice": "True",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1067",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Towering Rows of Crevasses - Knik Glacier in Alaska” by Eric Kilby, CC BY-SA 2.0; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "earth-above-01",
+      "category": "earth-above",
+      "categoryLabel": "Orbital Views",
+      "file": "earth-above-01.webp",
+      "title": "Earth's City Lights by DMSP, 1994-1995 (large)",
+      "alt": "This image of Earth’s city lights was created with data from the Defense Meteorological Satellite Program (DMSP) Operational Linescan System (OLS). Originally designed to view clouds by moonlight, the OLS is also used to map the locations of permanent lights on the Earth’s surface. The brightest are",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#0c0c23"
+      },
+      "output": {
+        "width": 1600,
+        "height": 800,
+        "bytes": 85640,
+        "sha256": "762885e5d500db02b55c58b77139fba33bb76fd70650ad0057c8a96704515992"
+      },
+      "thumbnail": {
+        "file": "thumbs/earth-above-01.webp",
+        "width": 480,
+        "height": 240,
+        "bytes": 6296,
+        "sha256": "80bbc1a7cfb332b016d4defaabb95052c4a30b498fc90558738e37cc3e28c600"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Earth's City Lights by DMSP, 1994-1995 (large).jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Earth's_City_Lights_by_DMSP,_1994-1995_(large).jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/e/e1/Earth%27s_City_Lights_by_DMSP%2C_1994-1995_%28large%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1222173992,
+        "sourceChecksum": "f8dd4c8959257a753d1d147bb64ea6c53918f1c8",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Data: Marc Imhoff/NASA GSFC, Christopher Elvidge/NOAA NGDC; Image: Craig Mayhew and Robert Simmon/NASA GSFC",
+          "url": null
+        },
+        "credit": "https://visibleearth.nasa.gov/view.php?id=55167 ( image link )"
+      },
+      "rights": {
+        "kind": "public-domain",
+        "id": "Public domain",
+        "name": "Public domain",
+        "url": "https://commons.wikimedia.org/wiki/File:Earth's_City_Lights_by_DMSP,_1994-1995_(large).jpg",
+        "attributionRequired": false,
+        "copyrightNotice": "False",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×800",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Earth's City Lights by DMSP, 1994-1995 (large)” by Data: Marc Imhoff/NASA GSFC, Christopher Elvidge/NOAA NGDC; Image: Craig Mayhew and Robert Simmon/NASA GSFC, public domain; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "earth-above-02",
+      "category": "earth-above",
+      "categoryLabel": "Orbital Views",
+      "file": "earth-above-02.webp",
+      "title": "Top of Atmosphere",
+      "alt": "View of the crescent moon through the top of the Earth's atmosphere. Photographed above 21.5°N, 113.3°E by International Space Station crew Expedition 13 over the South China Sea , just south of Macau (NASA image ID: ISS013-E-54329).",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#808999"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1062,
+        "bytes": 35396,
+        "sha256": "3da7a19db71bc4467ac16ad78772ce7c8fd7c0e10b4f796f5ba50367b5faf569"
+      },
+      "thumbnail": {
+        "file": "thumbs/earth-above-02.webp",
+        "width": 480,
+        "height": 319,
+        "bytes": 4862,
+        "sha256": "8961f75ff5f731f71e8d9a6802de12314e2e11894a4828ec5ffbb509b28cfd4b"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Top of Atmosphere.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Top_of_Atmosphere.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/b/be/Top_of_Atmosphere.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1250807845,
+        "sourceChecksum": "f4c5051cd15eba3e226c2e620a24c43c2dc726e1",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "NASA Earth Observatory",
+          "url": null
+        },
+        "credit": "http://eol.jsc.nasa.gov/scripts/sseop/photo.pl?mission=ISS013&roll=E&frame=54329"
+      },
+      "rights": {
+        "kind": "public-domain",
+        "id": "Public domain",
+        "name": "Public domain",
+        "url": "https://commons.wikimedia.org/wiki/File:Top_of_Atmosphere.jpg",
+        "attributionRequired": false,
+        "copyrightNotice": "False",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1062",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Top of Atmosphere” by NASA Earth Observatory, public domain; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "earth-above-03",
+      "category": "earth-above",
+      "categoryLabel": "Orbital Views",
+      "file": "earth-above-03.webp",
+      "title": "International Space Station star trails - JSC2012E039800",
+      "alt": "Star trail composite image created by International Space Station Expedition 30 crew member Don Pettit using images ISS030E171842 through ISS030E171889. Expedition 30 and Expedition 31 Flight Engineer Don Pettit provided information about photographic techniques used to achieve the images: \"My star ",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#3c363c"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1065,
+        "bytes": 145106,
+        "sha256": "ab6c5180e357fd68df4092c0de950b44c9bf08f5114b0a56baedc1aa54002190"
+      },
+      "thumbnail": {
+        "file": "thumbs/earth-above-03.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 13998,
+        "sha256": "a10f8ff852599d3bb2840b6a2c09a7141b868d48597d4df839d4ceee7c4390dd"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:International Space Station star trails - JSC2012E039800.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:International_Space_Station_star_trails_-_JSC2012E039800.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/f/f2/International_Space_Station_star_trails_-_JSC2012E039800.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1018152088,
+        "sourceChecksum": "40c3fcac9efa1e762dc9e37526ee929476f05bb0",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "NASA/Don Pettit",
+          "url": null
+        },
+        "credit": "NASA JSC Flickr account"
+      },
+      "rights": {
+        "kind": "public-domain",
+        "id": "Public domain",
+        "name": "Public domain",
+        "url": "https://commons.wikimedia.org/wiki/File:International_Space_Station_star_trails_-_JSC2012E039800.jpg",
+        "attributionRequired": false,
+        "copyrightNotice": "False",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1065",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“International Space Station star trails - JSC2012E039800” by NASA/Don Pettit, public domain; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "earth-above-04",
+      "category": "earth-above",
+      "categoryLabel": "Orbital Views",
+      "file": "earth-above-04.webp",
+      "title": "Good Morning From the International Space Station",
+      "alt": "NASA astronaut Scott Kelly took this photograph of a moonrise over the western united states.",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#161210"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1065,
+        "bytes": 138798,
+        "sha256": "9743ae32d7580eb6953b43900f6f7d50cb243a8a0718ddb889a5fa9019047eb6"
+      },
+      "thumbnail": {
+        "file": "thumbs/earth-above-04.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 9174,
+        "sha256": "a4e28aa92b9bc7723146a36bceed1ae04eeb97247c3197df0334f34ed26cb751"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Good Morning From the International Space Station.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Good_Morning_From_the_International_Space_Station.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/3/3b/Good_Morning_From_the_International_Space_Station.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 910375738,
+        "sourceChecksum": "c444a7b0ff9f691f04ebe3f208774fb2978b9e1e",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Scott Kelly",
+          "url": null
+        },
+        "credit": "Gateway to Astronaut Photography of Earth"
+      },
+      "rights": {
+        "kind": "public-domain",
+        "id": "Public domain",
+        "name": "Public domain",
+        "url": "https://commons.wikimedia.org/wiki/File:Good_Morning_From_the_International_Space_Station.jpg",
+        "attributionRequired": false,
+        "copyrightNotice": "False",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1065",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Good Morning From the International Space Station” by Scott Kelly, public domain; resized and converted to WebP by Zyra."
+    },
+    {
+      "id": "earth-above-05",
+      "category": "earth-above",
+      "categoryLabel": "Orbital Views",
+      "file": "earth-above-05.webp",
+      "title": "Earth From the Perspective of Artemis II",
+      "alt": "A view of Earth taken by NASA astronaut and Artemis II Commander Reid Wiseman from of the Orion spacecraft's window after completing the translunar injection burn on April 2, 2026. The image features two auroras (top right and bottom left) and zodiacal light (bottom right) is visible as the Earth ec",
+      "focalPoint": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "presentation": {
+        "textTone": "light",
+        "dominantColor": "#2c2e33"
+      },
+      "output": {
+        "width": 1600,
+        "height": 1067,
+        "bytes": 308014,
+        "sha256": "dde9b4a125cfd68d0b7f6f74554f791c81ad2dc4dee32319be70e1b475775667"
+      },
+      "thumbnail": {
+        "file": "thumbs/earth-above-05.webp",
+        "width": 480,
+        "height": 320,
+        "bytes": 10504,
+        "sha256": "e87ccc11f1c94ea71cc70f51a8684aa139d1a0859f73fe2b7cb6ffa973c3d2f6"
+      },
+      "source": {
+        "provider": "wikimedia-commons",
+        "assetId": "File:Earth From the Perspective of Artemis II.jpg",
+        "pageUrl": "https://commons.wikimedia.org/wiki/File:Earth_From_the_Perspective_of_Artemis_II.jpg",
+        "originalUrl": "https://upload.wikimedia.org/wikipedia/commons/6/63/Earth_From_the_Perspective_of_Artemis_II.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+        "pageRevisionId": 1259465063,
+        "sourceChecksum": "150fa5b7b0a860073ac4f0c4d0fa89c1a2028852",
+        "retrievedAt": "2026-08-19T20:38:34.163651+00:00",
+        "creator": {
+          "name": "Reid Wiseman /NASA",
+          "url": "https://en.wikipedia.org/wiki/en:Reid_Wiseman"
+        },
+        "credit": "This image or video was catalogued by Lyndon B. Johnson Space Center of the United States National Aeronautics and Space Administration (NASA) under Photo ID: art002e000192 ."
+      },
+      "rights": {
+        "kind": "public-domain",
+        "id": "Public domain",
+        "name": "Public domain",
+        "url": "https://commons.wikimedia.org/wiki/File:Earth_From_the_Perspective_of_Artemis_II.jpg",
+        "attributionRequired": false,
+        "copyrightNotice": "False",
+        "disclaimerNotice": null,
+        "restrictions": []
+      },
+      "modifications": [
+        "Resized to 1600×1067",
+        "Converted to WebP",
+        "Metadata removed"
+      ],
+      "attributionText": "“Earth From the Perspective of Artemis II” by Reid Wiseman /NASA, public domain; resized and converted to WebP by Zyra."
+    }
+  ]
+}

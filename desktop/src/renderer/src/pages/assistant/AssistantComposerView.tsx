@@ -4,7 +4,7 @@ import { useSettings } from '@/lib/settings'
 import { cn } from '@/lib/utils'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { ConfirmModal } from '@/components/ui/ConfirmModal'
-import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import {
     ChevronDown,
     ChevronUp,
@@ -13,8 +13,6 @@ import {
     FileImage,
     FileText,
     GripVertical,
-    ListTodo,
-    MessageSquare,
     Pencil,
     Plus,
     SendHorizontal,
@@ -24,6 +22,8 @@ import {
 import AssistantAttachmentPreviewModal from './AssistantAttachmentPreviewModal'
 import { AssistantVoiceRecorderBar } from './AssistantVoiceRecorderBar'
 import { AssistantNewChatProjectChip } from './AssistantNewChatProjectChip'
+import { AssistantComposerContextIndicator } from './AssistantComposerContextIndicator'
+import { AssistantBusySendSplitButton } from './AssistantBusySendSplitButton'
 import { ComposerAttachmentsShelf, ComposerFooterControls, ComposerMentionMenu, ComposerRealtimeVoiceButton, ComposerSendButton, ComposerVoiceButton } from './AssistantComposerSections'
 import { formatAssistantModelLabel } from './assistant-model-labels'
 import {
@@ -34,6 +34,7 @@ import type { AssistantVoiceExecutionConfiguration } from '@shared/assistant/con
 import type { AssistantComposerController } from './useAssistantComposerController'
 import { writeFullAccessConfirmSuppressed } from './assistant-safety-preferences'
 import { deriveAssistantComposerViewState, shouldShowComposerRealtimeVoicePrimaryAction } from './assistant-composer-view-state'
+import { buildAssistantVoiceExecutionConfiguration } from './assistant-voice-execution-configuration'
 import {
     getContentTypeTag,
     getContextFileMeta,
@@ -51,13 +52,11 @@ export function AssistantComposerView({
     onStartRealtimeVoice?: (configuration: AssistantVoiceExecutionConfiguration) => void
 }) {
     const navigate = useNavigate()
-    const { settings } = useSettings()
+    const { settings, updateSettings } = useSettings()
     const transcriptionEnabled = settings.assistantTranscriptionEnabled
     const capabilities = controller.capabilities
     const canSend = capabilities.canSend
     const showBusySendActions = capabilities.showBusySendActions
-    const defaultBusyActionLabel = controller.busyMessageMode === 'force' ? 'Force' : 'Queue'
-    const secondaryBusyActionLabel = controller.busyMessageMode === 'force' ? 'Queue' : 'Force'
     const [showBrowserSpeechFallbackModal, setShowBrowserSpeechFallbackModal] = useState(false)
     const [textareaScrollTop, setTextareaScrollTop] = useState(0)
     const [draggedQueuedMessageId, setDraggedQueuedMessageId] = useState<string | null>(null)
@@ -72,9 +71,7 @@ export function AssistantComposerView({
         controller,
         settings
     })
-    const composerPlaceholder = controller.selectedInteractionMode === 'plan'
-        ? 'Add plan step...'
-        : capabilities.placeholder
+    const composerPlaceholder = capabilities.placeholder
     const sendActionDisabled = capabilities.sendDisabled || (voiceBusy && !capabilities.canStop)
     const currentSubmitLabel = controller.isDirty && controller.dirtySubmitLabel
         ? controller.dirtySubmitLabel
@@ -513,7 +510,7 @@ export function AssistantComposerView({
                             </div>
                         </AnimatedHeight>
                         <div className={cn(
-                            'flex items-center justify-between',
+                            'flex items-center justify-between [container-type:inline-size]',
                             showCodexRecorder
                                 ? 'gap-2 px-1.5 py-1.5'
                                 : controller.isCompactFooter
@@ -588,7 +585,11 @@ export function AssistantComposerView({
                                 onReconnect={controller.onReconnect}
                             />
 
-                            <div className="flex shrink-0 items-center gap-2">
+                            <div className={cn('assistant-composer-footer-actions flex shrink-0 items-center', showBusySendActions ? 'gap-1.5 [--assistant-footer-action-gap:0.375rem]' : 'gap-2 [--assistant-footer-action-gap:0.5rem]')}>
+                                <AssistantComposerContextIndicator
+                                    usage={controller.latestTurnUsage}
+                                    modelContextWindow={controller.selectedModelContextWindow}
+                                />
                                 {controller.showCancelWhenDirty && controller.isDirty ? (
                                     <button
                                         type="button"
@@ -605,29 +606,16 @@ export function AssistantComposerView({
                                     disabled={capabilities.voiceDisabled || controller.voiceInput.isStarting || controller.voiceInput.isTranscribing}
                                     onToggle={controller.voiceInput.toggleRecording}
                                 />
-                                {controller.queuedMessageCount > 0 ? (
-                                    <span className="inline-flex h-[36px] items-center rounded-full border border-transparent bg-white/[0.03] px-3 text-[11px] font-medium text-sparkle-text-secondary">
-                                        {controller.queuedMessageCount} queued
-                                    </span>
-                                ) : null}
                                 {showBusySendActions ? (
                                     <>
-                                        <button
-                                            type="button"
-                                            onClick={() => void controller.handleSend()}
-                                            className="inline-flex h-[36px] items-center justify-center rounded-full border border-[var(--accent-primary)] bg-[var(--accent-primary)] px-3.5 text-[12px] font-semibold text-[var(--accent-contrast)] transition-all duration-150 hover:scale-[1.03] hover:bg-[color-mix(in_srgb,var(--accent-primary)_88%,var(--color-text))]"
-                                            title={`${defaultBusyActionLabel} this message while the current turn is still running`}
-                                        >
-                                            {defaultBusyActionLabel}
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => void (controller.busyMessageMode === 'force' ? controller.handleQueueSend() : controller.handleForceSend())}
-                                            className="inline-flex h-[36px] items-center justify-center rounded-full border border-transparent bg-white/[0.03] px-3.5 text-[12px] font-semibold text-sparkle-text-secondary transition-colors hover:bg-white/[0.05] hover:text-sparkle-text"
-                                            title={`${secondaryBusyActionLabel} this message instead of using the default busy-send action`}
-                                        >
-                                            {secondaryBusyActionLabel}
-                                        </button>
+                                        <AssistantBusySendSplitButton
+                                            defaultMode={controller.busyMessageMode}
+                                            disabled={sendActionDisabled}
+                                            queuedCount={controller.queuedMessageCount}
+                                            onModeUsed={(assistantBusyMessageMode) => updateSettings({ assistantBusyMessageMode })}
+                                            onQueue={controller.handleQueueSend}
+                                            onForce={controller.handleForceSend}
+                                        />
                                         <ComposerSendButton
                                             disabled={sendActionDisabled}
                                             isConnected={controller.isConnected}
@@ -641,14 +629,16 @@ export function AssistantComposerView({
                                         />
                                     </>
                                 ) : showRealtimeVoicePrimaryAction ? (
-                                    <ComposerRealtimeVoiceButton onStart={() => onStartRealtimeVoice?.({
-                                        model: controller.selectedModel,
-                                        runtimeMode: controller.selectedRuntimeMode,
-                                        effort: controller.selectedEffort,
-                                        interactionMode: controller.selectedInteractionMode,
-                                        profile: controller.zyraProfile || 'default',
-                                        serviceTier: controller.fastModeEnabled ? 'fast' : undefined
-                                    })} />
+                                    <ComposerRealtimeVoiceButton onStart={() => onStartRealtimeVoice?.(
+                                        buildAssistantVoiceExecutionConfiguration({
+                                            model: controller.selectedModel,
+                                            runtimeMode: controller.selectedRuntimeMode,
+                                            effort: controller.selectedEffort,
+                                            interactionMode: controller.selectedInteractionMode,
+                                            profile: controller.zyraProfile,
+                                            fastModeEnabled: controller.fastModeEnabled
+                                        })
+                                    )} />
                                 ) : (
                                     <ComposerSendButton
                                         disabled={sendActionDisabled}

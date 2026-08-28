@@ -5,6 +5,8 @@ import MarkdownRenderer from '@/components/ui/MarkdownRenderer'
 import {
     formatAssistantAgentElapsed,
     formatAssistantAgentTokens,
+    projectAssistantAgentLiveToolActivity,
+    projectAssistantAgentTranscriptActivities,
     projectAssistantAgentTranscriptMessages,
     resolveAssistantAgentIdentity,
     shortAssistantAgentModel
@@ -16,6 +18,7 @@ import {
     type AssistantAgentAction
 } from './AssistantAgentPrimitives'
 import { AssistantAgentRunDetailsModal } from './AssistantAgentRunDetailsModal'
+import { TimelineToolCallList } from './AssistantTimelineToolCalls'
 
 export function AssistantAgentDetailPage({
     run,
@@ -39,12 +42,44 @@ export function AssistantAgentDetailPage({
     const [runDetailsOpen, setRunDetailsOpen] = useState(false)
     const identity = resolveAssistantAgentIdentity(run)
     const messages = transcript ? projectAssistantAgentTranscriptMessages(transcript.entries) : []
-    const hasAssistantMessage = messages.some((message) => message.role === 'assistant')
-    const finishedWithoutFinalResponse = Boolean(
-        run.sessionFile
-        && ['completed', 'failed', 'cancelled', 'interrupted'].includes(run.status)
-        && !hasAssistantMessage
-    )
+    const activities = transcript ? projectAssistantAgentTranscriptActivities(transcript.entries) : []
+    const terminal = ['completed', 'failed', 'cancelled', 'interrupted'].includes(run.status)
+    const active = ['queued', 'starting', 'running', 'waiting', 'blocked', 'recovering'].includes(run.status)
+    const liveToolActivity = active
+        ? projectAssistantAgentLiveToolActivity(run.activity, run.heartbeatAt || run.startedAt || run.createdAt)
+        : null
+    const displayedActivities = [...activities]
+    if (liveToolActivity && !displayedActivities.some((activity) => activity.activity.id === liveToolActivity.id)) {
+        displayedActivities.push({
+            index: Number.MAX_SAFE_INTEGER,
+            partIndex: 0,
+            toolCallId: liveToolActivity.id,
+            summary: liveToolActivity.summary,
+            detail: liveToolActivity.detail || null,
+            status: 'running',
+            timestamp: liveToolActivity.createdAt,
+            activity: liveToolActivity
+        })
+    }
+    const activityGroups = displayedActivities.length > 0 ? [{
+        kind: 'activity-group' as const,
+        index: activities[0]?.index ?? Math.max(-1, ...messages.map((message) => message.index)) + 1,
+        activities: displayedActivities
+    }] : []
+    const transcriptRows = [
+        ...messages.map((message) => ({ kind: 'message' as const, index: message.index, message })),
+        ...activityGroups
+    ].sort((left, right) => left.index - right.index)
+    const hasRootTranscriptMessage = messages.some((message) => message.role === 'user' && message.text.trim())
+    const resultText = String(run.result?.text || '').trim()
+    const hasRenderedResult = resultText.length > 0 && messages.some((message) => {
+        if (message.role !== 'assistant') return false
+        const text = message.text.trim()
+        return text === resultText || text.includes(resultText) || resultText.includes(text)
+    })
+    const renderResultFallback = terminal && Boolean(resultText) && !hasRenderedResult
+    const hasAssistantMessage = messages.some((message) => message.role === 'assistant') || renderResultFallback
+    const finishedWithoutFinalResponse = Boolean(run.sessionFile && terminal && !hasAssistantMessage)
 
     return (
         <section className="flex min-h-0 flex-1 flex-col" data-testid="assistant-agent-detail-page" data-agent-run-id={run.agentRunId}>
@@ -77,20 +112,22 @@ export function AssistantAgentDetailPage({
                 </button>
             </header>
 
-            <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+            <div data-assistant-capsule-scroll="agent-detail" className="custom-scrollbar min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
                 <div className="mx-auto w-full max-w-3xl px-3 py-3">
-                    <section className="rounded-xl border border-white/[0.065] bg-[color-mix(in_srgb,var(--color-card)_38%,transparent)] p-3" aria-label="Delegated task">
-                        <div className="flex items-center justify-between gap-3">
-                            <span className="font-mono text-[8px] uppercase tracking-[0.11em] text-sparkle-text-muted/45">Delegated task</span>
-                            <span className="truncate font-mono text-[8px] text-sparkle-text-muted/40">{run.definitionName || run.agentId}</span>
-                        </div>
-                        <p className="mt-2 whitespace-pre-wrap text-[11px] font-medium leading-5 text-sparkle-text/90">{run.goal || 'No delegated goal recorded.'}</p>
-                        {run.activity?.summary ? (
-                            <p className="mt-2 border-l border-[var(--accent-primary)]/30 pl-2 text-[9px] leading-4 text-sparkle-text-muted/65">{run.activity.summary}</p>
-                        ) : null}
-                    </section>
+                    {!hasRootTranscriptMessage ? (
+                        <section className="rounded-xl border border-white/[0.065] bg-[color-mix(in_srgb,var(--color-card)_38%,transparent)] p-3" aria-label="Delegated task">
+                            <div className="flex items-center justify-between gap-3">
+                                <span className="font-mono text-[8px] uppercase tracking-[0.11em] text-sparkle-text-muted/45">Delegated task</span>
+                                <span className="truncate font-mono text-[8px] text-sparkle-text-muted/40">{run.definitionName || run.agentId}</span>
+                            </div>
+                            <p className="mt-2 whitespace-pre-wrap text-[11px] font-medium leading-5 text-sparkle-text/90">{run.goal || 'No delegated goal recorded.'}</p>
+                            {run.activity?.summary ? (
+                                <p className="mt-2 border-l border-[var(--accent-primary)]/30 pl-2 text-[9px] leading-4 text-sparkle-text-muted/65">{run.activity.summary}</p>
+                            ) : null}
+                        </section>
+                    ) : null}
 
-                    <div className="mt-2 grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(7.5rem, 1fr))' }}>
+                    <div className={hasRootTranscriptMessage ? 'grid gap-2' : 'mt-2 grid gap-2'} style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(7.5rem, 1fr))' }}>
                         <AgentFact label="Model" value={shortAssistantAgentModel(run.selectedModel)} title={run.selectedModel} />
                         <AgentFact label="Effort" value={run.effort} />
                         <AgentFact label="Tokens" value={formatAssistantAgentTokens(run.usage.totalTokens)} />
@@ -104,7 +141,7 @@ export function AssistantAgentDetailPage({
                                 <div>
                                     <h3 className="text-[10px] font-semibold text-sparkle-text">Transcript</h3>
                                     <p className="mt-0.5 font-mono text-[8px] text-sparkle-text-muted/45">
-                                        {transcript ? `${messages.length} messages · ${transcript.hydrated}/${transcript.totalEntries} records loaded` : 'Read-only child session'}
+                                        {transcript ? `${messages.length} messages · ${activities.length} activities · ${transcript.hydrated}/${transcript.totalEntries} records loaded` : 'Read-only child session'}
                                     </p>
                                 </div>
                             </div>
@@ -138,15 +175,21 @@ export function AssistantAgentDetailPage({
                             </div>
                         ) : !run.sessionFile ? (
                             <TranscriptEmpty text="Transcript becomes available after the child session starts." />
-                        ) : messages.length === 0 && !finishedWithoutFinalResponse ? (
-                            <TranscriptEmpty text="No user or assistant messages are available in the loaded transcript records." />
+                        ) : transcriptRows.length === 0 && !finishedWithoutFinalResponse && !renderResultFallback && !liveToolActivity ? (
+                            <TranscriptEmpty text="Activity appears here when the child session starts working." />
                         ) : (
                             <div className="space-y-5 py-4" data-testid="assistant-agent-transcript" aria-readonly="true">
-                                {messages.map((message) => message.role === 'user' ? (
-                                    <RootTranscriptMessage key={`${message.index}:${message.role}`} message={message} runId={run.agentRunId} />
-                                ) : (
-                                    <AgentTranscriptMessage key={`${message.index}:${message.role}`} message={message} run={run} />
-                                ))}
+                                {transcriptRows.map((row) => row.kind === 'message'
+                                    ? row.message.role === 'user'
+                                        ? <RootTranscriptMessage key={`message:${row.message.index}:${row.message.role}`} message={row.message} runId={run.agentRunId} />
+                                        : <AgentTranscriptMessage key={`message:${row.message.index}:${row.message.role}`} message={row.message} run={run} />
+                                    : <TimelineToolCallList
+                                        key={`activity-group:${row.index}`}
+                                        activities={row.activities.map((activity) => activity.activity)}
+                                        projectRootPath={run.worktree?.directory || null}
+                                    />
+                                )}
+                                {renderResultFallback ? <AgentResultMessage text={resultText} run={run} /> : null}
                                 {finishedWithoutFinalResponse ? <MissingFinalResponse run={run} /> : null}
                             </div>
                         )}
@@ -192,6 +235,24 @@ function AgentTranscriptMessage({ message, run }: { message: ReturnType<typeof p
                     className="text-[12px] leading-5 text-sparkle-text/90 [&_h1]:border-0 [&_h1]:pb-0 [&_h1]:text-[13px] [&_h2]:border-0 [&_h2]:pb-0 [&_h2]:text-[13px] [&_h3]:text-[12px] [&_li]:leading-5 [&_p]:mb-2.5 [&_p]:leading-5 [&_p:last-child]:mb-0 [&_pre]:text-[10px] [&_code]:text-[10px]"
                 />
                 {message.timestamp ? <time className="mt-1 block text-[8px] text-sparkle-text-muted/35" dateTime={message.timestamp}>{formatTranscriptTime(message.timestamp)}</time> : null}
+            </div>
+        </article>
+    )
+}
+
+function AgentResultMessage({ text, run }: { text: string; run: AgentRunState }) {
+    const identity = resolveAssistantAgentIdentity(run)
+    return (
+        <article className="flex max-w-full items-start gap-2.5" data-agent-transcript-role="assistant" data-agent-result-fallback="true">
+            <AssistantAgentAvatar run={run} size={24} className="mt-0.5" />
+            <div className="min-w-0 max-w-[calc(100%-2.25rem)] flex-1">
+                <span className="mb-1 block text-[8px] font-semibold text-[var(--accent-primary)]/65">{identity.name}</span>
+                <MarkdownRenderer
+                    content={text}
+                    cacheKey={`agent-result:${run.agentRunId}:${run.completedAt || 'completed'}`}
+                    className="text-[12px] leading-5 text-sparkle-text/90 [&_h1]:border-0 [&_h1]:pb-0 [&_h1]:text-[13px] [&_h2]:border-0 [&_h2]:pb-0 [&_h2]:text-[13px] [&_h3]:text-[12px] [&_li]:leading-5 [&_p]:mb-2.5 [&_p]:leading-5 [&_p:last-child]:mb-0 [&_pre]:text-[10px] [&_code]:text-[10px]"
+                />
+                {run.completedAt ? <time className="mt-1 block text-[8px] text-sparkle-text-muted/35" dateTime={run.completedAt}>{formatTranscriptTime(run.completedAt)}</time> : null}
             </div>
         </article>
     )

@@ -34,7 +34,7 @@ export const TimelineSubagentActivityCard = memo(({
 
     return (
         <div className="px-2 py-1.5">
-            <div className="overflow-hidden rounded-xl border border-violet-400/15 bg-violet-500/[0.05]">
+            <div className="overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--accent-primary)_20%,var(--surface-divider))] bg-[color-mix(in_srgb,var(--accent-primary)_5%,var(--color-card))]">
                 <button
                     type="button"
                     onClick={() => {
@@ -42,16 +42,16 @@ export const TimelineSubagentActivityCard = memo(({
                     }}
                     className={cn(
                         'flex w-full items-start gap-3 px-3 py-3 text-left transition-colors',
-                        hasExpandedContent && 'hover:bg-white/[0.02]'
+                        hasExpandedContent && 'hover:bg-[var(--surface-hover)]'
                     )}
                 >
                     <span className={cn(
                         'mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border',
                         status === 'running'
-                            ? 'border-sky-400/20 bg-sky-500/[0.12] text-sky-200'
+                            ? 'border-[color-mix(in_srgb,var(--status-info)_24%,transparent)] bg-[color-mix(in_srgb,var(--status-info)_12%,transparent)] text-[color-mix(in_srgb,var(--status-info)_70%,var(--color-text))]'
                             : status === 'failed'
-                                ? 'border-red-400/20 bg-red-500/[0.12] text-red-200'
-                                : 'border-violet-400/20 bg-violet-500/[0.14] text-violet-100'
+                                ? 'border-[color-mix(in_srgb,var(--status-danger)_24%,transparent)] bg-[color-mix(in_srgb,var(--status-danger)_12%,transparent)] text-[color-mix(in_srgb,var(--status-danger)_70%,var(--color-text))]'
+                                : 'border-[color-mix(in_srgb,var(--accent-primary)_24%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_12%,transparent)] text-[color-mix(in_srgb,var(--accent-primary)_70%,var(--color-text))]'
                     )}>
                         <Bot size={14} />
                     </span>
@@ -61,10 +61,10 @@ export const TimelineSubagentActivityCard = memo(({
                             <span className={cn(
                                 'rounded-full px-2 py-0.5 text-[9px] font-medium uppercase tracking-[0.14em]',
                                 status === 'running'
-                                    ? 'bg-sky-500/[0.12] text-sky-200'
+                                    ? 'bg-[color-mix(in_srgb,var(--status-info)_12%,transparent)] text-[color-mix(in_srgb,var(--status-info)_70%,var(--color-text))]'
                                     : status === 'failed'
-                                        ? 'bg-red-500/[0.12] text-red-200'
-                                        : 'bg-violet-500/[0.12] text-violet-100'
+                                        ? 'bg-[color-mix(in_srgb,var(--status-danger)_12%,transparent)] text-[color-mix(in_srgb,var(--status-danger)_70%,var(--color-text))]'
+                                        : 'bg-[color-mix(in_srgb,var(--accent-primary)_12%,transparent)] text-[color-mix(in_srgb,var(--accent-primary)_70%,var(--color-text))]'
                             )}>
                                 {status === 'running' ? 'Running' : status === 'failed' ? 'Failed' : 'Completed'}
                             </span>
@@ -76,25 +76,25 @@ export const TimelineSubagentActivityCard = memo(({
                         </div>
                     </div>
                     {hasExpandedContent ? (
-                        <ChevronDown size={12} className={cn('mt-1 shrink-0 text-white/20 transition-transform', expanded && 'rotate-180')} />
+                        <ChevronDown size={12} className={cn('mt-1 shrink-0 text-sparkle-text-muted transition-transform', expanded && 'rotate-180')} />
                     ) : null}
                 </button>
                 <AnimatedHeight isOpen={expanded && hasExpandedContent} duration={220}>
-                    <div className="border-t border-white/[0.05] px-3 pb-3 pt-2">
-                        <p className="text-[10px] text-white/25">{formatAssistantDateTime(activity.createdAt)}</p>
+                    <div className="border-t border-[var(--surface-divider)] px-3 pb-3 pt-2">
+                        <p className="text-[10px] text-sparkle-text-muted">{formatAssistantDateTime(activity.createdAt)}</p>
                         {threadLabels.length > 0 ? (
                             <div className="mt-2 flex flex-wrap gap-1.5">
                                 {threadLabels.map((entry, index) => (
                                     <span
                                         key={`${activity.id}-target-${entry.threadId || index}`}
-                                        className="inline-flex items-center gap-1 rounded-full border border-white/[0.06] bg-black/20 px-2 py-1 text-[10px] text-sparkle-text-secondary"
+                                        className="inline-flex items-center gap-1 rounded-full border border-[var(--surface-divider)] bg-[color-mix(in_srgb,var(--color-bg)_72%,var(--color-card))] px-2 py-1 text-[10px] text-sparkle-text-secondary"
                                         title={entry.role || entry.nickname || entry.label}
                                     >
                                         <span className={cn(
                                             'h-1.5 w-1.5 rounded-full',
-                                            entry.state === 'running' || entry.state === 'waiting' ? 'bg-sky-400'
-                                                : entry.state === 'error' ? 'bg-red-400'
-                                                    : 'bg-violet-300'
+                                            entry.state === 'running' || entry.state === 'waiting' ? 'bg-[var(--status-info)]'
+                                                : entry.state === 'error' ? 'bg-[var(--status-danger)]'
+                                                    : 'bg-[var(--accent-primary)]'
                                         )} />
                                         <span className="max-w-[220px] truncate">{entry.label}</span>
                                     </span>
@@ -102,15 +102,15 @@ export const TimelineSubagentActivityCard = memo(({
                             </div>
                         ) : null}
                         {prompt ? (
-                            <div className="mt-2 rounded-lg border border-white/[0.05] bg-black/20 px-2.5 py-2">
-                                <p className="text-[9px] font-medium uppercase tracking-[0.14em] text-white/18">Prompt</p>
+                            <div className="mt-2 rounded-lg border border-[var(--surface-divider)] bg-[color-mix(in_srgb,var(--color-bg)_72%,var(--color-card))] px-2.5 py-2">
+                                <p className="text-[9px] font-medium uppercase tracking-[0.14em] text-sparkle-text-muted">Prompt</p>
                                 <p className="mt-1 whitespace-pre-wrap break-words text-[11px] leading-5 text-sparkle-text-secondary">{prompt}</p>
                             </div>
                         ) : null}
                         {model || reasoning ? (
                             <div className="mt-2 flex flex-wrap gap-1.5">
-                                {model ? <span className="rounded-full border border-white/[0.06] bg-white/[0.03] px-2 py-0.5 text-[10px] text-sparkle-text-secondary">Model: {model}</span> : null}
-                                {reasoning ? <span className="rounded-full border border-white/[0.06] bg-white/[0.03] px-2 py-0.5 text-[10px] text-sparkle-text-secondary">Reasoning: {reasoning}</span> : null}
+                                {model ? <span className="rounded-full border border-[var(--surface-divider)] bg-[var(--surface-hover)] px-2 py-0.5 text-[10px] text-sparkle-text-secondary">Model: {model}</span> : null}
+                                {reasoning ? <span className="rounded-full border border-[var(--surface-divider)] bg-[var(--surface-hover)] px-2 py-0.5 text-[10px] text-sparkle-text-secondary">Reasoning: {reasoning}</span> : null}
                             </div>
                         ) : null}
                     </div>

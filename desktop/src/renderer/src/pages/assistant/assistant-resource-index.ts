@@ -47,7 +47,7 @@ export const ASSISTANT_RESOURCE_TEXT_BUDGET = 2_000_000
 const ASSISTANT_RESOURCE_ORIGIN_LIMIT = 24
 const ASSISTANT_RESOURCE_TEXT_LIMIT = 50_000
 const ASSISTANT_RESOURCE_REFERENCES_PER_TEXT_LIMIT = 80
-const MARKDOWN_LINK_PATTERN = /(!?)\[([^\]]*)\]\(\s*(<[^>]+>|[^\s)]+)(?:\s+['"][^'"]*['"])?\s*\)/g
+const MARKDOWN_LINK_PATTERN = /(!?)\[([^\]]*)\]\(\s*(<[^>]+>|(?:[^\s()]|\([^()\s]*\))+)(?:\s+['"][^'"]*['"])?\s*\)/g
 const MARKDOWN_AUTOLINK_PATTERN = /<((?:https?:\/\/|\/\/)[^>\s]+)>/gi
 const PLAIN_URL_PATTERN = /(?:https?:\/\/|\/\/)[^\s<>{}\[\]"']+/gi
 const INLINE_CODE_PATTERN = /`([^`\r\n]{1,500})`/g
@@ -91,10 +91,20 @@ function isImageAttachment(attachment: ParsedUserAttachment): boolean {
         || looksLikeImageTarget(String(attachment.path || attachment.displayName || ''))
 }
 
+function trimUrlBoundaryPunctuation(rawValue: string): string {
+    let value = String(rawValue || '').trim().replace(/[.,;!?]+$/, '')
+    while (value.endsWith(')')) {
+        const openingCount = (value.match(/\(/g) || []).length
+        const closingCount = (value.match(/\)/g) || []).length
+        if (closingCount <= openingCount) break
+        value = value.slice(0, -1).replace(/[.,;!?]+$/, '')
+    }
+    return value
+}
+
 function normalizeWebUrl(rawValue: string): string | null {
-    let value = String(rawValue || '').trim()
+    let value = trimUrlBoundaryPunctuation(rawValue)
     if (!value) return null
-    value = value.replace(/[.,;!?]+$/, '')
     if (value.startsWith('//')) value = `https:${value}`
     try {
         const url = new URL(value)
@@ -140,15 +150,37 @@ function extractTextReferences(text: string, availableTextBudget = ASSISTANT_RES
     for (const match of source.matchAll(PLAIN_URL_PATTERN)) addCandidate(match[0] || '')
     for (const match of source.matchAll(INLINE_CODE_PATTERN)) addCandidate(match[1] || '')
 
-    return candidates.slice(0, ASSISTANT_RESOURCE_REFERENCES_PER_TEXT_LIMIT).flatMap((candidate): ExtractedTextReference[] => {
+    const references = new Map<string, ExtractedTextReference>()
+    for (const candidate of candidates.slice(0, ASSISTANT_RESOURCE_REFERENCES_PER_TEXT_LIMIT)) {
         const packageReference = resolveMarkdownPackageReference(candidate.value)
-        if (packageReference) {
-            return [{ kind: 'link', url: packageReference.href, title: packageReference.specifier }]
+        const url = packageReference?.href || normalizeWebUrl(candidate.value)
+        const reference: ExtractedTextReference | null = url
+            ? {
+                kind: 'link',
+                url,
+                title: packageReference?.specifier || candidate.title,
+                image: candidate.image || looksLikeImageTarget(url)
+            }
+            : looksLikeMarkdownFileReference(candidate.value)
+                ? { kind: 'file', target: candidate.value }
+                : null
+        if (!reference) continue
+
+        const identity = reference.kind === 'link'
+            ? `link:${reference.url}`
+            : `file:${normalizePathKey(reference.target)}`
+        const existing = references.get(identity)
+        if (existing?.kind === 'link' && reference.kind === 'link') {
+            references.set(identity, {
+                ...existing,
+                title: existing.title || reference.title,
+                image: existing.image || reference.image
+            })
+            continue
         }
-        const url = normalizeWebUrl(candidate.value)
-        if (url) return [{ kind: 'link', url, title: candidate.title, image: candidate.image || looksLikeImageTarget(url) }]
-        return looksLikeMarkdownFileReference(candidate.value) ? [{ kind: 'file', target: candidate.value }] : []
-    })
+        if (!existing) references.set(identity, reference)
+    }
+    return [...references.values()]
 }
 
 function originForTurn(turn: AssistantDiffTurn, kind: AssistantResourceOriginKind, suffix: string): AssistantResourceOrigin {
@@ -169,6 +201,69 @@ function sourceLabel(sources: Iterable<AssistantResourceSource>): string {
         mentioned: 'Mentioned in chat'
     }
     return [...sources].map((source) => labels[source]).join(' · ')
+}
+
+function isCanonicalMediaAttachment(attachment: ParsedUserAttachment): boolean {
+    const path = String(attachment.path || '').replace(/\\/g, '/').toLowerCase()
+    return /canonical zyra transcript/i.test(String(attachment.origin || ''))
+        || path.includes('/assistant/canonical-media/')
+}
+
+function normalizedAttachmentSize(attachment: ParsedUserAttachment): number | null {
+    const digits = String(attachment.size || '').replace(/[^0-9]/g, '')
+    if (!digits) return null
+    const size = Number(digits)
+    return Number.isSafeInteger(size) && size >= 0 ? size : null
+}
+
+function attachmentMimeMatches(left: ParsedUserAttachment, right: ParsedUserAttachment): boolean {
+    const leftMime = String(left.mime || '').trim().toLowerCase()
+    const rightMime = String(right.mime || '').trim().toLowerCase()
+    return !leftMime || !rightMime || leftMime === rightMime
+}
+
+function reconcileMaterializedImageAttachments(attachments: ParsedUserAttachment[]): ParsedUserAttachment[] {
+    const canonicalAttachments = attachments.filter((attachment) => isImageAttachment(attachment) && isCanonicalMediaAttachment(attachment))
+    if (canonicalAttachments.length === 0) return attachments
+    const originals = attachments.filter((attachment) => isImageAttachment(attachment) && !isCanonicalMediaAttachment(attachment))
+    const matchedOriginals = new Set<ParsedUserAttachment>()
+    const replacementByCanonical = new Map<ParsedUserAttachment, ParsedUserAttachment>()
+
+    canonicalAttachments.forEach((canonical, canonicalIndex) => {
+        const canonicalSize = normalizedAttachmentSize(canonical)
+        const original = originals.find((candidate) => (
+            !matchedOriginals.has(candidate)
+            && canonicalSize != null
+            && normalizedAttachmentSize(candidate) === canonicalSize
+            && attachmentMimeMatches(candidate, canonical)
+        )) || (originals.length === canonicalAttachments.length
+            ? originals[canonicalIndex]
+            : undefined)
+        if (!original || matchedOriginals.has(original) || !attachmentMimeMatches(original, canonical)) return
+        matchedOriginals.add(original)
+        const originalPath = String(original.path || '').trim()
+        const durablePath = original.isClipboard || originalPath.toLowerCase().startsWith('clipboard://')
+            ? canonical.path
+            : original.path || canonical.path
+        replacementByCanonical.set(canonical, {
+            ...canonical,
+            name: original.name || canonical.name,
+            displayName: original.displayName || original.name || canonical.displayName,
+            path: durablePath,
+            mime: original.mime || canonical.mime,
+            size: original.size || canonical.size,
+            preview: original.preview || canonical.preview,
+            note: original.note || canonical.note,
+            origin: original.origin || canonical.origin,
+            content: original.content || canonical.content,
+            isClipboard: false
+        })
+    })
+
+    return attachments.flatMap((attachment) => {
+        if (matchedOriginals.has(attachment)) return []
+        return [replacementByCanonical.get(attachment) || attachment]
+    })
 }
 
 function attachmentIdentity(attachment: ParsedUserAttachment): string {
@@ -255,7 +350,7 @@ export function buildAssistantResourceIndex(input: {
         upsert({
             key,
             kind: 'image',
-            title: basename(path),
+            title: attachment?.displayName || attachment?.name || basename(path),
             subtitle: displayPath,
             path,
             attachment,
@@ -301,7 +396,7 @@ export function buildAssistantResourceIndex(input: {
             )
         }
 
-        for (const attachment of turn.promptAttachments) {
+        for (const attachment of reconcileMaterializedImageAttachments(turn.promptAttachments)) {
             if (!isImageAttachment(attachment)) continue
             const path = String(attachment.path || '').trim()
             if (path && !attachment.isClipboard && !path.toLowerCase().startsWith('clipboard://')) {

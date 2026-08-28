@@ -50,8 +50,10 @@ export type AssistantComposerProps = {
     resetStateToken?: string | null
     placement?: 'bottom' | 'center'
     onSend: (prompt: string, contextFiles: ComposerContextFile[], options: AssistantComposerSendOptions) => Promise<boolean>
+    onDraftStarted?: () => void
     onStop?: () => Promise<void> | void
     onReconnect?: () => Promise<void> | void
+    onPrepareRealtimeVoice?: (configuration: AssistantVoiceExecutionConfiguration) => void
     onStartRealtimeVoice?: (configuration: AssistantVoiceExecutionConfiguration) => void
     realtimeVoiceDisabled?: boolean
     onOverflowWheel?: (deltaY: number) => void
