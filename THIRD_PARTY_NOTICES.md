@@ -1,5 +1,9 @@
 # Third-party notices
 
+## PostHog capture service
+
+Zyra can send explicitly enabled, allowlisted product events to a user-configured [PostHog](https://posthog.com/) project through PostHog's documented capture API. Zyra does not bundle the PostHog SDK or enable its browser autocapture, session replay, heatmap, DOM capture, or remote feature-flag features. Use of a configured PostHog service remains subject to the service operator's terms and privacy settings.
+
 ## OpenAI and browser logos from SVGL
 
 Zyra includes logo artwork published by the SVGL project:

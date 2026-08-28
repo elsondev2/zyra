@@ -30,6 +30,8 @@ Zyra separates public tool behavior from optional local context:
 
 The public repo should not include private relationship context, raw exports, local datasets, or person-specific prompt assumptions.
 
+Product analytics is optional and disabled by default. When configured, it sends only allowlisted coarse outcomes under a random installation ID. Prompts, responses, files, paths, URLs, Browser history, account identity, terminal content, and raw errors are excluded. See [Product analytics](docs/architecture/product-analytics.md) and [setup](docs/guides/product-analytics-setup.md).
+
 ## Run It Locally
 
 ```powershell

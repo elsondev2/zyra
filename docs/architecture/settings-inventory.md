@@ -26,6 +26,7 @@ Settings controls must have a verified consumer. A persisted field with no behav
 | Canonical/project runtime preferences | `<project>/.zyra/preferences.json` | model, thinking, profile, web tools, TUI notifications, interrupt mode, terminal theme, project trust | Expose only through bounded main/canonical APIs with explicit global/project scope. Do not mirror blindly into renderer storage. |
 | Skill source preferences | `~/.zyra/skill-sources.json` | enabled compatible folders, source priority, per-name conflict choices | Keep main-owned, bounded, atomic, and available only to trusted Desktop renderers. Existing sessions apply changes through `/reload`; new sessions load them at startup. |
 | Secrets | currently mixed into `devscope-settings` | Groq and Gemini API keys | Migrate to encrypted main-process storage in a separately reviewed security change. Never put new secrets in renderer storage. |
+| Product analytics | Desktop main and CLI state directories | explicit enable flag, PostHog project key, approved host, random installation ID, bounded queue | Keep outside renderer settings. Desktop exposes only the enable toggle and redacted readiness status; environment values may override persisted configuration. |
 | Permission memory | `zyra:browser-control-approval-preferences:v1` | remembered Browser-control sites and capabilities | Manage under Browser & Control. Keep bounded, inspectable, and revocable. |
 | Continuity state | several bounded `localStorage` records | Browser tabs, terminal groups, composer drafts, active project views, panel widths | Keep outside Settings. Add reset/clear actions where useful. |
 | Cache and acknowledgement state | local storage and main-process files | recent projects, project view cache, skipped update, seen update success | Keep outside the settings schema; expose narrow maintenance actions. |
@@ -174,6 +175,7 @@ Implemented in the audited Settings pass:
 - The settings loader now validates and bounds persisted strings, paths, arrays, records, numbers, enum values, and theme/accent selections.
 - Cache clearing now targets recent-project and project-view caches instead of accidentally deleting rail-order continuity state.
 - Final consumer review confirmed Windows startup remains main/OS-owned, reduced motion applies through the provider-owned body class, and `assistantUsageDisplayMode` recalculates rendered rate-limit percentages and labels.
+- General > Privacy exposes the main-owned product analytics enable toggle and redacted readiness. Project keys and capture hosts stay outside the device preference schema and never enter renderer persistence.
 - `desktop/scripts/test-settings-contract.ts` covers malformed persistence and legacy migrations.
 
 Still requiring a separately reviewed change:

@@ -91,6 +91,12 @@ After the complete Settings/chat sweep and settlement, the full production proce
 | Long-chat detail | 2.90 s | 1.94 s median before local-first ordering | 32.9% faster |
 | Useful surface | 5.30 s | 4.69 s median | 11.6% faster |
 
+## Optional product analytics overhead
+
+`npm run benchmark:analytics` uses an in-process fake transport and 100 synthetic allowlisted events. On the Windows release workstation, disabled initialization took 2.06 ms with a 48,496-byte observed heap delta and zero requests or payload bytes. The enabled durability stress pass took 33.31 ms to initialize, recorded a 321,328-byte heap delta and 18.66 ms maximum event-loop delay, and emitted 36,845 bytes across five fake batches. Persisting 100 events sequentially took 1,996.86 ms because each accepted event fsyncs the bounded queue; product callers do not await that I/O.
+
+Disabled analytics remains outside the launch critical path and creates no identity, queue, timer, directory, or network work.
+
 ## Material changes
 
 1. The agent-server catalog and chat index now import a narrow project-path module instead of the 2,200-line Zyra runtime. A direct cold import fell from roughly 9.0 s for `zyra-sdk.mjs` to 50–73 ms for the narrow catalog/index modules.

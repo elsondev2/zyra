@@ -55,7 +55,8 @@ process.resourcesPath/zyra-runtime
 
 The staged contract contains:
 
-- `src/` (including agent-server, agent-control, memory, TUI, and workflow runtime code);
+- `src/` (including analytics, agent-server, agent-control, memory, TUI, and workflow runtime code);
+- `analytics/events.v1.json`, the shared versioned event catalog imported by the CLI and Desktop main client;
 - `bin/` for the package-declared CLI entrypoint;
 - `prompts/`;
 - built-in `agents/` definitions discovered by the fleet loader;
@@ -210,6 +211,24 @@ The repository contains no signing credentials. Configure these GitHub Actions s
 Tagged Windows and macOS packages are VMP-signed in addition to their platform signatures. macOS VMP signing runs before Apple code signing; Windows VMP signing runs after Authenticode. A successful EVS pass writes the runtime production-VMP marker consumed by Browser status. CastLabs development binaries can negotiate Widevine, while repeated Spotify track skipping is consistent with a production-license/VMP rejection. The cause is not certified until the EVS-signed package passes real multi-track playback. Linux does not use VMP and may require one restart after first Widevine installation.
 
 Every publication tag, including alpha and beta tags, fails in preflight if any signing or notarization value is absent. The workflow never substitutes ad-hoc or fake signatures. Windows verifies the produced installer with Authenticode. macOS verifies the app with `codesign`, Gatekeeper, and the stapled notarization ticket. Unsigned artifacts are permitted only in a manual rehearsal and remain unpublished in both the workflow artifact store and a GitHub draft, so the updater cannot see them.
+
+## Product analytics gate
+
+Product analytics must remain disabled without an explicit enable flag, project key, and approved HTTPS host. Release validation uses only the injected fake transport. Do not add production credentials to CI, build arguments, source, renderer bundles, logs, or release artifacts.
+
+Before approving analytics changes:
+
+```bash
+npm run test:analytics
+npm run benchmark:analytics
+npm run privacy-check
+npm run ui:typecheck
+npm run ui:build
+npm audit --omit=dev --audit-level=low
+npm audit --omit=dev --audit-level=low --prefix desktop
+```
+
+Review [`analytics/events.v1.json`](analytics/events.v1.json) and [`docs/architecture/product-analytics.md`](docs/architecture/product-analytics.md) together. Confirm PostHog project retention matches each event's documented intent before supplying production configuration. No PostHog SDK is bundled, so dependency and third-party license gates remain unchanged.
 
 ## Release checks
 
