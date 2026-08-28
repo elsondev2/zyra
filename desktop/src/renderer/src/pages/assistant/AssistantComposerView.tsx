@@ -216,7 +216,7 @@ export function AssistantComposerView({
             return () => window.cancelAnimationFrame(frameId)
         }
         setSlashMenuAnimatedOpen(false)
-        const timerId = window.setTimeout(() => setSlashMenuPresent(false), 280)
+        const timerId = window.setTimeout(() => setSlashMenuPresent(false), 300)
         return () => window.clearTimeout(timerId)
     }, [showSlashMenu])
 
@@ -392,14 +392,25 @@ export function AssistantComposerView({
         <>
             <div className="relative flex pointer-events-none flex-col gap-0">
                 {showTopShelf ? (
-                    <div ref={attachmentShelfRef} className="pointer-events-none absolute inset-x-0 bottom-full z-50 mb-[-2px]">
+                    <div
+                        ref={attachmentShelfRef}
+                        className={cn(
+                            'pointer-events-none absolute inset-x-0 bottom-full',
+                            slashMenuPresent ? 'z-30 mb-[-13px]' : 'z-50 mb-[-2px]'
+                        )}
+                    >
                         <div className="flex flex-col gap-1" onWheel={slashMenuPresent ? undefined : handleShelfWheel}>
                             {slashMenuPresent ? (
                                 <AnimatedHeight
                                     isOpen={slashMenuAnimatedOpen}
-                                    duration={280}
+                                    duration={300}
                                     unmountOnExit
-                                    contentClassName="origin-bottom transition-[transform,opacity] duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)] data-[state=closed]:translate-y-1"
+                                    contentClassName={cn(
+                                        'origin-bottom transition-[transform,opacity,filter] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+                                        slashMenuAnimatedOpen
+                                            ? 'translate-y-0 opacity-100 blur-0'
+                                            : 'translate-y-4 opacity-0 blur-[1px]'
+                                    )}
                                 >
                                     <AssistantComposerCommandMenu
                                         menuId={commandMenuId}
