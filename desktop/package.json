@@ -128,19 +128,19 @@
         "ansi-to-html": "^0.7.2",
         "clsx": "^2.1.1",
         "electron-log": "^5.1.7",
-        "electron-updater": "^6.8.3",
+        "electron-updater": "6.8.9",
         "hast-util-to-jsx-runtime": "2.3.6",
         "html-url-attributes": "3.0.1",
         "lucide-react": "^0.469.0",
         "material-icon-theme": "^5.37.0",
-        "mermaid": "^11.12.3",
-        "monaco-editor": "^0.55.1",
+        "mermaid": "11.17.2",
+        "monaco-editor": "0.56.0",
         "node-pty": "1.1.0",
         "ogl": "^1.0.11",
         "react": "^19.2.0",
         "react-dom": "^19.2.0",
         "react-markdown": "^10.1.0",
-        "react-router-dom": "^7.1.1",
+        "react-router-dom": "7.18.3",
         "react-syntax-highlighter": "^16.1.0",
         "recharts": "^3.6.0",
         "rehype-raw": "^7.0.0",
@@ -148,9 +148,9 @@
         "remark-gfm": "^4.0.1",
         "remark-parse": "11.0.0",
         "remark-rehype": "11.1.2",
-        "simple-git": "^3.31.1",
+        "simple-git": "3.36.0",
         "sql.js": "^1.13.0",
-        "systeminformation": "^5.23.5",
+        "systeminformation": "5.33.5",
         "unified": "11.0.5",
         "unist-util-visit": "5.0.0",
         "xterm": "^5.3.0",
@@ -486,5 +486,10 @@
             "synopsis": "Local Zyra coding assistant desktop application"
         }
     },
-    "homepage": "https://github.com/justelson/zyra"
+    "homepage": "https://github.com/justelson/zyra",
+    "overrides": {
+        "js-yaml": "4.3.1",
+        "uuid": "11.1.1",
+        "dompurify": "3.4.14"
+    }
 }
