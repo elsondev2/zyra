@@ -155,6 +155,7 @@ Inside chat:
 - `/themes`, `/thinking`, and `/models` adjust runtime behavior.
 - `/reload` restarts Zyra from disk and resumes the chat.
 - `/reload --soft` reloads commands, themes, prompt, and memory only.
+- `/skill:<name> <task>` explicitly runs a discovered local Agent Skill. Typing `/` in Desktop opens a project-aware picker above the composer while retaining Desktop's `/yolo`, `/safe`, and `/include` commands.
 
 The complete agent/workflow guide, safety boundaries, definition formats, persistence layout, and desktop controls are in [docs/guides/subagents-workflows.md](docs/guides/subagents-workflows.md). Current provider compatibility and deferred model work are tracked in [docs/guides/model-support.md](docs/guides/model-support.md).
 
@@ -174,7 +175,9 @@ Start with the [Voice-Agent Architecture](docs/architecture/voice-agent/README.m
 - `src/agents/` owns event-sourced fleet authority, child Pi sessions, routing, isolation, and output safety. `src/workflows/` owns validation, QuickJS execution, scheduling, caching, approvals, and budgets.
 - `AGENTS.md` keeps project rules that should survive across chats.
 - `commands/` is where repeated workflows can become slash commands.
+- `~/.zyra/commands/<name>.md` is the personal command path available across projects.
 - `.zyra/commands/<name>.md` is the project-local command path.
+- Skills follow Pi's local Agent Skills locations: `~/.pi/agent/skills`, `~/.agents/skills`, trusted project `.pi/skills`, and trusted ancestor `.agents/skills`. Zyra also keeps `skills/`, `~/.zyra/skills`, and project `.zyra/skills` for compatibility. More specific local scopes win name collisions.
 - `.zyra/profiles/<name>.md` is the local private profile overlay path.
 
 Commands should earn their place. The tool should grow from real use, not from pretending every workflow is known in advance.

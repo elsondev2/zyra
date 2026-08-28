@@ -638,6 +638,7 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         activeMentionCandidate,
         syncScrollAffordance,
         syncComposerCursor,
+        composerCursor,
         setComposerCursor,
         modelQuery,
         setModelQuery,

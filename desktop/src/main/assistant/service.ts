@@ -88,6 +88,7 @@ import { materializeCanonicalImage } from './canonical-media-cache'
 import { createAssistantSessionRecord } from './service-records'
 import type { AssistantServiceActionDeps } from './service-action-deps'
 import { AssistantPersistence } from './persistence'
+import { listAssistantPromptResources } from './prompt-resources'
 import { toAssistantShellSnapshot } from './persistence-snapshot'
 import { FleetProjection, shouldApplyAssistantFleetSnapshot } from './fleet-projection'
 import { queueGeneratedSessionTitle, regenerateSessionTitle as generateReplacementSessionTitle, shouldAutoRegenerateSessionTitle, shouldGenerateSessionTitleForPrompt } from './session-title-generation'
@@ -1565,6 +1566,13 @@ export class AssistantService {
             void this.stopCanonicalVoiceInternal(
                 event.type === 'realtime.session.error' ? 'provider_error' : 'provider_closed'
             ).catch((error) => log.error('[AssistantVoice] Failed to recover after provider termination', error))
+        }
+    }
+
+    async listPromptResources(projectPath?: string | null, forceRefresh = false) {
+        return {
+            success: true as const,
+            ...await listAssistantPromptResources(projectPath, forceRefresh)
         }
     }
 

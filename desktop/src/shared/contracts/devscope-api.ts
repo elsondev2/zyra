@@ -23,6 +23,7 @@ import type {
     AssistantIngestRealtimeVoiceEventInput,
     AssistantModelInfo,
     AssistantPlaygroundResultPayload,
+    AssistantPromptResourcesPayload,
     AssistantPersistClipboardImageInput,
     AssistantRealtimeVoiceEvent,
     AssistantRedeemAccountResetInput,
@@ -577,6 +578,7 @@ export interface DevScopeAssistantApi {
     redeemAccountReset: (input: AssistantRedeemAccountResetInput) => Promise<DevScopeResult<AssistantRedeemAccountResetPayload>>
     getSessionTurnUsage: (input?: AssistantGetSessionTurnUsageInput) => Promise<DevScopeResult<AssistantSessionTurnUsageResultPayload>>
     listModels: (forceRefresh?: boolean) => Promise<DevScopeResult<{ models: AssistantModelInfo[] }>>
+    listPromptResources: (projectPath?: string | null, forceRefresh?: boolean) => Promise<DevScopeResult<AssistantPromptResourcesPayload>>
     connect: (options?: AssistantConnectOptions) => Promise<DevScopeResult<{ threadId: string }>>
     disconnect: (sessionId?: string) => Promise<DevScopeResult>
     createSession: (input?: AssistantCreateSessionInput) => Promise<DevScopeResult<{ sessionId: string }>>

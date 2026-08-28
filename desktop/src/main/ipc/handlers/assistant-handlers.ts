@@ -117,6 +117,14 @@ export function handleAssistantListModels(_event: Electron.IpcMainInvokeEvent, f
     return withAssistantResult(() => getAssistantService().listModels(Boolean(forceRefresh)))
 }
 
+export function handleAssistantListPromptResources(
+    _event: Electron.IpcMainInvokeEvent,
+    projectPath?: string | null,
+    forceRefresh = false
+) {
+    return withAssistantResult(() => getAssistantService().listPromptResources(projectPath, forceRefresh === true))
+}
+
 export function handleAssistantConnect(_event: Electron.IpcMainInvokeEvent, options?: AssistantConnectOptions) {
     log.info('IPC: assistant:connect', { options })
     return withDesktopAssistantSelectionLease(() => getAssistantService().connect(options))

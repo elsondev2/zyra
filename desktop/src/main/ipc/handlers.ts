@@ -52,6 +52,7 @@ import {
     handleAssistantInterruptTurn,
     handleAssistantIngestRealtimeVoiceEvent,
     handleAssistantListModels,
+    handleAssistantListPromptResources,
     handleAssistantNewThread,
     handleAssistantPersistClipboardImage,
     handleAssistantRedeemAccountReset,
@@ -355,6 +356,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(ASSISTANT_IPC.redeemAccountReset, requireCompletedSetup(handleAssistantRedeemAccountReset))
     ipcMain.handle(ASSISTANT_IPC.getSessionTurnUsage, requireCompletedSetup(handleAssistantGetSessionTurnUsage))
     ipcMain.handle(ASSISTANT_IPC.listModels, requireCompletedSetup(handleAssistantListModels))
+    ipcMain.handle(ASSISTANT_IPC.listPromptResources, requireCompletedSetup(handleAssistantListPromptResources))
     ipcMain.handle(ASSISTANT_IPC.connect, requireCompletedSetup(handleAssistantConnect))
     ipcMain.handle(ASSISTANT_IPC.disconnect, requireCompletedSetup(handleAssistantDisconnect))
     ipcMain.handle(ASSISTANT_IPC.createSession, requireCompletedSetup(handleAssistantCreateSession))

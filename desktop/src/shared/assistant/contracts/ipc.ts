@@ -40,6 +40,7 @@ export const ASSISTANT_IPC = {
     redeemAccountReset: 'devscope:assistant:redeemAccountReset',
     getSessionTurnUsage: 'devscope:assistant:getSessionTurnUsage',
     listModels: 'devscope:assistant:listModels',
+    listPromptResources: 'devscope:assistant:listPromptResources',
     connect: 'devscope:assistant:connect',
     disconnect: 'devscope:assistant:disconnect',
     createSession: 'devscope:assistant:createSession',
@@ -88,6 +89,27 @@ export type AssistantIpcChannel = (typeof ASSISTANT_IPC)[keyof typeof ASSISTANT_
 export interface AssistantConnectOptions {
     sessionId?: string
     voicePreparation?: AssistantVoiceExecutionConfiguration
+}
+
+export type AssistantPromptResourceScope = 'built-in' | 'personal' | 'project'
+
+export interface AssistantPromptCommandResource {
+    name: string
+    description: string
+    scope: AssistantPromptResourceScope
+}
+
+export interface AssistantPromptSkillResource extends AssistantPromptCommandResource {
+    disableModelInvocation: boolean
+}
+
+export interface AssistantPromptResourcesPayload {
+    commands: AssistantPromptCommandResource[]
+    skills: AssistantPromptSkillResource[]
+    diagnostics: Array<{
+        type: string
+        message: string
+    }>
 }
 
 export interface AssistantBootstrapPayload {

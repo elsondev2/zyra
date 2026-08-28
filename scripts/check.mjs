@@ -46,6 +46,7 @@ const syntaxTargets = [
   "src/terminal-input.mjs",
   "src/zyra-next-turn-checkpoint.mjs",
   "src/zyra-sdk.mjs",
+  "src/zyra-prompt-resources.mjs",
   "src/zyra.mjs",
   "src/zyra-app.mjs",
   "src/zyra-memory.mjs",
@@ -83,6 +84,7 @@ const syntaxTargets = [
   "scripts/sync-codex-realtime-contract.mjs",
   "scripts/test-provider-runtime-migration.mjs",
   "scripts/test-zyra-prompt-errors.mjs",
+  "scripts/test-zyra-prompt-resources.mjs",
   "scripts/test-zyra-write-diff.mjs",
   "scripts/test-zyra-version.mjs",
   "scripts/privacy-check.mjs",
@@ -101,6 +103,7 @@ const coreTests = [
   "scripts/test-codex-realtime-contract-sync.mjs",
   "scripts/test-provider-runtime-migration.mjs",
   "scripts/test-zyra-prompt-errors.mjs",
+  "scripts/test-zyra-prompt-resources.mjs",
   "scripts/test-zyra-version.mjs",
   "scripts/test-zyra-ui-render.mjs",
   "scripts/test-zyra-subagents.mjs",
@@ -118,6 +121,7 @@ const quickCoreTests = [
   "scripts/test-codex-realtime-contract-sync.mjs",
   "scripts/test-provider-runtime-migration.mjs",
   "scripts/test-zyra-prompt-errors.mjs",
+  "scripts/test-zyra-prompt-resources.mjs",
   "scripts/test-zyra-version.mjs",
   "scripts/test-zyra-fleet-ui.mjs",
 ];
@@ -129,6 +133,7 @@ const serialCoreTests = new Set([
 ]);
 
 const desktopTasks = [
+  { label: "desktop:test:assistant-composer-command-menu", bunArgs: ["desktop/scripts/test-assistant-composer-command-menu.ts"] },
   { label: "desktop:test:assistant-fleet", bunArgs: ["run", "--cwd", "desktop", "test:assistant-fleet"] },
   { label: "desktop:test:assistant-inspector-browser", bunArgs: ["run", "--cwd", "desktop", "test:assistant-inspector-browser"] },
   { label: "desktop:test:agent-platform-integration", bunArgs: ["desktop/scripts/test-agent-platform-integration.ts"] },

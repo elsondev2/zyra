@@ -7,6 +7,7 @@ import {
   fetchCodexUsageStats,
   isCodexResetCreditAvailable,
   loadCustomCommand,
+  loadZyraSkillPrompt,
   loginZyraAuth,
   reloadZyraRuntime,
   runZyraPrompt,
@@ -667,11 +668,13 @@ async function runInterruptMode(runtime, ui, arg) {
 }
 
 async function runCustomSlashCommand(runtime, ui, rawCommand, arg, controls) {
-  const customPrompt = loadCustomCommand(runtime, rawCommand, arg);
-  if (customPrompt) {
+  const prompt = rawCommand.toLowerCase().startsWith("/skill:")
+    ? loadZyraSkillPrompt(runtime, rawCommand, arg)
+    : loadCustomCommand(runtime, rawCommand, arg);
+  if (prompt) {
     controls.setTerminalTitleState?.("thinking");
     try {
-      await runZyraPrompt(runtime, customPrompt);
+      await runZyraPrompt(runtime, prompt);
       controls.notifyTerminalIfUnfocused?.();
     } finally {
       controls.setTerminalTitleState?.("ready");

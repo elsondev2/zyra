@@ -317,6 +317,10 @@ export function createBrowserAssistantBridgeAdapter(): DevScopeApi['assistant'] 
         redeemAccountReset: remoteAssistantMethod('redeemAccountReset'),
         getSessionTurnUsage: remoteAssistantMethod('getSessionTurnUsage'),
         listModels: remoteAssistantMethod('listModels'),
+        listPromptResources: async () => ({
+            success: false,
+            error: 'Commands and skills are available only in trusted Zyra Desktop windows.'
+        }),
         connect: remoteAssistantMethod('connect'),
         disconnect: remoteAssistantMethod('disconnect'),
         createSession: remoteAssistantMethod('createSession'),

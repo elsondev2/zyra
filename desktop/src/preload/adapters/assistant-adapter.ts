@@ -50,6 +50,8 @@ export function createAssistantAdapter() {
                 ipcRenderer.invoke(ASSISTANT_IPC.redeemAccountReset, input),
             getSessionTurnUsage: (input?: { sessionId?: string }) => ipcRenderer.invoke(ASSISTANT_IPC.getSessionTurnUsage, input),
             listModels: (forceRefresh = false) => ipcRenderer.invoke(ASSISTANT_IPC.listModels, forceRefresh),
+            listPromptResources: (projectPath?: string | null, forceRefresh = false) =>
+                ipcRenderer.invoke(ASSISTANT_IPC.listPromptResources, projectPath, forceRefresh),
             connect: (options?: AssistantConnectOptions) => ipcRenderer.invoke(ASSISTANT_IPC.connect, options),
             disconnect: (sessionId?: string) => ipcRenderer.invoke(ASSISTANT_IPC.disconnect, sessionId),
             createSession: (input?: AssistantCreateSessionInput) => ipcRenderer.invoke(ASSISTANT_IPC.createSession, input),

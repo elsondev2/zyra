@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
@@ -91,6 +91,10 @@ import {
 } from "./tool-contracts.mjs";
 import { installZyraNextTurnCheckpoint } from "./zyra-next-turn-checkpoint.mjs";
 import { createRequestUserInputTool } from "./request-user-input-tool.mjs";
+import {
+  listZyraPromptResourceManifest,
+  resolveZyraSkillSources,
+} from "./zyra-prompt-resources.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ZYRA_THEME_CUSTOM_TYPE = "zyra.theme.v1";
@@ -400,6 +404,7 @@ function isCodexResponsesPayload(payload) {
 
 function createFastResourceLoader(project, options = {}) {
   const runtime = options.extensionRuntime ?? createEmptyExtensionRuntime();
+  let skillsResult = options.skillsResult ?? { skills: [], diagnostics: [] };
   const extensionsResult = {
     extensions: createZyraBuiltinExtensions(options),
     errors: [],
@@ -407,14 +412,18 @@ function createFastResourceLoader(project, options = {}) {
   };
   return {
     getExtensions: () => extensionsResult,
-    getSkills: () => ({ skills: [], diagnostics: [] }),
+    getSkills: () => skillsResult,
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
     getAgentsFiles: () => ({ agentsFiles: [] }),
     getSystemPrompt: () => undefined,
     getAppendSystemPrompt: () => [],
     extendResources: () => {},
-    reload: async () => {},
+    reload: async () => {
+      if (typeof options.loadSkills === "function") {
+        skillsResult = await options.loadSkills();
+      }
+    },
     project,
   };
 }
@@ -425,9 +434,19 @@ async function createZyraResourceLoader(project, options = {}) {
     loadPiPackage(),
   ]);
   const agentDir = getAgentDir();
-  const settingsManager = SettingsManager.create(project, agentDir);
+  const projectTrusted = options.projectTrusted === true;
+  const settingsManager = SettingsManager.create(project, agentDir, { projectTrusted });
+  const skillSources = await resolveZyraSkillSources({ project, root: ROOT, projectTrusted });
+  const loadSkills = () => loadZyraSkills(project, { projectTrusted, sources: skillSources });
   if (options.enablePiExtensions) {
-    const loader = new DefaultResourceLoader({ cwd: project, agentDir, settingsManager });
+    const zyraSkills = await loadSkills();
+    const loader = new DefaultResourceLoader({
+      cwd: project,
+      agentDir,
+      settingsManager,
+      additionalSkillPaths: skillSources.map((source) => source.dir),
+      skillsOverride: (loaded) => mergeZyraSkillResults(zyraSkills, loaded),
+    });
     await loader.reload();
     return {
       agentDir,
@@ -442,6 +461,8 @@ async function createZyraResourceLoader(project, options = {}) {
     permissionRequest: options.permissionRequest,
     getPermissionMode: options.getPermissionMode,
     extensionRuntime: createExtensionRuntime(),
+    skillsResult: await loadSkills(),
+    loadSkills,
   });
   return { agentDir, settingsManager, resourceLoader };
 }
@@ -717,6 +738,7 @@ export async function createZyraSession(options = {}) {
     permissionRequest: options.permissionRequest,
     getPermissionMode: options.getPermissionMode,
     project,
+    projectTrusted: options.projectTrusted === true || preferences.projectTrusted === true,
   });
   const cwd = sessionManager.getCwd?.() ?? project;
   const managedBash = createManagedBashState();
@@ -863,6 +885,7 @@ export async function createZyraSession(options = {}) {
 
   return {
     session: result.session,
+    resourceLoader: startupResources.resourceLoader,
     root: ROOT,
     project,
     sessions,
@@ -1374,7 +1397,8 @@ function memoryRunner(root = defaults.dataRoot) {
 }
 
 export async function runZyraPrompt(runtime, prompt, options = {}) {
-  const expanded = expandFileMentions(runtime, prompt);
+  const promptResource = expandZyraPromptResource(runtime, prompt);
+  const expanded = expandFileMentions(runtime, promptResource);
   const layeredMemoryPrompt = injectLayeredMemory(runtime.session, defaults.dataRoot, expanded.text);
   const additionalContextTokens = layeredMemoryPrompt
     ? estimateMessageTokens({
@@ -1399,7 +1423,8 @@ export async function runZyraPrompt(runtime, prompt, options = {}) {
 
 export async function queueZyraMidRunInput(runtime, prompt, options = {}) {
   const mode = normalizeInterruptModePreference(options.mode) ?? runtime.interruptMode ?? "steer";
-  const expanded = expandFileMentions(runtime, prompt);
+  const promptResource = expandZyraPromptResource(runtime, prompt);
+  const expanded = expandFileMentions(runtime, promptResource);
   injectLayeredMemory(runtime.session, defaults.dataRoot, expanded.text);
   if (mode === "queue") {
     await runtime.session.followUp(expanded.text, options.images);
@@ -1421,7 +1446,8 @@ export async function runZyraBackgroundTextPrompt(runtime, prompt) {
 
 export async function runZyraPrintPrompt(runtime, prompt, options = {}) {
   const beforeEntryCount = sessionEntries(runtime).length;
-  const expanded = expandFileMentions(runtime, prompt);
+  const promptResource = expandZyraPromptResource(runtime, prompt);
+  const expanded = expandFileMentions(runtime, promptResource);
   injectLayeredMemory(runtime.session, defaults.dataRoot, expanded.text);
   try {
     await runtime.session.prompt(expanded.text, { source: "print", images: options.images });
@@ -1971,9 +1997,10 @@ export function listCustomCommands(runtime) {
   const cached = commandCache.get(cacheKey);
   if (cached) return cached;
 
-  const dirs = getCustomCommandDirs(runtime);
+  const sources = getCustomCommandSources(runtime);
   const commands = [];
-  for (const dir of dirs) {
+  for (const source of sources) {
+    const dir = source.dir;
     if (!existsSync(dir)) continue;
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".md")) continue;
@@ -1983,6 +2010,7 @@ export function listCustomCommands(runtime) {
       commands.push({
         name,
         file,
+        scope: source.scope,
         description: extractCommandDescription(text) ?? "custom prompt",
       });
     }
@@ -2030,10 +2058,7 @@ export async function reloadZyraRuntime(runtime) {
 }
 
 export function getCustomCommandScopes(runtime) {
-  return getCustomCommandDirs(runtime).map((dir) => ({
-    dir,
-    scope: path.resolve(dir) === path.resolve(path.join(defaults.root, "commands")) ? "global" : "project",
-  }));
+  return getCustomCommandSources(runtime).map((source) => ({ ...source }));
 }
 
 export function loadCustomCommand(runtime, commandName, args = "") {
@@ -2044,6 +2069,62 @@ export function loadCustomCommand(runtime, commandName, args = "") {
   const argText = String(args ?? "").trim();
   if (body.includes("{{args}}")) return body.replaceAll("{{args}}", argText);
   return argText ? `${body}\n\nUser arguments:\n${argText}` : body;
+}
+
+export function listZyraSkills(runtime) {
+  const skills = runtime?.resourceLoader?.getSkills?.()?.skills ?? [];
+  return skills
+    .map((skill) => ({
+      ...skill,
+      scope: skill.zyraScope ?? resolveZyraResourceScope(skill.filePath, runtime?.project),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export function loadZyraSkillPrompt(runtime, skillName, args = "") {
+  const name = String(skillName ?? "")
+    .replace(/^\//, "")
+    .replace(/^skill:/i, "")
+    .trim()
+    .toLowerCase();
+  const skill = listZyraSkills(runtime).find((item) => item.name.toLowerCase() === name);
+  if (!skill) return undefined;
+
+  const skillPath = path.resolve(skill.filePath);
+  const size = statSync(skillPath).size;
+  if (size > 1024 * 1024) throw new Error(`Skill ${skill.name} exceeds the 1 MB execution limit.`);
+  const instructions = readFileSync(skillPath, "utf8").trim();
+  if (!instructions) throw new Error(`Skill ${skill.name} has no instructions.`);
+  const argText = String(args ?? "").trim();
+  return [
+    `Use the ${skill.name} skill for this request.`,
+    `Skill location: ${skillPath}`,
+    instructions,
+    argText ? `User: ${argText}` : "User: Start the skill workflow for the current request.",
+  ].join("\n\n");
+}
+
+export function expandZyraPromptResource(runtime, prompt) {
+  const text = String(prompt ?? "");
+  const invocation = text.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/);
+  if (!invocation) return text;
+
+  const commandName = invocation[1];
+  const args = invocation[2] ?? "";
+  if (commandName.toLowerCase().startsWith("skill:")) {
+    return loadZyraSkillPrompt(runtime, commandName, args) ?? text;
+  }
+  return loadCustomCommand(runtime, commandName, args) ?? text;
+}
+
+export async function listZyraPromptResources(options = {}) {
+  const project = path.resolve(options.project ?? defaults.project);
+  const preferences = readProjectPreferences(project);
+  return listZyraPromptResourceManifest({
+    project,
+    root: defaults.root,
+    projectTrusted: options.projectTrusted === true || preferences.projectTrusted === true,
+  });
 }
 
 export function saveZyraExitSummary(runtime, summary) {
@@ -2420,11 +2501,79 @@ function findProjectMemoryFiles(project) {
   return files;
 }
 
-function getCustomCommandDirs(runtime) {
+function getCustomCommandSources(runtime) {
   return [
-    path.join(defaults.root, "commands"),
-    path.join(runtime.project, PROJECT_DATA_DIR, "commands"),
+    { dir: path.join(defaults.root, "commands"), scope: "built-in" },
+    { dir: path.join(os.homedir(), PROJECT_DATA_DIR, "commands"), scope: "personal" },
+    { dir: path.join(runtime.project, PROJECT_DATA_DIR, "commands"), scope: "project" },
   ];
+}
+
+function getCustomCommandDirs(runtime) {
+  return getCustomCommandSources(runtime).map((source) => source.dir);
+}
+
+async function loadZyraSkills(project, options = {}) {
+  const { loadSkillsFromDir } = await loadPiPackage();
+  const sources = options.sources ?? await resolveZyraSkillSources({
+    project,
+    root: defaults.root,
+    projectTrusted: options.projectTrusted === true,
+  });
+  const skillsByName = new Map();
+  const realPaths = new Set();
+  const diagnostics = [];
+
+  // Most specific sources win, matching Desktop discovery and Zyra's existing
+  // project-over-personal command behavior.
+  for (const source of [...sources].reverse()) {
+    if (!existsSync(source.dir)) continue;
+    const result = loadSkillsFromDir({ dir: source.dir, source: source.loaderSource });
+    diagnostics.push(...result.diagnostics);
+    for (const skill of result.skills) {
+      const resolvedFile = path.resolve(skill.filePath);
+      const directRootMarkdown = path.dirname(resolvedFile) === path.resolve(source.dir)
+        && path.basename(resolvedFile) !== "SKILL.md";
+      if (!source.allowRootMarkdown && directRootMarkdown) continue;
+      const pathKey = process.platform === "win32" ? resolvedFile.toLowerCase() : resolvedFile;
+      if (realPaths.has(pathKey)) continue;
+      realPaths.add(pathKey);
+      const existing = skillsByName.get(skill.name);
+      if (existing) {
+        diagnostics.push({
+          type: "collision",
+          message: `skill "${skill.name}" from ${existing.zyraScope} overrides ${source.scope}`,
+          path: skill.filePath,
+        });
+        continue;
+      }
+      skillsByName.set(skill.name, { ...skill, zyraScope: source.scope });
+    }
+  }
+
+  return {
+    skills: [...skillsByName.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    diagnostics,
+  };
+}
+
+function mergeZyraSkillResults(preferred, loaded) {
+  const skillsByName = new Map(preferred.skills.map((skill) => [skill.name, skill]));
+  const diagnostics = [...preferred.diagnostics, ...(loaded.diagnostics ?? [])];
+  for (const skill of loaded.skills ?? []) {
+    if (skillsByName.has(skill.name)) continue;
+    skillsByName.set(skill.name, skill);
+  }
+  return { skills: [...skillsByName.values()], diagnostics };
+}
+
+function resolveZyraResourceScope(file, project) {
+  const normalized = path.resolve(file).toLowerCase();
+  const projectRoot = path.resolve(project ?? defaults.project).toLowerCase();
+  const homeRoot = path.resolve(os.homedir()).toLowerCase();
+  if (normalized.startsWith(`${projectRoot}${path.sep}`)) return "project";
+  if (normalized.startsWith(`${homeRoot}${path.sep}`)) return "personal";
+  return "built-in";
 }
 
 function commandCacheKey(runtime) {
