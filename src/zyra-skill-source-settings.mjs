@@ -54,7 +54,6 @@ export const DEFAULT_ZYRA_SKILL_SOURCE_SETTINGS = Object.freeze({
   customSources: Object.freeze([]),
 })
 
-const SOURCE_ID_PATTERN = /^(?:zyra|codex|claude|agents|pi|custom-[a-f0-9]{12})$/
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const MAX_SETTINGS_BYTES = 64 * 1024
 const MAX_CUSTOM_SOURCES = 10
@@ -128,11 +127,13 @@ export function normalizeZyraSkillSourceSettings(value = {}) {
   }
 
   const preferredSourceBySkill = {}
+  let preferredSourceCount = 0
   if (candidate.preferredSourceBySkill && typeof candidate.preferredSourceBySkill === 'object') {
     for (const [skillName, sourceId] of Object.entries(candidate.preferredSourceBySkill)) {
-      if (Object.keys(preferredSourceBySkill).length >= MAX_SKILL_OVERRIDES) break
+      if (preferredSourceCount >= MAX_SKILL_OVERRIDES) break
       if (!SKILL_NAME_PATTERN.test(skillName) || typeof sourceId !== 'string' || !validIds.has(sourceId)) continue
       preferredSourceBySkill[skillName] = sourceId
+      preferredSourceCount += 1
     }
   }
 
@@ -175,14 +176,4 @@ export async function writeZyraSkillSourceSettings(value, options = {}) {
     await rm(temporary, { force: true }).catch(() => undefined)
   }
   return settings
-}
-
-export function resolveZyraSkillSourcePriority(settings, sourceId) {
-  const normalized = normalizeZyraSkillSourceSettings(settings)
-  const index = normalized.priority.indexOf(sourceId)
-  return index < 0 ? Number.MAX_SAFE_INTEGER : index
-}
-
-export function isKnownZyraSkillSourceId(value) {
-  return typeof value === 'string' && SOURCE_ID_PATTERN.test(value)
 }
