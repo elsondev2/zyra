@@ -1,8 +1,36 @@
 import type { AssistantLatestTurn, AssistantThreadState } from '../../shared/assistant/contracts'
+import { normalizeAssistantMessageReferenceId } from '../../shared/assistant/message-identity'
 import type { CanonicalAgentChatPresence } from './zyra-agent-server-worker'
 
 const ACTIVE_CANONICAL_PRESENCE_STATES = new Set<CanonicalAgentChatPresence['state']>(['running', 'background'])
 const ACTIVE_ASSISTANT_THREAD_STATES = new Set<AssistantThreadState>(['starting', 'running', 'waiting'])
+
+type DesktopCanonicalPresence = CanonicalAgentChatPresence & { observedSequence?: number }
+
+export function isCanonicalPresenceActive(presence?: CanonicalAgentChatPresence | null): boolean {
+    return presence?.state === 'running' || presence?.state === 'background'
+}
+
+export function hasCanonicalUserInputAttention(presence?: CanonicalAgentChatPresence | null): boolean {
+    return presence?.attention === 'input' || presence?.attention === 'user-input'
+}
+
+export function mergeCanonicalPresenceObservation(
+    previous: DesktopCanonicalPresence | null | undefined,
+    observed: CanonicalAgentChatPresence
+): DesktopCanonicalPresence {
+    const appliedSequence = Math.max(0, Number(previous?.latestSequence) || 0)
+    const observedSequence = Math.max(
+        appliedSequence,
+        Number(previous?.observedSequence) || 0,
+        Number(observed.latestSequence) || 0
+    )
+    return {
+        ...observed,
+        latestSequence: appliedSequence,
+        observedSequence
+    }
+}
 
 /**
  * Reconcile the persisted Desktop shell with the server-owned canonical worker.
@@ -49,7 +77,7 @@ export function resolveCanonicalPresenceAttention(input: {
     }
     return {
         hasPendingApprovals: input.hasLocalPendingApproval || input.presence?.attention === 'approval',
-        hasPendingUserInputs: input.hasLocalPendingInput || input.presence?.attention === 'input'
+        hasPendingUserInputs: input.hasLocalPendingInput || hasCanonicalUserInputAttention(input.presence)
     }
 }
 
@@ -59,16 +87,18 @@ export function mergeCanonicalPresenceLatestTurn(
 ): AssistantLatestTurn | null {
     const canonical = presence?.latestTurn
     if (!canonical) return current
+    const canonicalAssistantMessageId = normalizeAssistantMessageReferenceId(canonical.assistantMessageId)
     if (!current || current.id !== canonical.id) {
         return {
             ...canonical,
+            assistantMessageId: canonicalAssistantMessageId,
             usage: null
         }
     }
     return {
         ...current,
         ...canonical,
-        assistantMessageId: canonical.assistantMessageId || current.assistantMessageId,
+        assistantMessageId: canonicalAssistantMessageId || current.assistantMessageId,
         effort: current.effort,
         serviceTier: current.serviceTier,
         usage: current.usage || null

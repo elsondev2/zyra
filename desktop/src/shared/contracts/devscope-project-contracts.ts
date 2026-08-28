@@ -60,6 +60,7 @@ export type DevScopeFileTreeNode = {
     modifiedAt?: number
     children?: DevScopeFileTreeNode[]
     childrenLoaded?: boolean
+    hasDirectoryChildren?: boolean
     isHidden: boolean
     gitStatus?: DevScopeGitFileStatus
 }
@@ -103,6 +104,7 @@ export type DevScopeIndexedPathSearchInput = {
     limit?: number
     includeFiles?: boolean
     includeDirectories?: boolean
+    includeAncestors?: boolean
     showHidden?: boolean
 }
 
@@ -118,6 +120,14 @@ export type DevScopeProcessInfo = {
     port?: number
     command?: string
     type: 'dev-server' | 'node' | 'python' | 'other'
+}
+
+export type DevScopeLocalServer = {
+    pid: number | null
+    port: number
+    url: string
+    processName: string
+    attachedToProject: boolean
 }
 
 export type DevScopeRunningApp = {

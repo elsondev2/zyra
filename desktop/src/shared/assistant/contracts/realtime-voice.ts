@@ -68,7 +68,6 @@ export type AssistantRealtimeVoiceClientMessage =
         channel: 'speakable' | 'commentary'
         content: [{ type: 'input_text'; text: string }]
     }
-    | { type: 'response.create' }
     | { type: 'session.close' }
 
 export interface AssistantRealtimeVoiceClientCommandEvent {

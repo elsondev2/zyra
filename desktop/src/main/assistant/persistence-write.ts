@@ -12,6 +12,7 @@ import type {
     AssistantSnapshot,
     AssistantThread
 } from '../../shared/assistant/contracts'
+import { findAssistantMessageReplayDuplicateIds } from '../../shared/assistant/message-reconciliation'
 import {
     PERSISTENCE_VERSION,
     jsonStringify,
@@ -32,7 +33,10 @@ export function upsertAssistantCanonicalTimelineProjection(db: SqlDatabase, inpu
     runSqlTransaction(db, () => {
         for (const message of input.messages) upsertAssistantMessage(db, input.threadId, message)
         for (const activity of input.activities) upsertAssistantActivity(db, input.threadId, activity)
-        deleteAssistantThreadRowsById(db, 'assistant_messages', input.threadId, input.removedMessageIds || [])
+        deleteAssistantThreadRowsById(db, 'assistant_messages', input.threadId, [
+            ...(input.removedMessageIds || []),
+            ...readAssistantMessageReplayDuplicateIds(db, input.threadId)
+        ])
         deleteAssistantThreadRowsById(db, 'assistant_activities', input.threadId, input.removedActivityIds || [])
         updateAssistantThreadMessageCount(db, input.threadId)
     })
@@ -90,7 +94,10 @@ export function persistAssistantEvent(db: SqlDatabase, event: AssistantDomainEve
                     const removedPendingUserInputIds = readRemovedIds('removedPendingUserInputIds')
                     if (Object.prototype.hasOwnProperty.call(patch, 'messages')) upsertAssistantMessages(db, thread.thread)
                     if (Object.prototype.hasOwnProperty.call(patch, 'messages') || removedMessageIds.length > 0) {
-                        deleteAssistantThreadRowsById(db, 'assistant_messages', thread.thread.id, removedMessageIds)
+                        deleteAssistantThreadRowsById(db, 'assistant_messages', thread.thread.id, [
+                            ...removedMessageIds,
+                            ...readAssistantMessageReplayDuplicateIds(db, thread.thread.id)
+                        ])
                         updateAssistantThreadMessageCount(db, thread.thread.id)
                     }
                     if (Object.prototype.hasOwnProperty.call(patch, 'activities')) upsertAssistantActivities(db, thread.thread)
@@ -129,6 +136,12 @@ export function persistAssistantEvent(db: SqlDatabase, event: AssistantDomainEve
                         || (event.type === 'thread.message.user' ? payloadMessage as unknown as AssistantMessage : null)
                     if (message) {
                         upsertAssistantMessage(db, thread.thread.id, message)
+                        deleteAssistantThreadRowsById(
+                            db,
+                            'assistant_messages',
+                            thread.thread.id,
+                            readAssistantMessageReplayDuplicateIds(db, thread.thread.id)
+                        )
                         updateAssistantThreadMessageCount(db, thread.thread.id)
                     }
                 }
@@ -365,6 +378,28 @@ function deleteAssistantThreadRowsById(db: SqlDatabase, tableName: string, threa
     if (rowIds.length === 0) return
     const placeholders = rowIds.map(() => '?').join(', ')
     db.run(`DELETE FROM ${tableName} WHERE thread_id = ? AND id IN (${placeholders})`, [threadId, ...rowIds])
+}
+
+function readAssistantMessageReplayDuplicateIds(db: SqlDatabase, threadId: string): string[] {
+    const rows = db.exec(`
+        SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at, provider_item_id, modality
+        FROM assistant_messages
+        WHERE thread_id = ?
+        ORDER BY created_at ASC, COALESCE(timeline_sequence, -1) ASC, id ASC
+    `, [threadId])[0]?.values || []
+    const messages: AssistantMessage[] = rows.map((row) => ({
+        id: String(row[0] || ''),
+        role: String(row[1] || 'assistant') as AssistantMessage['role'],
+        text: String(row[2] || ''),
+        turnId: row[3] == null ? null : String(row[3]),
+        streaming: Number(row[4]) === 1,
+        timelineSequence: typeof row[5] === 'number' ? row[5] : undefined,
+        createdAt: String(row[6] || ''),
+        updatedAt: String(row[7] || ''),
+        providerItemId: row[8] == null ? undefined : String(row[8]),
+        modality: (row[9] == null ? undefined : String(row[9])) as AssistantMessage['modality']
+    }))
+    return findAssistantMessageReplayDuplicateIds(messages)
 }
 
 function upsertAssistantMessages(db: SqlDatabase, thread: AssistantThread): void {

@@ -45,10 +45,18 @@ import {
     DEFAULT_INSTRUCTOR_REALTIME_VOICE,
     DEFAULT_INSTRUCTOR_VOICE_INSTRUCTIONS,
     foregroundRouteClaim,
+    mergeFileChangePayloadRecords,
     parseAssistantHistoryBodyRef
 } from '../../shared/assistant/contracts'
 import { isAssistantToolLifecycleStartEvent } from '../../shared/assistant/tool-lifecycle'
+import {
+    normalizeAssistantRuntimePolicy,
+    type AssistantRuntimePolicy
+} from '../../shared/assistant/runtime-policy'
 import { isAssistantReasoningEffort } from '../../shared/assistant/reasoning-efforts'
+import { findAssistantMessageReplayDuplicateIds, preserveCanonicalUserReplayBoundaries } from '../../shared/assistant/message-reconciliation'
+import { replaceSerializedAssistantImageAttachments } from '../../shared/assistant/message-attachments'
+import { isAssistantTitleGenerationPrompt } from '../../shared/assistant/title-generation'
 import { AssistantTextDeltaBuffer } from './assistant-text-delta-buffer'
 import { AssistantActivityDeltaBuffer } from './assistant-activity-delta-buffer'
 import { ChatGptRealtimeVoiceRuntime } from './codex-realtime-voice'
@@ -75,14 +83,14 @@ import {
     readPiFileChangeData,
     ZyraPiRuntime
 } from './zyra-pi-runtime'
-import { deriveSessionTitleFromPrompt, nowIso } from './utils'
+import { deriveSessionTitleFromPrompt, isDefaultSessionTitle, nowIso } from './utils'
 import { materializeCanonicalImage } from './canonical-media-cache'
 import { createAssistantSessionRecord } from './service-records'
 import type { AssistantServiceActionDeps } from './service-action-deps'
 import { AssistantPersistence } from './persistence'
 import { toAssistantShellSnapshot } from './persistence-snapshot'
-import { FleetProjection } from './fleet-projection'
-import { queueGeneratedSessionTitle, shouldGenerateSessionTitleForPrompt } from './session-title-generation'
+import { FleetProjection, shouldApplyAssistantFleetSnapshot } from './fleet-projection'
+import { queueGeneratedSessionTitle, regenerateSessionTitle as generateReplacementSessionTitle, shouldAutoRegenerateSessionTitle, shouldGenerateSessionTitleForPrompt } from './session-title-generation'
 import { applyDomainEvent, createDefaultSnapshot } from './projector'
 import { approvePendingPlaygroundLabRequestAction, attachSessionToPlaygroundLabAction, createPlaygroundLabAction, declinePendingPlaygroundLabRequestAction, deletePlaygroundLabAction, setPlaygroundRootAction } from './service-playground-actions'
 import {
@@ -117,7 +125,7 @@ import {
     buildStreamingToolActivity,
     handleAssistantRuntimeEvent
 } from './service-runtime-events'
-import { mergeCanonicalPresenceLatestTurn, resolveCanonicalPresenceAttention, resolveCanonicalPresenceThreadState } from './service-canonical-presence'
+import { hasCanonicalUserInputAttention, mergeCanonicalPresenceLatestTurn, mergeCanonicalPresenceObservation, resolveCanonicalPresenceAttention, resolveCanonicalPresenceThreadState } from './service-canonical-presence'
 import { CanonicalHistoryRefreshTracker, shouldRefreshCanonicalHistory } from './canonical-history-refresh-policy'
 import { TrailingAsyncReconciler } from './trailing-async-reconciler'
 import {
@@ -133,6 +141,8 @@ import {
 
 const REALTIME_VOICE_LAB_CWD = join(tmpdir(), 'zyra-voice-lab')
 const MAX_REALTIME_BRIDGE_EVENT_BYTES = 256 * 1024
+const CANONICAL_CHAT_HISTORY_PAGE_LIMIT = 160
+const CANONICAL_SINGLE_TURN_MAX_ENTRIES = 5_000
 const MAX_CACHED_HISTORY_BODIES = 15
 const MAX_CACHED_HISTORY_BODY_BYTES = 16 * 1024 * 1024
 const MAX_SINGLE_CACHED_HISTORY_BODY_BYTES = 8 * 1024 * 1024
@@ -163,6 +173,11 @@ type ActiveCanonicalVoice = {
 type CompletedRealtimeUserTranscriptEvent = Extract<RealtimeDomainEvent, { text: string }> & {
     type: 'realtime.user.transcript.completed'
 }
+
+type VoiceStrongRequest = Pick<
+    CompletedRealtimeUserTranscriptEvent,
+    'adapterSessionId' | 'conversationId' | 'providerItemId' | 'text'
+>
 
 function isCompletedRealtimeUserTranscriptEvent(
     event: RealtimeDomainEvent
@@ -198,6 +213,45 @@ type PendingCanonicalVoiceStart = {
 export type AssistantServiceOptions = {
     getNewChatExecutionDefaults?: () => Promise<{ webSearch: boolean; webFetch: boolean }>
     getTitleGenerationModel?: () => Promise<string | null>
+    getTitleAutomation?: () => Promise<{ enabled: boolean; turnInterval: number }>
+    getRuntimePolicy?: () => Promise<AssistantRuntimePolicy>
+    openDesktopWorkspace?: (request: Record<string, unknown>) => Promise<Record<string, unknown>>
+    cancelDesktopWorkspace?: (requestId: string) => void
+    handleDesktopWorkspaceTurn?: (canonicalChatId: string, turnId: string) => void
+    handleDetachedControl?: (input: { canonicalChatId: string; turnId: string | null; operation: unknown; principal?: unknown; signal: AbortSignal }) => Promise<Record<string, unknown>>
+    handleDesktopWorkspaceTurnEnded?: (canonicalChatId: string, turnId: string) => void
+}
+
+export function reconcileCanonicalFileChangeActivity(
+    existing: AssistantActivity | null | undefined,
+    incoming: AssistantActivity
+): AssistantActivity {
+    if (!existing || (existing.kind !== 'file-change' && incoming.kind !== 'file-change')) return incoming
+    const existingPayload = existing.payload || {}
+    const incomingPayload = incoming.payload || {}
+    const providerValue = incomingPayload['provider'] || existingPayload['provider']
+    const provider = providerValue === 'codex' ? 'codex' : 'pi'
+    const startedAtValue = existingPayload['startedAt'] || incomingPayload['startedAt']
+    const startedAt = typeof startedAtValue === 'string' && startedAtValue.trim()
+        ? startedAtValue
+        : existing.createdAt || incoming.createdAt
+    const merged = mergeFileChangePayloadRecords(existingPayload, incomingPayload, { provider, startedAt })
+    return {
+        ...incoming,
+        payload: {
+            ...existingPayload,
+            ...incomingPayload,
+            ...merged
+        }
+    }
+}
+
+function reconcileCanonicalFileChangeActivities(
+    existing: AssistantActivity[],
+    incoming: AssistantActivity[]
+): AssistantActivity[] {
+    const existingById = new Map(existing.map((activity) => [activity.id, activity]))
+    return incoming.map((activity) => reconcileCanonicalFileChangeActivity(existingById.get(activity.id), activity))
 }
 
 export class AssistantService {
@@ -225,7 +279,7 @@ export class AssistantService {
     private navigationSelectionGeneration = 0
     private readonly voiceTransitioningThreadIds = new Set<string>()
     private readonly activeVoiceStrongTasks = new Map<string, ActiveVoiceStrongTask>()
-    private readonly queuedVoiceStrongRequests = new Map<string, CompletedRealtimeUserTranscriptEvent[]>()
+    private readonly queuedVoiceStrongRequests = new Map<string, VoiceStrongRequest[]>()
     private readonly delegatedVoiceProviderItems = new Set<string>()
     private readonly typedVoiceResponseQueues = new Map<string, Promise<void>>()
     private readonly fleetProjection = new FleetProjection()
@@ -277,9 +331,11 @@ export class AssistantService {
     private readonly realtimeVoiceSubscribers = new Set<number>()
     private readonly externalRealtimeVoiceSubscribers = new Set<(event: AssistantRealtimeVoiceEvent) => void>()
     private realtimeVoiceOwnerId: number | null = null
+    private voicePrimaryPreparationGeneration = 0
     private readonly planBuffers = new Map<string, string>()
     private readonly assistantTextBuffers = new Map<string, string>()
     private readonly suppressedAssistantTextTurns = new Set<string>()
+    private readonly autoTitleMilestones = new Set<string>()
     private readonly readyPromise: Promise<void>
     private disposePromise: Promise<void> | null = null
     private readonly actionDeps: AssistantServiceActionDeps
@@ -307,6 +363,7 @@ export class AssistantService {
     }>()
 
     constructor(private readonly options: AssistantServiceOptions = {}) {
+        this.runtime.setDesktopWorkspaceHandler(options.openDesktopWorkspace || null, options.cancelDesktopWorkspace || null, options.handleDesktopWorkspaceTurn || null, options.handleDetachedControl || null, options.handleDesktopWorkspaceTurnEnded || null)
         this.readyPromise = this.initialize()
         this.actionDeps = {
             runtime: this.runtime,
@@ -319,6 +376,9 @@ export class AssistantService {
             getNewChatExecutionDefaults: () => this.options.getNewChatExecutionDefaults?.()
                 || Promise.resolve({ webSearch: true, webFetch: true }),
             getTitleGenerationModel: () => this.options.getTitleGenerationModel?.() || Promise.resolve(null),
+            getRuntimePolicy: async () => normalizeAssistantRuntimePolicy(
+                await this.options.getRuntimePolicy?.()
+            ),
             appendEvent: (type, occurredAt, payload, sessionId, threadId) => {
                 this.appendEvent(type, occurredAt, payload, sessionId, threadId)
             },
@@ -434,6 +494,21 @@ export class AssistantService {
         return { success: true as const }
     }
 
+    getHangDiagnosticContext() {
+        const snapshot = this.state.snapshot
+        const selectedSession = snapshot.sessions.find((session) => session.id === snapshot.selectedSessionId) || null
+        const activeThread = selectedSession?.threads.find((thread) => thread.id === selectedSession.activeThreadId) || null
+        return {
+            selectedSessionId: selectedSession?.id || null,
+            activeThreadId: activeThread?.id || null,
+            threadState: activeThread?.state || null,
+            latestTurnState: activeThread?.latestTurn?.state || null,
+            messageCount: activeThread?.messages.length || 0,
+            activityCount: activeThread?.activities.length || 0,
+            clientSurfaces: [...new Set((activeThread?.canonicalPresence?.clients || []).map((client) => client.surface))].sort()
+        }
+    }
+
     async getSnapshot() {
         await this.ensureReady()
         return toAssistantShellSnapshot(this.state.snapshot)
@@ -454,6 +529,10 @@ export class AssistantService {
 
     async listModels(forceRefresh = false) {
         await this.ensureReady()
+        const knownModels = this.state.snapshot.knownModels
+        if (!forceRefresh && knownModels.length > 0) {
+            return { success: true as const, models: structuredClone(knownModels) }
+        }
         const { models, authoritative } = await this.runtime.listModelsWithProvenance(forceRefresh)
         if (authoritative && !areAssistantModelListsEqual(this.state.snapshot.knownModels, models)) {
             this.state.snapshot.knownModels = models
@@ -486,16 +565,40 @@ export class AssistantService {
 
     async getFleetSnapshot(threadId: string) {
         await this.ensureReady()
-        const localThreadId = requireThread(this.state.snapshot, threadId).id
-        const snapshot = this.fleetProjection.get(localThreadId)
+        const thread = requireThread(this.state.snapshot, threadId)
+        const localThreadId = thread.id
+        const persisted = this.fleetProjection.get(localThreadId)
             || this.state.snapshot.fleetByThreadId[localThreadId]
             || await this.persistence.readFleet(localThreadId)
+        let refreshed: FleetSnapshot | null = null
+        if (thread.providerThreadId) {
+            const record = findThreadRecord(this.state.snapshot, localThreadId)
+            try {
+                await this.runtime.connect(thread, record?.session.projectPath || thread.cwd || process.cwd())
+                const result = await this.runtime.requestFleetOperation(localThreadId, 'agents', 'list', {})
+                refreshed = (result['snapshot'] || result['fleet']) as FleetSnapshot | null
+            } catch (error) {
+                log.warn('[Assistant] Failed to refresh the canonical fleet snapshot', { threadId: localThreadId, error })
+            }
+        }
+        const live = refreshed || this.runtime.getFleetSnapshot(localThreadId)
+        const snapshot = live && shouldApplyAssistantFleetSnapshot(persisted, live)
+            ? live
+            : persisted
+        if (snapshot) {
+            this.fleetProjection.apply(localThreadId, snapshot)
+            this.state.snapshot.fleetByThreadId[localThreadId] = snapshot
+            this.persistence.projectFleet(localThreadId, snapshot)
+        }
         return { success: true as const, snapshot: snapshot || null }
     }
 
     async runFleetOperation(namespace: 'agents' | 'workflows', input: FleetOperationInput) {
         await this.ensureReady()
-        const localThreadId = requireThread(this.state.snapshot, input.threadId).id
+        const thread = requireThread(this.state.snapshot, input.threadId)
+        const localThreadId = thread.id
+        const record = findThreadRecord(this.state.snapshot, localThreadId)
+        await this.runtime.connect(thread, record?.session.projectPath || thread.cwd || process.cwd())
         const result = await this.runtime.requestFleetOperation(localThreadId, namespace, input.action, input.payload || {})
         const snapshot = (result['snapshot'] || result['fleet']) as FleetSnapshot | undefined
         if (snapshot) {
@@ -522,15 +625,41 @@ export class AssistantService {
     }
 
     async getSessionTurnUsage(input?: AssistantGetSessionTurnUsageInput) {
-        return getAssistantSessionTurnUsageAction(
+        const result = await getAssistantSessionTurnUsageAction(
             this.actionDeps,
             (sessionId) => this.persistence.readSessionTurnUsage(sessionId),
             input
         )
+        const session = requireSession(this.state.snapshot, result.usage.sessionId)
+        const thread = getActiveThread(session)
+        result.usage.totals = thread ? this.runtime.getSessionUsage(thread.id) : null
+        return result
     }
 
     async connect(options?: AssistantConnectOptions) {
-        return connectAssistantSession(this.actionDeps, options)
+        const voicePreparation = options?.voicePreparation || null
+        const preparationGeneration = voicePreparation
+            ? ++this.voicePrimaryPreparationGeneration
+            : null
+        const result = await connectAssistantSession(this.actionDeps, options)
+        if (preparationGeneration !== null
+            && preparationGeneration === this.voicePrimaryPreparationGeneration
+            && !this.activeCanonicalVoice
+            && !this.pendingCanonicalVoiceStart
+            && this.realtimeVoiceOwnerId === null) {
+            const session = options?.sessionId
+                ? requireSession(this.state.snapshot, options.sessionId)
+                : getSelectedSession(this.state.snapshot)
+            const thread = getActiveThread(session)
+            if (session && thread) {
+                this.prepareVoicePrimaryWorker(
+                    thread.id,
+                    this.getSessionRuntimeCwd(session, thread),
+                    requireCanonicalVoiceExecutionConfiguration(voicePreparation)
+                )
+            }
+        }
+        return result
     }
 
     async disconnect(sessionId?: string) {
@@ -544,31 +673,36 @@ export class AssistantService {
     }
 
     async selectSession(sessionId: string) {
+        await this.ensureReady()
         const generation = ++this.navigationSelectionGeneration
         if (this.activeCanonicalVoice?.sessionId !== sessionId) await this.stopCanonicalVoiceForNavigation()
         if (generation !== this.navigationSelectionGeneration) return { success: true as const, sessionId }
         const result = await selectAssistantSessionAction(this.actionDeps, sessionId)
-        if (generation === this.navigationSelectionGeneration) void this.refreshSelectedCanonicalPresence(sessionId)
-        return result
+        if (generation !== this.navigationSelectionGeneration) return result
+        const snapshot = toAssistantShellSnapshot(this.state.snapshot)
+        this.scheduleSelectedCanonicalSessionSynchronization(sessionId, generation)
+        return { ...result, snapshot }
     }
 
     async selectThread(sessionId: string, threadId: string) {
+        await this.ensureReady()
         const generation = ++this.navigationSelectionGeneration
         if (this.activeCanonicalVoice?.localThreadId !== threadId) await this.stopCanonicalVoiceForNavigation()
         if (generation !== this.navigationSelectionGeneration) return { success: true as const, sessionId, threadId }
         const result = await selectAssistantThreadAction(this.actionDeps, sessionId, threadId)
-        if (generation === this.navigationSelectionGeneration) void this.refreshSelectedCanonicalPresence(sessionId)
-        return result
+        if (generation !== this.navigationSelectionGeneration) return result
+        const snapshot = toAssistantShellSnapshot(this.state.snapshot)
+        this.scheduleSelectedCanonicalSessionSynchronization(sessionId, generation)
+        return { ...result, snapshot }
     }
 
     async getThreadDetailBootstrap(threadId: string) {
         await this.ensureReady()
         const record = findThreadRecord(this.state.snapshot, threadId)
         if (!record) throw new Error(`Assistant thread not found: ${threadId}`)
-        const detail = await this.persistence.readThreadDetail(record.thread.id)
-        void this.ensureCanonicalHistoryLoaded(record.session, record.thread).catch((error) => {
-            log.warn('[Assistant] Failed to refresh canonical history after local bootstrap', error)
-        })
+        await this.ensureCanonicalHistoryLoaded(record.session, record.thread)
+        const refreshedRecord = findThreadRecord(this.state.snapshot, threadId) || record
+        const detail = await this.persistence.readThreadDetail(refreshedRecord.thread.id)
         return { success: true as const, detail }
     }
 
@@ -661,7 +795,8 @@ export class AssistantService {
         await this.ensureReady()
         const record = findThreadRecord(this.state.snapshot, threadId)
         if (!record) throw new Error(`Assistant thread not found: ${threadId}`)
-        await this.ensureCanonicalReviewHistoryIndexed(record.session, record.thread)
+        // Review is a persisted read model. Opening the panel must never turn into an
+        // unbounded canonical-history import on the main/UI critical path.
         return { success: true as const, index: await this.persistence.readReviewIndex(record.thread.id) }
     }
 
@@ -670,9 +805,6 @@ export class AssistantService {
         const record = findThreadRecord(this.state.snapshot, threadId)
         if (!record) throw new Error(`Assistant thread not found: ${threadId}`)
         const canonicalChatId = record.thread.providerThreadId
-        if (canonicalChatId && !this.canonicalReviewHistoryState.has(canonicalChatId)) {
-            await this.ensureCanonicalReviewHistoryIndexed(record.session, record.thread)
-        }
         const persisted = await this.persistence.searchTurns(record.thread.id, query, limit)
         if (!canonicalChatId || !String(query || '').trim()) return { success: true as const, result: persisted }
         try {
@@ -700,10 +832,6 @@ export class AssistantService {
         await this.ensureReady()
         const record = findThreadRecord(this.state.snapshot, threadId)
         if (!record) throw new Error(`Assistant thread not found: ${threadId}`)
-        const canonicalChatId = record.thread.providerThreadId
-        if (canonicalChatId && !this.canonicalReviewHistoryState.has(canonicalChatId)) {
-            await this.ensureCanonicalReviewHistoryIndexed(record.session, record.thread)
-        }
         const detail = await this.persistence.readTurnDetail(record.thread.id, turnId)
         const hydratedFileChanges = await this.hydrateDeferredFileChanges(detail.activities)
         if (hydratedFileChanges.length > 0) {
@@ -720,6 +848,41 @@ export class AssistantService {
 
     async renameSession(sessionId: string, title: string) {
         return renameAssistantSessionAction(this.actionDeps, sessionId, title)
+    }
+
+    async regenerateSessionTitle(sessionId: string) {
+        await this.ensureReady()
+        const session = requireSession(this.state.snapshot, sessionId)
+        const thread = session.threads.find((entry) => entry.source === 'root' && !entry.parentThreadId)
+            || getActiveThread(session)
+        if (!thread) throw new Error('Assistant thread not found.')
+        if (['starting', 'running', 'waiting'].includes(thread.state) || thread.latestTurn?.state === 'running') {
+            throw new Error('Wait for the current turn to finish before refreshing the title.')
+        }
+        const review = await this.persistence.readReviewIndex(thread.id)
+        const completedTurns = review.turns.filter((turn) => turn.state === 'completed' && turn.prompt && turn.response)
+        if (completedTurns.length === 0) throw new Error('Complete a conversation turn before refreshing the title.')
+        const preferredModel = await this.options.getTitleGenerationModel?.().catch(() => null) || null
+        const title = await generateReplacementSessionTitle({
+            sessionId: session.id,
+            threadId: thread.id,
+            turns: completedTurns,
+            seedTitle: session.title,
+            cwd: this.getSessionRuntimeCwd(session, thread),
+            preferredModel,
+            generateText: (prompt, options) => this.runtime.generateText(prompt, options),
+            getSnapshot: () => this.state.snapshot,
+            appendEvent: (type, occurredAt, payload, eventSessionId, eventThreadId) => {
+                this.appendEvent(type, occurredAt, payload, eventSessionId, eventThreadId)
+            },
+            onApplied: async (nextTitle) => {
+                await Promise.allSettled(session.threads
+                    .map((entry) => entry.providerThreadId)
+                    .filter((providerThreadId): providerThreadId is string => Boolean(providerThreadId))
+                    .map((providerThreadId) => this.runtime.updateCanonicalChat(providerThreadId, { title: nextTitle })))
+            }
+        })
+        return { success: true as const, title: title || session.title }
     }
 
     async archiveSession(sessionId: string, archived = true) {
@@ -755,7 +918,16 @@ export class AssistantService {
     }
 
     async setSessionProjectPath(sessionId: string, projectPath: string | null) {
-        if (this.activeCanonicalVoice?.sessionId === sessionId) await this.stopCanonicalVoiceForNavigation()
+        const session = this.state.snapshot.sessions.find((entry) => entry.id === sessionId) || null
+        const pendingVoiceBelongsToSession = Boolean(
+            this.pendingCanonicalVoiceStart
+            && session?.threads.some((thread) => thread.id === this.pendingCanonicalVoiceStart?.conversationId)
+        )
+        if (this.activeCanonicalVoice?.sessionId === sessionId || pendingVoiceBelongsToSession) {
+            await this.stopCanonicalVoiceForNavigation()
+        } else {
+            this.invalidateVoicePrimaryWorkerPreparation()
+        }
         return setAssistantSessionProjectPathAction(this.actionDeps, sessionId, projectPath)
     }
 
@@ -902,6 +1074,24 @@ export class AssistantService {
             routeClaim: foregroundRouteClaim(route),
             idempotencyKey: `voice-typed:${active.conversationId}:${clientMessageId}`
         })
+        if (shouldDelegateVoiceInspection(text)) {
+            void this.realtimeVoiceRuntime.appendContext([{ role: 'user', text }]).catch((error) => {
+                log.warn('[AssistantVoice] Typed primary task context append failed', error)
+            })
+            void this.requireCanonicalRealtimeAdapter().deliverComposerResponse(
+                active.adapterSessionId,
+                { turnId, text: 'I\u2019m handing that to the primary agent.' }
+            ).catch((error) => {
+                log.warn('[AssistantVoice] Typed primary task acknowledgement failed', error)
+            })
+            this.routeVoiceStrongRequest({
+                adapterSessionId: active.adapterSessionId,
+                conversationId: active.conversationId,
+                providerItemId: `typed:${clientMessageId}`,
+                text
+            })
+            return { success: true as const, mode: 'strong-task' as const }
+        }
         this.queueTypedVoiceResponse({
             text,
             turnId,
@@ -1015,6 +1205,13 @@ export class AssistantService {
         if (this.realtimeVoiceOwnerId !== null && this.realtimeVoiceOwnerId !== senderId) {
             throw new Error('Only the Zyra window that started Voice can stop it.')
         }
+        const hasVoiceState = Boolean(
+            this.realtimeVoiceOwnerId !== null
+            || this.pendingCanonicalVoiceStart
+            || this.activeCanonicalVoice
+            || this.realtimeVoiceRuntime.currentSessionIdentity()
+        )
+        if (!hasVoiceState) return { success: true as const }
         await this.cancelPendingCanonicalVoiceStart()
         if (this.activeCanonicalVoice) {
             await this.stopCanonicalVoiceInternal('user_exit')
@@ -1042,6 +1239,7 @@ export class AssistantService {
         this.externalRealtimeVoiceSubscribers.clear()
         this.assistantTextDeltaBuffer.dispose()
         this.assistantActivityDeltaBuffer.dispose()
+        this.voicePrimaryPreparationGeneration += 1
         this.realtimeVoiceOwnerId = null
         this.pendingCanonicalVoiceStart?.abortController.abort(new Error('Assistant Voice disposed.'))
         for (const task of this.activeVoiceStrongTasks.values()) task.abortController.abort(new Error('Assistant Voice disposed.'))
@@ -1081,6 +1279,9 @@ export class AssistantService {
         }
         this.state.snapshot.fleetByThreadId ||= {}
         await this.importCanonicalChats()
+        void this.recoverActiveCanonicalRuntimes().catch((error) => {
+            log.warn('[Assistant] Active canonical runtime recovery failed', error)
+        })
         await this.initializeCanonicalVoiceController()
         void this.ensureCanonicalVoiceSetup().catch((error) => {
             log.warn('[AssistantVoice] Background capability setup failed', error)
@@ -1093,6 +1294,30 @@ export class AssistantService {
                 this.state.snapshot.fleetByThreadId[thread.id] = fleet
             }
         }
+    }
+
+    private async recoverActiveCanonicalRuntimes(): Promise<void> {
+        const activeCanonicalThreads = this.state.snapshot.sessions.flatMap((session) => (
+            session.threads
+                .filter((thread) => (
+                    Boolean(thread.providerThreadId)
+                    && (thread.canonicalPresence?.state === 'running' || thread.canonicalPresence?.state === 'background')
+                ))
+                .map((thread) => ({ session, thread }))
+        ))
+        if (activeCanonicalThreads.length === 0) return
+
+        await Promise.allSettled(activeCanonicalThreads.map(async ({ session, thread }) => {
+            try {
+                await this.runtime.connect(thread, this.getSessionRuntimeCwd(session, thread))
+            } catch (error) {
+                log.warn('[Assistant] Failed to restore an active canonical runtime during startup', {
+                    threadId: thread.id,
+                    providerThreadId: thread.providerThreadId,
+                    error
+                })
+            }
+        }))
     }
 
     private async initializeCanonicalVoiceController(): Promise<void> {
@@ -1241,9 +1466,11 @@ export class AssistantService {
 
         this.realtimeVoiceOwnerId = senderId
         try {
+            const projectCwd = this.getSessionRuntimeCwd(connected.session, connected.thread)
+            this.prepareVoicePrimaryWorker(connected.thread.id, projectCwd, executionConfiguration)
             const activation = await this.requireCanonicalVoiceSessions().startVoice({
                 conversationId,
-                projectCwd: this.getSessionRuntimeCwd(connected.session, connected.thread),
+                projectCwd,
                 offerSdp: input.sdp,
                 instructions: canonicalVoiceInstructions(input.instructions),
                 voice: input.voice || DEFAULT_INSTRUCTOR_REALTIME_VOICE,
@@ -1276,6 +1503,7 @@ export class AssistantService {
     }
 
     private async stopCanonicalVoiceForNavigation(): Promise<void> {
+        this.invalidateVoicePrimaryWorkerPreparation()
         await this.cancelPendingCanonicalVoiceStart()
         if (this.activeCanonicalVoice) await this.stopCanonicalVoiceInternal('selection_changed')
     }
@@ -1330,17 +1558,7 @@ export class AssistantService {
         const legacy = canonicalVoicePresentationEvent(event)
         if (legacy) this.broadcastRealtimeVoiceEvent(legacy)
         if (isCompletedRealtimeUserTranscriptEvent(event) && shouldDelegateVoiceInspection(event.text)) {
-            const sourceKey = `${event.adapterSessionId}:${event.providerItemId}`
-            if (this.delegatedVoiceProviderItems.has(sourceKey)) return
-            this.delegatedVoiceProviderItems.add(sourceKey)
-            while (this.delegatedVoiceProviderItems.size > 512) {
-                const oldest = this.delegatedVoiceProviderItems.values().next().value
-                if (!oldest) break
-                this.delegatedVoiceProviderItems.delete(oldest)
-            }
-            void this.startVoiceStrongInspection(event).catch((error) => {
-                log.error('[AssistantVoice] Primary task failed', error)
-            })
+            this.routeVoiceStrongRequest(event)
         }
         if ((event.type === 'realtime.session.error' || event.type === 'realtime.session.closed')
             && this.activeCanonicalVoice?.adapterSessionId === event.adapterSessionId) {
@@ -1350,8 +1568,22 @@ export class AssistantService {
         }
     }
 
+    private routeVoiceStrongRequest(request: VoiceStrongRequest): void {
+        const sourceKey = `${request.adapterSessionId}:${request.providerItemId}`
+        if (this.delegatedVoiceProviderItems.has(sourceKey)) return
+        this.delegatedVoiceProviderItems.add(sourceKey)
+        while (this.delegatedVoiceProviderItems.size > 512) {
+            const oldest = this.delegatedVoiceProviderItems.values().next().value
+            if (!oldest) break
+            this.delegatedVoiceProviderItems.delete(oldest)
+        }
+        void this.startVoiceStrongInspection(request).catch((error) => {
+            log.error('[AssistantVoice] Primary task failed', error)
+        })
+    }
+
     private async startVoiceStrongInspection(
-        event: CompletedRealtimeUserTranscriptEvent
+        event: VoiceStrongRequest
     ): Promise<void> {
         const active = this.activeCanonicalVoice
         if (!active
@@ -1384,7 +1616,7 @@ export class AssistantService {
         }
         this.activeVoiceStrongTasks.set(event.conversationId, task)
         this.projectVoiceStrongTask(task, record.session.id, 'running', 'Primary agent working', event.text)
-        await this.requireCanonicalRealtimeAdapter().appendTransientContext(
+        const runningContext = this.requireCanonicalRealtimeAdapter().appendTransientContext(
             active.adapterSessionId,
             `Primary task ${taskId} is running for this exact request: ${event.text.slice(0, 1000)}. Say only that the primary agent is working if asked for status.`
         ).catch(() => undefined)
@@ -1406,11 +1638,14 @@ export class AssistantService {
             if (!current || current.adapterSessionId !== active.adapterSessionId) return
             const narration = boundedVoiceTaskResult(result.text)
             this.projectVoiceStrongTask(task, record.session.id, 'completed', 'Primary agent finished', narration)
-            await this.requireCanonicalRealtimeAdapter().appendTransientContext(
-                current.adapterSessionId,
-                `Verified primary-agent result for ${taskId}: ${narration}`
-            )
-            await this.submitVoiceTaskNarration(current, taskId, narration)
+            await runningContext
+            await Promise.all([
+                this.requireCanonicalRealtimeAdapter().appendTransientContext(
+                    current.adapterSessionId,
+                    `Verified primary-agent result for ${taskId}: ${narration}`
+                ).catch(() => undefined),
+                this.submitVoiceTaskNarration(current, taskId, narration)
+            ])
         } catch (error) {
             if (abortController.signal.aborted) {
                 this.projectVoiceStrongTask(task, record.session.id, 'cancelled', 'Primary agent stopped', 'Voice ended before the request completed.')
@@ -1420,11 +1655,14 @@ export class AssistantService {
             this.projectVoiceStrongTask(task, record.session.id, 'failed', 'Primary agent could not finish', message)
             const current = this.activeCanonicalVoice
             if (current?.adapterSessionId === active.adapterSessionId) {
-                await this.requireCanonicalRealtimeAdapter().appendTransientContext(
-                    current.adapterSessionId,
-                    `Primary task ${taskId} failed. Do not claim it is still running. User-safe reason: ${message}`
-                ).catch(() => undefined)
-                await this.submitVoiceTaskNarration(current, taskId, message).catch(() => undefined)
+                await runningContext
+                await Promise.all([
+                    this.requireCanonicalRealtimeAdapter().appendTransientContext(
+                        current.adapterSessionId,
+                        `Primary task ${taskId} failed. Do not claim it is still running. User-safe reason: ${message}`
+                    ).catch(() => undefined),
+                    this.submitVoiceTaskNarration(current, taskId, message).catch(() => undefined)
+                ])
             }
         } finally {
             if (this.activeVoiceStrongTasks.get(event.conversationId)?.taskId === taskId) {
@@ -1433,12 +1671,43 @@ export class AssistantService {
             const queued = this.queuedVoiceStrongRequests.get(event.conversationId)
             const next = queued?.shift() || null
             if (queued && queued.length === 0) this.queuedVoiceStrongRequests.delete(event.conversationId)
-            if (next && this.activeCanonicalVoice?.conversationId === event.conversationId) {
+            const current = this.activeCanonicalVoice
+            if (current?.conversationId === event.conversationId) {
+                this.prepareVoicePrimaryWorker(
+                    record.thread.id,
+                    this.getSessionRuntimeCwd(record.session, record.thread),
+                    current.executionConfiguration
+                )
+            }
+            if (next && current?.conversationId === event.conversationId) {
                 void this.startVoiceStrongInspection(next).catch((nextError) => {
                     log.error('[AssistantVoice] Queued primary task failed', nextError)
                 })
             }
         }
+    }
+
+    private prepareVoicePrimaryWorker(
+        localThreadId: string,
+        cwd: string,
+        executionConfiguration: AssistantVoiceExecutionConfiguration
+    ): void {
+        void this.runtime.preparePrivateVoiceTask({
+            localThreadId,
+            cwd,
+            model: executionConfiguration.model,
+            effort: executionConfiguration.effort,
+            runtimeMode: executionConfiguration.runtimeMode,
+            interactionMode: executionConfiguration.interactionMode,
+            profile: executionConfiguration.profile
+        }).catch((error) => {
+            log.warn('[AssistantVoice] Primary agent preparation failed', error)
+        })
+    }
+
+    private invalidateVoicePrimaryWorkerPreparation(): void {
+        this.voicePrimaryPreparationGeneration += 1
+        this.runtime.disposePreparedPrivateVoiceTask()
     }
 
     private projectVoiceStrongTask(
@@ -1531,17 +1800,44 @@ export class AssistantService {
             updatedAt: receipt.observedAt
         }
         if (input.role === 'user') {
+            const persistedFirstUserMessage = await this.persistence.readFirstUserMessageText(record.session.id)
+            const shouldGenerateTitle = shouldGenerateSessionTitleForPrompt(record.session, persistedFirstUserMessage)
+            let titleSeed = record.session.title
             this.appendEvent('thread.message.user', input.providerCompletedAt, {
                 threadId: record.thread.id,
                 message
             }, record.session.id, record.thread.id)
-            if (record.thread.messageCount === 0) {
-                const title = deriveSessionTitleFromPrompt(input.text)
+            if (record.thread.messageCount === 0 && isDefaultSessionTitle(record.session.title)) {
+                titleSeed = deriveSessionTitleFromPrompt(input.text)
                 this.appendEvent('session.updated', input.providerCompletedAt, {
                     sessionId: record.session.id,
-                    patch: { title, updatedAt: input.providerCompletedAt }
+                    patch: { title: titleSeed, updatedAt: input.providerCompletedAt }
                 }, record.session.id, record.thread.id)
-                await this.runtime.updateCanonicalChat(input.conversationId, { title }).catch(() => undefined)
+                await this.runtime.updateCanonicalChat(input.conversationId, { title: titleSeed }).catch(() => undefined)
+            }
+            if (shouldGenerateTitle) {
+                const titleModelPromise = this.options.getTitleGenerationModel
+                    ? this.options.getTitleGenerationModel().catch((error) => {
+                        log.warn('[AssistantVoice] Failed to read the chat-title model preference', error)
+                        return null
+                    })
+                    : Promise.resolve(null)
+                void titleModelPromise.then((preferredModel) => queueGeneratedSessionTitle({
+                    sessionId: record.session.id,
+                    threadId: record.thread.id,
+                    messageText: input.text,
+                    seedTitle: titleSeed,
+                    cwd: this.getSessionRuntimeCwd(record.session, record.thread),
+                    preferredModel,
+                    generateText: (titlePrompt, titleOptions) => this.runtime.generateText(titlePrompt, titleOptions),
+                    getSnapshot: () => this.state.snapshot,
+                    appendEvent: (type, occurredAt, payload, sessionId, threadId) => {
+                        this.appendEvent(type, occurredAt, payload, sessionId, threadId)
+                    },
+                    onApplied: (nextTitle) => this.runtime.updateCanonicalChat(input.conversationId, { title: nextTitle })
+                })).catch((error) => {
+                    log.warn('[AssistantVoice] Session title generation task failed:', error)
+                })
             }
         } else {
             this.appendEvent('thread.message.assistant.delta', input.providerCompletedAt, {
@@ -1623,6 +1919,43 @@ export class AssistantService {
         return this.canonicalVoiceSessions
     }
 
+    private scheduleSelectedCanonicalSessionSynchronization(sessionId: string, generation: number): void {
+        setImmediate(() => {
+            if (generation !== this.navigationSelectionGeneration) return
+            void this.synchronizeSelectedCanonicalSession(sessionId, generation).catch((error) => {
+                log.warn('[Assistant] Failed to synchronize the selected canonical chat after navigation', error)
+            })
+        })
+    }
+
+    private async synchronizeSelectedCanonicalSession(sessionId: string, generation: number) {
+        await this.refreshSelectedCanonicalPresence(sessionId)
+        if (generation !== this.navigationSelectionGeneration) return null
+
+        const session = this.state.snapshot.sessions.find((entry) => entry.id === sessionId) || null
+        const thread = getActiveThread(session)
+        if (!session || !thread) return null
+
+        try {
+            await this.runtime.connect(thread, this.getSessionRuntimeCwd(session, thread))
+        } catch (error) {
+            log.warn('[Assistant] Failed to attach the selected canonical chat during navigation', error)
+        }
+        if (generation !== this.navigationSelectionGeneration) {
+            const currentThread = getActiveThread(getSelectedSession(this.state.snapshot))
+            if (currentThread?.id !== thread.id) this.runtime.disconnect(thread.id)
+            return null
+        }
+
+        await this.refreshSelectedCanonicalPresence(sessionId)
+        if (generation !== this.navigationSelectionGeneration) {
+            const currentThread = getActiveThread(getSelectedSession(this.state.snapshot))
+            if (currentThread?.id !== thread.id) this.runtime.disconnect(thread.id)
+            return null
+        }
+        return toAssistantShellSnapshot(this.state.snapshot)
+    }
+
     private async refreshSelectedCanonicalPresence(sessionId: string): Promise<void> {
         const session = this.state.snapshot.sessions.find((entry) => entry.id === sessionId) || null
         const thread = getActiveThread(session)
@@ -1633,7 +1966,14 @@ export class AssistantService {
                 thread.providerThreadId,
                 session.projectPath || thread.cwd || undefined
             )
-            if (!chat?.presence) return
+            if (!chat) return
+            if (shouldRefreshCanonicalHistory({
+                canonicalModifiedAt: normalizeCatalogDate(chat.modifiedAt, thread.createdAt),
+                persistedCanonicalModifiedAt: thread.canonicalHistoryModifiedAt,
+                canonicalEntryCount: chat.entryCount,
+                persistedCanonicalEntryCount: thread.canonicalHistoryEntryCount
+            })) this.markCanonicalHistoryDirty(chat.canonicalChatId)
+            if (!chat.presence) return
             const occurredAt = nowIso()
             const latestTurn = mergeCanonicalPresenceLatestTurn(thread.latestTurn, chat.presence)
             const attention = resolveCanonicalPresenceAttention({
@@ -1646,13 +1986,7 @@ export class AssistantService {
             this.appendEvent('thread.updated', occurredAt, {
                 threadId: thread.id,
                 patch: {
-                    canonicalPresence: {
-                        ...chat.presence,
-                        latestSequence: Math.max(
-                            thread.canonicalPresence?.latestSequence || 0,
-                            chat.presence.latestSequence || 0
-                        )
-                    },
+                    canonicalPresence: mergeCanonicalPresenceObservation(thread.canonicalPresence, chat.presence),
                     latestTurn,
                     state: resolveCanonicalPresenceThreadState({
                         currentState: thread.state,
@@ -1712,10 +2046,9 @@ export class AssistantService {
                 const canonicalTurnActive = chat.presence?.state === 'running' || chat.presence?.state === 'background'
                 const nextMessageCount = canonicalTurnActive ? Math.max(existing.thread.messageCount, messageCount) : messageCount
                 const nextActivityCount = Math.max(existing.thread.activityCount, activityCount)
-                const nextCanonicalPresence = chat.presence ? {
-                    ...chat.presence,
-                    latestSequence: existing.thread.canonicalPresence?.latestSequence || 0
-                } : undefined
+                const nextCanonicalPresence = chat.presence
+                    ? mergeCanonicalPresenceObservation(existing.thread.canonicalPresence, chat.presence)
+                    : undefined
                 const presenceChanged = JSON.stringify(existing.thread.canonicalPresence || null) !== JSON.stringify(nextCanonicalPresence || null)
                 const nextThreadState = resolveCanonicalPresenceThreadState({
                     currentState: existing.thread.state,
@@ -1772,10 +2105,12 @@ export class AssistantService {
             thread.providerThreadId = chat.canonicalChatId
             thread.messageCount = messageCount
             thread.activityCount = activityCount
-            thread.canonicalPresence = chat.presence ? { ...chat.presence, latestSequence: 0 } : undefined
+            thread.canonicalPresence = chat.presence
+                ? mergeCanonicalPresenceObservation(undefined, chat.presence)
+                : undefined
             thread.latestTurn = mergeCanonicalPresenceLatestTurn(null, chat.presence)
             thread.hasPendingApprovals = chat.presence?.attention === 'approval'
-            thread.hasPendingUserInputs = chat.presence?.attention === 'input'
+            thread.hasPendingUserInputs = hasCanonicalUserInputAttention(chat.presence)
             if (chat.presence?.state === 'running') thread.state = 'running'
             if (chat.presence?.state === 'background') thread.state = 'waiting'
             thread.updatedAt = updatedAt
@@ -1854,29 +2189,67 @@ export class AssistantService {
         try {
             const history = await this.runtime.readCanonicalChatHistory(input.canonicalChatId, input.project, {
                 before: input.before,
-                limit: 500,
+                limit: CANONICAL_CHAT_HISTORY_PAGE_LIMIT,
                 toolResultBodies: 'lazy-v1'
             })
             if (!history) return false
-            const projection = projectCanonicalTimeline(
-                history.entries || [],
+            let canonicalEntries = history.entries || []
+            let canonicalStartCursor = Math.max(0, Number(history.pageInfo?.startCursor) || 0)
+            let canonicalOldestCursor = history.pageInfo?.oldestCursor || null
+            let canonicalHasOlder = history.pageInfo?.hasOlder === true
+            let projection = projectCanonicalTimeline(
+                canonicalEntries,
                 input.canonicalChatId,
                 input.key,
                 input.fallbackCreatedAt,
-                Number(history.pageInfo?.startCursor || 0),
+                canonicalStartCursor,
                 history.chat.cwd || input.project
             )
+            const seenCanonicalCursors = new Set<string>()
+            while (
+                !projection.messages.some((message) => message.role === 'user')
+                && canonicalHasOlder
+                && canonicalOldestCursor
+            ) {
+                if (
+                    seenCanonicalCursors.has(canonicalOldestCursor)
+                    || canonicalEntries.length >= CANONICAL_SINGLE_TURN_MAX_ENTRIES
+                ) {
+                    throw new Error('Canonical history could not find a complete user turn within the bounded import window.')
+                }
+                seenCanonicalCursors.add(canonicalOldestCursor)
+                const older = await this.runtime.readCanonicalChatHistory(input.canonicalChatId, input.project, {
+                    before: canonicalOldestCursor,
+                    limit: CANONICAL_CHAT_HISTORY_PAGE_LIMIT,
+                    toolResultBodies: 'lazy-v1'
+                })
+                if (!older) break
+                canonicalEntries = [...(older.entries || []), ...canonicalEntries]
+                canonicalStartCursor = Math.max(0, Number(older.pageInfo?.startCursor) || 0)
+                canonicalOldestCursor = older.pageInfo?.oldestCursor || null
+                canonicalHasOlder = older.pageInfo?.hasOlder === true
+                projection = projectCanonicalTimeline(
+                    canonicalEntries,
+                    input.canonicalChatId,
+                    input.key,
+                    input.fallbackCreatedAt,
+                    canonicalStartCursor,
+                    history.chat.cwd || input.project
+                )
+            }
             const record = findThreadRecord(this.state.snapshot, input.threadId)
             const canonicalHistoryModifiedAt = normalizeCatalogDate(history.chat.modifiedAt, record?.thread.updatedAt || input.fallbackCreatedAt)
             const canonicalHistoryEntryCount = Math.max(0, Number(history.chat.entryCount ?? history.pageInfo?.totalEntries) || 0)
             if (record && (projection.messages.length > 0 || projection.activities.length > 0)) {
                 const persistedTimeline = await this.persistence.readTimelineProjectionRows(input.threadId)
+                const canonicalMessages = preserveCanonicalUserReplayBoundaries(persistedTimeline.messages, projection.messages)
+                const canonicalActivities = reconcileCanonicalFileChangeActivities(persistedTimeline.activities, projection.activities)
                 const removedMessageIds = [...new Set([
                     ...projection.legacyMessageIds,
                     ...findDuplicateProjectedMessageIds(persistedTimeline.messages),
                     ...findSupersededCanonicalMessageIds(
                         persistedTimeline.messages,
-                        projection.messages,
+                        canonicalMessages,
                         projection.legacyMessageIds
                     )
                 ])]
@@ -1885,7 +2258,7 @@ export class AssistantService {
                     ...findDuplicateProjectedActivityIds(persistedTimeline.activities),
                     ...findSupersededCanonicalActivityIds(
                         persistedTimeline.activities,
-                        projection.activities,
+                        canonicalActivities,
                         projection.legacyActivityIds
                     )
                 ])]
@@ -1894,10 +2267,10 @@ export class AssistantService {
                     patch: {
                         canonicalHistoryModifiedAt,
                         canonicalHistoryEntryCount,
-                        messages: projection.messages,
-                        activities: projection.activities,
-                        messageCount: countMergedCanonicalRecords(persistedTimeline.messages, projection.messages, removedMessageIds),
-                        activityCount: countMergedCanonicalRecords(persistedTimeline.activities, projection.activities, removedActivityIds)
+                        messages: canonicalMessages,
+                        activities: canonicalActivities,
+                        messageCount: countMergedCanonicalRecords(persistedTimeline.messages, canonicalMessages, removedMessageIds),
+                        activityCount: countMergedCanonicalRecords(persistedTimeline.activities, canonicalActivities, removedActivityIds)
                     },
                     removedMessageIds,
                     removedActivityIds
@@ -1909,8 +2282,8 @@ export class AssistantService {
                 }, input.sessionId, input.threadId)
             }
             this.canonicalHistoryState.set(input.canonicalChatId, {
-                before: history.pageInfo?.oldestCursor || null,
-                hasOlder: history.pageInfo?.hasOlder === true,
+                before: canonicalOldestCursor,
+                hasOlder: canonicalHasOlder,
                 project: input.project,
                 key: input.key,
                 sessionId: input.sessionId,
@@ -1923,7 +2296,8 @@ export class AssistantService {
         }
     }
 
-    private async ensureCanonicalReviewHistoryIndexed(session: AssistantSession, thread: AssistantThread): Promise<void> {
+    /** Reserved for explicit bounded Review backfill work; never call from a read-only panel request. */
+    async ensureCanonicalReviewHistoryIndexed(session: AssistantSession, thread: AssistantThread): Promise<void> {
         const canonicalChatId = thread.providerThreadId
         if (!canonicalChatId) return
         const pending = this.canonicalReviewIndexPromises.get(canonicalChatId)
@@ -2012,12 +2386,14 @@ export class AssistantService {
             latest.chat.cwd || project
         )
         const persistedTimeline = await this.persistence.readTimelineProjectionRows(thread.id)
+        const canonicalMessages = preserveCanonicalUserReplayBoundaries(persistedTimeline.messages, projection.messages)
+        const canonicalActivities = reconcileCanonicalFileChangeActivities(persistedTimeline.activities, projection.activities)
         const removedMessageIds = [...new Set([
             ...projection.legacyMessageIds,
             ...findDuplicateProjectedMessageIds(persistedTimeline.messages),
             ...findSupersededCanonicalMessageIds(
                 persistedTimeline.messages,
-                projection.messages,
+                canonicalMessages,
                 projection.legacyMessageIds
             )
         ])]
@@ -2026,14 +2402,14 @@ export class AssistantService {
             ...findDuplicateProjectedActivityIds(persistedTimeline.activities),
             ...findSupersededCanonicalActivityIds(
                 persistedTimeline.activities,
-                projection.activities,
+                canonicalActivities,
                 projection.legacyActivityIds
             )
         ])]
         await this.persistence.projectCanonicalReviewTimeline({
             threadId: thread.id,
-            messages: projection.messages,
-            activities: projection.activities,
+            messages: canonicalMessages,
+            activities: canonicalActivities,
             removedMessageIds,
             removedActivityIds
         })
@@ -2049,10 +2425,10 @@ export class AssistantService {
             if (!ref) continue
             try {
                 const hydrated = await this.hydrateHistoryBody({ activityId: activity.id, ref })
-                hydratedFileChanges.push({
+                hydratedFileChanges.push(reconcileCanonicalFileChangeActivity(activity, {
                     ...activity,
                     payload: { ...(activity.payload || {}), ...hydrated.body.payload }
-                })
+                }))
             } catch (error) {
                 log.warn('[Assistant] Failed to hydrate a deferred Review file change', {
                     canonicalChatId: ref.canonicalChatId,
@@ -2062,6 +2438,42 @@ export class AssistantService {
             }
         }
         return hydratedFileChanges
+    }
+
+    private async maybeAutoRegenerateSessionTitle(sessionId: string, threadId: string): Promise<void> {
+        const preferences = await this.options.getTitleAutomation?.().catch(() => null)
+        if (!preferences?.enabled) return
+        const session = this.state.snapshot.sessions.find((entry) => entry.id === sessionId) || null
+        const thread = session?.threads.find((entry) => entry.id === threadId) || null
+        if (!session || !thread || thread.source !== 'root' || session.titleGenerating) return
+
+        const review = await this.persistence.readReviewIndex(thread.id)
+        const completedTurns = review.turns.filter((turn) => turn.state === 'completed' && turn.prompt && turn.response)
+        if (!shouldAutoRegenerateSessionTitle(completedTurns.length, preferences)) return
+        const milestone = `${session.id}:${thread.id}:${completedTurns.length}`
+        if (this.autoTitleMilestones.has(milestone)) return
+        this.autoTitleMilestones.add(milestone)
+
+        const preferredModel = await this.options.getTitleGenerationModel?.().catch(() => null) || null
+        await generateReplacementSessionTitle({
+            sessionId: session.id,
+            threadId: thread.id,
+            turns: completedTurns,
+            seedTitle: session.title,
+            cwd: this.getSessionRuntimeCwd(session, thread),
+            preferredModel,
+            generateText: (prompt, options) => this.runtime.generateText(prompt, options),
+            getSnapshot: () => this.state.snapshot,
+            appendEvent: (type, occurredAt, payload, eventSessionId, eventThreadId) => {
+                this.appendEvent(type, occurredAt, payload, eventSessionId, eventThreadId)
+            },
+            onApplied: async (nextTitle) => {
+                await Promise.allSettled(session.threads
+                    .map((entry) => entry.providerThreadId)
+                    .filter((providerThreadId): providerThreadId is string => Boolean(providerThreadId))
+                    .map((providerThreadId) => this.runtime.updateCanonicalChat(providerThreadId, { title: nextTitle })))
+            }
+        })
     }
 
     private async recoverSelectedSessionTitle(): Promise<void> {
@@ -2200,8 +2612,10 @@ export class AssistantService {
             flushAssistantActivityDelta: (target) => this.assistantActivityDeltaBuffer.flush(target),
             appendEvent: (type, occurredAt, payload, sessionId, threadId) => this.appendEvent(type, occurredAt, payload, sessionId, threadId),
             projectFleet: (threadId, snapshot) => {
+                if (!shouldApplyAssistantFleetSnapshot(this.fleetProjection.get(threadId), snapshot)) return false
                 this.fleetProjection.apply(threadId, snapshot)
                 this.persistence.projectFleet(threadId, snapshot)
+                return true
             },
             updateLatestTurnAssistantMessage: (sessionId, threadId, assistantMessageId, occurredAt) => {
                 updateLatestTurnAssistantMessage(this.state.snapshot, sessionId, threadId, assistantMessageId, occurredAt, (type, eventOccurredAt, payload, eventSessionId, eventThreadId) => {
@@ -2226,6 +2640,9 @@ export class AssistantService {
                         removedActivityIds
                     }, completedRecord.session.id, completedRecord.thread.id)
                 }
+                void this.maybeAutoRegenerateSessionTitle(completedRecord.session.id, completedRecord.thread.id).catch((error) => {
+                    log.warn('[Assistant] Automatic title regeneration failed:', error)
+                })
             }
         }
 
@@ -2315,7 +2732,7 @@ function requireCanonicalVoiceExecutionConfiguration(value: unknown): AssistantV
         model,
         effort: record.effort,
         runtimeMode: record.runtimeMode,
-        interactionMode: record.interactionMode,
+        interactionMode: 'default',
         profile,
         ...(record.serviceTier === 'fast' ? { serviceTier: 'fast' as const } : {})
     }
@@ -2398,6 +2815,7 @@ export function projectCanonicalTimeline(
     const legacyMessageIds = new Set<string>()
     const legacyActivityIds = new Set<string>()
     let activeTurnId: string | null = null
+    let suppressInternalTitleTurn = false
     for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
         const entryValue = entries[entryIndex]
         if (!entryValue || typeof entryValue !== 'object') continue
@@ -2434,10 +2852,26 @@ export function projectCanonicalTimeline(
         if (messageId !== legacyMessageId) legacyMessageIds.add(legacyMessageId)
         const messageOccurredAt = normalizeCatalogDate(message['timestamp'] || entry['timestamp'], occurredAt)
         const content = canonicalContentParts(message['content'])
+        const text = canonicalMessageText(content)
         if (role === 'user') {
+            suppressInternalTitleTurn = isAssistantTitleGenerationPrompt(text)
+            activeTurnId = suppressInternalTitleTurn ? null : `shared-turn:${key}:${sourceMessageId}`
+        } else if (role === 'assistant' && !activeTurnId && !suppressInternalTitleTurn) {
             activeTurnId = `shared-turn:${key}:${sourceMessageId}`
-        } else if (role === 'assistant' && !activeTurnId) {
-            activeTurnId = `shared-turn:${key}:${sourceMessageId}`
+        }
+
+        if (suppressInternalTitleTurn) {
+            if (role === 'user' || role === 'assistant' || role === 'system') legacyMessageIds.add(messageId)
+            if (content.some((part) => part['type'] === 'thinking')) {
+                legacyActivityIds.add(`assistant-internal-${sourceMessageId}`)
+            }
+            for (const part of content.filter((candidate) => candidate['type'] === 'toolCall')) {
+                legacyActivityIds.add(`zyra-tool-${String(part['id'] || `${messageId}:tool:${activities.size + 1}`)}`)
+            }
+            if (role === 'toolResult') {
+                legacyActivityIds.add(`zyra-tool-${String(message['toolCallId'] || message['tool_call_id'] || messageId)}`)
+            }
+            continue
         }
 
         if (role === 'user' || role === 'assistant' || role === 'system') {
@@ -2446,9 +2880,8 @@ export function projectCanonicalTimeline(
                     ? canonicalImageAttachment(canonicalChatId, messageId, partIndex, part)
                     : null)
                 .filter((value): value is string => Boolean(value))
-            const text = canonicalMessageText(content)
             const projectedText = role === 'user' && imageAttachments.length > 0
-                ? serializeCanonicalAttachments(text, imageAttachments)
+                ? replaceSerializedAssistantImageAttachments(text, imageAttachments)
                 : text
             if (projectedText) {
                 messages.push({
@@ -2669,7 +3102,7 @@ export function findDuplicateProjectedMessageIds(messages: AssistantMessage[]): 
         if (group) group.push(message)
         else groups.set(signature, [message])
     }
-    const removed = new Set<string>()
+    const removed = new Set(findAssistantMessageReplayDuplicateIds(messages))
     for (const group of groups.values()) {
         if (group.length < 2) continue
         const isCanonicalMessageId = (id: string) => !id.startsWith('assistant-message-') || id.includes('pi-message:')
@@ -2703,6 +3136,7 @@ export function findSupersededCanonicalMessageIds(
 ): string[] {
     const canonicalIds = new Set(canonical.map((message) => message.id))
     const legacyIdSet = new Set(legacyIds)
+    const replayDuplicateIds = new Set(findAssistantMessageReplayDuplicateIds([...existing, ...canonical]))
     const canonicalBySignature = new Map<string, number[]>()
     for (const message of canonical) {
         const timestamp = Date.parse(message.createdAt)
@@ -2712,7 +3146,7 @@ export function findSupersededCanonicalMessageIds(
     }
     return existing.flatMap((message) => {
         if (canonicalIds.has(message.id)) return []
-        if (legacyIdSet.has(message.id)) return [message.id]
+        if (legacyIdSet.has(message.id) || replayDuplicateIds.has(message.id)) return [message.id]
         if (!message.id.startsWith('assistant-message-')) return []
         const canonicalTimestamps = canonicalBySignature.get(canonicalMessageSignature(message)) || []
         const timestamp = Date.parse(message.createdAt)
@@ -2808,10 +3242,6 @@ function canonicalImageAttachment(
         log.warn('[Assistant] Failed to cache a canonical transcript image', { canonicalChatId, messageId, error })
         return null
     }
-}
-
-function serializeCanonicalAttachments(body: string, attachments: string[]): string {
-    return `${body.trimEnd()}\n\nAttached files (${attachments.length}):\n${attachments.join('\n\n')}`.trimStart()
 }
 
 function historyBodyRefsMatch(left: AssistantHistoryBodyRef, right: AssistantHistoryBodyRef): boolean {

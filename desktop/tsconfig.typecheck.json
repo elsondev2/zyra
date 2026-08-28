@@ -3,7 +3,9 @@
     "compilerOptions": {
         "types": [
             "node"
-        ]
+        ],
+        "incremental": true,
+        "tsBuildInfoFile": "./node_modules/.cache/typescript/full.tsbuildinfo"
     },
     "include": [
         "src/**/*"

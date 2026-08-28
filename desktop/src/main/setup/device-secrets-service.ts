@@ -1,7 +1,9 @@
 import { readFile } from 'node:fs/promises'
 import type {
+    BrowserIntegrationSecretStatus,
     HostedAiSecrets,
     HostedAiSecretStatus,
+    UpdateBrowserIntegrationSecretsInput,
     UpdateHostedAiSecretsInput
 } from '../../shared/preferences/secrets-contracts'
 import { writeBytesAtomically } from './atomic-json'
@@ -16,6 +18,7 @@ type SecretRecord = {
     schemaVersion: 1
     groqApiKey: string
     geminiApiKey: string
+    unsplashAccessKey: string
     legacyMigrationCompletedAt: string | null
     updatedAt: string
 }
@@ -25,6 +28,7 @@ function emptyRecord(now: string): SecretRecord {
         schemaVersion: 1,
         groqApiKey: '',
         geminiApiKey: '',
+        unsplashAccessKey: '',
         legacyMigrationCompletedAt: null,
         updatedAt: now
     }
@@ -45,6 +49,7 @@ function parseRecord(value: unknown, now: string): SecretRecord {
         schemaVersion: 1,
         groqApiKey: sanitizeSecret(candidate.groqApiKey),
         geminiApiKey: sanitizeSecret(candidate.geminiApiKey),
+        unsplashAccessKey: sanitizeSecret(candidate.unsplashAccessKey),
         legacyMigrationCompletedAt: typeof candidate.legacyMigrationCompletedAt === 'string'
             ? candidate.legacyMigrationCompletedAt
             : null,
@@ -66,6 +71,14 @@ export class DeviceSecretsService {
     async getHostedAiKey(provider: 'groq' | 'gemini'): Promise<string> {
         const record = await this.load()
         return provider === 'groq' ? record.groqApiKey : record.geminiApiKey
+    }
+
+    isPersistenceAvailable(): boolean {
+        return this.encryption.isAvailable()
+    }
+
+    async getUnsplashAccessKey(): Promise<string> {
+        return (await this.load()).unsplashAccessKey
     }
 
     /** Test/support boundary; decrypted keys are never exposed through IPC. */
@@ -105,6 +118,26 @@ export class DeviceSecretsService {
         })
     }
 
+    updateBrowserIntegrationSecrets(input: UpdateBrowserIntegrationSecretsInput): Promise<{ status: BrowserIntegrationSecretStatus }> {
+        return this.enqueue(async () => {
+            const record = await this.load()
+            const hasUpdate = Object.prototype.hasOwnProperty.call(input || {}, 'unsplashAccessKey')
+            const unsplashAccessKey = hasUpdate ? sanitizeSecret(input?.unsplashAccessKey) : record.unsplashAccessKey
+            if (hasUpdate && record.unsplashAccessKey && !unsplashAccessKey && input?.confirmClear !== true) {
+                throw Object.assign(new Error('Confirm before removing the saved Unsplash access key.'), {
+                    code: 'CONFIRMATION_REQUIRED'
+                })
+            }
+            const next: SecretRecord = {
+                ...record,
+                unsplashAccessKey,
+                updatedAt: this.now().toISOString()
+            }
+            await this.persist(next)
+            return { status: this.browserIntegrationStatus(next) }
+        })
+    }
+
     migrateLegacyHostedAiKeys(input: UpdateHostedAiSecretsInput): Promise<{ status: HostedAiSecretStatus }> {
         return this.enqueue(async () => {
             const record = await this.load()
@@ -120,6 +153,13 @@ export class DeviceSecretsService {
             await this.persist(next)
             return { status: this.status(next) }
         })
+    }
+
+    private browserIntegrationStatus(record: SecretRecord): BrowserIntegrationSecretStatus {
+        return {
+            unsplashConfigured: Boolean(record.unsplashAccessKey),
+            persistenceAvailable: this.encryption.isAvailable()
+        }
     }
 
     private status(record: SecretRecord): HostedAiSecretStatus {

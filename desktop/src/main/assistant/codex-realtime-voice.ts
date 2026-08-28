@@ -200,7 +200,6 @@ export class ChatGptRealtimeVoiceRuntime extends EventEmitter {
             channel: 'speakable',
             content: [{ type: 'input_text', text: chunk }]
         }))
-        messages.push({ type: 'response.create' })
         this.emitClientMessages(session, messages)
     }
 

@@ -14,17 +14,20 @@ import type {
     AssistantRuntimeMode,
     AssistantSendPromptOptions,
     AssistantSession,
+    AssistantSessionUsageTotals,
     AssistantSnapshot,
     AssistantThread
 } from '../../shared/assistant/contracts'
 import type { PreparedAssistantPromptImage } from './prompt-images'
 import type { AssistantNewChatExecutionDefaults } from './service-state'
+import type { AssistantRuntimePolicy } from '../../shared/assistant/runtime-policy'
 
 export interface AssistantRuntimeBridge {
     checkAvailability(): Promise<{ available: boolean; reason: string | null }>
     listModels(forceRefresh?: boolean): Promise<AssistantModelInfo[]>
     connect(thread: AssistantThread, cwd: string): Promise<void>
     hasSession(threadId: string): boolean
+    getSessionUsage?(threadId: string): AssistantSessionUsageTotals | null
     generateText(
         prompt: string,
         options: { cwd: string; model?: string; effort?: AssistantReasoningEffort; timeoutMs?: number }
@@ -44,6 +47,8 @@ export interface AssistantRuntimeBridge {
             serviceTier?: 'fast'
             profile?: string
             images?: PreparedAssistantPromptImage[]
+            reasoningSummary?: AssistantRuntimePolicy['reasoningSummary']
+            contextCompactionThresholdTokens?: number
         }
     ): Promise<{ turnId: string; providerThreadId: string | null }>
     interruptTurn(threadId: string, turnId?: string): Promise<void>
@@ -63,6 +68,7 @@ export interface AssistantServiceActionDeps {
     getFirstUserMessageText(sessionId: string): Promise<string | null>
     getNewChatExecutionDefaults(): Promise<AssistantNewChatExecutionDefaults>
     getTitleGenerationModel(): Promise<string | null>
+    getRuntimePolicy?(): Promise<AssistantRuntimePolicy>
     appendEvent(
         type: AssistantDomainEvent['type'],
         occurredAt: string,

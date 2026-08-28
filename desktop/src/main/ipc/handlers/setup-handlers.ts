@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain as electronIpcMain } from 'electron'
+import { BrowserWindow } from 'electron'
 import {
     ONBOARDING_IPC,
     type BeginOnboardingReviewInput,
@@ -16,10 +16,12 @@ import {
 } from '../../../shared/preferences/contracts'
 import {
     DEVICE_SECRETS_IPC,
+    type UpdateBrowserIntegrationSecretsInput,
     type UpdateHostedAiSecretsInput
 } from '../../../shared/preferences/secrets-contracts'
 import type { DesktopSetupServices } from '../../setup'
 import { createOnboardingGatedIpcMain } from '../onboarding-ipc-gate'
+import { ipcMain as trustedIpcMain } from '../trusted-ipc'
 
 const PRE_ONBOARDING_SETUP_CHANNELS = new Set<string>([
     DEVICE_PREFERENCES_IPC.get,
@@ -63,7 +65,7 @@ export function registerSetupIpcHandlers(services: DesktopSetupServices): void {
     services.preferences.subscribe((event) => broadcast(DEVICE_PREFERENCES_IPC.changed, event))
     services.onboarding.subscribe((snapshot) => broadcast(ONBOARDING_IPC.changed, snapshot))
 
-    const ipcMain = createOnboardingGatedIpcMain(electronIpcMain, {
+    const ipcMain = createOnboardingGatedIpcMain(trustedIpcMain, {
         isAccessAllowed: () => services.onboarding.isAccessAllowed(),
         allowedBeforeOnboarding: PRE_ONBOARDING_SETUP_CHANNELS,
         blockedResult: onboardingRequiredError
@@ -81,6 +83,9 @@ export function registerSetupIpcHandlers(services: DesktopSetupServices): void {
     )))
     ipcMain.handle(DEVICE_SECRETS_IPC.migrateLegacyHostedAiKeys, (_event, input: UpdateHostedAiSecretsInput) => result(async () => (
         services.secrets.migrateLegacyHostedAiKeys(input)
+    )))
+    ipcMain.handle(DEVICE_SECRETS_IPC.updateBrowserIntegrationSecrets, (_event, input: UpdateBrowserIntegrationSecretsInput) => result(async () => (
+        services.secrets.updateBrowserIntegrationSecrets(input)
     )))
 
     ipcMain.handle(ONBOARDING_IPC.getState, () => result(async () => ({

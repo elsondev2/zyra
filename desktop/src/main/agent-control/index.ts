@@ -41,9 +41,9 @@ export function getAgentControlBroker(): AgentControlBroker {
     return broker
 }
 
-export function bindTrustedBrowserTarget(ownerWebContentsId: number, guestWebContentsId: number, tabId: string, ownerThreadId: string) {
+export function bindTrustedBrowserTarget(ownerWebContentsId: number, guestWebContentsId: number, tabId: string, ownerThreadId: string, sessionMode: 'normal' | 'incognito') {
     const controlBroker = getAgentControlBroker()
-    const guestEntry = trustedBrowserGuests.bind(ownerWebContentsId, guestWebContentsId, tabId, ownerThreadId)
+    const guestEntry = trustedBrowserGuests.bind(ownerWebContentsId, guestWebContentsId, tabId, ownerThreadId, sessionMode)
     const existingTargetId = browserTargetByGuestIdentity.get(guestEntry.guestIdentity)
     if (existingTargetId) return controlBroker.targets.get(existingTargetId).target
     if (!browserDriver) throw new Error('Integrated Browser control driver is unavailable.')
@@ -52,7 +52,7 @@ export function bindTrustedBrowserTarget(ownerWebContentsId: number, guestWebCon
     const origin = /^https?:/.test(url) ? new URL(url).origin : null
     const target = controlBroker.registerTarget({
         target: {
-            kind: 'zyra-browser', targetId, tabId, ownerThreadId, guestIdentity: guestEntry.guestIdentity, origin,
+            kind: 'zyra-browser', targetId, tabId, sessionMode, ownerThreadId, guestIdentity: guestEntry.guestIdentity, origin,
             url: /^https?:/.test(url) ? url : null,
             title: guestEntry.guest.getTitle().slice(0, 512) || null
         },
@@ -61,11 +61,29 @@ export function bindTrustedBrowserTarget(ownerWebContentsId: number, guestWebCon
         ownerWebContentsId
     })
     browserTargetByGuestIdentity.set(guestEntry.guestIdentity, targetId)
-    installGuestLifecycle(guestEntry.guest, targetId, controlBroker, ownerWebContentsId)
+    installGuestLifecycle(guestEntry.guest, targetId, controlBroker)
     return target
 }
 
-function installGuestLifecycle(guest: WebContents, targetId: string, controlBroker: AgentControlBroker, ownerWebContentsId: number): void {
+export function transferTrustedBrowserTargetOwner(
+    guestWebContentsId: number,
+    previousOwnerWebContentsId: number,
+    ownerWebContentsId: number
+): void {
+    if (previousOwnerWebContentsId === ownerWebContentsId) return
+    const entry = trustedBrowserGuests.transferOwner(guestWebContentsId, previousOwnerWebContentsId, ownerWebContentsId)
+    const targetId = browserTargetByGuestIdentity.get(entry.guestIdentity)
+    if (!targetId || !broker) return
+    try {
+        broker.transferTargetOwner(targetId, previousOwnerWebContentsId, ownerWebContentsId)
+    } catch (error) {
+        try { broker.transferTargetOwner(targetId, ownerWebContentsId, previousOwnerWebContentsId) } catch {}
+        trustedBrowserGuests.transferOwner(guestWebContentsId, ownerWebContentsId, previousOwnerWebContentsId)
+        throw error
+    }
+}
+
+function installGuestLifecycle(guest: WebContents, targetId: string, controlBroker: AgentControlBroker): void {
     const navigation = (_event: unknown, url: string, _isInPlace?: boolean, isMainFrame?: boolean) => {
         if (isMainFrame === false || !/^https?:\/\//.test(url)) return
         controlBroker.handleTargetNavigation(targetId, url)
@@ -74,7 +92,10 @@ function installGuestLifecycle(guest: WebContents, targetId: string, controlBrok
     const input = (_event: unknown, value: Electron.InputEvent) => {
         const category = controlInteractionCategory(value.type)
         if (!category) return
-        const owner = BrowserWindow.getAllWindows().find((window) => window.webContents.id === ownerWebContentsId)
+        const ownerWebContentsId = trustedBrowserGuests.findByGuestId(guest.id)?.ownerWebContentsId
+        const owner = ownerWebContentsId
+            ? BrowserWindow.getAllWindows().find((window) => window.webContents.id === ownerWebContentsId)
+            : null
         const contentBounds = owner?.getContentBounds()
         const cursor = category === 'pointer-action' || category === 'scroll' || category === 'gesture'
             ? screen.getCursorScreenPoint()

@@ -56,7 +56,7 @@ export function createChatGptRealtimeCapabilityReport(
             transcript_events: transcriptCapability,
             session_context_seed: direct('Frameless session.initial_items'),
             silent_context_append: ownerCommand('session.context.append channel=commentary'),
-            explicit_speech: ownerCommand('session.context.append channel=speakable + response.create'),
+            explicit_speech: ownerCommand('session.context.append channel=speakable'),
             direct_image_input: unsupported('Typed Voice images are explicitly gated because utility text generation cannot truthfully inspect them.'),
             arbitrary_client_tools: unsupported('The realtime foreground does not register arbitrary client tools.'),
             sideband_control: ownerCommand('Owner-scoped oai-events client commands'),

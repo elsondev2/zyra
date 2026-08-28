@@ -73,10 +73,14 @@ if (taggedPublication) {
         'ZYRA_MACOS_CERTIFICATE_PASSWORD',
         'ZYRA_MACOS_NOTARIZATION_API_KEY',
         'ZYRA_MACOS_NOTARIZATION_KEY_ID',
-        'ZYRA_MACOS_NOTARIZATION_ISSUER_ID'
+        'ZYRA_MACOS_NOTARIZATION_ISSUER_ID',
+        'EVS_ACCOUNT_NAME',
+        'EVS_PASSWD',
+        'ZYRA_ACCEPT_ECS_SECURITY_DELTA'
     ]
     const missing = requiredSecrets.filter((name) => !hasSecret(name))
     assert(missing.length === 0, `Tagged publication is blocked; missing signing/notarization secrets: ${missing.join(', ')}`)
+    assert(process.env.ZYRA_ACCEPT_ECS_SECURITY_DELTA === 'true', 'Tagged publication is blocked until the CastLabs Electron 43.2 versus stock Electron 43.4 security delta is explicitly accepted or removed by an upgrade.')
 }
 
 const output = process.env.GITHUB_OUTPUT

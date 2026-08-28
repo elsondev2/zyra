@@ -7,6 +7,7 @@ import type {
     AssistantSnapshot,
     AssistantThread
 } from './contracts'
+import { reconcileAssistantMessageReplays } from './message-reconciliation'
 
 type ThreadLocation = {
     sessionIndex: number
@@ -312,7 +313,11 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
             delete patch.pendingApprovals
             delete patch.pendingUserInputs
             Object.assign(writable.thread, patch)
-            if (messages || Array.isArray(event.payload['removedMessageIds'])) writable.thread.messages = mergeThreadRecordsById(writable.thread.messages, messages || [], event.payload['removedMessageIds'])
+            if (messages || Array.isArray(event.payload['removedMessageIds'])) {
+                writable.thread.messages = reconcileAssistantMessageReplays(
+                    mergeThreadRecordsById(writable.thread.messages, messages || [], event.payload['removedMessageIds'])
+                )
+            }
             if (activities || Array.isArray(event.payload['removedActivityIds'])) writable.thread.activities = mergeThreadRecordsById(writable.thread.activities, activities || [], event.payload['removedActivityIds'])
             if (proposedPlans || Array.isArray(event.payload['removedProposedPlanIds'])) writable.thread.proposedPlans = mergeThreadRecordsById(writable.thread.proposedPlans, proposedPlans || [], event.payload['removedProposedPlanIds'])
             if (pendingApprovals || Array.isArray(event.payload['removedPendingApprovalIds'])) writable.thread.pendingApprovals = mergeThreadRecordsById(writable.thread.pendingApprovals, pendingApprovals || [], event.payload['removedPendingApprovalIds'])
@@ -346,6 +351,7 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
                         ...existing,
                         role: 'assistant',
                         text: `${existing.text}${delta}`,
+                        turnId: existing.turnId || String(event.payload['turnId'] || '') || null,
                         streaming: true,
                         updatedAt: event.occurredAt
                     }
@@ -374,6 +380,7 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
                         ...(canonicalCompletion || {}),
                         id: messageId,
                         text: completedText,
+                        turnId: canonicalCompletion?.turnId || existing.turnId || String(event.payload['turnId'] || '') || null,
                         streaming: false,
                         timelineSequence: canonicalCompletion?.timelineSequence ?? existing.timelineSequence,
                         createdAt: canonicalCompletion?.createdAt || existing.createdAt,
@@ -388,6 +395,7 @@ function applyAssistantDomainEventInternal(snapshot: AssistantSnapshot, event: A
                 })
             }
 
+            writable.thread.messages = reconcileAssistantMessageReplays(writable.thread.messages)
             const addedMessageCount = Math.max(0, writable.thread.messages.length - loadedMessageCountBefore)
             if (addedMessageCount > 0) writable.thread.messageCount += addedMessageCount
             if (event.type !== 'thread.message.assistant.delta') {

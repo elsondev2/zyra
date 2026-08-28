@@ -34,6 +34,15 @@ export class TargetRegistry {
         return [...this.targets.values()].find((entry) => entry.trustedIdentity === identity)
     }
 
+    transferOwner(targetId: string, previousOwnerWebContentsId: number, ownerWebContentsId: number): RegisteredControlTarget {
+        const target = this.get(targetId)
+        if (target.ownerWebContentsId !== previousOwnerWebContentsId) {
+            throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The Browser control target owner changed during transfer.')
+        }
+        target.ownerWebContentsId = ownerWebContentsId
+        return target
+    }
+
     list(kind?: ControlTarget['kind']): RegisteredControlTarget[] {
         return [...this.targets.values()].filter((entry) => !kind || entry.target.kind === kind)
     }

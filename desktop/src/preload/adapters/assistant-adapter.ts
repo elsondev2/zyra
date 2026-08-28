@@ -62,6 +62,7 @@ export function createAssistantAdapter() {
             getTurnDetail: (input: AssistantGetTurnDetailInput) => ipcRenderer.invoke(ASSISTANT_IPC.getTurnDetail, input),
             searchTurns: (input: AssistantSearchTurnsInput) => ipcRenderer.invoke(ASSISTANT_IPC.searchTurns, input),
             renameSession: (sessionId: string, title: string) => ipcRenderer.invoke(ASSISTANT_IPC.renameSession, sessionId, title),
+            regenerateSessionTitle: (sessionId: string) => ipcRenderer.invoke(ASSISTANT_IPC.regenerateSessionTitle, sessionId),
             archiveSession: (sessionId: string, archived = true) => ipcRenderer.invoke(ASSISTANT_IPC.archiveSession, sessionId, archived),
             deleteSession: (sessionId: string) => ipcRenderer.invoke(ASSISTANT_IPC.deleteSession, sessionId),
             deleteMessage: (input: AssistantDeleteMessageInput) => ipcRenderer.invoke(ASSISTANT_IPC.deleteMessage, input),

@@ -496,6 +496,7 @@ export class BrowserAssistantBridge {
                 return service.searchTurns(input.threadId, input.query, input.limit)
             }
             case 'renameSession': return service.renameSession(args[0] as string, args[1] as string)
+            case 'regenerateSessionTitle': return service.regenerateSessionTitle(args[0] as string)
             case 'archiveSession': return service.archiveSession(args[0] as string, args[1] !== false)
             case 'deleteSession': return service.deleteSession(args[0] as string)
             case 'deleteMessage': return service.deleteMessage(args[0] as any)

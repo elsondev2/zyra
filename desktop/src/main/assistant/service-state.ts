@@ -47,7 +47,7 @@ export function createAssistantThread(
         proposedPlanCount: 0,
         lastSeenCompletedTurnId: null,
         runtimeMode: previousThread?.runtimeMode || 'approval-required',
-        interactionMode: previousThread?.interactionMode || 'default',
+        interactionMode: 'default',
         webSearch: defaults?.webSearch ?? previousThread?.webSearch ?? null,
         webFetch: defaults?.webFetch ?? previousThread?.webFetch ?? null,
         state: 'idle',

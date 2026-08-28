@@ -1,4 +1,6 @@
-import type { Database as SqlJsDatabase, SqlValue } from 'sql.js/dist/sql-asm.js'
+import type { Database as SqlJsDatabase, SqlValue, Statement as SqlJsStatement } from 'sql.js/dist/sql-asm.js'
+
+type SqlBindParams = SqlValue[] | Record<string, SqlValue>
 
 type NativeStatement = {
     all(...params: unknown[]): unknown[][]
@@ -17,8 +19,26 @@ type NativeSqliteModule = {
     DatabaseSync: new (path: string) => NativeDatabase
 }
 
-function normalizeParameters(params: SqlValue[]): unknown[] {
-    return params.map((value) => value === undefined ? null : value)
+function normalizeParameters(params: SqlBindParams): unknown[] {
+    return Array.isArray(params)
+        ? params.map((value) => value === undefined ? null : value)
+        : [params]
+}
+
+class SqlJsCompatibleNativeStatement {
+    private readonly statement: NativeStatement
+
+    constructor(statement: NativeStatement) {
+        this.statement = statement
+    }
+
+    run(params: SqlBindParams = []): void {
+        this.statement.run(...normalizeParameters(params))
+    }
+
+    free(): boolean {
+        return true
+    }
 }
 
 class SqlJsCompatibleNativeDatabase {
@@ -28,8 +48,8 @@ class SqlJsCompatibleNativeDatabase {
         this.database = database
     }
 
-    run(sql: string, params: SqlValue[] = []): this {
-        if (params.length === 0) {
+    run(sql: string, params: SqlBindParams = []): this {
+        if (Array.isArray(params) && params.length === 0) {
             this.database.exec(sql)
             return this
         }
@@ -37,7 +57,11 @@ class SqlJsCompatibleNativeDatabase {
         return this
     }
 
-    exec(sql: string, params: SqlValue[] = []): Array<{ columns: string[]; values: SqlValue[][] }> {
+    prepare(sql: string): SqlJsStatement {
+        return new SqlJsCompatibleNativeStatement(this.database.prepare(sql)) as unknown as SqlJsStatement
+    }
+
+    exec(sql: string, params: SqlBindParams = []): Array<{ columns: string[]; values: SqlValue[][] }> {
         const statement = this.database.prepare(sql)
         statement.setReturnArrays(true)
         const values = statement.all(...normalizeParameters(params)) as SqlValue[][]
@@ -53,7 +77,7 @@ class SqlJsCompatibleNativeDatabase {
     }
 }
 
-export async function openNativeAssistantDatabase(filePath: string): Promise<SqlJsDatabase> {
+export async function openNativeSqliteDatabase(filePath: string): Promise<SqlJsDatabase> {
     const moduleName = 'node:sqlite'
     const sqlite = await import(/* @vite-ignore */ moduleName) as unknown as NativeSqliteModule
     const database = new sqlite.DatabaseSync(filePath)
@@ -71,3 +95,5 @@ export async function openNativeAssistantDatabase(filePath: string): Promise<Sql
         throw error
     }
 }
+
+export const openNativeAssistantDatabase = openNativeSqliteDatabase

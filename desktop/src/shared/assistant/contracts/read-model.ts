@@ -167,9 +167,12 @@ export interface AssistantThreadShell {
         activeTurnId: string | null
         clients: Array<{ clientId: string; surface: string }>
         backgroundWorkActive: boolean
-        attention?: 'approval' | 'input' | null
+        attention?: 'approval' | 'input' | 'user-input' | null
         latestTurn?: AssistantLatestTurn | null
+        /** Highest canonical event sequence applied to the Desktop projection. */
         latestSequence?: number
+        /** Server-observed high-water mark; never used as a replay acknowledgement. */
+        observedSequence?: number
     }
     lastError: string | null
     createdAt: string
@@ -195,6 +198,7 @@ export type AssistantHistoryCursor = string
 export interface AssistantGetHistoryPageInput {
     threadId: string
     before?: AssistantHistoryCursor | null
+    after?: AssistantHistoryCursor | null
     turnLimit?: number
 }
 
@@ -310,7 +314,9 @@ export interface AssistantHistoryPage {
     proposedPlans: AssistantProposedPlan[]
     pageInfo: {
         oldestCursor: AssistantHistoryCursor | null
+        newestCursor: AssistantHistoryCursor | null
         hasOlder: boolean
+        hasNewer: boolean
         turnCount: number
     }
 }
@@ -318,7 +324,9 @@ export interface AssistantHistoryPage {
 export interface AssistantThreadHistoryState extends AssistantHistoryPage {
     initialLoading: boolean
     loadingOlder: boolean
+    loadingNewer: boolean
     loadOlderError: string | null
+    loadNewerError: string | null
     fullyLoaded: boolean
 }
 
@@ -333,6 +341,7 @@ export interface AssistantThreadDetail {
 export interface AssistantSession {
     id: string
     title: string
+    titleGenerating?: boolean
     mode: AssistantSessionMode
     projectPath: string | null
     playgroundLabId: string | null
@@ -354,6 +363,7 @@ export interface AssistantModelInfo {
     label: string
     description?: string
     supportedEfforts?: AssistantReasoningEffort[]
+    contextWindow?: number | null
 }
 
 export type AssistantAccountPlanType =
@@ -433,9 +443,18 @@ export interface AssistantAccountOverview {
     fetchedAt: string
 }
 
+export interface AssistantSessionUsageTotals extends AssistantTurnUsage {
+    threadId: string
+    contextTokens?: number | null
+    cacheHitPercent?: number | null
+    costComplete?: boolean | null
+    autoCompactionEnabled?: boolean | null
+}
+
 export interface AssistantSessionTurnUsagePayload {
     sessionId: string
     turns: AssistantSessionTurnUsageEntry[]
+    totals?: AssistantSessionUsageTotals | null
     fetchedAt: string
 }
 

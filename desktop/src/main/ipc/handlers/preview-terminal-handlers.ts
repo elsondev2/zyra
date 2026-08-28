@@ -2,8 +2,16 @@ import * as pty from 'node-pty'
 import { dirname, resolve } from 'path'
 import { stat } from 'fs/promises'
 import log from 'electron-log'
-import type { DevScopePreviewTerminalSessionSummary } from '../../../shared/contracts/devscope-api'
+import type {
+    DevScopePreviewTerminalSessionSummary,
+    DevScopePreviewTerminalWorkspaceOwner
+} from '../../../shared/contracts/devscope-api'
 import { getAugmentedEnv } from '../../inspectors/safe-exec'
+import {
+    PreviewTerminalWorkspaceRegistry,
+    previewTerminalEventChannel,
+    type PreviewTerminalSessionScope
+} from './preview-terminal-workspace-registry'
 
 export const PREVIEW_TERMINAL_EVENT_CHANNEL = 'devscope:previewTerminal:event'
 
@@ -23,9 +31,10 @@ type PreviewTerminalEventPayload = {
 type PreviewTerminalSession = {
     sessionId: string
     key: string
-    senderId: number
+    scopeKey: string
+    runtimeId: string | null
     proc: pty.IPty | null
-    webContents: Electron.WebContents
+    legacyWebContents: Electron.WebContents | null
     shell: string
     cwd: string
     groupKey: string
@@ -39,16 +48,43 @@ type PreviewTerminalSession = {
     oscTitleCarryover: string
 }
 
+type PreviewTerminalWorkspaceAuthorizer = (
+    event: Electron.IpcMainInvokeEvent,
+    owner: DevScopePreviewTerminalWorkspaceOwner
+) => string | Promise<string>
+
 const previewTerminalSessions = new Map<string, PreviewTerminalSession>()
+const previewTerminalWorkspaces = new PreviewTerminalWorkspaceRegistry<Electron.WebContents>()
+const senderCleanupRegistered = new Set<number>()
 const MAX_OUTPUT_BUFFER_CHARS = 60_000
+let previewTerminalWorkspaceAuthorizer: PreviewTerminalWorkspaceAuthorizer | null = null
+
+export function configurePreviewTerminalWorkspaceAuthorizer(authorizer: PreviewTerminalWorkspaceAuthorizer): void {
+    previewTerminalWorkspaceAuthorizer = authorizer
+}
 
 function normalizeSessionId(raw: unknown): string {
     const value = String(raw || '').trim()
     return value.length > 0 ? value : ''
 }
 
-function getSessionKey(senderId: number, sessionId: string): string {
-    return `${senderId}:${sessionId}`
+function getSessionKey(scopeKey: string, sessionId: string): string {
+    return `${scopeKey}:${sessionId}`
+}
+
+function resolveSessionScope(event: Electron.IpcMainInvokeEvent, workspaceCapability?: string): PreviewTerminalSessionScope {
+    return previewTerminalWorkspaces.resolve(event.sender.id, workspaceCapability)
+}
+
+function readSessionInput(input: string | { sessionId?: string; workspaceCapability?: string }): {
+    sessionId: string
+    workspaceCapability?: string
+} {
+    if (typeof input === 'string') return { sessionId: normalizeSessionId(input) }
+    return {
+        sessionId: normalizeSessionId(input?.sessionId),
+        workspaceCapability: String(input?.workspaceCapability || '').trim() || undefined
+    }
 }
 
 function normalizeGroupKey(cwd: string): string {
@@ -63,14 +99,14 @@ function shellLabelFromPreference(shell: 'powershell' | 'cmd'): string {
 function buildSessionTitle(
     preferredShell: 'powershell' | 'cmd',
     groupKey: string,
-    senderId: number,
+    scopeKey: string,
     requestedTitle?: string
 ): string {
     const normalizedRequested = String(requestedTitle || '').trim()
     if (normalizedRequested) return normalizedRequested
 
     const ordinal = Array.from(previewTerminalSessions.values()).filter((session) => (
-        session.senderId === senderId && session.groupKey === groupKey
+        session.scopeKey === scopeKey && session.groupKey === groupKey
     )).length + 1
 
     return `${shellLabelFromPreference(preferredShell)} ${ordinal}`
@@ -181,9 +217,9 @@ function serializeSession(session: PreviewTerminalSession): DevScopePreviewTermi
     }
 }
 
-function listSessionsForSender(senderId: number, groupKey?: string): PreviewTerminalSession[] {
+function listSessionsForScope(scopeKey: string, groupKey?: string): PreviewTerminalSession[] {
     return Array.from(previewTerminalSessions.values())
-        .filter((session) => session.senderId === senderId && (!groupKey || session.groupKey === groupKey))
+        .filter((session) => session.scopeKey === scopeKey && (!groupKey || session.groupKey === groupKey))
         .sort((a, b) => {
             if (a.status === 'running' && b.status !== 'running') return -1
             if (a.status !== 'running' && b.status === 'running') return 1
@@ -192,8 +228,15 @@ function listSessionsForSender(senderId: number, groupKey?: string): PreviewTerm
 }
 
 function emitTerminalEvent(session: PreviewTerminalSession, payload: PreviewTerminalEventPayload): void {
-    if (session.webContents.isDestroyed()) return
-    session.webContents.send(PREVIEW_TERMINAL_EVENT_CHANNEL, payload)
+    if (!session.runtimeId) {
+        if (!session.legacyWebContents || session.legacyWebContents.isDestroyed()) return
+        session.legacyWebContents.send(PREVIEW_TERMINAL_EVENT_CHANNEL, payload)
+        return
+    }
+    for (const binding of previewTerminalWorkspaces.bindingsForRuntime(session.runtimeId)) {
+        if (binding.receiver.isDestroyed()) continue
+        binding.receiver.send(previewTerminalEventChannel(binding.capability), payload)
+    }
 }
 
 function emitSessionTitle(session: PreviewTerminalSession): void {
@@ -264,14 +307,59 @@ function removeSession(sessionKey: string): void {
     previewTerminalSessions.delete(sessionKey)
 }
 
-export async function handleListPreviewTerminalSessions(
+export async function handleRegisterPreviewTerminalWorkspace(
     event: Electron.IpcMainInvokeEvent,
-    input?: { targetPath?: string }
+    owner: DevScopePreviewTerminalWorkspaceOwner
 ) {
     try {
+        if (!previewTerminalWorkspaceAuthorizer) {
+            return { success: false, error: 'Preview terminal workspace authorization is unavailable.' }
+        }
+        const runtimeId = String(await previewTerminalWorkspaceAuthorizer(event, owner)).trim()
+        if (!runtimeId || runtimeId.length > 256 || /[\u0000-\u001f]/.test(runtimeId)) {
+            return { success: false, error: 'Preview terminal runtime identity is invalid.' }
+        }
+        const binding = previewTerminalWorkspaces.register(event.sender.id, runtimeId, event.sender)
+        if (!senderCleanupRegistered.has(event.sender.id)) {
+            senderCleanupRegistered.add(event.sender.id)
+            event.sender.once('destroyed', () => {
+                senderCleanupRegistered.delete(event.sender.id)
+                previewTerminalWorkspaces.releaseSender(event.sender.id)
+            })
+        }
+        return { success: true, workspaceCapability: binding.capability }
+    } catch (err: any) {
+        log.error('Failed to register preview terminal workspace:', err)
+        return { success: false, error: err?.message || 'Failed to register preview terminal workspace.' }
+    }
+}
+
+export async function handleReleasePreviewTerminalWorkspace(
+    event: Electron.IpcMainInvokeEvent,
+    workspaceCapabilityInput: string
+) {
+    try {
+        const workspaceCapability = String(workspaceCapabilityInput || '').trim()
+        if (!workspaceCapability) return { success: true, released: false }
+        return {
+            success: true,
+            released: previewTerminalWorkspaces.release(event.sender.id, workspaceCapability)
+        }
+    } catch (err: any) {
+        log.error('Failed to release preview terminal workspace:', err)
+        return { success: false, error: err?.message || 'Failed to release preview terminal workspace.' }
+    }
+}
+
+export async function handleListPreviewTerminalSessions(
+    event: Electron.IpcMainInvokeEvent,
+    input?: { targetPath?: string; workspaceCapability?: string }
+) {
+    try {
+        const scope = resolveSessionScope(event, input?.workspaceCapability)
         const cwd = input?.targetPath ? await resolveTerminalCwd(input.targetPath) : undefined
         const groupKey = cwd ? normalizeGroupKey(cwd) : undefined
-        const sessions = listSessionsForSender(event.sender.id, groupKey).map(serializeSession)
+        const sessions = listSessionsForScope(scope.key, groupKey).map(serializeSession)
         return {
             success: true,
             cwd,
@@ -293,6 +381,7 @@ export async function handleCreatePreviewTerminal(
         cols?: number
         rows?: number
         title?: string
+        workspaceCapability?: string
     }
 ) {
     const sessionId = normalizeSessionId(input?.sessionId)
@@ -304,8 +393,8 @@ export async function handleCreatePreviewTerminal(
             return { success: false, error: 'Session ID is required.' }
         }
 
-        const senderId = event.sender.id
-        const sessionKey = getSessionKey(senderId, sessionId)
+        const scope = resolveSessionScope(event, input?.workspaceCapability)
+        const sessionKey = getSessionKey(scope.key, sessionId)
         removeSession(sessionKey)
 
         const cwd = await resolveTerminalCwd(input?.targetPath)
@@ -348,14 +437,15 @@ export async function handleCreatePreviewTerminal(
         const session: PreviewTerminalSession = {
             sessionId,
             key: sessionKey,
-            senderId,
+            scopeKey: scope.key,
+            runtimeId: scope.runtimeId,
             proc: null,
-            webContents: event.sender,
+            legacyWebContents: scope.scoped ? null : event.sender,
             shell,
             cwd,
             groupKey,
             status: 'running',
-            title: buildSessionTitle(preferredShell, groupKey, senderId, input?.title),
+            title: buildSessionTitle(preferredShell, groupKey, scope.key, input?.title),
             startedAt,
             lastActivityAt: startedAt,
             exitCode: null,
@@ -438,6 +528,7 @@ export async function handleWritePreviewTerminal(
     input: {
         sessionId: string
         data: string
+        workspaceCapability?: string
     }
 ) {
     const sessionId = normalizeSessionId(input?.sessionId)
@@ -445,7 +536,8 @@ export async function handleWritePreviewTerminal(
         if (!sessionId) {
             return { success: false, error: 'Session ID is required.' }
         }
-        const sessionKey = getSessionKey(event.sender.id, sessionId)
+        const scope = resolveSessionScope(event, input?.workspaceCapability)
+        const sessionKey = getSessionKey(scope.key, sessionId)
         const session = previewTerminalSessions.get(sessionKey)
         if (!session || !session.proc) {
             return { success: false, error: 'Preview terminal session not found.' }
@@ -470,6 +562,7 @@ export async function handleSetPreviewTerminalTitle(
     input: {
         sessionId: string
         title: string
+        workspaceCapability?: string
     }
 ) {
     const sessionId = normalizeSessionId(input?.sessionId)
@@ -477,7 +570,8 @@ export async function handleSetPreviewTerminalTitle(
         if (!sessionId) {
             return { success: false, error: 'Session ID is required.' }
         }
-        const sessionKey = getSessionKey(event.sender.id, sessionId)
+        const scope = resolveSessionScope(event, input?.workspaceCapability)
+        const sessionKey = getSessionKey(scope.key, sessionId)
         const session = previewTerminalSessions.get(sessionKey)
         if (!session) {
             return { success: false, error: 'Preview terminal session not found.' }
@@ -502,6 +596,7 @@ export async function handleResizePreviewTerminal(
         sessionId: string
         cols: number
         rows: number
+        workspaceCapability?: string
     }
 ) {
     const sessionId = normalizeSessionId(input?.sessionId)
@@ -509,7 +604,8 @@ export async function handleResizePreviewTerminal(
         if (!sessionId) {
             return { success: false, error: 'Session ID is required.' }
         }
-        const sessionKey = getSessionKey(event.sender.id, sessionId)
+        const scope = resolveSessionScope(event, input?.workspaceCapability)
+        const sessionKey = getSessionKey(scope.key, sessionId)
         const session = previewTerminalSessions.get(sessionKey)
         if (!session || !session.proc) {
             return { success: false, error: 'Preview terminal session not found.' }
@@ -526,14 +622,15 @@ export async function handleResizePreviewTerminal(
 
 export async function handleClearPreviewTerminal(
     event: Electron.IpcMainInvokeEvent,
-    sessionIdInput: string
+    sessionInput: string | { sessionId?: string; workspaceCapability?: string }
 ) {
-    const sessionId = normalizeSessionId(sessionIdInput)
+    const { sessionId, workspaceCapability } = readSessionInput(sessionInput)
     try {
         if (!sessionId) {
             return { success: false, error: 'Session ID is required.' }
         }
-        const session = previewTerminalSessions.get(getSessionKey(event.sender.id, sessionId))
+        const scope = resolveSessionScope(event, workspaceCapability)
+        const session = previewTerminalSessions.get(getSessionKey(scope.key, sessionId))
         if (!session) {
             return { success: false, error: 'Preview terminal session not found.' }
         }
@@ -557,14 +654,15 @@ export async function handleClearPreviewTerminal(
 
 export async function handleClosePreviewTerminal(
     event: Electron.IpcMainInvokeEvent,
-    sessionIdInput: string
+    sessionInput: string | { sessionId?: string; workspaceCapability?: string }
 ) {
-    const sessionId = normalizeSessionId(sessionIdInput)
+    const { sessionId, workspaceCapability } = readSessionInput(sessionInput)
     try {
         if (!sessionId) {
             return { success: false, error: 'Session ID is required.' }
         }
-        const sessionKey = getSessionKey(event.sender.id, sessionId)
+        const scope = resolveSessionScope(event, workspaceCapability)
+        const sessionKey = getSessionKey(scope.key, sessionId)
         const session = previewTerminalSessions.get(sessionKey)
         if (!session) {
             return { success: true, closed: false }

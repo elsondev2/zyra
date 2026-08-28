@@ -5,15 +5,16 @@
 import { contextBridge } from 'electron'
 import { createDevScopeElectronAdapter } from './devscope-electron-adapter'
 import { installBrowserDevscopeRelay } from './browser-devscope-relay'
-import type { DevScopeApi } from '../shared/contracts/devscope-api'
+import { installRendererDiagnostics } from './renderer-diagnostics'
+import { installBrowserPopupPreload } from './browser-popup'
+import { BROWSER_POPUP_PRELOAD_ARGUMENT } from '../shared/preload-surfaces'
 
-const devscope = createDevScopeElectronAdapter()
-installBrowserDevscopeRelay(devscope)
+if (process.argv.includes(BROWSER_POPUP_PRELOAD_ARGUMENT)) {
+    installBrowserPopupPreload()
+} else {
+    installRendererDiagnostics()
+    const devscope = createDevScopeElectronAdapter()
+    installBrowserDevscopeRelay(devscope)
 
-contextBridge.exposeInMainWorld('devscope', devscope)
-
-declare global {
-    interface Window {
-        devscope: DevScopeApi
-    }
+    contextBridge.exposeInMainWorld('devscope', devscope)
 }

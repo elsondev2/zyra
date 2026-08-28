@@ -75,6 +75,7 @@ import type {
     DevScopeIndexedPathSearchResult,
     DevScopeIndexedProject,
     DevScopeInstalledIde,
+    DevScopeLocalServer,
     DevScopePathInfo,
     DevScopeProcessInfo,
     DevScopeProject,
@@ -99,6 +100,16 @@ import type {
     RendererControlGrantInput
 } from '../agent-control/protocol'
 import type { ZyraClientPlatform } from '../platform-window-chrome'
+import type { BrowserShortcutAction } from '../browser-shortcuts'
+import type { BrowserPopupCommand, BrowserPopupState, BrowserPopupSummary } from '../browser-popup'
+import type { BrowserDownloadAction, BrowserDownloadActionResult, BrowserDownloadPreviewTarget, BrowserDownloadRecord, BrowserDownloadsFolderAction, BrowserDownloadsFolderActionResult, BrowserDownloadsFolderEntry } from '../browser-downloads'
+import type { BrowserViewApi } from '../browser-view'
+import type { AssistantUtilityApi } from '../assistant/utility-window'
+import type {
+    ExternalBrowserHistoryImportInput,
+    ExternalBrowserHistoryImportResult,
+    ExternalBrowserHistoryScanResult
+} from '../external-browser-history-contracts'
 import type {
     BeginOnboardingReviewInput,
     CancelOnboardingReviewInput,
@@ -117,7 +128,9 @@ import type {
     UpdateDevicePreferencesInput
 } from '../preferences/contracts'
 import type {
+    BrowserIntegrationSecretStatus,
     HostedAiSecretStatus,
+    UpdateBrowserIntegrationSecretsInput,
     UpdateHostedAiSecretsInput
 } from '../preferences/secrets-contracts'
 
@@ -125,16 +138,107 @@ export * from './devscope-git-contracts'
 export * from './devscope-project-contracts'
 export * from './memory-contracts'
 export * from './font-contracts'
+export * from '../browser-downloads'
 
 export type DevScopeOk<T = Record<string, unknown>> = { success: true } & T
 export type DevScopeErr = { success: false; error: string }
 export type DevScopeResult<T = Record<string, unknown>> = DevScopeOk<T> | DevScopeErr
+
+export type DevScopeProtectedMediaStatus = {
+    supported: boolean
+    ready: boolean
+    restartRequired: boolean
+    componentVersion: string | null
+    vmpLevel: 'development' | 'production'
+    message: string | null
+}
 
 export type DevScopeBrowserPreviewConfig = {
     partition: string
     webPreferences: string
     profileScope: 'global'
     persistent: true
+    protectedMedia: DevScopeProtectedMediaStatus
+}
+
+export type DevScopeBrowserHistoryEntry = {
+    url: string
+    title: string
+    faviconUrl: string | null
+    lastVisitedAt: string
+    visitCount: number
+}
+
+export type DevScopeBrowserHistoryRecordInput = {
+    url: string
+    title?: string | null
+    faviconUrl?: string | null
+    incrementVisit?: boolean
+}
+
+export type DevScopeBrowserAdBlockStatus = {
+    enabled: boolean
+    ready: boolean
+    engine: 'Ghostery'
+    error: string | null
+}
+
+export type DevScopeBrowserAdDetection = {
+    pageOrigin: string
+    guestWebContentsId: number | null
+    detectedAt: string
+}
+
+export const BROWSER_ADBLOCK_DETECTED_CHANNEL = 'devscope:browserPreview:adDetected'
+export const BROWSER_PREVIEW_OPEN_TAB_REQUESTED_CHANNEL = 'devscope:browserPreview:openTabRequested'
+export const BROWSER_PREVIEW_SHORTCUT_CHANNEL = 'devscope:browserPreview:shortcut'
+export const BROWSER_THREAT_BLOCKED_CHANNEL = 'devscope:browserPreview:threatBlocked'
+
+export type DevScopeBrowserThreatNavigationKind = 'current-tab' | 'new-tab' | 'popup'
+
+export type DevScopeBrowserThreatWarning = {
+    decisionId: string
+    url: string
+    hostname: string
+    threatType: 'phishing'
+    source: 'phishtank' | 'test'
+    sourceGuestWebContentsId: number
+    blockedGuestWebContentsId: number
+    navigationKind: DevScopeBrowserThreatNavigationKind
+    previousUrl: string
+    blockedAt: string
+}
+
+export type DevScopeBrowserOpenTabRequest = {
+    sourceGuestWebContentsId: number
+    url: string
+    activate: boolean
+}
+
+export type DevScopeBrowserShortcutEvent = {
+    sourceGuestWebContentsId: number
+    action: BrowserShortcutAction
+}
+
+export type DevScopeBrowserBackgroundCategory = 'all' | 'forest-paths' | 'mountain-highs' | 'ocean-moods' | 'desert-dreams' | 'water-in-motion' | 'wildflower-party' | 'animal-cameos' | 'ice-aurora' | 'earth-above'
+
+export type DevScopeBrowserRemoteBackground = {
+    id: string
+    provider: 'unsplash'
+    category: DevScopeBrowserBackgroundCategory
+    imageUrl: string
+    thumbnailUrl: string
+    color: string | null
+    alt: string
+    photographer: string
+    photographerUrl: string
+    photoUrl: string
+    downloadLocation: string
+}
+
+export type DevScopeBrowserBackgroundProviderStatus = {
+    unsplashConfigured: boolean
+    persistenceAvailable: boolean
 }
 
 export type DevScopeBrowserLinkPreview = {
@@ -148,6 +252,10 @@ export type DevScopeBrowserLinkPreview = {
 export type DevScopeBrowserGuestTargetInput = {
     guestWebContentsId: number
     tabId: string
+}
+
+export type DevScopeBrowserThreatCheckInput = DevScopeBrowserGuestTargetInput & {
+    url: string
 }
 
 export type DevScopeBrowserColorScheme = 'system' | 'light' | 'dark'
@@ -241,6 +349,14 @@ export type DevScopeBrowserAnnotationInput = DevScopeBrowserGuestTargetInput & {
 }
 
 export const BROWSER_PREVIEW_RECORDING_FRAME_CHANNEL = 'devscope:browserPreview:recordingFrame'
+
+export type DevScopePreviewTerminalWorkspaceOwner =
+    | { kind: 'main-workspace'; runtimeId: string }
+    | { kind: 'utility-tab'; tabId: string }
+
+export type DevScopePreviewTerminalAccess = {
+    workspaceCapability?: string
+}
 
 export type DevScopePreviewTerminalEvent = {
     sessionId: string
@@ -347,14 +463,40 @@ export type DevScopeWindowRuntimeInfo = {
     customWindowControls: boolean
 }
 
+export type DevScopeTerminalCommandStatus = {
+    path: string
+    installed: boolean
+    managed: boolean
+    pathConfigured: boolean
+}
+
 export interface DevScopeWindowApi {
     minimize: () => void
     maximize: () => void
     close: () => void
+    setFullScreen: (enabled: boolean) => void
+    isFullScreen: () => Promise<boolean>
     isMaximized: () => Promise<boolean>
     getRuntimeInfo: () => Promise<DevScopeWindowRuntimeInfo>
+    getTerminalCommandStatus: () => Promise<DevScopeResult<{ status: DevScopeTerminalCommandStatus }>>
+    installTerminalCommand: () => Promise<DevScopeResult<{ status: DevScopeTerminalCommandStatus }>>
+    removeTerminalCommand: () => Promise<DevScopeResult<{ status: DevScopeTerminalCommandStatus }>>
     onMaximizedChange: (callback: (maximized: boolean) => void) => () => void
+    onFullScreenChange: (callback: (fullscreen: boolean) => void) => () => void
     onAppMenuCommand: (callback: (command: DevScopeAppMenuCommand) => void) => () => void
+}
+
+export interface DevScopeBrowserPopupApi {
+    getState: () => Promise<DevScopeResult<{ state: BrowserPopupState }>>
+    command: (command: BrowserPopupCommand) => Promise<DevScopeResult<{ state: BrowserPopupState }>>
+    listOpenWindows: () => Promise<DevScopeResult<{ windows: BrowserPopupSummary[] }>>
+    focusWindow: (id: string) => Promise<DevScopeResult>
+    listDownloads: () => Promise<DevScopeResult<{ downloads: BrowserDownloadRecord[] }>>
+    actOnDownload: (action: BrowserDownloadAction) => Promise<DevScopeResult<BrowserDownloadActionResult>>
+    onDownloadsChanged: (callback: (downloads: BrowserDownloadRecord[]) => void) => () => void
+    onStateChange: (callback: (state: BrowserPopupState) => void) => () => void
+    onFocusAddress: (callback: () => void) => () => void
+    onOpenWindowsChange: (callback: (windows: BrowserPopupSummary[]) => void) => () => void
 }
 
 export interface DevScopePreferencesApi {
@@ -366,6 +508,7 @@ export interface DevScopePreferencesApi {
 export interface DevScopeSecretsApi {
     updateHostedAiKeys: (input: UpdateHostedAiSecretsInput) => Promise<DevScopeResult<{ status: HostedAiSecretStatus }>>
     migrateLegacyHostedAiKeys: (input: UpdateHostedAiSecretsInput) => Promise<DevScopeResult<{ status: HostedAiSecretStatus }>>
+    updateBrowserIntegrationSecrets: (input: UpdateBrowserIntegrationSecretsInput) => Promise<DevScopeResult<{ status: BrowserIntegrationSecretStatus }>>
 }
 
 export interface DevScopeOnboardingApi {
@@ -401,7 +544,7 @@ export interface DevScopeAgentScopeApi {
 
 export interface DevScopeAgentControlApi {
     getState: () => Promise<DevScopeResult<{ state: ControlStateSnapshot }>>
-    bindBrowserTab: (input: { guestWebContentsId: number; tabId: string; threadId: string }) => Promise<DevScopeResult<{ target: ControlTarget }>>
+    bindBrowserTab: (input: { guestWebContentsId: number; tabId: string; threadId: string; sessionMode: 'normal' | 'incognito' }) => Promise<DevScopeResult<{ target: ControlTarget }>>
     acknowledgeBrowserSurfaceRequest: (input: BrowserSurfaceOpenAcknowledgement) => Promise<DevScopeResult<{ accepted: boolean }>>
     completeBrowserSurfaceRequest: (input: BrowserSurfaceOpenCompletion) => Promise<DevScopeResult<{ completed: boolean }>>
     claimBrowserSurfaceRequest: (input: BrowserSurfaceClaim) => Promise<DevScopeResult<{ claimed: boolean }>>
@@ -437,8 +580,8 @@ export interface DevScopeAssistantApi {
     connect: (options?: AssistantConnectOptions) => Promise<DevScopeResult<{ threadId: string }>>
     disconnect: (sessionId?: string) => Promise<DevScopeResult>
     createSession: (input?: AssistantCreateSessionInput) => Promise<DevScopeResult<{ sessionId: string }>>
-    selectSession: (sessionId: string) => Promise<DevScopeResult<{ sessionId: string; snapshot?: AssistantSnapshot }>>
-    selectThread: (input: AssistantSelectThreadInput) => Promise<DevScopeResult<{ sessionId: string; threadId: string; snapshot?: AssistantSnapshot }>>
+    selectSession: (sessionId: string) => Promise<DevScopeResult<{ sessionId: string; snapshot?: AssistantShellSnapshot; status?: AssistantRuntimeStatus }>>
+    selectThread: (input: AssistantSelectThreadInput) => Promise<DevScopeResult<{ sessionId: string; threadId: string; snapshot?: AssistantShellSnapshot; status?: AssistantRuntimeStatus }>>
     getThreadDetailBootstrap: (threadId: string) => Promise<DevScopeResult<AssistantThreadDetailResultPayload>>
     getHistoryPage: (input: AssistantGetHistoryPageInput) => Promise<DevScopeResult<AssistantHistoryPageResultPayload>>
     hydrateHistoryBody: (input: AssistantHydrateHistoryBodyInput) => Promise<DevScopeResult<AssistantHistoryBodyResultPayload>>
@@ -446,6 +589,7 @@ export interface DevScopeAssistantApi {
     getTurnDetail: (input: AssistantGetTurnDetailInput) => Promise<DevScopeResult<AssistantTurnDetailResultPayload>>
     searchTurns: (input: AssistantSearchTurnsInput) => Promise<DevScopeResult<AssistantSearchTurnsResultPayload>>
     renameSession: (sessionId: string, title: string) => Promise<DevScopeResult>
+    regenerateSessionTitle: (sessionId: string) => Promise<DevScopeResult<{ title: string }>>
     archiveSession: (sessionId: string, archived?: boolean) => Promise<DevScopeResult>
     deleteSession: (sessionId: string) => Promise<DevScopeResult>
     deleteMessage: (input: AssistantDeleteMessageInput) => Promise<DevScopeResult>
@@ -535,6 +679,7 @@ export interface DevScopeApi {
             rootPath?: string
             includeGitStatus?: boolean
             includeFileSize?: boolean
+            includeDirectoryChildHint?: boolean
         }
     ) => Promise<DevScopeResult<{ tree: DevScopeFileTreeNode[] }>>
     getGitHistory: (
@@ -660,7 +805,8 @@ export interface DevScopeApi {
     getGitignorePatterns: () => Promise<DevScopeResult<{ patterns: Array<{ id: string; label: string; description: string; category: string; patterns: string[] }> }>>
     generateCustomGitignoreContent: (selectedPatternIds: string[]) => Promise<DevScopeResult<{ content: string }>>
     copyToClipboard: (text: string) => Promise<DevScopeResult>
-    readFileContent: (filePath: string) => Promise<DevScopeResult<{ content: string; size: number; previewBytes: number; truncated: boolean; modifiedAt: number }>>
+    readFileContent: (filePath: string, options?: { knownSize?: number | null; knownModifiedAt?: number | null }) => Promise<DevScopeResult<{ content?: string; size: number; previewBytes?: number; truncated?: boolean; modifiedAt: number; notModified?: boolean }>>
+    readBinaryFile: (filePath: string) => Promise<DevScopeResult<{ data: ArrayBuffer; size: number; modifiedAt: number }>>
     readTextFileFull: (filePath: string) => Promise<DevScopeResult<{ content: string; size: number; modifiedAt: number }>>
     getPathInfo: (targetPath: string) => Promise<DevScopeResult<DevScopePathInfo>>
     writeTextFile: (
@@ -672,7 +818,10 @@ export interface DevScopeApi {
         Promise<DevScopeResult<{ pid: number | null; interpreter: string; command: string }>>
     stopPythonPreview: (sessionId: string) => Promise<DevScopeResult<{ stopped: boolean }>>
     onPythonPreviewEvent: (callback: (event: DevScopePythonPreviewEvent) => void) => () => void
-    createPreviewTerminal: (input: {
+    registerPreviewTerminalWorkspace: (owner: DevScopePreviewTerminalWorkspaceOwner) =>
+        Promise<DevScopeResult<{ workspaceCapability: string }>>
+    releasePreviewTerminalWorkspace: (workspaceCapability: string) => Promise<DevScopeResult<{ released: boolean }>>
+    createPreviewTerminal: (input: DevScopePreviewTerminalAccess & {
         sessionId: string
         targetPath?: string
         preferredShell?: 'powershell' | 'cmd'
@@ -680,15 +829,41 @@ export interface DevScopeApi {
         rows?: number
         title?: string
     }) => Promise<DevScopeResult<{ shell: string; cwd: string; groupKey: string; session: DevScopePreviewTerminalSessionSummary }>>
-    listPreviewTerminalSessions: (input?: { targetPath?: string }) =>
+    listPreviewTerminalSessions: (input?: DevScopePreviewTerminalAccess & { targetPath?: string }) =>
         Promise<DevScopeResult<{ groupKey?: string; cwd?: string; sessions: DevScopePreviewTerminalSessionSummary[] }>>
-    writePreviewTerminal: (input: { sessionId: string; data: string }) => Promise<DevScopeResult>
-    setPreviewTerminalTitle: (input: { sessionId: string; title: string }) => Promise<DevScopeResult<{ title: string }>>
-    resizePreviewTerminal: (input: { sessionId: string; cols: number; rows: number }) => Promise<DevScopeResult>
-    clearPreviewTerminal: (sessionId: string) => Promise<DevScopeResult>
-    closePreviewTerminal: (sessionId: string) => Promise<DevScopeResult<{ closed: boolean }>>
-    onPreviewTerminalEvent: (callback: (event: DevScopePreviewTerminalEvent) => void) => () => void
+    writePreviewTerminal: (input: DevScopePreviewTerminalAccess & { sessionId: string; data: string }) => Promise<DevScopeResult>
+    setPreviewTerminalTitle: (input: DevScopePreviewTerminalAccess & { sessionId: string; title: string }) => Promise<DevScopeResult<{ title: string }>>
+    resizePreviewTerminal: (input: DevScopePreviewTerminalAccess & { sessionId: string; cols: number; rows: number }) => Promise<DevScopeResult>
+    clearPreviewTerminal: (input: string | (DevScopePreviewTerminalAccess & { sessionId: string })) => Promise<DevScopeResult>
+    closePreviewTerminal: (input: string | (DevScopePreviewTerminalAccess & { sessionId: string })) => Promise<DevScopeResult<{ closed: boolean }>>
+    onPreviewTerminalEvent: (callback: (event: DevScopePreviewTerminalEvent) => void, workspaceCapability?: string) => () => void
     getBrowserPreviewConfig: () => Promise<DevScopeResult<DevScopeBrowserPreviewConfig>>
+    getBrowserPageIcon: (pageUrl: string) => Promise<DevScopeResult<{ dataUrl: string | null }>>
+    listBrowserDownloads: () => Promise<DevScopeResult<{ downloads: BrowserDownloadRecord[] }>>
+    actOnBrowserDownload: (action: BrowserDownloadAction) => Promise<DevScopeResult<BrowserDownloadActionResult>>
+    getBrowserDownloadPreviewTarget: (id: string) => Promise<DevScopeResult<{ target: BrowserDownloadPreviewTarget }>>
+    onBrowserDownloadsChanged: (callback: (downloads: BrowserDownloadRecord[]) => void) => () => void
+    listBrowserDownloadsFolder: () => Promise<DevScopeResult<{ entries: BrowserDownloadsFolderEntry[] }>>
+    actOnBrowserDownloadsFolderEntry: (action: BrowserDownloadsFolderAction) => Promise<DevScopeResult<BrowserDownloadsFolderActionResult>>
+    getBrowserHistory: (input?: { query?: string; limit?: number }) => Promise<DevScopeResult<{ entries: DevScopeBrowserHistoryEntry[] }>>
+    getBrowserSearchSuggestions: (input: { query: string }) => Promise<DevScopeResult<{ suggestions: string[]; provider: 'Google' }>>
+    scanExternalBrowserHistoryProfiles: () => Promise<DevScopeResult<ExternalBrowserHistoryScanResult>>
+    importExternalBrowserHistory: (input: ExternalBrowserHistoryImportInput) => Promise<DevScopeResult<{ result: ExternalBrowserHistoryImportResult }>>
+    recordBrowserHistory: (input: DevScopeBrowserHistoryRecordInput) => Promise<DevScopeResult<{ entry: DevScopeBrowserHistoryEntry | null }>>
+    clearBrowserHistory: () => Promise<DevScopeResult<{ cleared: boolean }>>
+    getBrowserAdBlockStatus: () => Promise<DevScopeResult<{ status: DevScopeBrowserAdBlockStatus }>>
+    setBrowserAdBlockEnabled: (input: { enabled: boolean; promptDismissed?: boolean }) => Promise<DevScopeResult<{ status: DevScopeBrowserAdBlockStatus }>>
+    onBrowserAdDetected: (callback: (event: DevScopeBrowserAdDetection) => void) => () => void
+    onBrowserOpenTabRequested: (callback: (event: DevScopeBrowserOpenTabRequest) => void) => () => void
+    onBrowserShortcut: (callback: (event: DevScopeBrowserShortcutEvent) => void) => () => void
+    checkBrowserThreatNavigation: (input: DevScopeBrowserThreatCheckInput) => Promise<DevScopeResult<{ allowed: boolean }>>
+    proceedBrowserThreatWarning: (decisionId: string) => Promise<DevScopeResult>
+    dismissBrowserThreatWarning: (decisionId: string) => Promise<DevScopeResult>
+    onBrowserThreatBlocked: (callback: (event: DevScopeBrowserThreatWarning) => void) => () => void
+    getBrowserBackgroundProviderStatus: () => Promise<DevScopeResult<{ status: DevScopeBrowserBackgroundProviderStatus }>>
+    validateBrowserUnsplashAccessKey: (input: { accessKey: string }) => Promise<DevScopeResult>
+    getBrowserRemoteBackgrounds: (input: { category: DevScopeBrowserBackgroundCategory; refresh?: boolean; query?: string }) => Promise<DevScopeResult<{ backgrounds: DevScopeBrowserRemoteBackground[] }>>
+    trackBrowserRemoteBackground: (input: { downloadLocation: string }) => Promise<DevScopeResult>
     clearBrowserPreviewData: () => Promise<DevScopeResult<{ cleared: boolean }>>
     clearBrowserPreviewCache: () => Promise<DevScopeResult<{ cleared: boolean }>>
     clearBrowserPreviewCookies: () => Promise<DevScopeResult<{ cleared: boolean }>>
@@ -722,6 +897,7 @@ export interface DevScopeApi {
     moveFileSystemItem: (sourcePath: string, destinationDirectory: string) => Promise<DevScopeResult<{ path: string; name: string }>>
     getProjectSessions: (projectPath: string) => Promise<DevScopeResult>
     getProjectProcesses: (projectPath: string) => Promise<DevScopeResult<{ isLive: boolean; processes: DevScopeProcessInfo[]; activePorts: number[] }>>
+    getRunningLocalServers: (projectPath?: string) => Promise<DevScopeResult<{ servers: DevScopeLocalServer[] }>>
     indexAllFolders: (
         folders: string[],
         options?: { forceRefresh?: boolean }
@@ -742,6 +918,9 @@ export interface DevScopeApi {
     onboarding: DevScopeOnboardingApi
     updates: DevScopeUpdatesApi
     window: DevScopeWindowApi
+    browserPopup: DevScopeBrowserPopupApi
+    browserView: BrowserViewApi
+    assistantUtility: AssistantUtilityApi
 }
 
 export type DevScopePackageRuntimeId = 'node' | 'npm' | 'pnpm' | 'yarn' | 'bun'

@@ -25,6 +25,7 @@ import type {
     AssistantThreadDetail,
     AssistantTurnDetail
 } from './read-model'
+import type { AssistantVoiceExecutionConfiguration } from './realtime-voice'
 
 export const ASSISTANT_IPC = {
     subscribe: 'devscope:assistant:subscribe',
@@ -51,6 +52,7 @@ export const ASSISTANT_IPC = {
     getTurnDetail: 'devscope:assistant:getTurnDetail',
     searchTurns: 'devscope:assistant:searchTurns',
     renameSession: 'devscope:assistant:renameSession',
+    regenerateSessionTitle: 'devscope:assistant:regenerateSessionTitle',
     archiveSession: 'devscope:assistant:archiveSession',
     deleteSession: 'devscope:assistant:deleteSession',
     deleteMessage: 'devscope:assistant:deleteMessage',
@@ -85,6 +87,7 @@ export type AssistantIpcChannel = (typeof ASSISTANT_IPC)[keyof typeof ASSISTANT_
 
 export interface AssistantConnectOptions {
     sessionId?: string
+    voicePreparation?: AssistantVoiceExecutionConfiguration
 }
 
 export interface AssistantBootstrapPayload {

@@ -97,7 +97,8 @@ await run(process.execPath, [
     path.join(scriptDirectory, 'validate-packaged-app.mjs'),
     `--platform=${platform}`,
     `--version=${version}`,
-    `--raw-dir=${rawDirectory}`
+    `--raw-dir=${rawDirectory}`,
+    `--expected-production-vmp=${expectedSigned && (platform === 'windows' || platform === 'macos') ? 'true' : 'false'}`
 ], desktopRoot)
 if (unpacked) {
     console.log(`Built unpacked Zyra ${version} for ${platform}: ${rawDirectory}`)

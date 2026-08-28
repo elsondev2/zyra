@@ -177,6 +177,11 @@ export function handleAssistantRenameSession(_event: Electron.IpcMainInvokeEvent
     return withAssistantResult(() => getAssistantService().renameSession(sessionId, title))
 }
 
+export function handleAssistantRegenerateSessionTitle(_event: Electron.IpcMainInvokeEvent, sessionId: string) {
+    log.info('IPC: assistant:regenerateSessionTitle', { sessionId })
+    return withAssistantResult(() => getAssistantService().regenerateSessionTitle(sessionId))
+}
+
 export function handleAssistantArchiveSession(_event: Electron.IpcMainInvokeEvent, sessionId: string, archived?: boolean) {
     log.info('IPC: assistant:archiveSession', { sessionId, archived: archived !== false })
     return withAssistantResult(() => getAssistantService().archiveSession(sessionId, archived))

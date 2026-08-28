@@ -12,7 +12,7 @@ import {
 export function createAgentControlAdapter() {
     return {
         getState: () => ipcRenderer.invoke(AGENT_CONTROL_IPC.getState),
-        bindBrowserTab: (input: { guestWebContentsId: number; tabId: string; threadId: string }) => ipcRenderer.invoke(AGENT_CONTROL_IPC.bindBrowserTab, input),
+        bindBrowserTab: (input: { guestWebContentsId: number; tabId: string; threadId: string; sessionMode: 'normal' | 'incognito' }) => ipcRenderer.invoke(AGENT_CONTROL_IPC.bindBrowserTab, input),
         acknowledgeBrowserSurfaceRequest: (input: BrowserSurfaceOpenAcknowledgement) => ipcRenderer.invoke(AGENT_CONTROL_IPC.acknowledgeBrowserSurfaceRequest, input),
         completeBrowserSurfaceRequest: (input: BrowserSurfaceOpenCompletion) => ipcRenderer.invoke(AGENT_CONTROL_IPC.completeBrowserSurfaceRequest, input),
         claimBrowserSurfaceRequest: (input: BrowserSurfaceClaim) => ipcRenderer.invoke(AGENT_CONTROL_IPC.claimBrowserSurfaceRequest, input),

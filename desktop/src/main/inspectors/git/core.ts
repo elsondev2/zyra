@@ -1,4 +1,3 @@
-import { spawnSync } from 'child_process'
 import log from 'electron-log'
 import { existsSync, readdirSync } from 'fs'
 import { stat, unlink } from 'fs/promises'
@@ -42,19 +41,16 @@ function getGitHubDesktopGitCandidates(localAppData: string): string[] {
 }
 
 function resolveGitBinaryPath(env: NodeJS.ProcessEnv): string {
-    const locateCommand = process.platform === 'win32' ? 'where' : 'which'
-    const locateResult = spawnSync(locateCommand, ['git'], {
-        encoding: 'utf8',
-        windowsHide: true,
-        env
-    })
-
-    const resolvedFromPath = locateResult.status === 0
-        ? (locateResult.stdout || '')
-            .split(/\r?\n/)
-            .map((line) => line.trim())
-            .find((line) => Boolean(line) && existsSync(line))
-        : ''
+    const pathValue = env.Path || env.PATH || ''
+    const executableNames = process.platform === 'win32'
+        ? ['git.exe', 'git.cmd', 'git.bat', 'git']
+        : ['git']
+    const resolvedFromPath = pathValue
+        .split(delimiter)
+        .map((entry) => entry.trim().replace(/^"(.*)"$/, '$1'))
+        .filter(Boolean)
+        .flatMap((entry) => executableNames.map((name) => join(entry, name)))
+        .find((candidate) => existsSync(candidate))
 
     if (resolvedFromPath) return resolvedFromPath
 
