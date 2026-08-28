@@ -15,6 +15,10 @@ function formatServerProcessName(value: string): string {
     return normalized
 }
 
+function getServerDisplayName(server: DevScopeLocalServer): string {
+    return String(server.pageTitle || '').trim() || formatServerProcessName(server.processName)
+}
+
 function BrowserServerGroup({
     label,
     servers,
@@ -42,7 +46,7 @@ function BrowserServerGroup({
                                 <span className="absolute bottom-0 right-0 size-1.5 rounded-full bg-emerald-400 ring-2 ring-[var(--color-bg)]" aria-hidden="true" />
                             </span>
                             <span className="min-w-0 flex-1">
-                                <span className="block truncate text-[11px] font-medium text-[var(--color-text)]">{formatServerProcessName(server.processName)}</span>
+                                <span className="block truncate text-[11px] font-medium text-[var(--color-text)]">{getServerDisplayName(server)}</span>
                                 <span className="block truncate font-mono text-[10px] text-sparkle-text-muted/70">localhost:{server.port}</span>
                             </span>
                             <ArrowRight size={10} className="shrink-0 text-sparkle-text-muted/35 transition-transform group-hover/server:translate-x-0.5 group-hover/server:text-sparkle-text-muted/70" />

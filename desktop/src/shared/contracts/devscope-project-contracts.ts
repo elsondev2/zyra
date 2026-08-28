@@ -126,6 +126,7 @@ export type DevScopeLocalServer = {
     pid: number | null
     port: number
     url: string
+    pageTitle?: string
     processName: string
     attachedToProject: boolean
 }

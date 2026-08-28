@@ -16,6 +16,9 @@ const execAsync = promisify(exec)
 const execFileAsync = promisify(execFile)
 const LOCAL_SERVER_SCAN_TTL_MS = 10_000
 const LOCAL_SERVER_SCAN_CACHE_LIMIT = 8
+const LOCAL_SERVER_PROBE_TIMEOUT_MS = 650
+const LOCAL_SERVER_TITLE_MAX_BYTES = 64 * 1024
+const LOCAL_SERVER_TITLE_MAX_LENGTH = 160
 const PROCESS_INVENTORY_TTL_MS = 5_000
 const PORT_INVENTORY_TTL_MS = 3_000
 
@@ -37,6 +40,7 @@ export interface RunningLocalServer {
     pid: number | null
     port: number
     url: string
+    pageTitle?: string
     processName: string
     attachedToProject: boolean
 }
@@ -323,30 +327,109 @@ async function getPortListeners(ports?: number[]): Promise<Map<number, number>> 
     return new Map([...listeners].filter(([port]) => requested.has(port)))
 }
 
-async function detectLocalHttpProtocol(port: number): Promise<'http' | 'https' | null> {
-    const probe = (protocol: 'http' | 'https', host: string) => new Promise<boolean>((resolve) => {
-        const request = (protocol === 'https' ? httpsRequest : httpRequest)({
+type LocalHttpMetadata = {
+    protocol: 'http' | 'https'
+    pageTitle?: string
+}
+
+function decodeLocalServerTitleEntities(value: string): string {
+    const namedEntities: Record<string, string> = {
+        amp: '&',
+        apos: "'",
+        gt: '>',
+        lt: '<',
+        nbsp: ' ',
+        quot: '"'
+    }
+    return value.replace(/&(?:#(\d+)|#x([\da-f]+)|([a-z]+));/gi, (match, decimal, hexadecimal, named) => {
+        if (named) return namedEntities[String(named).toLowerCase()] ?? match
+        const codePoint = Number.parseInt(decimal || hexadecimal, decimal ? 10 : 16)
+        if (!Number.isFinite(codePoint) || codePoint <= 0 || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) return ''
+        return String.fromCodePoint(codePoint)
+    })
+}
+
+export function sanitizeLocalServerPageTitle(value: string): string | undefined {
+    const title = decodeLocalServerTitleEntities(String(value || ''))
+        .replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    return title ? title.slice(0, LOCAL_SERVER_TITLE_MAX_LENGTH) : undefined
+}
+
+function extractLocalServerPageTitle(html: string): string | undefined {
+    const match = html.match(/<title(?:\s[^>]*)?>([\s\S]*?)<\/title\s*>/i)
+    return match ? sanitizeLocalServerPageTitle(match[1]) : undefined
+}
+
+async function detectLocalHttpProtocol(port: number): Promise<LocalHttpMetadata | null> {
+    const probe = (protocol: 'http' | 'https', host: string) => new Promise<LocalHttpMetadata | null>((resolve) => {
+        let responseStarted = false
+        let settled = false
+        let request: ReturnType<typeof httpRequest> | undefined
+        const finish = (result: LocalHttpMetadata | null) => {
+            if (settled) return
+            settled = true
+            clearTimeout(deadline)
+            resolve(result)
+        }
+        const deadline = setTimeout(() => {
+            request?.destroy()
+            finish(responseStarted ? { protocol } : null)
+        }, LOCAL_SERVER_PROBE_TIMEOUT_MS)
+        request = (protocol === 'https' ? httpsRequest : httpRequest)({
             host,
             port,
             path: '/',
-            method: 'HEAD',
-            timeout: 450,
+            method: 'GET',
+            headers: {
+                accept: 'text/html,application/xhtml+xml',
+                'accept-encoding': 'identity'
+            },
+            timeout: LOCAL_SERVER_PROBE_TIMEOUT_MS,
             ...(protocol === 'https' ? { rejectUnauthorized: false } : {})
         }, (response) => {
-            response.resume()
-            request.destroy()
-            resolve(true)
+            responseStarted = true
+            const contentType = String(response.headers['content-type'] || '').toLowerCase()
+            const contentEncoding = String(response.headers['content-encoding'] || '').toLowerCase()
+            if ((contentType && !contentType.includes('html') && !contentType.includes('xhtml')) || (contentEncoding && contentEncoding !== 'identity')) {
+                response.destroy()
+                finish({ protocol })
+                return
+            }
+            const chunks: Buffer[] = []
+            let byteCount = 0
+            const finishFromBody = () => {
+                const pageTitle = extractLocalServerPageTitle(Buffer.concat(chunks).toString('utf8'))
+                response.destroy()
+                finish(pageTitle ? { protocol, pageTitle } : { protocol })
+            }
+            response.on('data', (chunk: Buffer | string) => {
+                const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+                const remaining = LOCAL_SERVER_TITLE_MAX_BYTES - byteCount
+                if (remaining > 0) {
+                    chunks.push(buffer.subarray(0, remaining))
+                    byteCount += Math.min(buffer.length, remaining)
+                }
+                const html = Buffer.concat(chunks).toString('utf8')
+                if (/<\/title\s*>/i.test(html) || /<\/head\s*>/i.test(html) || byteCount >= LOCAL_SERVER_TITLE_MAX_BYTES) finishFromBody()
+            })
+            response.once('end', finishFromBody)
+            response.once('error', () => finish({ protocol }))
         })
         request.once('timeout', () => {
             request.destroy()
-            resolve(false)
+            finish(responseStarted ? { protocol } : null)
         })
-        request.once('error', () => resolve(false))
+        request.once('error', () => finish(responseStarted ? { protocol } : null))
         request.end()
     })
     for (const protocol of ['http', 'https'] as const) {
         const results = await Promise.all([probe(protocol, '127.0.0.1'), probe(protocol, '::1')])
-        if (results.some(Boolean)) return protocol
+        const pageWithTitle = results.find((result) => result?.pageTitle)
+        if (pageWithTitle) return pageWithTitle
+        const reachablePage = results.find((result): result is LocalHttpMetadata => Boolean(result))
+        if (reachablePage) return reachablePage
     }
     return null
 }
@@ -430,19 +513,20 @@ async function scanRunningLocalServers(resolvedProjectPath: string): Promise<Run
             return Number(rightAttached) - Number(leftAttached) || leftPort - rightPort
         })
         .slice(0, 128)
-    const protocolRows = await Promise.all(candidates.map(async ([port, pid]) => ({
+    const metadataRows = await Promise.all(candidates.map(async ([port, pid]) => ({
         port,
         pid,
-        protocol: await detectLocalHttpProtocol(port)
+        metadata: await detectLocalHttpProtocol(port)
     })))
 
-    return protocolRows.flatMap((entry): RunningLocalServer[] => {
-        if (!entry.protocol) return []
+    return metadataRows.flatMap((entry): RunningLocalServer[] => {
+        if (!entry.metadata) return []
         const processRow = processByPid.get(entry.pid)
         return [{
             pid: entry.pid,
             port: entry.port,
-            url: `${entry.protocol}://localhost:${entry.port}/`,
+            url: `${entry.metadata.protocol}://localhost:${entry.port}/`,
+            ...(entry.metadata.pageTitle ? { pageTitle: entry.metadata.pageTitle } : {}),
             processName: sanitizeLocalServerProcessName(processRow?.name || ''),
             attachedToProject: isAttached(entry.pid)
         }]

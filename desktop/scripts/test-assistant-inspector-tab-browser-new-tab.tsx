@@ -203,6 +203,7 @@ const newTabMarkup = renderToStaticMarkup(createElement(SettingsProvider, null, 
         pid: 10,
         port: 5174,
         url: 'http://localhost:5174/',
+        pageTitle: 'Zyra Desktop',
         processName: 'node.exe',
         attachedToProject: true
     }],
@@ -229,6 +230,9 @@ assert.match(newTabMarkup, /Running locally/)
 assert.match(newTabMarkup, /aria-expanded="false"[^>]*aria-controls="assistant-browser-local-servers-content"[\s\S]*Local servers/, 'local servers start as the compact tucked disclosure')
 assert.match(newTabMarkup, /This project/)
 assert.match(newTabMarkup, /Other local servers/)
+assert.match(newTabMarkup, /Zyra Desktop/, 'local server rows prefer the page title returned by the server')
+assert.match(newTabMarkup, /storybook/, 'local server rows retain the process name when a page has no title')
+assert.doesNotMatch(newTabMarkup, />node</, 'the runtime process label stays hidden when the page provides a title')
 assert.match(newTabMarkup, /localhost:5174/)
 assert.match(newTabMarkup, /Open localhost:6006 in a new Browser tab/)
 assert.match(newTabMarkup, /class="[^"]*size-8[^"]*"[^>]*aria-label="Open Browser history"/, 'the rendered History action uses the requested compact 32px target')

@@ -6,7 +6,7 @@ import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { commandReferencesProjectPath, detectRunningLocalServers, sanitizeLocalServerProcessName } from '../src/main/inspectors/process-detector'
+import { commandReferencesProjectPath, detectRunningLocalServers, sanitizeLocalServerPageTitle, sanitizeLocalServerProcessName } from '../src/main/inspectors/process-detector'
 
 assert.equal(commandReferencesProjectPath('node C:\\Work\\App\\server.js', 'c:/work/app', 'win32'), true, 'Windows project matching is case-insensitive and separator-aware')
 assert.equal(commandReferencesProjectPath('node C:\\Work\\Application\\server.js', 'C:/Work/App', 'win32'), false, 'project matching rejects sibling prefix collisions')
@@ -14,6 +14,8 @@ assert.equal(commandReferencesProjectPath('node /srv/App/server.js', '/srv/App',
 assert.equal(commandReferencesProjectPath('node /srv/app/server.js', '/srv/App', 'linux'), false, 'POSIX project matching preserves case')
 assert.equal(sanitizeLocalServerProcessName('/Users/private/bin/node'), 'node', 'POSIX executable paths are reduced to a safe process basename')
 assert.equal(sanitizeLocalServerProcessName('C:\\Users\\private\\bin\\bun.exe'), 'bun.exe', 'Windows executable paths are reduced to a safe process basename')
+assert.equal(sanitizeLocalServerPageTitle('  Typescribe &amp; tools  '), 'Typescribe & tools', 'local page titles are decoded and normalized for Browser chrome')
+assert.equal(sanitizeLocalServerPageTitle('\u202eSpoofed\u202c\n title'), 'Spoofed title', 'local page titles cannot inject control characters into Browser chrome')
 const detectorSource = readFileSync(new URL('../src/main/inspectors/process-detector.ts', import.meta.url), 'utf8')
 assert.match(detectorSource, /execFileAsync\('powershell\.exe'/, 'Windows process inventory bypasses fragile shell quoting')
 assert.match(detectorSource, /Get-WmiObject[\s\S]*falling back to known development ports/, 'process inventory retries and degrades without surfacing the PowerShell command failure')
@@ -65,8 +67,8 @@ function createTestHttpsServer(): { directory: string; server: https.Server } | 
 }
 
 const httpServer = http.createServer((_request, response) => {
-    response.writeHead(204)
-    response.end()
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+    response.end('<!doctype html><html><head><title>Typescribe &amp; local tools</title></head><body></body></html>')
 })
 const httpsFixture = createTestHttpsServer()
 const nonHttpServer = net.createServer((socket) => socket.end('not-http'))
@@ -85,6 +87,7 @@ try {
     const detectedHttp = servers.find((entry) => entry.port === httpPort)
     assert.ok(detectedHttp, 'a browser-openable local HTTP server is discovered even outside conventional development ports')
     assert.equal(detectedHttp.url, `http://localhost:${httpPort}/`)
+    assert.equal(detectedHttp.pageTitle, 'Typescribe & local tools', 'a local server exposes its page title instead of only its runtime process name')
     if (httpsPort) {
         assert.equal(servers.find((entry) => entry.port === httpsPort)?.url, `https://localhost:${httpsPort}/`, 'a self-signed local HTTPS development server is discovered without weakening public TLS')
     }
