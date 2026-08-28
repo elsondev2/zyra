@@ -128,3 +128,5 @@ jobs:
         run: |
           git diff --exit-code -- desktop/resources
           git diff --check
+
+# fork-ci-activation: alternate account validation
