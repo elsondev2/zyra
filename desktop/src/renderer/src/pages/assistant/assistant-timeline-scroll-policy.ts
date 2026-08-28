@@ -44,4 +44,3 @@ export function resolveAssistantTimelineModeAfterScroll(input: {
     }
     return { userNavigatedAway: true, mode: 'free-scrolling' }
 }
-

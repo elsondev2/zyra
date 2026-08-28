@@ -87,4 +87,3 @@ export async function fetchGoogleBrowserSearchSuggestions(rawQuery: string): Pro
     }
     return suggestions.slice()
 }
-

@@ -56,7 +56,7 @@ assert.match(preload, /getBrowserDownloadPreviewTarget/, 'trusted main Browser c
 assert.match(preload, /listBrowserDownloadsFolder/, 'trusted Browser chrome can request the bounded folder view')
 assert.match(preload, /actOnBrowserDownloadsFolderEntry/, 'trusted Browser chrome can request a path-confined folder action')
 assert.match(popupPreload, /onDownloadsChanged/, 'popup chrome shares the same main-owned download manager')
-assert.match(workspace, /<AssistantBrowserDownloadsButton api=\{browserDownloadsApi\} onOpenHere=\{openDownloadHere\}/, 'the main Browser places downloads beside its address bar and opens supported files in its active Zyra window')
+assert.match(workspace, /<AssistantBrowserDownloadsButton[\s\S]{0,160}api=\{browserDownloadsApi\}[\s\S]{0,120}onOpenHere=\{openDownloadHere\}/, 'the main Browser places downloads beside its address bar and opens supported files in its active Zyra window')
 assert.match(workspace, /<AssistantBrowserDownloadsPanel[\s\S]*api=\{browserDownloadsApi\}/, 'the full Downloads history is a separate surface backed by the same trusted download service')
 assert.match(workspace, /<span>History<\/span>[\s\S]*<span>Downloads<\/span>/, 'the Browser menu opens both full history surfaces')
 assert.doesNotMatch(workspace, /Local Browser profile|Website sign-ins persist on this device/, 'the Browser menu does not carry a verbose profile explanation')
