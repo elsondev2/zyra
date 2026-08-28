@@ -21,6 +21,8 @@ import { IncognitoIcon } from '@/components/ui/IncognitoIcon'
 import { preloadPreviewRenderer } from '@/components/ui/file-preview/useFilePreview'
 import { warmPreviewFileSearchIndex } from '@/components/ui/file-preview/usePreviewFileSearch'
 import { useSettings } from '@/lib/settings'
+import { captureProductEventOnce } from '@/lib/product-analytics'
+import { normalizeAnalyticsWorkspaceKind as analyticsWorkspaceKind } from '@shared/analytics/contracts'
 import type { AssistantDiffTarget, AssistantDiffTurn } from './assistant-diff-types'
 import { AssistantBrowserPageIcon } from './AssistantBrowserPageIcon'
 import type { AssistantBrowserWorkspaceController } from './AssistantBrowserWorkspace'
@@ -550,6 +552,13 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     }), [browserTabs, browserWorkspaceState.tabs, contentLoadingTabId, controlState?.pendingGrants, diffTabContext, effectiveFleetSnapshot, explorerViewCapsule?.activePreview, filesTabContext, fleetSnapshotLoading, pendingControlCount, reviewContextDiff?.filePath, settings.appearanceResolvedMode, transitionLoadingTabId, turns, workspaceTabs])
 
     const activeWorkspaceTab = workspaceTabs.find((tab) => tab.id === activeTabId) || workspaceTabs[0] || null
+    useEffect(() => {
+        if (!open || !activeWorkspaceTab || activeWorkspaceTab.kind === 'browser') return
+        captureProductEventOnce(`workspace:${activeWorkspaceTab.kind}`, {
+            event: 'zyra_v1_workspace_ui',
+            properties: { action: 'workspace_select', workspace: analyticsWorkspaceKind(activeWorkspaceTab.kind) }
+        })
+    }, [activeWorkspaceTab?.kind, open])
     const activeTurnTab = activeWorkspaceTab?.kind === 'turn' ? activeWorkspaceTab : null
     const visibleTurnId = activeTurnTab?.turnId || (activeWorkspaceTab?.kind === 'review' ? reviewTurnId : null)
     const visibleTurn = turns.find((turn) => turn.id === visibleTurnId) || null

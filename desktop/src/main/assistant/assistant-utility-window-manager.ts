@@ -23,6 +23,8 @@ import { writeJsonAtomically } from '../setup/atomic-json'
 import { sanitizeBrowserPersistentUrl } from '../../shared/browser-url-sanitization'
 import { getAgentControlBroker } from '../agent-control'
 import type { BrowserViewTransferHost } from '../browser-view-manager'
+import { classifyAnalyticsErrorCode as utilityAnalyticsErrorCode } from '../../shared/analytics/error-code'
+import { normalizeAnalyticsWorkspaceKind as utilityAnalyticsTabKind } from '../../shared/analytics/contracts'
 
 const MAX_WINDOWS = 8
 const MAX_TABS_PER_WINDOW = 32
@@ -52,6 +54,13 @@ type UtilityWindowManagerOptions = {
     getMainWindow: () => BrowserWindow | null
     browserViews?: BrowserViewTransferHost
     isTrustedRenderer?: (webContentsId: number) => boolean
+    captureAnalytics?: (properties: {
+        action: 'tab_create' | 'tab_drag' | 'tear_off' | 'merge' | 'close' | 'terminal_transfer'
+        outcome: 'started' | 'completed' | 'failed' | 'cancelled' | 'prevented' | 'unknown'
+        tab_kind?: 'chat' | 'browser' | 'files' | 'terminal' | 'agents' | 'resources' | 'diff' | 'unknown'
+        tab_count?: number
+        error_code?: string
+    }) => void
 }
 
 type PendingReady = { resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
@@ -327,6 +336,7 @@ export class AssistantUtilityWindowManager {
         state.tabs.splice(index, 1)
         if (state.activeTabId === tabId) state.activeTabId = state.tabs[Math.min(index, state.tabs.length - 1)]?.id || null
         await this.commitAndPublish(windowId)
+        if (shouldCaptureUtilityTab(closingTab)) this.options.captureAnalytics?.({ action: 'close', outcome: 'completed', tab_kind: utilityAnalyticsTabKind(closingTab.workspace), tab_count: state.tabs.length })
         if (state.tabs.length === 0) {
             this.windows.get(windowId)?.close()
             if (windowId !== 'default') {
@@ -362,6 +372,7 @@ export class AssistantUtilityWindowManager {
         state.tabs = groupTabsByChat(state.tabs)
         state.activeTabId = tab.id
         await this.commitAndPublish(state.id)
+        if (shouldCaptureUtilityTab(tab)) this.options.captureAnalytics?.({ action: 'tab_create', outcome: 'completed', tab_kind: utilityAnalyticsTabKind(tab.workspace), tab_count: state.tabs.length })
         return { tabId: tab.id }
     }
 
@@ -375,6 +386,7 @@ export class AssistantUtilityWindowManager {
         state.tabs.splice(to, 0, tab)
         state.tabs = groupTabsByChat(state.tabs)
         await this.commitAndPublish(windowId)
+        if (shouldCaptureUtilityTab(tab)) this.options.captureAnalytics?.({ action: 'tab_drag', outcome: 'completed', tab_kind: utilityAnalyticsTabKind(tab.workspace), tab_count: state.tabs.length })
         return { reordered: true }
     }
 
@@ -445,6 +457,7 @@ export class AssistantUtilityWindowManager {
             expiryTimer
         }
         this.tearOffSessions.set(sessionId, session)
+        if (shouldCaptureUtilityTab(tab)) this.options.captureAnalytics?.({ action: 'tear_off', outcome: 'started', tab_kind: utilityAnalyticsTabKind(tab.workspace) })
         return { sessionId, targetWindowId: target.id }
     }
 
@@ -509,8 +522,10 @@ export class AssistantUtilityWindowManager {
                 const targetWindow = this.windows.get(targetWindowId)
                 if (targetWindow && !targetWindow.isDestroyed()) this.reveal(targetWindow, true)
             }
+            if (shouldCaptureUtilityTab(tab)) this.options.captureAnalytics?.({ action: dropTarget ? 'merge' : 'tear_off', outcome: 'completed', tab_kind: utilityAnalyticsTabKind(tab.workspace) })
             return { committed: true, targetWindowId }
         } catch (error) {
+            if (shouldCaptureUtilityTab(tab)) this.options.captureAnalytics?.({ action: 'tear_off', outcome: 'failed', tab_kind: utilityAnalyticsTabKind(tab.workspace), error_code: utilityAnalyticsErrorCode(error) })
             await this.discardTearOff(session).catch(() => undefined)
             throw error
         }
@@ -518,7 +533,9 @@ export class AssistantUtilityWindowManager {
 
     private async cancelTearOff(event: IpcMainInvokeEvent, sessionId: string): Promise<{ cancelled: true }> {
         const session = this.requireOwnedTearOff(event, sessionId)
+        const tab = this.state.windows.find((window) => window.id === session.targetWindowId)?.tabs.find((entry) => entry.id === session.sourceTabId)
         await this.discardTearOff(session)
+        if (tab && shouldCaptureUtilityTab(tab)) this.options.captureAnalytics?.({ action: 'tear_off', outcome: 'cancelled' })
         return { cancelled: true }
     }
 
@@ -599,6 +616,7 @@ export class AssistantUtilityWindowManager {
             await this.commitAndPublish(source.id)
             await this.pruneEmptyWindow(source)
             this.reveal(this.ensureWindow(target.id), false)
+            this.captureUtilityMove(tab, target.tabs.length)
             return { targetWindowId: target.id }
         }
         if (targetId === 'main') {
@@ -621,6 +639,7 @@ export class AssistantUtilityWindowManager {
             removeTabFromWindow(source, tab.id)
             await this.commitAndPublish(source.id)
             await this.pruneEmptyWindow(source)
+            this.captureUtilityMove(tab, 0)
             return { targetWindowId: 'main' }
         }
         const target = targetId ? this.findWindowState(targetId) : this.createWindowState()
@@ -643,7 +662,18 @@ export class AssistantUtilityWindowManager {
         await this.commitAndPublish(source.id)
         await this.pruneEmptyWindow(source)
         this.reveal(this.ensureWindow(target.id), false)
+        this.captureUtilityMove(tab, target.tabs.length)
         return { targetWindowId: target.id }
+    }
+
+    private captureUtilityMove(tab: AssistantUtilityTab, tabCount: number): void {
+        if (!shouldCaptureUtilityTab(tab)) return
+        this.options.captureAnalytics?.({
+            action: tab.workspace === 'terminal' ? 'terminal_transfer' : 'merge',
+            outcome: 'completed',
+            tab_kind: utilityAnalyticsTabKind(tab.workspace),
+            tab_count: tabCount
+        })
     }
 
     private async detachMainTab(input: AssistantUtilityMainTabInput): Promise<{ targetWindowId: string }> {
@@ -1056,4 +1086,8 @@ function persistentAssistantUtilityState(state: AssistantUtilityState): Assistan
         return { ...windowState, activeTabId, tabs }
     }).filter((windowState) => windowState.id === 'default' || windowState.tabs.length > 0)
     return { version: 1, windows }
+}
+
+function shouldCaptureUtilityTab(tab: AssistantUtilityTab): boolean {
+    return tab.workspace !== 'browser' || tab.sessionMode !== 'incognito'
 }

@@ -22,6 +22,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const syntaxTargets = [
   "src/version.mjs",
+  "src/analytics/contracts.mjs",
+  "src/analytics/client.mjs",
+  "src/analytics/cli.mjs",
   "src/agent-surface.mjs",
   "src/model-availability.mjs",
   "src/chatgpt-account.mjs",
@@ -87,11 +90,14 @@ const syntaxTargets = [
   "scripts/test-zyra-prompt-resources.mjs",
   "scripts/test-zyra-write-diff.mjs",
   "scripts/test-zyra-version.mjs",
+  "scripts/test-product-analytics.mjs",
+  "scripts/benchmark-product-analytics.mjs",
   "scripts/privacy-check.mjs",
 ];
 
 const coreTests = [
   "scripts/privacy-check.mjs",
+  "scripts/test-product-analytics.mjs",
   "scripts/test-agent-surface-contract.mjs",
   "scripts/test-zyra-memory.mjs",
   "scripts/test-zyra-codex-mode.mjs",
@@ -115,6 +121,7 @@ const coreTests = [
 // orchestration suites remain in core/full so quick is useful during iteration.
 const quickCoreTests = [
   "scripts/privacy-check.mjs",
+  "scripts/test-product-analytics.mjs",
   "scripts/test-agent-surface-contract.mjs",
   "scripts/test-zyra-model-availability.mjs",
   "scripts/test-chatgpt-realtime-call.mjs",
@@ -133,6 +140,7 @@ const serialCoreTests = new Set([
 ]);
 
 const desktopTasks = [
+  { label: "desktop:test:analytics", bunArgs: ["run", "--cwd", "desktop", "test:analytics"] },
   { label: "desktop:test:assistant-composer-command-menu", bunArgs: ["desktop/scripts/test-assistant-composer-command-menu.ts"] },
   { label: "desktop:test:assistant-fleet", bunArgs: ["run", "--cwd", "desktop", "test:assistant-fleet"] },
   { label: "desktop:test:assistant-inspector-browser", bunArgs: ["run", "--cwd", "desktop", "test:assistant-inspector-browser"] },

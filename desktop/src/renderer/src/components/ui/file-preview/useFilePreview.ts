@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import type { PreviewFile, PreviewMediaItem, PreviewMediaSource, PreviewOpenOptions, PreviewTab } from './types'
 import { readPreviewContentCache, writePreviewContentCache, type PreviewContentSnapshot } from './preview-content-cache'
 import { isMediaPreviewType, resolvePreviewType } from './utils'
+import { captureProductEvent } from '@/lib/product-analytics'
 
 export interface UseFilePreviewReturn {
     previewTabs: PreviewTab[]
@@ -180,6 +181,7 @@ export function useFilePreview(): UseFilePreviewReturn {
     const loadPreviewTabContent = async (tabId: string, file: { name: string; path: string }, ext: string) => {
         const previewTarget = resolvePreviewType(file.name, ext)
         if (!previewTarget || !previewTarget.needsContent) return
+        const startedAt = performance.now()
 
         const requestId = activePreviewRequestIdRef.current + 1
         activePreviewRequestIdRef.current = requestId
@@ -203,7 +205,18 @@ export function useFilePreview(): UseFilePreviewReturn {
                     ? { ...tab, ...snapshot, loading: false }
                     : tab
             )))
+            captureProductEvent({
+                event: 'zyra_v1_files',
+                properties: {
+                    action: 'preview',
+                    outcome: 'completed',
+                    preview_kind: analyticsPreviewKind(previewTarget.type),
+                    size_bucket: analyticsSizeBucket(snapshot.size),
+                    duration_ms: performance.now() - startedAt
+                }
+            })
         } catch (err) {
+            captureProductEvent({ event: 'zyra_v1_files', properties: { action: 'preview', outcome: 'failed', preview_kind: analyticsPreviewKind(previewTarget.type), duration_ms: performance.now() - startedAt, error_code: 'unknown' } })
             console.error('Failed to load file:', err)
             setPreviewTabsState((currentTabs) => currentTabs.map((tab) => (
                 tab.id === tabId && tab.requestId === requestId
@@ -228,6 +241,9 @@ export function useFilePreview(): UseFilePreviewReturn {
             return
         }
         preloadPreviewRenderer(previewTarget.type)
+        if (!previewTarget.needsContent) {
+            captureProductEvent({ event: 'zyra_v1_files', properties: { action: 'preview', outcome: 'completed', preview_kind: analyticsPreviewKind(previewTarget.type), size_bucket: 'unknown' } })
+        }
 
         const requestedFocusLine = typeof options?.focusLine === 'number' && options.focusLine > 0
             ? Math.floor(options.focusLine)
@@ -394,4 +410,26 @@ export function useFilePreview(): UseFilePreviewReturn {
         closePreview,
         openFile
     }
+}
+
+function analyticsPreviewKind(value: PreviewFile['type']): 'text' | 'code' | 'markdown' | 'image' | 'pdf' | 'office' | 'table' | 'audio' | 'video' | 'binary' | 'unknown' {
+    if (value === 'text' || value === 'html') return 'text'
+    if (value === 'code' || value === 'json') return 'code'
+    if (value === 'md') return 'markdown'
+    if (value === 'image') return 'image'
+    if (value === 'pdf') return 'pdf'
+    if (value === 'docx' || value === 'xlsx' || value === 'pptx') return 'office'
+    if (value === 'csv') return 'table'
+    if (value === 'audio') return 'audio'
+    if (value === 'video') return 'video'
+    return value === 'directory' ? 'unknown' : 'binary'
+}
+
+function analyticsSizeBucket(value: number | null): 'tiny' | 'small' | 'medium' | 'large' | 'very_large' | 'unknown' {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return 'unknown'
+    if (value < 16 * 1024) return 'tiny'
+    if (value < 256 * 1024) return 'small'
+    if (value < 2 * 1024 * 1024) return 'medium'
+    if (value < 20 * 1024 * 1024) return 'large'
+    return 'very_large'
 }

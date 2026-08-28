@@ -3,6 +3,8 @@ import { ArrowLeft, PanelLeftOpen, Pin, Search, X } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useSettings } from '@/lib/settings'
 import { cn } from '@/lib/utils'
+import { captureProductEventOnce } from '@/lib/product-analytics'
+import type { AnalyticsEventPropertiesMap } from '@shared/analytics/contracts'
 import {
     ASSISTANT_BUBBLE_SIDEBAR_WIDTH,
     ASSISTANT_SIDEBAR_COLLAPSE_MORPH_MS,
@@ -43,6 +45,16 @@ function groupSettingsSearchTargets(targets: SettingsSearchTarget[]): Array<{ se
     return [...groups].map(([section, entries]) => ({ section, targets: entries }))
 }
 
+type AnalyticsSettingsSection = NonNullable<AnalyticsEventPropertiesMap['zyra_v1_workspace_ui']['section']>
+const analyticsSettingsSections = new Set(SETTINGS_NAVIGATION_GROUPS.flatMap((group) => (
+    group.items.map((item) => item.id.replaceAll('-', '_'))
+)))
+
+function analyticsSettingsSection(value: string): AnalyticsSettingsSection {
+    const normalized = value.replaceAll('-', '_')
+    return analyticsSettingsSections.has(normalized) ? normalized as AnalyticsSettingsSection : 'unknown'
+}
+
 function SettingsRouteFallback() {
     return (
         <div className="mx-auto w-full max-w-[680px] px-5 pb-16 pt-8 sm:px-10 sm:pt-10" aria-busy="true" aria-label="Opening settings page">
@@ -73,6 +85,13 @@ export default function SettingsShell() {
     const [previewOpen, setPreviewOpen] = useState(previewPinned)
     const normalizedQuery = query.trim().toLowerCase()
     const activeItem = findSettingsNavigationItem(location.pathname)
+    useEffect(() => {
+        captureProductEventOnce(`settings:${activeItem.id}`, {
+            event: 'zyra_v1_workspace_ui',
+            properties: { action: 'settings_section', section: analyticsSettingsSection(activeItem.id) }
+        })
+    }, [activeItem.id])
+
     const requestedSearchTarget = useMemo(() => {
         const value = new URLSearchParams(location.search).get('setting') || ''
         return isSettingsSearchTargetId(value) ? value : null

@@ -7,6 +7,7 @@ import type { PreviewNavigationWorkspaceState } from '@/components/ui/file-previ
 import type { FilePreviewPresentationState } from '@/components/ui/file-preview/modalTypes'
 import { AssistantExplorerWorkspace } from './AssistantExplorerWorkspace'
 import { captureAssistantUtilityScrollAnchor, restoreAssistantUtilityScrollAnchor } from './assistant-utility-state-capsules'
+import { captureProductEvent } from '@/lib/product-analytics'
 
 export const AssistantFilesWorkspace = memo(function AssistantFilesWorkspace({
     projectPath,
@@ -22,6 +23,7 @@ export const AssistantFilesWorkspace = memo(function AssistantFilesWorkspace({
     publishNavigatorToAppTitleBar?: boolean
 }) {
     const preview = useFilePreview()
+    const modeOpenCapturedRef = useRef(false)
     const rootRef = useRef<HTMLElement | null>(null)
     const initialNavigationState = useMemo<PreviewNavigationWorkspaceState>(() => ({
         currentFolderPath: stateCapsule?.currentFolderPath,
@@ -48,6 +50,16 @@ export const AssistantFilesWorkspace = memo(function AssistantFilesWorkspace({
     const openPreviewInNewTabRef = useRef(preview.openPreviewInNewTab)
     openPreviewRef.current = preview.openPreview
     openPreviewInNewTabRef.current = preview.openPreviewInNewTab
+
+    useEffect(() => {
+        if (!active) {
+            modeOpenCapturedRef.current = false
+            return
+        }
+        if (modeOpenCapturedRef.current) return
+        modeOpenCapturedRef.current = true
+        captureProductEvent({ event: 'zyra_v1_files', properties: { action: 'mode_open', outcome: 'completed' } })
+    }, [active])
 
     const handleOpenPreview = useCallback<UseFilePreviewReturn['openPreview']>(
         (file, ext, options) => openPreviewRef.current(file, ext, options),

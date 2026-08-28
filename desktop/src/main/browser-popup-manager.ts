@@ -14,6 +14,7 @@ import { ipcMain } from './ipc/trusted-ipc'
 import log from 'electron-log'
 import { resolveBrowserWindowOpenIntent } from './browser-window-open-policy'
 import {
+    getGlobalBrowserSession,
     isSafeBrowserNavigationUrl,
     recordGlobalBrowserHistory,
     registerBrowserPermissionTarget,
@@ -71,6 +72,7 @@ type BrowserPopupManagerOptions = {
         height: number
     }) => BrowserWindow
     requestTab: (ownerWindow: BrowserWindow, sourceGuestWebContentsId: number, url: string, activate: boolean) => void
+    captureAnalytics?: (properties: { action: 'popup'; outcome: 'completed' | 'failed' | 'blocked' | 'allowed'; error_code?: string }) => void
 }
 
 function popupPlatform(): BrowserShortcutPlatform {
@@ -120,6 +122,18 @@ export class BrowserPopupManager {
     private ipcRegistered = false
 
     constructor(private readonly options: BrowserPopupManagerOptions) {}
+
+    isIncognitoWebContents(webContentsId: number): boolean {
+        return [...this.popupByShellContentsId.values()].some((popup) => (
+            !popup.disposed
+            && popup.sourceContents.session !== getGlobalBrowserSession()
+            && (popup.shellWebContentsId === webContentsId || popup.pageContents.id === webContentsId)
+        ))
+    }
+
+    hasIncognitoContents(): boolean {
+        return [...this.popupByShellContentsId.values()].some((popup) => !popup.disposed && popup.sourceContents.session !== getGlobalBrowserSession())
+    }
 
     registerIpc(): void {
         if (this.ipcRegistered) return
@@ -329,13 +343,19 @@ export class BrowserPopupManager {
                     url: details.url,
                     proceed: () => this.options.requestTab(ownerWindow, sourceGuestWebContentsId, details.url, true)
                 })
-                if (warning) return { action: 'deny' }
+                if (warning) {
+                    if (sourceContents.session === getGlobalBrowserSession()) this.options.captureAnalytics?.({ action: 'popup', outcome: 'blocked' })
+                    return { action: 'deny' }
+                }
             }
             if (intent.kind === 'tab') {
                 this.options.requestTab(ownerWindow, sourceGuestWebContentsId, details.url === 'about:blank' ? '' : details.url, intent.activate)
                 return { action: 'deny' }
             }
-            if (this.managedCount(ownerWindow) >= MAX_MANAGED_BROWSER_POPUPS) return { action: 'deny' }
+            if (this.managedCount(ownerWindow) >= MAX_MANAGED_BROWSER_POPUPS) {
+                if (sourceContents.session === getGlobalBrowserSession()) this.options.captureAnalytics?.({ action: 'popup', outcome: 'blocked', error_code: 'unavailable' })
+                return { action: 'deny' }
+            }
             const reservation = this.reserve(ownerWindow)
             return {
                 action: 'allow',
@@ -361,6 +381,7 @@ export class BrowserPopupManager {
                         ).pageContents
                     } catch (error) {
                         this.releaseReservation(ownerWindow, reservation)
+                        if (sourceContents.session === getGlobalBrowserSession()) this.options.captureAnalytics?.({ action: 'popup', outcome: 'failed', error_code: 'unknown' })
                         throw error
                     }
                 }
@@ -419,6 +440,7 @@ export class BrowserPopupManager {
             active.add(popup)
             this.popupByShellContentsId.set(shellWindow.webContents.id, popup)
             this.publishWindowList(ownerWindow)
+            if (sourceContents.session === getGlobalBrowserSession()) this.options.captureAnalytics?.({ action: 'popup', outcome: 'allowed' })
 
             shellWindow.contentView.addChildView(pageView)
             pageView.setBackgroundColor('#111318')

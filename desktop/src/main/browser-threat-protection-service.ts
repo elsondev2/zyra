@@ -164,7 +164,7 @@ export class BrowserThreatProtectionService {
         return warning
     }
 
-    async proceed(ownerWebContentsId: number, decisionId: string): Promise<void> {
+    async proceed(ownerWebContentsId: number, decisionId: string): Promise<DevScopeBrowserThreatWarning> {
         this.pruneEphemeralState()
         const decision = this.pendingDecisions.get(decisionId)
         if (!decision || decision.ownerWebContentsId !== ownerWebContentsId) {
@@ -194,6 +194,7 @@ export class BrowserThreatProtectionService {
         }
         try {
             await decision.proceed()
+            return decision.warning
         } catch (error) {
             if (hash) {
                 this.allowances.delete(allowanceKey(decision.warning.blockedGuestWebContentsId, hash))
@@ -203,13 +204,14 @@ export class BrowserThreatProtectionService {
         }
     }
 
-    dismiss(ownerWebContentsId: number, decisionId: string): void {
+    dismiss(ownerWebContentsId: number, decisionId: string): DevScopeBrowserThreatWarning {
         this.pruneEphemeralState()
         const decision = this.pendingDecisions.get(decisionId)
         if (!decision || decision.ownerWebContentsId !== ownerWebContentsId) {
             throw new Error('This blocked navigation is no longer available.')
         }
         this.pendingDecisions.delete(decisionId)
+        return decision.warning
     }
 
     transferGuestOwner(guestWebContentsId: number, previousOwnerWebContentsId: number, ownerWebContentsId: number): void {

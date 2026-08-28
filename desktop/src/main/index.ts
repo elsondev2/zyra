@@ -19,9 +19,9 @@ import { AssistantUtilityWindowManager, type ResolvedUtilityChat, type UtilityWi
 import { persistAssistantClipboardImage, resolveAssistantClipboardAttachment } from './assistant/clipboard-attachments'
 import { getCodexVoiceTranscriptionState, transcribeVoiceWithCodex } from './assistant/codex-voice-transcription'
 import { BrowserClientRuntime } from './browser-client-runtime'
-import { disposeUpdater, initializeUpdater, registerUpdateWindow } from './update/manager'
+import { configureUpdateAnalytics, disposeUpdater, initializeUpdater, registerUpdateWindow } from './update/manager'
 import { registerFileProtocol } from './file-protocol'
-import { flushGlobalBrowserProfileStorage, isSafeBrowserNavigationUrl } from './ipc/handlers/browser-preview-handlers'
+import { configureBrowserActionAnalytics, configureBrowserPermissionAnalytics, flushGlobalBrowserProfileStorage, isSafeBrowserNavigationUrl } from './ipc/handlers/browser-preview-handlers'
 import { disposeAgentControlBroker, getAgentControlBroker } from './agent-control'
 import { trustedBrowserGuests } from './agent-control/trusted-guest-registry'
 import { resolveZyraWindowChromePolicy, type ZyraDesktopPlatform } from '../shared/platform-window-chrome'
@@ -38,6 +38,8 @@ import { registerInstalledDesktop } from './desktop-install-registration'
 import { dispatchDesktopTui, isDesktopTuiDispatch } from './desktop-tui-dispatcher'
 import { createRendererHangRecorder } from './diagnostics/renderer-hang-recorder'
 import { BROWSER_POPUP_PRELOAD_ARGUMENT } from '../shared/preload-surfaces'
+import { configureBrowserDownloadAnalytics } from './browser-download-service'
+import { inspectProjectAnalyticsCapabilities } from './analytics/project-capabilities'
 
 app.enableSandbox()
 
@@ -87,7 +89,11 @@ function applyRuntimeIdentity(identity: RuntimeIdentity): void {
 
 applyRuntimeIdentity(runtimeIdentity)
 
+const launchStartedAt = performance.now()
 const setupServices = createDesktopSetupServices(app.getPath('userData'))
+configureUpdateAnalytics((properties) => setupServices.analytics.capture({ event: 'zyra_v1_app_lifecycle', properties }))
+configureBrowserDownloadAnalytics((properties) => setupServices.analytics.capture({ event: 'zyra_v1_browser', properties }))
+configureBrowserPermissionAnalytics((outcome) => setupServices.analytics.capture({ event: 'zyra_v1_browser', properties: { action: 'permission', outcome } }))
 
 // Configure logging
 const verboseMainLogs = process.env.ZYRA_VERBOSE_LOGS === '1'
@@ -97,9 +103,26 @@ console.log = log.log
 console.error = log.error
 console.warn = log.warn
 
+let isIncognitoBrowserWebContents = (_webContentsId: number): boolean => false
+let hasIncognitoBrowserContents = (): boolean => false
+
 const rendererHangRecorder = createRendererHangRecorder({
     userDataPath: app.getPath('userData'),
-    getAssistantContext: () => getAssistantService().getHangDiagnosticContext()
+    getAssistantContext: () => getAssistantService().getHangDiagnosticContext(),
+    onIncident: (incident) => {
+        if (incident.reason.includes('process-gone')) return
+        if (incident.webContentsId !== null && isIncognitoBrowserWebContents(incident.webContentsId)) return
+        if (hasIncognitoBrowserContents()) return
+        setupServices.analytics.capture({
+            event: 'zyra_v1_app_lifecycle',
+            properties: {
+                action: 'hang',
+                outcome: 'completed',
+                process_kind: incident.processKind,
+                ...(incident.durationMs === undefined ? {} : { duration_ms: incident.durationMs })
+            }
+        })
+    }
 })
 
 let mainWindow: BrowserWindow | null = null
@@ -363,7 +386,8 @@ function requestBrowserTab(
 
 const browserPopupManager = new BrowserPopupManager({
     createShellWindow: createBrowserPopupShellWindow,
-    requestTab: requestBrowserTab
+    requestTab: requestBrowserTab,
+    captureAnalytics: (properties) => setupServices.analytics.capture({ event: 'zyra_v1_browser', properties })
 })
 browserPopupManager.registerIpc()
 
@@ -375,9 +399,21 @@ const browserViewManager = new BrowserViewManager({
         const utilityWindowId = assistantUtilityWindowManager?.windowIdForWebContents(window.webContents.id)
         return utilityWindowId ? `utility:${utilityWindowId}` : null
     },
-    canUseBrowser: () => setupServices.onboarding.isAccessAllowed()
+    canUseBrowser: () => setupServices.onboarding.isAccessAllowed(),
+    captureAnalytics: (properties) => setupServices.analytics.capture({ event: 'zyra_v1_browser', properties })
 })
 browserViewManager.registerIpc()
+isIncognitoBrowserWebContents = (webContentsId) => (
+    browserViewManager.isIncognitoWebContents(webContentsId)
+    || browserPopupManager.isIncognitoWebContents(webContentsId)
+)
+hasIncognitoBrowserContents = () => browserViewManager.hasIncognitoContents() || browserPopupManager.hasIncognitoContents()
+configureBrowserActionAnalytics((input) => {
+    const allowed = input.guestWebContentsId === undefined
+        ? browserViewManager.isAnalyticsAllowedForOwner(input.ownerWebContentsId)
+        : browserViewManager.isAnalyticsAllowedForGuest(input.guestWebContentsId)
+    if (allowed) setupServices.analytics.capture({ event: 'zyra_v1_browser', properties: input.properties })
+})
 
 assistantUtilityWindowManager = new AssistantUtilityWindowManager({
     userDataPath: app.getPath('userData'),
@@ -385,7 +421,8 @@ assistantUtilityWindowManager = new AssistantUtilityWindowManager({
     activateWindow: (window, windowId) => loadRendererRoute(window, `/assistant-utility/${encodeURIComponent(windowId)}`),
     resolveChat: resolveAssistantUtilityChat,
     getMainWindow: () => mainWindow,
-    browserViews: browserViewManager
+    browserViews: browserViewManager,
+    captureAnalytics: (properties) => setupServices.analytics.capture({ event: 'zyra_v1_utility_window', properties })
 })
 assistantUtilityWindowManager.registerIpc()
 configurePreviewTerminalWorkspaceAuthorizer(async (event, owner) => {
@@ -786,6 +823,11 @@ function openFolderInMainWindow(folderPath: string): BrowserWindow {
         return mainWindow
     }
     const route = buildExternalExplorerRoute(folderPath)
+    void inspectProjectAnalyticsCapabilities(folderPath).then((capabilities) => {
+        setupServices.analytics.capture({ event: 'zyra_v1_project', properties: { action: 'open', outcome: 'completed', ...capabilities } })
+    }).catch(() => {
+        setupServices.analytics.capture({ event: 'zyra_v1_project', properties: { action: 'open', outcome: 'failed', error_code: 'unknown' } })
+    })
 
     if (!mainWindow || mainWindow.isDestroyed()) {
         mainWindow = createWindow(true, route)
@@ -883,6 +925,10 @@ app.on('open-file', (event, filePath) => {
 
 app.on('second-instance', (_event, argv) => {
     if (argv.includes('--zyra-background-host')) return
+    setupServices.analytics.capture({
+        event: 'zyra_v1_app_lifecycle',
+        properties: { action: 'launch_ready', outcome: 'ready', launch_bucket: 'warm' }
+    })
     const shellLaunchTarget = extractShellLaunchTargetFromArgv(argv)
     if (shellLaunchTarget) {
         handleShellLaunchTarget(shellLaunchTarget)
@@ -946,7 +992,8 @@ app.whenReady().then(async () => {
         handleDesktopWorkspaceTurnEnded: (canonicalChatId, turnId) => assistantUtilityWindowManager.handleTuiTurnEnded(canonicalChatId, turnId),
         getTitleGenerationModel: () => setupServices.preferences.getAssistantTitleModel(),
         getTitleAutomation: () => setupServices.preferences.getAssistantTitleAutomation(),
-        getRuntimePolicy: () => setupServices.preferences.getAssistantRuntimePolicy()
+        getRuntimePolicy: () => setupServices.preferences.getAssistantRuntimePolicy(),
+        captureAnalytics: (input) => setupServices.analytics.capture(input)
     })
     configureApplicationMenu(setupServices.onboarding.isAccessAllowed())
     setupServices.onboarding.subscribe((snapshot) => {
@@ -1000,6 +1047,15 @@ app.whenReady().then(async () => {
         createQuickPreviewWindow(initialShellLaunchTarget.path)
     }
     startNormalDesktopRuntime()
+    setupServices.analytics.capture({
+        event: 'zyra_v1_app_lifecycle',
+        properties: {
+            action: 'launch_ready',
+            outcome: 'ready',
+            launch_bucket: 'cold',
+            duration_ms: performance.now() - launchStartedAt
+        }
+    })
 
     app.on('activate', function () {
         if (!mainWindow || mainWindow.isDestroyed()) {
@@ -1016,6 +1072,12 @@ app.whenReady().then(async () => {
             reason: details.reason,
             exitCode: details.exitCode
         })
+        if (!quitCleanupStarted && details.reason !== 'clean-exit' && !isIncognitoBrowserWebContents(webContents.id) && !hasIncognitoBrowserContents()) {
+            setupServices.analytics.capture({
+                event: 'zyra_v1_app_lifecycle',
+                properties: { action: 'crash', outcome: 'failed', process_kind: 'renderer', error_code: 'renderer_gone' }
+            })
+        }
         log.error('[Process] Renderer gone', {
             id: webContents.id,
             reason: details.reason,
@@ -1025,6 +1087,17 @@ app.whenReady().then(async () => {
 
     app.on('child-process-gone', (_event, details) => {
         rendererHangRecorder.captureChildProcessGone({ ...details })
+        if (!quitCleanupStarted && details.reason !== 'clean-exit' && !hasIncognitoBrowserContents()) {
+            setupServices.analytics.capture({
+                event: 'zyra_v1_app_lifecycle',
+                properties: {
+                    action: 'crash',
+                    outcome: 'failed',
+                    process_kind: details.type === 'GPU' ? 'gpu' : details.type === 'Utility' ? 'utility' : 'other',
+                    error_code: 'unknown'
+                }
+            })
+        }
         log.error('[Process] Child process gone', details)
     })
 })
@@ -1039,6 +1112,13 @@ app.on('before-quit', (event) => {
     event.preventDefault()
     if (quitCleanupStarted) return
     quitCleanupStarted = true
+    if (!setupServices.onboarding.isAccessAllowed()) {
+        setupServices.analytics.capture({ event: 'zyra_v1_onboarding', properties: { action: 'abandoned', outcome: 'cancelled' } })
+    }
+    setupServices.analytics.capture({
+        event: 'zyra_v1_app_lifecycle',
+        properties: { action: 'shutdown', outcome: 'started' }
+    })
     void flushGlobalBrowserProfileStorage().then(() => {
         globalShortcut.unregisterAll()
         browserViewManager.dispose()
@@ -1051,9 +1131,11 @@ app.on('before-quit', (event) => {
             assistantUtilityWindowManager.dispose(),
             setupServices.auth.dispose().catch((error) => log.warn('[Shutdown] OpenAI auth worker cleanup failed', error)),
             disposeAgentControlBroker().catch((error) => log.warn('[Shutdown] Agent Control cleanup failed', error)),
-            disposeBrowserThreatProtectionService().catch((error) => log.warn('[Shutdown] Browser phishing protection cleanup failed', error))
+            disposeBrowserThreatProtectionService().catch((error) => log.warn('[Shutdown] Browser phishing protection cleanup failed', error)),
+            setupServices.analytics.flush(1_500)
         ])
-    }).then(() => {
+    }).then(async () => {
+        await setupServices.analytics.shutdown(250)
         rendererHangRecorder.dispose()
         quitCleanupComplete = true
         app.quit()

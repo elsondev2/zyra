@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LEFT_PANEL_MAX_WIDTH, LEFT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH, RIGHT_PANEL_MIN_WIDTH } from './modalShared'
 import { VIEWPORT_PRESETS, type ViewportPreset } from './viewport'
+import { captureProductEvent } from '@/lib/product-analytics'
 
 type UseFilePreviewChromeParams = {
     defaultStartExpanded: boolean
@@ -49,6 +50,7 @@ export function useFilePreviewChrome({
     const [focusLine, setFocusLine] = useState<number | null>(initialFocusLine)
 
     const previewSurfaceRef = useRef<HTMLDivElement | null>(null)
+    const isExpandedRef = useRef(isExpanded)
     const panelResizeRef = useRef<{ side: 'left' | 'right'; startX: number; startWidth: number } | null>(null)
     const leftPanelWidthRef = useRef(leftPanelWidth)
     const rightPanelWidthRef = useRef(rightPanelWidth)
@@ -84,6 +86,10 @@ export function useFilePreviewChrome({
             if (timeoutId !== null) clearTimeout(timeoutId)
         }
     }, [initialFocusLine, initialFocusLineRequestId])
+
+    useEffect(() => {
+        isExpandedRef.current = isExpanded
+    }, [isExpanded])
 
     useEffect(() => {
         leftPanelWidthRef.current = leftPanelWidth
@@ -225,11 +231,18 @@ export function useFilePreviewChrome({
         }
     }, [isExpanded])
 
+    const setTrackedExpanded = useCallback((next: boolean | ((current: boolean) => boolean)) => {
+        const enabled = typeof next === 'function' ? next(isExpandedRef.current) : next
+        isExpandedRef.current = enabled
+        setIsExpanded(enabled)
+        captureProductEvent({ event: 'zyra_v1_files', properties: { action: 'fullscreen', outcome: 'completed', enabled } })
+    }, [])
+
     return {
         viewport,
         setViewport,
         isExpanded,
-        setIsExpanded,
+        setIsExpanded: setTrackedExpanded,
         leftPanelOpen,
         setLeftPanelOpen,
         rightPanelOpen,

@@ -39,6 +39,7 @@ import {
 } from './ipc/handlers/browser-preview-handlers'
 import { assertBrowserPreviewDeveloperTransferable, transferBrowserPreviewDeveloperOwner } from './ipc/handlers/browser-preview-developer-handlers'
 import { registerManagedBrowserPresentation, setManagedBrowserPresentationScale } from './browser-view-presentation'
+import { classifyAnalyticsErrorCode as browserAnalyticsErrorCode } from '../shared/analytics/error-code'
 
 const TRANSFER_TIMEOUT_MS = 8_000
 const RELEASE_GRACE_MS = 750
@@ -63,6 +64,9 @@ type BrowserViewRecord = {
     mainFrameFailed: boolean
     navigationGeneration: number
     stoppedNavigationGeneration: number
+    navigationAttempt: number
+    reportedNavigationAttempt: number
+    navigationStartedAt: number
     allowedNavigationUrl: string | null
     controlOverlay: BrowserViewControlOverlay
     disposed: boolean
@@ -101,6 +105,14 @@ type BrowserViewManagerOptions = {
     popupManager: Pick<BrowserPopupManager, 'registerGuest' | 'transferGuestOwner'>
     resolveOwnerId: (window: BrowserWindow) => string | null
     canUseBrowser?: () => boolean
+    captureAnalytics?: (properties: {
+        action: 'tab_create' | 'new_tab' | 'navigation' | 'threat' | 'permission' | 'transfer'
+        outcome: 'started' | 'completed' | 'failed' | 'cancelled' | 'blocked' | 'allowed' | 'denied' | 'unknown'
+        destination?: 'blank' | 'search' | 'documentation' | 'code_host' | 'local' | 'media' | 'commerce' | 'social' | 'other' | 'unknown'
+        transfer_target?: 'main' | 'utility' | 'external' | 'unknown'
+        duration_ms?: number
+        error_code?: string
+    }) => void
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -148,6 +160,27 @@ export class BrowserViewManager implements BrowserViewTransferHost {
 
     constructor(private readonly options: BrowserViewManagerOptions) {}
 
+    isIncognitoWebContents(webContentsId: number): boolean {
+        return [...this.records.values()].some((record) => !record.disposed && record.sessionMode === 'incognito' && record.view.webContents.id === webContentsId)
+    }
+
+    hasIncognitoContents(): boolean {
+        return [...this.records.values()].some((record) => !record.disposed && record.sessionMode === 'incognito')
+    }
+
+    isAnalyticsAllowedForGuest(guestWebContentsId: number): boolean {
+        const record = [...this.records.values()].find((candidate) => !candidate.disposed && candidate.view.webContents.id === guestWebContentsId)
+        return record?.sessionMode === 'normal'
+    }
+
+    isAnalyticsAllowedForOwner(ownerWebContentsId: number): boolean {
+        const slots = this.slotsByOwner.get(ownerWebContentsId)
+        if (!slots) return false
+        const activeTabId = [...slots.entries()].find(([, slot]) => slot.active && slot.visible)?.[0]
+        if (!activeTabId) return false
+        return this.records.get(activeTabId)?.sessionMode === 'normal'
+    }
+
     registerIpc(): void {
         if (this.registered) return
         this.registered = true
@@ -185,6 +218,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             resolveTransfer = resolve
             rejectTransfer = reject
         })
+        const analyticsAllowed = record.sessionMode === 'normal'
         const pending: PendingTransfer = {
             tabId,
             destinationWindow,
@@ -198,7 +232,17 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         }
         this.pendingTransfers.set(tabId, pending)
         this.attemptTransfer(pending)
-        return promise
+        return promise.then((result) => {
+            if (analyticsAllowed) this.options.captureAnalytics?.({
+                action: 'transfer',
+                outcome: 'completed',
+                transfer_target: destinationOwnerId === 'main' ? 'main' : destinationOwnerId.startsWith('utility:') ? 'utility' : 'unknown'
+            })
+            return result
+        }, (error) => {
+            if (analyticsAllowed) this.options.captureAnalytics?.({ action: 'transfer', outcome: 'failed', error_code: browserAnalyticsErrorCode(error) })
+            throw error
+        })
     }
 
     closeIfOwned(tabId: string, ownerWindow: BrowserWindow | null): boolean {
@@ -248,6 +292,11 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         }
         const record = this.createRecord({ tabId, threadId, sessionMode, ownerWindow: window, ownerId })
         const initialUrl = String(input?.initialUrl || '').trim()
+        if (sessionMode === 'normal') this.options.captureAnalytics?.({
+            action: initialUrl ? 'tab_create' : 'new_tab',
+            outcome: 'completed',
+            destination: initialUrl ? classifyBrowserDestination(initialUrl) : 'blank'
+        })
         if (initialUrl) setImmediate(() => {
             if (record.disposed || record.view.webContents.getURL() !== 'about:blank') return
             void this.navigate(record, initialUrl).catch((error) => {
@@ -298,6 +347,9 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             mainFrameFailed: false,
             navigationGeneration: 0,
             stoppedNavigationGeneration: 0,
+            navigationAttempt: 0,
+            reportedNavigationAttempt: 0,
+            navigationStartedAt: 0,
             allowedNavigationUrl: null,
             controlOverlay: { controlled: false, cursor: null },
             disposed: false
@@ -354,6 +406,8 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             if (!isMainFrame) return
             record.url = url === 'about:blank' ? '' : url
             if (!isInPlace) {
+                record.navigationAttempt += 1
+                record.navigationStartedAt = Date.now()
                 record.mainFrameFailed = false
                 record.status = url === 'about:blank' ? 'idle' : 'loading'
                 record.error = null
@@ -384,6 +438,10 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             record.status = page.getURL() === 'about:blank' ? 'idle' : 'ready'
             record.error = null
             this.publishState(record, 'navigation')
+            if (record.reportedNavigationAttempt !== record.navigationAttempt) {
+                record.reportedNavigationAttempt = record.navigationAttempt
+                if (record.sessionMode === 'normal') this.options.captureAnalytics?.({ action: 'navigation', outcome: 'completed', destination: classifyBrowserDestination(page.getURL()), duration_ms: Date.now() - record.navigationStartedAt })
+            }
             void this.applyControlOverlay(record)
         })
         page.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
@@ -393,6 +451,10 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             record.status = 'error'
             record.error = `${errorDescription || 'The page could not be loaded.'}${validatedURL ? ` (${validatedURL})` : ''}`.slice(0, 1_024)
             this.publishState(record, 'error')
+            if (record.reportedNavigationAttempt !== record.navigationAttempt) {
+                record.reportedNavigationAttempt = record.navigationAttempt
+                if (record.sessionMode === 'normal') this.options.captureAnalytics?.({ action: 'navigation', outcome: 'failed', destination: classifyBrowserDestination(validatedURL), duration_ms: Date.now() - record.navigationStartedAt, error_code: browserAnalyticsErrorCode(errorDescription) })
+            }
         })
         page.on('page-title-updated', () => this.publishState(record, 'metadata'))
         page.on('page-favicon-updated', (_event, favicons) => {
@@ -459,7 +521,10 @@ export class BrowserViewManager implements BrowserViewTransferHost {
                 if (!record.disposed) void record.view.webContents.loadURL(url).catch((error) => log.debug('[BrowserView] Allowed navigation failed.', error))
             }
         })
-        if (warning) event.preventDefault()
+        if (warning) {
+            event.preventDefault()
+            if (record.sessionMode === 'normal') this.options.captureAnalytics?.({ action: 'threat', outcome: 'blocked', destination: classifyBrowserDestination(url) })
+        }
     }
 
     private async command(event: IpcMainInvokeEvent, command: BrowserViewCommand): Promise<{ accepted: boolean; state: BrowserViewState; snapshotDataUrl?: string }> {
@@ -861,4 +926,18 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             return { success: false, error: errorMessage(error, 'Browser view request failed.') }
         }
     }
+}
+
+function classifyBrowserDestination(value: unknown): 'blank' | 'search' | 'documentation' | 'code_host' | 'local' | 'media' | 'commerce' | 'social' | 'other' | 'unknown' {
+    const raw = String(value || '').trim()
+    if (!raw || raw === 'about:blank') return 'blank'
+    let host = ''
+    try { host = new URL(raw).hostname.toLowerCase() } catch { return 'unknown' }
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.local')) return 'local'
+    if (/google\.|bing\.|duckduckgo\.|search\./.test(host)) return 'search'
+    if (/github\.|gitlab\.|bitbucket\./.test(host)) return 'code_host'
+    if (/docs\.|developer\.|readthedocs\.|mdn\./.test(host)) return 'documentation'
+    if (/youtube\.|youtu\.be|vimeo\.|spotify\.|soundcloud\./.test(host)) return 'media'
+    if (/amazon\.|shopify\.|ebay\.|etsy\./.test(host)) return 'commerce'
+    return 'other'
 }

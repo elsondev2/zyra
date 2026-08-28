@@ -49,6 +49,7 @@ export const SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly SettingsS
             'Agent Inbox sidebar': 'sidebar active work recent settled'
         }),
         row('Setup', 'Review device setup', 'onboarding openai chatgpt appearance projects review'),
+        row('Privacy', 'Share product analytics', 'privacy posthog anonymous usage diagnostics opt in'),
         row('Local maintenance', 'Cached UI data', 'clear cache renderer local maintenance')
     ],
     appearance: [

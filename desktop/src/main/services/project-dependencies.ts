@@ -16,6 +16,13 @@ export type DependencyInstallStatus = {
 
 export type DependencyInstallManager = 'npm' | 'pnpm' | 'yarn' | 'bun'
 
+export const DEPENDENCY_MANAGER_LOCKFILES: Readonly<Record<DependencyInstallManager, readonly string[]>> = {
+    npm: ['package-lock.json', 'npm-shrinkwrap.json'],
+    pnpm: ['pnpm-lock.yaml'],
+    yarn: ['yarn.lock'],
+    bun: ['bun.lock', 'bun.lockb']
+}
+
 export type ProjectPackageJson = {
     packageManager?: string
     dependencies?: Record<string, string>
@@ -99,9 +106,9 @@ export async function detectDependencyInstallManager(
     if (packageManagerField.startsWith('bun')) return 'bun'
     if (packageManagerField.startsWith('npm')) return 'npm'
 
-    if (await pathExists(join(projectPath, 'pnpm-lock.yaml'))) return 'pnpm'
-    if (await pathExists(join(projectPath, 'yarn.lock'))) return 'yarn'
-    if (await pathExists(join(projectPath, 'bun.lockb')) || await pathExists(join(projectPath, 'bun.lock'))) return 'bun'
+    if (await pathExists(join(projectPath, DEPENDENCY_MANAGER_LOCKFILES.pnpm[0]))) return 'pnpm'
+    if (await pathExists(join(projectPath, DEPENDENCY_MANAGER_LOCKFILES.yarn[0]))) return 'yarn'
+    if ((await Promise.all(DEPENDENCY_MANAGER_LOCKFILES.bun.map((marker) => pathExists(join(projectPath, marker))))).some(Boolean)) return 'bun'
     return 'npm'
 }
 

@@ -5,12 +5,14 @@ import { DeviceSecretsService } from './device-secrets-service'
 import { OnboardingService } from './onboarding-service'
 import { getSharedOpenAIAuthWorkerClient } from './openai-auth-worker-client'
 import { OpenAIConnectionService } from './openai-connection-service'
+import { DesktopAnalyticsService } from '../analytics/service'
 
 export type DesktopSetupServices = {
     preferences: DevicePreferencesService
     secrets: DeviceSecretsService
     auth: OpenAIConnectionService
     onboarding: OnboardingService
+    analytics: DesktopAnalyticsService
 }
 
 export function createDesktopSetupServices(userDataPath: string): DesktopSetupServices {
@@ -34,5 +36,6 @@ export function createDesktopSetupServices(userDataPath: string): DesktopSetupSe
         preferences,
         auth
     )
-    return { preferences, secrets, auth, onboarding }
+    const analytics = new DesktopAnalyticsService(userDataPath)
+    return { preferences, secrets, auth, onboarding, analytics }
 }

@@ -230,7 +230,7 @@ export function isBrowserDevscopeBridgePath(value: unknown): value is string[] {
         && /^[A-Za-z][A-Za-z0-9]*$/.test(segment)
         && !FORBIDDEN_BROWSER_DEVSCOPE_PATH_SEGMENTS.has(segment)
     ))) return false
-    if (value[0] === 'window' || value[0] === 'assistant' || value[0] === 'assistantUtility' || value[0] === 'browserView' || value[0] === 'secrets') return false
+    if (value[0] === 'window' || value[0] === 'assistant' || value[0] === 'assistantUtility' || value[0] === 'browserView' || value[0] === 'secrets' || value[0] === 'analytics') return false
     const method = value[value.length - 1]
     if (FORBIDDEN_BROWSER_DEVSCOPE_METHODS.has(method)) return false
     if (value[0] === 'agentControl' && FORBIDDEN_BROWSER_AGENT_CONTROL_METHODS.has(method)) return false

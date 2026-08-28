@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { summarizeGitDiff, type GitDiffSummary } from './gitDiff'
 import type { PreviewFile } from './types'
 import type { PendingIntent } from './modalShared'
+import { captureProductEvent } from '@/lib/product-analytics'
 
 type UseFilePreviewEditSessionParams = {
     file: PreviewFile
@@ -97,6 +98,7 @@ export function useFilePreviewEditSession({
     const handleSave = useCallback(async () => {
         if (!canEdit || isSaving || !isDirty || !file.path) return true
 
+        const startedAt = performance.now()
         setIsSaving(true)
         setSaveError(null)
         try {
@@ -114,9 +116,11 @@ export function useFilePreviewEditSession({
                             : Date.now()
                     )
                     setSaveError('File changed on disk. Review and choose reload or overwrite.')
+                    captureProductEvent({ event: 'zyra_v1_files', properties: { action: 'save', outcome: 'failed', duration_ms: performance.now() - startedAt, error_code: 'duplicate' } })
                     return false
                 }
                 setSaveError(result?.error || 'Failed to save file changes.')
+                captureProductEvent({ event: 'zyra_v1_files', properties: { action: 'save', outcome: 'failed', duration_ms: performance.now() - startedAt, error_code: 'unknown' } })
                 return false
             }
 
@@ -130,9 +134,11 @@ export function useFilePreviewEditSession({
                     console.warn('Post-save refresh failed:', error)
                 })
             }
+            captureProductEvent({ event: 'zyra_v1_files', properties: { action: 'save', outcome: 'completed', duration_ms: performance.now() - startedAt } })
             return true
         } catch (error: any) {
             setSaveError(error?.message || 'Failed to save file changes.')
+            captureProductEvent({ event: 'zyra_v1_files', properties: { action: 'save', outcome: 'failed', duration_ms: performance.now() - startedAt, error_code: 'unknown' } })
             return false
         } finally {
             setIsSaving(false)
@@ -248,6 +254,7 @@ export function useFilePreviewEditSession({
     const discardUnsavedChanges = useCallback(() => {
         setDraftContent(sourceContent)
         setShowUnsavedModal(false)
+        captureProductEvent({ event: 'zyra_v1_files', properties: { action: 'discard', outcome: 'completed' } })
         void commitPendingIntent()
     }, [commitPendingIntent, sourceContent])
 
@@ -312,9 +319,14 @@ export function useFilePreviewEditSession({
         }
     }, [file.path, gitSummaryRefreshToken, projectPath])
 
+    const setTrackedMode = useCallback((nextMode: 'preview' | 'edit') => {
+        setMode(nextMode)
+        if (nextMode === 'edit') captureProductEvent({ event: 'zyra_v1_files', properties: { action: 'edit', outcome: 'started' } })
+    }, [])
+
     return {
         mode,
-        setMode,
+        setMode: setTrackedMode,
         gitDiffText,
         gitDiffSummary,
         sourceContent,

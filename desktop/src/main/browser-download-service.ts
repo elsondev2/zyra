@@ -130,6 +130,18 @@ function initialStoredDownloads(filePath: string, downloadsRoot: string): Stored
     }
 }
 
+type BrowserDownloadAnalytics = (properties: {
+    action: 'download'
+    outcome: 'started' | 'completed' | 'failed' | 'cancelled' | 'blocked'
+    error_code?: string
+}) => void
+
+let captureBrowserDownloadAnalytics: BrowserDownloadAnalytics | null = null
+
+export function configureBrowserDownloadAnalytics(capture: BrowserDownloadAnalytics | null): void {
+    captureBrowserDownloadAnalytics = capture
+}
+
 export class BrowserDownloadService {
     private readonly downloadsRoot: string
     private readonly storePath: string
@@ -185,11 +197,13 @@ export class BrowserDownloadService {
         if (this.attachedSessions.has(browserSession)) return
         this.attachedSessions.add(browserSession)
         browserSession.on('will-download', (event, item, sourceContents) => {
+            const analyticsAllowed = browserSession.isPersistent()
             if (!isAuthorizedTarget(sourceContents)) {
                 event.preventDefault()
+                if (analyticsAllowed) captureBrowserDownloadAnalytics?.({ action: 'download', outcome: 'blocked', error_code: 'permission_denied' })
                 return
             }
-            this.startDownload(item, sourceContents)
+            this.startDownload(item, sourceContents, analyticsAllowed)
         })
     }
 
@@ -412,7 +426,7 @@ export class BrowserDownloadService {
         this.commit()
     }
 
-    private startDownload(item: DownloadItem, sourceContents: WebContents): void {
+    private startDownload(item: DownloadItem, sourceContents: WebContents, analyticsAllowed: boolean): void {
         const id = randomUUID()
         const now = new Date().toISOString()
         const filename = safeFilename(item.getFilename())
@@ -439,6 +453,7 @@ export class BrowserDownloadService {
             savePath
         }
         this.records.set(id, record)
+        if (analyticsAllowed) captureBrowserDownloadAnalytics?.({ action: 'download', outcome: 'started' })
         this.live.set(id, { item, sourceWebContentsId: sourceContents.id, retryUrl: item.getURL(), lastBroadcastAt: 0 })
         this.retrySources.set(id, { sourceWebContentsId: sourceContents.id, url: item.getURL() })
         this.trimHistory()
@@ -475,6 +490,11 @@ export class BrowserDownloadService {
             current.updatedAt = new Date().toISOString()
             current.completedAt = current.updatedAt
             this.commit()
+            if (analyticsAllowed) captureBrowserDownloadAnalytics?.({
+                action: 'download',
+                outcome: state === 'completed' ? 'completed' : state === 'cancelled' ? 'cancelled' : 'failed',
+                ...(state === 'interrupted' ? { error_code: 'transport_failed' } : {})
+            })
             if (state === 'completed') void this.finalizeCompletedDownload(current)
         })
     }

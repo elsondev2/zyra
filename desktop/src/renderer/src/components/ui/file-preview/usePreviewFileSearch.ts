@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { DevScopeFileTreeNode, DevScopeIndexedPathEntry } from '@shared/contracts/devscope-project-contracts'
+import { captureProductEvent } from '@/lib/product-analytics'
 
 export type PreviewFileSearchEntry = Pick<DevScopeIndexedPathEntry,
     'path' | 'parentPath' | 'relativePath' | 'name' | 'type' | 'extension' | 'isHidden' | 'depth'
@@ -129,6 +130,7 @@ export function usePreviewFileSearch({
     const [searching, setSearching] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const requestSequenceRef = useRef(0)
+    const capturedQueryRef = useRef('')
 
     useEffect(() => {
         const normalizedProjectPath = normalizePath(projectPath)
@@ -180,6 +182,28 @@ export function usePreviewFileSearch({
             if (requestSequenceRef.current === requestId) setSearching(false)
         })
     }, [limit, loadedTree, projectPath, query, scopePath, showHidden])
+
+    useEffect(() => {
+        const normalizedQuery = query.trim().toLowerCase()
+        if (!normalizedQuery) {
+            capturedQueryRef.current = ''
+            return
+        }
+        if (searching || capturedQueryRef.current === normalizedQuery) return
+        const timer = window.setTimeout(() => {
+            capturedQueryRef.current = normalizedQuery
+            captureProductEvent({
+                event: 'zyra_v1_files',
+                properties: {
+                    action: 'search',
+                    outcome: error ? 'failed' : 'completed',
+                    result_count: entries.length,
+                    ...(error ? { error_code: 'unknown' } : {})
+                }
+            })
+        }, 750)
+        return () => window.clearTimeout(timer)
+    }, [entries.length, error, query, searching])
 
     return { entries, searching, error }
 }

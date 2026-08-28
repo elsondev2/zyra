@@ -55,6 +55,9 @@ import {
     type AssistantRuntimePolicy
 } from '../../shared/assistant/runtime-policy'
 import { isAssistantReasoningEffort } from '../../shared/assistant/reasoning-efforts'
+import type { AnalyticsEventInput, AnalyticsEventName } from '../../shared/analytics/contracts'
+import { inspectProjectAnalyticsCapabilities } from '../analytics/project-capabilities'
+import { classifyAnalyticsErrorCode as classifyAnalyticsError } from '../../shared/analytics/error-code'
 import { findAssistantMessageReplayDuplicateIds, preserveCanonicalUserReplayBoundaries } from '../../shared/assistant/message-reconciliation'
 import { replaceSerializedAssistantImageAttachments } from '../../shared/assistant/message-attachments'
 import { isAssistantTitleGenerationPrompt } from '../../shared/assistant/title-generation'
@@ -226,6 +229,7 @@ export type AssistantServiceOptions = {
     handleDesktopWorkspaceTurn?: (canonicalChatId: string, turnId: string) => void
     handleDetachedControl?: (input: { canonicalChatId: string; turnId: string | null; operation: unknown; principal?: unknown; signal: AbortSignal }) => Promise<Record<string, unknown>>
     handleDesktopWorkspaceTurnEnded?: (canonicalChatId: string, turnId: string) => void
+    captureAnalytics?: <Name extends AnalyticsEventName>(input: AnalyticsEventInput<Name>) => void
 }
 
 export function reconcileCanonicalFileChangeActivity(
@@ -338,6 +342,8 @@ export class AssistantService {
     private readonly externalRealtimeVoiceSubscribers = new Set<(event: AssistantRealtimeVoiceEvent) => void>()
     private realtimeVoiceOwnerId: number | null = null
     private voicePrimaryPreparationGeneration = 0
+    private voiceStartedAt = 0
+    private voiceFirstResponseCaptured = false
     private readonly planBuffers = new Map<string, string>()
     private readonly assistantTextBuffers = new Map<string, string>()
     private readonly suppressedAssistantTextTurns = new Set<string>()
@@ -421,6 +427,23 @@ export class AssistantService {
             void this.queueCanonicalChatImport()
         })
         this.realtimeVoiceRuntime.on('event', (event) => {
+            if (event.type === 'session.started') {
+                this.captureAnalytics({
+                    event: 'zyra_v1_voice',
+                    properties: { action: 'connect', outcome: 'completed', duration_ms: Date.now() - this.voiceStartedAt }
+                })
+            } else if (event.type === 'transcript.done' && event.role === 'assistant' && !this.voiceFirstResponseCaptured) {
+                this.voiceFirstResponseCaptured = true
+                this.captureAnalytics({
+                    event: 'zyra_v1_voice',
+                    properties: { action: 'first_response', outcome: 'completed', duration_ms: Date.now() - this.voiceStartedAt }
+                })
+            } else if (event.type === 'session.error') {
+                this.captureAnalytics({
+                    event: 'zyra_v1_voice',
+                    properties: { action: 'fail', outcome: 'failed', error_code: classifyAnalyticsError(event.message) }
+                })
+            }
             if (event.type === 'client.command') {
                 if (this.realtimeVoiceRuntime.isCurrentClientCommand(event)) {
                     this.broadcastRealtimeVoiceEvent(event, true)
@@ -675,7 +698,14 @@ export class AssistantService {
 
     async createSession(input?: AssistantCreateSessionInput) {
         await this.stopCanonicalVoiceForNavigation()
-        return createAssistantSessionAction(this.actionDeps, input)
+        try {
+            const result = await createAssistantSessionAction(this.actionDeps, input)
+            this.captureAnalytics({ event: 'zyra_v1_chat', properties: { action: 'create', outcome: 'completed' } })
+            return result
+        } catch (error) {
+            this.captureAnalytics({ event: 'zyra_v1_chat', properties: { action: 'create', outcome: 'failed', error_code: classifyAnalyticsError(error) } })
+            throw error
+        }
     }
 
     async selectSession(sessionId: string) {
@@ -934,7 +964,20 @@ export class AssistantService {
         } else {
             this.invalidateVoicePrimaryWorkerPreparation()
         }
-        return setAssistantSessionProjectPathAction(this.actionDeps, sessionId, projectPath)
+        try {
+            const result = await setAssistantSessionProjectPathAction(this.actionDeps, sessionId, projectPath)
+            if (projectPath) {
+                void inspectProjectAnalyticsCapabilities(projectPath).then((capabilities) => {
+                    this.captureAnalytics({ event: 'zyra_v1_project', properties: { action: 'attach', outcome: 'completed', ...capabilities } })
+                }).catch(() => {
+                    this.captureAnalytics({ event: 'zyra_v1_project', properties: { action: 'attach', outcome: 'completed' } })
+                })
+            }
+            return result
+        } catch (error) {
+            if (projectPath) this.captureAnalytics({ event: 'zyra_v1_project', properties: { action: 'attach', outcome: 'failed', error_code: classifyAnalyticsError(error) } })
+            throw error
+        }
     }
 
     async setPlaygroundRoot(input: { rootPath: string | null }) {
@@ -972,11 +1015,34 @@ export class AssistantService {
             || this.isVoiceForeground(thread))) {
             throw new Error('Voice is responding in this conversation. Stop Voice before sending work to the strong assistant.')
         }
-        return sendAssistantPromptAction(this.actionDeps, prompt, options)
+        this.captureAnalytics({
+            event: 'zyra_v1_chat',
+            properties: {
+                action: 'send',
+                outcome: 'started',
+                model_family: classifyAnalyticsModelFamily(thread?.model),
+                effort: normalizeAnalyticsEffort(thread?.thinking),
+                runtime_mode: thread?.runtimeMode === 'full-access' ? 'full_access' : 'approval_required',
+                attachment_count: Array.isArray(options?.images) ? options.images.length : 0
+            }
+        })
+        try {
+            return await sendAssistantPromptAction(this.actionDeps, prompt, options)
+        } catch (error) {
+            this.captureAnalytics({ event: 'zyra_v1_chat', properties: { action: 'fail', outcome: 'failed', error_code: classifyAnalyticsError(error) } })
+            throw error
+        }
     }
 
     async interruptTurn(turnId?: string, sessionId?: string) {
-        return interruptAssistantTurnAction(this.actionDeps, turnId, sessionId)
+        try {
+            const result = await interruptAssistantTurnAction(this.actionDeps, turnId, sessionId)
+            this.captureAnalytics({ event: 'zyra_v1_chat', properties: { action: 'cancel', outcome: 'started' } })
+            return result
+        } catch (error) {
+            this.captureAnalytics({ event: 'zyra_v1_chat', properties: { action: 'cancel', outcome: 'failed', error_code: classifyAnalyticsError(error) } })
+            throw error
+        }
     }
 
     async respondApproval(input: { requestId: string; decision: 'acceptOnce' | 'acceptForSession' | 'decline' }) {
@@ -990,19 +1056,36 @@ export class AssistantService {
     async startRealtimeVoice(input: AssistantStartRealtimeVoiceInput, senderId: number) {
         if (!Number.isSafeInteger(senderId)) throw new Error('Voice owner identity is invalid.')
         if (this.realtimeVoiceOwnerId !== null && this.realtimeVoiceOwnerId !== senderId) {
+            this.captureAnalytics({ event: 'zyra_v1_voice', properties: { action: 'duplicate_prevented', outcome: 'prevented', error_code: 'already_active' } })
             throw new Error('Voice is already active in another Zyra window.')
         }
-        if (input.conversationId) {
-            const transitionKey = input.conversationId
-            if (this.pendingCanonicalVoiceStart || this.voiceTransitioningThreadIds.has(transitionKey)) {
-                throw new Error('Voice is already changing mode for a conversation.')
-            }
+        const transitionKey = input.conversationId || null
+        const duplicateStart = Boolean(
+            this.pendingCanonicalVoiceStart
+            || this.activeCanonicalVoice
+            || this.realtimeVoiceRuntime.currentSessionIdentity()
+            || (transitionKey && this.voiceTransitioningThreadIds.has(transitionKey))
+        )
+        if (duplicateStart) {
+            this.captureAnalytics({ event: 'zyra_v1_voice', properties: { action: 'duplicate_prevented', outcome: 'prevented', error_code: 'already_active' } })
+            throw new Error('Voice is already active or changing mode for a conversation.')
+        }
+        this.voiceStartedAt = Date.now()
+        this.voiceFirstResponseCaptured = false
+        this.captureAnalytics({
+            event: 'zyra_v1_voice',
+            properties: { action: 'start', outcome: 'started', mode: input.conversationId ? 'conversation' : 'voice_lab' }
+        })
+        if (input.conversationId && transitionKey) {
             const pending = createPendingCanonicalVoiceStart(senderId, transitionKey)
             this.pendingCanonicalVoiceStart = pending
             this.realtimeVoiceOwnerId = senderId
             this.voiceTransitioningThreadIds.add(transitionKey)
             try {
                 return await this.startCanonicalRealtimeVoice(input, senderId, pending.abortController.signal)
+            } catch (error) {
+                this.captureAnalytics({ event: 'zyra_v1_voice', properties: { action: 'fail', outcome: 'failed', mode: 'conversation', error_code: classifyAnalyticsError(error) } })
+                throw error
             } finally {
                 this.voiceTransitioningThreadIds.delete(transitionKey)
                 if (this.pendingCanonicalVoiceStart === pending) this.pendingCanonicalVoiceStart = null
@@ -1025,6 +1108,7 @@ export class AssistantService {
             return { success: true as const, ...result }
         } catch (error) {
             if (this.realtimeVoiceOwnerId === senderId) this.realtimeVoiceOwnerId = null
+            this.captureAnalytics({ event: 'zyra_v1_voice', properties: { action: 'fail', outcome: 'failed', mode: 'voice_lab', error_code: classifyAnalyticsError(error) } })
             throw error
         }
     }
@@ -1202,6 +1286,12 @@ export class AssistantService {
         if (Buffer.byteLength(JSON.stringify(input.payload), 'utf8') > MAX_REALTIME_BRIDGE_EVENT_BYTES) {
             throw new Error('The realtime event exceeds the canonical bridge limit.')
         }
+        const realtimeEventType = input.payload && typeof input.payload === 'object'
+            ? String((input.payload as { type?: unknown }).type || '')
+            : ''
+        if (realtimeEventType === 'conversation.item.truncated' || realtimeEventType === 'response.cancelled') {
+            this.captureAnalytics({ event: 'zyra_v1_voice', properties: { action: 'interrupt', outcome: 'completed' } })
+        }
         this.requireCanonicalRealtimeAdapter().ingestWebRtcEvent(input.adapterSessionId, input.payload)
         return { success: true as const }
     }
@@ -1219,12 +1309,15 @@ export class AssistantService {
         )
         if (!hasVoiceState) return { success: true as const }
         await this.cancelPendingCanonicalVoiceStart()
+        this.captureAnalytics({ event: 'zyra_v1_voice', properties: { action: 'stop', outcome: 'started' } })
         if (this.activeCanonicalVoice) {
             await this.stopCanonicalVoiceInternal('user_exit')
+            this.captureAnalytics({ event: 'zyra_v1_voice', properties: { action: 'stop', outcome: 'completed' } })
             return { success: true as const }
         }
         try {
             await this.realtimeVoiceRuntime.stop()
+            this.captureAnalytics({ event: 'zyra_v1_voice', properties: { action: 'stop', outcome: 'completed' } })
             return { success: true as const }
         } finally {
             if (this.realtimeVoiceOwnerId === senderId) this.realtimeVoiceOwnerId = null
@@ -1316,7 +1409,9 @@ export class AssistantService {
         await Promise.allSettled(activeCanonicalThreads.map(async ({ session, thread }) => {
             try {
                 await this.runtime.connect(thread, this.getSessionRuntimeCwd(session, thread))
+                this.captureAnalytics({ event: 'zyra_v1_chat', properties: { action: 'recover', outcome: 'recovered' } })
             } catch (error) {
+                this.captureAnalytics({ event: 'zyra_v1_chat', properties: { action: 'recover', outcome: 'failed', error_code: classifyAnalyticsError(error) } })
                 log.warn('[Assistant] Failed to restore an active canonical runtime during startup', {
                     threadId: thread.id,
                     providerThreadId: thread.providerThreadId,
@@ -2578,6 +2673,12 @@ export class AssistantService {
         this.pendingBroadcastTimer.unref?.()
     }
 
+    private captureAnalytics<Name extends AnalyticsEventName>(input: AnalyticsEventInput<Name>): void {
+        try {
+            this.options.captureAnalytics?.(input)
+        } catch {}
+    }
+
     private flushBroadcastEvents(): void {
         if (this.pendingBroadcastEvents.length === 0) return
         const events = this.pendingBroadcastEvents.splice(0, this.pendingBroadcastEvents.length)
@@ -2593,6 +2694,39 @@ export class AssistantService {
     }
 
     private handleRuntimeEvent(event: Parameters<typeof handleAssistantRuntimeEvent>[0]) {
+        if (event.type === 'turn.completed') {
+            const record = findThreadRecord(this.state.snapshot, event.threadId)
+            const startedAt = record?.thread.latestTurn?.startedAt
+            const durationMs = startedAt ? Date.parse(event.createdAt) - Date.parse(startedAt) : undefined
+            const outcome = event.payload.outcome === 'completed'
+                ? 'completed'
+                : event.payload.outcome === 'interrupted' || event.payload.outcome === 'cancelled'
+                    ? 'cancelled'
+                    : 'failed'
+            this.captureAnalytics({
+                event: 'zyra_v1_chat',
+                properties: {
+                    action: outcome === 'completed' ? 'complete' : outcome === 'cancelled' ? 'cancel' : 'fail',
+                    outcome,
+                    model_family: classifyAnalyticsModelFamily(record?.thread.model),
+                    effort: normalizeAnalyticsEffort(event.payload.effort || record?.thread.thinking),
+                    ...(durationMs === undefined || !Number.isFinite(durationMs) ? {} : { duration_ms: durationMs }),
+                    ...(outcome === 'failed' ? { error_code: classifyAnalyticsError(event.payload.errorMessage) } : {})
+                }
+            })
+        } else if (event.type === 'activity' && event.payload.kind === 'context.compaction') {
+            const status = String(event.payload.data?.['status'] || '')
+            if (status && status !== 'running') {
+                this.captureAnalytics({
+                    event: 'zyra_v1_chat',
+                    properties: {
+                        action: 'context_compaction',
+                        outcome: status === 'completed' ? 'completed' : status === 'cancelled' ? 'cancelled' : 'failed',
+                        ...(status === 'failed' ? { error_code: 'unknown' } : {})
+                    }
+                })
+            }
+        }
         const privateVoiceTarget = this.runtime.resolvePrivateVoiceTargetThread(event.threadId)
         if (privateVoiceTarget) {
             if (event.type !== 'activity' && event.type !== 'approval.requested' && event.type !== 'approval.resolved') return
@@ -3350,4 +3484,23 @@ function asCanonicalRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === 'object' && !Array.isArray(value)
         ? value as Record<string, unknown>
         : null
+}
+
+function classifyAnalyticsModelFamily(value: unknown): 'openai' | 'anthropic' | 'google' | 'groq' | 'local' | 'other' | 'unknown' {
+    const normalized = String(value || '').trim().toLowerCase()
+    if (!normalized) return 'unknown'
+    if (/openai|gpt|codex/.test(normalized)) return 'openai'
+    if (/anthropic|claude/.test(normalized)) return 'anthropic'
+    if (/google|gemini/.test(normalized)) return 'google'
+    if (/groq/.test(normalized)) return 'groq'
+    if (/ollama|local|lmstudio/.test(normalized)) return 'local'
+    return 'other'
+}
+
+function normalizeAnalyticsEffort(value: unknown): 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'unknown' {
+    const normalized = String(value || '').trim().toLowerCase()
+    if (normalized === 'none') return 'off'
+    if (normalized === 'off' || normalized === 'minimal' || normalized === 'low' || normalized === 'medium'
+        || normalized === 'high' || normalized === 'xhigh' || normalized === 'max') return normalized
+    return 'unknown'
 }

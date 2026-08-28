@@ -31,6 +31,7 @@ import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileA
 import { PromptModal } from '@/components/ui/PromptModal'
 import { getParentFolderPath, validateCreateName } from '@/lib/filesystem/fileSystemPaths'
 import { useSettings } from '@/lib/settings'
+import { captureProductEvent } from '@/lib/product-analytics'
 import { cn, getFileExtension } from '@/lib/utils'
 import type { PreviewFile, PreviewOpenOptions } from './types'
 import { resolvePreviewType } from './utils'
@@ -522,6 +523,14 @@ export function PreviewNavigationSidebar({
 
     const revealNode = useCallback(async (node: DevScopeFileTreeNode) => {
         const result = await window.devscope.openInExplorer(node.path)
+        captureProductEvent({
+            event: 'zyra_v1_files',
+            properties: {
+                action: 'tree_reveal',
+                outcome: result.success ? 'completed' : 'failed',
+                ...(result.success ? {} : { error_code: 'unknown' })
+            }
+        })
         if (!result.success) {
             showToast(result.error || `Failed to reveal "${node.name}"`)
         }

@@ -73,6 +73,7 @@ type RendererHealthState = {
 type RecorderOptions = {
     userDataPath: string
     getAssistantContext?: () => AssistantHangDiagnosticContext | null
+    onIncident?: (incident: { reason: string; processKind: 'main' | 'renderer' | 'other'; webContentsId: number | null; durationMs?: number }) => void
 }
 
 function finiteNumber(value: unknown, fallback = 0): number {
@@ -282,6 +283,15 @@ export function createRendererHangRecorder(options: RecorderOptions) {
         } catch (error) {
             log.error('[HangDiagnostics] failed to persist incident', error)
         }
+        try {
+            const durationMs = finiteNumber(trigger.durationMs, -1)
+            options.onIncident?.({
+                reason,
+                processKind: reason.startsWith('main-') ? 'main' : contents ? 'renderer' : 'other',
+                webContentsId: contents?.id ?? null,
+                ...(durationMs >= 0 ? { durationMs } : {})
+            })
+        } catch {}
         return report
     }
 

@@ -15,6 +15,7 @@ import {
     BROWSER_DEVSCOPE_BRIDGE_INVOKE_PATH,
     BROWSER_FILE_BRIDGE_PATH,
     BROWSER_REALTIME_VOICE_EVENTS_PATH,
+    isBrowserDevscopeBridgePath,
     type BrowserDevscopeRelayEvent
 } from '../src/shared/browser-assistant-bridge'
 import { BrowserAssistantBridge } from '../src/main/assistant/browser-assistant-bridge'
@@ -43,6 +44,7 @@ assert.match(
 assert.match(mainSource, /app\.on\('before-quit', \(event\) => \{[\s\S]*event\.preventDefault\(\)[\s\S]*flushGlobalBrowserProfileStorage\(\)\.then[\s\S]*Promise\.all\([\s\S]*disposeAssistantService\(\)[\s\S]*Zyra kept running because local state could not be committed/, 'Desktop quit persists Browser and Assistant state and refuses to discard a failed batch')
 assert.equal(assistantHandlersSource.includes('withDesktopAssistantSelectionLease(() => getAssistantService().connect(options))'), true, 'Desktop auto-reconnect must not steal a browser-routed chat')
 assert.equal(preloadRelaySource.includes('Object.prototype.hasOwnProperty.call'), true, 'the generic relay must only invoke methods owned by the exposed Desktop adapter')
+assert.equal(isBrowserDevscopeBridgePath(['analytics', 'capture']), false, 'remote Browser clients must never proxy analytics')
 assert.equal(preloadRelaySource.includes("relayEvent('previewTerminal'"), true, 'terminal output must cross the browser event relay')
 assert.equal(preloadRelaySource.includes("relayEvent('agentControlState'"), true, 'Agent Control state must cross the browser event relay')
 assert.equal(preloadRelaySource.includes('BROWSER_DEVSCOPE_RELAY_READY_CHANNEL'), true, 'preload must announce that native browser actions are ready')

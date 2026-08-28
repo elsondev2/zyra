@@ -47,6 +47,7 @@ import { getDevicePreferenceOwnership, type DevicePreferenceSurface, type Device
 import type { UpdateHostedAiSecretsInput } from '@shared/preferences/secrets-contracts'
 import { isElectronRendererRuntime } from './browser-file-url'
 import { setCanonicalAssistantAutoReconnectPreference } from './assistant/assistant-runtime-preferences'
+import { captureProductEvent } from './product-analytics'
 
 export {
     DARK_THEMES,
@@ -1040,6 +1041,15 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     }, [replaceSettings])
 
     const updateSettings = useCallback((partial: Partial<Settings>) => {
+        if (partial.appearanceThemeMode) {
+            captureProductEvent({ event: 'zyra_v1_workspace_ui', properties: { action: 'theme_mode', theme_mode: partial.appearanceThemeMode } })
+        }
+        if (typeof partial.accessibilityReduceMotion === 'boolean') {
+            captureProductEvent({ event: 'zyra_v1_workspace_ui', properties: { action: 'accessibility_toggle', enabled: partial.accessibilityReduceMotion } })
+        }
+        if (typeof partial.assistantAgentInboxSidebarEnabled === 'boolean') {
+            captureProductEvent({ event: 'zyra_v1_workspace_ui', properties: { action: 'agent_inbox_disclosure', enabled: partial.assistantAgentInboxSidebarEnabled } })
+        }
         const rendererPartial: Partial<Settings> = { ...partial }
         if (Object.prototype.hasOwnProperty.call(partial, 'groqApiKey')) {
             rendererPartial.groqApiKey = ''
