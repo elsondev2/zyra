@@ -9,7 +9,11 @@ import {
   resolveZyraStartupPreferences
 } from "../zyra-sdk.mjs";
 import { resolveTerminalTheme } from "../terminal-theme.mjs";
+import { launchInstalledDesktop } from "../desktop-app.mjs";
+import { removeZyraTitleGenerationMessages } from "../title-generation.mjs";
 import { ZyraAgentServerClient } from "./client.mjs";
+
+export const TUI_RESUME_HISTORY_ENTRY_LIMIT = 120;
 
 export async function createZyraTuiClientRuntime(options = {}) {
   const project = path.resolve(options.project || defaults.project);
@@ -71,10 +75,10 @@ export async function createZyraTuiClientRuntime(options = {}) {
     const historyResult = await client.request("catalog.history", {
       session: canonicalChatId,
       project,
-      limit: 240
+      limit: TUI_RESUME_HISTORY_ENTRY_LIMIT
     }, { timeoutMs: 35_000 });
     const history = asRecord(historyResult.history);
-    historyEvents = projectHistoryEntries(Array.isArray(history?.entries) ? history.entries : []);
+    historyEvents = projectHistoryEntries(selectTuiResumeEntries(history?.entries));
     const pageInfo = asRecord(history?.pageInfo);
     historyCursor = asString(pageInfo?.oldestCursor);
     historyHasOlder = pageInfo?.hasOlder === true;
@@ -86,15 +90,20 @@ export async function createZyraTuiClientRuntime(options = {}) {
   const respondedApprovalRequestIds = new Set();
   const resolvedApprovalRequestIds = new Set();
   const approvalAbortControllers = new Map();
+  const respondedUserInputRequestIds = new Set();
+  const resolvedUserInputRequestIds = new Set();
+  const userInputAbortControllers = new Map();
   let approvalHandler = null;
-  const activeTools = new Set(["read", "bash", "edit", "write", ...(preferences.webSearch ? ["web_search"] : []), ...(preferences.webFetch ? ["web_fetch"] : [])]);
+  let userInputHandler = null;
+  const activeTools = new Set(["read", "bash", "edit", "write", "request_user_input", ...(preferences.webSearch ? ["web_search"] : []), ...(preferences.webFetch ? ["web_fetch"] : [])]);
   const steering = [];
   const followUp = [];
   let disposed = false;
   let latestSequence = 0;
-  let activeTurnId = asString(asRecord(attached.activeRequestContext)?.turnId);
   let currentPresence = asRecord(attached.presence);
+  let activeTurnId = asString(asRecord(attached.activeRequestContext)?.turnId) || activeTurnFromPresence(currentPresence);
   let remotelyAttached = true;
+  let reconnectDetached = () => Promise.resolve();
   let systemPrompt = "";
   let thinkingLevel = requestedChatConfig.thinking || connectedConfig.thinking || connected.thinking || preferences.thinking;
   const thinkingState = { value: thinkingLevel };
@@ -109,9 +118,12 @@ export async function createZyraTuiClientRuntime(options = {}) {
   let agentDefinitions = normalizeDefinitions(connected.agentDefinitions);
   let workflowDefinitions = normalizeDefinitions(connected.workflowDefinitions);
 
-  const dispatch = (event, requestContext) => {
+  const dispatch = (event, requestContext, replay = false) => {
     if (!event || typeof event !== "object") return;
-    if (requestContext?.turnId && event.type !== "zyra_server_turn_completed") {
+    // Replay rebuilds transcript/UI state only. Live turn ownership comes from
+    // authoritative attach presence; otherwise a historical post-agent_end event
+    // carrying the old request context can resurrect a completed turn locally.
+    if (!replay && requestContext?.turnId && event.type !== "zyra_server_turn_completed") {
       activeTurnId = requestContext.turnId;
       currentPresence = {
         ...(currentPresence || {}),
@@ -119,15 +131,15 @@ export async function createZyraTuiClientRuntime(options = {}) {
         activeTurnId,
       };
     }
-    if (event.type === "zyra_server_turn_completed") {
+    if (!replay && (event.type === "zyra_server_turn_completed" || event.type === "agent_end")) {
       if (!requestContext?.turnId || requestContext.turnId === activeTurnId) activeTurnId = null;
       currentPresence = {
         ...(currentPresence || {}),
         state: "ready",
         activeTurnId: null,
       };
-      return;
     }
+    if (event.type === "zyra_server_turn_completed") return;
     if (event.type === "session_config") {
       const config = normalizeRemoteChatConfig(event);
       if (config.model) currentModel = resolveModel(modelRegistry, config.model);
@@ -176,6 +188,36 @@ export async function createZyraTuiClientRuntime(options = {}) {
         });
       }
     }
+    if (event.type === "user_input_resolved") {
+      const requestId = asString(event.requestId);
+      if (requestId) {
+        resolvedUserInputRequestIds.add(requestId);
+        userInputAbortControllers.get(requestId)?.abort();
+        userInputAbortControllers.delete(requestId);
+      }
+    }
+    if (event.type === "user_input_requested") {
+      const requestId = asString(event.requestId);
+      if (requestId && !respondedUserInputRequestIds.has(requestId)) {
+        respondedUserInputRequestIds.add(requestId);
+        void Promise.resolve().then(async () => {
+          if (resolvedUserInputRequestIds.has(requestId)) return;
+          const controller = new AbortController();
+          userInputAbortControllers.set(requestId, controller);
+          let result = { answers: {}, cancelled: true };
+          try {
+            result = await userInputHandler?.(event, { signal: controller.signal }) || result;
+          } catch {}
+          userInputAbortControllers.delete(requestId);
+          if (resolvedUserInputRequestIds.has(requestId) || controller.signal.aborted) return;
+          await request("user_input.respond", {
+            requestId,
+            answers: result?.answers || {},
+            cancelled: result?.cancelled === true,
+          }).catch(() => undefined);
+        });
+      }
+    }
     if (event.type === "message_end" && event.message?.role === "assistant" && event.message.id && !costAccountedMessageIds.has(event.message.id)) {
       cumulativeCost += Number(event.message.usage?.cost?.total) || 0;
       costAccountedMessageIds.add(event.message.id);
@@ -188,29 +230,44 @@ export async function createZyraTuiClientRuntime(options = {}) {
     for (const listener of eventListeners) listener(event);
   };
 
-  const consumeServerEntry = (entry) => {
+  const consumeServerEntry = (entry, replay = false) => {
     const sequence = Number(entry?.sequence) || 0;
     if (sequence && sequence <= latestSequence) return;
     if (sequence) {
       latestSequence = sequence;
       currentPresence = { ...(currentPresence || {}), latestSequence: sequence };
     }
-    dispatch(entry?.event, entry?.requestContext);
+    dispatch(entry?.event, entry?.requestContext, replay);
   };
   const onServerEvent = (message) => {
     if (message.sessionKey !== canonicalChatId) return;
     consumeServerEntry(message);
   };
-  const onDisconnect = () => { remotelyAttached = false; };
+  const onDisconnect = () => {
+    remotelyAttached = false;
+    void reconnectDetached();
+  };
   client.on("session-event", onServerEvent);
   client.on("disconnect", onDisconnect);
   client.off("session-event", captureEarlyServerEvent);
   const initialEntries = [
-    ...(Array.isArray(attached.replay) ? attached.replay : []),
-    ...earlyServerEvents.filter((entry) => entry?.sessionKey === canonicalChatId)
-  ].sort((left, right) => (Number(left?.sequence) || 0) - (Number(right?.sequence) || 0));
-  for (const entry of initialEntries) consumeServerEntry(entry);
+    ...(Array.isArray(attached.replay) ? attached.replay.map((entry) => ({ entry, replay: true })) : []),
+    ...earlyServerEvents
+      .filter((entry) => entry?.sessionKey === canonicalChatId)
+      .map((entry) => ({ entry, replay: false }))
+  ].sort((left, right) => (Number(left.entry?.sequence) || 0) - (Number(right.entry?.sequence) || 0));
+  for (const item of initialEntries) consumeServerEntry(item.entry, item.replay);
   latestSequence = Math.max(latestSequence, Number(attached.latestSequence) || 0);
+
+  const synchronizePresence = (value) => {
+    const presence = asRecord(value);
+    if (!presence) return currentPresence;
+    currentPresence = presence;
+    const remoteTurnId = activeTurnFromPresence(presence);
+    if (remoteTurnId) activeTurnId = remoteTurnId;
+    else if (["ready", "idle", "completed", "failed", "interrupted"].includes(asString(presence.state))) activeTurnId = null;
+    return currentPresence;
+  };
 
   const ensureAttached = async () => {
     if (remotelyAttached) return;
@@ -222,8 +279,86 @@ export async function createZyraTuiClientRuntime(options = {}) {
       lastSequence: latestSequence
     });
     remotelyAttached = true;
-    currentPresence = asRecord(result.presence) || currentPresence;
-    for (const entry of Array.isArray(result.replay) ? result.replay : []) consumeServerEntry(entry);
+    synchronizePresence(result.presence);
+    for (const entry of Array.isArray(result.replay) ? result.replay : []) consumeServerEntry(entry, true);
+  };
+
+  let reconnectPromise = null;
+  reconnectDetached = () => {
+    if (disposed) return Promise.resolve();
+    if (reconnectPromise) return reconnectPromise;
+    reconnectPromise = (async () => {
+      let delayMs = 120;
+      while (!disposed && !remotelyAttached) {
+        try {
+          await ensureAttached();
+          return;
+        } catch {
+          await delay(delayMs);
+          delayMs = Math.min(2_500, Math.round(delayMs * 1.7));
+        }
+      }
+    })().finally(() => { reconnectPromise = null; });
+    return reconnectPromise;
+  };
+
+  const resolveDesktopWorkspaceChat = async (selector) => {
+    const requested = String(selector || "").trim();
+    if (!requested) return { canonicalChatId, title: currentSessionName || "this chat" };
+    const result = await client.request("catalog.list", {
+      query: requested,
+      allProjects: true,
+      includeArchived: false,
+      limit: 40
+    });
+    const chats = Array.isArray(result.chats) ? result.chats.filter((chat) => !chat?.deleted && !chat?.archived) : [];
+    const normalized = requested.toLowerCase();
+    const exact = chats.filter((chat) => String(chat?.canonicalChatId || "").toLowerCase() === normalized
+      || String(chat?.title || "").trim().toLowerCase() === normalized);
+    const matches = exact.length > 0 ? exact : chats.filter((chat) => String(chat?.canonicalChatId || "").toLowerCase().startsWith(normalized)
+      || String(chat?.title || "").toLowerCase().includes(normalized));
+    if (matches.length === 0) throw Object.assign(new Error(`No chat matched “${requested}”.`), { code: "DESKTOP_WORKSPACE_CHAT_NOT_FOUND" });
+    if (matches.length > 1) throw Object.assign(new Error(`More than one chat matched “${requested}”. Use a longer title or ID.`), { code: "DESKTOP_WORKSPACE_CHAT_AMBIGUOUS" });
+    return { canonicalChatId: String(matches[0].canonicalChatId), title: String(matches[0].title || "Untitled chat") };
+  };
+
+  const openDesktopWorkspace = async (input = {}) => {
+    if (input.background === true) await refreshPresence();
+    const chat = await resolveDesktopWorkspaceChat(input.chat);
+    const request = () => client.request("desktop.workspace.open", {
+      operation: input.operation || "open",
+      sourceCanonicalChatId: canonicalChatId,
+      canonicalChatId: chat.canonicalChatId,
+      workspace: input.workspace,
+      url: input.url || "",
+      path: input.path || "",
+      background: input.background === true,
+      focus: input.focus === true,
+      newWindow: input.newWindow === true,
+      activeTurnId: input.background === true ? activeTurnId || undefined : undefined
+    }, { timeoutMs: 20_000 });
+    let result;
+    try {
+      result = await request();
+    } catch (error) {
+      if (error?.code !== "DESKTOP_WORKSPACE_UNAVAILABLE") throw error;
+      const launch = await launchInstalledDesktop();
+      if (!launch.launched) throw error;
+      let lastError = error;
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        await delay(250);
+        try {
+          result = await request();
+          lastError = null;
+          break;
+        } catch (retryError) {
+          lastError = retryError;
+          if (retryError?.code !== "DESKTOP_WORKSPACE_UNAVAILABLE") throw retryError;
+        }
+      }
+      if (lastError) throw lastError;
+    }
+    return { ...result, chatTitle: result.chatTitle || chat.title };
   };
 
   const refreshPresence = async () => {
@@ -235,7 +370,7 @@ export async function createZyraTuiClientRuntime(options = {}) {
       });
       const chats = Array.isArray(result.chats) ? result.chats : [];
       const chat = chats.find((entry) => entry?.canonicalChatId === canonicalChatId);
-      currentPresence = asRecord(chat?.presence) || currentPresence;
+      synchronizePresence(chat?.presence);
     } catch {}
     return currentPresence;
   };
@@ -251,6 +386,11 @@ export async function createZyraTuiClientRuntime(options = {}) {
     try {
       return await send();
     } catch (error) {
+      if (isAgentServerTransportFailure(error)) {
+        remotelyAttached = false;
+        void reconnectDetached();
+        throw error;
+      }
       if (!["AGENT_SERVER_SESSION_NOT_FOUND", "AGENT_SERVER_AUTH_FAILED"].includes(String(error?.code || ""))) throw error;
       remotelyAttached = false;
       await ensureAttached();
@@ -309,6 +449,7 @@ export async function createZyraTuiClientRuntime(options = {}) {
     async prompt(prompt, promptOptions = {}) {
       if (activeTurnId) throw new Error("This canonical chat already has an active turn.");
       const turnId = `turn:${randomUUID()}`;
+      let preserveServerOwnedTurn = false;
       activeTurnId = turnId;
       try {
         return await request("prompt", {
@@ -322,8 +463,11 @@ export async function createZyraTuiClientRuntime(options = {}) {
           webFetch: runtime.webFetch,
           turnId
         }, { turnId, localThreadId: runtime.localThreadId });
+      } catch (error) {
+        preserveServerOwnedTurn = isAgentServerTransportFailure(error);
+        throw error;
       } finally {
-        if (activeTurnId === turnId) activeTurnId = null;
+        if (!preserveServerOwnedTurn && activeTurnId === turnId) activeTurnId = null;
       }
     },
     abort: () => request("abort"),
@@ -432,10 +576,10 @@ export async function createZyraTuiClientRuntime(options = {}) {
           session: canonicalChatId,
           project: currentProject,
           before: historyCursor,
-          limit: 240
+          limit: TUI_RESUME_HISTORY_ENTRY_LIMIT
         }, { timeoutMs: 35_000 });
         const history = asRecord(result.history);
-        const olderEvents = projectHistoryEntries(Array.isArray(history?.entries) ? history.entries : []);
+        const olderEvents = projectHistoryEntries(selectTuiResumeEntries(history?.entries));
         historyEvents = [...olderEvents, ...historyEvents];
         const pageInfo = asRecord(history?.pageInfo);
         historyCursor = asString(pageInfo?.oldestCursor);
@@ -449,11 +593,18 @@ export async function createZyraTuiClientRuntime(options = {}) {
       activeTurnId: () => activeTurnId,
       presence: () => currentPresence,
       refreshPresence,
+      openDesktopWorkspace,
       setApprovalHandler(handler) {
         approvalHandler = typeof handler === "function" ? handler : null;
       },
+      setUserInputHandler(handler) {
+        userInputHandler = typeof handler === "function" ? handler : null;
+      },
       respondApproval(requestId, decision) {
         return request("approval.respond", { requestId, decision });
+      },
+      respondUserInput(requestId, answers, cancelled = false) {
+        return request("user_input.respond", { requestId, answers, cancelled });
       }
     }
   };
@@ -623,14 +774,22 @@ function projectConnectedMessages(messages) {
   });
 }
 
-function projectHistoryEntries(entries) {
+export function selectTuiResumeEntries(entries) {
+  const bounded = (Array.isArray(entries) ? entries : []).slice(-TUI_RESUME_HISTORY_ENTRY_LIMIT);
+  const firstUserIndex = bounded.findIndex((entry) => entry?.type === "message" && entry.message?.role === "user");
+  return firstUserIndex > 0 ? bounded.slice(firstUserIndex) : bounded;
+}
+
+export function projectHistoryEntries(entries) {
   const events = [];
   const tools = new Map();
+  const messages = entries.map((entry) => asRecord(entry)?.message).filter(Boolean);
+  const visibleMessages = new Set(removeZyraTitleGenerationMessages(messages));
   for (const entryValue of entries) {
     const entry = asRecord(entryValue);
     if (!entry || entry.type !== "message") continue;
     const message = asRecord(entry.message);
-    if (!message) continue;
+    if (!message || !visibleMessages.has(entry.message)) continue;
     const role = asString(message.role);
     const content = normalizeHistoryContent(message.content);
     const id = asString(message.id) || asString(entry.id) || `history:${events.length + 1}`;
@@ -646,29 +805,44 @@ function projectHistoryEntries(entries) {
       continue;
     }
     if (role === "assistant") {
-      const visibleContent = content.flatMap((part, index) => {
-        if (part?.type === "text" || part?.type === "thinking") return [part];
-        if (part?.type === "image") return [{ type: "text", text: `[Image ${index + 1}: ${part.mimeType || part.mime_type || "image"}]` }];
-        return [];
-      });
-      if (visibleContent.length > 0) {
-        const visibleMessage = { ...normalizedMessage, content: visibleContent };
+      let visibleParts = [];
+      let segmentIndex = 0;
+      const flushVisibleParts = () => {
+        if (visibleParts.length === 0) return;
+        segmentIndex += 1;
+        const visibleMessage = {
+          ...normalizedMessage,
+          id: `${id}:visible:${segmentIndex}`,
+          content: visibleParts
+        };
+        visibleParts = [];
         events.push({ type: "message_start", message: visibleMessage, historical: true });
         events.push({ type: "message_end", message: visibleMessage, historical: true });
-      }
-      for (const part of content.filter((candidate) => candidate?.type === "toolCall")) {
+      };
+      for (const [partIndex, part] of content.entries()) {
+        if (part?.type === "text" && asString(part.text)) {
+          visibleParts.push(part);
+          continue;
+        }
+        if (part?.type === "image") {
+          visibleParts.push({ type: "text", text: `[Image ${partIndex + 1}: ${part.mimeType || part.mime_type || "image"}]` });
+          continue;
+        }
+        if (part?.type !== "toolCall") continue;
+        flushVisibleParts();
         const toolCallId = asString(part.id) || `${id}:tool:${tools.size + 1}`;
-        const event = {
+        const toolEvent = {
           type: "tool_execution_start",
           toolCallId,
           toolName: asString(part.name) || "tool",
           args: part.arguments,
           historical: true
         };
-        tools.set(toolCallId, event);
-        events.push(event);
+        tools.set(toolCallId, toolEvent);
+        events.push(toolEvent);
       }
-      if (normalizedMessage.errorMessage && visibleContent.length === 0) {
+      flushVisibleParts();
+      if (normalizedMessage.errorMessage && segmentIndex === 0) {
         events.push({ type: "history_error", errorMessage: normalizedMessage.errorMessage, historical: true });
       }
       continue;
@@ -676,12 +850,16 @@ function projectHistoryEntries(entries) {
     if (role === "toolResult") {
       const toolCallId = asString(message.toolCallId) || asString(message.tool_call_id) || `${id}:tool-result`;
       const started = tools.get(toolCallId) || {};
+      const details = asRecord(message.details);
       events.push({
         ...started,
         type: "tool_execution_end",
         toolCallId,
         toolName: asString(message.toolName) || started.toolName || "tool",
-        result: { content },
+        result: {
+          content,
+          ...(details ? { details: structuredClone(details) } : {})
+        },
         isError: message.isError === true,
         historical: true
       });
@@ -702,4 +880,21 @@ function asRecord(value) {
 
 function asString(value) {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function activeTurnFromPresence(value) {
+  const presence = asRecord(value);
+  const latestTurn = asRecord(presence?.latestTurn);
+  return asString(presence?.activeTurnId)
+    || (["running", "background"].includes(asString(presence?.state)) && latestTurn?.state === "running" ? asString(latestTurn.id) : null);
+}
+
+function isAgentServerTransportFailure(error) {
+  const code = String(error?.code || "").toUpperCase();
+  if (["AGENT_SERVER_DISCONNECTED", "AGENT_SERVER_UNAVAILABLE", "AGENT_SERVER_TIMEOUT", "ECONNRESET", "ECONNREFUSED", "EPIPE"].includes(code)) return true;
+  return /agent[- ]server.*(?:closed|disconnect|unavailable|timed out)|socket.*(?:closed|hang up)|fetch failed/i.test(String(error?.message || error || ""));
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
 }

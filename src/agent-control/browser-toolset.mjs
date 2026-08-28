@@ -48,6 +48,7 @@ const browserTabsSchema = Type.Object({
   secondaryTargetId: Type.Optional(Type.String()),
   grantId: Type.Optional(Type.String()),
   reveal: Type.Optional(Type.Boolean()),
+  sessionMode: Type.Optional(operation("normal", "incognito")),
   width: Type.Optional(Type.Number()),
   url: Type.Optional(Type.String()),
 }, { additionalProperties: false });
@@ -99,7 +100,7 @@ export function createBrowserToolSet(options = {}) {
     bridgeTool({
       name: "browser_tabs",
       label: "Browser tabs",
-      description: "Discover, open, reveal, arrange, resize, refresh, close, or externally hand off retained in-app Browser tabs.",
+      description: "Discover, open, reveal, arrange, resize, refresh, close, or externally hand off retained in-app Browser tabs. New tabs default to incognito; choose normal only when the task needs saved sign-in or site state.",
       parameters: browserTabsSchema,
       client: options.client,
       toOperation: (input) => ({

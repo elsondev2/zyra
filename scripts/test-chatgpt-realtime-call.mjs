@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  CHATGPT_REALTIME_ALPHA_HEADER,
   CHATGPT_REALTIME_CALL_URL,
   CHATGPT_REALTIME_MODEL,
   buildChatGptRealtimeSession,
@@ -7,6 +8,9 @@ import {
   getChatGptAccountAuthStatus,
   parseChatGptRealtimeCallId,
 } from "../src/chatgpt-account.mjs";
+
+assert.equal(CHATGPT_REALTIME_MODEL, "gpt-live-1-codex");
+assert.equal(CHATGPT_REALTIME_ALPHA_HEADER, "quicksilver=v2");
 
 const offerSdp = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n";
 const answerSdp = "v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n";
@@ -150,6 +154,27 @@ await assert.rejects(
   (error) => {
     assert.match(error.message, /authentication expired/u);
     assert.doesNotMatch(error.message, /provider body|oauth-secret-token/u);
+    return true;
+  },
+);
+
+await assert.rejects(
+  createChatGptRealtimeCall(input, {
+    resolveAuth: async () => ({ accessToken, accountId }),
+    fetchImpl: async () => new Response(JSON.stringify({
+      error: {
+        type: "invalid_request_error",
+        param: "session.audio.input.turn_detection.eagerness",
+        message: `provider detail leaked ${accessToken}`,
+      },
+    }), { status: 400, headers: { "content-type": "application/json" } }),
+  }),
+  (error) => {
+    assert.equal(
+      error.message,
+      "ChatGPT Voice signaling failed (400) [invalid_request_error: session.audio.input.turn_detection.eagerness].",
+    );
+    assert.doesNotMatch(error.message, /provider detail|oauth-secret-token/u);
     return true;
   },
 );

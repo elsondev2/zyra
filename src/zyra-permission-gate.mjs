@@ -7,6 +7,7 @@ const SAFE_TOOL_NAMES = new Set([
   "ls",
   "web_search",
   "web_fetch",
+  "request_user_input",
 ]);
 
 function asRecord(value) {

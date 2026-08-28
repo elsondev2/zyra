@@ -38,6 +38,11 @@ import { buildProjectStartPrompt } from "./project-start.mjs";
 import { getSlashCommand, parseSlashInput } from "./slash-commands.mjs";
 import { normalizeWebToolsMode } from "./web-tools-picker.mjs";
 import {
+  DESKTOP_WORKSPACE_COMMANDS,
+  formatDesktopWorkspaceResult,
+  parseDesktopWorkspaceCommand,
+} from "./desktop-workspace-commands.mjs";
+import {
   formatCodexResetCreditsSummary,
   formatCodexResetRedemptionWarning,
   formatCodexUsageSnapshot,
@@ -92,6 +97,14 @@ export async function handleSlash(runtime, ui, input, controls = {}) {
       return runProfile(runtime, ui, arg);
     case "memory":
       return runMemory(runtime, ui, arg);
+    case "browser":
+    case "details-ui":
+    case "explore-files":
+    case "resources":
+    case "subagents-ui":
+    case "diff-ui":
+    case "terminal-ui":
+      return runDesktopWorkspace(runtime, ui, name, arg);
     case "web":
       return runWeb(runtime, ui, arg);
     case "websearch":
@@ -149,6 +162,27 @@ export async function handleSlash(runtime, ui, input, controls = {}) {
     default:
       return runCustomSlashCommand(runtime, ui, `/${parsed.commandName}`, arg, controls);
   }
+}
+
+async function runDesktopWorkspace(runtime, ui, commandName, arg) {
+  if (!DESKTOP_WORKSPACE_COMMANDS.includes(commandName)) return false;
+  if (typeof runtime.agentServer?.openDesktopWorkspace !== "function") {
+    ui.info("Zyra Desktop is required for this command.");
+    return true;
+  }
+  try {
+    const command = parseDesktopWorkspaceCommand(commandName, arg);
+    const result = await runtime.agentServer.openDesktopWorkspace(command);
+    ui.info(formatDesktopWorkspaceResult(command, result));
+  } catch (error) {
+    const code = String(error?.code || "");
+    if (code === "DESKTOP_WORKSPACE_UNAVAILABLE" || code === "AGENT_SERVER_TIMEOUT") {
+      ui.info("Zyra Desktop is not connected. Open Desktop and retry.");
+      return true;
+    }
+    ui.info(error instanceof Error ? error.message : "Could not open Zyra Desktop.");
+  }
+  return true;
 }
 
 async function runAgents(runtime, ui, arg) {

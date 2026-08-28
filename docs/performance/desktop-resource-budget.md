@@ -20,12 +20,18 @@ These are Zyra project budgets for a Windows production-renderer launch with an 
 
 An active integrated Browser tab, Monaco editor, Mermaid diagram, terminal, Voice session, or large file preview has its own incremental budget and must remain lazy or suspendable.
 
+### Hybrid live-transfer resource policy
+
+Chrome-style cross-window transfer keeps Browser pages live by creating them as main-owned `WebContentsView`s from the start and reparenting the same view. This replaces the former renderer-owned `<webview>` guest rather than adding a second page renderer. Terminal transfers retain one main-owned PTY/runtime while destination xterm presentation rehydrates. Files, Review, Resources, Details, and Agents use bounded typed state capsules instead of one renderer per tab.
+
+A local Electron 43 probe measured an otherwise empty app at about **349 MiB** working set, one simple dedicated tab view at **478 MiB**, and four at **815 MiB**—roughly **111 MiB working set / 23 MiB private memory per additional view** before real workspace content. Eager view-per-workspace hosting would therefore violate the 32-tab product limit and desktop memory budget. The approved hybrid policy reserves native live views for Browser pages, retains Terminal processes without another per-tab renderer, and keeps static workspace transfers state-preserving and process-conscious.
+
 ## Measurement environment
 
 - Windows 11 Pro build 26200
 - Intel Core i5-10310U, 4 cores / 8 logical processors
 - 15.78 GiB RAM, SSD, Intel UHD Graphics
-- Electron 43.4.0 / Node 24.18.1
+- CastLabs Electron 43.2.0+wvcus / Node 24.18.0
 - React 19.2, Vite 5.4
 - Aged `Zyra-dev` profile: 105 sessions, 106 threads, and a 273 MiB Assistant database
 - Production renderer assets launched through Electron against the dev profile

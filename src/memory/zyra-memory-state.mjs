@@ -10,6 +10,7 @@ export const MEMORY_MODES = new Set(["enabled", "disabled", "polluted"]);
 
 const TRANSIENT_WRITE_ERROR_CODES = new Set(["EACCES", "EBUSY", "EPERM"]);
 const RENAME_RETRY_DELAYS_MS = [0, 15, 40, 90, 180, 320];
+const LIVE_PENDING_STATE_TEMP_GRACE_MS = 30_000;
 
 export function createEmptyMemoryState() {
   const now = new Date().toISOString();
@@ -495,10 +496,30 @@ function findNewestPendingStateTemp(file) {
     if (!entry.isFile() || !entry.name.startsWith(prefix) || !entry.name.endsWith(".tmp")) continue;
     const candidateFile = path.join(dir, entry.name);
     const stats = safeStat(candidateFile);
-    if (stats) candidates.push({ file: candidateFile, mtimeMs: stats.mtimeMs });
+    if (stats && !isFreshPendingStateTempOwnedByAnotherProcess(entry.name, prefix, stats.mtimeMs)) {
+      candidates.push({ file: candidateFile, mtimeMs: stats.mtimeMs });
+    }
   }
   candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return candidates[0];
+}
+
+function isFreshPendingStateTempOwnedByAnotherProcess(name, prefix, mtimeMs) {
+  const ownerText = name.slice(prefix.length).split(".", 1)[0];
+  if (!/^\d+$/.test(ownerText)) return false;
+  const ownerPid = Number(ownerText);
+  if (!Number.isSafeInteger(ownerPid) || ownerPid <= 0 || ownerPid === process.pid) return false;
+  if (Date.now() - mtimeMs > LIVE_PENDING_STATE_TEMP_GRACE_MS) return false;
+  return isProcessAlive(ownerPid);
+}
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
 }
 
 function replaceFileWithRetry(source, target) {

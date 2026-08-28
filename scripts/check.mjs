@@ -1,4 +1,20 @@
-import { spawnSync } from "node:child_process";
+/**
+ * Zyra validation runner.
+ *
+ * Modes are intentionally stable so humans and agents can choose the smallest
+ * useful gate instead of repeatedly paying for every suite:
+ *   node scripts/check.mjs quick    syntax + fast deterministic core tests
+ *   node scripts/check.mjs core     syntax + every core CLI test
+ *   node scripts/check.mjs desktop  heavyweight desktop integration suites
+ *   node scripts/check.mjs full     core + desktop + doctor (default)
+ *
+ * Independent syntax checks and core tests use bounded concurrency. Desktop
+ * suites remain serial because they can share Electron, browser, and process
+ * resources. Set ZYRA_CHECK_CONCURRENCY=1 when diagnosing an order-sensitive
+ * failure; do not raise it casually on memory-constrained machines.
+ */
+import { spawn } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,6 +25,7 @@ const syntaxTargets = [
   "src/agent-surface.mjs",
   "src/model-availability.mjs",
   "src/chatgpt-account.mjs",
+  "src/chatgpt-realtime-contract.mjs",
   "src/web-search-tool.mjs",
   "src/web-tools-picker.mjs",
   "src/interrupt-mode-picker.mjs",
@@ -62,6 +79,8 @@ const syntaxTargets = [
   "scripts/test-zyra-managed-bash.mjs",
   "scripts/test-zyra-model-availability.mjs",
   "scripts/test-chatgpt-realtime-call.mjs",
+  "scripts/test-codex-realtime-contract-sync.mjs",
+  "scripts/sync-codex-realtime-contract.mjs",
   "scripts/test-provider-runtime-migration.mjs",
   "scripts/test-zyra-prompt-errors.mjs",
   "scripts/test-zyra-write-diff.mjs",
@@ -69,7 +88,7 @@ const syntaxTargets = [
   "scripts/privacy-check.mjs",
 ];
 
-const nodeTests = [
+const coreTests = [
   "scripts/privacy-check.mjs",
   "scripts/test-agent-surface-contract.mjs",
   "scripts/test-zyra-memory.mjs",
@@ -79,6 +98,7 @@ const nodeTests = [
   "scripts/test-zyra-managed-bash.mjs",
   "scripts/test-zyra-model-availability.mjs",
   "scripts/test-chatgpt-realtime-call.mjs",
+  "scripts/test-codex-realtime-contract-sync.mjs",
   "scripts/test-provider-runtime-migration.mjs",
   "scripts/test-zyra-prompt-errors.mjs",
   "scripts/test-zyra-version.mjs",
@@ -88,38 +108,163 @@ const nodeTests = [
   "scripts/test-zyra-fleet-ui.mjs",
 ];
 
-function run(command, args) {
-  const result = spawnSync(command, args, {
-    cwd: root,
-    env: process.env,
-    stdio: "inherit",
-  });
+// Quick mode stays deterministic and side-effect-light. Larger state, UI, and
+// orchestration suites remain in core/full so quick is useful during iteration.
+const quickCoreTests = [
+  "scripts/privacy-check.mjs",
+  "scripts/test-agent-surface-contract.mjs",
+  "scripts/test-zyra-model-availability.mjs",
+  "scripts/test-chatgpt-realtime-call.mjs",
+  "scripts/test-codex-realtime-contract-sync.mjs",
+  "scripts/test-provider-runtime-migration.mjs",
+  "scripts/test-zyra-prompt-errors.mjs",
+  "scripts/test-zyra-version.mjs",
+  "scripts/test-zyra-fleet-ui.mjs",
+];
 
-  if (result.error) {
-    console.error(`[check] could not start ${command}: ${result.error.message}`);
-    process.exit(1);
-  }
-  if (result.status !== 0) process.exit(result.status ?? 1);
+const serialCoreTests = new Set([
+  "scripts/test-zyra-memory.mjs",
+  "scripts/test-zyra-codex-mode.mjs",
+  "scripts/test-zyra-managed-bash.mjs",
+]);
+
+const desktopTasks = [
+  { label: "desktop:test:assistant-fleet", bunArgs: ["run", "--cwd", "desktop", "test:assistant-fleet"] },
+  { label: "desktop:test:assistant-inspector-browser", bunArgs: ["run", "--cwd", "desktop", "test:assistant-inspector-browser"] },
+  { label: "desktop:test:agent-platform-integration", bunArgs: ["desktop/scripts/test-agent-platform-integration.ts"] },
+];
+
+const modes = new Set(["quick", "core", "desktop", "syntax", "full"]);
+const requestedMode = process.argv[2] || "full";
+
+if (requestedMode === "--help" || requestedMode === "help") {
+  console.log(`Zyra checks\n\n  quick    syntax + fast core tests\n  core     syntax + all core CLI tests\n  desktop  serial desktop integration suites\n  syntax   JavaScript syntax only\n  full     core + desktop + doctor (default)\n\nEnvironment:\n  ZYRA_CHECK_CONCURRENCY=1  run syntax/core tasks serially for debugging`);
+  process.exit(0);
 }
 
-console.log(`[check] syntax (${syntaxTargets.length} files)`);
-for (const target of syntaxTargets) run(process.execPath, ["--check", target]);
+if (!modes.has(requestedMode)) {
+  console.error(`[check] unknown mode: ${requestedMode}`);
+  console.error("[check] run `npm run check:help` for available modes");
+  process.exit(2);
+}
 
-console.log(`[check] core tests (${nodeTests.length} suites)`);
-for (const target of nodeTests) run(process.execPath, [target]);
+function readConcurrency() {
+  const configured = Number.parseInt(process.env.ZYRA_CHECK_CONCURRENCY || "", 10);
+  if (Number.isFinite(configured) && configured > 0) return Math.min(configured, 4);
+  // Keep one logical CPU free and cap memory/process pressure on laptops and CI.
+  return Math.max(1, Math.min(2, os.availableParallelism?.() || os.cpus().length || 1));
+}
 
-function runBun(args) {
+const taskConcurrency = readConcurrency();
+
+function nodeTask(target, extraArgs = []) {
+  return {
+    label: target,
+    command: process.execPath,
+    args: [...extraArgs, target],
+  };
+}
+
+function bunTask(task) {
   if (process.platform === "win32") {
-    run(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "bun", ...args]);
-    return;
+    return {
+      label: task.label,
+      command: process.env.ComSpec || "cmd.exe",
+      args: ["/d", "/s", "/c", "bun", ...task.bunArgs],
+    };
   }
-  run("bun", args);
+  return { label: task.label, command: "bun", args: task.bunArgs };
 }
 
-console.log("[check] desktop suites");
-runBun(["run", "--cwd", "desktop", "test:assistant-fleet"]);
-runBun(["desktop/scripts/test-agent-platform-integration.ts"]);
+function runTask(task) {
+  return new Promise((resolve, reject) => {
+    const startedAt = performance.now();
+    if (!task.quiet) console.log(`[check] start ${task.label}`);
+    const child = spawn(task.command, task.args, {
+      cwd: root,
+      env: process.env,
+      stdio: "inherit",
+      windowsHide: true,
+    });
 
-console.log("[check] doctor");
-run(process.execPath, ["bin/zyra.mjs", "doctor"]);
-console.log("[check] complete");
+    child.once("error", (error) => {
+      reject(new Error(`could not start ${task.command}: ${error.message}`));
+    });
+    child.once("exit", (code, signal) => {
+      const duration = ((performance.now() - startedAt) / 1000).toFixed(1);
+      if (code === 0) {
+        if (!task.quiet) console.log(`[check] done  ${task.label} (${duration}s)`);
+        resolve();
+        return;
+      }
+      reject(new Error(`${task.label} failed (${signal || `exit ${code}`}, ${duration}s)`));
+    });
+  });
+}
+
+async function runGroup(title, tasks, concurrency = taskConcurrency) {
+  if (tasks.length === 0) return;
+  console.log(`[check] ${title} (${tasks.length} tasks, concurrency ${Math.min(concurrency, tasks.length)})`);
+  let nextIndex = 0;
+  let firstFailure = null;
+
+  async function worker() {
+    while (firstFailure === null) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= tasks.length) return;
+      try {
+        await runTask(tasks[index]);
+      } catch (error) {
+        firstFailure = error;
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, () => worker()));
+  if (firstFailure) throw firstFailure;
+}
+
+async function main() {
+  const startedAt = performance.now();
+  console.log(`[check] mode=${requestedMode} concurrency=${taskConcurrency}`);
+
+  if (["quick", "core", "syntax", "full"].includes(requestedMode)) {
+    await runGroup("syntax", syntaxTargets.map((target) => ({
+      ...nodeTask(target, ["--check"]),
+      quiet: true,
+    })), taskConcurrency);
+  }
+
+  if (requestedMode === "quick") {
+    await runGroup("quick core tests", quickCoreTests.map((target) => nodeTask(target)));
+  }
+
+  if (["core", "full"].includes(requestedMode)) {
+    const parallelCoreTests = coreTests.filter((target) => !serialCoreTests.has(target));
+    const isolatedCoreTests = coreTests.filter((target) => serialCoreTests.has(target));
+    await runGroup("core tests", parallelCoreTests.map((target) => nodeTask(target)));
+    await runGroup("isolated core tests", isolatedCoreTests.map((target) => nodeTask(target)), 1);
+  }
+
+  if (["desktop", "full"].includes(requestedMode)) {
+    // Preserve serial execution for suites with browser/process/global-state work.
+    await runGroup("desktop suites", desktopTasks.map(bunTask), 1);
+  }
+
+  if (requestedMode === "full") {
+    await runGroup("doctor", [{
+      label: "doctor",
+      command: process.execPath,
+      args: ["bin/zyra.mjs", "doctor"],
+    }], 1);
+  }
+
+  const duration = ((performance.now() - startedAt) / 1000).toFixed(1);
+  console.log(`[check] complete mode=${requestedMode} (${duration}s)`);
+}
+
+main().catch((error) => {
+  console.error(`[check] ${error instanceof Error ? error.message : String(error)}`);
+  process.exitCode = 1;
+});

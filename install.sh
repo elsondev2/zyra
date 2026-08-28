@@ -44,21 +44,45 @@ echo "Installing Zyra dependencies..."
 cd "$ROOT"
 if has_command bun; then
   bun install
-  echo "Linking Zyra CLI globally..."
-  bun link
 elif has_command npm; then
   echo "Bun not found. Falling back to npm."
   npm install
-  echo "Linking Zyra CLI globally..."
-  npm link
 else
   echo "Bun/npm is missing. Install Bun for package-manager tasks, or npm as a fallback."
   exit 1
 fi
 
+COMMAND_DIR="$HOME/.local/bin"
+COMMAND_PATH="$COMMAND_DIR/zyra"
+PATH_ALREADY_CONFIGURED=false
+if [[ ":$PATH:" == *":$COMMAND_DIR:"* ]]; then PATH_ALREADY_CONFIGURED=true; fi
+DESKTOP_REGISTRATION="$HOME/.zyra/desktop-install-v1.json"
+DESKTOP_EXE=""
+if [[ -f "$DESKTOP_REGISTRATION" ]]; then
+  DESKTOP_EXE="$(node -e 'try{const fs=require("fs"),path=require("path");const v=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const p=JSON.parse(fs.readFileSync(path.join(process.argv[2],"package.json"),"utf8"));const s=fs.lstatSync(v.executable);if(v.version===1&&v.appVersion===p.version&&v.platform===process.platform&&v.architecture===process.arch&&s.isFile()&&!s.isSymbolicLink())process.stdout.write(v.executable)}catch{}' "$DESKTOP_REGISTRATION" "$ROOT")"
+  if [[ -n "$DESKTOP_EXE" && "$(uname -s)" == "Darwin" ]]; then
+    codesign --verify --deep --strict "$DESKTOP_EXE" >/dev/null 2>&1 || DESKTOP_EXE=""
+  fi
+fi
+mkdir -p "$COMMAND_DIR"
+{
+  echo '#!/usr/bin/env sh'
+  echo '# zyra-managed-launcher:v1'
+  if [[ -n "$DESKTOP_EXE" ]]; then
+    printf 'if [ -x %q ]; then exec %q --tui "$@"; fi\n' "$DESKTOP_EXE" "$DESKTOP_EXE"
+  fi
+  printf 'exec node %q "$@"\n' "$ROOT/bin/zyra.mjs"
+} > "$COMMAND_PATH"
+chmod 755 "$COMMAND_PATH"
+
+export PATH="$COMMAND_DIR:$PATH"
 echo "Checking install..."
-zyra doctor
+"$COMMAND_PATH" doctor
 
 echo ""
 echo "Zyra is installed."
-echo "Open a new terminal and run: zyra"
+if [[ "$PATH_ALREADY_CONFIGURED" != true ]]; then
+  echo "Add $COMMAND_DIR to PATH, then run: zyra"
+else
+  echo "Open a new terminal and run: zyra"
+fi

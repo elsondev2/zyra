@@ -42,7 +42,7 @@ Settings controls must have a verified consumer. A persisted field with no behav
 - Explorer enablement and the existing project-browser view/content layout.
 - Git initialization, author safety, bulk scope, PR defaults, PR guide, and branch behavior.
 - Git AI provider and model selection.
-- Assistant model, permission, interaction, reasoning, service tier, prompt, streaming, tool-output, queue/interrupt, reconnect, history, status, diagnostics, transcription, and account usage display.
+- Assistant model, permission, interaction, reasoning effort and summaries, automatic context-compaction limit, service tier, prompt, streaming, tool-output, queue/interrupt, reconnect, history, status, diagnostics, transcription, and account usage display.
 
 ### Remove from the visible settings contract
 
@@ -81,6 +81,7 @@ These require source-to-render verification before controls are added.
 ## Continuity state that must stay out of Settings
 
 - Active Browser tabs, URLs, per-tab zoom, color emulation, and device viewport.
+- Main-owned Zyra Browser history and omnibox recency.
 - Retained terminal groups and active terminal IDs.
 - Composer drafts and per-chat composer state.
 - Left/right panel widths and per-chat Inspector width.
@@ -96,6 +97,11 @@ Settings may provide **Reset layout**, **Clear retained Browser workspaces**, or
 Settings should make the following existing behavior discoverable:
 
 - Count and revoke remembered Browser-control sites.
+- Enable or disable Google search suggestions while typing.
+- Enable or disable the default-off built-in Ghostery ad blocker; the first passive ad detection may offer the same persistent choice in Browser.
+- Choose Off, the 45-image included nature pack, or optional Unsplash BYOK for New Tab backgrounds; category, rotation, and pinning remain in the focused background picker.
+- Import sanitized history from explicitly selected external browser profiles.
+- Clear Browser history without removing sign-ins.
 - Clear Browser cache.
 - Clear Browser cookies/authentication.
 - Clear the persistent local Browser profile after explicit confirmation.

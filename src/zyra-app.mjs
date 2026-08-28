@@ -198,6 +198,10 @@ function parse(argv) {
 }
 
 function runUpdate() {
+  if (process.env.ZYRA_DISTRIBUTION === "desktop-bundle") {
+    console.log("This Zyra TUI is bundled with Zyra Desktop. Install updates from Desktop Settings → About.");
+    return;
+  }
   const root = defaults.root;
   if (process.platform === "win32") {
     const script = path.join(root, "install.ps1");
@@ -264,6 +268,7 @@ async function main() {
 
   const subscribeRuntimeEvents = (runtime, handler = (event) => ui.event(event)) => {
     runtime.agentServer?.setApprovalHandler?.((request, options) => ui.requestApproval?.(request, options) || "decline");
+    runtime.agentServer?.setUserInputHandler?.((request, options) => ui.requestUserInput?.(request, options) || { answers: {}, cancelled: true });
     const forward = (event) => {
       handler(event);
       terminalTitle.fromEvent(event, runtime);
@@ -299,7 +304,8 @@ async function main() {
   let onboardingResult;
   if (parsed.command === "onboarding") {
     onboardingResult = await runOnboarding({
-      root: defaults.root,
+      root: defaults.dataRoot,
+      assetRoot: defaults.root,
       project: parsed.project,
       currentTheme: parsed.terminalTheme,
       webSearch: parsed.webSearch,
@@ -382,12 +388,13 @@ async function main() {
   }
 
   if (shouldShowStartupRecommendations(parsed) && shouldRunOnboarding({
-    root: defaults.root,
+    root: defaults.dataRoot,
     force: parsed.forceOnboarding,
     skip: parsed.skipOnboarding,
   })) {
     onboardingResult = await runOnboarding({
-      root: defaults.root,
+      root: defaults.dataRoot,
+      assetRoot: defaults.root,
       project: parsed.project,
       currentTheme: parsed.terminalTheme,
       webSearch: parsed.webSearch,
@@ -414,6 +421,7 @@ async function main() {
     interruptMode: parsed.interruptMode || undefined,
     webSearch: parsed.webSearch,
     webFetch: parsed.webFetch,
+    requestUserInput: (request, options) => ui.requestUserInput?.(request, options) || { answers: {}, cancelled: true },
   };
 
   if (parsed.printMode || parsed.prompt) {
@@ -424,6 +432,7 @@ async function main() {
 
     if (parsed.printMode) {
       runtime.agentServer?.setApprovalHandler?.((request, options) => ui.requestApproval?.(request, options) || "decline");
+      runtime.agentServer?.setUserInputHandler?.((request, options) => ui.requestUserInput?.(request, options) || { answers: {}, cancelled: true });
       if (runtime.modelFallbackMessage) {
         console.error(runtime.modelFallbackMessage);
       }
@@ -571,7 +580,7 @@ async function main() {
   await ui.interactive(async (submission) => {
     try {
       const text = getSubmissionText(submission);
-      if (activeRun) {
+      if (activeRun || runtime.session.isStreaming) {
         if (isHardInterruptInput(text)) {
           suppressNextAbortError = true;
           setTerminalTitleState("stopped", runtime);
@@ -620,7 +629,7 @@ async function main() {
       }
     },
     statusLine: (width, state) => renderStatusLine(runtime, width, state),
-    isRunActive: () => activeRun,
+    isRunActive: () => activeRun || runtime.session.isStreaming,
     shouldEchoUserMessage: () => !activeRun,
     getQueuedMessages: () => getQueuedMessages(runtime),
     onRestoreQueued: (currentText) => {

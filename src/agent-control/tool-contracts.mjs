@@ -26,6 +26,10 @@ const common = {
   clickCount: Type.Optional(Type.Number()),
   includeScreenshot: Type.Optional(Type.Boolean()),
   reveal: Type.Optional(Type.Boolean({ description: "Reveal the in-app Browser workspace. Root agent only." })),
+  sessionMode: Type.Optional(Type.Union([
+    Type.Literal("normal"),
+    Type.Literal("incognito"),
+  ], { description: "Storage mode for a new in-app Browser tab. Defaults to incognito for agent-opened tabs." })),
   capabilities: Type.Optional(Type.Array(capability, { maxItems: CONTROL_CAPABILITIES.length })),
   maxActions: Type.Optional(Type.Number()),
   allowedOrigins: Type.Optional(Type.Array(Type.String(), { maxItems: 32 })),

@@ -13,6 +13,13 @@ document.readyState
 *.sqlite-wal
 *.zip
 pi-session-*.html
+__pycache__/
+*.pyc
+
+# Disposable local agent notes and preview test documents
+/claude.md
+/zyra-random-notes.pdf
+/zyra-random-work-notes.docx
 
 # Private local exports, derived analysis, and profile/memory material
 resources/*

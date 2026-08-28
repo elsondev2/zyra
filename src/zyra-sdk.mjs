@@ -42,6 +42,7 @@ import { AgentFleetController } from "./agents/runtime/fleet-controller.mjs";
 import { createFleetTools } from "./agents/tools.mjs";
 import { WorkflowRuntime } from "./workflows/runtime.mjs";
 import { DEFAULT_TERMINAL_THEME, listTerminalThemes, resolveTerminalTheme } from "./terminal-theme.mjs";
+import { removeZyraTitleGenerationMessages } from "./title-generation.mjs";
 import {
   checkModelAvailability,
   formatModelAvailabilitySummary,
@@ -75,11 +76,21 @@ import {
   toPiThinkingLevel,
 } from "./thinking-levels.mjs";
 import {
+  applyAssistantReasoningSummary,
+  DEFAULT_ASSISTANT_CONTEXT_COMPACTION_THRESHOLD_TOKENS,
+  DEFAULT_ASSISTANT_REASONING_SUMMARY,
+  normalizeAssistantContextCompactionThreshold,
+  normalizeAssistantReasoningSummary,
+  resolveAssistantContextCompactionThreshold,
+  shouldCompactAssistantContext,
+} from "./assistant-runtime-policy.mjs";
+import {
   DEFAULT_MANAGED_BASH_AUTO_POLL_MS,
   ZYRA_WEB_FETCH_TOOL_NAME,
   ZYRA_WEB_SEARCH_TOOL_NAME,
 } from "./tool-contracts.mjs";
 import { installZyraNextTurnCheckpoint } from "./zyra-next-turn-checkpoint.mjs";
+import { createRequestUserInputTool } from "./request-user-input-tool.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ZYRA_THEME_CUSTOM_TYPE = "zyra.theme.v1";
@@ -304,6 +315,9 @@ function createZyraBuiltinExtensions(options = {}) {
   if (options.thinkingState) {
     extensions.push(createGpt56ThinkingExtension(options.thinkingState));
   }
+  if (options.reasoningSummaryState) {
+    extensions.push(createReasoningSummaryExtension(options.reasoningSummaryState));
+  }
   if (options.permissionRequest) {
     extensions.push(createZyraPermissionGateExtension({
       project: options.project,
@@ -344,6 +358,24 @@ function createGpt56ThinkingExtension(state) {
     handlers: new Map([
       ["before_provider_request", [
         (event) => applyGpt56ThinkingEffort(event.payload, state?.value),
+      ]],
+    ]),
+    tools: new Map(),
+    messageRenderers: new Map(),
+    commands: new Map(),
+    flags: new Map(),
+    shortcuts: new Map(),
+  };
+}
+
+function createReasoningSummaryExtension(state) {
+  return {
+    path: "<zyra:reasoning-summary>",
+    resolvedPath: "<zyra:reasoning-summary>",
+    sourceInfo: { source: "builtin", scope: "temporary", label: "Zyra reasoning summaries" },
+    handlers: new Map([
+      ["before_provider_request", [
+        (event) => applyAssistantReasoningSummary(event.payload, state?.value),
       ]],
     ]),
     tools: new Map(),
@@ -626,6 +658,12 @@ export async function createZyraSession(options = {}) {
   const startupPreferences = resolveZyraStartupPreferences(project, options, preferences);
   const thinking = startupPreferences.thinking;
   const thinkingState = { value: thinking };
+  const reasoningSummaryState = {
+    value: normalizeAssistantReasoningSummary(options.reasoningSummary ?? DEFAULT_ASSISTANT_REASONING_SUMMARY),
+  };
+  const contextCompactionThresholdTokens = normalizeAssistantContextCompactionThreshold(
+    options.contextCompactionThresholdTokens ?? DEFAULT_ASSISTANT_CONTEXT_COMPACTION_THRESHOLD_TOKENS,
+  );
 
   if (!existsSync(project)) {
     throw new Error(`Project path does not exist: ${project}`);
@@ -675,6 +713,7 @@ export async function createZyraSession(options = {}) {
     enablePiExtensions: options.enablePiExtensions || process.env.ZYRA_ENABLE_PI_EXTENSIONS === "1",
     codexServiceTierState,
     thinkingState,
+    reasoningSummaryState,
     permissionRequest: options.permissionRequest,
     getPermissionMode: options.getPermissionMode,
     project,
@@ -703,6 +742,7 @@ export async function createZyraSession(options = {}) {
         shellPath: settingsManager?.getShellPath?.(),
         commandPrefix: settingsManager?.getShellCommandPrefix?.(),
       }),
+      createRequestUserInputTool({ requestUserInput: options.requestUserInput }),
       createZyraWebSearchTool(),
       createZyraWebFetchTool(),
       createZyraWriteTool({
@@ -720,6 +760,12 @@ export async function createZyraSession(options = {}) {
     ],
     ...startupResources,
   });
+
+  const contextMessages = result.session.state?.messages;
+  if (Array.isArray(contextMessages)) {
+    const filteredMessages = removeZyraTitleGenerationMessages(contextMessages);
+    if (filteredMessages.length !== contextMessages.length) contextMessages.splice(0, contextMessages.length, ...filteredMessages);
+  }
 
   browserSessionRef.current = result.session;
   installZyraNextTurnCheckpoint(result.session, managedBash, {
@@ -828,6 +874,9 @@ export async function createZyraSession(options = {}) {
     memoryStartup,
     thinking: effectiveThinking,
     thinkingState,
+    reasoningSummary: reasoningSummaryState.value,
+    reasoningSummaryState,
+    contextCompactionThresholdTokens,
     webSearch: startupPreferences.webSearch,
     webFetch: startupPreferences.webFetch,
     statusLine: startupPreferences.statusLine,
@@ -974,6 +1023,7 @@ export async function listAvailableModels(options = {}) {
     description: getModelCompatibilityLabel(model)
       ?? (model.name && model.name !== model.id ? model.name : model.provider),
     supportedEfforts: getModelThinkingLevels(model),
+    contextWindow: Number(model.contextWindow) || null,
   }));
 }
 
@@ -1303,6 +1353,7 @@ async function createZyraMemoryWorkerSession({ model } = {}) {
     skipProjectMemory: true,
     skipProfileInjection: true,
     model: model ?? defaults.model,
+    reasoningSummary: "auto",
     surface: "memory-worker",
   });
   upsertSystemPromptBlock(worker.session, "ZYRA_MEMORY_WORKER", [
@@ -1323,9 +1374,21 @@ function memoryRunner(root = defaults.dataRoot) {
 }
 
 export async function runZyraPrompt(runtime, prompt, options = {}) {
-  const beforeEntryCount = sessionEntries(runtime).length;
   const expanded = expandFileMentions(runtime, prompt);
-  injectLayeredMemory(runtime.session, defaults.dataRoot, expanded.text);
+  const layeredMemoryPrompt = injectLayeredMemory(runtime.session, defaults.dataRoot, expanded.text);
+  const additionalContextTokens = layeredMemoryPrompt
+    ? estimateMessageTokens({
+        role: "system",
+        content: [{ type: "text", text: layeredMemoryPrompt }],
+        timestamp: Date.now(),
+      })
+    : 0;
+  await compactZyraContextBeforePrompt(runtime, expanded.text, {
+    images: options.images,
+    thresholdTokens: options.contextCompactionThresholdTokens,
+    additionalContextTokens,
+  });
+  const beforeEntryCount = sessionEntries(runtime).length;
   try {
     await runtime.session.prompt(expanded.text, { source: "interactive", images: options.images });
   } finally {
@@ -1994,6 +2057,82 @@ export function saveZyraExitSummary(runtime, summary) {
   return true;
 }
 
+export function setZyraReasoningSummary(runtime, value) {
+  const mode = normalizeAssistantReasoningSummary(value);
+  if (!runtime.reasoningSummaryState) runtime.reasoningSummaryState = { value: mode };
+  else runtime.reasoningSummaryState.value = mode;
+  runtime.reasoningSummary = mode;
+  return mode;
+}
+
+export function setZyraContextCompactionThreshold(runtime, value) {
+  const thresholdTokens = normalizeAssistantContextCompactionThreshold(value);
+  runtime.contextCompactionThresholdTokens = thresholdTokens;
+  return thresholdTokens;
+}
+
+function hasUncompactedConversationEntries(runtime) {
+  const branch = runtime?.session?.sessionManager?.getBranch?.();
+  if (!Array.isArray(branch)) return true;
+  let latestCompactionIndex = -1;
+  for (let index = branch.length - 1; index >= 0; index -= 1) {
+    if (branch[index]?.type === "compaction") {
+      latestCompactionIndex = index;
+      break;
+    }
+  }
+  if (latestCompactionIndex < 0) return branch.some((entry) => entry?.type === "message");
+  return branch.slice(latestCompactionIndex + 1).some((entry) => entry?.type === "message");
+}
+
+export async function compactZyraContextBeforePrompt(runtime, prompt, options = {}) {
+  const thresholdTokens = setZyraContextCompactionThreshold(
+    runtime,
+    options.thresholdTokens ?? runtime.contextCompactionThresholdTokens,
+  );
+  const usage = getRuntimeContextUsage(runtime);
+  const contextTokens = Number(usage?.tokens);
+  const contextWindow = Number(usage?.contextWindow ?? runtime?.session?.model?.contextWindow);
+  const promptTokens = estimateMessageTokens({
+    role: "user",
+    content: [{ type: "text", text: String(prompt || "") }],
+    timestamp: Date.now(),
+  });
+  const shouldCompact = shouldCompactAssistantContext({
+    contextTokens,
+    contextWindow,
+    configuredThreshold: thresholdTokens,
+    promptTokens,
+    additionalContextTokens: options.additionalContextTokens,
+    imageCount: Array.isArray(options.images) ? options.images.length : 0,
+  });
+  const effectiveThresholdTokens = resolveAssistantContextCompactionThreshold(contextWindow, thresholdTokens);
+  if (!shouldCompact || !hasUncompactedConversationEntries(runtime)) {
+    return { compacted: false, contextTokens, contextWindow, effectiveThresholdTokens };
+  }
+  if (runtime?.session?.isStreaming) throw new Error("Wait for the current response to finish before compacting context.");
+  if (runtime?.session?.isCompacting) throw new Error("Wait for context compaction to finish before sending.");
+  if (typeof runtime?.session?.compact !== "function") {
+    throw new Error("This runtime cannot compact context before sending.");
+  }
+  const previousReasoningSummary = runtime?.reasoningSummaryState?.value;
+  if (runtime?.reasoningSummaryState) runtime.reasoningSummaryState.value = "concise";
+  try {
+    await runtime.session.compact();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error || "");
+    if (/Already compacted|Nothing to compact|session too small/i.test(message)) {
+      return { compacted: false, contextTokens, contextWindow, effectiveThresholdTokens };
+    }
+    throw error;
+  } finally {
+    if (runtime?.reasoningSummaryState && previousReasoningSummary) {
+      runtime.reasoningSummaryState.value = previousReasoningSummary;
+    }
+  }
+  return { compacted: true, contextTokens, contextWindow, effectiveThresholdTokens };
+}
+
 export function getRuntimeContextUsage(runtime) {
   const trusted = runtime?.session?.getContextUsage?.();
   if (trusted && trusted.tokens !== null && trusted.percent !== null) return trusted;
@@ -2025,24 +2164,51 @@ export function calculateSessionUsage(sessionManager) {
     cacheWrite: 0,
     reasoning: 0,
     cost: 0,
+    costComplete: false,
+    cacheHitPercent: null,
     assistantMessages: 0,
   };
+  let meteredUsageCount = 0;
+  let missingCostCount = 0;
 
   const entries = typeof sessionManager.getEntries === "function" ? sessionManager.getEntries() : [];
   for (const entry of entries) {
-    if (entry?.type !== "message" || entry.message?.role !== "assistant") continue;
-    const messageUsage = entry.message.usage;
+    const role = entry?.type === "message" ? entry.message?.role : null;
+    const messageUsage = role === "assistant" || role === "toolResult"
+      ? entry.message?.usage
+      : entry?.type === "branch_summary" || entry?.type === "compaction"
+        ? entry.usage
+        : null;
     if (!messageUsage) continue;
-    usage.assistantMessages += 1;
-    usage.input += numberValue(messageUsage.input);
-    usage.output += numberValue(messageUsage.output);
-    usage.cacheRead += numberValue(messageUsage.cacheRead);
-    usage.cacheWrite += numberValue(messageUsage.cacheWrite);
+    if (role === "assistant") {
+      usage.assistantMessages += 1;
+      const latestPromptTokens = numberValue(messageUsage.input) + numberValue(messageUsage.cacheRead) + numberValue(messageUsage.cacheWrite);
+      usage.cacheHitPercent = latestPromptTokens > 0
+        ? (numberValue(messageUsage.cacheRead) / latestPromptTokens) * 100
+        : null;
+    }
+    const input = numberValue(messageUsage.input);
+    const output = numberValue(messageUsage.output);
+    const cacheRead = numberValue(messageUsage.cacheRead);
+    const cacheWrite = numberValue(messageUsage.cacheWrite);
+    const hasMeteredUsage = input + output + cacheRead + cacheWrite > 0;
+    const reportedCost = messageUsage.cost?.total;
+    usage.input += input;
+    usage.output += output;
+    usage.cacheRead += cacheRead;
+    usage.cacheWrite += cacheWrite;
     usage.reasoning += extractReasoningTokens(messageUsage);
-    usage.cost += numberValue(messageUsage.cost?.total);
+    if (hasMeteredUsage) {
+      meteredUsageCount += 1;
+      if (typeof reportedCost === "number" && Number.isFinite(reportedCost)) usage.cost += reportedCost;
+      else missingCostCount += 1;
+    } else if (typeof reportedCost === "number" && Number.isFinite(reportedCost)) {
+      usage.cost += reportedCost;
+    }
   }
 
-  usage.total = usage.input + usage.output;
+  usage.total = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  usage.costComplete = meteredUsageCount > 0 && missingCostCount === 0;
   return usage;
 }
 
@@ -2230,10 +2396,11 @@ function injectProjectMemory(session, project) {
 
 function injectLayeredMemory(session, root, query = "") {
   const memory = buildLayeredMemoryContext(root, { query });
-  if (!memory.prompt) return;
+  if (!memory.prompt) return "";
   session._zyraMemoryContext = memory;
   session._zyraMemoryCitation = memory.citation;
   upsertSystemPromptBlock(session, ZYRA_LAYERED_MEMORY_MARKER, memory.prompt);
+  return memory.prompt;
 }
 
 function injectActiveProfile(session, profile, project = defaults.project) {
