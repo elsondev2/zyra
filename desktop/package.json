@@ -72,6 +72,7 @@
         "test:theme-adaptive-surfaces": "bun scripts/test-theme-adaptive-preview-surfaces.ts",
         "test:file-icon-system": "bun scripts/test-material-file-icon-system.ts",
         "benchmark:assistant-history-streaming": "bun scripts/benchmark-assistant-history-streaming.ts",
+        "benchmark:voice-main-responsiveness": "bun scripts/benchmark-voice-main-responsiveness.ts",
         "benchmark:markdown-preview": "bun scripts/benchmark-long-markdown-preview.ts",
         "benchmark:shared-files": "bun scripts/benchmark-shared-files-surfaces.ts",
         "test:pi-assistant-lifecycle": "bun scripts/test-pi-assistant-lifecycle.ts && bun scripts/test-assistant-title-generation.ts && node ../scripts/test-assistant-runtime-policy.mjs",

@@ -664,6 +664,10 @@ const voiceOrbStyles = readFileSync(
     new URL('../src/renderer/src/pages/assistant/InstructorVoiceOrb.css', import.meta.url),
     'utf8'
 )
+const strandsSource = readFileSync(
+    new URL('../src/renderer/src/components/ui/strands/Strands.tsx', import.meta.url),
+    'utf8'
+)
 const voiceSettingsStyles = readFileSync(
     new URL('../src/renderer/src/pages/assistant/InstructorVoiceSettings.css', import.meta.url),
     'utf8'
@@ -741,6 +745,9 @@ assert.doesNotMatch(voiceConversationStyles, /--sparkle-/)
 assert.match(voiceOrbSource, /animateLayout/)
 assert.match(voiceOrbSource, /instructor-voice-orb-render-surface/)
 assert.match(voiceOrbSource, /instructor-voice-orb-volume/)
+assert.match(voiceOrbSource, /maxFps=\{active \? 30 : connecting \? 24 : 12\}/, 'the Voice orb must use an explicit active, connecting, and idle frame budget')
+assert.match(strandsSource, /frameIntervalMs = 1_000 \/ Math\.min\(60, Math\.max\(1, current\.maxFps\)\)/, 'the WebGL loop must enforce its configured frame ceiling')
+assert.match(strandsSource, /antialias: false/, 'the full-screen shader must not pay for redundant multisampling')
 assert.match(voiceOrbStyles, /--instructor-orb-layout-scale/)
 assert.match(voiceOrbStyles, /--instructor-orb-volume-scale/)
 assert.match(voiceSettingsStyles, /grid-template-columns: minmax\(280px/)

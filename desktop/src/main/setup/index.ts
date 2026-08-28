@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { DevicePreferencesService } from './device-preferences-service'
 import { DeviceSecretsService } from './device-secrets-service'
 import { OnboardingService } from './onboarding-service'
-import { OpenAIAuthWorkerClient } from './openai-auth-worker-client'
+import { getSharedOpenAIAuthWorkerClient } from './openai-auth-worker-client'
 import { OpenAIConnectionService } from './openai-connection-service'
 
 export type DesktopSetupServices = {
@@ -21,7 +21,7 @@ export function createDesktopSetupServices(userDataPath: string): DesktopSetupSe
         encrypt: (value) => safeStorage.encryptString(value),
         decrypt: (value) => safeStorage.decryptString(value)
     })
-    const authWorker = new OpenAIAuthWorkerClient()
+    const authWorker = getSharedOpenAIAuthWorkerClient()
     const auth = new OpenAIConnectionService({
         openExternal: (url) => shell.openExternal(url),
         loadSdk: async () => authWorker.sdk,

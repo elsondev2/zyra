@@ -6,7 +6,10 @@ import {
   removeZyraAuth,
   verifyZyraOpenAIApiAuth,
 } from "./desktop-openai-auth.mjs";
-import { buildChatGptAccountStatus } from "./chatgpt-account.mjs";
+import {
+  buildChatGptAccountStatus,
+  resolveChatGptAccountAuth,
+} from "./chatgpt-account.mjs";
 
 if (!parentPort) throw new Error("Desktop OpenAI auth worker requires a parent port.");
 
@@ -26,6 +29,8 @@ async function execute(message) {
       return null;
     case "buildChatGptAccountStatus":
       return buildChatGptAccountStatus(message.provider, message.options);
+    case "resolveChatGptAccountAuth":
+      return resolveChatGptAccountAuth();
     case "getZyraAuthStatus":
       return getZyraAuthStatus(message.provider);
     case "loginZyraAuth":
