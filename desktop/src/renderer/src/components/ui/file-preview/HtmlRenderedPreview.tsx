@@ -60,6 +60,9 @@ export default function HtmlRenderedPreview({
                     key={previewUrl}
                     src={previewUrl}
                     title={`${fileName} preview`}
+                    sandbox=""
+                    allow=""
+                    referrerPolicy="no-referrer"
                     className="block h-full w-full"
                     style={{
                         minHeight: isExpanded ? '100%' : '400px',

@@ -14,6 +14,11 @@ const fetchCalls: Array<{ input: string | Request; init?: RequestInit }> = []
 const errorLogs: unknown[][] = []
 
 mock.module('electron', () => ({
+    nativeImage: {
+        createEmpty: () => ({ isEmpty: () => true }),
+        createFromPath: () => ({ isEmpty: () => true }),
+        createThumbnailFromPath: async () => ({ isEmpty: () => true })
+    },
     net: {
         fetch: async (input: string | Request, init?: RequestInit) => {
             fetchCalls.push({ input, init })
@@ -81,12 +86,20 @@ assert.equal(rangeResponse.headers.get('content-length'), String(mediaBytes.byte
 assert.equal(rangeResponse.headers.get('content-type'), 'video/mp4')
 assert.equal(
     rangeResponse.headers.get('content-security-policy'),
-    "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;"
+    "default-src 'none'; base-uri 'none'; object-src 'none'"
 )
+assert.equal(rangeResponse.headers.get('permissions-policy')?.includes('microphone=()'), true)
+assert.equal(rangeResponse.headers.get('referrer-policy'), 'no-referrer')
+assert.equal(rangeResponse.headers.get('x-content-type-options'), 'nosniff')
 assert.ok(rangeResponse.body, 'the upstream file body remains a stream')
 const rangeReader = rangeResponse.body.getReader()
 assert.equal(new TextDecoder().decode((await rangeReader.read()).value), 'streamed-media')
 await rangeReader.cancel()
+
+const rejectedMethodResponse = await handler!(new Request(mediaUrl, { method: 'POST' }))
+assert.equal(rejectedMethodResponse.status, 405)
+assert.equal(rejectedMethodResponse.headers.get('allow'), 'GET, HEAD')
+assert.equal(fetchCalls.length, 1, 'non-read methods are rejected before touching the local file')
 
 const invalidRangeResponse = await handler!(new Request(mediaUrl, {
     headers: { Range: 'bytes=1000-' }
@@ -115,11 +128,36 @@ const malformedResponse = await handler!(new Request('zyra:///%E0%A4%A'))
 assert.equal(malformedResponse.status, 500)
 assert.equal(errorLogs.length, 2, 'invalid protocol paths remain logged as resolution failures')
 
+const htmlPath = resolve(tmpdir(), `zyra protocol unsafe preview-${process.pid}.html`)
+const htmlSource = '<!doctype html><script>top.location="https://attacker.example"</script><img src="file:///private.txt"><img src="https://attacker.example/leak">'
+await Bun.write(htmlPath, htmlSource)
+nextFetchResponse = new Response(htmlSource, { status: 200, headers: { 'Content-Type': 'text/html' } })
+const htmlResponse = await handler!(new Request(pathToFileURL(htmlPath).href.replace(/^file:/, 'zyra:')))
+const htmlPolicy = htmlResponse.headers.get('content-security-policy') || ''
+for (const directive of [
+    'sandbox',
+    "default-src 'none'",
+    "script-src 'none'",
+    "connect-src 'none'",
+    "frame-src 'none'",
+    "form-action 'none'",
+    'img-src data: blob:'
+]) assert.equal(htmlPolicy.includes(directive), true, `HTML policy includes ${directive}`)
+assert.equal(htmlPolicy.includes('http:'), false, 'HTML cannot request remote network resources')
+assert.equal(htmlPolicy.includes('file:'), false, 'HTML cannot read arbitrary file URLs')
+assert.equal(htmlPolicy.includes('zyra:'), false, 'HTML cannot pivot the local protocol into another file')
+assert.equal(htmlPolicy.includes("'unsafe-eval'"), false)
+
 const protocolSource = await Bun.file(new URL('../src/main/file-protocol.ts', import.meta.url)).text()
+const htmlPreviewSource = await Bun.file(new URL('../src/renderer/src/components/ui/file-preview/HtmlRenderedPreview.tsx', import.meta.url)).text()
 assert.doesNotMatch(protocolSource, /registerBufferProtocol|\breadFile\b/)
+assert.match(htmlPreviewSource, /sandbox=""/, 'untrusted HTML receives every iframe sandbox restriction')
+assert.match(htmlPreviewSource, /allow=""/, 'untrusted HTML receives no delegated permissions')
+assert.match(htmlPreviewSource, /referrerPolicy="no-referrer"/)
+assert.doesNotMatch(htmlPreviewSource, /allow-scripts|allow-same-origin|allow-popups|allow-top-navigation|allow-forms/)
 
 const projectIconSource = await Bun.file(new URL('../src/renderer/src/components/ui/ProjectIcon.tsx', import.meta.url)).text()
 assert.match(projectIconSource, /failedCustomIconPaths/, 'failed custom project icons are not requested repeatedly during the same app session')
 
-await unlink(mediaPath)
+await Promise.all([unlink(mediaPath), unlink(htmlPath)])
 console.log('Local file protocol streaming, range forwarding, and error semantics: ok')

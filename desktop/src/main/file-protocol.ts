@@ -4,7 +4,34 @@ import { stat } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { resolveFileMimeType, resolveProtocolFilePath } from './local-file-content'
 
-const CONTENT_SECURITY_POLICY = "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;"
+export const LOCAL_HTML_CONTENT_SECURITY_POLICY = [
+    "sandbox",
+    "default-src 'none'",
+    "base-uri 'none'",
+    "object-src 'none'",
+    "script-src 'none'",
+    "connect-src 'none'",
+    "frame-src 'none'",
+    "child-src 'none'",
+    "form-action 'none'",
+    "style-src 'unsafe-inline'",
+    "img-src data: blob:",
+    "media-src data: blob:",
+    "font-src data:"
+].join('; ')
+const PASSIVE_FILE_CONTENT_SECURITY_POLICY = "default-src 'none'; base-uri 'none'; object-src 'none'"
+const LOCAL_FILE_PERMISSIONS_POLICY = [
+    'camera=()',
+    'microphone=()',
+    'geolocation=()',
+    'midi=()',
+    'payment=()',
+    'usb=()',
+    'serial=()',
+    'hid=()',
+    'clipboard-read=()',
+    'clipboard-write=()'
+].join(', ')
 const THUMBNAIL_CACHE_MAX_ENTRIES = 384
 const THUMBNAIL_CACHE_MAX_BYTES = 48 * 1024 * 1024
 const THUMBNAIL_MAX_EDGE = 512
@@ -65,12 +92,22 @@ function isMissingFileError(error: unknown): boolean {
     return false
 }
 
+function fileContentSecurityPolicy(filePath: string): string {
+    const mimeType = resolveFileMimeType(filePath)
+    return mimeType === 'text/html' || mimeType === 'image/svg+xml'
+        ? LOCAL_HTML_CONTENT_SECURITY_POLICY
+        : PASSIVE_FILE_CONTENT_SECURITY_POLICY
+}
+
 function createResponseHeaders(filePath: string, fileSize: number): Headers {
     return new Headers({
         'Accept-Ranges': 'bytes',
         'Content-Length': String(fileSize),
-        'Content-Security-Policy': CONTENT_SECURITY_POLICY,
-        'Content-Type': resolveFileMimeType(filePath)
+        'Content-Security-Policy': fileContentSecurityPolicy(filePath),
+        'Content-Type': resolveFileMimeType(filePath),
+        'Permissions-Policy': LOCAL_FILE_PERMISSIONS_POLICY,
+        'Referrer-Policy': 'no-referrer',
+        'X-Content-Type-Options': 'nosniff'
     })
 }
 
@@ -159,6 +196,10 @@ export function registerFileProtocol(fileProtocol: string) {
     protocol.handle(fileProtocol, async (request) => {
         let filePath = ''
 
+        if (request.method !== 'GET' && request.method !== 'HEAD') {
+            return emptyResponse(405, { Allow: 'GET, HEAD' })
+        }
+
         try {
             filePath = resolveProtocolFilePath(request.url)
         } catch (error) {
@@ -185,12 +226,9 @@ export function registerFileProtocol(fileProtocol: string) {
         if (thumbnailSize && resolveFileMimeType(filePath).startsWith('image/') && (request.method === 'GET' || request.method === 'HEAD')) {
             const thumbnail = await getThumbnail(filePath, thumbnailSize.width, thumbnailSize.height, fileSize, modifiedAt)
             if (thumbnail) {
-                const headers = new Headers({
-                    'Cache-Control': 'no-store',
-                    'Content-Length': String(thumbnail.byteLength),
-                    'Content-Security-Policy': CONTENT_SECURITY_POLICY,
-                    'Content-Type': 'image/png'
-                })
+                const headers = createResponseHeaders(filePath, thumbnail.byteLength)
+                headers.set('Cache-Control', 'no-store')
+                headers.set('Content-Type', 'image/png')
                 const body = new Uint8Array(thumbnail.byteLength)
                 body.set(thumbnail)
                 return request.method === 'HEAD' ? emptyResponse(200, headers) : new Response(body.buffer, { status: 200, headers })
@@ -211,9 +249,8 @@ export function registerFileProtocol(fileProtocol: string) {
                 headers: request.headers
             })
             const headers = new Headers(fileResponse.headers)
-            headers.set('Accept-Ranges', 'bytes')
-            headers.set('Content-Security-Policy', CONTENT_SECURITY_POLICY)
-            headers.set('Content-Type', resolveFileMimeType(filePath))
+            const safeHeaders = createResponseHeaders(filePath, fileSize)
+            for (const [name, value] of safeHeaders) headers.set(name, value)
 
             if (byteRange) {
                 headers.set('Content-Length', String(byteRange.end - byteRange.start + 1))
