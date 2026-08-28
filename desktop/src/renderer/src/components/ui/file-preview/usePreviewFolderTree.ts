@@ -1,10 +1,19 @@
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import type { DevScopeFileTreeNode } from '@shared/contracts/devscope-project-contracts'
-import { mergeDirectoryChildren } from '@/lib/filesystem/fileTreeMutations'
-import { getCachedPreviewFolderTree, setCachedPreviewFolderTree } from '@/lib/projectViewCache'
+import { mergeDirectoryChildren, preserveLoadedDirectoryChildren } from '@/lib/filesystem/fileTreeMutations'
+import {
+    getCachedPreviewFolderTree,
+    getCachedPreviewFolderTreeStatus,
+    getOrCreatePreviewFolderTreeRequest,
+    invalidateCachedPreviewFolderTreeRoot,
+    setCachedPreviewFolderTree
+} from '@/lib/projectViewCache'
 
 function normalizePathKey(pathValue: string): string {
-    return String(pathValue || '').replace(/\\/g, '/').toLowerCase()
+    const normalized = String(pathValue || '').replace(/\\/g, '/')
+    return /^[a-z]:\//i.test(normalized) || normalized.startsWith('//')
+        ? normalized.toLowerCase()
+        : normalized
 }
 
 export function getPreviewNavigatorFolderPath(pathValue: string, directoryTarget = false): string {
@@ -80,6 +89,10 @@ type UsePreviewFolderTreeOptions = {
     directoryTarget?: boolean
     enabled?: boolean
     refreshToken?: number
+    showHidden?: boolean
+    includeFileMetadata?: boolean
+    directoryOnlyTree?: boolean
+    initialFolderPath?: string | null
 }
 
 export function usePreviewFolderTree({
@@ -87,13 +100,17 @@ export function usePreviewFolderTree({
     projectPath,
     directoryTarget = false,
     enabled = true,
-    refreshToken = 0
+    refreshToken = 0,
+    showHidden = false,
+    includeFileMetadata = false,
+    directoryOnlyTree = false,
+    initialFolderPath = null
 }: UsePreviewFolderTreeOptions) {
     const currentFileFolderPath = useMemo(
         () => getPreviewNavigatorFolderPath(filePath, directoryTarget),
         [directoryTarget, filePath]
     )
-    const [activeFolderPath, setActiveFolderPath] = useState(currentFileFolderPath)
+    const [activeFolderPath, setActiveFolderPath] = useState(() => String(initialFolderPath || currentFileFolderPath))
     const treeRootPath = useMemo(() => resolveTreeRootPath(projectPath, activeFolderPath), [activeFolderPath, projectPath])
     const targetAncestorPaths = useMemo(
         () => collectAncestorDirectoryPaths(treeRootPath, activeFolderPath),
@@ -103,13 +120,22 @@ export function usePreviewFolderTree({
     const [tree, setTree] = useState<DevScopeFileTreeNode[]>([])
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
+    const [settledNavigatorTargetKey, setSettledNavigatorTargetKey] = useState('')
     const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set())
     const requestSequenceRef = useRef(0)
+    const navigatorRequestSequenceRef = useRef(0)
     const latestRequestByPathRef = useRef(new Map<string, number>())
     const internalNavigationTargetRef = useRef<string | null>(null)
-    const cacheKeyRootPath = treeRootPath || activeFolderPath
+    const initialFolderPathRef = useRef(String(initialFolderPath || '').trim())
+    const hasAppliedInitialFileSyncRef = useRef(false)
+    const hasVisibleTreeRef = useRef(false)
+    const cacheKeyRootPath = `${treeRootPath || activeFolderPath}::${showHidden ? 'hidden' : 'visible'}::${includeFileMetadata ? 'metadata' : 'lean'}::${directoryOnlyTree ? 'directory-hints' : 'all-children'}`
 
     useEffect(() => {
+        if (!hasAppliedInitialFileSyncRef.current) {
+            hasAppliedInitialFileSyncRef.current = true
+            if (initialFolderPathRef.current) return
+        }
         const nextFileKey = normalizePathKey(filePath)
         if (!nextFileKey) return
 
@@ -128,104 +154,135 @@ export function usePreviewFolderTree({
         return Array.isArray(cachedTree) ? (cachedTree as DevScopeFileTreeNode[]) : null
     }, [cacheKeyRootPath])
 
+    const readCachedDirectoryStatus = useCallback((folderPath: string) => {
+        if (!cacheKeyRootPath || !folderPath) return null
+        const cached = getCachedPreviewFolderTreeStatus(cacheKeyRootPath, folderPath)
+        if (!cached || !Array.isArray(cached.value)) return null
+        return { value: cached.value as DevScopeFileTreeNode[], stale: cached.stale }
+    }, [cacheKeyRootPath])
+
     const writeCachedDirectory = useCallback((folderPath: string, nodes: DevScopeFileTreeNode[]) => {
         if (!cacheKeyRootPath || !folderPath) return
         setCachedPreviewFolderTree(cacheKeyRootPath, folderPath, nodes)
     }, [cacheKeyRootPath])
 
-    const loadTree = useCallback(async (
-        targetPath?: string,
-        options?: { preferCache?: boolean }
+    const readDirectory = useCallback(async (folderPath: string, preferCache = true) => {
+        const cachedTree = preferCache ? readCachedDirectoryStatus(folderPath) : null
+        if (cachedTree && !cachedTree.stale) return cachedTree.value
+
+        const nextTree = await getOrCreatePreviewFolderTreeRequest(cacheKeyRootPath, folderPath, async () => {
+            const result = await window.devscope.getFileTree(treeRootPath, {
+                showHidden,
+                maxDepth: 0,
+                rootPath: folderPath,
+                includeGitStatus: false,
+                includeFileSize: includeFileMetadata,
+                includeDirectoryChildHint: directoryOnlyTree
+            })
+            if (!result?.success) throw new Error(result?.error || 'Failed to load folder tree.')
+            return sortNodes(result.tree || [])
+        })
+        writeCachedDirectory(folderPath, nextTree)
+        return nextTree
+    }, [cacheKeyRootPath, directoryOnlyTree, includeFileMetadata, readCachedDirectoryStatus, showHidden, treeRootPath, writeCachedDirectory])
+
+    const combineDirectorySnapshots = useCallback((
+        directoryPaths: string[],
+        snapshots: DevScopeFileTreeNode[][]
     ) => {
-        if (!enabled || !treeRootPath || !activeFolderPath) return
-
-        const resolvedTargetPath = targetPath || treeRootPath
-        const cachedTree = options?.preferCache === false ? null : readCachedDirectory(resolvedTargetPath)
-        if (cachedTree) {
-            if (targetPath) {
-                applyTreeUpdate(setTree, (currentTree) => mergeDirectoryChildren(currentTree, resolvedTargetPath, cachedTree))
-            } else {
-                setError(null)
-                setLoading(false)
-                applyTreeUpdate(setTree, cachedTree)
-            }
-            return
+        let nextTree = snapshots[0] || []
+        for (let index = 1; index < snapshots.length; index += 1) {
+            nextTree = mergeDirectoryChildren(nextTree, directoryPaths[index], snapshots[index] || [])
         }
+        return nextTree
+    }, [])
 
-        const requestKey = normalizePathKey(resolvedTargetPath)
-        const requestId = ++requestSequenceRef.current
-        latestRequestByPathRef.current.set(requestKey, requestId)
-        const isStaleRequest = () => latestRequestByPathRef.current.get(requestKey) !== requestId
-        const ownsNavigatorStatus = !targetPath
+    const loadNavigatorTree = useCallback(async (preferCache = true) => {
+        if (!enabled || !treeRootPath || !activeFolderPath) return
+        const requestId = ++navigatorRequestSequenceRef.current
+        const directoryPaths = [...new Set([treeRootPath, ...targetAncestorPaths])]
+        const cachedSnapshots = preferCache
+            ? directoryPaths.map((folderPath) => readCachedDirectory(folderPath))
+            : directoryPaths.map(() => null)
+        const cachedRoot = cachedSnapshots[0]
 
-        if (ownsNavigatorStatus) {
+        if (cachedRoot) {
+            const cachedDirectoryPaths = [directoryPaths[0]]
+            const availableSnapshots = [cachedRoot]
+            for (let index = 1; index < cachedSnapshots.length; index += 1) {
+                const snapshot = cachedSnapshots[index]
+                if (!snapshot) break
+                cachedDirectoryPaths.push(directoryPaths[index])
+                availableSnapshots.push(snapshot)
+            }
+            const cachedTree = combineDirectorySnapshots(cachedDirectoryPaths, availableSnapshots)
+            hasVisibleTreeRef.current = cachedTree.length > 0
+            setError(null)
+            setLoading(false)
+            applyTreeUpdate(setTree, (currentTree) => preserveLoadedDirectoryChildren(cachedTree, currentTree))
+        } else if (!hasVisibleTreeRef.current) {
             setLoading(true)
             setError(null)
         }
 
         try {
-            const result = await window.devscope.getFileTree(treeRootPath, {
-                showHidden: false,
-                maxDepth: 0,
-                rootPath: resolvedTargetPath,
-                includeGitStatus: false,
-                includeFileSize: false
-            })
-
-            if (isStaleRequest()) return
-
-            if (!result?.success) {
-                if (ownsNavigatorStatus) setError(result?.error || 'Failed to load folder tree.')
-                return
-            }
-
-            const nextTree = sortNodes(result.tree || [])
-            writeCachedDirectory(resolvedTargetPath, nextTree)
-            if (targetPath) {
-                applyTreeUpdate(setTree, (currentTree) => mergeDirectoryChildren(currentTree, resolvedTargetPath, nextTree))
-                return
-            }
-
-            applyTreeUpdate(setTree, nextTree)
+            const snapshots = await Promise.all(directoryPaths.map((folderPath) => readDirectory(folderPath, preferCache)))
+            if (navigatorRequestSequenceRef.current !== requestId) return
+            const nextTree = combineDirectorySnapshots(directoryPaths, snapshots)
+            hasVisibleTreeRef.current = nextTree.length > 0
+            setError(null)
+            applyTreeUpdate(setTree, (currentTree) => preserveLoadedDirectoryChildren(nextTree, currentTree))
+            setSettledNavigatorTargetKey(normalizePathKey(activeFolderPath))
         } catch (loadError: any) {
-            if (isStaleRequest()) return
-            if (ownsNavigatorStatus) setError(loadError?.message || 'Failed to load folder tree.')
+            if (navigatorRequestSequenceRef.current !== requestId) return
+            setError(loadError?.message || 'Failed to load folder tree.')
         } finally {
-            if (!isStaleRequest()) {
+            if (navigatorRequestSequenceRef.current === requestId) setLoading(false)
+        }
+    }, [activeFolderPath, combineDirectorySnapshots, enabled, readCachedDirectory, readDirectory, targetAncestorPaths, treeRootPath])
+
+    const loadTree = useCallback(async (targetPath: string) => {
+        if (!enabled || !treeRootPath || !activeFolderPath) return
+        const requestKey = normalizePathKey(targetPath)
+        const requestId = ++requestSequenceRef.current
+        latestRequestByPathRef.current.set(requestKey, requestId)
+        try {
+            const nextTree = await readDirectory(targetPath)
+            if (latestRequestByPathRef.current.get(requestKey) !== requestId) return
+            applyTreeUpdate(setTree, (currentTree) => mergeDirectoryChildren(currentTree, targetPath, nextTree))
+        } catch {
+            if (
+                latestRequestByPathRef.current.get(requestKey) === requestId
+                && normalizePathKey(targetPath) === normalizePathKey(activeFolderPath)
+            ) setActiveFolderPath(treeRootPath)
+        } finally {
+            if (latestRequestByPathRef.current.get(requestKey) === requestId) {
                 latestRequestByPathRef.current.delete(requestKey)
-                if (ownsNavigatorStatus) setLoading(false)
             }
         }
-    }, [activeFolderPath, enabled, readCachedDirectory, treeRootPath, writeCachedDirectory])
+    }, [activeFolderPath, enabled, readDirectory, treeRootPath])
 
     useEffect(() => {
         if (!enabled || !activeFolderPath || !treeRootPath) {
+            navigatorRequestSequenceRef.current += 1
+            hasVisibleTreeRef.current = false
             setTree([])
             setExpandedPaths(new Set())
             setLoading(false)
             setError(null)
+            setSettledNavigatorTargetKey('')
             return
         }
 
         setExpandedPaths(collectAncestorDirectoryKeys(treeRootPath, activeFolderPath))
-
-        let cancelled = false
-        void (async () => {
-            await loadTree()
-            for (const ancestorPath of targetAncestorPaths) {
-                if (cancelled) return
-                await loadTree(ancestorPath)
-            }
-        })()
-        return () => {
-            cancelled = true
-        }
-    }, [activeFolderPath, enabled, loadTree, targetAncestorPaths, treeRootPath])
+        void loadNavigatorTree(true)
+    }, [activeFolderPath, enabled, loadNavigatorTree, treeRootPath])
 
     useEffect(() => {
         if (!enabled || !activeFolderPath || !treeRootPath || refreshToken <= 0) return
-        void loadTree(undefined, { preferCache: false })
-    }, [activeFolderPath, enabled, loadTree, refreshToken, treeRootPath])
+        invalidateCachedPreviewFolderTreeRoot(cacheKeyRootPath)
+        void loadNavigatorTree(false)
+    }, [activeFolderPath, cacheKeyRootPath, enabled, loadNavigatorTree, refreshToken, treeRootPath])
 
     const ensureDirectoryLoaded = useCallback(async (node: DevScopeFileTreeNode) => {
         if (node.type !== 'directory' || node.childrenLoaded === true) return
@@ -235,8 +292,9 @@ export function usePreviewFolderTree({
     }, [loadTree])
 
     const reload = useCallback(async () => {
-        await loadTree(undefined, { preferCache: false })
-    }, [loadTree])
+        invalidateCachedPreviewFolderTreeRoot(cacheKeyRootPath)
+        await loadNavigatorTree(false)
+    }, [cacheKeyRootPath, loadNavigatorTree])
 
     const preserveContextForFile = useCallback((targetFilePath: string) => {
         internalNavigationTargetRef.current = normalizePathKey(targetFilePath)
@@ -251,9 +309,11 @@ export function usePreviewFolderTree({
 
     return {
         treeRootPath,
+        activeFolderPath,
         tree,
         loading,
         error,
+        navigatorTargetSettled: settledNavigatorTargetKey === normalizePathKey(activeFolderPath),
         expandedPaths,
         ensureDirectoryLoaded,
         reload,

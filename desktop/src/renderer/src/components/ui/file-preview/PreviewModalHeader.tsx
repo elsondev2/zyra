@@ -1,7 +1,7 @@
-import { Check, ChevronDown, Copy, Expand, PanelLeftClose, PanelLeftOpen, Play, Square, Trash2 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { Check, Copy, Expand, PanelLeftClose, PanelLeftOpen, Play, Save, Square, Undo2 } from 'lucide-react'
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { cn } from '@/lib/utils'
-import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { useSettings } from '@/lib/settings'
 import type { PreviewFile, PreviewTab } from './types'
 import type { ViewportPreset } from './viewport'
@@ -10,6 +10,7 @@ import { PreviewHeaderEditMenu } from './PreviewHeaderEditMenu'
 import { PreviewHeaderStatusActions } from './PreviewHeaderStatusActions'
 import { PreviewHeaderHtmlControls } from './PreviewHeaderHtmlControls'
 import { PreviewHistoryNavigation } from './PreviewHistoryNavigation'
+import { PreviewTabStrip } from './PreviewTabStrip'
 
 interface PreviewModalHeaderProps {
     file: PreviewFile
@@ -24,8 +25,11 @@ interface PreviewModalHeaderProps {
     isDirty: boolean
     isSaving: boolean
     isExpanded: boolean
-    allowExpanded?: boolean
-    windowedNavigatorEnabled?: boolean
+    allowExpanded: boolean
+    showHistoryNavigation: boolean
+    showPreviewTabs: boolean
+    showLeftPanelToggle: boolean
+    windowedNavigatorEnabled: boolean
     leftPanelOpen: boolean
     rightPanelOpen: boolean
     loadingEditableContent?: boolean
@@ -55,6 +59,15 @@ interface PreviewModalHeaderProps {
     onClosePreviewTab: (tabId: string) => void
     canCreateSiblingFile?: boolean
     onCreateSiblingFile?: () => void
+    setFindRequestToken: Dispatch<SetStateAction<number>>
+    setReplaceRequestToken: Dispatch<SetStateAction<number>>
+    isEditorToolsEnabled: boolean
+    editorWordWrap: 'on' | 'off'
+    setEditorWordWrap: Dispatch<SetStateAction<'on' | 'off'>>
+    editorMinimapEnabled: boolean
+    setEditorMinimapEnabled: Dispatch<SetStateAction<boolean>>
+    editorFontSize: number
+    setEditorFontSize: Dispatch<SetStateAction<number>>
 }
 
 function formatPreviewFileName(name: string, maxLength: number): string {
@@ -88,6 +101,9 @@ export default function PreviewModalHeader(props: PreviewModalHeaderProps) {
                 isEditable={props.isEditable}
                 isDirty={props.isDirty}
                 isSaving={props.isSaving}
+                showHistoryNavigation={props.showHistoryNavigation}
+                showPreviewTabs={props.showPreviewTabs}
+                showLeftPanelToggle={props.showLeftPanelToggle}
                 leftPanelOpen={props.leftPanelOpen}
                 rightPanelOpen={props.rightPanelOpen}
                 loadingEditableContent={props.loadingEditableContent}
@@ -115,8 +131,15 @@ export default function PreviewModalHeader(props: PreviewModalHeaderProps) {
                 activePreviewTabId={props.activePreviewTabId}
                 onSelectPreviewTab={props.onSelectPreviewTab}
                 onClosePreviewTab={props.onClosePreviewTab}
-                canCreateSiblingFile={props.canCreateSiblingFile}
-                onCreateSiblingFile={props.onCreateSiblingFile}
+                setFindRequestToken={props.setFindRequestToken}
+                setReplaceRequestToken={props.setReplaceRequestToken}
+                isEditorToolsEnabled={props.isEditorToolsEnabled}
+                editorWordWrap={props.editorWordWrap}
+                setEditorWordWrap={props.setEditorWordWrap}
+                editorMinimapEnabled={props.editorMinimapEnabled}
+                setEditorMinimapEnabled={props.setEditorMinimapEnabled}
+                editorFontSize={props.editorFontSize}
+                setEditorFontSize={props.setEditorFontSize}
             />
         )
     }
@@ -136,9 +159,10 @@ function PreviewWindowedHeader({
     isEditable,
     isDirty,
     isSaving,
-    isExpanded,
-    allowExpanded = true,
-    windowedNavigatorEnabled = false,
+    allowExpanded,
+    showHistoryNavigation,
+    showPreviewTabs,
+    windowedNavigatorEnabled,
     leftPanelOpen,
     onToggleLeftPanel,
     loadingEditableContent,
@@ -154,25 +178,22 @@ function PreviewWindowedHeader({
     onClose,
     canRunPython = false,
     pythonRunState = 'idle',
-    pythonHasOutput = false,
-    pythonRunMode = 'terminal',
     onRunPython,
     onStopPython,
-    onClearPythonOutput,
-    onPythonRunModeChange
+    previewTabs,
+    activePreviewTabId,
+    onSelectPreviewTab,
+    onClosePreviewTab
 }: PreviewModalHeaderProps) {
     const { settings } = useSettings()
     const iconTheme = settings.appearanceResolvedMode
     const isHtml = file.type === 'html'
     const isCsv = file.type === 'csv'
-    const isMediaFile = file.type === 'image' || file.type === 'video' || file.type === 'audio'
     const isEditMode = mode === 'edit'
     const isPythonRunning = pythonRunState === 'running'
     const containerRef = useRef<HTMLDivElement | null>(null)
-    const pythonRunModeMenuRef = useRef<HTMLDivElement | null>(null)
     const [headerWidth, setHeaderWidth] = useState(1280)
     const [copied, setCopied] = useState(false)
-    const [pythonRunModeMenuOpen, setPythonRunModeMenuOpen] = useState(false)
 
     useEffect(() => {
         const node = containerRef.current
@@ -183,16 +204,6 @@ function PreviewWindowedHeader({
         observer.observe(node)
         return () => observer.disconnect()
     }, [])
-
-    useEffect(() => {
-        if (!pythonRunModeMenuOpen) return
-        const handlePointerDown = (event: MouseEvent) => {
-            const target = event.target as Node | null
-            if (!pythonRunModeMenuRef.current?.contains(target)) setPythonRunModeMenuOpen(false)
-        }
-        window.addEventListener('mousedown', handlePointerDown)
-        return () => window.removeEventListener('mousedown', handlePointerDown)
-    }, [pythonRunModeMenuOpen])
 
     const handleCopyPath = () => {
         navigator.clipboard.writeText(file.path)
@@ -206,16 +217,15 @@ function PreviewWindowedHeader({
     const visibleFileName = formatPreviewFileName(file.name, headerWidth < 760 ? 26 : headerWidth < 980 ? 36 : 52)
 
     const controlGroupClass = 'flex items-center gap-0.5 rounded-md border border-white/10 bg-white/[0.035] p-0.5 shrink-0'
-    const iconButtonBaseClass = 'inline-flex h-6 w-6 items-center justify-center rounded-md border transition-colors'
-    const ghostIconButtonClass = `${iconButtonBaseClass} border-transparent text-white/55 hover:bg-white/10 hover:text-white`
-    const activeIconButtonClass = `${iconButtonBaseClass} border-white/15 bg-white/10 text-white`
-    const showWindowedEditMenu = !isMediaFile && (previewModeEnabled || isEditable)
+    const showWindowedEditMenu = previewModeEnabled && isEditable
+    const showFileTabs = showPreviewTabs && previewTabs.length > 1
+    const isEditOnly = isEditable && !previewModeEnabled
 
     return (
         <div
             ref={containerRef}
             className={cn(
-                'flex h-10 shrink-0 items-center gap-1.5 border-b border-white/[0.06] bg-white/[0.02]',
+                'flex h-10 shrink-0 items-center gap-1.5 border-y border-[var(--surface-panel-divider)] bg-white/[0.02]',
                 showCloseButton ? 'pl-2 pr-0' : 'px-2'
             )}
         >
@@ -234,39 +244,94 @@ function PreviewWindowedHeader({
                             : <PanelLeftOpen size={15} strokeWidth={1.7} />}
                     </button>
                 ) : null}
-                <PreviewHistoryNavigation
-                    canGoBack={canNavigateBack}
-                    canGoForward={canNavigateForward}
-                    onBack={onNavigateBack}
-                    onForward={onNavigateForward}
-                />
-                <span className="mx-0.5 h-4 w-px shrink-0 bg-white/[0.08]" aria-hidden="true" />
-                <div className="group/file flex min-w-0 items-center gap-2">
-                    <VscodeEntryIcon
-                        pathValue={file.path || file.name}
-                        kind={file.type === 'directory' ? 'directory' : 'file'}
-                        theme={iconTheme}
-                        className="size-4 shrink-0"
+                {showHistoryNavigation ? (
+                    <PreviewHistoryNavigation
+                        canGoBack={canNavigateBack}
+                        canGoForward={canNavigateForward}
+                        onBack={onNavigateBack}
+                        onForward={onNavigateForward}
                     />
-                    <div className="flex min-w-0 items-center gap-1">
-                        <h3 className="truncate text-[13px] font-semibold text-white" title={file.name}>
-                            {visibleFileName}
-                        </h3>
+                ) : null}
+                {windowedNavigatorEnabled || showHistoryNavigation ? (
+                    <span className="mx-0.5 h-4 w-px shrink-0 bg-white/[0.08]" aria-hidden="true" />
+                ) : null}
+                {showFileTabs ? (
+                    <div className="flex min-w-0 flex-1 self-stretch overflow-hidden">
+                        <PreviewTabStrip
+                            tabs={previewTabs}
+                            activeTabId={activePreviewTabId}
+                            activeTabDirty={isDirty}
+                            iconTheme={iconTheme}
+                            canCreateSiblingFile={false}
+                            onSelectTab={onSelectPreviewTab}
+                            onCloseTab={onClosePreviewTab}
+                        />
+                    </div>
+                ) : (
+                    <div className="group/file flex min-w-0 items-center gap-2">
+                        <FileEntryIcon
+                            pathValue={file.path || file.name}
+                            kind={file.type === 'directory' ? 'directory' : 'file'}
+                            theme={iconTheme}
+                            className="size-4 shrink-0"
+                        />
+                        <div className="flex min-w-0 items-center gap-1">
+                            <h3 className="truncate text-[13px] font-semibold text-white" title={file.name}>
+                                {visibleFileName}
+                            </h3>
+                            <button
+                                onClick={handleCopyPath}
+                                className={cn(
+                                    'shrink-0 rounded p-1 opacity-0 transition-[opacity,color,background-color] group-hover/file:opacity-100 focus-visible:opacity-100',
+                                    copied ? 'bg-emerald-400/10 text-emerald-400 opacity-100' : 'text-white/35 hover:bg-white/[0.07] hover:text-white'
+                                )}
+                                title={copied ? 'Copied!' : `Copy path: ${file.path}`}
+                            >
+                                {copied ? <Check size={14} /> : <Copy size={14} />}
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {allowExpanded ? (
+                    <button
+                        type="button"
+                        onClick={onToggleExpanded}
+                        className="group/expand ml-auto inline-flex size-6 shrink-0 items-center justify-center text-white/48 outline-none transition-colors hover:text-white focus-visible:text-white"
+                        title="Expand workspace"
+                        aria-label="Expand workspace"
+                    >
+                        <Expand size={16} className="transition-transform duration-200 group-hover/expand:scale-105 group-focus-visible/expand:scale-105" />
+                    </button>
+                ) : null}
+
+                {isEditOnly && isDirty ? (
+                    <div className="flex shrink-0 items-center gap-0.5">
                         <button
-                            onClick={handleCopyPath}
-                            className={cn(
-                                'shrink-0 rounded p-1 opacity-0 transition-[opacity,color,background-color] group-hover/file:opacity-100 focus-visible:opacity-100',
-                                copied ? 'bg-emerald-400/10 text-emerald-400 opacity-100' : 'text-white/35 hover:bg-white/[0.07] hover:text-white'
-                            )}
-                            title={copied ? 'Copied!' : `Copy path: ${file.path}`}
+                            type="button"
+                            disabled={isSaving}
+                            onClick={onSave}
+                            className="inline-flex size-6 items-center justify-center rounded-[5px] text-sparkle-text-muted transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text disabled:cursor-not-allowed disabled:opacity-35"
+                            title={isSaving ? 'Saving…' : 'Save changes'}
+                            aria-label={isSaving ? 'Saving changes' : 'Save changes'}
                         >
-                            {copied ? <Check size={14} /> : <Copy size={14} />}
+                            <Save size={13} />
+                        </button>
+                        <button
+                            type="button"
+                            disabled={isSaving}
+                            onClick={onRevert}
+                            className="inline-flex size-6 items-center justify-center rounded-[5px] text-sparkle-text-muted transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text disabled:cursor-not-allowed disabled:opacity-35"
+                            title="Discard changes"
+                            aria-label="Discard changes"
+                        >
+                            <Undo2 size={13} />
                         </button>
                     </div>
-                </div>
+                ) : null}
 
                 {showWindowedEditMenu ? (
-                    <div className="ml-auto shrink-0">
+                    <div className={cn('shrink-0', !allowExpanded && 'ml-auto')}>
                         <PreviewHeaderEditMenu
                             previewModeEnabled={previewModeEnabled}
                             isEditable={isEditable}
@@ -279,106 +344,23 @@ function PreviewWindowedHeader({
                             onRevert={onRevert}
                         />
                     </div>
-                ) : <span className="ml-auto" />}
+                ) : !allowExpanded ? <span className="ml-auto" /> : null}
 
-                {!isMediaFile && canRunPython ? (
-                    <div className={controlGroupClass}>
-                        <div ref={pythonRunModeMenuRef} className="relative inline-flex items-center rounded-lg border border-white/10 bg-black/10">
-                            <button
-                                type="button"
-                                onClick={isPythonRunning ? onStopPython : onRunPython}
-                                className={cn(
-                                    'inline-flex h-6 w-6 items-center justify-center rounded-l-md transition-colors',
-                                    isPythonRunning ? 'bg-amber-500/15 text-amber-200 hover:bg-amber-500/25' : 'bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25'
-                                )}
-                                title={isPythonRunning ? 'Stop Python run' : `Run Python (${pythonRunMode === 'terminal' ? 'terminal' : 'output'})`}
-                            >
-                                {isPythonRunning ? <Square size={13} /> : <Play size={13} />}
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setPythonRunModeMenuOpen((current) => !current)}
-                                className="inline-flex h-6 w-5 items-center justify-center rounded-r-md border-l border-white/10 text-white/70 transition-colors hover:bg-white/10 hover:text-white"
-                                title="Choose run mode"
-                                aria-expanded={pythonRunModeMenuOpen}
-                            >
-                                <ChevronDown size={12} className={cn('transition-transform', pythonRunModeMenuOpen && 'rotate-180')} />
-                            </button>
-
-                            {pythonRunModeMenuOpen ? (
-                                <div className="absolute right-0 top-7 z-40 w-44 rounded-lg border border-white/10 bg-sparkle-card p-1.5 shadow-2xl">
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            onPythonRunModeChange?.('terminal')
-                                            setPythonRunModeMenuOpen(false)
-                                        }}
-                                        className={cn(
-                                            'flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs transition-colors',
-                                            pythonRunMode === 'terminal'
-                                                ? 'bg-[var(--accent-primary)]/20 text-[var(--accent-primary)]'
-                                                : 'text-sparkle-text-secondary hover:bg-white/[0.03] hover:text-sparkle-text'
-                                        )}
-                                    >
-                                        <span>Run in Terminal</span>
-                                        {pythonRunMode === 'terminal' ? <Check size={12} /> : null}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            onPythonRunModeChange?.('output')
-                                            setPythonRunModeMenuOpen(false)
-                                        }}
-                                        className={cn(
-                                            'mt-0.5 flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs transition-colors',
-                                            pythonRunMode === 'output'
-                                                ? 'bg-[var(--accent-primary)]/20 text-[var(--accent-primary)]'
-                                                : 'text-sparkle-text-secondary hover:bg-white/[0.03] hover:text-sparkle-text'
-                                        )}
-                                    >
-                                        <span>Run in Output</span>
-                                        {pythonRunMode === 'output' ? <Check size={12} /> : null}
-                                    </button>
-                                </div>
-                            ) : null}
-                        </div>
-
-                        <button
-                            type="button"
-                            onClick={onClearPythonOutput}
-                            disabled={!pythonHasOutput && !isPythonRunning}
-                            className={cn(
-                                ghostIconButtonClass,
-                                (pythonHasOutput || isPythonRunning)
-                                    ? ''
-                                    : 'cursor-not-allowed border-transparent text-white/25 hover:bg-transparent hover:text-white/25'
-                            )}
-                            title="Clear run output"
-                        >
-                            <Trash2 size={13} />
-                        </button>
-                    </div>
+                {canRunPython ? (
+                    <button
+                        type="button"
+                        onClick={isPythonRunning ? onStopPython : onRunPython}
+                        className={cn(
+                            'inline-flex size-6 shrink-0 items-center justify-center rounded-[5px] text-sparkle-text-muted transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text',
+                            isPythonRunning && 'text-amber-300'
+                        )}
+                        title={isPythonRunning ? 'Stop Python run' : 'Run Python'}
+                        aria-label={isPythonRunning ? 'Stop Python run' : 'Run Python'}
+                    >
+                        {isPythonRunning ? <Square size={13} /> : <Play size={13} />}
+                    </button>
                 ) : null}
 
-                {!isMediaFile && allowExpanded ? (
-                    <div className={controlGroupClass}>
-                        <button
-                            onClick={onToggleExpanded}
-                            className={cn(isExpanded ? activeIconButtonClass : ghostIconButtonClass)}
-                            title={isExpanded ? 'Return to windowed view' : 'Expand workspace'}
-                        >
-                            <span className="relative block h-4 w-4">
-                                <Expand
-                                    size={16}
-                                    className={cn(
-                                        'absolute inset-0 transition-all duration-250 ease-out',
-                                        isExpanded ? 'scale-[0.9] rotate-180 opacity-100' : 'scale-100 rotate-0 opacity-100'
-                                    )}
-                                />
-                            </span>
-                        </button>
-                    </div>
-                ) : null}
             </div>
 
             {isHtml && !isEditMode ? (

@@ -14,14 +14,97 @@ export type PreviewVirtualRange = {
     end: number
 }
 
+export type PreviewTreeScrollAlignment = 'auto' | 'top' | 'center'
+
+export function previewTreeScrollTopForIndex({
+    index,
+    rowCount,
+    rowHeight,
+    viewportHeight,
+    currentScrollTop,
+    alignment
+}: {
+    index: number
+    rowCount: number
+    rowHeight: number
+    viewportHeight: number
+    currentScrollTop: number
+    alignment: PreviewTreeScrollAlignment
+}): number {
+    if (rowCount <= 0 || rowHeight <= 0) return 0
+    const safeViewportHeight = Math.max(rowHeight, viewportHeight)
+    const safeIndex = Math.max(0, Math.min(rowCount - 1, index))
+    const rowTop = safeIndex * rowHeight
+    const rowBottom = rowTop + rowHeight
+    const maxScrollTop = Math.max(0, rowCount * rowHeight - safeViewportHeight)
+    const viewportTop = Math.max(0, Math.min(maxScrollTop, currentScrollTop))
+    const viewportBottom = viewportTop + safeViewportHeight
+
+    if (alignment === 'center') {
+        return Math.max(0, Math.min(maxScrollTop, rowTop - (safeViewportHeight - rowHeight) / 2))
+    }
+    if (alignment === 'top') return Math.max(0, Math.min(maxScrollTop, rowTop))
+    if (rowTop < viewportTop) return Math.max(0, Math.min(maxScrollTop, rowTop))
+    if (rowBottom > viewportBottom) return Math.max(0, Math.min(maxScrollTop, rowBottom - safeViewportHeight))
+    return viewportTop
+}
+
+export function previewDirectoryCanExpand(node: DevScopeFileTreeNode, directoryOnly = false): boolean {
+    if (node.type !== 'directory') return false
+    if (Array.isArray(node.children)) {
+        return directoryOnly ? node.children.some((child) => child.type === 'directory') : node.children.length > 0
+    }
+    if (directoryOnly && typeof node.hasDirectoryChildren === 'boolean') return node.hasDirectoryChildren
+    return node.childrenLoaded !== true
+}
+
+export function previewTreeAnchoredScrollTop(
+    previousRows: readonly PreviewVirtualTreeRow[],
+    nextRowIndexByKey: ReadonlyMap<string, number>,
+    scrollTop: number,
+    rowHeight: number
+): number | null {
+    if (previousRows.length === 0 || rowHeight <= 0) return null
+    const anchorIndex = Math.min(previousRows.length - 1, Math.floor(Math.max(0, scrollTop) / rowHeight))
+    const anchor = previousRows[anchorIndex]
+    const nextAnchorIndex = anchor ? nextRowIndexByKey.get(anchor.key) : undefined
+    if (nextAnchorIndex === undefined) return null
+    return nextAnchorIndex * rowHeight + (Math.max(0, scrollTop) - anchorIndex * rowHeight)
+}
+
 export function normalizePreviewTreePath(pathValue: string): string {
-    return String(pathValue || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+    const normalized = String(pathValue || '').replace(/\\/g, '/').replace(/\/+$/, '')
+    return /^[a-z]:\//i.test(normalized) || normalized.startsWith('//')
+        ? normalized.toLowerCase()
+        : normalized
 }
 
 export type PreviewVisibleTreeModel = {
     rows: PreviewVirtualTreeRow[]
     rowIndexByKey: Map<string, number>
     horizontalContentWidth: number
+}
+
+type PreviewTreeNodeLayoutIdentity = {
+    path: string
+    name: string
+    key: string
+    nameWidth: number
+}
+
+const previewTreeNodeLayoutIdentityCache = new WeakMap<DevScopeFileTreeNode, PreviewTreeNodeLayoutIdentity>()
+
+function readPreviewTreeNodeLayoutIdentity(node: DevScopeFileTreeNode): PreviewTreeNodeLayoutIdentity {
+    const cached = previewTreeNodeLayoutIdentityCache.get(node)
+    if (cached?.path === node.path && cached.name === node.name) return cached
+    const identity = {
+        path: node.path,
+        name: node.name,
+        key: normalizePreviewTreePath(node.path),
+        nameWidth: node.name.length * 7.25
+    }
+    previewTreeNodeLayoutIdentityCache.set(node, identity)
+    return identity
 }
 
 export function buildVisiblePreviewTreeModel(
@@ -36,7 +119,8 @@ export function buildVisiblePreviewTreeModel(
         const setSize = entries.length
         for (let index = 0; index < entries.length; index += 1) {
             const node = entries[index]
-            const key = normalizePreviewTreePath(node.path)
+            const identity = readPreviewTreeNodeLayoutIdentity(node)
+            const key = identity.key
             const row: PreviewVirtualTreeRow = {
                 key,
                 node,
@@ -49,7 +133,7 @@ export function buildVisiblePreviewTreeModel(
             rows.push(row)
             horizontalContentWidth = Math.max(
                 horizontalContentWidth,
-                Math.ceil(depth * 12 + node.name.length * 7.25 + 82)
+                Math.ceil(depth * 12 + identity.nameWidth + 82)
             )
             if (
                 node.type === 'directory'

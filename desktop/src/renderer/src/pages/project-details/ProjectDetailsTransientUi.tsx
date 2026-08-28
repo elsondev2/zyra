@@ -95,6 +95,7 @@ export function ProjectDetailsTransientUi(props: ProjectDetailsTransientUiProps)
                     previewBytes={previewBytes}
                     modifiedAt={previewModifiedAt}
                     projectPath={projectPath}
+                    chromeContext="detail"
                     onOpenLinkedPreview={openPreview}
                     onOpenLinkedPreviewInNewTab={openPreviewInNewTab}
                     onSelectPreviewTab={setActivePreviewTab}

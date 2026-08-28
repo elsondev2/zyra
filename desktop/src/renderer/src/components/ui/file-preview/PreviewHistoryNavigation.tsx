@@ -14,14 +14,12 @@ export function PreviewHistoryNavigation({
     onForward: () => void
     expanded?: boolean
 }) {
-    const buttonClass = 'inline-flex h-6 w-6 items-center justify-center rounded-md text-white/55 transition-colors hover:bg-white/[0.07] hover:text-white disabled:cursor-default disabled:text-white/18 disabled:hover:bg-transparent'
+    const buttonClass = 'inline-flex h-6 w-6 items-center justify-center rounded-[5px] text-sparkle-text-muted transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text disabled:cursor-default disabled:text-sparkle-text-muted/25 disabled:hover:bg-transparent'
 
     return (
         <div className={cn(
             'flex shrink-0 items-center gap-0.5',
-            expanded
-                ? 'h-full border-r border-white/[0.08] bg-sparkle-bg px-1'
-                : 'px-0.5'
+            expanded ? 'h-full px-1' : 'px-0.5'
         )} aria-label="File preview history">
             <button
                 type="button"

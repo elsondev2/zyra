@@ -1,5 +1,5 @@
-import { Check, ChevronDown } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { Check, ChevronDown, ChevronUp } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { cn } from '@/lib/utils'
 
@@ -41,6 +41,7 @@ const TONE_STYLES = {
 export type ConnectedDropdownButtonOption = {
     id: string
     label: string
+    icon?: ReactNode
     tone?: ConnectedDropdownButtonTone
 }
 
@@ -50,11 +51,30 @@ export function ConnectedDropdownButton(props: {
     value: string
     options: ConnectedDropdownButtonOption[]
     onChange: (value: string) => void
+    onPrimaryAction?: (value: string) => void
+    primarySuffix?: ReactNode
+    disabled?: boolean
     className?: string
     tone?: ConnectedDropdownButtonTone
     menuLabel?: string
+    direction?: 'down' | 'up'
+    shape?: 'rounded' | 'pill'
+    size?: 'default' | 'composer'
 }) {
-    const { value, options, onChange, className, tone = 'sky', menuLabel = 'Choose option' } = props
+    const {
+        value,
+        options,
+        onChange,
+        onPrimaryAction,
+        primarySuffix,
+        disabled = false,
+        className,
+        tone = 'sky',
+        menuLabel = 'Choose option',
+        direction = 'down',
+        shape = 'rounded',
+        size = 'default'
+    } = props
     const [menuOpen, setMenuOpen] = useState(false)
     const [menuVisible, setMenuVisible] = useState(false)
     const triggerRef = useRef<HTMLDivElement | null>(null)
@@ -66,6 +86,7 @@ export function ConnectedDropdownButton(props: {
     const selectedToneStyles = TONE_STYLES[selectedOption?.tone || tone]
 
     const openMenu = () => {
+        if (disabled) return
         if (closeTimerRef.current !== null) {
             window.clearTimeout(closeTimerRef.current)
             closeTimerRef.current = null
@@ -112,31 +133,54 @@ export function ConnectedDropdownButton(props: {
         }
     }, [])
 
+    const DirectionChevron = direction === 'up' ? ChevronUp : ChevronDown
+    const composerSize = size === 'composer'
+
     return (
         <div ref={triggerRef} className={cn('relative inline-flex w-full max-w-[240px]', className)}>
             <div
+                style={shape === 'pill' ? { borderBottomLeftRadius: 9999, borderBottomRightRadius: 9999 } : undefined}
                 className={cn(
-                    'inline-flex w-full overflow-hidden rounded-md border border-white/[0.07] bg-sparkle-card transition-[border-color,background-color,box-shadow,border-radius] duration-200',
-                    menuVisible && 'rounded-b-none border-b-transparent border-white/20 shadow-[0_10px_24px_rgba(0,0,0,0.16)]'
+                    'inline-flex w-full overflow-hidden border border-white/[0.07] bg-sparkle-card transition-[border-color,background-color,box-shadow,border-radius] duration-200',
+                    shape === 'pill' ? 'rounded-full' : 'rounded-md',
+                    menuVisible && (
+                        direction === 'up'
+                            ? shape === 'pill'
+                                ? 'relative z-[121] border-white/20 [border-top-color:transparent] shadow-[0_10px_24px_rgba(0,0,0,0.16)]'
+                                : 'rounded-t-none border-t-transparent border-white/20 shadow-[0_10px_24px_rgba(0,0,0,0.16)]'
+                            : 'rounded-b-none border-b-transparent border-white/20 shadow-[0_10px_24px_rgba(0,0,0,0.16)]'
+                    ),
+                    disabled && 'opacity-55'
                 )}
             >
                 <button
                     type="button"
+                    disabled={disabled}
                     onClick={() => {
+                        if (disabled || !selectedOption) return
+                        if (onPrimaryAction) {
+                            onPrimaryAction(selectedOption.id)
+                            return
+                        }
                         if (alternateOption) onChange(alternateOption.id)
                     }}
                     className={cn(
-                        'inline-flex h-8 min-w-0 flex-1 items-center gap-2 px-3 text-xs font-medium transition-colors',
-                        selectedToneStyles.trigger
+                        'inline-flex min-w-0 flex-1 items-center gap-2 font-medium transition-colors',
+                        composerSize ? 'h-9 px-3 text-[12px]' : 'h-8 px-3 text-xs',
+                        selectedToneStyles.trigger,
+                        disabled && 'cursor-not-allowed'
                     )}
                     title={selectedOption?.label || ''}
                 >
-                    <span className={cn('size-1.5 shrink-0 rounded-full', selectedToneStyles.dot)} aria-hidden="true" />
+                    {selectedOption?.icon || <span className={cn('size-1.5 shrink-0 rounded-full', selectedToneStyles.dot)} aria-hidden="true" />}
                     <span className="min-w-0 flex-1 truncate text-left">{selectedOption?.label}</span>
+                    {primarySuffix ? <span className="shrink-0">{primarySuffix}</span> : null}
                 </button>
                 <button
                     type="button"
+                    disabled={disabled}
                     onClick={() => {
+                        if (disabled) return
                         if (menuVisible && menuOpen) {
                             closeMenu()
                             return
@@ -144,14 +188,16 @@ export function ConnectedDropdownButton(props: {
                         openMenu()
                     }}
                     className={cn(
-                        'inline-flex h-8 w-9 items-center justify-center border-l border-white/[0.08] transition-colors',
-                        selectedToneStyles.chevron
+                        'inline-flex items-center justify-center border-l border-white/[0.08] transition-colors',
+                        composerSize ? 'h-9 w-8' : 'h-8 w-9',
+                        selectedToneStyles.chevron,
+                        disabled && 'cursor-not-allowed'
                     )}
                     aria-haspopup="menu"
                     aria-expanded={menuVisible && menuOpen}
                     title={menuLabel}
                 >
-                    <ChevronDown className={cn('size-3.5 transition-transform', menuVisible && menuOpen && 'rotate-180')} />
+                    <DirectionChevron className={cn('size-3.5 transition-transform', menuVisible && menuOpen && 'rotate-180')} />
                 </button>
             </div>
 
@@ -159,13 +205,24 @@ export function ConnectedDropdownButton(props: {
                 <div
                     ref={menuRef}
                     className={cn(
-                        'absolute left-0 top-full z-[120] -mt-px w-full overflow-hidden',
+                        'absolute left-0 z-[120] w-full overflow-hidden',
+                        direction === 'up'
+                            ? shape === 'pill' ? 'bottom-full -mb-[18px]' : 'bottom-full -mb-px'
+                            : 'top-full -mt-px',
                         menuVisible ? 'pointer-events-auto' : 'pointer-events-none'
                     )}
                 >
                     <AnimatedHeight isOpen={menuOpen} duration={MENU_ANIMATION_MS}>
-                        <div className="relative rounded-b-lg border border-white/[0.08] border-t-transparent bg-sparkle-card p-1 shadow-2xl shadow-black/60">
-                            <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-white/[0.08]" />
+                        <div
+                            role="menu"
+                            className={cn(
+                                'relative border border-white/[0.08] bg-sparkle-card p-1 shadow-2xl shadow-black/60',
+                                direction === 'up'
+                                    ? cn(shape === 'pill' ? 'rounded-t-[18px] pb-[19px]' : 'rounded-t-lg', 'rounded-b-none border-b-transparent')
+                                    : cn(shape === 'pill' ? 'rounded-b-[18px]' : 'rounded-b-lg', 'rounded-t-none border-t-transparent')
+                            )}
+                        >
+                            <div className={cn('pointer-events-none absolute inset-x-0 h-px bg-white/[0.08]', direction === 'up' ? 'bottom-0' : 'top-0')} />
                             {options.map((option) => {
                                 const selected = option.id === selectedOption?.id
                                 const optionToneStyles = TONE_STYLES[option.tone || tone]
@@ -173,17 +230,20 @@ export function ConnectedDropdownButton(props: {
                                     <button
                                         key={option.id}
                                         type="button"
+                                        role="menuitem"
                                         onClick={() => {
                                             onChange(option.id)
                                             closeMenu()
                                         }}
                                         className={cn(
-                                            'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition-colors',
+                                            'flex w-full items-center gap-2 rounded-md px-2.5 text-left text-xs transition-colors',
+                                            composerSize ? 'h-9' : 'py-1.5',
                                             selected
                                                 ? optionToneStyles.row
                                                 : 'text-sparkle-text-secondary hover:bg-white/[0.05] hover:text-sparkle-text'
                                         )}
                                     >
+                                        {option.icon ? <span className="inline-flex shrink-0">{option.icon}</span> : null}
                                         <span className="min-w-0 flex-1 truncate">{option.label}</span>
                                         {selected ? <Check size={12} className="shrink-0" /> : null}
                                     </button>

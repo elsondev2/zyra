@@ -1,5 +1,4 @@
 import {
-    applyCachedSessionSelection,
     hasCachedSessionSelection,
     type CachedHydratedThreadState
 } from './session-hydration-cache'
@@ -7,6 +6,8 @@ import {
     deriveAssistantRuntimeStatus,
     type AssistantStoreState
 } from './assistant-store-runtime'
+import { mergeAssistantShellSnapshot } from './assistant-history-state'
+import { prepareAssistantWarmSelection } from './assistant-warm-selection'
 
 type SetAssistantStoreState = (
     nextState:
@@ -19,29 +20,7 @@ type AssistantStoreSessionSelectionContext = {
     hydratedThreadCache: Map<string, CachedHydratedThreadState>
     getState: () => AssistantStoreState
     setState: SetAssistantStoreState
-    requestSessionHydration: (sessionId: string, threadId: string | null) => Promise<void>
-}
-
-const SELECTION_PAINT_FALLBACK_MS = 80
-
-function waitForSelectionShellPaint(): Promise<void> {
-    if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
-        return new Promise((resolve) => setTimeout(resolve, 0))
-    }
-
-    return new Promise((resolve) => {
-        let settled = false
-        const finish = () => {
-            if (settled) return
-            settled = true
-            window.clearTimeout(fallbackTimer)
-            resolve()
-        }
-        const fallbackTimer = window.setTimeout(finish, SELECTION_PAINT_FALLBACK_MS)
-        window.requestAnimationFrame(() => {
-            window.requestAnimationFrame(finish)
-        })
-    })
+    requestSessionHydration: (sessionId: string, threadId: string | null, options?: { force?: boolean; resetLoadedRange?: boolean }) => Promise<void>
 }
 
 export async function selectAssistantStoreSession(
@@ -61,61 +40,33 @@ export async function selectAssistantStoreSession(
     const targetThreadId = selectedSession.activeThreadId || null
     const targetThread = selectedSession.threads.find((thread) => thread.id === targetThreadId) || null
     const transitionKey = `${sessionId}:${targetThreadId || ''}`
-    const canHydrateFromCache = hasCachedSessionSelection(
-        context.state.snapshot,
-        sessionId,
-        targetThreadId,
-        context.hydratedThreadCache
-    )
     let selectionRequestId = 0
 
     context.setState((current) => {
         selectionRequestId = current.selectionRequestId + 1
-        const snapshot = applyCachedSessionSelection(
-            current.snapshot,
+        const warmSelection = prepareAssistantWarmSelection({
+            snapshot: current.snapshot,
             sessionId,
-            targetThreadId,
-            context.hydratedThreadCache
-        )
+            threadId: targetThreadId,
+            hydratedThreadCache: context.hydratedThreadCache,
+            historyByThreadId: current.historyByThreadId
+        })
+        const snapshot = warmSelection.snapshot
         return {
             error: null,
-            commandPending: !canHydrateFromCache,
+            commandPending: true,
             selectionRequestId,
             selectionRequestSessionId: sessionId,
-            selectionTransitionKey: canHydrateFromCache ? null : transitionKey,
+            selectionTransitionKey: transitionKey,
             snapshot,
+            historyByThreadId: warmSelection.historyByThreadId,
             status: deriveAssistantRuntimeStatus(snapshot, current.status)
         }
     })
 
-    if (!canHydrateFromCache) {
-        void context.requestSessionHydration(sessionId, targetThreadId)
-        await waitForSelectionShellPaint()
-        if (context.getState().selectionRequestId !== selectionRequestId) {
-            return { success: true as const, snapshot: context.getState().snapshot }
-        }
-
-        context.setState((current) => {
-            if (current.selectionRequestId !== selectionRequestId) return {}
-            const snapshot = applyCachedSessionSelection(
-                current.snapshot,
-                sessionId,
-                targetThreadId,
-                context.hydratedThreadCache
-            )
-            return {
-                selectionTransitionKey: null,
-                snapshot,
-                status: deriveAssistantRuntimeStatus(snapshot, current.status)
-            }
-        })
-    }
-
-    if (canHydrateFromCache) {
-        await Promise.resolve()
-        if (context.getState().selectionRequestId !== selectionRequestId) {
-            return { success: true as const, snapshot: context.getState().snapshot }
-        }
+    await Promise.resolve()
+    if (context.getState().selectionRequestId !== selectionRequestId) {
+        return { success: true as const, snapshot: context.getState().snapshot }
     }
 
     const restorePreviousSelection = (message: string) => {
@@ -146,17 +97,36 @@ export async function selectAssistantStoreSession(
             restorePreviousSelection(result.error)
             return result
         }
-        const snapshot = result.snapshot
-        if (snapshot) {
+        const shellSnapshot = result.snapshot
+        if (shellSnapshot) {
             context.setState((current) => {
                 if (current.selectionRequestId !== selectionRequestId) return {}
+                const warmSelection = prepareAssistantWarmSelection({
+                    snapshot: mergeAssistantShellSnapshot(current.snapshot, shellSnapshot),
+                    sessionId,
+                    threadId: targetThreadId,
+                    hydratedThreadCache: context.hydratedThreadCache,
+                    historyByThreadId: current.historyByThreadId
+                })
+                const snapshot = warmSelection.snapshot
                 return {
                     snapshot,
-                    status: deriveAssistantRuntimeStatus(snapshot, current.status)
+                    historyByThreadId: warmSelection.historyByThreadId,
+                    status: result.status || deriveAssistantRuntimeStatus(snapshot, current.status)
                 }
             })
-        } else {
-            void context.requestSessionHydration(sessionId, targetThreadId)
+        }
+        if (context.getState().selectionRequestId === selectionRequestId) {
+            const cacheMatchesLatestShell = hasCachedSessionSelection(
+                context.getState().snapshot,
+                sessionId,
+                targetThreadId,
+                context.hydratedThreadCache
+            )
+            await context.requestSessionHydration(sessionId, targetThreadId, {
+                force: !cacheMatchesLatestShell,
+                resetLoadedRange: !cacheMatchesLatestShell
+            })
         }
 
         return result

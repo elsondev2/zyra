@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 
 interface AnimatedHeightProps {
@@ -8,6 +8,7 @@ interface AnimatedHeightProps {
     contentClassName?: string
     duration?: number
     crispContent?: boolean
+    unmountOnExit?: boolean
 }
 
 /**
@@ -20,8 +21,20 @@ export const AnimatedHeight: React.FC<AnimatedHeightProps> = ({
     className,
     contentClassName,
     duration = 280,
-    crispContent = false
+    crispContent = false,
+    unmountOnExit = false
 }) => {
+    const [retainChildren, setRetainChildren] = useState(isOpen)
+    useEffect(() => {
+        if (!unmountOnExit) return
+        if (isOpen) {
+            setRetainChildren(true)
+            return
+        }
+        const timerId = window.setTimeout(() => setRetainChildren(false), Math.max(0, duration))
+        return () => window.clearTimeout(timerId)
+    }, [duration, isOpen, unmountOnExit])
+    const renderedChildren = !unmountOnExit || isOpen || retainChildren ? children : null
     if (crispContent) {
         return (
             <div
@@ -36,7 +49,7 @@ export const AnimatedHeight: React.FC<AnimatedHeightProps> = ({
                 style={{ transitionDuration: `${duration}ms` }}
             >
                 <div className="min-h-0 overflow-hidden">
-                    <div className={contentClassName}>{children}</div>
+                    <div className={contentClassName}>{renderedChildren}</div>
                 </div>
             </div>
         )
@@ -59,7 +72,7 @@ export const AnimatedHeight: React.FC<AnimatedHeightProps> = ({
         >
             <div className="min-h-0 overflow-hidden">
                 <div className={contentClassName}>
-                    {children}
+                    {renderedChildren}
                 </div>
             </div>
         </div>

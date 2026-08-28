@@ -56,7 +56,23 @@ const AGENT_CONTROL_GUEST_ONLY_METHODS = new Set([
 const LIVE_RELAY_NAMESPACES = new Set(['preferences', 'onboarding'])
 
 const ELECTRON_GUEST_ONLY_METHODS = new Set([
+    'registerPreviewTerminalWorkspace',
+    'releasePreviewTerminalWorkspace',
     'getBrowserPreviewConfig',
+    'getBrowserHistory',
+    'getBrowserSearchSuggestions',
+    'scanExternalBrowserHistoryProfiles',
+    'importExternalBrowserHistory',
+    'recordBrowserHistory',
+    'clearBrowserHistory',
+    'getBrowserAdBlockStatus',
+    'setBrowserAdBlockEnabled',
+    'onBrowserAdDetected',
+    'getBrowserBackgroundProviderStatus',
+    'validateBrowserUnsplashAccessKey',
+    'getBrowserRemoteBackgrounds',
+    'trackBrowserRemoteBackground',
+    'getRunningLocalServers',
     'clearBrowserPreviewData',
     'clearBrowserPreviewCache',
     'clearBrowserPreviewCookies',

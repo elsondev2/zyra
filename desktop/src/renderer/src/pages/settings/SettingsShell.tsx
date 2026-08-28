@@ -4,6 +4,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import { useSettings } from '@/lib/settings'
 import { cn } from '@/lib/utils'
 import {
+    ASSISTANT_BUBBLE_SIDEBAR_WIDTH,
     ASSISTANT_SIDEBAR_COLLAPSE_MORPH_MS,
     ASSISTANT_SIDEBAR_PREVIEW_CLOSE_MS,
     readAssistantBubblePreviewPinned,
@@ -185,6 +186,15 @@ export default function SettingsShell() {
     }, [])
 
     useEffect(() => {
+        if (settings.sidebarHoverPreviewEnabled || previewPinned) return
+        if (previewCloseTimerRef.current !== null) {
+            window.clearTimeout(previewCloseTimerRef.current)
+            previewCloseTimerRef.current = null
+        }
+        setPreviewOpen(false)
+    }, [previewPinned, settings.sidebarHoverPreviewEnabled])
+
+    useEffect(() => {
         const wasCollapsed = wasCollapsedRef.current
         wasCollapsedRef.current = settings.sidebarCollapsed
 
@@ -198,11 +208,11 @@ export default function SettingsShell() {
             return
         }
 
-        if (!wasCollapsed) {
+        if (!wasCollapsed && settings.sidebarHoverPreviewEnabled) {
             setPreviewOpen(true)
             schedulePreviewClose(ASSISTANT_SIDEBAR_COLLAPSE_MORPH_MS)
         }
-    }, [schedulePreviewClose, settings.sidebarCollapsed])
+    }, [schedulePreviewClose, settings.sidebarCollapsed, settings.sidebarHoverPreviewEnabled])
 
     const expandCollapsedSidebar = useCallback(() => {
         setPreviewPinned(false)
@@ -261,7 +271,7 @@ export default function SettingsShell() {
     } as const
     const sidebarSurfaceStyle = settings.sidebarCollapsed
         ? {
-            width: `${sidebarWidth}px`,
+            width: `${ASSISTANT_BUBBLE_SIDEBAR_WIDTH}px`,
             opacity: previewOpen ? 1 : 0,
             pointerEvents: previewOpen ? 'auto' : 'none',
             transform: previewOpen ? 'translate3d(0, 0, 0)' : 'translate3d(-18px, 0, 0)',
@@ -277,7 +287,7 @@ export default function SettingsShell() {
 
     return (
         <div className="zyra-settings-shell flex h-full min-h-0 overflow-hidden bg-[var(--settings-bg)] text-[var(--settings-text)]">
-            {settings.sidebarCollapsed ? (
+            {settings.sidebarCollapsed && settings.sidebarHoverPreviewEnabled ? (
                 <div
                     className="pointer-events-auto fixed bottom-0 left-0 top-[34px] z-[59] w-6"
                     onMouseEnter={openPreview}
@@ -304,10 +314,10 @@ export default function SettingsShell() {
             >
                 <aside
                     onMouseEnter={() => {
-                        if (settings.sidebarCollapsed) openPreview()
+                        if (settings.sidebarCollapsed && settings.sidebarHoverPreviewEnabled) openPreview()
                     }}
                     onMouseLeave={() => {
-                        if (settings.sidebarCollapsed) schedulePreviewClose()
+                        if (settings.sidebarCollapsed && settings.sidebarHoverPreviewEnabled) schedulePreviewClose()
                     }}
                     aria-hidden={settings.sidebarCollapsed && !previewOpen}
                     className={cn(

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Search } from 'lucide-react'
-import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { useSettings } from '@/lib/settings'
 import { cn } from '@/lib/utils'
 
@@ -141,7 +141,7 @@ export function CreateFileTypeModal({
         : ''
     const canCreate = normalizedBaseName.length > 0
     const renderPresetIcon = (extension: string) => (
-        <VscodeEntryIcon
+        <FileEntryIcon
             pathValue={iconPathOverrides[extension] ?? `file.${extension || 'txt'}`}
             kind="file"
             theme={iconTheme}

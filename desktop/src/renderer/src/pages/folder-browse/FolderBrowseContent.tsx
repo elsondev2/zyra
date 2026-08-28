@@ -1,4 +1,6 @@
-import { ChevronRight, Code, File, FileCode, FileText, Folder, Github } from 'lucide-react'
+import { ChevronRight, Code, File, FileCode, Folder, Github } from 'lucide-react'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
+import { useThemeRevision } from '@/lib/use-theme-revision'
 import { cn } from '@/lib/utils'
 import { FinderItem, SectionHeader, WRAP_AND_CLAMP_2 } from '../shared/BrowseSectionPrimitives'
 import { FolderBrowseProjectCard } from './FolderBrowseProjectCard'
@@ -88,6 +90,8 @@ export function FolderBrowseContent({
     getFileColor,
     formatRelativeTime
 }: FolderBrowseContentProps) {
+    useThemeRevision()
+    const iconTheme = typeof document !== 'undefined' && document.body.classList.contains('light') ? 'light' : 'dark'
     const { openEntryContextMenu, openEmptySpaceContextMenu, contextMenuPortal } = useFolderBrowseContextMenu({
         currentDirectoryPath,
         currentDirectoryName,
@@ -163,7 +167,7 @@ export function FolderBrowseContent({
                             {filteredFolders.map((folder) => (
                                 viewMode === 'finder' ? (
                                     <div key={folder.path} className="group mx-auto w-fit" onContextMenu={(event) => openEntryContextMenu(event, { path: folder.path, name: folder.name, type: 'directory' })}>
-                                        <FinderItem icon={Folder} iconClassName="text-yellow-400" title={folder.name} onClick={() => onFolderClick(folder)} />
+                                        <FinderItem icon={Folder} visual={<FileEntryIcon pathValue={folder.path} kind="directory" theme={iconTheme} size={42} loading="lazy" />} title={folder.name} onClick={() => onFolderClick(folder)} />
                                     </div>
                                 ) : (
                                     <div
@@ -173,7 +177,7 @@ export function FolderBrowseContent({
                                         className="group relative flex cursor-pointer items-center gap-2 rounded-lg border border-white/5 bg-sparkle-card/50 p-2.5 text-left transition-all hover:border-white/20 hover:bg-white/5"
                                         title={folder.name}
                                     >
-                                        <Folder size={16} className="shrink-0 text-yellow-400/70 transition-colors group-hover:text-yellow-400" />
+                                        <FileEntryIcon pathValue={folder.path} kind="directory" theme={iconTheme} size={18} />
                                         <span className={cn('text-sm leading-5 text-white/70 transition-colors group-hover:text-white', WRAP_AND_CLAMP_2)}>{folder.name}</span>
                                         <ChevronRight size={12} className="ml-auto shrink-0 text-white/20 transition-colors group-hover:text-white/60" />
                                     </div>
@@ -239,16 +243,14 @@ export function FolderBrowseContent({
                         >
                             {visibleFiles.map((file) => {
                                 const iconColor = getFileColor(file.extension)
-                                const isText = file.extension === 'md' || file.extension === 'txt'
                                 const isMedia = Boolean(file.previewType)
                                 const entryTarget: EntryActionTarget = { path: file.path, name: file.name, type: 'file' }
 
                                 return viewMode === 'finder' ? (
                                     <div key={file.path} className="group mx-auto w-fit" onContextMenu={(event) => openEntryContextMenu(event, entryTarget)}>
                                         <FinderItem
-                                            icon={isText ? FileText : FileCode}
-                                            iconClassName={isMedia ? 'text-white/0' : 'text-white/20'}
-                                            visual={isMedia ? <MediaFilePreview file={file} compact /> : undefined}
+                                            icon={FileCode}
+                                            visual={isMedia ? <MediaFilePreview file={file} compact /> : <FileEntryIcon pathValue={file.path} kind="file" theme={iconTheme} size={40} loading="lazy" />}
                                             title={file.name}
                                             subtitle={formatFileSize(file.size)}
                                             tag={file.extension}
@@ -270,7 +272,7 @@ export function FolderBrowseContent({
                                             </div>
                                         ) : (
                                             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg" style={{ backgroundColor: `${iconColor}15` }}>
-                                                {isText ? <FileText size={16} style={{ color: iconColor }} /> : <FileCode size={16} style={{ color: iconColor }} />}
+                                                <FileEntryIcon pathValue={file.path} kind="file" theme={iconTheme} size={18} />
                                             </div>
                                         )}
                                         <div className="min-w-0 flex-1">

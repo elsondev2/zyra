@@ -1,5 +1,8 @@
 export function normalizePathKey(pathValue: string): string {
-    return String(pathValue || '').replace(/\\/g, '/').toLowerCase()
+    const normalized = String(pathValue || '').replace(/\\/g, '/')
+    return /^[a-z]:\//i.test(normalized) || normalized.startsWith('//')
+        ? normalized.toLowerCase()
+        : normalized
 }
 
 export function getPathName(pathValue: string): string {

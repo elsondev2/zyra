@@ -111,6 +111,7 @@ export default function GeneralSettings() {
 
             <SettingsSection title="Interface">
                 <SettingsRow title="Chat rail" description="Keep the conversation sidebar collapsed across restarts on this surface." control={<SettingsSwitch checked={settings.sidebarCollapsed} onCheckedChange={(sidebarCollapsed) => updateSettings({ sidebarCollapsed })} label="Collapse chat rail" />} />
+                <SettingsRow title="Sidebar hover preview" description="Temporarily show a minimized sidebar when the pointer reaches the left edge." control={<SettingsSwitch checked={settings.sidebarHoverPreviewEnabled} onCheckedChange={(sidebarHoverPreviewEnabled) => updateSettings({ sidebarHoverPreviewEnabled })} label="Preview minimized sidebar on hover" />} />
                 <SettingsRow title="Agent Inbox sidebar" description="Use one flat chat list in creation order. Active work renders as rich cards; settled chats collapse to compact rows. Switch back any time." control={<SettingsSwitch checked={settings.assistantAgentInboxSidebarEnabled} onCheckedChange={(assistantAgentInboxSidebarEnabled) => updateSettings({ assistantAgentInboxSidebarEnabled })} label="Use Agent Inbox sidebar" />} />
             </SettingsSection>
 

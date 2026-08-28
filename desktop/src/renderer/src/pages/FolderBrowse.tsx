@@ -199,6 +199,7 @@ export default function FolderBrowsePage({ mode = 'projects' }: FolderBrowseProp
             limit: 320,
             includeFiles: true,
             includeDirectories: true,
+            includeAncestors: false,
             showHidden: false
         }).then((result) => {
             if (cancelled) return

@@ -49,7 +49,11 @@ function areAssistantLatestTurnsEqual(left: AssistantLatestTurn | null, right: A
         && left.usage?.outputTokens === right.usage?.outputTokens
         && left.usage?.reasoningOutputTokens === right.usage?.reasoningOutputTokens
         && left.usage?.cachedInputTokens === right.usage?.cachedInputTokens
+        && left.usage?.cacheWriteTokens === right.usage?.cacheWriteTokens
         && left.usage?.modelContextWindow === right.usage?.modelContextWindow
+        && left.usage?.costUsd === right.usage?.costUsd
+        && left.usage?.sessionCostUsd === right.usage?.sessionCostUsd
+        && left.usage?.sessionCostComplete === right.usage?.sessionCostComplete
 }
 
 function areAssistantSessionsEqual(
@@ -60,6 +64,7 @@ function areAssistantSessionsEqual(
     if (!left || !right) return left === right
     return left.id === right.id
         && left.title === right.title
+        && left.titleGenerating === right.titleGenerating
         && left.mode === right.mode
         && left.projectPath === right.projectPath
         && left.playgroundLabId === right.playgroundLabId
@@ -87,12 +92,25 @@ function areAssistantThreadsEqual(
         && left.agentNickname === right.agentNickname
         && left.agentRole === right.agentRole
         && left.model === right.model
+        && left.thinking === right.thinking
+        && left.profile === right.profile
         && left.cwd === right.cwd
         && left.messageCount === right.messageCount
+        && left.activityCount === right.activityCount
+        && left.proposedPlanCount === right.proposedPlanCount
         && left.lastSeenCompletedTurnId === right.lastSeenCompletedTurnId
         && left.runtimeMode === right.runtimeMode
         && left.interactionMode === right.interactionMode
+        && left.webSearch === right.webSearch
+        && left.webFetch === right.webFetch
         && left.state === right.state
+        && left.hasActivePlan === right.hasActivePlan
+        && left.hasPendingApprovals === right.hasPendingApprovals
+        && left.hasPendingUserInputs === right.hasPendingUserInputs
+        && left.canonicalPresence?.state === right.canonicalPresence?.state
+        && left.canonicalPresence?.activeTurnId === right.canonicalPresence?.activeTurnId
+        && left.canonicalPresence?.latestSequence === right.canonicalPresence?.latestSequence
+        && left.canonicalPresence?.observedSequence === right.canonicalPresence?.observedSequence
         && left.lastError === right.lastError
         && left.createdAt === right.createdAt
         && left.updatedAt === right.updatedAt
@@ -271,7 +289,11 @@ function getRailThreadSignature(thread: AssistantSnapshot['sessions'][number]['t
         presence?.state || '',
         presence?.activeTurnId || '',
         presence?.backgroundWorkActive ? '1' : '0',
-        presence?.latestSequence ?? ''
+        presence?.latestSequence ?? '',
+        (presence?.clients || [])
+            .map((client) => `${client.clientId}:${client.surface}`)
+            .sort()
+            .join(',')
     ].join(':')
 }
 
@@ -284,7 +306,7 @@ function getRailSessionSignature(session: AssistantSnapshot['sessions'][number])
     }, null)
     const hasVisibleChats = session.threads.some((thread) => (thread.messageCount || 0) > 0)
     return [
-        session.id, session.title, session.mode, session.projectPath || '', session.playgroundLabId || '', session.pendingLabRequest?.id || '', session.pendingLabRequest?.kind || '', session.archived ? '1' : '0', session.createdAt, session.activeThreadId || '',
+        session.id, session.title, session.titleGenerating ? 'title-loading' : '', session.mode, session.projectPath || '', session.playgroundLabId || '', session.pendingLabRequest?.id || '', session.pendingLabRequest?.kind || '', session.archived ? '1' : '0', session.createdAt, session.activeThreadId || '',
         session.threads.map(getRailThreadSignature).join('|'),
         hasVisibleChats ? '1' : '0', activeThread?.state || '', activeThread?.messageCount || 0, activeThread?.lastSeenCompletedTurnId || '', activeThread?.latestTurn?.id || '', activeThread?.latestTurn?.state || '', activeThread?.cwd || '', earliestCreatedThread?.cwd || ''
     ].join('|')

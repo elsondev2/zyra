@@ -43,8 +43,9 @@ export const SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly SettingsS
             'Open at login': 'startup launch automatically sign in computer',
             'Start hidden': 'startup minimized background'
         }),
-        ...rows('Interface', ['Chat rail', 'Agent Inbox sidebar'], {
+        ...rows('Interface', ['Chat rail', 'Sidebar hover preview', 'Agent Inbox sidebar'], {
             'Chat rail': 'sidebar collapsed navigation surface',
+            'Sidebar hover preview': 'sidebar minimized collapsed hover edge bubble peek',
             'Agent Inbox sidebar': 'sidebar active work recent settled'
         }),
         row('Setup', 'Review device setup', 'onboarding openai chatgpt appearance projects review'),
@@ -94,24 +95,28 @@ export const SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly SettingsS
         row('Trusted devices', 'Other devices', 'phone computer pair pairing remote lan tailscale revoke')
     ],
     assistant: [
-        ...rows('Assistant defaults', ['Model', 'Chat title model', 'Zyra profile', 'Permission mode', 'Full-access warning', 'Interaction mode', 'Reasoning effort', 'Fast service tier', 'Web access', 'Busy send behavior', 'Default prompt'], {
+        ...rows('Assistant defaults', ['Model', 'Chat title model', 'Refresh chat titles', 'Zyra profile', 'Permission mode', 'Full-access warning', 'Reasoning effort', 'Fast service tier', 'Web access', 'Busy send behavior', 'Default prompt'], {
             Model: 'default ai model chat',
             'Chat title model': 'name naming generation luna utility',
+            'Refresh chat titles': 'automatic regenerate rename interval turns cost recent prompts final responses',
             'Zyra profile': 'default builder instructions profile',
             'Permission mode': 'supervised approval full access security',
             'Full-access warning': 'confirmation suppressed restore',
-            'Interaction mode': 'plan normal default',
             'Reasoning effort': 'thinking depth high low max',
             'Fast service tier': 'priority fast provider',
             'Web access': 'search fetch pages internet tools new chat default',
             'Busy send behavior': 'queue next interrupt active turn',
             'Default prompt': 'template instructions new chat'
         }),
-        ...rows('Output and history', ['Assistant output', 'Open live tool output', 'Reconnect on startup', 'Prefetch earlier history', 'Cross-surface status', 'Canonical diagnostics'], {
+        ...rows('Reasoning and context', ['Reasoning summaries', 'Context limit'], {
+            'Reasoning summaries': 'auto detailed concise readable thoughts chain of thought progress',
+            'Context limit': 'window tokens automatic compaction compact summarize 128k 200k 256k 320k 372k'
+        }),
+        ...rows('Output and history', ['Assistant output', 'Open live tool output', 'Reconnect on startup', 'Preload history on open', 'Cross-surface status', 'Canonical diagnostics'], {
             'Assistant output': 'stream chunks token text response',
             'Open live tool output': 'expanded minimized collapsed closed command terminal animation',
             'Reconnect on startup': 'connect selected chat launch',
-            'Prefetch earlier history': 'older messages pagination',
+            'Preload history on open': 'older messages pagination prefetch',
             'Cross-surface status': 'desktop browser active status',
             'Canonical diagnostics': 'worker replay sequence debug'
         }),
@@ -128,9 +133,14 @@ export const SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly SettingsS
         Instructions: 'voice prompt behavior'
     }),
     'browser-control': [
-        ...rows('Browser workspace', ['Restore Browser tabs', 'Retained workspaces', 'Cache', 'Cookies and sign-ins', 'Local Browser profile'], {
+        ...rows('Browser workspace', ['Restore Browser tabs', 'Google search suggestions', 'Built-in ad blocking', 'New Tab backgrounds', 'Background behavior', 'Retained workspaces', 'Browser history', 'Cache', 'Cookies and sign-ins', 'Local Browser profile'], {
             'Restore Browser tabs': 'reopen retained workspace',
+            'Google search suggestions': 'autocomplete predictions privacy google typed query',
+            'Built-in ad blocking': 'ads trackers ghostery easylist privacy shields',
+            'New Tab backgrounds': 'nature images wallpaper unsplash byok categories attribution',
+            'Background behavior': 'new tab image rotate shuffle change each tab lock fixed selection',
             'Retained workspaces': 'saved tabs clear layouts',
+            'Browser history': 'visited addresses omnibox suggestions recent clear',
             Cache: 'downloaded page resources clear',
             'Cookies and sign-ins': 'authentication sessions clear logout',
             'Local Browser profile': 'permissions site data clear'
@@ -184,8 +194,7 @@ export const SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly SettingsS
             Persistence: 'index disk cache restart',
             'Traversal boundary': 'bounded scan home app data drive'
         }),
-        ...rows('Explorer', ['Enable Explorer', 'Project browser view', 'Project content layout'], {
-            'Enable Explorer': 'indexed project file workspace',
+        ...rows('Project browser', ['Project browser view', 'Project content layout'], {
             'Project browser view': 'finder grid',
             'Project content layout': 'tree grouped sections'
         }),

@@ -134,6 +134,7 @@ export function FolderBrowseOverlays(input: {
                     previewBytes={previewBytes}
                     modifiedAt={previewModifiedAt}
                     projectPath={decodedPath}
+                    chromeContext="detail"
                     onOpenLinkedPreview={openPreview}
                     mediaItems={previewMediaItems}
                     onSaved={onPreviewSaved}

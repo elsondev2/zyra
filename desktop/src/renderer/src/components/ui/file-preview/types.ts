@@ -1,5 +1,6 @@
 export type PreviewMediaType = 'image' | 'video' | 'audio'
-export type PreviewFileType = 'directory' | 'md' | 'html' | PreviewMediaType | 'text' | 'code' | 'json' | 'csv'
+export type PreviewOfficeType = 'docx' | 'xlsx' | 'pptx'
+export type PreviewFileType = 'directory' | 'md' | 'html' | 'pdf' | PreviewOfficeType | PreviewMediaType | 'text' | 'code' | 'json' | 'csv'
 
 export interface PreviewFile {
     name: string

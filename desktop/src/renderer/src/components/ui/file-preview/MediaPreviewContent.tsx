@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Film, Image as ImageIcon, Music4 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { PreviewFile, PreviewMediaItem } from './types'
@@ -10,6 +10,23 @@ interface MediaPreviewContentProps {
     mediaItems?: PreviewMediaItem[]
     onSelectMedia?: (item: PreviewMediaItem) => Promise<void> | void
     isExpanded?: boolean
+}
+
+const MEDIA_TRANSITION_MS = 300
+const MEDIA_TRANSITION_SETTLE_BUFFER_MS = 80
+
+function preloadAdjacentImages(items: Array<PreviewMediaItem | null>): HTMLImageElement[] {
+    if (typeof Image === 'undefined') return []
+    const paths = new Set(items
+        .filter((item): item is PreviewMediaItem => item?.type === 'image')
+        .map((item) => item.path))
+    return [...paths].map((path) => {
+        const image = new Image()
+        image.decoding = 'async'
+        image.src = getFileUrl(path)
+        void image.decode?.().catch(() => undefined)
+        return image
+    })
 }
 
 function renderMediaIcon(type: PreviewMediaItem['type']) {
@@ -45,13 +62,21 @@ function MediaNavButton({
     )
 }
 
-function renderMediaStage(targetFile: PreviewFile, activeMediaItem: PreviewMediaItem | undefined, isExpanded: boolean) {
+function renderMediaStage(
+    targetFile: PreviewFile,
+    activeMediaItem: PreviewMediaItem | undefined,
+    isExpanded: boolean,
+    imageControlsHost: HTMLElement | null,
+    showImageControls: boolean
+) {
     if (targetFile.type === 'image') {
         return (
             <ImagePreviewContent
                 filePath={targetFile.path}
                 fileName={targetFile.name}
                 isExpanded
+                controlsHost={imageControlsHost}
+                showControls={showImageControls}
             />
         )
     }
@@ -109,6 +134,7 @@ export default function MediaPreviewContent({
     onSelectMedia,
     isExpanded = false
 }: MediaPreviewContentProps) {
+    const [imageControlsHost, setImageControlsHost] = useState<HTMLDivElement | null>(null)
     const [transitionState, setTransitionState] = useState<{
         from: PreviewFile
         to: PreviewFile
@@ -129,6 +155,16 @@ export default function MediaPreviewContent({
     const activeMediaItem = mediaItemByPath.get(file.path.toLowerCase())
 
     useEffect(() => {
+        const images = preloadAdjacentImages([previousItem, nextItem])
+        return () => {
+            for (const image of images) {
+                image.onload = null
+                image.onerror = null
+            }
+        }
+    }, [nextItem, previousItem])
+
+    useEffect(() => {
         if (!previousItem && !nextItem) return
 
         const handleKeyDown = (event: KeyboardEvent) => {
@@ -147,9 +183,16 @@ export default function MediaPreviewContent({
         return () => window.removeEventListener('keydown', handleKeyDown)
     }, [nextItem, onSelectMedia, previousItem])
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         const previousFile = previousFileRef.current
         if (previousFile.path === file.path) return
+
+        previousFileRef.current = file
+        const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+        if (reduceMotion) {
+            setTransitionState(null)
+            return
+        }
 
         const previousIndex = mediaItems.findIndex((item) => item.path.toLowerCase() === previousFile.path.toLowerCase())
         const nextIndexValue = mediaItems.findIndex((item) => item.path.toLowerCase() === file.path.toLowerCase())
@@ -163,17 +206,22 @@ export default function MediaPreviewContent({
             direction,
             stage: 'preparing'
         })
-        previousFileRef.current = file
 
-        const frameId = window.requestAnimationFrame(() => {
-            setTransitionState((current) => current ? { ...current, stage: 'running' } : current)
+        let runningFrameId = 0
+        const preparationFrameId = window.requestAnimationFrame(() => {
+            runningFrameId = window.requestAnimationFrame(() => {
+                setTransitionState((current) => current?.to.path === file.path
+                    ? { ...current, stage: 'running' }
+                    : current)
+            })
         })
         const timeoutId = window.setTimeout(() => {
             setTransitionState((current) => current?.to.path === file.path ? null : current)
-        }, 280)
+        }, MEDIA_TRANSITION_MS + MEDIA_TRANSITION_SETTLE_BUFFER_MS)
 
         return () => {
-            window.cancelAnimationFrame(frameId)
+            window.cancelAnimationFrame(preparationFrameId)
+            if (runningFrameId) window.cancelAnimationFrame(runningFrameId)
             window.clearTimeout(timeoutId)
         }
     }, [file, mediaItems])
@@ -184,7 +232,7 @@ export default function MediaPreviewContent({
                 <div className="relative h-full w-full overflow-hidden">
                     <div
                         className={cn(
-                            'absolute inset-0 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+                            'absolute inset-0 transform-gpu transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform motion-reduce:transition-none',
                             transitionState.stage === 'running'
                                 ? (transitionState.direction === 'right' ? '-translate-x-full' : 'translate-x-full')
                                 : 'translate-x-0'
@@ -193,24 +241,33 @@ export default function MediaPreviewContent({
                         {renderMediaStage(
                             transitionState.from,
                             mediaItemByPath.get(transitionState.from.path.toLowerCase()),
-                            isExpanded
+                            isExpanded,
+                            imageControlsHost,
+                            false
                         )}
                     </div>
                     <div
                         className={cn(
-                            'absolute inset-0 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
+                            'absolute inset-0 transform-gpu transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform motion-reduce:transition-none',
                             transitionState.stage === 'running'
                                 ? 'translate-x-0'
                                 : (transitionState.direction === 'right' ? 'translate-x-full' : '-translate-x-full')
                         )}
                     >
-                        {renderMediaStage(transitionState.to, activeMediaItem, isExpanded)}
+                        {renderMediaStage(
+                            transitionState.to,
+                            activeMediaItem,
+                            isExpanded,
+                            imageControlsHost,
+                            true
+                        )}
                     </div>
                 </div>
             ) : (
-                renderMediaStage(file, activeMediaItem, isExpanded)
+                renderMediaStage(file, activeMediaItem, isExpanded, imageControlsHost, true)
             )}
 
+            <div ref={setImageControlsHost} className="pointer-events-none absolute inset-0 z-30" />
             <MediaNavButton side="left" item={previousItem} onSelect={onSelectMedia} />
             <MediaNavButton side="right" item={nextItem} onSelect={onSelectMedia} />
         </div>

@@ -277,6 +277,17 @@ export function parseMarkdownBlocks(content: string): MarkdownBlock[] {
     return touchCacheValue(markdownBlockCache, cacheKey, blocks, MARKDOWN_BLOCK_CACHE_LIMIT)
 }
 
+export function markdownToPlainText(content: string): string {
+    return parseMarkdownBlocks(content)
+        .filter((block) => block.kind !== 'hr')
+        .map((block) => block.text
+            .replace(/(?:^|\s):?-{3,}:?(?=\s|$)/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim())
+        .filter(Boolean)
+        .join(' · ')
+}
+
 function estimateTextBlockHeight(
     text: string,
     width: number,

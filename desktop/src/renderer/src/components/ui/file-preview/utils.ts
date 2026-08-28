@@ -3,13 +3,17 @@ import {
     CODE_LANGUAGE_BY_EXTENSION,
     CODE_LANGUAGE_BY_FILENAME,
     COLOR_SCAN_CHAR_LIMIT,
+    DOCX_EXTENSIONS,
     CSV_EXTENSIONS,
     HTML_EXTENSIONS,
     IMAGE_EXTENSIONS,
     JSON_EXTENSIONS,
     MARKDOWN_EXTENSIONS,
+    PDF_EXTENSIONS,
+    PPTX_EXTENSIONS,
     TEXT_EXTENSIONS,
-    VIDEO_EXTENSIONS
+    VIDEO_EXTENSIONS,
+    XLSX_EXTENSIONS
 } from './constants'
 import { projectLocalFileUrl } from '@/lib/browser-file-url'
 import type { PreviewFile, PreviewFileType, PreviewMediaItem, PreviewMediaSource, PreviewMediaType } from './types'
@@ -17,6 +21,8 @@ import type { PreviewFile, PreviewFileType, PreviewMediaItem, PreviewMediaSource
 const HEX_COLOR_REGEX = /#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/g
 const FUNCTION_COLOR_REGEX = /\b(?:rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch|color)\(\s*[^()]{1,160}\)/gi
 const COVER_ART_NAMES = ['cover', 'folder', 'front', 'album', 'artwork', 'art', 'thumb', 'thumbnail']
+const EXTENSIONLESS_MARKDOWN_FILE_PATTERN = /^(?:readme|changelog|changes)(?:[-_][^.]*)?$/i
+const EXTENSIONLESS_TEXT_FILE_PATTERN = /^(?:licen[cs]e|copying|notice|authors?|contributors?|unlicense|todo)(?:[-_.].*)?$/i
 
 let colorValidationStyle: CSSStyleDeclaration | null = null
 
@@ -26,7 +32,18 @@ export function detectCodeLanguage(extLower: string, fileName: string): string |
 }
 
 export function detectCsvDelimiter(content: string): string {
-    const sample = content.split(/\r?\n/).find(line => line.trim().length > 0) || ''
+    let sample = ''
+    let lineStart = 0
+    for (let index = 0; index <= content.length; index += 1) {
+        if (index < content.length && content.charCodeAt(index) !== 10 && content.charCodeAt(index) !== 13) continue
+        const candidate = content.slice(lineStart, index)
+        if (candidate.trim()) {
+            sample = candidate
+            break
+        }
+        if (content.charCodeAt(index) === 13 && content.charCodeAt(index + 1) === 10) index += 1
+        lineStart = index + 1
+    }
     const counts = [
         { delimiter: ',', count: (sample.match(/,/g) || []).length },
         { delimiter: ';', count: (sample.match(/;/g) || []).length },
@@ -34,6 +51,54 @@ export function detectCsvDelimiter(content: string): string {
     ]
     counts.sort((a, b) => b.count - a.count)
     return counts[0].count > 0 ? counts[0].delimiter : ','
+}
+
+export async function parseDelimitedContentChunked(
+    content: string,
+    delimiter: string,
+    isCancelled: () => boolean = () => false,
+    chunkSize = 64 * 1024
+): Promise<string[][]> {
+    const rows: string[][] = []
+    let row: string[] = []
+    let cell = ''
+    let inQuotes = false
+    let nextYieldAt = Math.max(1, chunkSize)
+
+    for (let index = 0; index < content.length; index += 1) {
+        const char = content[index]
+        const nextChar = content[index + 1]
+        if (char === '"') {
+            if (inQuotes && nextChar === '"') {
+                cell += '"'
+                index += 1
+            } else {
+                inQuotes = !inQuotes
+            }
+        } else if (!inQuotes && char === delimiter) {
+            row.push(cell)
+            cell = ''
+        } else if (!inQuotes && (char === '\n' || char === '\r')) {
+            if (char === '\r' && nextChar === '\n') index += 1
+            row.push(cell)
+            rows.push(row)
+            row = []
+            cell = ''
+        } else {
+            cell += char
+        }
+
+        if (index >= nextYieldAt) {
+            if (isCancelled()) return []
+            await new Promise<void>((resolve) => setTimeout(resolve, 0))
+            nextYieldAt = index + Math.max(1, chunkSize)
+        }
+    }
+    if (cell.length > 0 || row.length > 0) {
+        row.push(cell)
+        rows.push(row)
+    }
+    return rows
 }
 
 export function parseDelimitedContent(content: string, delimiter: string): string[][] {
@@ -144,6 +209,12 @@ export function getFileUrl(filePath: string): string {
     return projectLocalFileUrl(isUncPath ? `zyra://${encoded}` : `zyra:///${encoded}`)
 }
 
+export function getFileThumbnailUrl(filePath: string, width = 152, height = 112): string {
+    const url = getFileUrl(filePath)
+    const separator = url.includes('?') ? '&' : '?'
+    return `${url}${separator}thumbnail=${Math.max(32, Math.round(width))}x${Math.max(32, Math.round(height))}`
+}
+
 export function formatPreviewBytes(bytes?: number | null): string | null {
     if (typeof bytes !== 'number' || Number.isNaN(bytes) || bytes < 0) return null
     return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
@@ -153,8 +224,12 @@ export function resolvePreviewType(fileName: string, ext: string): { type: Previ
     const extLower = ext.toLowerCase()
 
     if (HTML_EXTENSIONS.has(extLower)) return { type: 'html', language: 'html', needsContent: true }
-    if (MARKDOWN_EXTENSIONS.has(extLower)) return { type: 'md', needsContent: true }
+    if (MARKDOWN_EXTENSIONS.has(extLower) || EXTENSIONLESS_MARKDOWN_FILE_PATTERN.test(fileName.trim())) return { type: 'md', needsContent: true }
     if (IMAGE_EXTENSIONS.has(extLower)) return { type: 'image', needsContent: false }
+    if (PDF_EXTENSIONS.has(extLower)) return { type: 'pdf', needsContent: false }
+    if (DOCX_EXTENSIONS.has(extLower)) return { type: 'docx', needsContent: false }
+    if (XLSX_EXTENSIONS.has(extLower)) return { type: 'xlsx', needsContent: false }
+    if (PPTX_EXTENSIONS.has(extLower)) return { type: 'pptx', needsContent: false }
     if (VIDEO_EXTENSIONS.has(extLower)) return { type: 'video', needsContent: false }
     if (AUDIO_EXTENSIONS.has(extLower)) return { type: 'audio', needsContent: false }
     if (JSON_EXTENSIONS.has(extLower)) return { type: 'json', needsContent: true }
@@ -162,6 +237,8 @@ export function resolvePreviewType(fileName: string, ext: string): { type: Previ
     if (CSV_EXTENSIONS.has(extLower)) {
         return { type: 'csv', language: extLower === 'tsv' ? 'tsv' : 'csv', needsContent: true }
     }
+
+    if (EXTENSIONLESS_TEXT_FILE_PATTERN.test(fileName.trim()) || /^\.env(?:\.|$)/i.test(fileName.trim())) return { type: 'text', needsContent: true }
 
     const codeLanguage = detectCodeLanguage(extLower, fileName)
     if (codeLanguage) return { type: 'code', language: codeLanguage, needsContent: true }

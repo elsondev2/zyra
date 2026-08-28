@@ -13,7 +13,7 @@ export function useProjectLiveStatusLifecycle({
 }: UseProjectLiveStatusLifecycleParams): void {
     useEffect(() => {
         const checkProjectStatus = async () => {
-            if (!projectPath) return
+            if (!projectPath || document.visibilityState !== 'visible') return
 
             try {
                 const processResult = await window.devscope.getProjectProcesses(projectPath)
@@ -26,8 +26,15 @@ export function useProjectLiveStatusLifecycle({
             }
         }
 
-        checkProjectStatus()
-        const interval = setInterval(checkProjectStatus, 3000)
-        return () => clearInterval(interval)
+        void checkProjectStatus()
+        const interval = window.setInterval(() => void checkProjectStatus(), 15_000)
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible') void checkProjectStatus()
+        }
+        document.addEventListener('visibilitychange', handleVisibilityChange, { passive: true })
+        return () => {
+            window.clearInterval(interval)
+            document.removeEventListener('visibilitychange', handleVisibilityChange)
+        }
     }, [projectPath, setIsProjectLive, setActivePorts])
 }

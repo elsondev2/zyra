@@ -1,5 +1,7 @@
 import type { MouseEvent as ReactMouseEvent } from 'react'
-import { ChevronRight, Code, FileCode, FileText, Folder, Github, Music4, Play } from 'lucide-react'
+import { ChevronRight, FileCode, Folder, Music4, Play } from 'lucide-react'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
+import { useThemeRevision } from '@/lib/use-theme-revision'
 import { cn } from '@/lib/utils'
 import { getFileUrl } from '@/components/ui/file-preview/utils'
 import ProjectIcon from '@/components/ui/ProjectIcon'
@@ -101,6 +103,8 @@ export function FolderBrowseExplorerContent({
     getFileColor: (ext: string) => string
     formatRelativeTime: (timestamp?: number) => string
 }) {
+    useThemeRevision()
+    const iconTheme = typeof document !== 'undefined' && document.body.classList.contains('light') ? 'light' : 'dark'
     const explorerEntries = [
         ...filteredFolders.map((folder) => ({ id: `folder:${folder.path}`, kind: 'folder' as const, name: folder.name, path: folder.path, payload: folder })),
         ...gitRepos.map((repo) => ({ id: `git:${repo.path}`, kind: 'git' as const, name: repo.name, path: repo.path, payload: { name: repo.name, path: repo.path, isProject: true } as FolderItem })),
@@ -184,15 +188,13 @@ export function FolderBrowseExplorerContent({
                             if (entry.kind === 'file') {
                                 const file = entry.payload as FileItem
                                 const entryTarget: EntryActionTarget = { path: file.path, name: file.name, type: 'file' }
-                                const isText = file.extension === 'md' || file.extension === 'txt'
                                 const isMedia = Boolean(file.previewType)
                                 const iconColor = getFileColor(file.extension)
                                 return isFinderMode ? (
                                     <div key={entry.id} className="group mx-auto w-fit" onContextMenu={(event) => openEntryContextMenu(event, entryTarget)}>
                                         <FinderItem
-                                            icon={isText ? FileText : FileCode}
-                                            iconClassName={isMedia ? 'text-white/0' : 'text-white/20'}
-                                            visual={isMedia ? <MediaFilePreview file={file} compact /> : undefined}
+                                            icon={FileCode}
+                                            visual={isMedia ? <MediaFilePreview file={file} compact /> : <FileEntryIcon pathValue={file.path} kind="file" theme={iconTheme} size={40} loading="lazy" />}
                                             title={file.name}
                                             subtitle={formatFileSize(file.size)}
                                             tag={file.extension}
@@ -208,7 +210,7 @@ export function FolderBrowseExplorerContent({
                                         onContextMenu={(event) => openEntryContextMenu(event, entryTarget)}
                                     >
                                         <div className={cn('mb-2 overflow-hidden rounded-lg border border-white/5 bg-sparkle-bg', isMedia ? 'h-24 w-full' : 'inline-flex w-fit p-2')}>
-                                            {isMedia ? <MediaFilePreview file={file} /> : isText ? <FileText size={16} style={{ color: iconColor }} /> : <FileCode size={16} style={{ color: iconColor }} />}
+                                            {isMedia ? <MediaFilePreview file={file} /> : <FileEntryIcon pathValue={file.path} kind="file" theme={iconTheme} size={20} />}
                                         </div>
                                         <div className="min-w-0 flex-1">
                                             <p className={cn('text-sm leading-5 text-white/80 transition-colors group-hover:text-white', WRAP_AND_CLAMP_2)} title={file.name}>{file.name}</p>
@@ -230,7 +232,7 @@ export function FolderBrowseExplorerContent({
 
                             return isFinderMode ? (
                                 <div key={entry.id} className="group mx-auto w-fit" onContextMenu={(event) => openEntryContextMenu(event, entryTarget)}>
-                                    <FinderItem icon={isGit ? Github : Folder} iconClassName={isGit ? 'text-white' : 'text-yellow-400'} title={entry.name} subtitle={isGit ? 'Git Repo' : 'Folder'} onClick={() => onFolderClick(folder)} />
+                                    <FinderItem icon={Folder} visual={<FileEntryIcon pathValue={isGit ? `${folder.path}/.git` : folder.path} kind="directory" theme={iconTheme} size={42} loading="lazy" />} title={entry.name} subtitle={isGit ? 'Git Repo' : 'Folder'} onClick={() => onFolderClick(folder)} />
                                 </div>
                             ) : (
                                 <div
@@ -240,7 +242,7 @@ export function FolderBrowseExplorerContent({
                                     className="group relative flex h-full min-h-[136px] cursor-pointer flex-col rounded-xl border border-white/5 bg-sparkle-card p-3 text-left transition-colors hover:border-white/15"
                                 >
                                     <div className="mb-2 inline-flex w-fit rounded-lg border border-white/5 bg-sparkle-bg p-2">
-                                        {isGit ? <Github size={16} className="text-white/80 transition-colors group-hover:text-white" /> : <Folder size={16} className="text-yellow-400/70 transition-colors group-hover:text-yellow-400" />}
+                                        <FileEntryIcon pathValue={isGit ? `${folder.path}/.git` : folder.path} kind="directory" theme={iconTheme} size={20} />
                                     </div>
                                     <div className="min-w-0 flex-1">
                                         <p className={cn('text-sm leading-5 text-white/70 transition-colors group-hover:text-white', WRAP_AND_CLAMP_2)} title={entry.name}>{entry.name}</p>

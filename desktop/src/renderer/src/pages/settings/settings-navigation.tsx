@@ -81,8 +81,8 @@ export const SETTINGS_NAVIGATION_GROUPS: SettingsNavigationGroup[] = [
             {
                 id: 'assistant',
                 label: 'Assistant',
-                description: 'Defaults, permissions, output, and transcription',
-                keywords: 'model profile supervised full access reasoning effort fast prompt streaming tools reconnect diagnostics transcription warning',
+                description: 'Defaults, reasoning, context, output, and transcription',
+                keywords: 'model profile supervised full access reasoning effort summaries detailed concise context window compaction limit fast prompt streaming tools reconnect diagnostics transcription warning',
                 to: '/settings/assistant',
                 icon: Bot,
                 legacyPaths: ['/settings/chat']
@@ -136,8 +136,8 @@ export const SETTINGS_NAVIGATION_GROUPS: SettingsNavigationGroup[] = [
         items: [
             {
                 id: 'projects',
-                label: 'Projects & explorer',
-                description: 'Roots, icons, discovery, and Explorer',
+                label: 'Projects',
+                description: 'Roots, icons, discovery, and indexing',
                 keywords: 'folders index scan bounded layout finder grid overrides',
                 to: '/settings/projects',
                 icon: FolderKanban,

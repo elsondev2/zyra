@@ -1,6 +1,6 @@
 import { memo, useMemo, useState, type ReactNode } from 'react'
 import { FolderClosed, Globe2 } from 'lucide-react'
-import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { cn } from '@/lib/utils'
 
 const FAILED_FAVICON_HOSTS = new Set<string>()
@@ -116,7 +116,7 @@ export const MarkdownFileTagContent = memo(function MarkdownFileTagContent({
     const iconPath = stripFileLocationSuffix(pathValue)
     return (
         <>
-            <VscodeEntryIcon
+            <FileEntryIcon
                 pathValue={iconPath}
                 kind="file"
                 theme={theme}
