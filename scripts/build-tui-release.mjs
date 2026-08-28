@@ -13,7 +13,7 @@ const output = path.resolve(root, String(args.output || `zyra-v${version}.zip`))
 const include = [
   'AGENTS.md', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
   'package.json', 'package-lock.json', 'install.cmd', 'install.ps1', 'install.sh', 'zyra.cmd', 'zyra.ps1',
-  'bin', 'src', 'prompts', 'agents', 'workflows', 'commands', 'themes'
+  'bin', 'src', 'analytics', 'prompts', 'agents', 'workflows', 'commands', 'themes'
 ]
 await mkdir(path.dirname(output), { recursive: true })
 const existing = include.filter((candidate) => {

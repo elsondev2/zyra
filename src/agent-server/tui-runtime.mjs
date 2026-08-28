@@ -12,6 +12,7 @@ import { resolveTerminalTheme } from "../terminal-theme.mjs";
 import { launchInstalledDesktop } from "../desktop-app.mjs";
 import { removeZyraTitleGenerationMessages } from "../title-generation.mjs";
 import { ZyraAgentServerClient } from "./client.mjs";
+import { captureCliEvent } from "../analytics/cli.mjs";
 
 export const TUI_RESUME_HISTORY_ENTRY_LIMIT = 120;
 
@@ -287,11 +288,13 @@ export async function createZyraTuiClientRuntime(options = {}) {
   reconnectDetached = () => {
     if (disposed) return Promise.resolve();
     if (reconnectPromise) return reconnectPromise;
+    captureCliEvent("zyra_v1_cli", { action: "recovery", outcome: "started", runtime: "client" });
     reconnectPromise = (async () => {
       let delayMs = 120;
       while (!disposed && !remotelyAttached) {
         try {
           await ensureAttached();
+          captureCliEvent("zyra_v1_cli", { action: "recovery", outcome: "recovered", runtime: "client" });
           return;
         } catch {
           await delay(delayMs);

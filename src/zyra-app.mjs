@@ -35,10 +35,13 @@ import { createZyraTerminalTitle } from "./terminal-title.mjs";
 import { normalizeWebToolsMode, selectWebTools } from "./web-tools-picker.mjs";
 import { formatZyraVersion, isZyraVersionRequest } from "./version.mjs";
 import { createZyraTuiClientRuntime, listCanonicalZyraChats } from "./agent-server/tui-runtime.mjs";
+import { captureCliEvent, initializeCliAnalytics, shutdownCliAnalytics } from "./analytics/cli.mjs";
+import { classifyErrorCode, normalizeAnalyticsCommandName } from "./analytics/contracts.mjs";
 
 const useEmbeddedRuntime = process.env.ZYRA_EMBEDDED_RUNTIME === "1";
 const createCliRuntime = (options) => useEmbeddedRuntime ? createZyraSession(options) : createZyraTuiClientRuntime(options);
 const listCliSessions = (options) => useEmbeddedRuntime ? listZyraSessions(options) : listCanonicalZyraChats(options);
+let cliStartupCompleted = false;
 
 function parse(argv) {
   const args = [...argv];
@@ -197,7 +200,7 @@ function parse(argv) {
   return { command, project, prompt, sessionMode, session, noSession, pickSession, printMode, model, thinking, serviceTier, profile, terminalTheme, statusLine, notifications, interruptMode, webSearch, webFetch, webMenu, forceOnboarding, skipOnboarding };
 }
 
-function runUpdate() {
+async function runUpdate() {
   if (process.env.ZYRA_DISTRIBUTION === "desktop-bundle") {
     console.log("This Zyra TUI is bundled with Zyra Desktop. Install updates from Desktop Settings → About.");
     return;
@@ -220,12 +223,14 @@ function runUpdate() {
       "-Yes",
     ], { stdio: "inherit", cwd: os.tmpdir() });
     if (result.error) throw result.error;
+    await shutdownCliAnalytics();
     process.exit(result.status ?? 1);
   }
 
   const script = path.join(root, "install.sh");
   const result = spawnSync("bash", [script], { stdio: "inherit" });
   if (result.error) throw result.error;
+  await shutdownCliAnalytics();
   process.exit(result.status ?? 1);
 }
 
@@ -240,21 +245,30 @@ function printDoctor(ui) {
   for (const [key, value] of Object.entries(status)) {
     console.log(`${key}: ${value ? "ok" : "missing"}`);
   }
-  if (Object.values(status).some((value) => !value)) process.exit(1);
+  if (Object.values(status).some((value) => !value)) process.exitCode = 1;
 }
 
 async function printSessions(_ui, _project) {
   console.log("Use `zyra resume` to browse chats, or `/chat` inside Zyra for the current chat.");
 }
 
-async function main() {
+async function runMain() {
   const parsed = parse(process.argv.slice(2));
+  captureCliEvent("zyra_v1_cli", {
+    action: "startup",
+    command: normalizeAnalyticsCommandName(parsed.command),
+    outcome: "started",
+    session_mode: parsed.noSession ? "none" : parsed.session ? "resume" : parsed.sessionMode === "continue" ? "continue" : "new",
+    runtime: useEmbeddedRuntime ? "embedded" : "client",
+  });
   if (parsed.command === "version") {
     process.stdout.write(`${formatZyraVersion()}\n`);
     return;
   }
 
   let ui = createZyraUi();
+  cliStartupCompleted = true;
+  captureCliEvent("zyra_v1_cli", { action: "startup", outcome: "completed", runtime: useEmbeddedRuntime ? "embedded" : "client" });
   const terminalTitle = createZyraTerminalTitle({ project: parsed.project, state: "ready" });
   process.once("exit", () => terminalTitle.dispose());
 
@@ -298,7 +312,7 @@ async function main() {
     return;
   }
   if (parsed.command === "update") {
-    runUpdate();
+    await runUpdate();
     return;
   }
   let onboardingResult;
@@ -709,8 +723,10 @@ async function restartZyraProcess(runtime, options = {}) {
 
   if (result.error) {
     console.error(result.error.message);
+    await shutdownCliAnalytics();
     process.exit(1);
   }
+  await shutdownCliAnalytics();
   process.exit(result.status ?? 0);
 }
 
@@ -782,8 +798,20 @@ function getSubmissionOptions(submission) {
   };
 }
 
+async function main() {
+  void initializeCliAnalytics();
+  try {
+    await runMain();
+  } catch (error) {
+    if (!cliStartupCompleted) captureCliEvent("zyra_v1_cli", { action: "startup", outcome: "failed", error_code: classifyErrorCode(error) });
+    throw error;
+  } finally {
+    await shutdownCliAnalytics();
+  }
+}
+
 main().catch((error) => {
   const ui = createZyraUi();
   ui.error(error);
-  process.exit(1);
+  process.exitCode = 1;
 });
