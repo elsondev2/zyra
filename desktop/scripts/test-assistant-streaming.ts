@@ -202,8 +202,13 @@ assert.match(
 )
 assert.match(
     instructorLiveTranscriptSource,
-    /animatePresentation = !reduceMotion && !shouldSnap[\s\S]*?scrollToLatest\(animatePresentation \? 'smooth' : 'auto'\)/,
-    'voice transcript words and scrolling must skip hidden animation batches'
+    /useLayoutEffect\(\(\) => \{[\s\S]{0,180}viewport\.scrollTop = viewport\.scrollHeight/,
+    'voice transcript scrolling must settle directly without animation batches'
+)
+assert.doesNotMatch(
+    instructorLiveTranscriptSource,
+    /requestAnimationFrame|behavior:\s*'smooth'|scrollToLatest/,
+    'the live Voice transcript must not retain an animated scroll queue while hidden'
 )
 assert.match(
     strandsSource,

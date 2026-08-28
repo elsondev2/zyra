@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
     buildAssistantBrowserAnnotationPrompt,
     parseAssistantBrowserAnnotation,
@@ -76,5 +77,10 @@ publishAssistantBrowserAnnotationAttachment({
 })
 unsubscribe()
 assert.equal(received, 1)
+
+const electronSmokeSource = readFileSync(new URL('./test-browser-annotation-electron.ts', import.meta.url), 'utf8')
+const electronRunnerSource = readFileSync(new URL('./maint/run-browser-annotation-test.mjs', import.meta.url), 'utf8')
+assert.match(electronSmokeSource, /ANNOTATION_SMOKE_TIMEOUT_MS = 60_000[\s\S]*app\.exit\(1\)/, 'the native annotation smoke must fail and exit on an internal readiness hang')
+assert.match(electronRunnerSource, /ANNOTATION_RUNNER_TIMEOUT_MS = 90_000[\s\S]*taskkill[\s\S]*'\/T'[\s\S]*'\/F'/, 'the outer runner must bound and clean the complete Windows Electron process tree')
 
 console.log('Browser annotation composer contract: ok')
