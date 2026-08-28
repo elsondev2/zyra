@@ -41,6 +41,7 @@ import {
     handleAssistantGetAccountOverview,
     handleAssistantGetFleetSnapshot,
     handleAssistantGetHistoryPage,
+    handleAssistantGetSkillSourceOverview,
     handleAssistantHydrateHistoryBody,
     handleAssistantGetReviewIndex,
     handleAssistantGetSessionTurnUsage,
@@ -67,6 +68,7 @@ import {
     handleAssistantSubscribeRealtimeVoice,
     handleAssistantTranscribeVoice,
     handleAssistantUnsubscribeRealtimeVoice,
+    handleAssistantUpdateSkillSourceSettings,
     handleAssistantWorkflowAction,
     handleAssistantSearchTurns,
     handleAssistantSelectSession,
@@ -357,6 +359,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(ASSISTANT_IPC.getSessionTurnUsage, requireCompletedSetup(handleAssistantGetSessionTurnUsage))
     ipcMain.handle(ASSISTANT_IPC.listModels, requireCompletedSetup(handleAssistantListModels))
     ipcMain.handle(ASSISTANT_IPC.listPromptResources, requireCompletedSetup(handleAssistantListPromptResources))
+    ipcMain.handle(ASSISTANT_IPC.getSkillSourceOverview, requireCompletedSetup(handleAssistantGetSkillSourceOverview))
+    ipcMain.handle(ASSISTANT_IPC.updateSkillSourceSettings, requireCompletedSetup(handleAssistantUpdateSkillSourceSettings))
     ipcMain.handle(ASSISTANT_IPC.connect, requireCompletedSetup(handleAssistantConnect))
     ipcMain.handle(ASSISTANT_IPC.disconnect, requireCompletedSetup(handleAssistantDisconnect))
     ipcMain.handle(ASSISTANT_IPC.createSession, requireCompletedSetup(handleAssistantCreateSession))

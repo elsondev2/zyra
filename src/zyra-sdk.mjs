@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
@@ -93,6 +93,7 @@ import { installZyraNextTurnCheckpoint } from "./zyra-next-turn-checkpoint.mjs";
 import { createRequestUserInputTool } from "./request-user-input-tool.mjs";
 import {
   listZyraPromptResourceManifest,
+  readZyraSkillSourceSettings,
   resolveZyraSkillSources,
 } from "./zyra-prompt-resources.mjs";
 
@@ -437,21 +438,29 @@ async function createZyraResourceLoader(project, options = {}) {
   const projectTrusted = options.projectTrusted === true;
   const settingsManager = SettingsManager.create(project, agentDir, { projectTrusted });
   const skillSources = await resolveZyraSkillSources({ project, root: ROOT, projectTrusted });
-  const loadSkills = () => loadZyraSkills(project, { projectTrusted, sources: skillSources });
+  const loadSkills = async () => loadZyraSkills(project, {
+    projectTrusted,
+    sources: await resolveZyraSkillSources({ project, root: ROOT, projectTrusted }),
+  });
   if (options.enablePiExtensions) {
-    const zyraSkills = await loadSkills();
+    let zyraSkills = await loadSkills();
     const loader = new DefaultResourceLoader({
       cwd: project,
       agentDir,
       settingsManager,
       additionalSkillPaths: skillSources.map((source) => source.dir),
-      skillsOverride: (loaded) => mergeZyraSkillResults(zyraSkills, loaded),
+      skillsOverride: () => zyraSkills,
     });
     await loader.reload();
     return {
       agentDir,
       settingsManager,
-      resourceLoader: withZyraBuiltinExtensions(loader, options),
+      resourceLoader: withZyraBuiltinExtensions(loader, {
+        ...options,
+        beforeReload: async () => {
+          zyraSkills = await loadSkills();
+        },
+      }),
     };
   }
   const resourceLoader = createFastResourceLoader(project, {
@@ -469,6 +478,7 @@ async function createZyraResourceLoader(project, options = {}) {
 
 function withZyraBuiltinExtensions(resourceLoader, options = {}) {
   const getExtensions = resourceLoader.getExtensions.bind(resourceLoader);
+  const reload = resourceLoader.reload.bind(resourceLoader);
   return new Proxy(resourceLoader, {
     get(target, property, receiver) {
       if (property === "getExtensions") {
@@ -478,6 +488,12 @@ function withZyraBuiltinExtensions(resourceLoader, options = {}) {
             ...loaded,
             extensions: [...createZyraBuiltinExtensions(options), ...(loaded.extensions ?? [])],
           };
+        };
+      }
+      if (property === "reload") {
+        return async () => {
+          await options.beforeReload?.();
+          return reload();
         };
       }
       const value = Reflect.get(target, property, receiver);
@@ -2520,13 +2536,16 @@ async function loadZyraSkills(project, options = {}) {
     root: defaults.root,
     projectTrusted: options.projectTrusted === true,
   });
-  const skillsByName = new Map();
-  const realPaths = new Set();
+  const settings = options.skillSourceSettings ?? await readZyraSkillSourceSettings();
+  const candidatesByName = new Map();
+  const sourceRealPaths = new Set();
   const diagnostics = [];
+  const scopePriority = { "built-in": 0, personal: 1, project: 2 };
 
-  // Most specific sources win, matching Desktop discovery and Zyra's existing
-  // project-over-personal command behavior.
-  for (const source of [...sources].reverse()) {
+  // Sources arrive from low to high priority. Scope is resolved first so a
+  // project skill still wins over a personal skill from a preferred provider.
+  for (let sourceOrder = 0; sourceOrder < sources.length; sourceOrder += 1) {
+    const source = sources[sourceOrder];
     if (!existsSync(source.dir)) continue;
     const result = loadSkillsFromDir({ dir: source.dir, source: source.loaderSource });
     diagnostics.push(...result.diagnostics);
@@ -2535,36 +2554,53 @@ async function loadZyraSkills(project, options = {}) {
       const directRootMarkdown = path.dirname(resolvedFile) === path.resolve(source.dir)
         && path.basename(resolvedFile) !== "SKILL.md";
       if (!source.allowRootMarkdown && directRootMarkdown) continue;
-      const pathKey = process.platform === "win32" ? resolvedFile.toLowerCase() : resolvedFile;
-      if (realPaths.has(pathKey)) continue;
-      realPaths.add(pathKey);
-      const existing = skillsByName.get(skill.name);
-      if (existing) {
-        diagnostics.push({
-          type: "collision",
-          message: `skill "${skill.name}" from ${existing.zyraScope} overrides ${source.scope}`,
-          path: skill.filePath,
-        });
-        continue;
-      }
-      skillsByName.set(skill.name, { ...skill, zyraScope: source.scope });
+      let canonicalFile = resolvedFile;
+      try {
+        canonicalFile = realpathSync.native(resolvedFile);
+      } catch {}
+      const normalizedFile = process.platform === "win32" ? canonicalFile.toLowerCase() : canonicalFile;
+      const pathKey = `${source.sourceId}:${normalizedFile}`;
+      if (sourceRealPaths.has(pathKey)) continue;
+      sourceRealPaths.add(pathKey);
+      const candidates = candidatesByName.get(skill.name) ?? [];
+      candidates.push({
+        ...skill,
+        zyraScope: source.scope,
+        zyraSourceId: source.sourceId,
+        zyraSourceLabel: source.sourceLabel,
+        zyraSourceOrder: sourceOrder,
+      });
+      candidatesByName.set(skill.name, candidates);
     }
   }
 
+  const skills = [];
+  for (const [name, candidates] of candidatesByName) {
+    const highestScope = Math.max(...candidates.map((candidate) => scopePriority[candidate.zyraScope] ?? -1));
+    const scoped = candidates.filter((candidate) => (scopePriority[candidate.zyraScope] ?? -1) === highestScope);
+    const preferredSourceId = settings.preferredSourceBySkill[name];
+    const preferred = preferredSourceId
+      ? scoped.filter((candidate) => candidate.zyraSourceId === preferredSourceId)
+      : [];
+    const eligible = preferred.length ? preferred : scoped;
+    const winner = eligible.reduce((current, candidate) => (
+      candidate.zyraSourceOrder > current.zyraSourceOrder ? candidate : current
+    ));
+    if (candidates.length > 1) {
+      diagnostics.push({
+        type: "collision",
+        message: `skill "${name}" uses ${winner.zyraSourceLabel} ${winner.zyraScope}`,
+        path: winner.filePath,
+      });
+    }
+    const { zyraSourceOrder: _sourceOrder, ...publicSkill } = winner;
+    skills.push(publicSkill);
+  }
+
   return {
-    skills: [...skillsByName.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    skills: skills.sort((a, b) => a.name.localeCompare(b.name)),
     diagnostics,
   };
-}
-
-function mergeZyraSkillResults(preferred, loaded) {
-  const skillsByName = new Map(preferred.skills.map((skill) => [skill.name, skill]));
-  const diagnostics = [...preferred.diagnostics, ...(loaded.diagnostics ?? [])];
-  for (const skill of loaded.skills ?? []) {
-    if (skillsByName.has(skill.name)) continue;
-    skillsByName.set(skill.name, skill);
-  }
-  return { skills: [...skillsByName.values()], diagnostics };
 }
 
 function resolveZyraResourceScope(file, project) {

@@ -31,6 +31,7 @@ import {
     loadProjectsSettings,
     loadProviderSettings,
     loadSettingsShell,
+    loadSkillsSettings,
     loadSourceControlSettings,
     loadTerminalRuntimeSettings,
     loadVoiceSettings
@@ -48,6 +49,7 @@ const BrowserControlSettings = lazy(loadBrowserControlSettings)
 const FilesEditorSettings = lazy(loadFilesEditorSettings)
 const TerminalRuntimeSettings = lazy(loadTerminalRuntimeSettings)
 const AssistantSettings = lazy(loadAssistantSettings)
+const SkillsSettings = lazy(loadSkillsSettings)
 const AccountSettings = lazy(loadAccountSettings)
 const AISettings = lazy(loadProviderSettings)
 const GitSettings = lazy(loadSourceControlSettings)
@@ -137,6 +139,7 @@ function MainContent() {
                         <Route path="appearance" element={<AppearanceSettings />} />
                         <Route path="account" element={<AccountSettings />} />
                         <Route path="assistant" element={<AssistantSettings />} />
+                        <Route path="skills" element={<SkillsSettings />} />
                         <Route path="voice" element={<VoiceSettings />} />
                         <Route path="connections" element={<ConnectionsSettings />} />
                         <Route path="browser-control" element={<BrowserControlSettings />} />

@@ -24,6 +24,7 @@ Settings controls must have a verified consumer. A persisted field with no behav
 | Desktop product preferences | `devscope-settings` in renderer `localStorage` | theme, assistant defaults, file preview defaults, Git defaults | Keep one typed store for non-secret desktop preferences; version and sanitize it. |
 | Operating-system preferences | Electron main process / Windows login settings | open at login, start hidden | Keep main-owned and reflect the real OS value in Settings. |
 | Canonical/project runtime preferences | `<project>/.zyra/preferences.json` | model, thinking, profile, web tools, TUI notifications, interrupt mode, terminal theme, project trust | Expose only through bounded main/canonical APIs with explicit global/project scope. Do not mirror blindly into renderer storage. |
+| Skill source preferences | `~/.zyra/skill-sources.json` | enabled compatible folders, source priority, per-name conflict choices | Keep main-owned, bounded, atomic, and available only to trusted Desktop renderers. Existing sessions apply changes through `/reload`; new sessions load them at startup. |
 | Secrets | currently mixed into `devscope-settings` | Groq and Gemini API keys | Migrate to encrypted main-process storage in a separately reviewed security change. Never put new secrets in renderer storage. |
 | Permission memory | `zyra:browser-control-approval-preferences:v1` | remembered Browser-control sites and capabilities | Manage under Browser & Control. Keep bounded, inspectable, and revocable. |
 | Continuity state | several bounded `localStorage` records | Browser tabs, terminal groups, composer drafts, active project views, panel widths | Keep outside Settings. Add reset/clear actions where useful. |
@@ -43,6 +44,7 @@ Settings controls must have a verified consumer. A persisted field with no behav
 - Git initialization, author safety, bulk scope, PR defaults, PR guide, and branch behavior.
 - Git AI provider and model selection.
 - Assistant model, permission, interaction, reasoning effort and summaries, automatic context-compaction limit, service tier, prompt, streaming, tool-output, queue/interrupt, reconnect, history, status, diagnostics, transcription, and account usage display.
+- Skill source enablement, source priority, custom user-selected folders, and per-name conflict resolution.
 
 ### Remove from the visible settings contract
 

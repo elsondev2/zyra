@@ -177,7 +177,7 @@ Start with the [Voice-Agent Architecture](docs/architecture/voice-agent/README.m
 - `commands/` is where repeated workflows can become slash commands.
 - `~/.zyra/commands/<name>.md` is the personal command path available across projects.
 - `.zyra/commands/<name>.md` is the project-local command path.
-- Skills follow Pi's local Agent Skills locations: `~/.pi/agent/skills`, `~/.agents/skills`, trusted project `.pi/skills`, and trusted ancestor `.agents/skills`. Zyra also keeps `skills/`, `~/.zyra/skills`, and project `.zyra/skills` for compatibility. More specific local scopes win name collisions.
+- Skills follow Pi's local Agent Skills locations: `~/.pi/agent/skills`, `~/.agents/skills`, trusted project `.pi/skills`, and trusted ancestor `.agents/skills`. Zyra also keeps `skills/`, `~/.zyra/skills`, and project `.zyra/skills` for compatibility. Settings > Skills can opt into compatible Codex, Claude Code, or explicitly selected folders and resolve name collisions. Project scope still wins over personal scope.
 - `.zyra/profiles/<name>.md` is the local private profile overlay path.
 
 Commands should earn their place. The tool should grow from real use, not from pretending every workflow is known in advance.

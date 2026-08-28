@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type WheelEvent as ReactWheelEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useSettings } from '@/lib/settings'
+import { readAssistantSkillSourceRevision } from '@/lib/assistant/assistant-skill-source-revision'
 import { cn } from '@/lib/utils'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { ConfirmModal } from '@/components/ui/ConfirmModal'
@@ -52,13 +53,13 @@ import {
 
 const PROMPT_RESOURCE_CACHE_TTL_MS = 30_000
 const PROMPT_RESOURCE_CACHE_MAX_PROJECTS = 24
-const promptResourceCache = new Map<string, { expiresAt: number; value: AssistantPromptResourcesPayload }>()
-const promptResourceRequests = new Map<string, Promise<AssistantPromptResourcesPayload>>()
+const promptResourceCache = new Map<string, { expiresAt: number; revision: string; value: AssistantPromptResourcesPayload }>()
+const promptResourceRequests = new Map<string, { revision: string; promise: Promise<AssistantPromptResourcesPayload> }>()
 
 function readCachedPromptResources(projectPath?: string | null): AssistantPromptResourcesPayload | null {
     const key = projectPath?.trim() || '<global>'
     const cached = promptResourceCache.get(key)
-    if (!cached || cached.expiresAt <= Date.now()) {
+    if (!cached || cached.expiresAt <= Date.now() || cached.revision !== readAssistantSkillSourceRevision()) {
         promptResourceCache.delete(key)
         return null
     }
@@ -67,12 +68,13 @@ function readCachedPromptResources(projectPath?: string | null): AssistantPrompt
 
 async function loadPromptResources(projectPath?: string | null): Promise<AssistantPromptResourcesPayload> {
     const key = projectPath?.trim() || '<global>'
+    const revision = readAssistantSkillSourceRevision()
     const cached = readCachedPromptResources(projectPath)
     if (cached) return cached
 
-    let request = promptResourceRequests.get(key)
-    if (!request) {
-        request = window.devscope.assistant.listPromptResources(projectPath).then((result) => {
+    let requestEntry = promptResourceRequests.get(key)
+    if (!requestEntry || requestEntry.revision !== revision) {
+        const promise = window.devscope.assistant.listPromptResources(projectPath).then((result) => {
             if (!result.success) throw new Error(result.error || 'Could not load commands and skills.')
             const value = {
                 commands: result.commands,
@@ -82,6 +84,7 @@ async function loadPromptResources(projectPath?: string | null): Promise<Assista
             promptResourceCache.delete(key)
             promptResourceCache.set(key, {
                 expiresAt: Date.now() + PROMPT_RESOURCE_CACHE_TTL_MS,
+                revision,
                 value
             })
             while (promptResourceCache.size > PROMPT_RESOURCE_CACHE_MAX_PROJECTS) {
@@ -91,11 +94,12 @@ async function loadPromptResources(projectPath?: string | null): Promise<Assista
             }
             return value
         }).finally(() => {
-            promptResourceRequests.delete(key)
+            if (promptResourceRequests.get(key)?.promise === promise) promptResourceRequests.delete(key)
         })
-        promptResourceRequests.set(key, request)
+        requestEntry = { revision, promise }
+        promptResourceRequests.set(key, requestEntry)
     }
-    return request
+    return requestEntry.promise
 }
 
 export function AssistantComposerView({

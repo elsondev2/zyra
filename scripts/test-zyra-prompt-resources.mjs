@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -9,7 +9,11 @@ import {
 } from '../src/zyra-sdk.mjs'
 import {
   listZyraPromptResourceManifest,
+  getZyraSkillSourceOverview,
+  normalizeZyraSkillSourceSettings,
+  readZyraSkillSourceSettings,
   resolveZyraSkillSources,
+  updateZyraSkillSourceSettings,
   ZYRA_PROMPT_RESOURCE_LIMITS,
 } from '../src/zyra-prompt-resources.mjs'
 
@@ -47,6 +51,10 @@ try {
 
   await writeSkill(path.join(home, '.pi', 'agent', 'skills', 'standard-user'), 'standard-user', 'A standard Pi user skill.')
   await writeSkill(path.join(home, '.agents', 'skills', 'grouped-user'), 'grouped-user', 'A grouped Agent Skills user skill.')
+  await writeSkill(path.join(home, '.agents', 'skills', 'portable-check'), 'portable-check', 'Shared portable checks.')
+  await writeSkill(path.join(home, '.codex', 'skills', 'portable-check'), 'portable-check', 'Codex portable checks.')
+  await writeSkill(path.join(home, '.claude', 'skills', 'portable-check'), 'portable-check', 'Claude portable checks.')
+  await writeSkill(path.join(home, '.claude', 'skills', 'scope-check'), 'scope-check', 'Personal Claude scope check.')
   await mkdir(path.join(home, '.agents', 'skills'), { recursive: true })
   await writeFile(path.join(home, '.agents', 'skills', 'ignored-root.md'), [
     '---', 'name: ignored-root', 'description: Root Markdown is ignored in .agents.', '---'
@@ -54,6 +62,7 @@ try {
   await writeSkill(path.join(home, '.zyra', 'skills', 'release-check'), 'release-check', 'Personal release checks.')
   await writeSkill(path.join(project, '.pi', 'skills', 'trusted-pi-project'), 'trusted-pi-project', 'A trusted Pi project skill.')
   await writeSkill(path.join(project, '.agents', 'skills', 'trusted-agent-project'), 'trusted-agent-project', 'A trusted Agent Skills project skill.')
+  await writeSkill(path.join(project, '.codex', 'skills', 'scope-check'), 'scope-check', 'Project Codex scope check.')
   await writeSkill(path.join(project, '.zyra', 'skills', 'release-check'), 'release-check', 'Project release checks.', 'Project instructions win.')
   await writeSkill(path.join(project, '.zyra', 'skills', 'invalid'), 'Bad_Name', 'Invalid names never enter the menu.')
 
@@ -107,6 +116,7 @@ try {
   assert.equal(resources.skills.some((skill) => skill.name === 'malformed'), false)
   assert.equal(resources.skills.some((skill) => skill.name === 'too-deep'), false)
   assert.equal(resources.skills.find((skill) => skill.name === 'release-check')?.description, 'Project release checks.')
+  assert.equal(resources.skills.find((skill) => skill.name === 'portable-check')?.description, 'Shared portable checks.', 'disabled Codex and Claude sources do not alter existing defaults')
   assert.equal(resources.skills.find((skill) => skill.name === 'oversized')?.description.length, ZYRA_PROMPT_RESOURCE_LIMITS.maxDescriptionCharacters)
   assert.ok(resources.diagnostics.some((entry) => entry.type === 'collision'))
   assert.ok(resources.diagnostics.some((entry) => entry.type === 'limit'))
@@ -121,6 +131,66 @@ try {
     path.join(home, '.zyra', 'skills'),
     path.join(project, '.zyra', 'skills'),
   ]) assert.equal(sourcePaths.includes(expected), true, `${expected} is part of the explicit discovery contract`)
+
+  const initialOverview = await getZyraSkillSourceOverview({ project, root, home, projectTrusted: true })
+  assert.equal(initialOverview.sources.find((source) => source.id === 'codex')?.enabled, false)
+  assert.equal(initialOverview.sources.find((source) => source.id === 'codex')?.skillCount, 2)
+  assert.equal(initialOverview.sources.find((source) => source.id === 'claude')?.skillCount, 2)
+
+  const configuredOverview = await updateZyraSkillSourceSettings({
+    ...initialOverview.settings,
+    enabledSourceIds: ['zyra', 'agents', 'pi', 'codex', 'claude'],
+    preferredSourceBySkill: { 'portable-check': 'claude', 'scope-check': 'claude' },
+  }, { project, root, home, projectTrusted: true })
+  assert.equal(configuredOverview.conflicts.find((conflict) => conflict.name === 'portable-check')?.winnerSourceId, 'claude')
+  assert.equal(configuredOverview.conflicts.find((conflict) => conflict.name === 'scope-check')?.winnerSourceId, 'codex', 'project scope wins before a personal source preference')
+  assert.equal((await readZyraSkillSourceSettings({ home })).preferredSourceBySkill['portable-check'], 'claude')
+
+  const configuredResources = await listZyraPromptResourceManifest({ project, root, home, projectTrusted: true })
+  assert.equal(configuredResources.skills.find((skill) => skill.name === 'portable-check')?.description, 'Claude portable checks.')
+  assert.equal(configuredResources.skills.find((skill) => skill.name === 'scope-check')?.description, 'Project Codex scope check.')
+  const configuredSourcePaths = (await resolveZyraSkillSources({ project, root, home, projectTrusted: true })).map((source) => source.dir)
+  assert.equal(configuredSourcePaths.includes(path.join(home, '.codex', 'skills')), true)
+  assert.equal(configuredSourcePaths.includes(path.join(home, '.claude', 'skills')), true)
+
+  const disabledClaudeOverview = await updateZyraSkillSourceSettings({
+    ...configuredOverview.settings,
+    enabledSourceIds: configuredOverview.settings.enabledSourceIds.filter((id) => id !== 'claude'),
+  }, { project, root, home, projectTrusted: true })
+  assert.equal((await listZyraPromptResourceManifest({ project, root, home, projectTrusted: true })).skills.find((skill) => skill.name === 'portable-check')?.description, 'Codex portable checks.', 'disabling a source removes it from resolution')
+
+  const normalizedCustomSettings = normalizeZyraSkillSourceSettings({
+    ...disabledClaudeOverview.settings,
+    customSources: [
+      { path: 'relative/skills', label: 'Relative' },
+      ...Array.from({ length: 12 }, (_, index) => ({ path: path.join(fixture, `custom-${index}`), label: `Custom ${index}` })),
+      { path: path.join(fixture, 'custom-0'), label: 'Duplicate' },
+    ],
+  })
+  assert.equal(normalizedCustomSettings.customSources.length, 10, 'custom sources reject relative paths, duplicates, and entries beyond the bound')
+
+  const customSkills = path.join(fixture, 'other-agent-skills')
+  await writeSkill(path.join(customSkills, 'custom-audit'), 'custom-audit', 'Checks imported from another agent.')
+  const customOverview = await updateZyraSkillSourceSettings({
+    ...disabledClaudeOverview.settings,
+    customSources: [...disabledClaudeOverview.settings.customSources, {
+      id: '',
+      label: 'Other agent',
+      path: customSkills,
+      enableOnAdd: true,
+    }],
+  }, { project, root, home, projectTrusted: true })
+  const customSource = customOverview.sources.find((source) => source.custom)
+  assert.equal(customSource?.enabled, true)
+  assert.equal(customSource?.skillCount, 1)
+  assert.equal((await listZyraPromptResourceManifest({ project, root, home, projectTrusted: true })).skills.some((skill) => skill.name === 'custom-audit'), true)
+  await updateZyraSkillSourceSettings({
+    ...customOverview.settings,
+    enabledSourceIds: customOverview.settings.enabledSourceIds.filter((id) => id !== customSource.id),
+    priority: customOverview.settings.priority.filter((id) => id !== customSource.id),
+    customSources: customOverview.settings.customSources.filter((source) => source.id !== customSource.id),
+  }, { project, root, home, projectTrusted: true })
+  assert.match(await readFile(path.join(customSkills, 'custom-audit', 'SKILL.md'), 'utf8'), /custom-audit/, 'removing a source never deletes or copies files from the external folder')
 
   const runtime = {
     project,

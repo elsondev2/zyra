@@ -31,6 +31,7 @@ import type {
     AssistantSendPromptOptions,
     AssistantSendRealtimeVoiceMessageInput,
     AssistantSession,
+    AssistantSkillSourceSettings,
     AssistantStartRealtimeVoiceInput,
     AssistantThread,
     AssistantVoiceExecutionConfiguration,
@@ -88,7 +89,11 @@ import { materializeCanonicalImage } from './canonical-media-cache'
 import { createAssistantSessionRecord } from './service-records'
 import type { AssistantServiceActionDeps } from './service-action-deps'
 import { AssistantPersistence } from './persistence'
-import { listAssistantPromptResources } from './prompt-resources'
+import {
+    getAssistantSkillSourceOverview,
+    listAssistantPromptResources,
+    updateAssistantSkillSourceSettings
+} from './prompt-resources'
 import { toAssistantShellSnapshot } from './persistence-snapshot'
 import { FleetProjection, shouldApplyAssistantFleetSnapshot } from './fleet-projection'
 import { queueGeneratedSessionTitle, regenerateSessionTitle as generateReplacementSessionTitle, shouldAutoRegenerateSessionTitle, shouldGenerateSessionTitleForPrompt } from './session-title-generation'
@@ -1573,6 +1578,20 @@ export class AssistantService {
         return {
             success: true as const,
             ...await listAssistantPromptResources(projectPath, forceRefresh)
+        }
+    }
+
+    async getSkillSourceOverview(projectPath?: string | null) {
+        return {
+            success: true as const,
+            ...await getAssistantSkillSourceOverview(projectPath)
+        }
+    }
+
+    async updateSkillSourceSettings(settings: AssistantSkillSourceSettings, projectPath?: string | null) {
+        return {
+            success: true as const,
+            ...await updateAssistantSkillSourceSettings(settings, projectPath)
         }
     }
 

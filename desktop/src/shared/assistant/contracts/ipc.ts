@@ -41,6 +41,8 @@ export const ASSISTANT_IPC = {
     getSessionTurnUsage: 'devscope:assistant:getSessionTurnUsage',
     listModels: 'devscope:assistant:listModels',
     listPromptResources: 'devscope:assistant:listPromptResources',
+    getSkillSourceOverview: 'devscope:assistant:getSkillSourceOverview',
+    updateSkillSourceSettings: 'devscope:assistant:updateSkillSourceSettings',
     connect: 'devscope:assistant:connect',
     disconnect: 'devscope:assistant:disconnect',
     createSession: 'devscope:assistant:createSession',
@@ -101,11 +103,70 @@ export interface AssistantPromptCommandResource {
 
 export interface AssistantPromptSkillResource extends AssistantPromptCommandResource {
     disableModelInvocation: boolean
+    sourceId?: string
+    sourceLabel?: string
+}
+
+export interface AssistantSkillConflictSource {
+    id: string
+    label: string
+}
+
+export interface AssistantSkillConflict {
+    name: string
+    winnerSourceId: string
+    winnerSourceLabel: string
+    preferredSourceId: string | null
+    sources: AssistantSkillConflictSource[]
 }
 
 export interface AssistantPromptResourcesPayload {
     commands: AssistantPromptCommandResource[]
     skills: AssistantPromptSkillResource[]
+    skillConflicts?: AssistantSkillConflict[]
+    diagnostics: Array<{
+        type: string
+        message: string
+    }>
+}
+
+export interface AssistantCustomSkillSource {
+    id: string
+    label: string
+    path: string
+    enableOnAdd?: boolean
+}
+
+export interface AssistantSkillSourceSettings {
+    version: 1
+    enabledSourceIds: string[]
+    priority: string[]
+    preferredSourceBySkill: Record<string, string>
+    customSources: AssistantCustomSkillSource[]
+}
+
+export interface AssistantSkillSourcePath {
+    path: string
+    scope: AssistantPromptResourceScope
+    detected: boolean
+}
+
+export interface AssistantSkillSourceSummary {
+    id: string
+    label: string
+    description: string
+    enabled: boolean
+    priority: number
+    detected: boolean
+    skillCount: number
+    paths: AssistantSkillSourcePath[]
+    custom: boolean
+}
+
+export interface AssistantSkillSourceOverviewPayload {
+    settings: AssistantSkillSourceSettings
+    sources: AssistantSkillSourceSummary[]
+    conflicts: AssistantSkillConflict[]
     diagnostics: Array<{
         type: string
         message: string

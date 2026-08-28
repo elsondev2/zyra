@@ -24,6 +24,7 @@ import type {
     AssistantSendPromptOptions,
     AssistantSendRealtimeVoiceMessageInput,
     AssistantSelectThreadInput,
+    AssistantSkillSourceSettings,
     AssistantStartRealtimeVoiceInput,
     AssistantSetPlaygroundRootInput,
     AssistantTranscribeVoiceInput,
@@ -52,6 +53,10 @@ export function createAssistantAdapter() {
             listModels: (forceRefresh = false) => ipcRenderer.invoke(ASSISTANT_IPC.listModels, forceRefresh),
             listPromptResources: (projectPath?: string | null, forceRefresh = false) =>
                 ipcRenderer.invoke(ASSISTANT_IPC.listPromptResources, projectPath, forceRefresh),
+            getSkillSourceOverview: (projectPath?: string | null) =>
+                ipcRenderer.invoke(ASSISTANT_IPC.getSkillSourceOverview, projectPath),
+            updateSkillSourceSettings: (settings: AssistantSkillSourceSettings, projectPath?: string | null) =>
+                ipcRenderer.invoke(ASSISTANT_IPC.updateSkillSourceSettings, settings, projectPath),
             connect: (options?: AssistantConnectOptions) => ipcRenderer.invoke(ASSISTANT_IPC.connect, options),
             disconnect: (sessionId?: string) => ipcRenderer.invoke(ASSISTANT_IPC.disconnect, sessionId),
             createSession: (input?: AssistantCreateSessionInput) => ipcRenderer.invoke(ASSISTANT_IPC.createSession, input),

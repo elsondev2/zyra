@@ -127,6 +127,18 @@ export const SETTINGS_SEARCH_TARGETS: Readonly<Record<string, readonly SettingsS
             'Browser dictation': 'web speech microphone'
         })
     ],
+    skills: [
+        row('Skill sources', 'Resolution order', 'priority winner project personal source order'),
+        ...rows('Skill sources', ['Zyra', 'Codex', 'Claude Code', 'Shared agents', 'Pi'], {
+            Zyra: 'native personal project folder',
+            Codex: 'import compatible agent skills',
+            'Claude Code': 'import compatible agent skills',
+            'Shared agents': 'global agents skills shared folder',
+            Pi: 'pi coding agent skills'
+        }),
+        row('Name conflicts', 'Overlapping names', 'duplicate collision choose preferred winner resolve'),
+        row('When changes apply', 'New chats', 'reload existing active agent')
+    ],
     voice: rows('Instructor Voice Lab', ['Voice', 'Output', 'Instructions'], {
         Voice: 'speaker realtime audio persona',
         Output: 'audio text spoken response',

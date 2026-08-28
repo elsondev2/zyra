@@ -14,6 +14,7 @@ import {
     LayoutGrid,
     MonitorSmartphone,
     Palette,
+    Puzzle,
     Settings2,
     TerminalSquare
 } from 'lucide-react'
@@ -86,6 +87,14 @@ export const SETTINGS_NAVIGATION_GROUPS: SettingsNavigationGroup[] = [
                 to: '/settings/assistant',
                 icon: Bot,
                 legacyPaths: ['/settings/chat']
+            },
+            {
+                id: 'skills',
+                label: 'Skills',
+                description: 'Sources, priority, and name conflicts',
+                keywords: 'skills agents codex claude pi source folders imports priority conflicts overrides',
+                to: '/settings/skills',
+                icon: Puzzle
             },
             {
                 id: 'voice',

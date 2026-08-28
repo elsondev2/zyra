@@ -1,6 +1,10 @@
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { AssistantPromptResourcesPayload } from '../../shared/assistant/contracts'
+import type {
+    AssistantPromptResourcesPayload,
+    AssistantSkillSourceOverviewPayload,
+    AssistantSkillSourceSettings
+} from '../../shared/assistant/contracts'
 import { resolveZyraRoot } from '../zyra/zyra-root'
 
 interface ZyraPromptResourceModule {
@@ -9,6 +13,15 @@ interface ZyraPromptResourceModule {
         root?: string
         projectTrusted?: boolean
     }): Promise<AssistantPromptResourcesPayload>
+    getZyraSkillSourceOverview(options?: {
+        project?: string | null
+        root?: string
+        projectTrusted?: boolean
+    }): Promise<AssistantSkillSourceOverviewPayload>
+    updateZyraSkillSourceSettings(
+        settings: AssistantSkillSourceSettings,
+        options?: { project?: string | null; root?: string; projectTrusted?: boolean }
+    ): Promise<AssistantSkillSourceOverviewPayload>
 }
 
 type PromptResourceCacheEntry = {
@@ -85,4 +98,27 @@ export function clearAssistantPromptResourceCache(projectPath?: string | null): 
         return
     }
     promptResourceCache.delete(projectCacheKey(projectPath))
+}
+
+export async function getAssistantSkillSourceOverview(
+    projectPath?: string | null
+): Promise<AssistantSkillSourceOverviewPayload> {
+    const sdk = await loadZyraPromptResourceModule()
+    return sdk.getZyraSkillSourceOverview({
+        project: projectPath ? resolve(projectPath) : null,
+        root: resolveZyraRoot()
+    })
+}
+
+export async function updateAssistantSkillSourceSettings(
+    settings: AssistantSkillSourceSettings,
+    projectPath?: string | null
+): Promise<AssistantSkillSourceOverviewPayload> {
+    const sdk = await loadZyraPromptResourceModule()
+    const overview = await sdk.updateZyraSkillSourceSettings(settings, {
+        project: projectPath ? resolve(projectPath) : null,
+        root: resolveZyraRoot()
+    })
+    clearAssistantPromptResourceCache()
+    return overview
 }

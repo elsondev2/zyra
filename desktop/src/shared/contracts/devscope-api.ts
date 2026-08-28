@@ -35,6 +35,8 @@ import type {
     AssistantSendPromptOptions,
     AssistantSendRealtimeVoiceMessageInput,
     AssistantSelectThreadInput,
+    AssistantSkillSourceOverviewPayload,
+    AssistantSkillSourceSettings,
     AssistantStartRealtimeVoiceInput,
     AssistantSetPlaygroundRootInput,
     AssistantSessionTurnUsageResultPayload,
@@ -579,6 +581,8 @@ export interface DevScopeAssistantApi {
     getSessionTurnUsage: (input?: AssistantGetSessionTurnUsageInput) => Promise<DevScopeResult<AssistantSessionTurnUsageResultPayload>>
     listModels: (forceRefresh?: boolean) => Promise<DevScopeResult<{ models: AssistantModelInfo[] }>>
     listPromptResources: (projectPath?: string | null, forceRefresh?: boolean) => Promise<DevScopeResult<AssistantPromptResourcesPayload>>
+    getSkillSourceOverview: (projectPath?: string | null) => Promise<DevScopeResult<AssistantSkillSourceOverviewPayload>>
+    updateSkillSourceSettings: (settings: AssistantSkillSourceSettings, projectPath?: string | null) => Promise<DevScopeResult<AssistantSkillSourceOverviewPayload>>
     connect: (options?: AssistantConnectOptions) => Promise<DevScopeResult<{ threadId: string }>>
     disconnect: (sessionId?: string) => Promise<DevScopeResult>
     createSession: (input?: AssistantCreateSessionInput) => Promise<DevScopeResult<{ sessionId: string }>>

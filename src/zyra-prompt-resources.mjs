@@ -1,7 +1,22 @@
-import { open, readdir, lstat } from 'node:fs/promises'
+import { open, readdir, realpath, stat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  normalizeZyraSkillSourceSettings,
+  readZyraSkillSourceSettings,
+  writeZyraSkillSourceSettings,
+  ZYRA_SKILL_SOURCE_DEFINITIONS,
+} from './zyra-skill-source-settings.mjs'
+
+export {
+  DEFAULT_ZYRA_SKILL_SOURCE_SETTINGS,
+  normalizeZyraSkillSourceSettings,
+  readZyraSkillSourceSettings,
+  writeZyraSkillSourceSettings,
+  ZYRA_SKILL_SOURCE_DEFINITIONS,
+  zyraSkillSourceSettingsPath,
+} from './zyra-skill-source-settings.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const RESOURCE_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
@@ -35,7 +50,7 @@ function commandSources(project, options = {}) {
 
 async function pathIsDirectory(value) {
   try {
-    return (await lstat(value)).isDirectory()
+    return (await stat(value)).isDirectory()
   } catch {
     return false
   }
@@ -46,7 +61,8 @@ async function findProjectAgentsSkillDirectories(project) {
   const result = []
   let current = path.resolve(project)
   for (let depth = 0; depth < ZYRA_PROMPT_RESOURCE_LIMITS.maxSources; depth += 1) {
-    result.push(path.join(current, '.agents', 'skills'))
+    const candidate = path.join(current, '.agents', 'skills')
+    if (await pathIsDirectory(candidate)) result.push(candidate)
     if (await pathIsDirectory(path.join(current, '.git'))) break
     const parent = path.dirname(current)
     if (parent === current) break
@@ -76,19 +92,71 @@ export async function resolveZyraSkillSources(options = {}) {
   const home = path.resolve(options.home ?? os.homedir())
   const project = options.project ? path.resolve(options.project) : null
   const projectTrusted = options.projectTrusted ?? await readProjectTrust(project)
-  const projectAgents = projectTrusted ? await findProjectAgentsSkillDirectories(project) : []
-  const sources = [
-    { dir: path.join(root, 'skills'), scope: 'built-in', loaderSource: 'builtin', allowRootMarkdown: true },
-    { dir: path.join(home, '.pi', 'agent', 'skills'), scope: 'personal', loaderSource: 'user', allowRootMarkdown: true },
-    { dir: path.join(home, '.agents', 'skills'), scope: 'personal', loaderSource: 'user', allowRootMarkdown: false },
-    { dir: path.join(home, '.zyra', 'skills'), scope: 'personal', loaderSource: 'user', allowRootMarkdown: true },
-    ...(projectTrusted && project ? [
-      { dir: path.join(project, '.pi', 'skills'), scope: 'project', loaderSource: 'project', allowRootMarkdown: true },
-      ...projectAgents.map((dir) => ({ dir, scope: 'project', loaderSource: 'project', allowRootMarkdown: false })),
-    ] : []),
-    ...(project ? [{ dir: path.join(project, '.zyra', 'skills'), scope: 'project', loaderSource: 'project', allowRootMarkdown: true }] : []),
-  ]
-  return sources.slice(-ZYRA_PROMPT_RESOURCE_LIMITS.maxSources)
+  const settings = options.skillSourceSettings
+    ? normalizeZyraSkillSourceSettings(options.skillSourceSettings)
+    : await readZyraSkillSourceSettings({ home })
+  const enabledSourceIds = new Set(settings.enabledSourceIds)
+  const definitions = new Map(ZYRA_SKILL_SOURCE_DEFINITIONS.map((source) => [source.id, source]))
+  for (const custom of settings.customSources) {
+    definitions.set(custom.id, {
+      ...custom,
+      description: 'Skills from a folder you selected.',
+      allowRootMarkdown: false,
+      custom: true,
+    })
+  }
+  const orderedSourceIds = [...settings.priority].reverse()
+  const projectAgents = projectTrusted && project ? await findProjectAgentsSkillDirectories(project) : []
+  const sources = [{
+    dir: path.join(root, 'skills'),
+    scope: 'built-in',
+    sourceId: 'built-in',
+    sourceLabel: 'Built-in',
+    loaderSource: 'builtin',
+    allowRootMarkdown: true,
+    enabled: true,
+  }]
+
+  for (const sourceId of orderedSourceIds) {
+    const definition = definitions.get(sourceId)
+    if (!definition || (!options.includeDisabled && !enabledSourceIds.has(sourceId))) continue
+    const dir = definition.custom
+      ? definition.path
+      : path.join(home, ...definition.personalSegments)
+    sources.push({
+      dir,
+      scope: 'personal',
+      sourceId,
+      sourceLabel: definition.label,
+      loaderSource: 'user',
+      allowRootMarkdown: definition.allowRootMarkdown === true,
+      enabled: enabledSourceIds.has(sourceId),
+    })
+  }
+
+  if (project) {
+    for (const sourceId of orderedSourceIds) {
+      const definition = definitions.get(sourceId)
+      if (!definition || definition.custom || (!options.includeDisabled && !enabledSourceIds.has(sourceId))) continue
+      if (sourceId !== 'zyra' && !projectTrusted) continue
+      const dirs = sourceId === 'agents'
+        ? projectAgents
+        : [path.join(project, ...definition.projectSegments)]
+      for (const dir of dirs) {
+        sources.push({
+          dir,
+          scope: 'project',
+          sourceId,
+          sourceLabel: definition.label,
+          loaderSource: 'project',
+          allowRootMarkdown: definition.allowRootMarkdown === true,
+          enabled: enabledSourceIds.has(sourceId),
+        })
+      }
+    }
+  }
+  if (sources.length <= ZYRA_PROMPT_RESOURCE_LIMITS.maxSources) return sources
+  return [sources[0], ...sources.slice(1).slice(-(ZYRA_PROMPT_RESOURCE_LIMITS.maxSources - 1))]
 }
 
 function createBudget() {
@@ -251,6 +319,20 @@ async function loadSkillFile(file, scope, diagnostics) {
 
 async function discoverSkills(source, budget, diagnostics) {
   const skills = []
+  const visitedDirectories = new Set()
+  const entryKind = async (entry, fullPath) => {
+    if (entry.isDirectory()) return 'directory'
+    if (entry.isFile()) return 'file'
+    if (!entry.isSymbolicLink()) return null
+    try {
+      const linked = await stat(fullPath)
+      if (linked.isDirectory()) return 'directory'
+      if (linked.isFile()) return 'file'
+    } catch {
+      return null
+    }
+    return null
+  }
   const visit = async (dir, depth, includeRootFiles) => {
     if (budget.stopped || depth > ZYRA_PROMPT_RESOURCE_LIMITS.maxDepth) {
       if (depth > ZYRA_PROMPT_RESOURCE_LIMITS.maxDepth) {
@@ -258,12 +340,24 @@ async function discoverSkills(source, budget, diagnostics) {
       }
       return
     }
+    try {
+      const canonical = await realpath(dir)
+      const key = process.platform === 'win32' ? canonical.toLowerCase() : canonical
+      if (visitedDirectories.has(key)) return
+      visitedDirectories.add(key)
+    } catch {
+      // safeEntries reports readable-directory failures without leaking paths.
+    }
     const entries = await safeEntries(dir, budget, diagnostics)
-    const declared = entries.find((entry) => entry.name === 'SKILL.md' && entry.isFile())
-    if (declared) {
+    const declared = entries.find((entry) => entry.name === 'SKILL.md')
+    if (declared && await entryKind(declared, path.join(dir, declared.name)) === 'file') {
       budget.files += 1
       const skill = await loadSkillFile(path.join(dir, declared.name), source.scope, diagnostics)
-      if (skill) skills.push(skill)
+      if (skill) skills.push({
+        ...skill,
+        sourceId: source.sourceId,
+        sourceLabel: source.sourceLabel,
+      })
       return
     }
     for (const entry of entries) {
@@ -272,14 +366,19 @@ async function discoverSkills(source, budget, diagnostics) {
         addDiagnostic(diagnostics, 'limit', 'Prompt resource file limit reached; remaining entries were skipped.')
         return
       }
-      if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.isSymbolicLink()) continue
+      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue
       const fullPath = path.join(dir, entry.name)
-      if (entry.isDirectory()) {
+      const kind = await entryKind(entry, fullPath)
+      if (kind === 'directory') {
         await visit(fullPath, depth + 1, false)
-      } else if (entry.isFile() && includeRootFiles && entry.name.toLowerCase().endsWith('.md')) {
+      } else if (kind === 'file' && includeRootFiles && entry.name.toLowerCase().endsWith('.md')) {
         budget.files += 1
         const skill = await loadSkillFile(fullPath, source.scope, diagnostics)
-        if (skill) skills.push(skill)
+        if (skill) skills.push({
+          ...skill,
+          sourceId: source.sourceId,
+          sourceLabel: source.sourceLabel,
+        })
       }
       if (skills.length >= ZYRA_PROMPT_RESOURCE_LIMITS.maxSkills) return
     }
@@ -288,8 +387,56 @@ async function discoverSkills(source, budget, diagnostics) {
   return skills
 }
 
+const SKILL_SCOPE_PRIORITY = Object.freeze({ 'built-in': 0, personal: 1, project: 2 })
+
+function selectSkillCandidate(candidates, settings) {
+  if (!candidates.length) return null
+  const highestScope = Math.max(...candidates.map((candidate) => SKILL_SCOPE_PRIORITY[candidate.scope] ?? -1))
+  const scoped = candidates.filter((candidate) => (SKILL_SCOPE_PRIORITY[candidate.scope] ?? -1) === highestScope)
+  const preferredSourceId = settings.preferredSourceBySkill[scoped[0].name]
+  if (preferredSourceId) {
+    const preferred = scoped.filter((candidate) => candidate.sourceId === preferredSourceId)
+    if (preferred.length) return preferred[0]
+  }
+  return scoped[0]
+}
+
+function describeSkillCollision(name, candidates, winner) {
+  const sources = [...new Set(candidates.map((candidate) => `${candidate.sourceLabel} ${candidate.scope}`))]
+  return `Skill ${name} is available from ${sources.join(', ')}; ${winner.sourceLabel} ${winner.scope} wins.`
+}
+
+function buildSkillConflicts(candidatesByName, settings) {
+  const conflicts = []
+  for (const [name, candidates] of candidatesByName) {
+    const sourceIds = [...new Set(candidates.map((candidate) => candidate.sourceId))]
+    if (sourceIds.length < 2) continue
+    const winner = selectSkillCandidate(candidates, settings)
+    if (!winner) continue
+    const sources = []
+    const seen = new Set()
+    for (const candidate of candidates) {
+      if (seen.has(candidate.sourceId)) continue
+      seen.add(candidate.sourceId)
+      sources.push({ id: candidate.sourceId, label: candidate.sourceLabel })
+    }
+    conflicts.push({
+      name,
+      winnerSourceId: winner.sourceId,
+      winnerSourceLabel: winner.sourceLabel,
+      preferredSourceId: settings.preferredSourceBySkill[name] || null,
+      sources,
+    })
+  }
+  return conflicts.sort((left, right) => left.name.localeCompare(right.name))
+}
+
 export async function listZyraPromptResourceManifest(options = {}) {
   const project = options.project ? path.resolve(options.project) : null
+  const home = path.resolve(options.home ?? os.homedir())
+  const skillSourceSettings = options.skillSourceSettings
+    ? normalizeZyraSkillSourceSettings(options.skillSourceSettings)
+    : await readZyraSkillSourceSettings({ home })
   const diagnostics = []
   const commandsByName = new Map(BUILT_IN_DESKTOP_COMMANDS.map((command) => [command.name, {
     ...command,
@@ -318,22 +465,116 @@ export async function listZyraPromptResourceManifest(options = {}) {
     }
   }
 
-  const skillsByName = new Map()
+  const skillCandidatesByName = new Map()
   const skillBudget = createBudget()
-  for (const source of await resolveZyraSkillSources({ ...options, project })) {
+  const skillSources = await resolveZyraSkillSources({
+    ...options,
+    project,
+    home,
+    skillSourceSettings,
+  })
+  // Scan high-priority sources first so lower-priority folders cannot exhaust
+  // the shared discovery budget before a configured winner is inspected.
+  for (const source of [...skillSources].reverse()) {
     const skills = await discoverSkills(source, skillBudget, diagnostics)
     for (const skill of skills) {
-      const existing = skillsByName.get(skill.name)
-      if (existing) addDiagnostic(diagnostics, 'collision', `Skill ${skill.name} from ${skill.scope} overrides ${existing.scope}.`)
-      skillsByName.set(skill.name, skill)
-      if (skillsByName.size >= ZYRA_PROMPT_RESOURCE_LIMITS.maxSkills) break
+      const candidates = skillCandidatesByName.get(skill.name) || []
+      candidates.push(skill)
+      skillCandidatesByName.set(skill.name, candidates)
+      if (skillCandidatesByName.size >= ZYRA_PROMPT_RESOURCE_LIMITS.maxSkills) break
     }
-    if (skillsByName.size >= ZYRA_PROMPT_RESOURCE_LIMITS.maxSkills || skillBudget.stopped) break
+    if (skillCandidatesByName.size >= ZYRA_PROMPT_RESOURCE_LIMITS.maxSkills || skillBudget.stopped) break
+  }
+
+  const skills = []
+  for (const [name, candidates] of skillCandidatesByName) {
+    const winner = selectSkillCandidate(candidates, skillSourceSettings)
+    if (!winner) continue
+    if (candidates.length > 1) addDiagnostic(diagnostics, 'collision', describeSkillCollision(name, candidates, winner))
+    skills.push(winner)
   }
 
   return {
     commands: [...commandsByName.values()].sort((left, right) => left.name.localeCompare(right.name)),
-    skills: [...skillsByName.values()].sort((left, right) => left.name.localeCompare(right.name)),
+    skills: skills.sort((left, right) => left.name.localeCompare(right.name)),
+    skillConflicts: buildSkillConflicts(skillCandidatesByName, skillSourceSettings),
     diagnostics,
   }
+}
+
+export async function getZyraSkillSourceOverview(options = {}) {
+  const project = options.project ? path.resolve(options.project) : null
+  const home = path.resolve(options.home ?? os.homedir())
+  const settings = options.skillSourceSettings
+    ? normalizeZyraSkillSourceSettings(options.skillSourceSettings)
+    : await readZyraSkillSourceSettings({ home })
+  const diagnostics = []
+  const budget = createBudget()
+  const sourcePaths = new Map()
+  const skillNamesBySource = new Map()
+  const activeCandidatesByName = new Map()
+
+  const overviewSources = await resolveZyraSkillSources({
+    ...options,
+    project,
+    home,
+    skillSourceSettings: settings,
+    includeDisabled: true,
+  })
+  for (const source of [...overviewSources].reverse()) {
+    if (source.sourceId === 'built-in') continue
+    const paths = sourcePaths.get(source.sourceId) || []
+    paths.push({
+      path: source.dir,
+      scope: source.scope,
+      detected: await pathIsDirectory(source.dir),
+    })
+    sourcePaths.set(source.sourceId, paths)
+
+    const skills = await discoverSkills(source, budget, diagnostics)
+    const names = skillNamesBySource.get(source.sourceId) || new Set()
+    for (const skill of skills) {
+      names.add(skill.name)
+      if (!source.enabled) continue
+      const candidates = activeCandidatesByName.get(skill.name) || []
+      candidates.push(skill)
+      activeCandidatesByName.set(skill.name, candidates)
+    }
+    skillNamesBySource.set(source.sourceId, names)
+    if (budget.stopped) break
+  }
+
+  const definitionById = new Map(ZYRA_SKILL_SOURCE_DEFINITIONS.map((source) => [source.id, source]))
+  for (const custom of settings.customSources) {
+    definitionById.set(custom.id, {
+      ...custom,
+      description: 'Skills from a folder you selected.',
+    })
+  }
+
+  return {
+    settings,
+    sources: settings.priority.map((id, priority) => {
+      const definition = definitionById.get(id)
+      const paths = sourcePaths.get(id) || []
+      return {
+        id,
+        label: definition?.label || 'Skill folder',
+        description: definition?.description || 'Compatible skills from a selected folder.',
+        enabled: settings.enabledSourceIds.includes(id),
+        priority,
+        detected: paths.some((entry) => entry.detected),
+        skillCount: skillNamesBySource.get(id)?.size || 0,
+        paths,
+        custom: settings.customSources.some((source) => source.id === id),
+      }
+    }),
+    conflicts: buildSkillConflicts(activeCandidatesByName, settings),
+    diagnostics,
+  }
+}
+
+export async function updateZyraSkillSourceSettings(value, options = {}) {
+  const settings = await writeZyraSkillSourceSettings(value, options)
+  return getZyraSkillSourceOverview({ ...options, skillSourceSettings: settings })
 }

@@ -321,6 +321,14 @@ export function createBrowserAssistantBridgeAdapter(): DevScopeApi['assistant'] 
             success: false,
             error: 'Commands and skills are available only in trusted Zyra Desktop windows.'
         }),
+        getSkillSourceOverview: async () => ({
+            success: false,
+            error: 'Skill sources can be managed only in Zyra Desktop.'
+        }),
+        updateSkillSourceSettings: async () => ({
+            success: false,
+            error: 'Skill sources can be managed only in Zyra Desktop.'
+        }),
         connect: remoteAssistantMethod('connect'),
         disconnect: remoteAssistantMethod('disconnect'),
         createSession: remoteAssistantMethod('createSession'),

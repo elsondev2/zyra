@@ -23,6 +23,7 @@ import type {
     AssistantSendPromptOptions,
     AssistantSendRealtimeVoiceMessageInput,
     AssistantSelectThreadInput,
+    AssistantSkillSourceSettings,
     AssistantStartRealtimeVoiceInput,
     AssistantSetPlaygroundRootInput,
     AssistantTranscribeVoiceInput,
@@ -123,6 +124,21 @@ export function handleAssistantListPromptResources(
     forceRefresh = false
 ) {
     return withAssistantResult(() => getAssistantService().listPromptResources(projectPath, forceRefresh === true))
+}
+
+export function handleAssistantGetSkillSourceOverview(
+    _event: Electron.IpcMainInvokeEvent,
+    projectPath?: string | null
+) {
+    return withAssistantResult(() => getAssistantService().getSkillSourceOverview(projectPath))
+}
+
+export function handleAssistantUpdateSkillSourceSettings(
+    _event: Electron.IpcMainInvokeEvent,
+    settings: AssistantSkillSourceSettings,
+    projectPath?: string | null
+) {
+    return withAssistantResult(() => getAssistantService().updateSkillSourceSettings(settings, projectPath))
 }
 
 export function handleAssistantConnect(_event: Electron.IpcMainInvokeEvent, options?: AssistantConnectOptions) {
