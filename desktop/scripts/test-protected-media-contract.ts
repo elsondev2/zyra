@@ -1,0 +1,38 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+
+const desktopRoot = path.resolve(import.meta.dirname, '..')
+const packageJson = JSON.parse(readFileSync(path.join(desktopRoot, 'package.json'), 'utf8'))
+const packageLock = JSON.parse(readFileSync(path.join(desktopRoot, 'package-lock.json'), 'utf8'))
+const protectedMediaSource = readFileSync(path.join(desktopRoot, 'src/main/protected-media-service.ts'), 'utf8')
+const mainSource = readFileSync(path.join(desktopRoot, 'src/main/index.ts'), 'utf8')
+const browserHandlerSource = readFileSync(path.join(desktopRoot, 'src/main/ipc/handlers/browser-preview-handlers.ts'), 'utf8')
+const adBlockSource = readFileSync(path.join(desktopRoot, 'src/main/browser-adblock-service.ts'), 'utf8')
+const browserWorkspaceSource = readFileSync(path.join(desktopRoot, 'src/renderer/src/pages/assistant/AssistantBrowserWorkspace.tsx'), 'utf8')
+const ensureElectronSource = readFileSync(path.join(desktopRoot, 'scripts/maint/ensure-electron.mjs'), 'utf8')
+const packageDesktopSource = readFileSync(path.join(desktopRoot, 'scripts/release/package-desktop.mjs'), 'utf8')
+const validatePackagedSource = readFileSync(path.join(desktopRoot, 'scripts/release/validate-packaged-app.mjs'), 'utf8')
+const protectedMediaProbeSource = readFileSync(path.join(desktopRoot, 'scripts/maint/probe-protected-media.cjs'), 'utf8')
+
+assert.match(packageJson.devDependencies.electron, /castlabs\/electron-releases[\s\S]*v43\.2\.0%2Bwvcus/, 'Desktop pins the Widevine-capable Electron fork')
+assert.equal(packageLock.packages['node_modules/electron'].version, '43.2.0+wvcus')
+assert.equal(packageJson.build.electronDownload.mirror, 'https://github.com/castlabs/electron-releases/releases/download/v')
+assert.match(packageJson.scripts.postinstall, /ensure-electron\.mjs/, 'clean installs materialize the CastLabs runtime before use')
+assert.match(ensureElectronSource, /installedPackageVersion !== expectedVersion/, 'stale npm metadata cannot silently retain stock Electron')
+assert.match(ensureElectronSource, /restoredVersion !== expectedVersion/, 'the downloaded binary must match the integrity-locked package version')
+assert.match(protectedMediaSource, /components\.whenReady\(\[components\.WIDEVINE_CDM_ID\]\)/, 'Widevine installs through the legal component updater')
+assert.match(protectedMediaSource, /PROTECTED_MEDIA_TIMEOUT_MS = 3 \* 60_000[\s\S]*Promise\.race/, 'Browser readiness has a bounded Widevine wait')
+assert.match(protectedMediaSource, /componentInstallationPromise = null[\s\S]*throw error/, 'a transient component failure remains retryable')
+assert.match(protectedMediaSource, /app\.isPackaged[\s\S]*schemaVersion === 1[\s\S]*productionVmp === true[\s\S]*marker\.platform === process\.platform/, 'runtime accepts only a complete platform-matched production VMP marker in packaged builds')
+assert.match(mainSource, /void initializeProtectedMedia\(\)/, 'component preparation starts as soon as Electron is ready')
+assert.match(browserHandlerSource, /const protectedMedia = getProtectedMediaStatus\(\)[\s\S]*void initializeProtectedMedia\(\)/, 'ordinary Browser startup is immediate while Widevine preparation continues in main')
+assert.match(adBlockSource, /@@\|\|open\.spotify\.com\^\$document/, 'Spotify is exempt from partial ad/media filtering')
+assert.match(browserWorkspaceSource, /getBrowserPreviewConfig\(\)[\s\S]*protectedMedia: result\.protectedMedia[\s\S]*poll\(\)/, 'renderer refreshes Widevine status without blocking ordinary browsing')
+assert.match(protectedMediaProbeSource, /session\.fromPartition\('persist:zyra-protected-media-smoke'[\s\S]*permission !== 'mediaKeySystem'[\s\S]*requestMediaKeySystemAccess/, 'native smoke exercises Widevine through a persistent permission-scoped Browser session')
+assert.match(readFileSync(path.join(desktopRoot, 'build/entitlements.mac.plist'), 'utf8'), /com\.apple\.security\.cs\.disable-library-validation/, 'macOS permits the downloaded CDM library')
+assert.match(readFileSync(path.join(desktopRoot, 'scripts/release/widevine-vmp-sign.cjs'), 'utf8'), /productionVmp: true[\s\S]*zyra-widevine-vmp\.json|zyra-widevine-vmp\.json[\s\S]*productionVmp: true/, 'successful EVS signing stamps a runtime-verifiable production marker')
+assert.match(packageDesktopSource, /--expected-production-vmp=/, 'packaging tells validation whether a production marker is allowed')
+assert.match(validatePackagedSource, /Unsigned or unpacked packages must not claim production Widevine VMP status/, 'unsigned and unpacked artifacts explicitly reject stray production markers')
+
+console.log('Protected media contract: ok')

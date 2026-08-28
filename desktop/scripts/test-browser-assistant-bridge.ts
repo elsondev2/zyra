@@ -40,7 +40,7 @@ assert.match(
     /app\.on\('window-all-closed', \(\) => \{\s*if \(process\.platform === 'darwin'\) return\s*app\.quit\(\)/,
     'closing the last macOS window must keep the browser runtime alive until the app actually quits'
 )
-assert.match(mainSource, /app\.on\('before-quit', \(event\) => \{[\s\S]*event\.preventDefault\(\)[\s\S]*Promise\.all\([\s\S]*disposeAssistantService\(\)[\s\S]*Zyra kept running because Assistant state could not be committed/, 'Desktop quit waits for Assistant persistence and refuses to discard a failed batch')
+assert.match(mainSource, /app\.on\('before-quit', \(event\) => \{[\s\S]*event\.preventDefault\(\)[\s\S]*flushGlobalBrowserProfileStorage\(\)\.then[\s\S]*Promise\.all\([\s\S]*disposeAssistantService\(\)[\s\S]*Zyra kept running because local state could not be committed/, 'Desktop quit persists Browser and Assistant state and refuses to discard a failed batch')
 assert.equal(assistantHandlersSource.includes('withDesktopAssistantSelectionLease(() => getAssistantService().connect(options))'), true, 'Desktop auto-reconnect must not steal a browser-routed chat')
 assert.equal(preloadRelaySource.includes('Object.prototype.hasOwnProperty.call'), true, 'the generic relay must only invoke methods owned by the exposed Desktop adapter')
 assert.equal(preloadRelaySource.includes("relayEvent('previewTerminal'"), true, 'terminal output must cross the browser event relay')
@@ -62,6 +62,7 @@ let eventListener: ((payload: AssistantEventStreamPayload) => void) | null = nul
 let realtimeVoiceEventListener: ((event: AssistantRealtimeVoiceEvent) => void) | null = null
 let devscopeEventListener: ((event: BrowserDevscopeRelayEvent) => void) | null = null
 const browserClientCounts: number[] = []
+const devscopeInvocations: Array<{ methodPath: string[]; args: unknown[] }> = []
 const service = {
     subscribeExternalEvents(listener: (payload: AssistantEventStreamPayload) => void) {
         eventListener = listener
@@ -107,7 +108,10 @@ const bridge = new BrowserAssistantBridge({
     capability,
     descriptorPath,
     port: 0,
-    invokeDevscope: async (methodPath, args) => ({ methodPath, args }),
+    invokeDevscope: async (methodPath, args) => {
+        devscopeInvocations.push({ methodPath, args })
+        return { methodPath, args }
+    },
     subscribeDevscopeEvents: (listener) => {
         devscopeEventListener = listener
         return () => { devscopeEventListener = null }
@@ -183,6 +187,21 @@ try {
         body: JSON.stringify({ path: ['constructor', 'constructor'], args: [] })
     })
     assert.equal(prototypeTraversal.status, 400, 'browser action paths must reject prototype traversal')
+
+    const desktopOnlyMethods = ['getBrowserHistory', 'recordBrowserHistory', 'clearBrowserHistory', 'getRunningLocalServers', 'getBrowserSearchSuggestions', 'getBrowserAdBlockStatus', 'setBrowserAdBlockEnabled', 'onBrowserAdDetected', 'getBrowserBackgroundProviderStatus', 'validateBrowserUnsplashAccessKey', 'getBrowserRemoteBackgrounds', 'trackBrowserRemoteBackground', 'scanExternalBrowserHistoryProfiles', 'importExternalBrowserHistory']
+    for (const method of desktopOnlyMethods) {
+        const desktopOnlyBypass = await fetch(`${baseUrl}${BROWSER_DEVSCOPE_BRIDGE_INVOKE_PATH}`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ path: [method], args: [] })
+        })
+        assert.equal(desktopOnlyBypass.status, 400, `thin Browser clients cannot bypass the adapter to invoke ${method}`)
+    }
+    assert.deepEqual(
+        devscopeInvocations.map(({ methodPath }) => methodPath),
+        [['selectFolder']],
+        'raw HTTP attempts for every Desktop-only Browser operation are rejected before the native adapter runs'
+    )
 
     const rejectedOrigin = await fetch(`${baseUrl}${BROWSER_ASSISTANT_BRIDGE_INVOKE_PATH}`, {
         method: 'POST',
@@ -299,7 +318,11 @@ try {
         threadId: 'thread:real',
         realtimeSessionId: 'realtime-owner-1',
         realtimeSessionGeneration: 1,
-        messages: [{ type: 'response.create' }]
+        messages: [{
+            type: 'session.context.append',
+            channel: 'speakable',
+            content: [{ type: 'input_text', text: 'Owner-scoped narration.' }]
+        }]
     })
     const voiceReader = voiceEventResponse.body!.getReader()
     const voiceDecoder = new TextDecoder()

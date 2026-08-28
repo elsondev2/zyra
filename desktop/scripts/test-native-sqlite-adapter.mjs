@@ -13,7 +13,9 @@ try {
         CREATE TABLE records (id TEXT PRIMARY KEY, value TEXT NOT NULL, sequence INTEGER NOT NULL);
         CREATE INDEX records_sequence ON records(sequence);
     `)
-    db.run('INSERT INTO records (id, value, sequence) VALUES (?, ?, ?)', ['one', 'alpha', 1])
+    const insertStatement = db.prepare('INSERT INTO records (id, value, sequence) VALUES (?, ?, ?)')
+    insertStatement.run(['one', 'alpha', 1])
+    insertStatement.free()
     db.run('BEGIN IMMEDIATE')
     db.run('INSERT INTO records (id, value, sequence) VALUES (?, ?, ?)', ['two', 'beta', 2])
     db.run('COMMIT')

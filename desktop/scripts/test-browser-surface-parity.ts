@@ -6,7 +6,7 @@ const inspectorSource = readFileSync(new URL('../src/renderer/src/pages/assistan
 const browserAdapterSource = readFileSync(new URL('../src/renderer/src/lib/browser-assistant-bridge-adapter.ts', import.meta.url), 'utf8')
 const browserHostSource = readFileSync(new URL('../src/main/browser-client-host.ts', import.meta.url), 'utf8')
 
-assert.match(titleBarSource, /\.\.\.\(desktopWindowControlsAvailable \? \[\[/u, 'Chrome must not expose the inert Close window app-menu action')
+assert.match(titleBarSource, /\.\.\.\(nativeDesktop \? \[\[/u, 'Chrome must not expose the inert Close window app-menu action')
 assert.match(inspectorSource, /\.\.\.\(isElectronRendererRuntime\(\)[\s\S]{0,180}id: 'browser'/u, 'the integrated Browser workspace must stay Electron-only')
 assert.match(inspectorSource, /restoredWorkspace\.tabs\.filter\(\(tab\) => tab\.kind !== 'browser'\)/u, 'Chrome must discard stale persisted webview tabs instead of reviving an unsupported workspace')
 assert.match(inspectorSource, /if \(!isElectronRendererRuntime\(\) \|\| !projectPath\)[\s\S]{0,120}openBrowserPreviewExternal/u, 'resource links must open externally in Chrome instead of routing to an unavailable webview')

@@ -260,7 +260,7 @@ assert.equal(migrated.assistantProductProfile, 'builder')
 assert.equal(migrated.assistantDefaultModel, 'legacy-model')
 assert.equal(migrated.assistantTitleModel, 'openai-codex/gpt-5.6-luna')
 assert.equal(migrated.assistantDefaultRuntimeMode, 'full-access')
-assert.equal(migrated.assistantDefaultInteractionMode, 'plan')
+assert.equal('assistantDefaultInteractionMode' in migrated, false, 'retired Plan-mode preferences are removed')
 assert.equal(migrated.assistantDefaultEffort, 'high')
 assert.equal(migrated.assistantDefaultFastMode, true)
 
@@ -294,6 +294,8 @@ assert.equal(findSettingsSearchTargets('terminal-runtime', 'font size')[0]?.targ
 assert.equal(findSettingsSearchTargets('connections', 'phone')[0]?.label, 'Other devices', 'Settings keywords must locate future-facing device controls')
 assert.equal(findSettingsSearchTargets('assistant', 'web access')[0]?.label, 'Web access', 'Settings search must locate the web default after it leaves onboarding')
 assert.equal(findSettingsSearchTargets('assistant', 'luna')[0]?.label, 'Chat title model', 'Settings search must locate the independent chat-title model')
+assert.equal(findSettingsSearchTargets('assistant', 'detailed reasoning')[0]?.label, 'Reasoning summaries', 'Settings search must locate readable reasoning controls')
+assert.equal(findSettingsSearchTargets('assistant', '256k')[0]?.label, 'Context limit', 'Settings search must locate the real automatic-compaction boundary')
 
 const settingsShellSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/SettingsShell.tsx'), 'utf8')
 assert.match(
@@ -304,6 +306,7 @@ assert.match(
 assert.match(settingsShellSource, /<section ref=\{contentScrollRef\}[^>]+overflow-y-auto/, 'the reset must target the real Settings content scroller')
 assert.match(settingsShellSource, /data-settings-sidebar-peek="true"/, 'collapsed Settings should expose the same left-edge peek target as chat')
 assert.match(settingsShellSource, /zyra-sidebar-floating-surface absolute bottom-3 left-2 top-2 z-\[60\]/, 'collapsed Settings should use the shared floating bubble surface')
+assert.match(settingsShellSource, /width: `\$\{ASSISTANT_BUBBLE_SIDEBAR_WIDTH\}px`/, 'the Settings bubble should use the same stable wide width as chat')
 assert.match(settingsShellSource, /schedulePreviewClose\(ASSISTANT_SIDEBAR_COLLAPSE_MORPH_MS\)/, 'Settings collapse should retain the shared bubble morph before closing')
 assert.match(settingsShellSource, /aria-label=\{previewPinned \? 'Unpin bubble sidebar' : 'Pin bubble sidebar'\}/, 'the Settings bubble should expose the shared pin control')
 assert.match(settingsShellSource, /aria-label="Expand sidebar"/, 'the Settings bubble should expose the shared expand control')
@@ -323,6 +326,21 @@ assert.match(
     assistantSettingsSource,
     /Names new chats without adding the title request to the conversation\./,
     'the title-model row must explain that utility prompts stay out of the chat timeline'
+)
+assert.match(
+    assistantSettingsSource,
+    /title="Reasoning summaries"[\s\S]{0,1200}<option value="detailed">Detailed<\/option>/,
+    'Assistant Settings must expose the provider-supported detailed reasoning-summary mode'
+)
+assert.match(
+    assistantSettingsSource,
+    /title="Context limit"[\s\S]{0,1200}assistantContextCompactionThresholdTokens: Number\(event\.target\.value\)/,
+    'Assistant Settings must persist the real automatic-compaction threshold'
+)
+assert.match(
+    assistantSettingsSource,
+    /ASSISTANT_CONTEXT_COMPACTION_THRESHOLD_OPTIONS\.map/,
+    'the context selector must use the shared bounded runtime policy options'
 )
 const accountSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/AccountSettings.tsx'), 'utf8')
 const accountResetCreditsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/AccountResetCreditsSection.tsx'), 'utf8')
@@ -451,6 +469,7 @@ const settingsCss = readFileSync(resolve(import.meta.dir, '../src/renderer/src/i
 assert.match(settingsCss, /\.zyra-settings-switch\[data-state='checked'\]/, 'Checked switch CSS must be explicit')
 assert.match(settingsCss, /\.zyra-settings-switch:focus-visible/, 'Switch focus state must remain visible')
 assert.match(settingsCss, /\.zyra-settings-section-body > \* \+ \*/, 'Every Settings row type must share section dividers')
+assert.match(settingsCss, /\.settings-content-scrollbar\s*\{[^}]*scrollbar-gutter:\s*stable;/, 'Settings pages must reserve the content scrollbar gutter even when a page is short')
 assert.doesNotMatch(settingsCss, /\.zyra-settings-footer::before/, 'Back to chats must not retain the old gradient-only divider')
 assert.match(settingsLayoutSource, /max-h-\[calc\(100vh-2\.5rem\)\][\s\S]{0,120}flex-col overflow-hidden/, 'Settings dialogs must remain viewport bounded')
 assert.match(settingsLayoutSource, /min-h-0 overflow-y-auto space-y-3/, 'Settings dialog bodies must scroll independently between fixed header and footer')

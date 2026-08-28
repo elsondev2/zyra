@@ -109,7 +109,7 @@ const driver = new FakeControlDriver()
 const broker = new AgentControlBroker({ drivers: [driver] })
 const targetId = broker.targets.createTargetId('zyra-browser')
 broker.registerTarget({
-    target: { kind: 'zyra-browser', targetId, tabId: 'browser:visual', ownerThreadId: 'thread:visual', guestIdentity: 'guest:visual', origin: 'http://127.0.0.1' },
+    target: { kind: 'zyra-browser', targetId, tabId: 'browser:visual', sessionMode: 'normal', ownerThreadId: 'thread:visual', guestIdentity: 'guest:visual', origin: 'http://127.0.0.1' },
     driver,
     trustedIdentity: {}
 })
@@ -142,22 +142,25 @@ const surfaceHost = new BrowserSurfaceHost({
     makeId: () => 'visual-open',
     timeoutMs: 2_000
 })
-const openedPromise = surfaceHost.openTab(principal, true)
+const openedPromise = surfaceHost.openTab(principal, true, 'incognito')
 assert.deepEqual(surfaceRequests[0] && {
     requestId: surfaceRequests[0].requestId,
     threadId: surfaceRequests[0].threadId,
     tabId: surfaceRequests[0].tabId,
+    sessionMode: surfaceRequests[0].sessionMode,
     reveal: surfaceRequests[0].reveal
 }, {
     requestId: 'browser-open:visual-open',
     threadId: principal.threadId,
     tabId: 'browser:agent:visual-open',
+    sessionMode: 'incognito',
     reveal: true
 })
 const openedTarget = {
     kind: 'zyra-browser' as const,
     targetId: 'zyra-browser:opened',
     tabId: surfaceRequests[0].tabId,
+    sessionMode: 'incognito' as const,
     ownerThreadId: principal.threadId,
     guestIdentity: 'guest:opened',
     origin: null
@@ -187,7 +190,7 @@ const delayedSurfaceHost = new BrowserSurfaceHost({
     makeId: () => 'delayed-visual-open',
     timeoutMs: 1_000
 })
-const delayedOpenedPromise = delayedSurfaceHost.openTab(principal, false)
+const delayedOpenedPromise = delayedSurfaceHost.openTab(principal, false, 'incognito')
 await new Promise((resolveDelay) => setTimeout(resolveDelay, 400))
 assert.equal(delayedSurfaceHost.acknowledge({
     requestId: delayedSurfaceRequests[0].requestId,
@@ -278,9 +281,11 @@ const revealedBrowserLayouts: Array<{ primary: string; secondary: string | null;
 const resizedInspectorWidths: number[] = []
 const closedBrowserTabs: string[] = []
 const browserTabCommands: Array<{ targetId: string; mode: string; url: string | null }> = []
+const openedBrowserSessionModes: string[] = []
 broker.setBrowserSurfaceController({
-    openTab: async (_requestPrincipal, reveal) => {
+    openTab: async (_requestPrincipal, reveal, sessionMode) => {
         assert.equal(reveal, true)
+        openedBrowserSessionModes.push(sessionMode)
         return broker.targets.get(targetId).target as Extract<ControlTarget, { kind: 'zyra-browser' }>
     },
     revealTabs: async (_requestPrincipal, primary, secondary, _signal, explicitLayout) => {
@@ -303,7 +308,10 @@ broker.setBrowserSurfaceController({
 })
 const openedByTool = await tool.execute('visual-open-tab', { operation: 'open_tab', reveal: true })
 assert.equal((openedByTool.details as any).target.targetId, targetId)
+assert.deepEqual(openedBrowserSessionModes, ['incognito'], 'agent-opened Browser tabs default to private storage')
 assert.match(String(openedByTool.content[0]?.text), /no navigation or input authority yet/i)
+await tool.execute('visual-open-normal-tab', { operation: 'open_tab', reveal: true, sessionMode: 'normal' })
+assert.deepEqual(openedBrowserSessionModes, ['incognito', 'normal'], 'agents can explicitly request a normal tab when persistent site state is required')
 const modelGrantPromise = tool.execute('visual-request-grant', {
     operation: 'request_grant', targetId, capabilities: ['observe.structure'], maxActions: 2
 })
@@ -324,6 +332,10 @@ assert.match(String(modelGrantResult.content[0]?.text), new RegExp(modelGrant.gr
 broker.revokeGrant(modelGrant.grantId, principal)
 await assert.rejects(
     broker.handleToolOperation(principal, { operation: 'open_tab', reveal: 'yes' }),
+    (error: any) => error.code === 'CONTROL_VALIDATION_ERROR'
+)
+await assert.rejects(
+    broker.handleToolOperation(principal, { operation: 'open_tab', sessionMode: 'private' }),
     (error: any) => error.code === 'CONTROL_VALIDATION_ERROR'
 )
 
@@ -372,7 +384,7 @@ assert.throws(() => races.requireRevision(base.targetId, older), (error: any) =>
 const otherThreadTargetId = broker.targets.createTargetId('zyra-browser')
 broker.registerTarget({
     target: {
-        kind: 'zyra-browser', targetId: otherThreadTargetId, tabId: 'browser:other-thread', ownerThreadId: 'thread:other',
+        kind: 'zyra-browser', targetId: otherThreadTargetId, tabId: 'browser:other-thread', sessionMode: 'normal', ownerThreadId: 'thread:other',
         guestIdentity: 'guest:other-thread', origin: 'https://other.example'
     },
     driver,
@@ -426,7 +438,7 @@ assert.equal(broker.grants.listPending().some((entry) => entry.principal.type ==
 const secondaryTargetId = broker.targets.createTargetId('zyra-browser')
 broker.registerTarget({
     target: {
-        kind: 'zyra-browser', targetId: secondaryTargetId, tabId: 'browser:secondary', ownerThreadId: principal.threadId, guestIdentity: 'guest:secondary',
+        kind: 'zyra-browser', targetId: secondaryTargetId, tabId: 'browser:secondary', sessionMode: 'normal', ownerThreadId: principal.threadId, guestIdentity: 'guest:secondary',
         origin: 'https://secondary.example', url: 'https://secondary.example/', title: 'Secondary'
     },
     driver,
@@ -442,9 +454,9 @@ broker.updateWorkspaceState({
         splitTabId: 'browser:secondary',
         visibleTabIds: ['renderer-values-are-derived'],
         tabs: [
-            { tabId: 'browser:visual', targetId, url: 'http://127.0.0.1/', title: 'Primary', origin: null, status: 'ready', position: null, visible: false },
-            { tabId: 'browser:secondary', targetId: secondaryTargetId, url: 'https://secondary.example/', title: 'Secondary', origin: null, status: 'ready', position: null, visible: false },
-            { tabId: 'browser:forged', targetId: secondaryTargetId, url: 'https://forged.example/', title: 'Forged', origin: null, status: 'ready', position: null, visible: false }
+            { tabId: 'browser:visual', sessionMode: 'normal', targetId, url: 'http://127.0.0.1/', title: 'Primary', origin: null, status: 'ready', position: null, visible: false },
+            { tabId: 'browser:secondary', sessionMode: 'normal', targetId: secondaryTargetId, url: 'https://secondary.example/', title: 'Secondary', origin: null, status: 'ready', position: null, visible: false },
+            { tabId: 'browser:forged', sessionMode: 'incognito', targetId: secondaryTargetId, url: 'https://forged.example/', title: 'Forged', origin: null, status: 'ready', position: null, visible: false }
         ]
     },
     updatedAt: new Date().toISOString()
@@ -530,12 +542,15 @@ const surfaceRequestsSource = readFileSync(new URL('../src/renderer/src/pages/as
 const panelSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantDiffPanel.tsx', import.meta.url), 'utf8')
 const workspaceSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantBrowserWorkspace.tsx', import.meta.url), 'utf8')
 const webviewSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantBrowserWebview.tsx', import.meta.url), 'utf8')
+const viewportFrameSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantBrowserViewportFrame.tsx', import.meta.url), 'utf8')
+const agentCursorSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantBrowserAgentCursor.tsx', import.meta.url), 'utf8')
 const handlerSource = readFileSync(new URL('../src/main/ipc/handlers/agent-control-handlers.ts', import.meta.url), 'utf8')
 const preloadSource = readFileSync(new URL('../src/preload/adapters/agent-control-adapter.ts', import.meta.url), 'utf8')
 const protocolSource = readFileSync(new URL('../src/shared/agent-control/protocol.ts', import.meta.url), 'utf8')
 const hostSource = readFileSync(new URL('../src/main/agent-control/browser-surface-host.ts', import.meta.url), 'utf8')
 const browserDriverSource = readFileSync(new URL('../src/main/agent-control/drivers/zyra-browser-driver.ts', import.meta.url), 'utf8')
 const mainSource = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8')
+const browserViewManagerSource = readFileSync(new URL('../src/main/browser-view-manager.ts', import.meta.url), 'utf8')
 const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-pi-runtime.ts', import.meta.url), 'utf8')
 assert(surfaceRequestsSource.includes('onBrowserSurfaceRequest'))
 assert(surfaceRequestsSource.includes('request.threadId !== threadRef.current'))
@@ -548,9 +563,9 @@ assert(surfaceRequestsSource.includes('waitForAppliedInspectorWidth(request, pre
 assert(surfaceRequestsSource.includes('width: appliedWidth'))
 assert(panelSource.includes('processedBrowserSurfaceRequestRef'))
 assert(panelSource.includes('surfaceRequest={browserSurfaceRequest}'))
-assert(panelSource.includes("'pointer-events-none invisible absolute inset-x-0 bottom-0 top-[76px] flex'"))
-assert(workspaceSource.includes('for (const tabId of requestedTabIds) next = addAssistantBrowserTab(next, tabId)'))
-assert(workspaceSource.includes('setAssistantBrowserLayout(next, surfaceRequest.tabId, surfaceRequest.secondaryTabId || null)'))
+assert(panelSource.includes("'pointer-events-none invisible absolute inset-0 flex'"))
+assert(workspaceSource.includes('ensureAssistantBrowserSurfaceTabs('))
+assert(workspaceSource.includes('transitionToBrowserTab(surfaceRequest.tabId)'))
 assert(workspaceSource.includes("mode === 'close' || mode === 'refresh' || mode === 'external'"))
 assert(workspaceSource.includes('completeBrowserSurfaceRequest({'))
 assert(workspaceSource.includes('claimBrowserSurfaceRequest({'))
@@ -561,18 +576,18 @@ assert(panelSource.includes('updateWorkspaceState({'))
 assert(panelSource.includes('onWorkspaceStateChange={handleBrowserWorkspaceStateChange}'))
 assert(workspaceSource.includes('Allow agent?'))
 assert(workspaceSource.includes('rejectGrant(activePendingGrant.requestId)'))
-assert(workspaceSource.includes('data-browser-control-owned'))
-assert(workspaceSource.includes('Zyra-controlled Browser surface'))
+assert(viewportFrameSource.includes("data-assistant-browser-viewport={viewport.mode}"))
+assert(viewportFrameSource.includes('Zyra-controlled Browser surface'))
 assert.equal(workspaceSource.includes('webviewRefs.current.get(activeTab.id)?.focus()'), false, 'revealing Browser never steals physical keyboard focus')
-assert.equal(webviewSource.includes('webview?.focus()'), false, 'retained webviews keep focus user-owned')
-assert(workspaceSource.includes('MousePointer2'))
+assert.equal(webviewSource.includes("type: 'focus'"), false, 'revealing a retained main-owned page keeps focus user-owned')
+assert(agentCursorSource.includes('MousePointer2'))
 assert(browserDriverSource.includes("for (const fromSurface of [true, false])"))
 assert(browserDriverSource.includes('guest.capturePage()'))
 assert(browserDriverSource.includes("await this.inputCommand(guest, 'Input.insertText', { text: action.text }, context)"))
 assert(browserDriverSource.includes('Click or focus an observed page element before sending target-local keyboard input.'))
 assert(browserDriverSource.includes('buildBrowserPointerPath'))
 assert(/finally \{[\s\S]{0,240}Input\.dispatchMouseEvent'[\s\S]{0,80}mouseReleased/.test(browserDriverSource), 'pressed pointer actions release even when cursor publication or cancellation fails')
-assert(mainSource.includes('webPreferences.backgroundThrottling = false'))
+assert(browserViewManagerSource.includes('backgroundThrottling: false'))
 assert(runtimeSource.includes("'Root Browser control ended with its turn.'"))
 assert(protocolSource.includes("operation: 'open_tab'"))
 assert(protocolSource.includes("operation: 'reveal_tab'"))

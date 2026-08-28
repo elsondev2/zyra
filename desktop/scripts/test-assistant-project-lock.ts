@@ -52,6 +52,21 @@ const session: AssistantSession = {
 
 assert.equal(isAssistantSessionProjectLocked(session), false, 'an untouched chat may still choose a different project')
 
+thread.state = 'starting'
+assert.equal(
+    isAssistantSessionProjectLocked(session),
+    false,
+    'connection-only warmup must not block project selection in a pristine New Chat'
+)
+
+thread.messageCount = 1
+assert.equal(
+    isAssistantSessionProjectLocked(session),
+    true,
+    'a starting thread with submitted chat content still protects its working directory'
+)
+
+thread.state = 'idle'
 thread.messageCount = 1
 assert.equal(isAssistantSessionProjectLocked(session), false, 'persisted chat messages do not permanently lock project metadata')
 

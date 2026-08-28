@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import initSqlJs from 'sql.js/dist/sql-asm.js'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { AgentTranscriptPage, FleetSnapshot } from '../src/shared/assistant/contracts'
+import type { AgentRunState, AgentTranscriptPage, FleetSnapshot } from '../src/shared/assistant/contracts'
 import { ASSISTANT_IPC, assertAssistantIpcContract } from '../src/shared/assistant/contracts'
 import { applyAssistantDomainEvent, createDefaultAssistantSnapshot } from '../src/shared/assistant/projector'
 import { initializeAssistantPersistenceSchema } from '../src/main/assistant/persistence-utils'
@@ -17,9 +17,18 @@ import { AssistantWorkflowDirectory } from '../src/renderer/src/pages/assistant/
 import { resolveAssistantWorkflowIdentity } from '../src/renderer/src/pages/assistant/assistant-workflow-presentation'
 import {
     mergeAssistantAgentTranscriptPages,
+    mergeAssistantAgentTranscriptRefresh,
+    projectAssistantAgentTranscriptActivities,
     projectAssistantAgentTranscriptMessages,
-    resolveAssistantAgentIdentity
+    resolveAssistantAgentIdentity,
+    resolveAssistantAgentLiveActivity
 } from '../src/renderer/src/pages/assistant/assistant-agent-presentation'
+
+const serviceSource = await readFile(new URL('../src/main/assistant/service.ts', import.meta.url), 'utf8')
+const fleetOperationSource = serviceSource.split("async runFleetOperation")[1]?.split('async getAccountOverview')[0] || ''
+assert.ok(fleetOperationSource.indexOf('await this.runtime.connect') < fleetOperationSource.indexOf('await this.runtime.requestFleetOperation'), 'fleet controls attach the canonical runtime before stop/retry/resume operations')
+const fleetRefreshSource = serviceSource.split('async getFleetSnapshot')[1]?.split('async runFleetOperation')[0] || ''
+assert.match(fleetRefreshSource, /shouldApplyAssistantFleetSnapshot\(persisted, live\)/, 'explicit fleet refresh cannot place an equal-sequence empty snapshot into the main read model')
 
 const now = new Date().toISOString()
 const fleet: FleetSnapshot = {
@@ -62,6 +71,20 @@ assert.equal(ASSISTANT_IPC.getFleetSnapshot, 'devscope:assistant:getFleetSnapsho
 const projection = new FleetProjection()
 assert.equal(projection.apply('thread-1', fleet).agents['agent-1']?.label, 'code-reviewer')
 assert.equal(projection.get('thread-1')?.workflows['workflow-1']?.definitionName, 'review-changes')
+const staleEmptyFleet: FleetSnapshot = {
+    ...fleet,
+    lastAppliedSequence: 2,
+    updatedAt: new Date(Date.parse(now) - 60_000).toISOString(),
+    agents: {},
+    workflows: {},
+    relationships: [],
+    artifacts: [],
+    eventWindow: []
+}
+assert.equal(projection.apply('thread-1', staleEmptyFleet).lastAppliedSequence, 9, 'an older empty attach snapshot cannot erase projected agents')
+assert.equal(Object.keys(projection.get('thread-1')?.agents || {}).length, 1)
+const equalSequenceEmptyFleet = { ...staleEmptyFleet, lastAppliedSequence: 9, updatedAt: new Date(Date.parse(now) + 60_000).toISOString() }
+assert.equal(Object.keys(projection.apply('thread-1', equalSequenceEmptyFleet).agents).length, 1, 'an equal-sequence empty snapshot cannot replace a fuller projection')
 
 const domainSnapshot = applyAssistantDomainEvent(createDefaultAssistantSnapshot(), {
     sequence: 1,
@@ -79,6 +102,11 @@ initializeAssistantPersistenceSchema(db)
 db.run("INSERT INTO assistant_sessions (id, title, mode, archived, created_at, updated_at) VALUES ('session-existing', 'Existing', 'work', 0, ?, ?)", [now, now])
 projectFleetSnapshot(db, 'thread-1', fleet)
 assert.equal(readFleetSnapshot(db, 'thread-1')?.agents['agent-1']?.status, 'running')
+projectFleetSnapshot(db, 'thread-1', staleEmptyFleet)
+assert.equal(readFleetSnapshot(db, 'thread-1')?.lastAppliedSequence, 9, 'SQLite rejects a regressive empty fleet snapshot')
+projectFleetSnapshot(db, 'thread-1', equalSequenceEmptyFleet)
+assert.equal(Object.keys(readFleetSnapshot(db, 'thread-1')?.agents || {}).length, 1, 'SQLite rejects an equal-sequence empty fleet snapshot')
+assert.equal(db.exec("SELECT COUNT(*) FROM assistant_agent_runs WHERE root_thread_id = 'thread-1'")[0]?.values[0]?.[0], 1)
 assert.equal(db.exec("SELECT COUNT(*) FROM assistant_sessions WHERE id = 'session-existing'")[0]?.values[0]?.[0], 1)
 assert.equal(db.exec("SELECT COUNT(*) FROM assistant_agent_runs WHERE root_thread_id = 'thread-1'")[0]?.values[0]?.[0], 1)
 assert.equal(db.exec("SELECT COUNT(*) FROM assistant_workflow_calls WHERE root_thread_id = 'thread-1'")[0]?.values[0]?.[0], 1)
@@ -172,8 +200,8 @@ assert.doesNotMatch(workflowDetailMarkup, /definitionHash|workflowCallId|stableK
 const transcriptPage: AgentTranscriptPage = {
     entries: [
         { index: 0, type: 'message', timestamp: now, message: { role: 'user', content: [{ type: 'text', text: 'Root instruction for the child.' }] } },
-        { index: 1, type: 'message', timestamp: now, message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'private reasoning' }] } },
-        { index: 2, type: 'message', timestamp: now, message: { role: 'toolResult', content: [{ type: 'text', text: 'tool output should stay hidden' }] } },
+        { index: 1, type: 'message', timestamp: now, message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'private reasoning' }, { type: 'toolCall', id: 'read-auth', name: 'read', arguments: { path: 'src/auth.ts' } }] } },
+        { index: 2, type: 'message', timestamp: now, message: { role: 'toolResult', toolCallId: 'read-auth', isError: false, content: [{ type: 'text', text: 'tool output should stay hidden' }] } },
         { index: 3, type: 'message', timestamp: now, message: { role: 'assistant', content: [{ type: 'text', text: 'Agent **answer**.' }] } }
     ],
     nextBefore: null,
@@ -190,11 +218,25 @@ assert.deepEqual(
     ],
     'transcript projection exposes root and agent chat messages without thoughts or tool results'
 )
+assert.deepEqual(
+    projectAssistantAgentTranscriptActivities(transcriptPage.entries).map(({ summary, detail, status }) => ({ summary, detail, status })),
+    [{ summary: 'Used read', detail: 'src/auth.ts', status: 'completed' }],
+    'agent transcript projection exposes bounded tool activity without raw results or private reasoning'
+)
+assert.deepEqual(resolveAssistantAgentLiveActivity({ type: 'tool_execution_start', toolName: 'read', args: { path: 'src/auth.ts' }, occurredAt: now }), {
+    summary: 'Using read', detail: 'src/auth.ts', status: 'running', updatedAt: now
+})
 const mergedTranscript = mergeAssistantAgentTranscriptPages(
     { ...transcriptPage, entries: transcriptPage.entries.slice(3), hydrated: 1 },
     { ...transcriptPage, entries: transcriptPage.entries.slice(0, 3), nextBefore: null, hydrated: 3 }
 )
 assert.deepEqual(mergedTranscript.entries.map((entry) => entry.index), [0, 1, 2, 3])
+const refreshedTranscript = mergeAssistantAgentTranscriptRefresh(
+    { ...transcriptPage, entries: transcriptPage.entries.slice(0, 3), totalEntries: 3, hydrated: 3 },
+    transcriptPage
+)
+assert.deepEqual(refreshedTranscript.entries.map((entry) => entry.index), [0, 1, 2, 3])
+assert.equal(refreshedTranscript.totalEntries, 4)
 
 const transcriptMarkup = renderToStaticMarkup(
     <AssistantAgentDetailPage
@@ -211,9 +253,47 @@ assert.match(transcriptMarkup, /data-agent-transcript-role="user"/)
 assert.match(transcriptMarkup, /Root instruction for the child/)
 assert.match(transcriptMarkup, /data-agent-transcript-role="assistant"/)
 assert.match(transcriptMarkup, /Agent <strong[^>]*>answer<\/strong>/)
-assert.doesNotMatch(transcriptMarkup, /private reasoning|tool output should stay hidden/)
+assert.match(transcriptMarkup, /Tool Calls/)
+assert.match(transcriptMarkup, /Read file/)
+assert.match(transcriptMarkup, /src\/auth\.ts/)
+assert.doesNotMatch(transcriptMarkup, /private reasoning/)
+assert.match(transcriptMarkup, /tool output should stay hidden/, 'tool output remains available inside the expandable tool-call row')
 assert.doesNotMatch(transcriptMarkup, /No final response was written/)
 assert.doesNotMatch(transcriptMarkup, /<(?:input|textarea)\b/, 'the agent transcript page remains read-only without a composer')
+assert.doesNotMatch(transcriptMarkup, /Delegated task/, 'the summary task block stays hidden when the root transcript already shows the delegated request')
+
+const taskFallbackMarkup = renderToStaticMarkup(
+    <AssistantAgentDetailPage
+        run={{ ...agentRun, sessionFile: null }}
+        transcript={null}
+        loading={false}
+        error={null}
+        onBack={() => {}}
+        onLoadOlder={() => {}}
+        onRetry={() => {}}
+    />
+)
+assert.match(taskFallbackMarkup, /Delegated task/, 'the task summary remains available before a root transcript exists')
+
+const multiBatchTranscriptEntries: AgentTranscriptPage['entries'] = [
+    ...transcriptPage.entries.slice(0, 3),
+    { index: 3, type: 'message', timestamp: now, message: { role: 'assistant', content: [{ type: 'toolCall', id: 'search-auth', name: 'rg', arguments: { pattern: 'authorize', path: 'src' } }] } },
+    { index: 4, type: 'message', timestamp: now, message: { role: 'toolResult', toolCallId: 'search-auth', isError: false, content: [{ type: 'text', text: 'src/auth.ts:12' }] } },
+    { ...transcriptPage.entries[3]!, index: 5 }
+]
+const multiBatchMarkup = renderToStaticMarkup(
+    <AssistantAgentDetailPage
+        run={{ ...agentRun, sessionFile: 'multi-batch-child-session.jsonl' }}
+        transcript={{ ...transcriptPage, entries: multiBatchTranscriptEntries, totalEntries: 6, hydrated: 6 }}
+        loading={false}
+        error={null}
+        onBack={() => {}}
+        onLoadOlder={() => {}}
+        onRetry={() => {}}
+    />
+)
+assert.equal(multiBatchMarkup.match(/>Tool Calls(?: \(\d+\))?</g)?.length, 1, 'separate child tool batches render inside one shared tool-call group')
+assert.match(multiBatchMarkup, /2 activities/)
 
 const missingFinalMarkup = renderToStaticMarkup(
     <AssistantAgentDetailPage
@@ -230,14 +310,56 @@ assert.match(missingFinalMarkup, /data-agent-transcript-state="missing-final-res
 assert.match(missingFinalMarkup, /No final response was written/)
 assert.match(missingFinalMarkup, /saved transcript ends without assistant answer text/)
 
+const resultFallbackMarkup = renderToStaticMarkup(
+    <AssistantAgentDetailPage
+        run={{ ...agentRun, status: 'completed', sessionFile: 'late-final-child-session.jsonl', result: { text: 'Immediate **agent result**.' }, completedAt: now }}
+        transcript={{ ...transcriptPage, entries: transcriptPage.entries.slice(0, 1), totalEntries: 1, hydrated: 1 }}
+        loading={false}
+        error={null}
+        onBack={() => {}}
+        onLoadOlder={() => {}}
+        onRetry={() => {}}
+    />
+)
+assert.match(resultFallbackMarkup, /data-agent-result-fallback="true"/)
+assert.match(resultFallbackMarkup, /Immediate <strong[^>]*>agent result<\/strong>/)
+assert.doesNotMatch(resultFallbackMarkup, /No final response was written/)
+
+const liveActivityMarkup = renderToStaticMarkup(
+    <AssistantAgentDetailPage
+        run={{
+            ...agentRun,
+            status: 'running',
+            sessionFile: 'live-child-session.jsonl',
+            activity: {
+                type: 'tool_execution_start',
+                toolCallId: 'live-read-auth',
+                toolName: 'read',
+                args: { path: 'src/auth.ts' },
+                occurredAt: now
+            } as unknown as AgentRunState['activity']
+        }}
+        transcript={{ ...transcriptPage, entries: transcriptPage.entries.slice(0, 1), totalEntries: 1, hydrated: 1 }}
+        loading={false}
+        error={null}
+        onBack={() => {}}
+        onLoadOlder={() => {}}
+        onRetry={() => {}}
+    />
+)
+assert.match(liveActivityMarkup, /Tool Calls/)
+assert.match(liveActivityMarkup, /Read file/)
+assert.match(liveActivityMarkup, /src\/auth\.ts/)
+
 const root = path.resolve(import.meta.dirname, '..', '..')
-const [bridge, adapter, inspector, runDetailsModal, fleetWorkspaceSource, agentDirectorySource, desktopPackageSource] = await Promise.all([
+const [bridge, adapter, inspector, runDetailsModal, fleetWorkspaceSource, agentDirectorySource, agentTranscriptHookSource, desktopPackageSource] = await Promise.all([
     readFile(path.join(root, 'src', 'zyra-ui-bridge.mjs'), 'utf8'),
     readFile(path.join(root, 'desktop', 'src', 'preload', 'adapters', 'assistant-adapter.ts'), 'utf8'),
     readFile(path.join(root, 'desktop', 'src', 'renderer', 'src', 'pages', 'assistant', 'AssistantDiffPanel.tsx'), 'utf8'),
     readFile(path.join(root, 'desktop', 'src', 'renderer', 'src', 'pages', 'assistant', 'AssistantAgentRunDetailsModal.tsx'), 'utf8'),
     readFile(path.join(root, 'desktop', 'src', 'renderer', 'src', 'pages', 'assistant', 'AssistantFleetWorkspace.tsx'), 'utf8'),
     readFile(path.join(root, 'desktop', 'src', 'renderer', 'src', 'pages', 'assistant', 'AssistantAgentDirectory.tsx'), 'utf8'),
+    readFile(path.join(root, 'desktop', 'src', 'renderer', 'src', 'pages', 'assistant', 'useAssistantAgentTranscript.ts'), 'utf8'),
     readFile(path.join(root, 'desktop', 'package.json'), 'utf8')
 ])
 for (const operation of ['agents.list', 'agents.spawn', 'agents.transcript', 'workflows.run', 'workflows.restart']) assert(bridge.includes(`case "${operation}"`))
@@ -254,6 +376,8 @@ assert.equal(runDetailsModal.includes('JSON.stringify'), false, 'run details do 
 assert.equal(fleetWorkspaceSource.includes('WorkflowRows'), false, 'workflows no longer use the old inline row dump')
 assert.equal(fleetWorkspaceSource.includes('WorkflowDetail'), true, 'workflow selection opens the dedicated detail page')
 assert.equal(agentDirectorySource.includes("repeat(auto-fit, minmax(0, 16.5rem))"), true, 'agent cards use packed fixed-width tracks without stretched column gaps')
+assert.match(agentTranscriptHookSource, /window\.setInterval[\s\S]{0,180}refreshLatest/, 'an open running agent refreshes its saved transcript continuously')
+assert.match(agentTranscriptHookSource, /TERMINAL_TRANSCRIPT_REFRESH_DELAYS_MS/, 'terminal agents retry transcript hydration while the final JSONL record settles')
 assert.equal(desktopPackageSource.includes('"@dicebear/styles"'), true, 'official DiceBear style definitions back Bottts, Loops, and Waves locally')
 assert.equal(desktopPackageSource.includes('"@dicebear/bottts"'), false, 'the retired DiceBear v9 style package is removed')
 

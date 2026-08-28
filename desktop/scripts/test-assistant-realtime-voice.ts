@@ -18,6 +18,7 @@ import {
     applyRealtimeTranscriptEvent
 } from '../src/renderer/src/pages/assistant/instructor-voice-transcript'
 import { shouldShowComposerRealtimeVoicePrimaryAction } from '../src/renderer/src/pages/assistant/assistant-composer-view-state'
+import { buildAssistantVoiceExecutionConfiguration } from '../src/renderer/src/pages/assistant/assistant-voice-execution-configuration'
 import {
     isCurrentRealtimeVoiceClientCommand,
     readRealtimeVoiceResponseActivity,
@@ -83,7 +84,7 @@ const rendererClientCommand = {
         type: 'session.context.append' as const,
         channel: 'commentary' as const,
         content: [{ type: 'input_text' as const, text: 'Bounded renderer context.' }]
-    }, { type: 'response.create' as const }]
+    }]
 }
 const rendererCommandMessages: string[] = []
 const rendererDataChannel = {
@@ -92,7 +93,7 @@ const rendererDataChannel = {
 }
 assert.equal(isCurrentRealtimeVoiceClientCommand(rendererClientCommand, rendererCommandBinding), true)
 assert.equal(sendRealtimeVoiceClientCommand(rendererDataChannel, rendererClientCommand, rendererCommandBinding), true)
-assert.deepEqual(rendererCommandMessages.map((value) => JSON.parse(value).type), ['session.context.append', 'response.create'])
+assert.deepEqual(rendererCommandMessages.map((value) => JSON.parse(value).type), ['session.context.append'])
 assert.equal(sendRealtimeVoiceClientCommand(rendererDataChannel, {
     ...rendererClientCommand,
     realtimeSessionGeneration: 2
@@ -186,7 +187,8 @@ assert.equal(
     true,
     'Frameless context commands must stay within the 500-byte provider bound'
 )
-assert.deepEqual(clientCommands[1].messages.at(-1), { type: 'response.create' })
+assert.equal(clientCommands[1].messages.every((message: any) => message.type === 'session.context.append'), true)
+assert.equal(clientCommands[1].messages.every((message: any) => message.channel === 'speakable'), true)
 assert.equal(
     directRuntimeEvents.some((event) => event.type === 'composer.response.done' && event.text === 'Typed response.'),
     true
@@ -329,6 +331,73 @@ assert.deepEqual(dataChannelTranscript.map(({ id, role, text, final }) => ({ id,
     { id: 'assistant-item-1', role: 'assistant', text: 'You have 120 GB free.', final: true },
     { id: 'user-item-1', role: 'user', text: 'How much storage is free?', final: true }
 ])
+
+let framelessTranscript: typeof dataChannelTranscript = []
+for (const [id, text] of [
+    ['transcript-chunk-1', 'Hey there'],
+    ['transcript-chunk-2', '! Zy'],
+    ['transcript-chunk-3', 'ra here,']
+] as const) {
+    framelessTranscript = applyRealtimeTranscriptEvent(framelessTranscript, {
+        type: 'output_transcript.added',
+        item: { id, text }
+    })
+}
+assert.deepEqual(
+    framelessTranscript.map(({ role, text, final }) => ({ role, text, final })),
+    [{ role: 'assistant', text: 'Hey there! Zyra here,', final: false }],
+    'Frameless transcript chunks with per-chunk item IDs must remain one streaming message'
+)
+framelessTranscript = applyRealtimeTranscriptEvent(framelessTranscript, {
+    type: 'turn.done',
+    turn: {
+        id: 'assistant-turn-frameless-1',
+        role: 'assistant',
+        transcript: 'Hey there! Zyra here, spelled with a Y.'
+    }
+})
+assert.deepEqual(
+    framelessTranscript.map(({ id, role, text, final }) => ({ id, role, text, final })),
+    [{
+        id: 'assistant-turn-frameless-1',
+        role: 'assistant',
+        text: 'Hey there! Zyra here, spelled with a Y.',
+        final: true
+    }],
+    'Frameless turn completion must finalize its streaming message with the canonical turn identity'
+)
+const framelessChatProjection = projectVoiceLiveTimelineMessages({
+    transcript: framelessTranscript,
+    canonicalMessages: [],
+    voiceStartedAt: '2026-08-24T12:00:00.000Z',
+    nowMs: Date.parse('2026-08-24T12:00:01.000Z')
+})
+assert.deepEqual(
+    framelessChatProjection.messages.map(({ role, text, streaming }) => ({ role, text, streaming })),
+    [{ role: 'assistant', text: 'Hey there! Zyra here, spelled with a Y.', streaming: false }],
+    'the regular Chat timeline must receive one Voice message after Frameless transcript reconciliation'
+)
+const committedFramelessMessage: AssistantMessage = {
+    id: 'canonical-frameless-message-1',
+    role: 'assistant',
+    text: 'Yep, I’m here. No storage results have come through to me yet.',
+    turnId: 'canonical-frameless-turn-1',
+    streaming: false,
+    providerItemId: 'assistant-turn-frameless-1',
+    createdAt: '2026-08-24T12:00:01.000Z',
+    updatedAt: '2026-08-24T12:00:01.000Z'
+}
+assert.equal(projectVoiceLiveTimelineMessages({
+    transcript: [{
+        id: 'assistant-turn-frameless-1',
+        role: 'assistant',
+        text: 'Yep, I’m here.',
+        final: true
+    }],
+    canonicalMessages: [committedFramelessMessage],
+    voiceStartedAt: '2026-08-24T12:00:00.000Z'
+}).messages.length, 0, 'a shorter local completion must yield to the canonical message with the same Frameless turn identity')
+
 assert.equal(shouldDelegateVoiceInspection("What's the storage left on my PC if the storage is free?"), true)
 assert.equal(shouldDelegateVoiceInspection('What are you able to do here?'), false)
 assert.equal(shouldDelegateVoiceInspection('Checking on what?'), false)
@@ -559,6 +628,21 @@ assert.equal(
     false,
     'the unavailable realtime service should not replace Send with a dead action'
 )
+assert.deepEqual(buildAssistantVoiceExecutionConfiguration({
+    model: 'openai-codex/gpt-5.6-sol',
+    runtimeMode: 'full-access',
+    effort: 'high',
+    interactionMode: 'default',
+    profile: 'builder',
+    fastModeEnabled: true
+}), {
+    model: 'openai-codex/gpt-5.6-sol',
+    runtimeMode: 'full-access',
+    effort: 'high',
+    interactionMode: 'default',
+    profile: 'builder',
+    serviceTier: 'fast'
+}, 'Voice startup and chat-open preparation must share one exact configuration builder')
 
 const voiceLabSource = readFileSync(
     new URL('../src/renderer/src/pages/assistant/InstructorVoiceLab.tsx', import.meta.url),
@@ -588,12 +672,24 @@ const composerViewSource = readFileSync(
     new URL('../src/renderer/src/pages/assistant/AssistantComposerView.tsx', import.meta.url),
     'utf8'
 )
+const composerSource = readFileSync(
+    new URL('../src/renderer/src/pages/assistant/AssistantComposer.tsx', import.meta.url),
+    'utf8'
+)
+const assistantStoreSource = readFileSync(
+    new URL('../src/renderer/src/lib/assistant/assistant-store-core.ts', import.meta.url),
+    'utf8'
+)
 const voiceSessionSource = readFileSync(
     new URL('../src/renderer/src/pages/assistant/useInstructorVoiceSession.ts', import.meta.url),
     'utf8'
 )
 const realtimeVoiceContractSource = readFileSync(
     new URL('../src/shared/assistant/contracts/realtime-voice.ts', import.meta.url),
+    'utf8'
+)
+const codexRealtimeVoiceSource = readFileSync(
+    new URL('../src/main/assistant/codex-realtime-voice.ts', import.meta.url),
     'utf8'
 )
 const conversationPaneSource = readFileSync(
@@ -610,6 +706,10 @@ const canonicalVoiceStageSource = readFileSync(
 )
 const canonicalVoiceDockSource = readFileSync(
     new URL('../src/renderer/src/pages/assistant/AssistantCanonicalVoiceDock.tsx', import.meta.url),
+    'utf8'
+)
+const voiceComposerSource = readFileSync(
+    new URL('../src/renderer/src/pages/assistant/InstructorVoiceComposer.tsx', import.meta.url),
     'utf8'
 )
 const canonicalVoiceStageStyles = readFileSync(
@@ -649,8 +749,18 @@ assert.doesNotMatch(voiceSettingsStyles, /--sparkle-/)
 assert.match(composerViewSource, /showRealtimeVoicePrimaryAction[\s\S]{0,120}<ComposerRealtimeVoiceButton/u)
 assert.match(
     composerViewSource,
-    /onStartRealtimeVoice\?\.\(\{[\s\S]{0,500}model: controller\.selectedModel[\s\S]{0,500}runtimeMode: controller\.selectedRuntimeMode[\s\S]{0,500}effort: controller\.selectedEffort[\s\S]{0,500}serviceTier: controller\.fastModeEnabled \? 'fast' : undefined/u,
+    /onStartRealtimeVoice\?\.\([\s\S]{0,150}buildAssistantVoiceExecutionConfiguration\(\{[\s\S]{0,500}model: controller\.selectedModel[\s\S]{0,500}runtimeMode: controller\.selectedRuntimeMode[\s\S]{0,500}effort: controller\.selectedEffort/u,
     'Voice activation must snapshot the configuration currently visible in the composer'
+)
+assert.match(
+    composerSource,
+    /controller\.loadedSessionId !== props\.sessionId[\s\S]{0,250}onPrepareRealtimeVoice\(buildAssistantVoiceExecutionConfiguration/u,
+    'the primary worker must start only after the active composer has loaded that chat configuration'
+)
+assert.match(
+    assistantStoreSource,
+    /connectionContextKey[\s\S]{0,500}voicePreparationKey[\s\S]{0,600}const key = `\$\{sessionId\}:\$\{threadId\}:\$\{connectionContextKey\}:\$\{voicePreparationKey\}`[\s\S]{0,700}voicePreparation \? \{ voicePreparation \} : \{\}/u,
+    'chat-open preparation must be distinct across canonical-only work and project changes'
 )
 assert.match(
     voiceSessionSource,
@@ -659,23 +769,76 @@ assert.match(
 )
 assert.match(
     voiceSessionSource,
+    /assistant\.connect\(\{[\s\S]{0,250}sessionId: binding\.sessionId,[\s\S]{0,250}voicePreparation: options\.executionConfiguration[\s\S]{0,500}getUserMedia/u,
+    'the canonical assistant connection and primary-agent preparation must overlap microphone and WebRTC setup'
+)
+assert.match(
+    assistantServiceSource,
+    /async connect\(options\?: AssistantConnectOptions\)[\s\S]{0,350}const result = await connectAssistantSession\(this\.actionDeps, options\)[\s\S]{0,1200}prepareVoicePrimaryWorker\([\s\S]{0,300}return result/u,
+    'cold canonical startup must finish before the private Voice worker starts so both bridges cannot exhaust the startup timeout together'
+)
+assert.match(
+    assistantServiceSource,
+    /const hasVoiceState = Boolean\([\s\S]{0,400}if \(!hasVoiceState\) return \{ success: true as const \}[\s\S]{0,120}await this\.cancelPendingCanonicalVoiceStart\(\)/u,
+    'an idle Voice cleanup must not cancel chat-open primary-worker preparation'
+)
+assert.doesNotMatch(
+    assistantServiceSource,
+    /async stopRealtimeVoice\(senderId: number\)[\s\S]{0,900}invalidateVoicePrimaryWorkerPreparation\(\)/u,
+    'stopping Voice must retain the healthy worker owned by the still-active chat'
+)
+assert.doesNotMatch(
+    assistantServiceSource,
+    /private async stopCanonicalVoiceInternal\(reason: string\)[\s\S]{0,650}invalidateVoicePrimaryWorkerPreparation\(\)/u,
+    'closing the Voice transport must not destroy the independent chat-scoped primary worker'
+)
+assert.match(
+    zyraRuntimeSource,
+    /const cancelled = this\.preparedPrivateVoiceWorker !== prepared[\s\S]{0,250}if \(cancelled\) return[\s\S]{0,100}throw error/u,
+    'intentionally disposing an unclaimed Voice preparation must settle quietly instead of reporting a false startup failure'
+)
+assert.match(
+    zyraRuntimeSource,
+    /if \(current\?\.key === key\)[\s\S]{0,350}if \(this\.preparedPrivateVoiceWorker !== current\) return[\s\S]{0,100}throw error/u,
+    'every waiter sharing a cancelled Voice preparation must settle quietly'
+)
+assert.match(
+    voiceSessionSource,
     /peer\.connectionState === 'disconnected'[\s\S]{0,650}REALTIME_PEER_DISCONNECT_GRACE_MS/u,
     'brief WebRTC disconnects should receive a bounded recovery grace instead of killing Voice immediately'
 )
 assert.match(voiceSessionSource, /sentClientCommandIdsRef/u, 'renderer commands must be deduplicated before reaching oai-events')
 assert.match(voiceSessionSource, /realtimeSessionGeneration/u, 'renderer commands must be bound to the active Voice generation')
-assert.match(voiceSessionSource, /requiresIdleResponse && realtimeResponseActiveRef\.current/u, 'context and response.create commands must queue while ChatGPT is already speaking')
+assert.match(voiceSessionSource, /requiresIdleResponse && realtimeResponseActiveRef\.current/u, 'context commands must queue while ChatGPT is already speaking')
+assert.doesNotMatch(realtimeVoiceContractSource, /response\.create/u, 'Frameless client commands must stay within the live provider command set')
+assert.doesNotMatch(codexRealtimeVoiceSource, /type: 'response\.create'/u, 'Voice speech must not emit the removed response.create command')
 assert.match(
     realtimeVoiceContractSource,
     /executionConfiguration\?: AssistantVoiceExecutionConfiguration/u,
     'canonical Voice start must carry a typed primary-agent execution configuration'
 )
 assert.match(conversationPaneSource, /onStartRealtimeVoice=\{handleStartCanonicalVoice\}/u)
+assert.match(conversationPaneSource, /onPrepareRealtimeVoice=\{handlePrepareCanonicalVoice\}/u)
 assert.match(conversationPaneSource, /messages=\{displayedTimelineMessages\}/u)
+assert.match(
+    conversationPaneSource,
+    /isConnecting=\{isThreadConnecting && !voiceVisible\}/u,
+    'the regular empty-thread connecting mark must yield while the Voice orb owns the focal state'
+)
 assert.match(canonicalVoiceStageSource, /<InstructorVoiceOrb/u)
 assert.match(canonicalVoiceDockSource, /<InstructorVoiceComposer/u)
 assert.match(canonicalVoiceDockSource, /allowImages=\{false\}/u)
 assert.match(canonicalVoiceDockSource, /AssistantPendingApprovalPanel/u)
+assert.doesNotMatch(
+    voiceComposerSource,
+    /onClick=\{active \|\| connecting \? onStop : onStart\}/u,
+    'Voice retry must not forward React click events as execution configuration'
+)
+assert.match(
+    voiceComposerSource,
+    /onClick=\{\(\) => \{[\s\S]{0,160}if \(active \|\| connecting\) onStop\(\)[\s\S]{0,100}else onStart\(\)/u,
+    'Voice start and stop controls must invoke their callbacks without DOM event arguments'
+)
 assert.match(canonicalVoiceStageStyles, /bottom: 90px/u)
 assert.match(conversationPaneSource, /VOICE_TIMELINE_RESERVE_PX = 500/u)
 assert.match(conversationPaneSource, /VOICE_SCROLL_BUTTON_BOTTOM_PX = 78/u)
@@ -699,8 +862,40 @@ assert.match(
 )
 assert.match(
     assistantServiceSource,
+    /prepareVoicePrimaryWorker\(connected\.thread\.id, projectCwd, executionConfiguration\)[\s\S]{0,500}startVoice\(/u,
+    'the chat-scoped primary-agent worker must still prepare while realtime Voice signaling is in flight as a fallback'
+)
+assert.match(
+    zyraRuntimeSource,
+    /claimPreparedPrivateVoiceWorker[\s\S]{0,3500}prepared\?\.connected[\s\S]{0,500}worker\.request\('prompt'/u,
+    'delegated Voice work must claim the prepared primary-agent session before prompting'
+)
+assert.match(
+    zyraRuntimeSource,
+    /configuration\.localThreadId,[\s\S]{0,350}configuration\.cwd,[\s\S]{0,350}configuration\.model/u,
+    'prepared primary workers must be keyed to the chat as well as their execution configuration'
+)
+assert.match(
+    zyraRuntimeSource,
+    /canReusePreparedWorker[\s\S]{0,500}prepared\.prepared\.claimed = false/u,
+    'a healthy completed primary worker must return to the chat-scoped pool for the next Voice handoff'
+)
+assert.match(
+    zyraRuntimeSource,
+    /if \(prepared && this\.preparedPrivateVoiceWorker === prepared\.prepared\)[\s\S]{0,180}this\.preparedPrivateVoiceWorker = null[\s\S]{0,120}worker\.dispose\(\)/u,
+    'failed, cancelled, stale, or unhealthy primary workers must be evicted instead of reused'
+)
+assert.match(zyraRuntimeSource, /\[AssistantVoiceTiming\] Primary worker ready/u)
+assert.match(zyraRuntimeSource, /\[AssistantVoiceTiming\] Primary task finished/u)
+assert.match(
+    assistantServiceSource,
     /private queueTypedVoiceResponse[\s\S]{0,1500}appendContext\(\[\{ role: 'user', text: input\.text \}\]\)[\s\S]{0,1500}generateTypedVoiceResponse/u,
     'typed Voice input must enter the current Frameless context before its Pi-generated response is spoken'
+)
+assert.match(
+    assistantServiceSource,
+    /if \(shouldDelegateVoiceInspection\(text\)\)[\s\S]{0,1200}routeVoiceStrongRequest\(\{[\s\S]{0,500}providerItemId: `typed:\$\{clientMessageId\}`[\s\S]{0,300}mode: 'strong-task'/u,
+    'actionable typed Voice input must use the same primary-agent route as spoken work'
 )
 assert.match(
     assistantServiceSource,
