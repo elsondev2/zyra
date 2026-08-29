@@ -1,4 +1,4 @@
-import { lazy, memo, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, memo, Suspense, useEffect, useMemo, useState, type RefObject } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { HIGHLIGHT_MAX_CHARS, HIGHLIGHT_MAX_LINES } from './constants'
@@ -6,16 +6,14 @@ import type { PreviewFile, PreviewMeta } from './types'
 import { formatPreviewBytes } from './utils'
 import { schedulePreviewWork } from './schedule-preview-work'
 import SyntaxPreview from './SyntaxPreview'
+import { PreviewContentSkeleton } from './PreviewLoadingSkeleton'
+import type { editor as MonacoEditor } from 'monaco-editor'
 
-const MarkdownRenderer = lazy(() => import('../MarkdownRenderer'))
+const FileMarkdownPreview = lazy(() => import('./FileMarkdownPreview'))
 const CsvPreviewTable = lazy(() => import('./CsvPreviewTable'))
 
-function PreviewRendererFallback({ label }: { label: string }) {
-    return (
-        <div className="flex min-h-36 w-full items-center justify-center text-xs text-sparkle-text-muted/70">
-            <span className="animate-pulse">{label}</span>
-        </div>
-    )
+function PreviewRendererFallback({ label: _label }: { label: string }) {
+    return <PreviewContentSkeleton className="min-h-36" />
 }
 
 interface TextPreviewContentProps {
@@ -28,7 +26,10 @@ interface TextPreviewContentProps {
     gitDiffText?: string
     csvDistinctColorsEnabled: boolean
     focusLine?: number | null
+    onEditorMount?: (editor: MonacoEditor.IStandaloneCodeEditor | null) => void
     isExpanded?: boolean
+    scrollContainerRef?: RefObject<HTMLElement | null>
+    markdownInitialSourceLine?: number | null
 }
 
 function exceedsLineLimit(value: string, limit: number): boolean {
@@ -56,7 +57,10 @@ function TextPreviewContent({
     gitDiffText,
     csvDistinctColorsEnabled,
     focusLine,
-    isExpanded = false
+    onEditorMount,
+    isExpanded = false,
+    scrollContainerRef,
+    markdownInitialSourceLine
 }: TextPreviewContentProps) {
     const isMarkdown = file.type === 'md'
     const isLargeTextPreview = useMemo(() => {
@@ -74,8 +78,6 @@ function TextPreviewContent({
         isFormatting: false,
         fallbackReason: null
     })
-
-    const useLightweightMarkdown = isLargeTextPreview || meta.truncated
 
     useEffect(() => {
         if (file.type !== 'json') {
@@ -152,13 +154,15 @@ function TextPreviewContent({
             {file.type === 'md' && (
                 <div className={markdownContainerClassName}>
                     <Suspense fallback={<PreviewRendererFallback label="Preparing Markdown preview…" />}>
-                        <MarkdownRenderer
+                        <FileMarkdownPreview
+                            key={file.path}
                             content={content}
                             filePath={file.path}
                             linkSearchRoot={projectPath}
                             onInternalLinkClick={onInternalLinkClick}
                             onLinkNotice={onLinkNotice}
-                            lightweight={useLightweightMarkdown}
+                            scrollContainerRef={scrollContainerRef}
+                            initialSourceLine={markdownInitialSourceLine}
                         />
                     </Suspense>
                 </div>
@@ -167,7 +171,7 @@ function TextPreviewContent({
             {file.type === 'json' && (
                 <div className={isExpanded ? 'w-full h-full min-h-0 bg-sparkle-card overflow-hidden' : 'w-full h-full min-h-0 max-w-[96%] bg-sparkle-card border border-white/5 overflow-hidden'}>
                     {jsonState.formatted ? (
-                        <SyntaxPreview content={jsonState.formatted} language="json" filePath={file.path} focusLine={focusLine} height={isExpanded ? '100%' : undefined} />
+                        <SyntaxPreview content={jsonState.formatted} language="json" filePath={file.path} focusLine={focusLine} onEditorMount={onEditorMount} height={isExpanded ? '100%' : undefined} />
                     ) : jsonState.isFormatting ? (
                         <div className="flex h-full items-center justify-center">
                             <div className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/65">
@@ -184,7 +188,7 @@ function TextPreviewContent({
                                 <div className="text-xs text-sky-300/80 px-4 pt-3">Preview is truncated, so JSON formatting is unavailable. Showing raw content.</div>
                             )}
                             <div className={isExpanded ? 'flex-1 min-h-0' : ''}>
-                                <SyntaxPreview content={content} language="json" filePath={file.path} projectPath={projectPath} gitDiffText={gitDiffText} focusLine={focusLine} height={isExpanded ? '100%' : undefined} />
+                                <SyntaxPreview content={content} language="json" filePath={file.path} projectPath={projectPath} gitDiffText={gitDiffText} focusLine={focusLine} onEditorMount={onEditorMount} height={isExpanded ? '100%' : undefined} />
                             </div>
                         </div>
                     )}
@@ -205,13 +209,13 @@ function TextPreviewContent({
 
             {file.type === 'code' && (
                 <div className={isExpanded ? 'w-full h-full min-h-0 bg-sparkle-card overflow-hidden' : 'w-full h-full min-h-0 max-w-[96%] bg-sparkle-card border border-white/5 overflow-hidden'}>
-                    <SyntaxPreview content={content} language={file.language || 'text'} filePath={file.path} projectPath={projectPath} gitDiffText={gitDiffText} focusLine={focusLine} height={isExpanded ? '100%' : undefined} />
+                    <SyntaxPreview content={content} language={file.language || 'text'} filePath={file.path} projectPath={projectPath} gitDiffText={gitDiffText} focusLine={focusLine} onEditorMount={onEditorMount} height={isExpanded ? '100%' : undefined} />
                 </div>
             )}
 
             {file.type === 'text' && (
                 <div className={isExpanded ? 'w-full h-full min-h-0 bg-sparkle-card overflow-hidden' : 'w-full h-full min-h-0 max-w-[96%] bg-sparkle-card border border-white/5 overflow-hidden'}>
-                    <SyntaxPreview content={content} language="text" filePath={file.path} projectPath={projectPath} gitDiffText={gitDiffText} focusLine={focusLine} height={isExpanded ? '100%' : undefined} />
+                    <SyntaxPreview content={content} language="text" filePath={file.path} projectPath={projectPath} gitDiffText={gitDiffText} focusLine={focusLine} onEditorMount={onEditorMount} height={isExpanded ? '100%' : undefined} />
                 </div>
             )}
         </div>
@@ -228,6 +232,7 @@ export default memo(TextPreviewContent, (previous, next) => {
         && previous.meta.size === next.meta.size
         && previous.meta.truncated === next.meta.truncated
         && previous.isExpanded === next.isExpanded
+        && previous.onEditorMount === next.onEditorMount
     )
 
     if (!sameBasePreview) return false
@@ -236,6 +241,8 @@ export default memo(TextPreviewContent, (previous, next) => {
         return previous.projectPath === next.projectPath
             && previous.onInternalLinkClick === next.onInternalLinkClick
             && previous.onLinkNotice === next.onLinkNotice
+            && previous.scrollContainerRef === next.scrollContainerRef
+            && previous.markdownInitialSourceLine === next.markdownInitialSourceLine
     }
 
     return (

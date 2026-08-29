@@ -25,10 +25,13 @@ if (requireSigning) {
     if (windows.signed !== true || !windows.checks.some((check) => check.name === 'authenticode')) {
         throw new Error('Tagged publication requires a verified Windows Authenticode signature')
     }
+    if (!windows.checks.some((check) => check.name === 'widevine-vmp')) {
+        throw new Error('Tagged publication requires verified Windows Widevine VMP signing')
+    }
     if (macos.signed !== true || macos.notarized !== true) {
         throw new Error('Tagged publication requires verified macOS signing and notarization')
     }
-    for (const requiredCheck of ['codesign', 'gatekeeper', 'notarization-staple']) {
+    for (const requiredCheck of ['widevine-vmp', 'codesign', 'gatekeeper', 'notarization-staple']) {
         if (!macos.checks.some((check) => check.name === requiredCheck)) {
             throw new Error(`Tagged publication is missing macOS verification: ${requiredCheck}`)
         }

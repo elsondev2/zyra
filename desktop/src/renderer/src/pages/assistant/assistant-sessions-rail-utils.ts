@@ -1,7 +1,9 @@
 import type { AssistantPlaygroundState, AssistantSession, AssistantThread } from '@shared/assistant/contracts'
 import type { DevScopeResult } from '@shared/contracts/devscope-api'
+import { isGenericUserFolderPath } from '@shared/projects/project-path-classification'
 import { getAssistantThreadPhase } from '@/lib/assistant/selectors'
 import { getCachedProjectDetails, primeProjectDetailsCache } from '@/lib/projectViewCache'
+import { retainAssistantProjectPresentation } from './assistant-project-presentation-memory'
 import type {
     AssistantRailFilterMode,
     AssistantRailGroupMode,
@@ -467,7 +469,7 @@ export function getSortableTimestamp(value: string): number {
     return Number.isFinite(timestamp) ? timestamp : 0
 }
 
-function resolveProjectPresentation(
+export function resolveAssistantProjectPresentation(
     projectPath: string,
     projectIconOverrides: Record<string, string> = {}
 ): Pick<SessionProjectGroup, 'projectIconPath' | 'projectType' | 'framework'> {
@@ -483,6 +485,21 @@ function resolveProjectPresentation(
     const manualIconPath = Object.entries(projectIconOverrides).find(([candidatePath]) => (
         normalizeProjectPath(candidatePath).toLowerCase() === normalizedProjectPath.toLowerCase()
     ))?.[1] || null
+    if (manualIconPath) {
+        return {
+            projectIconPath: manualIconPath,
+            projectType: null,
+            framework: null
+        }
+    }
+    if (isGenericUserFolderPath(normalizedProjectPath)) {
+        return {
+            projectIconPath: null,
+            projectType: null,
+            framework: null
+        }
+    }
+
     const cached = getCachedProjectDetails(projectPath) as {
         projectIconPath?: string | null
         type?: string
@@ -491,11 +508,11 @@ function resolveProjectPresentation(
 
     const firstFramework = Array.isArray(cached?.frameworks) ? cached.frameworks.find((value): value is string => typeof value === 'string' && value.trim().length > 0) : null
 
-    return {
-        projectIconPath: manualIconPath || (typeof cached?.projectIconPath === 'string' ? cached.projectIconPath : null),
+    return retainAssistantProjectPresentation(normalizedProjectPath, {
+        projectIconPath: typeof cached?.projectIconPath === 'string' ? cached.projectIconPath : null,
         projectType: typeof cached?.type === 'string' && cached.type.trim().length > 0 ? cached.type : null,
         framework: firstFramework || null
-    }
+    })
 }
 
 const PROJECT_METADATA_REFRESH_DELAY_MS = 60_000
@@ -510,7 +527,11 @@ export function resolveSessionProjectPath(session: AssistantSession): string {
 
 export async function hydrateProjectMetadataForPaths(projectPaths: string[]): Promise<number> {
     const now = Date.now()
-    const uniquePaths = Array.from(new Set(projectPaths.map((path) => normalizeProjectPath(path)).filter(Boolean)))
+    const uniquePaths = Array.from(new Set(
+        projectPaths
+            .map((path) => normalizeProjectPath(path))
+            .filter((path) => Boolean(path) && !isGenericUserFolderPath(path))
+    ))
     if (uniquePaths.length === 0) return 0
 
     const requestedPaths = uniquePaths.filter((path) => {
@@ -589,7 +610,7 @@ export function groupSessionsByProject(
     const groups = new Map<string, SessionProjectGroup>()
     for (const session of sessions) {
         const normalizedPath = resolveSessionProjectPath(session)
-        const projectPresentation = resolveProjectPresentation(normalizedPath, projectIconOverrides)
+        const projectPresentation = resolveAssistantProjectPresentation(normalizedPath, projectIconOverrides)
         const key = getProjectKey(normalizedPath)
         const sessionUpdatedAt = getSessionLastActivityAt(session)
         const existing = groups.get(key)

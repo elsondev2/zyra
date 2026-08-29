@@ -1,5 +1,7 @@
 import { access, readFile, readdir, realpath } from 'fs/promises'
+import { homedir } from 'os'
 import { basename, dirname, join, resolve, isAbsolute, relative } from 'path'
+import { isGenericUserFolderPath } from '../../shared/projects/project-path-classification'
 
 const COMMON_ICON_FILES = [
     'favicon.ico',
@@ -28,13 +30,44 @@ const COMMON_ICON_FILES = [
     'build/icon.png'
 ]
 
+const ROOT_PROJECT_EVIDENCE_FILES = new Set([
+    '.git',
+    'package.json',
+    'pnpm-workspace.yaml',
+    'turbo.json',
+    'Cargo.toml',
+    'go.mod',
+    'pom.xml',
+    'build.gradle',
+    'build.gradle.kts',
+    'requirements.txt',
+    'pyproject.toml',
+    'setup.py',
+    'Gemfile',
+    'composer.json',
+    'pubspec.yaml',
+    'mix.exs',
+    'CMakeLists.txt'
+])
+
 const PREFERRED_APP_ROOT_NAMES = new Map<string, number>([
     ['desktop', 320],
+    ['electron', 300],
     ['app', 280],
     ['web', 240],
+    ['frontend', 220],
+    ['client', 200],
     ['console', 180],
     ['marketing', 120]
 ])
+
+function hasProjectRootEvidence(entries: string[], packageJson?: any): boolean {
+    if (packageJson && typeof packageJson === 'object') return true
+    return entries.some((entry) => (
+        ROOT_PROJECT_EVIDENCE_FILES.has(entry)
+        || /\.(?:csproj|fsproj|sln|xcodeproj|xcworkspace)$/i.test(entry)
+    ))
+}
 
 function isLocalAssetReference(value: string): boolean {
     const trimmed = String(value || '').trim()
@@ -74,7 +107,12 @@ async function isPathConfinedToProject(projectPath: string, candidatePath: strin
     }
 }
 
-async function resolveExistingAssetPath(projectPath: string, baseDir: string, assetPath: string): Promise<string | null> {
+async function resolveExistingAssetPath(
+    projectPath: string,
+    baseDir: string,
+    assetPath: string,
+    projectRootRelative = false
+): Promise<string | null> {
     if (!isLocalAssetReference(assetPath)) return null
 
     const normalized = assetPath.replace(/\\/g, '/').trim()
@@ -82,10 +120,10 @@ async function resolveExistingAssetPath(projectPath: string, baseDir: string, as
     if (!stripped) return null
 
     const candidates = new Set<string>()
-    if (isAbsolute(stripped)) {
-        candidates.add(resolve(stripped))
-    } else if (stripped.startsWith('/')) {
+    if (projectRootRelative && stripped.startsWith('/')) {
         candidates.add(resolve(projectPath, `.${stripped}`))
+    } else if (isAbsolute(stripped)) {
+        candidates.add(resolve(stripped))
     } else {
         candidates.add(resolve(baseDir, stripped))
         candidates.add(resolve(projectPath, stripped))
@@ -146,7 +184,7 @@ async function resolveManifestIcon(projectPath: string, manifestPath: string): P
         icons.sort((left, right) => scoreManifestIcon(right) - scoreManifestIcon(left))
 
         for (const icon of icons) {
-            const resolved = await resolveExistingAssetPath(projectPath, dirname(manifestPath), String(icon?.src || ''))
+            const resolved = await resolveExistingAssetPath(projectPath, dirname(manifestPath), String(icon?.src || ''), true)
             if (resolved) return resolved
         }
     } catch {
@@ -162,7 +200,7 @@ async function resolveHtmlDeclaredIcon(projectPath: string, htmlPath: string): P
         const hrefs = extractHtmlLinkHrefs(html)
 
         for (const href of hrefs) {
-            const direct = await resolveExistingAssetPath(projectPath, dirname(htmlPath), href)
+            const direct = await resolveExistingAssetPath(projectPath, dirname(htmlPath), href, true)
             if (direct) {
                 if (/\.(?:webmanifest|json)$/i.test(direct)) {
                     const manifestIcon = await resolveManifestIcon(projectPath, direct)
@@ -173,7 +211,7 @@ async function resolveHtmlDeclaredIcon(projectPath: string, htmlPath: string): P
             }
 
             if (/\.(?:webmanifest|json)$/i.test(href)) {
-                const manifestPath = await resolveExistingAssetPath(projectPath, dirname(htmlPath), href)
+                const manifestPath = await resolveExistingAssetPath(projectPath, dirname(htmlPath), href, true)
                 if (!manifestPath) continue
                 const manifestIcon = await resolveManifestIcon(projectPath, manifestPath)
                 if (manifestIcon) return manifestIcon
@@ -210,7 +248,7 @@ async function resolveExpoIcon(projectPath: string, configPath: string): Promise
         const parsed = JSON.parse(content)
         const candidate = parsed?.expo?.icon || parsed?.icon
         if (typeof candidate === 'string') {
-            return await resolveExistingAssetPath(projectPath, dirname(configPath), candidate)
+            return await resolveExistingAssetPath(projectPath, dirname(configPath), candidate, true)
         }
     } catch {
         // Ignore malformed config files.
@@ -274,7 +312,7 @@ async function expandWorkspacePattern(projectPath: string, pattern: string): Pro
 
     if (!normalized.includes('*')) {
         const candidate = join(projectPath, normalized)
-        return (await pathExists(candidate)) ? [candidate] : []
+        return (await pathExists(candidate)) && (await isPathConfinedToProject(projectPath, candidate)) ? [candidate] : []
     }
 
     const starIndex = normalized.indexOf('*')
@@ -282,12 +320,23 @@ async function expandWorkspacePattern(projectPath: string, pattern: string): Pro
     const baseDir = basePart ? join(projectPath, basePart) : projectPath
 
     try {
+        if (!(await isPathConfinedToProject(projectPath, baseDir))) return []
         const entries = await readdir(baseDir, { withFileTypes: true })
-        return entries
-            .filter((entry) => entry.isDirectory())
-            .map((entry) => join(baseDir, entry.name))
+        const candidates: string[] = []
+        for (const entry of entries) {
+            if (!entry.isDirectory()) continue
+            const candidate = join(baseDir, entry.name)
+            if (await isPathConfinedToProject(projectPath, candidate)) candidates.push(candidate)
+        }
+        return candidates
     } catch {
         return []
+    }
+}
+
+async function addConfinedAppRoot(candidateRoots: Set<string>, projectPath: string, candidate: string): Promise<void> {
+    if ((await pathExists(candidate)) && (await isPathConfinedToProject(projectPath, candidate))) {
+        candidateRoots.add(candidate)
     }
 }
 
@@ -297,11 +346,19 @@ async function collectNestedAppRoots(projectPath: string, entries: string[], pac
     for (const pattern of getWorkspacePatterns(packageJson)) {
         const expanded = await expandWorkspacePattern(projectPath, pattern)
         for (const candidate of expanded) {
-            candidateRoots.add(candidate)
+            await addConfinedAppRoot(candidateRoots, projectPath, candidate)
         }
     }
 
     for (const relative of [
+        'desktop',
+        'electron',
+        'app',
+        'web',
+        'frontend',
+        'client',
+        'console',
+        'marketing',
         'apps/desktop',
         'apps/web',
         'apps/app',
@@ -313,20 +370,19 @@ async function collectNestedAppRoots(projectPath: string, entries: string[], pac
         'packages/console/app'
     ]) {
         const candidate = join(projectPath, relative)
-        if (await pathExists(candidate)) {
-            candidateRoots.add(candidate)
-        }
+        await addConfinedAppRoot(candidateRoots, projectPath, candidate)
     }
 
     for (const topLevelDir of ['apps', 'packages']) {
         if (!entries.includes(topLevelDir)) continue
         const baseDir = join(projectPath, topLevelDir)
         try {
+            if (!(await isPathConfinedToProject(projectPath, baseDir))) continue
             const subdirs = await readdir(baseDir, { withFileTypes: true })
             for (const entry of subdirs) {
                 if (!entry.isDirectory()) continue
                 const candidate = join(baseDir, entry.name)
-                candidateRoots.add(candidate)
+                await addConfinedAppRoot(candidateRoots, projectPath, candidate)
             }
         } catch {
             // Ignore unreadable workspace directories.
@@ -365,9 +421,12 @@ export async function resolveProjectIconPath(
     entries: string[],
     packageJson?: any
 ): Promise<string | null> {
-    const directRootIcon = await resolveRootDeclaredIcon(projectPath, entries, packageJson)
+    if (isGenericUserFolderPath(projectPath, homedir())) return null
 
-    const nestedRoots = await collectNestedAppRoots(projectPath, entries, packageJson)
+    const directRootIcon = await resolveRootDeclaredIcon(projectPath, entries, packageJson)
+    const nestedRoots = hasProjectRootEvidence(entries, packageJson)
+        ? await collectNestedAppRoots(projectPath, entries, packageJson)
+        : []
     let bestNestedIcon: { path: string; score: number } | null = null
 
     for (const nestedRoot of nestedRoots) {

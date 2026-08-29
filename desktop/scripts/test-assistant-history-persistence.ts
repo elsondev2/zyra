@@ -149,6 +149,38 @@ const projectedVoiceMessage = projectedVoiceCompletion.sessions[0]?.threads[0]?.
 assert.equal(projectedVoiceMessage?.providerItemId, 'voice-provider-projector-handoff', 'the canonical completion must transfer provider identity onto its existing streaming row')
 assert.equal(projectedVoiceMessage?.modality, 'voice', 'the canonical completion must transfer Voice modality onto its existing streaming row')
 
+const lateTurnMessageId = 'assistant-message-late-turn-identity'
+const projectedLateTurnDelta = applyAssistantDomainEvent(projectedVoiceCompletion, {
+    sequence: 12,
+    eventId: 'event-late-turn-delta',
+    type: 'thread.message.assistant.delta',
+    occurredAt: '2026-07-15T12:03:00.000Z',
+    sessionId: session.id,
+    threadId: thread.id,
+    payload: {
+        threadId: thread.id,
+        messageId: lateTurnMessageId,
+        delta: 'Final response',
+        turnId: null
+    }
+})
+const projectedLateTurnCompletion = applyAssistantDomainEvent(projectedLateTurnDelta, {
+    sequence: 13,
+    eventId: 'event-late-turn-completed',
+    type: 'thread.message.assistant.completed',
+    occurredAt: '2026-07-15T12:03:01.000Z',
+    sessionId: session.id,
+    threadId: thread.id,
+    payload: {
+        threadId: thread.id,
+        messageId: lateTurnMessageId,
+        text: 'Final response',
+        turnId: 'turn-late-identity'
+    }
+})
+const projectedLateTurnMessage = projectedLateTurnCompletion.sessions[0]?.threads[0]?.messages.find((message) => message.id === lateTurnMessageId)
+assert.equal(projectedLateTurnMessage?.turnId, 'turn-late-identity', 'a completed live response backfills turn identity so work can collapse without reloading history')
+
 const partialThread: AssistantThread = {
     ...thread,
     messageCount: 1,

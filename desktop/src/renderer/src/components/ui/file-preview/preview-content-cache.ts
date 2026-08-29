@@ -7,11 +7,14 @@ export type PreviewContentSnapshot = {
 }
 
 const MAX_PREVIEW_CACHE_ENTRIES = 8
-const MAX_PREVIEW_CACHE_CONTENT_LENGTH = 2_000_000
-const MAX_SINGLE_PREVIEW_CACHE_CONTENT_LENGTH = 600_000
+const MAX_PREVIEW_CACHE_CONTENT_LENGTH = 24 * 1024 * 1024
+const MAX_SINGLE_PREVIEW_CACHE_CONTENT_LENGTH = 8 * 1024 * 1024
 
 function normalizeCacheKey(filePath: string): string {
-    return String(filePath || '').trim().replace(/\\/g, '/').toLowerCase()
+    const normalized = String(filePath || '').trim().replace(/\\/g, '/')
+    return /^[a-z]:\//i.test(normalized) || normalized.startsWith('//')
+        ? normalized.toLowerCase()
+        : normalized
 }
 
 export function readPreviewContentCache(

@@ -70,7 +70,8 @@ try {
     assert.match(settingsStoreSource, /clearProjectViewCaches\(\)[\s\S]{0,160}clearSettingsRuntimeCaches\(\)/, 'Clear cache includes loaded Settings runtime caches')
 
     const runtimeSource = readFileSync(new URL('../src/main/assistant/zyra-pi-runtime.ts', import.meta.url), 'utf8')
-    assert.match(runtimeSource, /availabilityCache[\s\S]{0,900}checkAvailability\(forceRefresh = false\)/, 'runtime availability is cached instead of spawning Node for every Settings mount')
+    assert.match(runtimeSource, /private availabilityCache: \{ root: string; checkedAt: number; result:/, 'runtime availability retains a root-scoped cache')
+    assert.match(runtimeSource, /async checkAvailability\(forceRefresh = false\)[\s\S]{0,500}Date\.now\(\) - this\.availabilityCache\.checkedAt < 30_000[\s\S]{0,180}return this\.availabilityCache\.result/, 'runtime availability is cached instead of spawning Node for every Settings mount')
     const listModelsSource = runtimeSource.split('async listModels(forceRefresh = false)')[1]?.split('async prewarm')[0] || ''
     assert.doesNotMatch(listModelsSource, /checkAvailability/, 'model listing performs only one availability check through prewarm')
     assert.match(runtimeSource, /listModelsWithProvenance[\s\S]{0,1600}authoritative: false/, 'fallback model lists expose request-local non-authoritative provenance')

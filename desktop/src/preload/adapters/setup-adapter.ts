@@ -17,6 +17,7 @@ import {
 } from '../../shared/preferences/contracts'
 import {
     DEVICE_SECRETS_IPC,
+    type UpdateBrowserIntegrationSecretsInput,
     type UpdateHostedAiSecretsInput
 } from '../../shared/preferences/secrets-contracts'
 
@@ -33,7 +34,8 @@ export function createSetupAdapter() {
         },
         secrets: {
             updateHostedAiKeys: (input: UpdateHostedAiSecretsInput) => ipcRenderer.invoke(DEVICE_SECRETS_IPC.updateHostedAiKeys, input),
-            migrateLegacyHostedAiKeys: (input: UpdateHostedAiSecretsInput) => ipcRenderer.invoke(DEVICE_SECRETS_IPC.migrateLegacyHostedAiKeys, input)
+            migrateLegacyHostedAiKeys: (input: UpdateHostedAiSecretsInput) => ipcRenderer.invoke(DEVICE_SECRETS_IPC.migrateLegacyHostedAiKeys, input),
+            updateBrowserIntegrationSecrets: (input: UpdateBrowserIntegrationSecretsInput) => ipcRenderer.invoke(DEVICE_SECRETS_IPC.updateBrowserIntegrationSecrets, input)
         },
         onboarding: {
             getState: () => ipcRenderer.invoke(ONBOARDING_IPC.getState),

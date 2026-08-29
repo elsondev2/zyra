@@ -1,11 +1,9 @@
 import { randomBytes } from 'node:crypto'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import type {
     AssistantTranscribeVoiceInput,
     AssistantVoiceTranscriptionState
 } from '../../shared/assistant/contracts'
-import { resolveZyraRoot } from '../zyra/zyra-root'
+import { getSharedOpenAIAuthWorkerClient } from '../setup/openai-auth-worker-client'
 
 export const CODEX_VOICE_TRANSCRIPTION_URL = 'https://chatgpt.com/backend-api/transcribe'
 export const CODEX_VOICE_SAMPLE_RATE_HZ = 24_000
@@ -22,13 +20,6 @@ const BASE64_MAX_LENGTH = Math.ceil(CODEX_VOICE_MAX_AUDIO_BYTES / 3) * 4
 type CodexVoiceCredentials = {
     accessToken: string
     accountId: string
-}
-
-type ChatGptAccountAuthModule = {
-    resolveChatGptAccountAuth(): Promise<{
-        accessToken?: unknown
-        accountId?: unknown
-    } | undefined>
 }
 
 type CodexVoiceRequest = {
@@ -52,7 +43,6 @@ class CodexVoiceAuthError extends Error {
 }
 
 let activeTranscriptionRequests = 0
-let accountAuthModulePromise: Promise<ChatGptAccountAuthModule> | null = null
 
 function asRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === 'object' && !Array.isArray(value)
@@ -65,21 +55,12 @@ function readNonEmptyString(value: unknown): string | null {
     return normalized || null
 }
 
-async function loadChatGptAccountAuthModule(): Promise<ChatGptAccountAuthModule> {
-    if (!accountAuthModulePromise) {
-        const moduleUrl = pathToFileURL(join(resolveZyraRoot(), 'src', 'chatgpt-account.mjs')).href
-        accountAuthModulePromise = (import(/* @vite-ignore */ moduleUrl) as Promise<ChatGptAccountAuthModule>).catch((error) => {
-            accountAuthModulePromise = null
-            throw error
-        })
-    }
-    return accountAuthModulePromise
-}
-
 async function readCodexVoiceCredentials(): Promise<CodexVoiceCredentials> {
     try {
-        const accountAuth = await loadChatGptAccountAuthModule()
-        const auth = await accountAuth.resolveChatGptAccountAuth()
+        // Loading Pi auth and OAuth modules can be expensive on a cold Windows
+        // profile. Keep that dependency graph in the shared auth worker so a
+        // transcription request cannot block Electron's main event loop.
+        const auth = await getSharedOpenAIAuthWorkerClient().account.resolveChatGptAccountAuth()
         const accessToken = readNonEmptyString(auth?.accessToken)
         const accountId = readNonEmptyString(auth?.accountId)
         if (!accessToken || !accountId) {

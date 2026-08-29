@@ -23,6 +23,7 @@ import type {
     AssistantSendPromptOptions,
     AssistantSendRealtimeVoiceMessageInput,
     AssistantSelectThreadInput,
+    AssistantSkillSourceSettings,
     AssistantStartRealtimeVoiceInput,
     AssistantSetPlaygroundRootInput,
     AssistantTranscribeVoiceInput,
@@ -117,6 +118,29 @@ export function handleAssistantListModels(_event: Electron.IpcMainInvokeEvent, f
     return withAssistantResult(() => getAssistantService().listModels(Boolean(forceRefresh)))
 }
 
+export function handleAssistantListPromptResources(
+    _event: Electron.IpcMainInvokeEvent,
+    projectPath?: string | null,
+    forceRefresh = false
+) {
+    return withAssistantResult(() => getAssistantService().listPromptResources(projectPath, forceRefresh === true))
+}
+
+export function handleAssistantGetSkillSourceOverview(
+    _event: Electron.IpcMainInvokeEvent,
+    projectPath?: string | null
+) {
+    return withAssistantResult(() => getAssistantService().getSkillSourceOverview(projectPath))
+}
+
+export function handleAssistantUpdateSkillSourceSettings(
+    _event: Electron.IpcMainInvokeEvent,
+    settings: AssistantSkillSourceSettings,
+    projectPath?: string | null
+) {
+    return withAssistantResult(() => getAssistantService().updateSkillSourceSettings(settings, projectPath))
+}
+
 export function handleAssistantConnect(_event: Electron.IpcMainInvokeEvent, options?: AssistantConnectOptions) {
     log.info('IPC: assistant:connect', { options })
     return withDesktopAssistantSelectionLease(() => getAssistantService().connect(options))
@@ -175,6 +199,11 @@ export function handleAssistantSearchTurns(_event: Electron.IpcMainInvokeEvent, 
 export function handleAssistantRenameSession(_event: Electron.IpcMainInvokeEvent, sessionId: string, title: string) {
     log.info('IPC: assistant:renameSession', { sessionId })
     return withAssistantResult(() => getAssistantService().renameSession(sessionId, title))
+}
+
+export function handleAssistantRegenerateSessionTitle(_event: Electron.IpcMainInvokeEvent, sessionId: string) {
+    log.info('IPC: assistant:regenerateSessionTitle', { sessionId })
+    return withAssistantResult(() => getAssistantService().regenerateSessionTitle(sessionId))
 }
 
 export function handleAssistantArchiveSession(_event: Electron.IpcMainInvokeEvent, sessionId: string, archived?: boolean) {

@@ -81,10 +81,15 @@ This project is Zyra, a local CLI built on top of the Pi SDK.
 
 ## Validation
 
+- Read `docs/development/fast-validation.md` before choosing broad checks. It is the canonical command map for quick, scoped, full, watch, and build validation.
+- Keep a scoped TypeScript watcher running during desktop iteration; do not repeatedly restart the full graph after every edit.
 - Do not run production builds unless the user explicitly asks for one or the change is massive enough that build-level verification is necessary. For normal scoped changes, use the narrowest relevant test, typecheck, syntax check, or lint check instead.
 - Minor renderer, styling, and CSS changes must not trigger `npm run build`, packaging, or a full-app typecheck unless the user explicitly requests it. Use source inspection, a focused test, and live visual verification instead.
 - Do not run root-level or desktop full-app typechecks after every scoped change. Prefer a focused contract test, file-level syntax check, or the narrowest affected-package check. Run a full-app typecheck only when the change crosses module/type boundaries, changes shared contracts or configuration, is structurally broad, is being prepared for release, or the user explicitly requests it.
-- Default check: `npm run check`.
+- Iteration check: `npm run check:quick`.
+- Core CLI checkpoint: `npm run check:core`.
+- Desktop integration checkpoint: `npm run check:desktop`.
+- Merge/release check: `npm run check`.
 - Public readiness check: `npm run privacy-check`.
 - Terminal rendering changes should include `scripts/test-zyra-ui-render.mjs`.
 - Memory command changes should include `scripts/test-zyra-memory.mjs`.

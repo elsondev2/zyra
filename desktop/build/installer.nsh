@@ -1,3 +1,7 @@
+!include "WinMessages.nsh"
+!include "StrFunc.nsh"
+${StrStr}
+
 !macro customInstall
   WriteRegStr SHELL_CONTEXT "Software\Classes\*\shell\Zyra" "" "Open with Zyra"
   WriteRegStr SHELL_CONTEXT "Software\Classes\*\shell\Zyra" "Icon" "$appExe,0"
@@ -13,6 +17,32 @@
   WriteRegStr SHELL_CONTEXT "Software\Classes\Directory\Background\shell\Zyra" "Icon" "$appExe,0"
   WriteRegStr SHELL_CONTEXT "Software\Classes\Directory\Background\shell\Zyra" "Position" "Top"
   WriteRegStr SHELL_CONTEXT "Software\Classes\Directory\Background\shell\Zyra\command" "" '"$appExe" "%V"'
+
+  ; Desktop carries the lockstep TUI runtime. Install one user-owned terminal
+  ; launcher and add its stable directory without exposing resources paths.
+  CreateDirectory "$LOCALAPPDATA\Zyra\bin"
+  GetFullPathName /SHORT $3 "$INSTDIR"
+  FileOpen $0 "$LOCALAPPDATA\Zyra\bin\zyra.cmd" w
+  FileWrite $0 "@echo off$\r$\n"
+  FileWrite $0 "setlocal$\r$\n"
+  FileWrite $0 "rem zyra-desktop-managed-launcher:v1$\r$\n"
+  FileWrite $0 "set $\"ZYRA_ROOT=$3\resources\zyra-runtime$\"$\r$\n"
+  FileWrite $0 "set $\"ZYRA_DATA_ROOT=%USERPROFILE%$\"$\r$\n"
+  FileWrite $0 "set $\"ZYRA_DISTRIBUTION=desktop-bundle$\"$\r$\n"
+  FileWrite $0 "if exist $\"$3\resources\zyra-node\node.exe$\" ($\"$3\resources\zyra-node\node.exe$\" $\"$3\resources\zyra-runtime\bin\zyra.mjs$\" %* & exit /b %ERRORLEVEL%)$\r$\n"
+  FileWrite $0 "if exist $\"$LOCALAPPDATA\Zyra\zyra.cmd$\" call $\"$LOCALAPPDATA\Zyra\zyra.cmd$\" %*$\r$\n"
+  FileWrite $0 "exit /b %ERRORLEVEL%$\r$\n"
+  FileClose $0
+  ReadRegStr $1 HKCU "Environment" "Path"
+  ${StrStr} $2 "$1" "$LOCALAPPDATA\Zyra\bin"
+  StrCmp $2 "" 0 zyra_path_ready
+  StrCmp $1 "" 0 +2
+    StrCpy $1 "$LOCALAPPDATA\Zyra\bin"
+    Goto +2
+  StrCpy $1 "$1;$LOCALAPPDATA\Zyra\bin"
+  WriteRegExpandStr HKCU "Environment" "Path" "$1"
+  SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
+  zyra_path_ready:
 !macroend
 
 !macro customUnInstall
@@ -20,5 +50,18 @@
     DeleteRegKey SHELL_CONTEXT "Software\Classes\*\shell\Zyra"
     DeleteRegKey SHELL_CONTEXT "Software\Classes\Directory\shell\Zyra"
     DeleteRegKey SHELL_CONTEXT "Software\Classes\Directory\Background\shell\Zyra"
+    Delete "$LOCALAPPDATA\Zyra\bin\zyra.cmd"
+    IfFileExists "$LOCALAPPDATA\Zyra\zyra.cmd" 0 zyra_no_standalone_fallback
+      CreateDirectory "$LOCALAPPDATA\Zyra\bin"
+      FileOpen $0 "$LOCALAPPDATA\Zyra\bin\zyra.cmd" w
+      FileWrite $0 "@echo off$\r$\n"
+      FileWrite $0 "rem zyra-managed-launcher:v1$\r$\n"
+      FileWrite $0 "call $\"$LOCALAPPDATA\Zyra\zyra.cmd$\" %*$\r$\n"
+      FileWrite $0 "exit /b %ERRORLEVEL%$\r$\n"
+      FileClose $0
+      Goto zyra_launcher_cleanup_done
+    zyra_no_standalone_fallback:
+      RMDir "$LOCALAPPDATA\Zyra\bin"
+    zyra_launcher_cleanup_done:
   ${endIf}
 !macroend

@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { OnboardingSnapshot } from '../src/shared/onboarding/contracts'
 import { resolveOnboardingGateMode } from '../src/renderer/src/onboarding/onboarding-gate-policy'
+import { resolveAppLoadingRoute } from '../src/renderer/src/components/ui/app-loading-route'
 
 const requiredSnapshot: OnboardingSnapshot = {
     hydrated: true,
@@ -32,22 +33,38 @@ assert.equal(resolveOnboardingGateMode({ desktop: true, preferencesHydrated: tru
 assert.equal(resolveOnboardingGateMode({ desktop: false, preferencesHydrated: true, preferencesError: null, onboardingLoading: false, onboardingError: null, snapshot: completedSnapshot }), 'normal')
 assert.equal(resolveOnboardingGateMode({ desktop: true, preferencesHydrated: true, preferencesError: 'newer schema', onboardingLoading: false, onboardingError: null, snapshot: completedSnapshot }), 'desktop-error')
 assert.equal(resolveOnboardingGateMode({ desktop: true, preferencesHydrated: true, preferencesError: null, onboardingLoading: false, onboardingError: null, snapshot: { ...requiredSnapshot, blockedReason: 'future-schema', detectedSchemaVersion: 9 } }), 'desktop-future-schema')
+assert.equal(resolveAppLoadingRoute('#/assistant/chat/abc'), 'assistant')
+assert.equal(resolveAppLoadingRoute('#/assistant/instructor'), 'voice')
+assert.equal(resolveAppLoadingRoute('#/settings/browser-control'), 'settings')
+assert.equal(resolveAppLoadingRoute('#/explorer/C%3A%5Ccode'), 'assistant', 'retired Explorer links use the Assistant loading shell')
+assert.equal(resolveAppLoadingRoute('#/assistant-utility/files'), 'assistant-utility')
+assert.equal(resolveAppLoadingRoute('#/browser-popup/window'), 'browser-popup')
 
 const here = dirname(fileURLToPath(import.meta.url))
 const appSource = readFileSync(resolve(here, '../src/renderer/src/App.tsx'), 'utf8')
+const appRouteSkeletonSource = readFileSync(resolve(here, '../src/renderer/src/components/ui/AppRouteSkeleton.tsx'), 'utf8')
 const gateSource = readFileSync(resolve(here, '../src/renderer/src/onboarding/OnboardingGate.tsx'), 'utf8')
 const flowSource = readFileSync(resolve(here, '../src/renderer/src/onboarding/OnboardingFlow.tsx'), 'utf8')
 const stepsSource = readFileSync(resolve(here, '../src/renderer/src/onboarding/OnboardingSteps.tsx'), 'utf8')
 const backgroundSource = readFileSync(resolve(here, '../src/renderer/src/onboarding/OnboardingBackground.tsx'), 'utf8')
+const cloudFieldSource = readFileSync(resolve(here, '../src/renderer/src/components/ui/CloudField.tsx'), 'utf8')
 const motionSource = readFileSync(resolve(here, '../src/renderer/src/onboarding/OnboardingFlow.css'), 'utf8')
 const openAiLogoSource = readFileSync(resolve(here, '../src/renderer/src/components/ui/OpenAiLogo.tsx'), 'utf8')
 const themeSelectSource = readFileSync(resolve(here, '../src/renderer/src/pages/settings/appearance/AppearanceThemeSelect.tsx'), 'utf8')
 const browserSource = readFileSync(resolve(here, '../src/renderer/src/onboarding/BrowserSetupRequired.tsx'), 'utf8')
 const mainSource = readFileSync(resolve(here, '../src/main/index.ts'), 'utf8')
 
-assert.match(appSource, /<SettingsProvider>[\s\S]*<OnboardingProvider>[\s\S]*<OnboardingGate>[\s\S]*<NormalDesktopApp/)
+assert.match(appSource, /<SettingsProvider>[\s\S]*<OnboardingProvider>[\s\S]*<OnboardingGate[^>]*>[\s\S]*<NormalDesktopApp/)
 assert.doesNotMatch(appSource.split('function NormalDesktopApp')[1]?.split('function App')[0] || '', /OnboardingFlow/, 'normal routes must only mount behind the gate')
 assert.match(gateSource, /resolveOnboardingGateMode/, 'gate rendering must use the main-owned completion policy')
+assert.doesNotMatch(gateSource, /Preparing setup/, 'hydration must use the destination route skeleton instead of flashing setup UI')
+assert.match(appSource, /<OnboardingGate loadingFallback=\{<AppBootSkeleton \/>\}>/, 'the setup gate must preserve the destination-shaped app shell while state hydrates')
+assert.match(appSource, /function PageLoader\(\)[\s\S]*<AppRouteSkeleton pathname=\{location\.pathname\}/, 'lazy top-level routes must use a destination-shaped skeleton')
+assert.match(appRouteSkeletonSource, /data-app-route-skeleton="settings"/, 'settings loading keeps its navigation and content geometry')
+assert.doesNotMatch(appRouteSkeletonSource, /data-app-route-skeleton="explorer"|ExplorerRouteSkeleton/, 'the retired Explorer has no loading surface')
+assert.match(appRouteSkeletonSource, /data-app-route-skeleton="voice"/, 'Voice loading keeps its stage and composer geometry')
+assert.match(appRouteSkeletonSource, /data-app-route-skeleton="assistant-utility"/, 'utility windows have a workspace-shaped loading shell')
+assert.match(appRouteSkeletonSource, /data-app-route-skeleton="browser-popup"/, 'browser popup windows have a browser-shaped loading shell')
 assert.match(browserSource, /Finish setup in Zyra Desktop/)
 assert.match(browserSource, /browser will unlock as soon as Desktop setup is complete/)
 assert.doesNotMatch(flowSource, /Escape|onMouseDown|backdrop/, 'mandatory onboarding must not expose Escape or backdrop bypasses')
@@ -83,9 +100,13 @@ assert.match(themeSelectSource, /PALETTE_ROLES\.map/, 'every dropdown row must r
 assert.match(themeSelectSource, /createPortal\(popover, document\.body\)/, 'theme menus must escape clipped onboarding and Settings scroll regions')
 assert.match(themeSelectSource, /option\.offsetTop/, 'opening a theme menu must center its active theme rather than start at the first row')
 assert.match(themeSelectSource, /MAX_LIST_HEIGHT = 168/, 'theme menus must use the shortened frame')
-assert.match(backgroundSource, /detail="low"/)
+assert.match(backgroundSource, /<CloudField[\s\S]*backgroundColor=\{palette\.background\}[\s\S]*accentColor=\{palette\.accent\}[\s\S]*inkColor=\{palette\.ink\}/, 'onboarding Cloud Field follows the resolved Zyra theme palette')
 assert.match(backgroundSource, /maxFps=\{24\}/)
-assert.match(mainSource, /const launchHidden = setupComplete && initialShellLaunchTarget\?\.kind === 'file'/, 'shell file launches must not hide mandatory setup')
+assert.match(backgroundSource, /reducedMotion=\{settings\.accessibilityReduceMotion\}/, 'onboarding background honors the saved motion preference')
+assert.match(cloudFieldSource, /threeui\.com\/backgrounds\/portal-field\/cloud-field/, 'the retrieved Cloud Field source remains attributable at its local implementation boundary')
+assert.match(cloudFieldSource, /document\.hidden[\s\S]*frameInterval/, 'the ambient WebGL field is visibility-aware and frame-capped')
+assert.match(cloudFieldSource, /u_background[\s\S]*u_accent[\s\S]*u_ink/, 'the raw shader uses semantic Zyra theme colors instead of a fixed violet palette')
+assert.match(mainSource, /const launchHidden = launchAsBackgroundHost \|\| \(setupComplete && initialShellLaunchTarget\?\.kind === 'file'\)/, 'shell file launches and explicit background hosting must not hide mandatory setup')
 assert.match(mainSource, /pendingShellLaunchTargets\.push\(initialShellLaunchTarget\)/, 'pending launch intent must be retained')
 assert.match(mainSource, /app\.on\('open-file'/, 'macOS Finder launches must enter the onboarding-aware shell target queue')
 assert.match(mainSource, /getAssistantService: \(\) => setupServices\.onboarding\.isAccessAllowed\(\) \? getAssistantService\(\) : null/, 'browser runtime must defer Assistant construction until setup completes')

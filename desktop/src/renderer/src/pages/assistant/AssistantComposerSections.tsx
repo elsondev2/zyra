@@ -1,8 +1,8 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction, type WheelEvent as ReactWheelEvent } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type Dispatch, type RefObject, type SetStateAction, type WheelEvent as ReactWheelEvent } from 'react'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
-import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { cn } from '@/lib/utils'
-import { AudioLines, Check, ChevronDown, ChevronUp, Gauge, GitBranch, ListTodo, Loader2, Lock, LockOpen, MessageSquare, Mic, RotateCw, SendHorizontal, Square, Zap } from 'lucide-react'
+import { AudioLines, Check, ChevronDown, ChevronUp, Gauge, GitBranch, Loader2, Lock, LockOpen, Mic, RotateCw, SendHorizontal, Square, Zap } from 'lucide-react'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import { formatAssistantModelLabel } from './assistant-model-labels'
 import { getContentTypeTag, getContextFileMeta, isPastedTextAttachment } from './assistant-composer-utils'
@@ -15,35 +15,10 @@ import { AssistantFileAttachmentCard, AssistantPastedTextCard } from './Assistan
 import { AssistantAttachmentImageCard } from './AssistantAttachmentImageCard'
 import { AssistantBrowserAnnotationCard } from './AssistantBrowserAnnotationCard'
 
-function getEffortTone(effort: string): { textClass: string; rowClass: string } {
-    if (effort === 'off' || effort === 'none') {
-        return {
-            textClass: 'text-sparkle-text-muted',
-            rowClass: 'bg-white/[0.025] text-sparkle-text-muted'
-        }
-    }
-    if (effort === 'minimal' || effort === 'low') {
-        return {
-            textClass: 'text-emerald-200',
-            rowClass: 'border-emerald-400/18 bg-emerald-500/[0.08]'
-        }
-    }
-    if (effort === 'medium') {
-        return {
-            textClass: 'text-sky-200',
-            rowClass: 'border-sky-400/18 bg-sky-500/[0.08]'
-        }
-    }
-    if (effort === 'xhigh' || effort === 'max') {
-        return {
-            textClass: 'text-fuchsia-200',
-            rowClass: 'border-fuchsia-400/18 bg-fuchsia-500/[0.08]'
-        }
-    }
-    return {
-        textClass: 'text-amber-200',
-        rowClass: 'border-amber-400/18 bg-amber-500/[0.08]'
-    }
+function getEffortTone(effort: string): { textClass: string } {
+    return effort === 'off' || effort === 'none'
+        ? { textClass: 'text-sparkle-text-dark' }
+        : { textClass: 'text-sparkle-text' }
 }
 
 function isLatestModel(model: { id: string; label?: string }, latestModelId: string | null): boolean {
@@ -256,7 +231,7 @@ export const ComposerMentionMenu = memo(({
                             <div className="px-2 py-3 text-[11px] text-sparkle-text-secondary">No matching files or folders.</div>
                         ) : mentionCandidates.map((candidate, index) => (
                             <button key={candidate.path} type="button" data-mention-index={index} onClick={() => onApplyMention(candidate)} className={cn('flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors', index === activeMentionIndex ? 'bg-white/[0.08]' : 'hover:bg-white/[0.04]')}>
-                                <VscodeEntryIcon pathValue={candidate.relativePath || candidate.name} kind={candidate.type} theme={iconTheme} className="shrink-0" />
+                                <FileEntryIcon pathValue={candidate.relativePath || candidate.name} kind={candidate.type} theme={iconTheme} className="shrink-0" />
                                 <div className="min-w-0 flex-1 truncate"><span className="text-[13px] font-semibold text-sparkle-text">{candidate.name}</span><span className="ml-2 font-mono text-[11px] text-white/[0.12]">{candidate.relativePath}</span></div>
                             </button>
                         ))}
@@ -400,21 +375,9 @@ export const ComposerVoiceButton = memo(({
     )
 })
 
-function ZyraLoadingTextShimmer({ active, className, text }: { active: boolean; className?: string; text: string }) {
-    return (
-        <span className={cn('relative inline-block min-w-0', className)}>
-            <span className="block min-w-0 truncate">{text}</span>
-            {active ? (
-                <span className="zyra-loading-text-shine pointer-events-none absolute inset-0 block min-w-0 truncate" aria-hidden="true">
-                    {text}
-                </span>
-            ) : null}
-        </span>
-    )
-}
-
 export const ComposerFooterControls = memo(function ComposerFooterControls({
     isCompactFooter,
+    forceSingleRow = false,
     placement = 'bottom',
     controlsLocked = false,
     modelDropdownRef,
@@ -450,6 +413,7 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
     onReconnect,
 }: {
     isCompactFooter: boolean
+    forceSingleRow?: boolean
     placement?: 'bottom' | 'center'
     controlsLocked?: boolean
     modelDropdownRef: RefObject<HTMLDivElement | null>
@@ -491,9 +455,9 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
     onReconnect?: () => Promise<void> | void
 }) {
     const [activeSubmenu, setActiveSubmenu] = useState<'model' | 'speed' | null>(null)
-    const [modelRefreshVisible, setModelRefreshVisible] = useState(false)
+    const [submenuLeft, setSubmenuLeft] = useState({ model: 234, speed: 234 })
     const submenuCloseTimerRef = useRef<number | null>(null)
-    const modelRefreshVisibleTimerRef = useRef<number | null>(null)
+    const submenuContainerRef = useRef<HTMLDivElement | null>(null)
     const selectedModelText = formatAssistantModelLabel(selectedModelLabel)
     const selectedEffortText = EFFORT_LABELS[selectedEffort] || selectedEffort
     const selectedEffortTone = getEffortTone(selectedEffort)
@@ -502,26 +466,20 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
     const effortSliderPercent = effortSliderMax > 0 ? (selectedEffortIndex / effortSliderMax) * 100 : 0
     const effortSliderTicks = buildEffortSliderTicks(EFFORT_OPTIONS.length)
     const effortSliderColor = selectedEffort === 'off' || selectedEffort === 'none'
-        ? 'var(--color-text-muted)'
-        : selectedEffort === 'minimal' || selectedEffort === 'low'
-        ? 'var(--status-success)'
-        : selectedEffort === 'medium'
-            ? 'var(--accent-primary)'
-            : selectedEffort === 'high'
-                ? 'var(--accent-secondary)'
-                : 'var(--status-warning)'
+        ? 'var(--color-text-dark)'
+        : 'var(--accent-primary)'
     const traitsMenuOpensDown = placement === 'center'
 
-    const menuPanelClass = 'overflow-hidden rounded-[10px] border border-sparkle-border bg-sparkle-card p-1 text-[13px] text-sparkle-text shadow-[0_18px_48px_rgba(0,0,0,0.38)]'
-    const menuRouteClass = 'flex h-[30px] w-full items-center gap-2.5 rounded-md px-2.5 text-left transition-colors hover:bg-white/[0.065] hover:text-sparkle-text'
-    const menuOptionClass = 'flex w-full items-center gap-2 rounded-md px-2.5 text-left transition-colors hover:bg-white/[0.065] hover:text-sparkle-text'
+    const menuPanelClass = 'overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--color-text)_16%,transparent)] bg-[var(--surface-floating)] p-1.5 text-[13px] text-sparkle-text shadow-[0_18px_48px_rgba(0,0,0,0.22),inset_0_1px_0_color-mix(in_srgb,var(--color-text)_5%,transparent)] backdrop-blur-xl'
+    const menuRouteClass = 'group flex h-[36px] w-full items-center gap-3 rounded-lg px-2.5 text-left transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]'
+    const menuOptionClass = 'flex w-full items-center gap-2 rounded-lg px-2.5 text-left transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]'
     const modelSubmenuPositionClass = traitsMenuOpensDown
-        ? 'absolute left-[234px] top-[76px] w-[252px] max-[780px]:left-0 max-[780px]:top-[calc(100%+6px)] max-[780px]:w-[min(252px,calc(100vw-32px))]'
-        : 'absolute bottom-0 left-[234px] w-[252px] max-[780px]:bottom-[calc(100%+6px)] max-[780px]:left-0 max-[780px]:w-[min(252px,calc(100vw-32px))]'
+        ? 'absolute top-[76px] w-[252px] max-w-[calc(100vw-32px)]'
+        : 'absolute bottom-0 w-[252px] max-w-[calc(100vw-32px)]'
     const speedSubmenuPositionClass = traitsMenuOpensDown
-        ? 'absolute left-[234px] top-[106px] w-[216px] max-[780px]:left-0 max-[780px]:top-[calc(100%+6px)] max-[780px]:w-[min(216px,calc(100vw-32px))]'
-        : 'absolute bottom-0 left-[234px] w-[216px] max-[780px]:bottom-[calc(100%+6px)] max-[780px]:left-0 max-[780px]:w-[min(216px,calc(100vw-32px))]'
-    const submenuMotionClass = 'transition-[opacity,transform] duration-[120ms] ease-out'
+        ? 'absolute top-[106px] w-[216px] max-w-[calc(100vw-32px)]'
+        : 'absolute bottom-0 w-[216px] max-w-[calc(100vw-32px)]'
+    const submenuMotionClass = 'transition-opacity duration-[120ms] ease-out'
     const connectionPillState = isConnected || reconnectPending || isConnecting
         ? null
         : {
@@ -549,9 +507,9 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
         }, 90)
     }
     const getSubmenuVisibilityClass = (submenu: 'model' | 'speed') => activeSubmenu === submenu
-        ? 'pointer-events-auto translate-y-0 opacity-100'
-        : 'pointer-events-none translate-y-[2px] opacity-0'
-    const showModelRefreshState = modelsLoading || modelRefreshVisible
+        ? 'pointer-events-auto opacity-100'
+        : 'pointer-events-none opacity-0'
+    const showModelRefreshState = modelsLoading
 
     const toggleTraitsDropdown = () => {
         if (controlsLocked) return
@@ -560,7 +518,6 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
         setShowModelDropdown(false)
         if (!next) return
         setActiveSubmenu(null)
-        setModelRefreshVisible(true)
         onRefreshModels?.()
     }
 
@@ -568,48 +525,61 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
         if (!showTraitsDropdown) setActiveSubmenu(null)
     }, [showTraitsDropdown])
 
-    useEffect(() => {
-        if (modelsLoading) {
-            setModelRefreshVisible(true)
-            return
-        }
-        if (!modelRefreshVisible) return
-        if (modelRefreshVisibleTimerRef.current !== null) window.clearTimeout(modelRefreshVisibleTimerRef.current)
-        modelRefreshVisibleTimerRef.current = window.setTimeout(() => {
-            modelRefreshVisibleTimerRef.current = null
-            setModelRefreshVisible(false)
-        }, 560)
-        return () => {
-            if (modelRefreshVisibleTimerRef.current !== null) {
-                window.clearTimeout(modelRefreshVisibleTimerRef.current)
-                modelRefreshVisibleTimerRef.current = null
+    useLayoutEffect(() => {
+        if (!showTraitsDropdown) return
+        const container = submenuContainerRef.current
+        if (!container) return
+        const boundary = container.closest('.assistant-conversation-pane')
+
+        const updateSubmenuPlacement = () => {
+            const containerRect = container.getBoundingClientRect()
+            const boundaryRect = boundary?.getBoundingClientRect() ?? {
+                left: 0,
+                right: window.innerWidth
             }
+            const resolveLeft = (submenuWidth: number) => {
+                const gutter = 8
+                const preferredLeft = 234
+                const minLeft = boundaryRect.left - containerRect.left + gutter
+                const maxLeft = boundaryRect.right - containerRect.left - submenuWidth - gutter
+                return Math.round(maxLeft < minLeft ? minLeft : Math.max(minLeft, Math.min(preferredLeft, maxLeft)))
+            }
+            const next = {
+                model: resolveLeft(Math.min(252, window.innerWidth - 32)),
+                speed: resolveLeft(Math.min(216, window.innerWidth - 32))
+            }
+            setSubmenuLeft((current) => current.model === next.model && current.speed === next.speed ? current : next)
         }
-    }, [modelRefreshVisible, modelsLoading])
+
+        updateSubmenuPlacement()
+        window.addEventListener('resize', updateSubmenuPlacement)
+        const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateSubmenuPlacement)
+        resizeObserver?.observe(container)
+        if (boundary) resizeObserver?.observe(boundary)
+        return () => {
+            window.removeEventListener('resize', updateSubmenuPlacement)
+            resizeObserver?.disconnect()
+        }
+    }, [showTraitsDropdown])
 
     useEffect(() => () => {
         cancelSubmenuClose()
-        if (modelRefreshVisibleTimerRef.current !== null) window.clearTimeout(modelRefreshVisibleTimerRef.current)
     }, [])
 
     return (
-        <div className={cn('flex min-w-0 flex-1 flex-wrap items-center justify-start gap-1.5 max-[520px]:gap-1 text-[14px]', isCompactFooter ? 'overflow-visible' : 'overflow-visible')}>
-            <div className="relative min-w-[84px] flex-[1_1_160px] max-w-full max-[520px]:min-w-0 max-[520px]:flex-[1_1_72px] max-[520px]:max-w-[92px]" ref={traitsDropdownRef}>
+        <div className={cn('flex min-w-0 flex-1 flex-nowrap items-center justify-start text-[14px]', forceSingleRow ? 'gap-1' : 'gap-1.5 max-[520px]:gap-1', isCompactFooter ? 'overflow-visible' : 'overflow-visible')}>
+            <div className="relative min-w-0 flex-[1_1_0%] max-w-full" ref={traitsDropdownRef}>
                 <div
                     className={cn(
                         traitsMenuOpensDown ? 'absolute left-0 top-[36px] z-[170]' : 'absolute bottom-[36px] left-0 z-[170]',
-                        'transition-[opacity,transform] duration-[120ms] ease-out',
-                        showTraitsDropdown ? 'pointer-events-auto translate-y-0 opacity-100' : cn('pointer-events-none opacity-0', traitsMenuOpensDown ? '-translate-y-[2px]' : 'translate-y-[2px]')
+                        'transition-opacity duration-[120ms] ease-out',
+                        showTraitsDropdown ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'
                     )}
                 >
                     {showTraitsDropdown ? (
-                        <div className="relative">
+                        <div ref={submenuContainerRef} className="relative">
                             <div className={cn('w-[236px]', menuPanelClass)}>
-                                <div className="px-2.5 pb-0.5 pt-1.5">
-                                    <div className="mb-1.5 flex items-center justify-between text-[11px] font-medium leading-none text-sparkle-text-muted/70">
-                                        <span>Faster</span>
-                                        <span className={selectedEffortTone.textClass}>Smarter</span>
-                                    </div>
+                                <div className="px-2.5 pb-2 pt-1.5">
                                     <div className="relative py-1">
                                         <input
                                             type="range"
@@ -618,50 +588,49 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                                             step={1}
                                             value={selectedEffortIndex}
                                             onChange={(event) => setSelectedEffort(EFFORT_OPTIONS[Number(event.currentTarget.value)] || selectedEffort)}
-                                            className="zyra-effort-slider relative h-4 w-full cursor-pointer"
+                                            className="zyra-effort-slider relative h-6 w-full cursor-pointer"
                                             style={{
                                                 ['--zyra-effort-color' as string]: effortSliderColor,
                                                 ['--zyra-effort-progress' as string]: `${effortSliderPercent}%`,
                                                 ['--zyra-effort-ticks' as string]: effortSliderTicks
                                             }}
-                                            aria-label="Intelligence"
+                                            aria-label="Reasoning effort"
+                                            aria-valuetext={`${selectedEffortText} reasoning`}
                                         />
                                     </div>
-                                    <div className="mt-1 flex h-[30px] items-center justify-between rounded-md text-[13px] leading-none">
-                                        <span className="text-sparkle-text-secondary">Intelligence</span>
-                                        <span className={cn('font-medium', selectedEffortTone.textClass)}>{selectedEffortText}</span>
+                                    <div className="mt-1 flex items-center justify-between text-[9px] font-medium leading-none text-sparkle-text-dark">
+                                        <span>Faster</span>
+                                        <span>Smarter</span>
                                     </div>
                                 </div>
-                                <button
-                                    type="button"
-                                    onMouseEnter={() => openSubmenu('model')}
-                                    onMouseLeave={scheduleSubmenuClose}
-                                    onFocus={() => openSubmenu('model')}
-                                    className={cn(menuRouteClass, activeSubmenu === 'model' && 'bg-white/[0.075] text-sparkle-text')}
-                                >
-                                    <span className="min-w-0 flex-1 truncate">Model</span>
-                                    <span className="inline-flex min-w-0 shrink-0 items-center gap-1">
-                                        <ZyraLoadingTextShimmer
-                                            active={showModelRefreshState}
-                                            className="max-w-[128px] text-right text-sparkle-text-secondary"
-                                            text={selectedModelText || 'Select'}
-                                        />
-                                        <ChevronDown size={14} className="shrink-0 -rotate-90 text-sparkle-text-muted" />
-                                    </span>
-                                </button>
-                                <button
-                                    type="button"
-                                    onMouseEnter={() => openSubmenu('speed')}
-                                    onMouseLeave={scheduleSubmenuClose}
-                                    onFocus={() => openSubmenu('speed')}
-                                    className={cn(menuRouteClass, activeSubmenu === 'speed' && 'bg-white/[0.075] text-sparkle-text')}
-                                >
-                                    <span className="min-w-0 flex-1 truncate">Speed</span>
-                                    <span className="inline-flex min-w-0 shrink-0 items-center gap-1">
-                                        <span className={cn('truncate text-right text-sparkle-text-secondary', fastModeEnabled && 'text-amber-200')}>{fastModeEnabled ? 'Fast' : 'Standard'}</span>
-                                        <ChevronDown size={14} className="shrink-0 -rotate-90 text-sparkle-text-muted" />
-                                    </span>
-                                </button>
+                                <div className="border-t border-[var(--surface-divider)] pt-1">
+                                    <button
+                                        type="button"
+                                        onMouseEnter={() => openSubmenu('model')}
+                                        onMouseLeave={scheduleSubmenuClose}
+                                        onFocus={() => openSubmenu('model')}
+                                        className={cn(menuRouteClass, activeSubmenu === 'model' && 'bg-[var(--surface-active)] text-sparkle-text')}
+                                    >
+                                        <span className="min-w-0 flex-1 truncate font-medium text-sparkle-text">Model</span>
+                                        <span className="inline-flex min-w-0 shrink-0 items-center gap-1">
+                                            <span className={cn('max-w-[128px] truncate text-right font-medium text-sparkle-text-dark', showModelRefreshState && 'assistant-model-name-shimmer')} aria-label={showModelRefreshState ? `Refreshing models; current model ${selectedModelText || 'not selected'}` : undefined}>{selectedModelText || 'Select'}</span>
+                                            <ChevronDown size={14} className="shrink-0 -rotate-90 text-sparkle-text-muted transition-colors group-hover:text-sparkle-text-secondary" />
+                                        </span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onMouseEnter={() => openSubmenu('speed')}
+                                        onMouseLeave={scheduleSubmenuClose}
+                                        onFocus={() => openSubmenu('speed')}
+                                        className={cn(menuRouteClass, activeSubmenu === 'speed' && 'bg-[var(--surface-active)] text-sparkle-text')}
+                                    >
+                                        <span className="min-w-0 flex-1 truncate font-medium text-sparkle-text">Speed</span>
+                                        <span className="inline-flex min-w-0 shrink-0 items-center gap-1">
+                                            <span className={cn('truncate text-right font-medium text-sparkle-text-dark', fastModeEnabled && 'text-sparkle-text')}>{fastModeEnabled ? 'Fast' : 'Standard'}</span>
+                                            <ChevronDown size={14} className="shrink-0 -rotate-90 text-sparkle-text-muted transition-colors group-hover:text-sparkle-text-secondary" />
+                                        </span>
+                                    </button>
+                                </div>
                                 {modelsError ? <p className="px-3 py-1 text-[12px] font-medium text-rose-300">{modelsError}</p> : null}
                             </div>
 
@@ -670,14 +639,15 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                                 onMouseEnter={() => openSubmenu('model')}
                                 onMouseLeave={scheduleSubmenuClose}
                                 className={cn(modelSubmenuPositionClass, menuPanelClass, submenuMotionClass, getSubmenuVisibilityClass('model'))}
+                                style={{ left: submenuLeft.model }}
                             >
-                                    <div className="px-2.5 py-1.5 text-[12px] text-sparkle-text-muted">Models</div>
+                                    <div className="px-2.5 py-1.5 text-[12px] font-medium text-sparkle-text-dark">Models</div>
                                     <div
                                         ref={modelListRef}
                                         className="assistant-chat-scrollbar relative max-h-[min(196px,calc(100vh-136px))] overflow-y-auto"
                                     >
                                         {filteredModelOptions.length === 0 ? (
-                                            <div className="px-2.5 py-2.5 text-[12px] text-sparkle-text-secondary">No models found.</div>
+                                            <div className="px-2.5 py-2.5 text-[12px] text-sparkle-text-dark">No models found.</div>
                                         ) : filteredModelOptions.map((model, index) => {
                                             const isActive = model.id === selectedModel
                                             const isHighlighted = index === activeModelIndex
@@ -695,7 +665,7 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                                                     className={cn(
                                                         menuOptionClass,
                                                         'h-[32px] text-[12px]',
-                                                        isActive || isHighlighted ? 'bg-white/[0.075] text-sparkle-text' : 'text-sparkle-text-secondary'
+                                                        isActive || isHighlighted ? 'bg-[var(--surface-active)] text-sparkle-text' : 'text-sparkle-text-dark'
                                                     )}
                                                 >
                                                     <span className="min-w-0 flex-1 truncate">{formatAssistantModelLabel(model.label || model.id)}</span>
@@ -711,8 +681,9 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                                 onMouseEnter={() => openSubmenu('speed')}
                                 onMouseLeave={scheduleSubmenuClose}
                                 className={cn(speedSubmenuPositionClass, menuPanelClass, submenuMotionClass, getSubmenuVisibilityClass('speed'))}
+                                style={{ left: submenuLeft.speed }}
                             >
-                                    <div className="px-2.5 py-1.5 text-[12px] text-sparkle-text-muted">Speed</div>
+                                    <div className="px-2.5 py-1.5 text-[12px] font-medium text-sparkle-text-dark">Speed</div>
                                     {[true, false].map((fast) => (
                                         <button
                                             key={String(fast)}
@@ -721,7 +692,7 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                                                 setFastModeEnabled(fast)
                                                 openSubmenu('speed')
                                             }}
-                                            className={cn(menuOptionClass, 'h-[31px]', fastModeEnabled === fast ? 'bg-white/[0.075] text-sparkle-text' : 'text-sparkle-text-secondary')}
+                                            className={cn(menuOptionClass, 'h-[32px]', fastModeEnabled === fast ? 'bg-[var(--surface-active)] text-sparkle-text' : 'text-sparkle-text-dark')}
                                         >
                                             <span className="inline-flex min-w-0 flex-1 items-center gap-1.5">
                                                 {fast
@@ -757,15 +728,11 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                     </span>
                     <span
                         className={cn(
-                            'inline-flex min-w-0 max-w-full items-center gap-1.5 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]',
+                            'assistant-composer-footer-model-summary inline-flex min-w-0 max-w-full items-center gap-1.5 transition-[transform,gap] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]',
                             fastModeEnabled && 'translate-x-[18px]'
                         )}
                     >
-                        <ZyraLoadingTextShimmer
-                            active={showModelRefreshState}
-                            className="min-w-0 rounded px-0.5 max-[520px]:hidden"
-                            text={selectedModelText}
-                        />
+                        <span className={cn('assistant-composer-footer-model-label min-w-0 truncate rounded px-0.5', showModelRefreshState && 'assistant-model-name-shimmer')} aria-label={showModelRefreshState ? `Refreshing models; current model ${selectedModelText || 'not selected'}` : undefined}>{selectedModelText}</span>
                         <span className={cn('shrink-0', selectedEffortTone.textClass)}>{selectedEffortText}</span>
                         <ChevronDown size={12} className="-mr-0.5 ml-0.5 shrink-0 text-sparkle-text-muted" />
                     </span>
@@ -785,8 +752,10 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                     }
                     setShowFullAccessConfirm(true)
                 }}
+                aria-label={selectedRuntimeMode === 'full-access' ? 'Full access enabled' : 'Supervised access'}
+                style={{ '--assistant-access-expanded-width': selectedRuntimeMode === 'full-access' ? '64px' : '104px' } as CSSProperties}
                 className={cn(
-                    'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors max-[520px]:w-7 max-[520px]:justify-center max-[520px]:px-0',
+                    'assistant-composer-footer-access-control inline-flex h-7 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border px-2.5 text-[12px] font-medium transition-[width,height,padding,gap,color,background-color,border-color]',
                     selectedRuntimeMode === 'full-access'
                         ? 'border-amber-400/25 bg-amber-500/[0.10] text-amber-100 hover:bg-amber-500/[0.14]'
                         : 'border-emerald-400/20 bg-emerald-500/[0.08] text-emerald-200 hover:bg-emerald-500/[0.12]'
@@ -796,7 +765,7 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                 {selectedRuntimeMode === 'full-access'
                     ? <LockOpen size={12} />
                     : <Lock size={12} />}
-                <span className="max-[520px]:sr-only">{selectedRuntimeMode === 'full-access' ? 'Full' : 'Supervised'}</span>
+                <span className="assistant-composer-footer-access-label">{selectedRuntimeMode === 'full-access' ? 'Full' : 'Supervised'}</span>
             </button>
             {connectionPillState ? (
                 <button

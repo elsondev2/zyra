@@ -13,6 +13,7 @@ type PreviewExpandedPreviewAreaProps = {
     previewContent: ReactNode
     bottomOverlay?: ReactNode
     bottomOverlayPadding?: number
+    scrollContainerRef?: RefObject<HTMLDivElement | null>
 }
 
 export function PreviewExpandedPreviewArea({
@@ -26,7 +27,8 @@ export function PreviewExpandedPreviewArea({
     mode,
     previewContent,
     bottomOverlay,
-    bottomOverlayPadding = 0
+    bottomOverlayPadding = 0,
+    scrollContainerRef
 }: PreviewExpandedPreviewAreaProps) {
     return (
         <div
@@ -37,6 +39,7 @@ export function PreviewExpandedPreviewArea({
             )}
         >
             <div
+                ref={overflowLocked ? undefined : scrollContainerRef}
                 className={cn(
                     'h-full w-full custom-scrollbar flex',
                 surfaceBackgroundClass,
@@ -51,6 +54,7 @@ export function PreviewExpandedPreviewArea({
                     style={{ paddingBottom: bottomOverlay && bottomOverlayPadding > 0 ? `${bottomOverlayPadding}px` : undefined }}
                 >
                     <div
+                        ref={hasBottomPanel && mode !== 'edit' ? scrollContainerRef : undefined}
                         className={cn(
                             shouldStretchPreviewBody && 'min-h-0',
                             hasBottomPanel ? 'flex-1' : (shouldStretchPreviewBody ? 'h-full' : ''),

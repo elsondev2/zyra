@@ -1,19 +1,39 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import {
     computePreviewVirtualRange,
+    previewTreeScrollTopForIndex,
     previewVirtualRangeCoversViewport,
+    type PreviewTreeScrollAlignment,
     type PreviewVirtualRange
 } from './previewVirtualTreeModel'
 
 const PREVIEW_TREE_OVERSCAN_ROWS = 10
 const PREVIEW_TREE_RANGE_GUARD_ROWS = 3
+const PREVIEW_VIRTUAL_SCROLL_CACHE_LIMIT = 24
+const previewVirtualScrollOffsets = new Map<string, number>()
+
+function retainScrollOffset(key: string, offset: number): void {
+    previewVirtualScrollOffsets.delete(key)
+    previewVirtualScrollOffsets.set(key, Math.max(0, offset))
+    while (previewVirtualScrollOffsets.size > PREVIEW_VIRTUAL_SCROLL_CACHE_LIMIT) {
+        const oldestKey = previewVirtualScrollOffsets.keys().next().value
+        if (typeof oldestKey !== 'string') break
+        previewVirtualScrollOffsets.delete(oldestKey)
+    }
+}
 
 export function usePreviewVirtualWindow({
     rowCount,
-    rowHeight
+    rowHeight,
+    restoreKey,
+    overscanRows = PREVIEW_TREE_OVERSCAN_ROWS,
+    guardRows = PREVIEW_TREE_RANGE_GUARD_ROWS
 }: {
     rowCount: number
     rowHeight: number
+    restoreKey?: string
+    overscanRows?: number
+    guardRows?: number
 }) {
     const scrollElementRef = useRef<HTMLDivElement | null>(null)
     const frameRef = useRef<number | null>(null)
@@ -32,7 +52,7 @@ export function usePreviewVirtualWindow({
             rowHeight,
             scrollTop,
             viewportHeight,
-            guardRows: PREVIEW_TREE_RANGE_GUARD_ROWS
+            guardRows
         })) {
             return
         }
@@ -42,12 +62,12 @@ export function usePreviewVirtualWindow({
             rowHeight,
             scrollTop,
             viewportHeight,
-            overscan: PREVIEW_TREE_OVERSCAN_ROWS
+            overscan: overscanRows
         })
         if (nextRange.start === currentRange.start && nextRange.end === currentRange.end) return
         rangeRef.current = nextRange
         setRange(nextRange)
-    }, [rowCount, rowHeight])
+    }, [guardRows, overscanRows, rowCount, rowHeight])
 
     const scheduleRangeUpdate = useCallback(() => {
         if (frameRef.current !== null) return
@@ -61,10 +81,15 @@ export function usePreviewVirtualWindow({
         const scrollElement = scrollElementRef.current
         if (!scrollElement) return
         const maxScrollTop = Math.max(0, rowCount * rowHeight - scrollElement.clientHeight)
-        if (scrollElement.scrollTop > maxScrollTop) scrollElement.scrollTop = maxScrollTop
+        const restoredOffset = restoreKey ? previewVirtualScrollOffsets.get(restoreKey) : undefined
+        if (typeof restoredOffset === 'number') scrollElement.scrollTop = Math.min(maxScrollTop, restoredOffset)
+        else if (scrollElement.scrollTop > maxScrollTop) scrollElement.scrollTop = maxScrollTop
         updateRange(true)
 
         scrollElement.addEventListener('scroll', scheduleRangeUpdate, { passive: true })
+        const retainCurrentOffset = () => {
+            if (restoreKey) retainScrollOffset(restoreKey, scrollElement.scrollTop)
+        }
         const resizeObserver = typeof ResizeObserver === 'undefined'
             ? null
             : new ResizeObserver(() => updateRange(true))
@@ -73,6 +98,7 @@ export function usePreviewVirtualWindow({
         if (!resizeObserver) window.addEventListener('resize', handleWindowResize)
 
         return () => {
+            retainCurrentOffset()
             scrollElement.removeEventListener('scroll', scheduleRangeUpdate)
             resizeObserver?.disconnect()
             if (!resizeObserver) window.removeEventListener('resize', handleWindowResize)
@@ -81,24 +107,21 @@ export function usePreviewVirtualWindow({
                 frameRef.current = null
             }
         }
-    }, [rowCount, rowHeight, scheduleRangeUpdate, updateRange])
+    }, [restoreKey, rowCount, rowHeight, scheduleRangeUpdate, updateRange])
 
-    const scrollToIndex = useCallback((index: number, alignment: 'auto' | 'top' = 'auto') => {
+    const scrollToIndex = useCallback((index: number, alignment: PreviewTreeScrollAlignment = 'auto') => {
         const scrollElement = scrollElementRef.current
         if (!scrollElement || rowCount <= 0) return
-        const safeIndex = Math.max(0, Math.min(rowCount - 1, index))
-        const rowTop = safeIndex * rowHeight
-        const rowBottom = rowTop + rowHeight
-        const viewportTop = scrollElement.scrollTop
-        const viewportBottom = viewportTop + scrollElement.clientHeight
-
-        if (alignment === 'top' || rowTop < viewportTop) {
-            scrollElement.scrollTop = rowTop
-        } else if (rowBottom > viewportBottom) {
-            scrollElement.scrollTop = Math.max(0, rowBottom - scrollElement.clientHeight)
-        } else {
-            return
-        }
+        const nextScrollTop = previewTreeScrollTopForIndex({
+            index,
+            rowCount,
+            rowHeight,
+            viewportHeight: scrollElement.clientHeight,
+            currentScrollTop: scrollElement.scrollTop,
+            alignment
+        })
+        if (Math.abs(nextScrollTop - scrollElement.scrollTop) < 0.5) return
+        scrollElement.scrollTop = nextScrollTop
         updateRange(true)
     }, [rowCount, rowHeight, updateRange])
 

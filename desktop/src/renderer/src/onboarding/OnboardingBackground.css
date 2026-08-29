@@ -1,48 +1,55 @@
-.onboarding-gradient-waves {
+.onboarding-cloud-field {
     position: absolute;
     inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0.82;
+    filter: saturate(0.9);
 }
 
-.onboarding-gradient-wash {
+.onboarding-cloud-wash {
     background:
         radial-gradient(
-            circle at 50% 46%,
+            ellipse 62% 48% at 50% 45%,
             color-mix(in srgb, var(--color-bg) 18%, transparent) 0%,
-            color-mix(in srgb, var(--color-bg) 40%, transparent) 37%,
-            color-mix(in srgb, var(--color-bg) 82%, transparent) 78%,
+            color-mix(in srgb, var(--color-bg) 40%, transparent) 46%,
+            color-mix(in srgb, var(--color-bg) 78%, transparent) 82%,
             var(--color-bg) 100%
         ),
         linear-gradient(
             to bottom,
-            color-mix(in srgb, var(--color-bg) 46%, transparent),
+            color-mix(in srgb, var(--color-bg) 42%, transparent),
             transparent 34%,
-            color-mix(in srgb, var(--color-bg) 54%, transparent)
+            color-mix(in srgb, var(--color-bg) 48%, transparent) 68%,
+            color-mix(in srgb, var(--color-bg) 84%, transparent)
         );
 }
 
-.light .onboarding-gradient-waves {
-    opacity: 0.72;
+.light .onboarding-cloud-field {
+    opacity: 0.74;
+    filter: saturate(0.72) contrast(0.96);
 }
 
-.light .onboarding-gradient-wash {
+.light .onboarding-cloud-wash {
     background:
         radial-gradient(
-            circle at 50% 46%,
-            color-mix(in srgb, var(--color-bg) 42%, transparent) 0%,
-            color-mix(in srgb, var(--color-bg) 62%, transparent) 42%,
-            color-mix(in srgb, var(--color-bg) 88%, transparent) 82%,
+            ellipse 64% 50% at 50% 45%,
+            color-mix(in srgb, var(--color-bg) 38%, transparent) 0%,
+            color-mix(in srgb, var(--color-bg) 58%, transparent) 48%,
+            color-mix(in srgb, var(--color-bg) 84%, transparent) 84%,
             var(--color-bg) 100%
         ),
         linear-gradient(
             to bottom,
-            color-mix(in srgb, var(--color-bg) 68%, transparent),
-            transparent 36%,
-            color-mix(in srgb, var(--color-bg) 70%, transparent)
+            color-mix(in srgb, var(--color-bg) 62%, transparent),
+            transparent 34%,
+            color-mix(in srgb, var(--color-bg) 66%, transparent) 72%,
+            color-mix(in srgb, var(--color-bg) 92%, transparent)
         );
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .onboarding-gradient-waves {
-        opacity: 0.72;
+    .onboarding-cloud-field {
+        opacity: 0.76;
     }
 }

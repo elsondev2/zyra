@@ -20,6 +20,11 @@ import { buildAssistantChatRoute } from '@/pages/assistant/assistant-chat-route'
 import { createAssistantChatAndNavigate } from '@/pages/assistant/create-assistant-chat-and-navigate'
 import { cn } from '@/lib/utils'
 import { useWindowChrome } from '@/lib/useWindowChrome'
+import {
+    FILE_PREVIEW_FOCUS_STATE_EVENT,
+    FILE_PREVIEW_TOGGLE_NAVIGATOR_EVENT,
+    type FilePreviewFocusState
+} from '@/components/ui/file-preview/filePreviewFocusMode'
 
 type AppNavEntry = { path: string; search: string; sessionId: string | null }
 type AppMenuItem = {
@@ -39,7 +44,6 @@ function getContextualTitleParts(pathname: string) {
         return ['Settings', findSettingsNavigationItem(pathname).label]
     }
     if (pathname === '/assistant/instructor') return ['Instructor Voice Lab']
-    if (pathname.startsWith('/explorer')) return ['Explorer']
     return []
 }
 
@@ -69,6 +73,7 @@ export default function TitleBar() {
     const [sidebarCollapsed, setSidebarCollapsed] = useState(settings.sidebarCollapsed)
     const [appMenuOpen, setAppMenuOpen] = useState(false)
     const [controlActive, setControlActive] = useState(false)
+    const [filePreviewFocusState, setFilePreviewFocusState] = useState<FilePreviewFocusState>({ active: false, leftPanelOpen: false })
     const [appHistory, setAppHistory] = useState<{ entries: AppNavEntry[]; index: number }>({ entries: [], index: -1 })
     const assistantWorkspaceActive = location.pathname.startsWith('/assistant') && location.pathname !== '/assistant/instructor'
     const settingsPageActive = location.pathname.startsWith('/settings')
@@ -114,7 +119,7 @@ export default function TitleBar() {
             if (typeof detail?.width === 'number' && detail.width > 0) {
                 const nextWidth = Math.round(detail.width)
                 sidebarWidthRef.current = nextWidth
-                if (!sidebarCollapsedRef.current) {
+                if (!sidebarCollapsedRef.current && !filePreviewFocusState.active) {
                     assistantAppZoneRef.current?.style.setProperty('width', `${isMac ? Math.max(184, nextWidth) : nextWidth}px`)
                 }
             }
@@ -122,7 +127,17 @@ export default function TitleBar() {
 
         window.addEventListener('zyra:assistant-sidebar-state', handleSidebarState)
         return () => window.removeEventListener('zyra:assistant-sidebar-state', handleSidebarState)
-    }, [isMac])
+    }, [filePreviewFocusState.active, isMac])
+
+    useEffect(() => {
+        const handleFilePreviewFocusState = (event: Event) => {
+            const detail = (event as CustomEvent<FilePreviewFocusState>).detail
+            if (!detail || typeof detail.active !== 'boolean' || typeof detail.leftPanelOpen !== 'boolean') return
+            setFilePreviewFocusState(detail)
+        }
+        window.addEventListener(FILE_PREVIEW_FOCUS_STATE_EVENT, handleFilePreviewFocusState)
+        return () => window.removeEventListener(FILE_PREVIEW_FOCUS_STATE_EVENT, handleFilePreviewFocusState)
+    }, [])
 
     useEffect(() => {
         const entry: AppNavEntry = {
@@ -169,11 +184,18 @@ export default function TitleBar() {
     }, [appMenuOpen])
 
     const handleToggleSidebar = () => {
+        if (filePreviewFocusState.active) {
+            window.dispatchEvent(new Event(FILE_PREVIEW_TOGGLE_NAVIGATOR_EVENT))
+            return
+        }
         window.dispatchEvent(new CustomEvent('zyra:toggle-assistant-sidebar'))
     }
 
-    const sidebarActionLabel = sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'
-    const SidebarIcon = sidebarCollapsed ? PanelLeftOpen : PanelLeftClose
+    const effectiveSidebarOpen = filePreviewFocusState.active ? filePreviewFocusState.leftPanelOpen : !sidebarCollapsed
+    const sidebarActionLabel = filePreviewFocusState.active
+        ? effectiveSidebarOpen ? 'Hide file navigator' : 'Show file navigator'
+        : sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'
+    const SidebarIcon = effectiveSidebarOpen ? PanelLeftClose : PanelLeftOpen
 
     const handleMinimize = () => window.devscope.window.minimize()
 
@@ -269,7 +291,7 @@ export default function TitleBar() {
         ]] : [])
     ]
 
-    const expandedSidebar = sidebarWorkspaceActive && !sidebarCollapsed
+    const expandedSidebar = sidebarWorkspaceActive && !filePreviewFocusState.active && !sidebarCollapsed
     const baseAppZoneWidth = loadingScreenActive && assistantWorkspaceActive
         ? 112
         : expandedSidebar
@@ -308,7 +330,7 @@ export default function TitleBar() {
                         style={{ WebkitAppRegion: 'no-drag' } as any}
                         title={sidebarActionLabel}
                         aria-label={sidebarActionLabel}
-                        aria-pressed={!sidebarCollapsed}
+                        aria-pressed={effectiveSidebarOpen}
                     >
                         <SidebarIcon size={15} strokeWidth={1.7} />
                     </button>
@@ -381,7 +403,7 @@ export default function TitleBar() {
                     ref={titleBarControlsRef}
                     className={cn(
                         'flex h-full shrink-0 items-center',
-                        assistantWorkspaceActive && 'absolute right-0 top-0 z-[3]'
+                        assistantWorkspaceActive && 'absolute right-0 top-0 z-[5]'
                     )}
                     style={{ WebkitAppRegion: 'no-drag' } as any}
                 >

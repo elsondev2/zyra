@@ -6,7 +6,7 @@ export function createBrowserControlTool(options = {}) {
   return defineTool({
     name: "browser_control",
     label: "Browser control",
-    description: "Discover and reveal existing in-app Browser tabs, create tabs when needed, resize the Inspector, arrange two Browser tabs side by side, request user-approved access, then visually observe and control only granted targets.",
+    description: "Discover and reveal existing in-app Browser tabs, create normal or incognito tabs when needed, resize the Inspector, arrange two Browser tabs side by side, request user-approved access, then visually observe and control only granted targets. New tabs default to incognito; choose normal only when saved sign-in or site state is required.",
     parameters: browserControlSchema,
     execute: async (_toolCallId, input = {}, signal) => {
       const normalized = normalizeControlToolInput(input);
@@ -76,6 +76,7 @@ function formatControlResult(operation, result) {
       targetId: target.targetId,
       kind: target.kind,
       tabId: target.tabId,
+      sessionMode: target.sessionMode,
       title: target.title,
       url: target.url,
       origin: target.origin,
@@ -91,11 +92,11 @@ function formatControlResult(operation, result) {
   }
   if (operation === "open_tab") {
     const target = result.target || {};
-    return `A blank in-app Browser tab is registered. It has no navigation or input authority yet. Request a scoped grant before using it.\n${JSON.stringify({ targetId: target.targetId, tabId: target.tabId, title: target.title, url: target.url, revealed: Boolean(result.revealed) }, null, 2)}`;
+    return `A blank in-app Browser tab is registered. It has no navigation or input authority yet. Request a scoped grant before using it.\n${JSON.stringify({ targetId: target.targetId, tabId: target.tabId, sessionMode: target.sessionMode, title: target.title, url: target.url, revealed: Boolean(result.revealed) }, null, 2)}`;
   }
   if (operation === "reveal_tab") {
     const target = result.target || {};
-    return `The existing Browser tab is now the primary visible tab.\n${JSON.stringify({ targetId: target.targetId, tabId: target.tabId, title: target.title, url: target.url }, null, 2)}`;
+    return `The existing Browser tab is now the primary visible tab.\n${JSON.stringify({ targetId: target.targetId, tabId: target.tabId, sessionMode: target.sessionMode, title: target.title, url: target.url }, null, 2)}`;
   }
   if (operation === "close_tab") return "The selected Browser tab was closed and its control authority was revoked.";
   if (operation === "refresh_tab") return "The selected Browser tab was refreshed.";

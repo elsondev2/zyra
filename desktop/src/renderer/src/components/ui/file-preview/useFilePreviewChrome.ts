@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LEFT_PANEL_MAX_WIDTH, LEFT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH, RIGHT_PANEL_MIN_WIDTH } from './modalShared'
 import { VIEWPORT_PRESETS, type ViewportPreset } from './viewport'
+import { captureProductEvent } from '@/lib/product-analytics'
 
 type UseFilePreviewChromeParams = {
     defaultStartExpanded: boolean
@@ -10,8 +11,12 @@ type UseFilePreviewChromeParams = {
     defaultEditorWordWrap: 'on' | 'off'
     defaultEditorMinimapEnabled: boolean
     defaultEditorFontSize: number
+    initialLeftPanelWidth?: number
+    initialRightPanelWidth?: number
+    onPanelWidthCommit?: (side: 'left' | 'right', width: number) => void
     initialFocusLine?: number | null
     initialFocusLineRequestId?: number | null
+    active?: boolean
 }
 
 export function useFilePreviewChrome({
@@ -22,15 +27,19 @@ export function useFilePreviewChrome({
     defaultEditorWordWrap,
     defaultEditorMinimapEnabled,
     defaultEditorFontSize,
+    initialLeftPanelWidth = 256,
+    initialRightPanelWidth = 288,
+    onPanelWidthCommit,
     initialFocusLine = null,
-    initialFocusLineRequestId = null
+    initialFocusLineRequestId = null,
+    active = true
 }: UseFilePreviewChromeParams) {
     const [viewport, setViewport] = useState<ViewportPreset>('responsive')
     const [isExpanded, setIsExpanded] = useState(defaultStartExpanded)
     const [leftPanelOpen, setLeftPanelOpen] = useState(defaultLeftPanelOpen)
     const [rightPanelOpen, setRightPanelOpen] = useState(defaultRightPanelOpen)
-    const [leftPanelWidth, setLeftPanelWidth] = useState(256)
-    const [rightPanelWidth, setRightPanelWidth] = useState(288)
+    const [leftPanelWidth, setLeftPanelWidth] = useState(initialLeftPanelWidth)
+    const [rightPanelWidth, setRightPanelWidth] = useState(initialRightPanelWidth)
     const [isResizingPanels, setIsResizingPanels] = useState(false)
     const [csvDistinctColorsEnabled, setCsvDistinctColorsEnabled] = useState(defaultCsvDistinctColorsEnabled)
     const [editorWordWrap, setEditorWordWrap] = useState<'on' | 'off'>(defaultEditorWordWrap)
@@ -41,9 +50,12 @@ export function useFilePreviewChrome({
     const [focusLine, setFocusLine] = useState<number | null>(initialFocusLine)
 
     const previewSurfaceRef = useRef<HTMLDivElement | null>(null)
+    const isExpandedRef = useRef(isExpanded)
     const panelResizeRef = useRef<{ side: 'left' | 'right'; startX: number; startWidth: number } | null>(null)
     const leftPanelWidthRef = useRef(leftPanelWidth)
     const rightPanelWidthRef = useRef(rightPanelWidth)
+    const resizeFrameRef = useRef<number | null>(null)
+    const pendingResizeClientXRef = useRef<number | null>(null)
 
     useEffect(() => {
         if (!initialFocusLine) {
@@ -76,6 +88,10 @@ export function useFilePreviewChrome({
     }, [initialFocusLine, initialFocusLineRequestId])
 
     useEffect(() => {
+        isExpandedRef.current = isExpanded
+    }, [isExpanded])
+
+    useEffect(() => {
         leftPanelWidthRef.current = leftPanelWidth
     }, [leftPanelWidth])
 
@@ -84,6 +100,7 @@ export function useFilePreviewChrome({
     }, [rightPanelWidth])
 
     useEffect(() => {
+        if (!active) return
         const applyBodyDragState = (active: boolean) => {
             if (active) {
                 document.documentElement.style.setProperty('cursor', 'col-resize', 'important')
@@ -101,29 +118,55 @@ export function useFilePreviewChrome({
 
         const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 
-        const handleMouseMove = (event: MouseEvent) => {
+        const applyResize = (clientX: number) => {
             const resize = panelResizeRef.current
             if (!resize) return
 
             if (resize.side === 'left') {
-                const delta = event.clientX - resize.startX
-                setLeftPanelWidth(clamp(resize.startWidth + delta, LEFT_PANEL_MIN_WIDTH, LEFT_PANEL_MAX_WIDTH))
+                const delta = clientX - resize.startX
+                const nextWidth = clamp(resize.startWidth + delta, LEFT_PANEL_MIN_WIDTH, LEFT_PANEL_MAX_WIDTH)
+                leftPanelWidthRef.current = nextWidth
+                setLeftPanelWidth(nextWidth)
                 return
             }
 
-            const delta = resize.startX - event.clientX
-            setRightPanelWidth(clamp(resize.startWidth + delta, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH))
+            const delta = resize.startX - clientX
+            const nextWidth = clamp(resize.startWidth + delta, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH)
+            rightPanelWidthRef.current = nextWidth
+            setRightPanelWidth(nextWidth)
+        }
+
+        const handlePointerMove = (event: PointerEvent) => {
+            if (!panelResizeRef.current) return
+            pendingResizeClientXRef.current = event.clientX
+            if (resizeFrameRef.current !== null) return
+            resizeFrameRef.current = window.requestAnimationFrame(() => {
+                resizeFrameRef.current = null
+                const clientX = pendingResizeClientXRef.current
+                pendingResizeClientXRef.current = null
+                if (clientX !== null) applyResize(clientX)
+            })
         }
 
         const stopResize = () => {
+            const resize = panelResizeRef.current
+            const pendingClientX = pendingResizeClientXRef.current
+            if (resizeFrameRef.current !== null) {
+                window.cancelAnimationFrame(resizeFrameRef.current)
+                resizeFrameRef.current = null
+            }
+            pendingResizeClientXRef.current = null
+            if (resize && pendingClientX !== null) applyResize(pendingClientX)
             panelResizeRef.current = null
             setIsResizingPanels(false)
             applyBodyDragState(false)
-            window.removeEventListener('mousemove', handleMouseMove)
-            window.removeEventListener('mouseup', stopResize)
+            if (resize) onPanelWidthCommit?.(resize.side, resize.side === 'left' ? leftPanelWidthRef.current : rightPanelWidthRef.current)
+            window.removeEventListener('pointermove', handlePointerMove)
+            window.removeEventListener('pointerup', stopResize)
+            window.removeEventListener('pointercancel', stopResize)
         }
 
-        const handleMouseDown = (event: MouseEvent) => {
+        const handlePointerDown = (event: PointerEvent) => {
             const target = event.target as HTMLElement | null
             const side = target?.dataset?.previewResizeSide
             if (side !== 'left' && side !== 'right') return
@@ -136,29 +179,51 @@ export function useFilePreviewChrome({
             }
             setIsResizingPanels(true)
             applyBodyDragState(true)
-            window.addEventListener('mousemove', handleMouseMove)
-            window.addEventListener('mouseup', stopResize)
+            window.addEventListener('pointermove', handlePointerMove)
+            window.addEventListener('pointerup', stopResize)
+            window.addEventListener('pointercancel', stopResize)
         }
 
-        window.addEventListener('mousedown', handleMouseDown)
+        const handleSeparatorKeyDown = (event: KeyboardEvent) => {
+            const target = event.target as HTMLElement | null
+            const side = target?.dataset?.previewResizeSide
+            if ((side !== 'left' && side !== 'right') || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')) return
+            event.preventDefault()
+            const direction = event.key === 'ArrowRight' ? 1 : -1
+            const step = event.shiftKey ? 24 : 8
+            if (side === 'left') {
+                const nextWidth = clamp(leftPanelWidthRef.current + direction * step, LEFT_PANEL_MIN_WIDTH, LEFT_PANEL_MAX_WIDTH)
+                leftPanelWidthRef.current = nextWidth
+                setLeftPanelWidth(nextWidth)
+                onPanelWidthCommit?.('left', nextWidth)
+                return
+            }
+            const nextWidth = clamp(rightPanelWidthRef.current - direction * step, RIGHT_PANEL_MIN_WIDTH, RIGHT_PANEL_MAX_WIDTH)
+            rightPanelWidthRef.current = nextWidth
+            setRightPanelWidth(nextWidth)
+            onPanelWidthCommit?.('right', nextWidth)
+        }
+
+        window.addEventListener('pointerdown', handlePointerDown)
+        window.addEventListener('keydown', handleSeparatorKeyDown)
         return () => {
-            window.removeEventListener('mousedown', handleMouseDown)
+            window.removeEventListener('pointerdown', handlePointerDown)
+            window.removeEventListener('keydown', handleSeparatorKeyDown)
             stopResize()
         }
-    }, [])
+    }, [active, onPanelWidthCommit])
 
     const modalStyle = useMemo(() => {
         if (isExpanded) {
             return {
                 width: '100%',
-                maxWidth: 'none',
-                maxHeight: '100%',
+                maxWidth: '100vw',
+                maxHeight: 'calc(100vh - 34px)',
                 height: '100%'
             }
         }
 
         return {
-            animation: 'scaleIn 0.15s ease-out',
             width: 'min(1400px, 95vw)',
             maxWidth: '1400px',
             height: 'min(920px, 90vh)',
@@ -166,11 +231,18 @@ export function useFilePreviewChrome({
         }
     }, [isExpanded])
 
+    const setTrackedExpanded = useCallback((next: boolean | ((current: boolean) => boolean)) => {
+        const enabled = typeof next === 'function' ? next(isExpandedRef.current) : next
+        isExpandedRef.current = enabled
+        setIsExpanded(enabled)
+        captureProductEvent({ event: 'zyra_v1_files', properties: { action: 'fullscreen', outcome: 'completed', enabled } })
+    }, [])
+
     return {
         viewport,
         setViewport,
         isExpanded,
-        setIsExpanded,
+        setIsExpanded: setTrackedExpanded,
         leftPanelOpen,
         setLeftPanelOpen,
         rightPanelOpen,

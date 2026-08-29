@@ -95,6 +95,8 @@ export function looksLikeMarkdownFileReference(value: string): boolean {
     if (!trimmed || trimmed.includes('\n') || /\s/.test(trimmed) || trimmed.startsWith('#')) return false
     if (resolveMarkdownPackageReference(trimmed)) return false
     const decodedTrimmed = safeDecode(trimmed)
+    if (/[<>]/.test(decodedTrimmed)) return false
+    if (/:$/.test(decodedTrimmed) && !WINDOWS_ABSOLUTE_PATH_PATTERN.test(decodedTrimmed) && !POSITION_SUFFIX_PATTERN.test(decodedTrimmed)) return false
     if (/^\.[^\\/]+$/.test(decodedTrimmed)) {
         const normalizedDotfile = decodedTrimmed.toLowerCase()
         return STANDALONE_DOTFILES.has(normalizedDotfile) || normalizedDotfile.startsWith('.env.')
@@ -116,5 +118,9 @@ export function looksLikeMarkdownFileReference(value: string): boolean {
             || hasKnownFileExtension(candidate)
     }
     if (isAmbiguousBareSlashPair(candidate)) return false
+    if (/[\\/]/.test(candidate) && !hasKnownFileExtension(candidate)) {
+        const firstSegment = candidate.split(/[\\/]+/, 1)[0]?.toLowerCase() || ''
+        return AUTO_PATH_ROOT_SEGMENTS.has(firstSegment) || firstSegment.startsWith('.')
+    }
     return /[\\/]/.test(candidate) || hasKnownFileExtension(candidate)
 }

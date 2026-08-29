@@ -1,6 +1,7 @@
 import { useEffect, type RefObject } from 'react'
 import { hasActiveTextSelection } from './fileReferences'
 import { inspectMarkdownLinkAvailability } from './linkAvailability'
+import { isMarkdownScrollBusy } from './markdownScrollActivity'
 import { navigateMarkdownLink, resolveMarkdownLinkTarget } from './linkNavigation'
 
 export type MarkdownInternalLinkHandler = (
@@ -19,6 +20,7 @@ type MarkdownInteractionLayerProps = {
     contentKey: string
     onInternalLinkClick?: MarkdownInternalLinkHandler
     onLinkNotice?: MarkdownLinkNoticeHandler
+    onAnchorLinkClick?: (href: string) => boolean
 }
 
 type MarkdownLinkElement = HTMLAnchorElement | HTMLElement
@@ -40,6 +42,17 @@ function findInteractiveTarget(target: EventTarget | null, root: HTMLElement): M
     const containingAnchor = element.closest<HTMLAnchorElement>('a[href]')
     if (containingAnchor) return containingAnchor
     return element.closest(MARKDOWN_INTERACTIVE_TARGET_SELECTOR) as MarkdownLinkElement | null
+}
+
+function collectInteractiveTargets(root: HTMLElement, scope: Node): MarkdownLinkElement[] {
+    const targets: MarkdownLinkElement[] = []
+    if (scope instanceof Element && scope.matches(MARKDOWN_INTERACTIVE_TARGET_SELECTOR)) {
+        targets.push(scope as MarkdownLinkElement)
+    }
+    if (scope instanceof Element || scope instanceof DocumentFragment) {
+        targets.push(...Array.from(scope.querySelectorAll(MARKDOWN_INTERACTIVE_TARGET_SELECTOR)) as MarkdownLinkElement[])
+    }
+    return targets.filter((target) => root.contains(target))
 }
 
 function getTargetHref(target: MarkdownLinkElement): string {
@@ -82,6 +95,8 @@ function applyLinkState(
 }
 
 const SANITIZED_FRAGMENT_PREFIX = 'user-content-'
+const MAX_CONCURRENT_MARKDOWN_LINK_CHECKS = 4
+let markdownLinkRequestSequence = 0
 
 function normalizeSanitizedFragmentId(value: string): string {
     let normalized = value
@@ -118,7 +133,8 @@ export function MarkdownInteractionLayer({
     searchRootPath,
     contentKey,
     onInternalLinkClick,
-    onLinkNotice
+    onLinkNotice,
+    onAnchorLinkClick
 }: MarkdownInteractionLayerProps) {
     useEffect(() => {
         const root = rootRef.current
@@ -126,33 +142,102 @@ export function MarkdownInteractionLayer({
         let disposed = false
         let availabilityIdleId: number | null = null
         let availabilityTimerId: number | null = null
-        const inspectVisibleLinks = () => {
+        const pendingTargets = new Set<MarkdownLinkElement>()
+        const inspectedTargets = new WeakMap<MarkdownLinkElement, { href: string; generation: number }>()
+        let activeAvailabilityChecks = 0
+
+        const inspectPendingLinks = () => {
             availabilityIdleId = null
             availabilityTimerId = null
             if (disposed) return
-            const interactiveTargets = Array.from(
-                root.querySelectorAll(MARKDOWN_INTERACTIVE_TARGET_SELECTOR)
-            ) as MarkdownLinkElement[]
-
-            for (const target of interactiveTargets) {
+            if (isMarkdownScrollBusy()) {
+                availabilityTimerId = window.setTimeout(inspectPendingLinks, 160)
+                return
+            }
+            const availableSlots = Math.max(0, MAX_CONCURRENT_MARKDOWN_LINK_CHECKS - activeAvailabilityChecks)
+            const targets = [...pendingTargets].slice(0, availableSlots)
+            for (const target of targets) {
+                pendingTargets.delete(target)
+                if (!root.contains(target)) continue
                 const href = getTargetHref(target)
+                const previousInspection = inspectedTargets.get(target)
+                if (previousInspection?.href === href) continue
+                const generation = (previousInspection?.generation || 0) + 1
+                inspectedTargets.set(target, { href, generation })
+                clearLinkState(target)
                 if (href.startsWith('#')) continue
                 const resolvedTarget = resolveMarkdownLinkTarget(href, filePath)
                 if (!resolvedTarget) continue
-                clearLinkState(target)
                 applyLinkState(target, 'checking', resolvedTarget.path)
-                void inspectMarkdownLinkAvailability(href, filePath, searchRootPath).then((result) => {
-                    if (disposed || !result || !root.contains(target)) return
+                activeAvailabilityChecks += 1
+                void inspectMarkdownLinkAvailability(href, filePath, searchRootPath, {
+                    allowProjectSearch: !target.dataset.devscopeFileReference
+                }).then((result) => {
+                    const currentInspection = inspectedTargets.get(target)
+                    if (
+                        disposed
+                        || !result
+                        || !root.contains(target)
+                        || getTargetHref(target) !== href
+                        || currentInspection?.generation !== generation
+                    ) return
                     applyLinkState(target, result.availability, result.path, result.targetKind)
+                }).finally(() => {
+                    activeAvailabilityChecks = Math.max(0, activeAvailabilityChecks - 1)
+                    scheduleInspection()
                 })
             }
+            scheduleInspection()
         }
-        if (typeof window.requestIdleCallback === 'function') {
-            availabilityIdleId = window.requestIdleCallback(inspectVisibleLinks, { timeout: 800 })
-        } else {
-            availabilityTimerId = window.setTimeout(inspectVisibleLinks, 0)
+        const scheduleInspection = () => {
+            if (
+                disposed
+                || availabilityIdleId !== null
+                || availabilityTimerId !== null
+                || pendingTargets.size === 0
+                || activeAvailabilityChecks >= MAX_CONCURRENT_MARKDOWN_LINK_CHECKS
+            ) return
+            if (typeof window.requestIdleCallback === 'function') {
+                availabilityIdleId = window.requestIdleCallback(inspectPendingLinks, { timeout: 500 })
+            } else {
+                availabilityTimerId = window.setTimeout(inspectPendingLinks, 0)
+            }
+        }
+        const enqueueScope = (scope: Node) => {
+            for (const target of collectInteractiveTargets(root, scope)) {
+                if (inspectedTargets.get(target)?.href !== getTargetHref(target)) pendingTargets.add(target)
+            }
+            scheduleInspection()
         }
 
+        enqueueScope(root)
+        const mutationObserver = typeof MutationObserver === 'undefined'
+            ? null
+            : new MutationObserver((records) => {
+                for (const record of records) {
+                    if (record.type === 'attributes') enqueueScope(record.target)
+                    for (const addedNode of record.addedNodes) enqueueScope(addedNode)
+                }
+            })
+        mutationObserver?.observe(root, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['href', 'data-markdown-heading-target', 'data-markdown-image-target', 'data-devscope-file-reference']
+        })
+
+        return () => {
+            disposed = true
+            mutationObserver?.disconnect()
+            if (availabilityIdleId !== null) window.cancelIdleCallback(availabilityIdleId)
+            if (availabilityTimerId !== null) window.clearTimeout(availabilityTimerId)
+            pendingTargets.clear()
+        }
+    }, [contentKey, filePath, rootRef, searchRootPath])
+
+    useEffect(() => {
+        const root = rootRef.current
+        if (!root) return
         const handleClick = async (event: MouseEvent) => {
             const target = findInteractiveTarget(event.target, root)
             if (!target) return
@@ -168,7 +253,8 @@ export function MarkdownInteractionLayer({
                     onLinkNotice?.('This section is already in view.', 'info')
                     return
                 }
-                anchorTarget?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                if (anchorTarget) anchorTarget.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                else onAnchorLinkClick?.(rawHref)
                 return
             }
             const imageTarget = target.dataset.markdownImageTarget
@@ -186,7 +272,12 @@ export function MarkdownInteractionLayer({
             event.preventDefault()
             if (hasActiveTextSelection()) return
 
+            markdownLinkRequestSequence += 1
+            const requestToken = `${markdownLinkRequestSequence}:${rawHref}`
+            target.dataset.markdownLinkRequest = requestToken
             const availability = await inspectMarkdownLinkAvailability(rawHref, filePath, searchRootPath)
+            if (!root.contains(target) || getTargetHref(target) !== rawHref || target.dataset.markdownLinkRequest !== requestToken) return
+            delete target.dataset.markdownLinkRequest
             if (availability?.availability === 'missing') {
                 applyLinkState(target, 'missing', availability.path)
                 onLinkNotice?.(`Broken link — file not found: ${availability.path}`, 'error')
@@ -228,14 +319,11 @@ export function MarkdownInteractionLayer({
         root.addEventListener('keydown', handleKeyDown)
         root.addEventListener('dragstart', handleDragStart)
         return () => {
-            disposed = true
-            if (availabilityIdleId !== null) window.cancelIdleCallback(availabilityIdleId)
-            if (availabilityTimerId !== null) window.clearTimeout(availabilityTimerId)
             root.removeEventListener('click', handleClick)
             root.removeEventListener('keydown', handleKeyDown)
             root.removeEventListener('dragstart', handleDragStart)
         }
-    }, [contentKey, filePath, onInternalLinkClick, onLinkNotice, rootRef, searchRootPath])
+    }, [filePath, onAnchorLinkClick, onInternalLinkClick, onLinkNotice, rootRef, searchRootPath])
 
     return null
 }

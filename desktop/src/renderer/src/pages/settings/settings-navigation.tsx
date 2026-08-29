@@ -14,6 +14,7 @@ import {
     LayoutGrid,
     MonitorSmartphone,
     Palette,
+    Puzzle,
     Settings2,
     TerminalSquare
 } from 'lucide-react'
@@ -81,11 +82,19 @@ export const SETTINGS_NAVIGATION_GROUPS: SettingsNavigationGroup[] = [
             {
                 id: 'assistant',
                 label: 'Assistant',
-                description: 'Defaults, permissions, output, and transcription',
-                keywords: 'model profile supervised full access reasoning effort fast prompt streaming tools reconnect diagnostics transcription warning',
+                description: 'Defaults, reasoning, context, output, and transcription',
+                keywords: 'model profile supervised full access reasoning effort summaries detailed concise context window compaction limit fast prompt streaming tools reconnect diagnostics transcription warning',
                 to: '/settings/assistant',
                 icon: Bot,
                 legacyPaths: ['/settings/chat']
+            },
+            {
+                id: 'skills',
+                label: 'Skills',
+                description: 'Sources, priority, and name conflicts',
+                keywords: 'skills agents codex claude pi source folders imports priority conflicts overrides',
+                to: '/settings/skills',
+                icon: Puzzle
             },
             {
                 id: 'voice',
@@ -136,8 +145,8 @@ export const SETTINGS_NAVIGATION_GROUPS: SettingsNavigationGroup[] = [
         items: [
             {
                 id: 'projects',
-                label: 'Projects & explorer',
-                description: 'Roots, icons, discovery, and Explorer',
+                label: 'Projects',
+                description: 'Roots, icons, discovery, and indexing',
                 keywords: 'folders index scan bounded layout finder grid overrides',
                 to: '/settings/projects',
                 icon: FolderKanban,

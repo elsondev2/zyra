@@ -59,6 +59,16 @@ const result = {
     checks: []
 }
 
+if (expectedSigned && (platform === 'windows' || platform === 'macos')) {
+    const applicationEntry = platform === 'windows'
+        ? entries.find((entry) => !entry.directory && path.basename(entry.path).toLowerCase() === 'zyra.exe' && /win[^/\\]*unpacked/i.test(entry.path))
+        : entries.find((entry) => entry.directory && entry.path.endsWith('Zyra.app'))
+    if (!applicationEntry) throw new Error(`Cannot verify Widevine VMP signing: packaged ${platform} application was not found`)
+    const packageDirectory = path.dirname(path.join(rawDirectory, applicationEntry.path))
+    const vmp = await run(process.env.PYTHON || 'python', ['-m', 'castlabs_evs.vmp', '--no-ask', 'verify-pkg', packageDirectory])
+    result.checks.push({ name: 'widevine-vmp', target: path.basename(packageDirectory), output: vmp.stdout || vmp.stderr })
+}
+
 if (expectedSigned && platform === 'windows') {
     const version = arg('version')
     if (!version) throw new Error('Cannot verify Windows signing without a release version')

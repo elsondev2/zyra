@@ -15,6 +15,7 @@ function fitTerminalSafely(fitAddon: XtermFitAddon): boolean {
 
 export const AssistantTerminalViewport = memo(function AssistantTerminalViewport({
     session,
+    workspaceCapability,
     initialOutput,
     theme,
     fontFamily,
@@ -32,6 +33,7 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
     onError
 }: {
     session: DevScopePreviewTerminalSessionSummary
+    workspaceCapability?: string
     initialOutput: string
     theme: ITheme
     fontFamily: string
@@ -83,7 +85,8 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
                 void window.devscope.resizePreviewTerminal({
                     sessionId: session.sessionId,
                     cols: terminal.cols,
-                    rows: terminal.rows
+                    rows: terminal.rows,
+                    workspaceCapability
                 }).catch(() => undefined)
             })
         }
@@ -135,7 +138,11 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
             })
 
             inputDisposable = terminal.onData((data) => {
-                void window.devscope.writePreviewTerminal({ sessionId: session.sessionId, data }).then((result) => {
+                void window.devscope.writePreviewTerminal({
+                    sessionId: session.sessionId,
+                    data,
+                    workspaceCapability
+                }).then((result) => {
                     if (!result.success) onError(result.error || 'Failed to write terminal input.')
                 }).catch((error: unknown) => {
                     onError(error instanceof Error ? error.message : 'Failed to write terminal input.')
@@ -146,7 +153,8 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
                 if (!normalizedTitle) return
                 void window.devscope.setPreviewTerminalTitle({
                     sessionId: session.sessionId,
-                    title: normalizedTitle
+                    title: normalizedTitle,
+                    workspaceCapability
                 }).catch(() => undefined)
             })
 
@@ -168,7 +176,7 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
             else if (event.type === 'clear') terminal.clear()
             else if (event.type === 'error') terminal.write(`\r\n[terminal] ${event.message || 'Terminal error'}\r\n`)
             else if (event.type === 'exit') terminal.write(`\r\n[terminal] Process exited${typeof event.exitCode === 'number' ? ` (${event.exitCode})` : ''}.\r\n`)
-        })
+        }, workspaceCapability)
 
         return () => {
             disposed = true
@@ -181,7 +189,7 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
             fitAddonRef.current = null
             mountedTerminal?.dispose()
         }
-    }, [onError, session.sessionId])
+    }, [onError, session.sessionId, workspaceCapability])
 
     useEffect(() => {
         const terminal = terminalRef.current
@@ -193,11 +201,12 @@ export const AssistantTerminalViewport = memo(function AssistantTerminalViewport
             void window.devscope.resizePreviewTerminal({
                 sessionId: session.sessionId,
                 cols: terminal.cols,
-                rows: terminal.rows
+                rows: terminal.rows,
+                workspaceCapability
             }).catch(() => undefined)
         })
         return () => window.cancelAnimationFrame(frame)
-    }, [active, focusRequestId, session.sessionId, visible])
+    }, [active, focusRequestId, session.sessionId, visible, workspaceCapability])
 
     useEffect(() => {
         const terminal = terminalRef.current

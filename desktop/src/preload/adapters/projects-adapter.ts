@@ -1,15 +1,41 @@
 import { ipcRenderer } from 'electron'
 import type {
+    DevScopeBrowserAdDetection,
     DevScopeBrowserAnnotationInput,
+    DevScopeBrowserBackgroundCategory,
     DevScopeBrowserGuestTargetInput,
+    DevScopeBrowserHistoryRecordInput,
+    DevScopeBrowserOpenTabRequest,
     DevScopeBrowserRecordingFrame,
+    DevScopeBrowserShortcutEvent,
+    DevScopeBrowserThreatCheckInput,
+    DevScopeBrowserThreatWarning,
     DevScopeGitCloneInput,
     DevScopeGitCloneProgressEvent,
+    DevScopePreviewTerminalAccess,
     DevScopePreviewTerminalEvent,
+    DevScopePreviewTerminalWorkspaceOwner,
     DevScopePythonPreviewEvent
 } from '../../shared/contracts/devscope-api'
+import type { ExternalBrowserHistoryImportInput } from '../../shared/external-browser-history-contracts'
+import { BROWSER_PAGE_ICON_CHANNEL } from '../../shared/browser-favicon'
 import {
+    BROWSER_DOWNLOADS_ACTION_CHANNEL,
+    BROWSER_DOWNLOADS_CHANGED_CHANNEL,
+    BROWSER_DOWNLOADS_FOLDER_ACTION_CHANNEL,
+    BROWSER_DOWNLOADS_FOLDER_LIST_CHANNEL,
+    BROWSER_DOWNLOADS_LIST_CHANNEL,
+    BROWSER_DOWNLOADS_PREVIEW_CHANNEL,
+    type BrowserDownloadAction,
+    type BrowserDownloadRecord,
+    type BrowserDownloadsFolderAction
+} from '../../shared/browser-downloads'
+import {
+    BROWSER_ADBLOCK_DETECTED_CHANNEL,
+    BROWSER_PREVIEW_OPEN_TAB_REQUESTED_CHANNEL,
     BROWSER_PREVIEW_RECORDING_FRAME_CHANNEL,
+    BROWSER_PREVIEW_SHORTCUT_CHANNEL,
+    BROWSER_THREAT_BLOCKED_CHANNEL,
     GIT_CLONE_PROGRESS_CHANNEL
 } from '../../shared/contracts/devscope-api'
 
@@ -42,6 +68,7 @@ export function createProjectsAdapter() {
                 rootPath?: string
                 includeGitStatus?: boolean
                 includeFileSize?: boolean
+                includeDirectoryChildHint?: boolean
             }
         ) =>
             ipcRenderer.invoke('devscope:getFileTree', projectPath, options),
@@ -177,7 +204,8 @@ export function createProjectsAdapter() {
         getGitignorePatterns: () => ipcRenderer.invoke('devscope:getGitignorePatterns'),
         generateCustomGitignoreContent: (selectedPatternIds: string[]) => ipcRenderer.invoke('devscope:generateCustomGitignoreContent', selectedPatternIds),
         copyToClipboard: (text: string) => ipcRenderer.invoke('devscope:copyToClipboard', text),
-        readFileContent: (filePath: string) => ipcRenderer.invoke('devscope:readFileContent', filePath),
+        readFileContent: (filePath: string, options?: { knownSize?: number | null; knownModifiedAt?: number | null }) => ipcRenderer.invoke('devscope:readFileContent', filePath, options),
+        readBinaryFile: (filePath: string) => ipcRenderer.invoke('devscope:readBinaryFile', filePath),
         readTextFileFull: (filePath: string) => ipcRenderer.invoke('devscope:readTextFileFull', filePath),
         getPathInfo: (targetPath: string) => ipcRenderer.invoke('devscope:getPathInfo', targetPath),
         writeTextFile: (filePath: string, content: string, expectedModifiedAt?: number) =>
@@ -195,7 +223,11 @@ export function createProjectsAdapter() {
                 ipcRenderer.removeListener(PYTHON_PREVIEW_EVENT_CHANNEL, listener)
             }
         },
-        createPreviewTerminal: (input: {
+        registerPreviewTerminalWorkspace: (owner: DevScopePreviewTerminalWorkspaceOwner) =>
+            ipcRenderer.invoke('devscope:previewTerminal:registerWorkspace', owner),
+        releasePreviewTerminalWorkspace: (workspaceCapability: string) =>
+            ipcRenderer.invoke('devscope:previewTerminal:releaseWorkspace', workspaceCapability),
+        createPreviewTerminal: (input: DevScopePreviewTerminalAccess & {
             sessionId: string
             targetPath?: string
             preferredShell?: 'powershell' | 'cmd'
@@ -203,29 +235,93 @@ export function createProjectsAdapter() {
             rows?: number
             title?: string
         }) => ipcRenderer.invoke('devscope:previewTerminal:create', input),
-        listPreviewTerminalSessions: (input?: { targetPath?: string }) =>
+        listPreviewTerminalSessions: (input?: DevScopePreviewTerminalAccess & { targetPath?: string }) =>
             ipcRenderer.invoke('devscope:previewTerminal:list', input),
-        writePreviewTerminal: (input: { sessionId: string; data: string }) =>
+        writePreviewTerminal: (input: DevScopePreviewTerminalAccess & { sessionId: string; data: string }) =>
             ipcRenderer.invoke('devscope:previewTerminal:write', input),
-        setPreviewTerminalTitle: (input: { sessionId: string; title: string }) =>
+        setPreviewTerminalTitle: (input: DevScopePreviewTerminalAccess & { sessionId: string; title: string }) =>
             ipcRenderer.invoke('devscope:previewTerminal:setTitle', input),
-        resizePreviewTerminal: (input: { sessionId: string; cols: number; rows: number }) =>
+        resizePreviewTerminal: (input: DevScopePreviewTerminalAccess & { sessionId: string; cols: number; rows: number }) =>
             ipcRenderer.invoke('devscope:previewTerminal:resize', input),
-        clearPreviewTerminal: (sessionId: string) =>
-            ipcRenderer.invoke('devscope:previewTerminal:clear', sessionId),
-        closePreviewTerminal: (sessionId: string) =>
-            ipcRenderer.invoke('devscope:previewTerminal:close', sessionId),
-        onPreviewTerminalEvent: (callback: (event: DevScopePreviewTerminalEvent) => void) => {
+        clearPreviewTerminal: (input: string | (DevScopePreviewTerminalAccess & { sessionId: string })) =>
+            ipcRenderer.invoke('devscope:previewTerminal:clear', input),
+        closePreviewTerminal: (input: string | (DevScopePreviewTerminalAccess & { sessionId: string })) =>
+            ipcRenderer.invoke('devscope:previewTerminal:close', input),
+        onPreviewTerminalEvent: (callback: (event: DevScopePreviewTerminalEvent) => void, workspaceCapability?: string) => {
+            const channel = workspaceCapability
+                ? `${PREVIEW_TERMINAL_EVENT_CHANNEL}:${workspaceCapability}`
+                : PREVIEW_TERMINAL_EVENT_CHANNEL
             const listener = (_event: Electron.IpcRendererEvent, payload: DevScopePreviewTerminalEvent) => {
                 callback(payload)
             }
-            ipcRenderer.on(PREVIEW_TERMINAL_EVENT_CHANNEL, listener)
+            ipcRenderer.on(channel, listener)
             return () => {
-                ipcRenderer.removeListener(PREVIEW_TERMINAL_EVENT_CHANNEL, listener)
+                ipcRenderer.removeListener(channel, listener)
             }
         },
         getBrowserPreviewConfig: () =>
             ipcRenderer.invoke('devscope:browserPreview:getConfig'),
+        getBrowserPageIcon: (pageUrl: string) => ipcRenderer.invoke(BROWSER_PAGE_ICON_CHANNEL, pageUrl),
+        listBrowserDownloads: () => ipcRenderer.invoke(BROWSER_DOWNLOADS_LIST_CHANNEL),
+        actOnBrowserDownload: (action: BrowserDownloadAction) => ipcRenderer.invoke(BROWSER_DOWNLOADS_ACTION_CHANNEL, action),
+        getBrowserDownloadPreviewTarget: (id: string) => ipcRenderer.invoke(BROWSER_DOWNLOADS_PREVIEW_CHANNEL, id),
+        listBrowserDownloadsFolder: () => ipcRenderer.invoke(BROWSER_DOWNLOADS_FOLDER_LIST_CHANNEL),
+        actOnBrowserDownloadsFolderEntry: (action: BrowserDownloadsFolderAction) => ipcRenderer.invoke(BROWSER_DOWNLOADS_FOLDER_ACTION_CHANNEL, action),
+        onBrowserDownloadsChanged: (callback: (downloads: BrowserDownloadRecord[]) => void) => {
+            const listener = (_event: Electron.IpcRendererEvent, downloads: BrowserDownloadRecord[]) => callback(downloads)
+            ipcRenderer.on(BROWSER_DOWNLOADS_CHANGED_CHANNEL, listener)
+            return () => ipcRenderer.removeListener(BROWSER_DOWNLOADS_CHANGED_CHANNEL, listener)
+        },
+        getBrowserHistory: (input?: { query?: string; limit?: number }) =>
+            ipcRenderer.invoke('devscope:browserPreview:getHistory', input),
+        getBrowserSearchSuggestions: (input: { query: string }) =>
+            ipcRenderer.invoke('devscope:browserPreview:getSearchSuggestions', input),
+        scanExternalBrowserHistoryProfiles: () =>
+            ipcRenderer.invoke('devscope:browserPreview:scanExternalHistory'),
+        importExternalBrowserHistory: (input: ExternalBrowserHistoryImportInput) =>
+            ipcRenderer.invoke('devscope:browserPreview:importExternalHistory', input),
+        recordBrowserHistory: (input: DevScopeBrowserHistoryRecordInput) =>
+            ipcRenderer.invoke('devscope:browserPreview:recordHistory', input),
+        clearBrowserHistory: () =>
+            ipcRenderer.invoke('devscope:browserPreview:clearHistory'),
+        getBrowserAdBlockStatus: () =>
+            ipcRenderer.invoke('devscope:browserPreview:getAdBlockStatus'),
+        setBrowserAdBlockEnabled: (input: { enabled: boolean; promptDismissed?: boolean }) =>
+            ipcRenderer.invoke('devscope:browserPreview:setAdBlockEnabled', input),
+        onBrowserAdDetected: (callback: (event: DevScopeBrowserAdDetection) => void) => {
+            const listener = (_event: Electron.IpcRendererEvent, payload: DevScopeBrowserAdDetection) => callback(payload)
+            ipcRenderer.on(BROWSER_ADBLOCK_DETECTED_CHANNEL, listener)
+            return () => ipcRenderer.removeListener(BROWSER_ADBLOCK_DETECTED_CHANNEL, listener)
+        },
+        onBrowserOpenTabRequested: (callback: (event: DevScopeBrowserOpenTabRequest) => void) => {
+            const listener = (_event: Electron.IpcRendererEvent, payload: DevScopeBrowserOpenTabRequest) => callback(payload)
+            ipcRenderer.on(BROWSER_PREVIEW_OPEN_TAB_REQUESTED_CHANNEL, listener)
+            return () => ipcRenderer.removeListener(BROWSER_PREVIEW_OPEN_TAB_REQUESTED_CHANNEL, listener)
+        },
+        onBrowserShortcut: (callback: (event: DevScopeBrowserShortcutEvent) => void) => {
+            const listener = (_event: Electron.IpcRendererEvent, payload: DevScopeBrowserShortcutEvent) => callback(payload)
+            ipcRenderer.on(BROWSER_PREVIEW_SHORTCUT_CHANNEL, listener)
+            return () => ipcRenderer.removeListener(BROWSER_PREVIEW_SHORTCUT_CHANNEL, listener)
+        },
+        checkBrowserThreatNavigation: (input: DevScopeBrowserThreatCheckInput) =>
+            ipcRenderer.invoke('devscope:browserPreview:checkThreatNavigation', input),
+        proceedBrowserThreatWarning: (decisionId: string) =>
+            ipcRenderer.invoke('devscope:browserPreview:proceedThreatWarning', decisionId),
+        dismissBrowserThreatWarning: (decisionId: string) =>
+            ipcRenderer.invoke('devscope:browserPreview:dismissThreatWarning', decisionId),
+        onBrowserThreatBlocked: (callback: (event: DevScopeBrowserThreatWarning) => void) => {
+            const listener = (_event: Electron.IpcRendererEvent, payload: DevScopeBrowserThreatWarning) => callback(payload)
+            ipcRenderer.on(BROWSER_THREAT_BLOCKED_CHANNEL, listener)
+            return () => ipcRenderer.removeListener(BROWSER_THREAT_BLOCKED_CHANNEL, listener)
+        },
+        getBrowserBackgroundProviderStatus: () =>
+            ipcRenderer.invoke('devscope:browserPreview:getBackgroundProviderStatus'),
+        validateBrowserUnsplashAccessKey: (input: { accessKey: string }) =>
+            ipcRenderer.invoke('devscope:browserPreview:validateUnsplashAccessKey', input),
+        getBrowserRemoteBackgrounds: (input: { category: DevScopeBrowserBackgroundCategory; refresh?: boolean; query?: string }) =>
+            ipcRenderer.invoke('devscope:browserPreview:getRemoteBackgrounds', input),
+        trackBrowserRemoteBackground: (input: { downloadLocation: string }) =>
+            ipcRenderer.invoke('devscope:browserPreview:trackRemoteBackground', input),
         clearBrowserPreviewData: () =>
             ipcRenderer.invoke('devscope:browserPreview:clearData'),
         clearBrowserPreviewCache: () =>
@@ -282,6 +378,7 @@ export function createProjectsAdapter() {
             ipcRenderer.invoke('devscope:moveFileSystemItem', sourcePath, destinationDirectory),
         getProjectSessions: (_projectPath: string) => Promise.resolve({ success: true, sessions: [] }),
         getProjectProcesses: (projectPath: string) => ipcRenderer.invoke('devscope:getProjectProcesses', projectPath),
+        getRunningLocalServers: (projectPath?: string) => ipcRenderer.invoke('devscope:getRunningLocalServers', projectPath),
         indexAllFolders: (folders: string[], options?: { forceRefresh?: boolean }) =>
             ipcRenderer.invoke('devscope:indexAllFolders', folders, options),
         searchIndexedPaths: (input: {
@@ -292,6 +389,7 @@ export function createProjectsAdapter() {
             limit?: number
             includeFiles?: boolean
             includeDirectories?: boolean
+            includeAncestors?: boolean
             showHidden?: boolean
         }) => ipcRenderer.invoke('devscope:searchIndexedPaths', input),
         getFileSystemRoots: () => ipcRenderer.invoke('devscope:getFileSystemRoots')

@@ -13,6 +13,7 @@ import type {
     AssistantSnapshot,
     AssistantThread
 } from '../../shared/assistant/contracts'
+import { reconcileAssistantMessageReplays } from '../../shared/assistant/message-reconciliation'
 import { sanitizeAssistantProjectPath } from '../../shared/assistant/session-routing'
 import { recoverPersistedSnapshot } from './projector'
 import {
@@ -138,7 +139,7 @@ export function readAssistantTimelineProjectionRows(
 }
 
 function readAssistantMessages(db: SqlDatabase, threadId: string): AssistantMessage[] {
-    return readThreadRows<AssistantMessage>(db, 'assistant_messages', threadId, [
+    return reconcileAssistantMessageReplays(readThreadRows<AssistantMessage>(db, 'assistant_messages', threadId, [
         'id', 'role', 'text', 'turn_id', 'streaming', 'timeline_sequence', 'created_at', 'updated_at', 'provider_item_id', 'modality'
     ], (row) => ({
         id: String(row[0] || ''),
@@ -151,7 +152,7 @@ function readAssistantMessages(db: SqlDatabase, threadId: string): AssistantMess
         updatedAt: String(row[7] || new Date(0).toISOString()),
         providerItemId: toNullableString(row[8]) || undefined,
         modality: (toNullableString(row[9]) || undefined) as AssistantMessage['modality']
-    }))
+    })))
 }
 
 function readAssistantActivities(db: SqlDatabase, threadId: string, includePayload: boolean): AssistantActivity[] {
@@ -402,7 +403,7 @@ function readAssistantSessionSummaries(db: SqlDatabase, playground: AssistantSna
             proposedPlanCount: proposedPlanCountByThreadId.get(threadId) ?? 0,
             lastSeenCompletedTurnId: toNullableString(row[14]),
             runtimeMode: String(row[15] || 'approval-required') as AssistantThread['runtimeMode'],
-            interactionMode: String(row[16] || 'default') as AssistantThread['interactionMode'],
+            interactionMode: 'default',
             webSearch: typeof row[17] === 'number' ? row[17] === 1 : null,
             webFetch: typeof row[18] === 'number' ? row[18] === 1 : null,
             state: String(row[19] || 'idle') as AssistantThread['state'],

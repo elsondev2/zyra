@@ -19,7 +19,7 @@ import { TrailingAsyncReconciler } from '../src/main/assistant/trailing-async-re
 import { shouldAutoReconnectAssistantThread } from '../src/renderer/src/pages/assistant/assistant-connection-recovery-policy'
 import { deriveAssistantComposerCapabilities } from '../src/renderer/src/pages/assistant/assistant-composer-capabilities'
 import { getAssistantThreadLastMessageAt, resolveAssistantThreadStatusPill } from '../src/renderer/src/pages/assistant/assistant-sessions-rail-utils'
-import { mergeCanonicalPresenceLatestTurn, resolveCanonicalPresenceAttention, resolveCanonicalPresenceThreadState } from '../src/main/assistant/service-canonical-presence'
+import { mergeCanonicalPresenceLatestTurn, mergeCanonicalPresenceObservation, resolveCanonicalPresenceAttention, resolveCanonicalPresenceThreadState } from '../src/main/assistant/service-canonical-presence'
 import { resolveAssistantComposerLaunchConfiguration } from '../src/renderer/src/pages/assistant/assistant-new-chat-composer-config'
 import {
     resolveAssistantComposerFallbackState,
@@ -35,6 +35,21 @@ assert.doesNotMatch(composerEffectsSource, /didAutoRefreshModelsRef/, 'the compo
 assert.match(composerEffectsSource, /areAssistantComposerConfigurationsEqual[\s\S]{0,300}writeAssistantComposerSessionState\(sessionId, currentComposerState\)/u, 'thread configuration choices persist immediately instead of being lost to the draft debounce')
 assert.match(conversationPaneSource, /useSettingsDefaults=\{selectedSessionIsDraft \|\| newChatHandoffActive\}/u, 'only a New Chat inherits global composer defaults')
 assert.match(composerControllerSource, /resolveRetainedAssistantComposerModel/u, 'model catalog refreshes preserve an explicit thread model')
+assert.match(
+    composerControllerSource,
+    /draftWarmKey[\s\S]{0,500}text\.trim\(\)[\s\S]{0,350}onDraftStarted\?\.\(\)/u,
+    'the first typed draft must start the selected assistant connection before Send'
+)
+assert.match(
+    conversationPaneSource,
+    /onDraftStarted=\{actions\.warmSelectedSessionConnection\}/u,
+    'the composer draft warmup must reach the canonical assistant store'
+)
+assert.match(
+    storeSource,
+    /warmSelectedSessionConnection\(voicePreparation\?: AssistantConnectOptions\['voicePreparation'\]\)[\s\S]{0,500}warmSessionConnection\(selected\.id, selected\.activeThreadId, false, false, voicePreparation\)/u,
+    'draft warmup must reuse the deduplicated background connection path without surfacing speculative errors'
+)
 
 const canonicalThreadFallback = resolveAssistantComposerFallbackState({
     useSettingsDefaults: false,
@@ -55,7 +70,7 @@ const canonicalThreadFallback = resolveAssistantComposerFallbackState({
 assert.deepEqual(canonicalThreadFallback, {
     model: 'openai-codex/gpt-5.6-terra',
     runtimeMode: 'full-access',
-    interactionMode: 'plan',
+    interactionMode: 'default',
     effort: 'high',
     fastModeEnabled: true
 }, 'an established thread restores its canonical configuration without inheriting new-chat defaults')
@@ -108,7 +123,6 @@ assert.deepEqual(resolveAssistantComposerLaunchConfiguration({
         assistantDefaultModel: 'openai-codex/gpt-5.6-sol',
         assistantDefaultFastMode: true,
         assistantDefaultRuntimeMode: 'full-access',
-        assistantDefaultInteractionMode: 'plan',
         assistantDefaultEffort: 'xhigh'
     },
     thread,
@@ -118,7 +132,7 @@ assert.deepEqual(resolveAssistantComposerLaunchConfiguration({
     activeEffort: 'xhigh',
     activeFastModeEnabled: true,
     runtimeMode: 'full-access',
-    interactionMode: 'plan',
+    interactionMode: 'default',
     activeProfile: 'yolo-fast'
 }, 'a pristine New Chat must use Settings defaults instead of its placeholder backend thread configuration')
 assert.deepEqual(resolveAssistantComposerLaunchConfiguration({
@@ -127,7 +141,6 @@ assert.deepEqual(resolveAssistantComposerLaunchConfiguration({
         assistantDefaultModel: 'openai-codex/gpt-5.6-sol',
         assistantDefaultFastMode: true,
         assistantDefaultRuntimeMode: 'full-access',
-        assistantDefaultInteractionMode: 'plan',
         assistantDefaultEffort: 'xhigh'
     },
     thread,
@@ -351,6 +364,12 @@ const readyPresence = {
     clients: [{ clientId: 'desktop:test', surface: 'desktop' }],
     backgroundWorkActive: false
 }
+const observedPresence = mergeCanonicalPresenceObservation(
+    { ...readyPresence, latestSequence: 2, observedSequence: 2 },
+    { ...readyPresence, latestSequence: 113 }
+)
+assert.equal(observedPresence.latestSequence, 2, 'catalog presence cannot acknowledge canonical events Desktop has not projected')
+assert.equal(observedPresence.observedSequence, 113, 'Thread Details can retain the server high-water mark without using it as a replay cursor')
 assert.equal(
     resolveCanonicalPresenceThreadState({ currentState: 'starting', presence: readyPresence }),
     'ready',
@@ -458,6 +477,23 @@ const completedLatestTurn = mergeCanonicalPresenceLatestTurn(null, {
     }
 })
 assert.equal(completedLatestTurn?.state, 'completed', 'canonical completion must reach unopened thread shells')
+const completedLatestTurnWithProviderMessage = mergeCanonicalPresenceLatestTurn(null, {
+    ...readyPresence,
+    attention: null,
+    latestTurn: {
+        id: 'turn:sidebar-complete-with-message',
+        state: 'completed',
+        requestedAt: now,
+        startedAt: now,
+        completedAt,
+        assistantMessageId: 'pi-message:assistant:canonical-final'
+    }
+})
+assert.equal(
+    completedLatestTurnWithProviderMessage?.assistantMessageId,
+    'assistant-message-pi-message:assistant:canonical-final',
+    'canonical provider references enter persistence in the Desktop message-id namespace'
+)
 assert.equal(
     resolveAssistantThreadStatusPill({ ...thread, latestTurn: completedLatestTurn }, false)?.label,
     'Done',

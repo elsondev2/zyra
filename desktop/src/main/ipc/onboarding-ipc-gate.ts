@@ -11,9 +11,8 @@ export type OnboardingIpcGateDependencies = {
 }
 
 /**
- * Gates every invoke handler registered through this facade. Setup handlers use
- * Electron's original ipcMain directly, while normal Desktop handlers register
- * through this proxy so newly added channels fail closed by default.
+ * Gates every invoke handler registered through this facade. Sender validation
+ * is supplied by the trusted ipcMain facade underneath this onboarding gate.
  */
 export function createOnboardingGatedIpcMain<T extends IpcMainWithHandle>(
     target: T,

@@ -217,10 +217,27 @@ export default function PatchDiffViewer({
     const diffThemeName = resolveDiffThemeName(settings.theme)
     const diffThemeType = resolveDiffThemeType(settings.theme)
     const diffStyle: 'split' | 'unified' = mode === 'split' ? 'split' : 'unified'
-    const fileDiffsToken = fileDiffs.map((entry, index) => `${entry.cacheKey || entry.name}:${index}`).join('|')
-    const renderToken = `${fileDiff?.cacheKey || fileDiff?.name || fileDiffsToken || patch || 'empty'}:${mode}:${settings.theme}:${settings.accentColor.primary}`
+    const fileDiffKeys = useMemo(
+        () => fileDiffs.map((entry, index) => `${entry.cacheKey || entry.name}:${index}`),
+        [fileDiffs]
+    )
+    const fileDiffsToken = fileDiffKeys.join('|')
+    const presentationToken = `${mode}:${settings.theme}:${settings.accentColor.primary}:${flush}:${hideChangeIcon}:${hideHeaderStats}`
+    const renderToken = `${fileDiff?.cacheKey || fileDiff?.name || fileDiffsToken || patch || 'empty'}:${presentationToken}`
+    const settledFileDiffStateRef = useRef<{ keys: string[]; presentationToken: string } | null>(null)
     const [settledRenderToken, setSettledRenderToken] = useState<string | null>(null)
     const isRendering = hasDiffInput && settledRenderToken !== renderToken
+    const settledFileDiffState = settledFileDiffStateRef.current
+    const isIncrementalFileDiffAppend = Boolean(
+        isRendering
+        && !fileDiff
+        && !patch
+        && fileDiffKeys.length > 0
+        && settledFileDiffState
+        && settledFileDiffState.presentationToken === presentationToken
+        && settledFileDiffState.keys.length < fileDiffKeys.length
+        && settledFileDiffState.keys.every((key, index) => fileDiffKeys[index] === key)
+    )
     const unsafeCSS = useMemo(
         () => buildDiffViewerUnsafeCss(diffThemeType, flush, hideChangeIcon, hideHeaderStats),
         [diffThemeType, flush, hideChangeIcon, hideHeaderStats]
@@ -235,8 +252,8 @@ export default function PatchDiffViewer({
     }), [diffStyle, diffThemeName, diffThemeType, unsafeCSS])
 
     useEffect(() => {
-        onRenderingChange?.(isRendering)
-    }, [isRendering, onRenderingChange])
+        onRenderingChange?.(isRendering && !isIncrementalFileDiffAppend)
+    }, [isIncrementalFileDiffAppend, isRendering, onRenderingChange])
 
     useEffect(() => {
         if (activeFileDiffIndex === null || activeFileDiffIndex < 0 || fileDiffs.length === 0) return
@@ -259,6 +276,7 @@ export default function PatchDiffViewer({
 
     useEffect(() => {
         if (!hasDiffInput) {
+            settledFileDiffStateRef.current = null
             setSettledRenderToken(renderToken)
             return
         }
@@ -268,6 +286,9 @@ export default function PatchDiffViewer({
 
         const settleIfReady = () => {
             if (hasRenderedDiffContent(containerRef.current)) {
+                settledFileDiffStateRef.current = !fileDiff && !patch && fileDiffKeys.length > 0
+                    ? { keys: fileDiffKeys, presentationToken }
+                    : null
                 setSettledRenderToken(renderToken)
                 return true
             }
@@ -281,13 +302,18 @@ export default function PatchDiffViewer({
         }
 
         animationFrame = window.requestAnimationFrame(tick)
-        timeoutId = window.setTimeout(() => setSettledRenderToken(renderToken), 4000)
+        timeoutId = window.setTimeout(() => {
+            settledFileDiffStateRef.current = !fileDiff && !patch && fileDiffKeys.length > 0
+                ? { keys: fileDiffKeys, presentationToken }
+                : null
+            setSettledRenderToken(renderToken)
+        }, 4000)
 
         return () => {
             window.cancelAnimationFrame(animationFrame)
             window.clearTimeout(timeoutId)
         }
-    }, [hasDiffInput, renderToken])
+    }, [fileDiff, fileDiffKeys, hasDiffInput, patch, presentationToken, renderToken])
 
     return (
         <div
@@ -304,7 +330,7 @@ export default function PatchDiffViewer({
                         renderHeaderMetadata={headerMetadata ? () => headerMetadata : undefined}
                     />
                 ) : fileDiffs.length > 0 ? (
-                    <div key={renderToken} className={flush ? 'space-y-0' : 'space-y-3'}>
+                    <div className={flush ? 'space-y-0' : 'space-y-3'}>
                         {fileDiffs.map((entry, index) => (
                             <div
                                 key={`${entry.cacheKey || entry.name}:${index}`}
@@ -337,7 +363,14 @@ export default function PatchDiffViewer({
                 )}
             </DiffWorkerPoolProvider>
 
-            {isRendering && hasDiffInput && (
+            {isRendering && isIncrementalFileDiffAppend ? (
+                <div className="pointer-events-none sticky bottom-3 ml-auto mr-3 mt-3 flex w-fit items-center gap-1.5 rounded-lg border border-white/10 bg-[color-mix(in_srgb,var(--color-card)_90%,black)] px-2.5 py-1.5 text-[10px] text-sparkle-text-muted shadow-lg">
+                    <RefreshCw size={11} className="animate-spin text-[var(--accent-primary)]" />
+                    Rendering added changes…
+                </div>
+            ) : null}
+
+            {isRendering && hasDiffInput && !isIncrementalFileDiffAppend && (
                 <div
                     className="pointer-events-none absolute inset-0 flex items-center justify-center px-4 py-4"
                     style={{

@@ -9,12 +9,6 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 import type { Element, Root } from 'hast'
 import { toJsxRuntime } from 'hast-util-to-jsx-runtime'
 import { urlAttributes } from 'html-url-attributes'
-import rehypeRaw from 'rehype-raw'
-import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
-import remarkGfm from 'remark-gfm'
-import remarkParse from 'remark-parse'
-import remarkRehype from 'remark-rehype'
-import { unified } from 'unified'
 import { visit } from 'unist-util-visit'
 import { defaultUrlTransform } from 'react-markdown'
 import { cn } from '@/lib/utils'
@@ -29,6 +23,8 @@ import { isWindowsPathHref, normalizeMarkdownHref, rewriteMarkdownFileUriHref } 
 import { looksLikeMarkdownFileReference } from './markdown/fileReferences'
 import { createMarkdownClipboardPayload } from './markdown/markdownClipboard'
 import { useMarkdownVisualTheme } from './markdown/markdownTheme'
+import { parseMarkdownToHast } from './markdown/markdownPipeline'
+import { createMarkdownHeadingSlug } from './markdown/markdownHeadingIds'
 
 export interface MarkdownRendererProps {
     content: string
@@ -36,6 +32,10 @@ export interface MarkdownRendererProps {
     filePath?: string
     codeBlockMaxLines?: number
     lightweight?: boolean
+    plainCodeBlocks?: boolean
+    deferCodeHighlighting?: boolean
+    preparedTree?: Root
+    interactionLayerEnabled?: boolean
     cacheKey?: string
     /** Idle prewarming may compile the tree without also highlighting fenced code. */
     prewarmCodeBlocks?: boolean
@@ -53,59 +53,14 @@ type CompiledMarkdownEntry = {
     node: ReactNode
 }
 
-type MarkdownAstNode = {
-    type?: string
-    meta?: unknown
-    data?: { hProperties?: Record<string, unknown> }
-    children?: MarkdownAstNode[]
-}
-
-function remarkPreserveCodeMeta() {
-    return (tree: MarkdownAstNode) => {
-        const visitNode = (node: MarkdownAstNode) => {
-            if (node.type === 'code' && typeof node.meta === 'string' && node.meta.trim()) {
-                node.data = {
-                    ...node.data,
-                    hProperties: {
-                        ...node.data?.hProperties,
-                        dataCodeMeta: node.meta.trim()
-                    }
-                }
-            }
-            node.children?.forEach(visitNode)
-        }
-        visitNode(tree)
-    }
-}
-
-const MARKDOWN_SANITIZE_SCHEMA = {
-    ...defaultSchema,
-    tagNames: [...(defaultSchema.tagNames || []), 'details', 'summary', 'picture', 'source'],
-    attributes: {
-        ...defaultSchema.attributes,
-        '*': [
-            ...(defaultSchema.attributes?.['*'] || []).filter((attribute) => attribute !== 'title'),
-            'align'
-        ],
-        code: [...(defaultSchema.attributes?.code || []), 'dataCodeMeta'],
-        details: [...(defaultSchema.attributes?.details || []), 'open'],
-        div: [...(defaultSchema.attributes?.div || []), 'dataCacheRaw'],
-        source: [...(defaultSchema.attributes?.source || []), 'src', 'srcSet', 'type', 'media']
-    },
-    protocols: {
-        ...defaultSchema.protocols,
-        href: [...(defaultSchema.protocols?.href || []), 'file', 'zyra', 'devscope'],
-        src: [...(defaultSchema.protocols?.src || []), 'file', 'zyra', 'devscope']
-    }
-} satisfies Parameters<typeof rehypeSanitize>[0]
-
-const RAW_HTML_TAG_REGEX = /<\/?[A-Za-z][^>\n]*>/
 const DEFERRED_MARKDOWN_LENGTH = 120_000
+const MAX_MARKDOWN_COMPONENT_SETS = 64
 const MAX_COMPILED_ENTRIES = 192
 const MAX_COMPILED_CONTENT_LENGTH = 4_000_000
 const compiledMarkdown = new Map<string, CompiledMarkdownEntry>()
 let compiledContentLength = 0
 let markdownCompilationCount = 0
+const markdownComponentSets = new Map<string, ReturnType<typeof createMarkdownComponents>>()
 const pendingPreparation = new Map<string, MarkdownRendererProps>()
 let preparationIdleId: number | null = null
 
@@ -130,6 +85,8 @@ function resolveCompiledKey(props: MarkdownRendererProps): string {
         props.filePath || '',
         props.codeBlockMaxLines || 0,
         props.lightweight ? 'light' : 'full',
+        props.plainCodeBlocks ? 'plain-code' : 'highlight-code',
+        props.deferCodeHighlighting ? 'defer-highlight' : 'sync-highlight',
         props.visualTheme || 'dark'
     ].join('|')
 }
@@ -161,18 +118,6 @@ function readElementText(node: Element): string {
         if (child.type === 'element') return readElementText(child)
         return ''
     }).join('')
-}
-
-function createHeadingSlug(value: string): string {
-    const slug = value
-        .normalize('NFKD')
-        .toLowerCase()
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^\p{Letter}\p{Number}\s-]/gu, '')
-        .trim()
-        .replace(/\s+/g, '-')
-        .replace(/-+/g, '-')
-    return slug || 'section'
 }
 
 const AUTO_PATH_BLOCKED_TAGS = new Set(['a', 'code', 'pre', 'script', 'style'])
@@ -236,7 +181,7 @@ function prepareMarkdownTree(tree: Root): void {
                 headingCounts.set(existingId, count)
                 if (count > 1) node.properties.id = `${existingId}-${count}`
             } else {
-                const baseSlug = createHeadingSlug(readElementText(node))
+                const baseSlug = createMarkdownHeadingSlug(readElementText(node))
                 const count = (headingCounts.get(baseSlug) || 0) + 1
                 headingCounts.set(baseSlug, count)
                 node.properties.id = count === 1 ? baseSlug : `${baseSlug}-${count}`
@@ -253,25 +198,40 @@ function prepareMarkdownTree(tree: Root): void {
     enhancePlainPathReferences(tree)
 }
 
-function compileMarkdown(props: MarkdownRendererProps): ReactNode {
-    markdownCompilationCount += 1
-    const hasRawHtml = !props.lightweight && RAW_HTML_TAG_REGEX.test(props.content)
-    const processor = unified()
-        .use(remarkParse)
-        .use(remarkGfm)
-        .use(remarkPreserveCodeMeta)
-        .use(remarkRehype, { allowDangerousHtml: hasRawHtml })
-
-    if (hasRawHtml) processor.use(rehypeRaw)
-    processor.use(rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA)
-
-    const tree = processor.runSync(processor.parse(props.content)) as Root
-    prepareMarkdownTree(tree)
+function getMarkdownComponents(props: MarkdownRendererProps): ReturnType<typeof createMarkdownComponents> {
+    const key = [
+        props.filePath || '',
+        props.codeBlockMaxLines || 0,
+        props.lightweight || props.plainCodeBlocks ? 'plain' : 'highlight',
+        props.deferCodeHighlighting ? 'defer' : 'sync',
+        props.visualTheme || 'dark'
+    ].join('|')
+    const cached = markdownComponentSets.get(key)
+    if (cached) {
+        markdownComponentSets.delete(key)
+        markdownComponentSets.set(key, cached)
+        return cached
+    }
     const components = createMarkdownComponents(props.filePath, {
         codeBlockMaxLines: props.codeBlockMaxLines,
-        plainCodeBlocks: props.lightweight,
+        plainCodeBlocks: props.lightweight || props.plainCodeBlocks,
+        deferCodeHighlighting: props.deferCodeHighlighting,
         visualTheme: props.visualTheme
     })
+    markdownComponentSets.set(key, components)
+    while (markdownComponentSets.size > MAX_MARKDOWN_COMPONENT_SETS) {
+        const oldestKey = markdownComponentSets.keys().next().value as string | undefined
+        if (!oldestKey) break
+        markdownComponentSets.delete(oldestKey)
+    }
+    return components
+}
+
+function compileMarkdown(props: MarkdownRendererProps): ReactNode {
+    markdownCompilationCount += 1
+    const tree = props.preparedTree || parseMarkdownToHast(props.content, !props.lightweight)
+    prepareMarkdownTree(tree)
+    const components = getMarkdownComponents(props)
 
     return toJsxRuntime(tree, {
         Fragment,
@@ -350,15 +310,15 @@ export function prewarmMarkdownRenders(items: MarkdownRendererProps[]): () => vo
 }
 
 export function MarkdownContentRenderer(props: MarkdownRendererProps) {
-    const { content, className, filePath, codeBlockMaxLines, lightweight = false, cacheKey, transient = false, linkSearchRoot, onInternalLinkClick, onLinkNotice } = props
+    const { content, className, filePath, codeBlockMaxLines, lightweight = false, plainCodeBlocks = false, deferCodeHighlighting = false, preparedTree, interactionLayerEnabled = true, cacheKey, transient = false, linkSearchRoot, onInternalLinkClick, onLinkNotice } = props
     const activeVisualTheme = useMarkdownVisualTheme()
     const documentRef = useRef<HTMLDivElement | null>(null)
     const visualTheme = props.visualTheme || activeVisualTheme
     const markdownProps = useMemo(
-        () => ({ content, filePath, codeBlockMaxLines, lightweight, cacheKey, transient, visualTheme }),
-        [cacheKey, codeBlockMaxLines, content, filePath, lightweight, transient, visualTheme]
+        () => ({ content, filePath, codeBlockMaxLines, lightweight, plainCodeBlocks, deferCodeHighlighting, preparedTree, cacheKey, transient, visualTheme }),
+        [cacheKey, codeBlockMaxLines, content, deferCodeHighlighting, filePath, lightweight, plainCodeBlocks, preparedTree, transient, visualTheme]
     )
-    const renderIdentity = useMemo(() => ({}), [cacheKey, codeBlockMaxLines, content, filePath, lightweight, transient, visualTheme])
+    const renderIdentity = useMemo(() => ({}), [cacheKey, codeBlockMaxLines, content, deferCodeHighlighting, filePath, lightweight, plainCodeBlocks, preparedTree, transient, visualTheme])
     const shouldDeferCompilation = !transient && content.length >= DEFERRED_MARKDOWN_LENGTH
     const [preparedIdentity, setPreparedIdentity] = useState<object | null>(null)
 
@@ -404,14 +364,14 @@ export function MarkdownContentRenderer(props: MarkdownRendererProps) {
             className={cn('markdown-body select-text break-words [overflow-wrap:break-word]', className)}
             onCopy={handleCopy}
         >
-            <MarkdownInteractionLayer
+            {interactionLayerEnabled ? <MarkdownInteractionLayer
                 rootRef={documentRef}
                 filePath={filePath}
                 searchRootPath={linkSearchRoot}
                 contentKey={renderReady ? content : ''}
                 onInternalLinkClick={onInternalLinkClick}
                 onLinkNotice={onLinkNotice}
-            />
+            /> : null}
             {renderReady ? renderedContent : (
                 <div className="my-4 space-y-2.5" role="status" aria-label="Preparing Markdown document">
                     <div className="h-3 w-3/5 animate-pulse rounded-full bg-sparkle-text-muted/12" />
@@ -432,6 +392,10 @@ export default memo(
         previous.filePath === next.filePath &&
         previous.codeBlockMaxLines === next.codeBlockMaxLines &&
         previous.lightweight === next.lightweight &&
+        previous.plainCodeBlocks === next.plainCodeBlocks &&
+        previous.deferCodeHighlighting === next.deferCodeHighlighting &&
+        previous.preparedTree === next.preparedTree &&
+        previous.interactionLayerEnabled === next.interactionLayerEnabled &&
         previous.cacheKey === next.cacheKey &&
         previous.transient === next.transient &&
         previous.linkSearchRoot === next.linkSearchRoot &&

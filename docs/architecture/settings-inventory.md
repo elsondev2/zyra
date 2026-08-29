@@ -24,7 +24,9 @@ Settings controls must have a verified consumer. A persisted field with no behav
 | Desktop product preferences | `devscope-settings` in renderer `localStorage` | theme, assistant defaults, file preview defaults, Git defaults | Keep one typed store for non-secret desktop preferences; version and sanitize it. |
 | Operating-system preferences | Electron main process / Windows login settings | open at login, start hidden | Keep main-owned and reflect the real OS value in Settings. |
 | Canonical/project runtime preferences | `<project>/.zyra/preferences.json` | model, thinking, profile, web tools, TUI notifications, interrupt mode, terminal theme, project trust | Expose only through bounded main/canonical APIs with explicit global/project scope. Do not mirror blindly into renderer storage. |
+| Skill source preferences | `~/.zyra/skill-sources.json` | enabled compatible folders, source priority, per-name conflict choices | Keep main-owned, bounded, atomic, and available only to trusted Desktop renderers. Existing sessions apply changes through `/reload`; new sessions load them at startup. |
 | Secrets | currently mixed into `devscope-settings` | Groq and Gemini API keys | Migrate to encrypted main-process storage in a separately reviewed security change. Never put new secrets in renderer storage. |
+| Product analytics | Desktop main and CLI state directories | explicit enable flag, PostHog project key, approved host, random installation ID, bounded queue | Keep outside renderer settings. Desktop exposes only the enable toggle and redacted readiness status; environment values may override persisted configuration. |
 | Permission memory | `zyra:browser-control-approval-preferences:v1` | remembered Browser-control sites and capabilities | Manage under Browser & Control. Keep bounded, inspectable, and revocable. |
 | Continuity state | several bounded `localStorage` records | Browser tabs, terminal groups, composer drafts, active project views, panel widths | Keep outside Settings. Add reset/clear actions where useful. |
 | Cache and acknowledgement state | local storage and main-process files | recent projects, project view cache, skipped update, seen update success | Keep outside the settings schema; expose narrow maintenance actions. |
@@ -42,7 +44,8 @@ Settings controls must have a verified consumer. A persisted field with no behav
 - Explorer enablement and the existing project-browser view/content layout.
 - Git initialization, author safety, bulk scope, PR defaults, PR guide, and branch behavior.
 - Git AI provider and model selection.
-- Assistant model, permission, interaction, reasoning, service tier, prompt, streaming, tool-output, queue/interrupt, reconnect, history, status, diagnostics, transcription, and account usage display.
+- Assistant model, permission, interaction, reasoning effort and summaries, automatic context-compaction limit, service tier, prompt, streaming, tool-output, queue/interrupt, reconnect, history, status, diagnostics, transcription, and account usage display.
+- Skill source enablement, source priority, custom user-selected folders, and per-name conflict resolution.
 
 ### Remove from the visible settings contract
 
@@ -81,6 +84,7 @@ These require source-to-render verification before controls are added.
 ## Continuity state that must stay out of Settings
 
 - Active Browser tabs, URLs, per-tab zoom, color emulation, and device viewport.
+- Main-owned Zyra Browser history and omnibox recency.
 - Retained terminal groups and active terminal IDs.
 - Composer drafts and per-chat composer state.
 - Left/right panel widths and per-chat Inspector width.
@@ -96,6 +100,11 @@ Settings may provide **Reset layout**, **Clear retained Browser workspaces**, or
 Settings should make the following existing behavior discoverable:
 
 - Count and revoke remembered Browser-control sites.
+- Enable or disable Google search suggestions while typing.
+- Enable or disable the default-off built-in Ghostery ad blocker; the first passive ad detection may offer the same persistent choice in Browser.
+- Choose Off, the 45-image included nature pack, or optional Unsplash BYOK for New Tab backgrounds; category, rotation, and pinning remain in the focused background picker.
+- Import sanitized history from explicitly selected external browser profiles.
+- Clear Browser history without removing sign-ins.
 - Clear Browser cache.
 - Clear Browser cookies/authentication.
 - Clear the persistent local Browser profile after explicit confirmation.
@@ -166,6 +175,7 @@ Implemented in the audited Settings pass:
 - The settings loader now validates and bounds persisted strings, paths, arrays, records, numbers, enum values, and theme/accent selections.
 - Cache clearing now targets recent-project and project-view caches instead of accidentally deleting rail-order continuity state.
 - Final consumer review confirmed Windows startup remains main/OS-owned, reduced motion applies through the provider-owned body class, and `assistantUsageDisplayMode` recalculates rendered rate-limit percentages and labels.
+- General > Privacy exposes the main-owned product analytics enable toggle and redacted readiness. Project keys and capture hosts stay outside the device preference schema and never enter renderer persistence.
 - `desktop/scripts/test-settings-contract.ts` covers malformed persistence and legacy migrations.
 
 Still requiring a separately reviewed change:

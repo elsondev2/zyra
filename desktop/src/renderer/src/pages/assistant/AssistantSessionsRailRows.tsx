@@ -18,11 +18,11 @@ import {
 } from '@dnd-kit/sortable'
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from '@dnd-kit/modifiers'
 import { CSS } from '@dnd-kit/utilities'
-import { Bot, ChevronRight, Folder, FolderOpen, MoreVertical } from 'lucide-react'
+import { Bot, ChevronRight, MoreVertical } from 'lucide-react'
 import type { AssistantSession, AssistantThread } from '@shared/assistant/contracts'
 import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
-import ProjectIcon from '@/components/ui/ProjectIcon'
 import { cn } from '@/lib/utils'
+import { AssistantProjectIcon } from './AssistantProjectIcon'
 import {
     buildSessionSubagentTree,
     formatAssistantSidebarRelativeTime,
@@ -48,34 +48,15 @@ export function ProjectGroupIcon({
     collapsed?: boolean
     expanded?: boolean
 }) {
-    if (!group.path) {
-        const FolderIcon = expanded && !collapsed ? FolderOpen : Folder
-        return <FolderIcon size={size} className="shrink-0 text-sparkle-text-muted/65" strokeWidth={1.8} />
-    }
-
-    const hasMeaningfulProjectType = Boolean(
-        group.projectType
-        && !['unknown', 'default', 'folder'].includes(group.projectType)
-    )
-    const hasProjectIconMetadata = Boolean(
-        group.projectIconPath
-        || group.framework
-        || hasMeaningfulProjectType
-    )
-
-    if (!hasProjectIconMetadata) {
-        const FolderIcon = expanded && !collapsed ? FolderOpen : Folder
-        return <FolderIcon size={size} className="shrink-0 text-sparkle-text-muted/65" strokeWidth={1.8} />
-    }
-
     return (
-        <ProjectIcon
-            projectType={hasMeaningfulProjectType ? group.projectType || undefined : undefined}
-            framework={group.framework || undefined}
-            customIconPath={group.projectIconPath}
+        <AssistantProjectIcon
+            projectPath={group.path}
+            projectIconPath={group.projectIconPath}
+            projectType={group.projectType}
+            framework={group.framework}
             size={size}
+            expanded={expanded && !collapsed}
             className={cn(
-                'shrink-0 overflow-hidden rounded-sm',
                 collapsed && 'rounded-[6px]',
                 expanded && 'opacity-95'
             )}

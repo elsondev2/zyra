@@ -46,7 +46,7 @@ function sanitizeAssistantComposerSessionState(value: unknown): AssistantCompose
         contextFiles: contextFiles.length > 0 ? contextFiles : undefined,
         model: typeof record.model === 'string' && record.model.trim().length > 0 ? record.model.trim() : undefined,
         runtimeMode: record.runtimeMode === 'full-access' || record.runtimeMode === 'approval-required' ? record.runtimeMode : undefined,
-        interactionMode: record.interactionMode === 'plan' || record.interactionMode === 'default' ? record.interactionMode : undefined,
+        interactionMode: record.interactionMode === 'plan' || record.interactionMode === 'default' ? 'default' : undefined,
         effort: isAssistantReasoningEffort(record.effort) ? record.effort : undefined,
         fastModeEnabled: typeof record.fastModeEnabled === 'boolean' ? record.fastModeEnabled : undefined
     }

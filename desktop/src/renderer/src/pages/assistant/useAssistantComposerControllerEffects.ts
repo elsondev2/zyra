@@ -1,4 +1,4 @@
-import { useEffect, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from 'react'
+import { useEffect, useLayoutEffect, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from 'react'
 import type { AssistantInteractionMode, AssistantRuntimeMode } from '@shared/assistant/contracts'
 import { TRANSIENT_MENU_DISMISS_EVENT } from '@/lib/transient-menu'
 import {
@@ -154,7 +154,7 @@ export function useAssistantComposerControllerEffects(input: {
         setIsCompactFooter
     } = input
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         const initializationKey = `${sessionId || 'no-session'}:${resetStateToken || 'stable'}`
         if (initializedSessionIdRef.current === initializationKey) return
         initializedSessionIdRef.current = initializationKey

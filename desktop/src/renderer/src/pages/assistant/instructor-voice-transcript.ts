@@ -133,9 +133,14 @@ export function applyRealtimeTranscriptEvent(
         const text = turn.transcript.trim()
         const deduplicatedEntries = removeMatchingComposerResponse(entries, turn.role, text, turn.id)
         const existing = deduplicatedEntries.find((entry) => entry.id === turn.id)
-        if (existing) {
-            return updateEntry(deduplicatedEntries, turn.id, (entry) => ({
+        const latestEntry = deduplicatedEntries.at(-1)
+        const streamingEntry = existing || (
+            latestEntry?.role === turn.role && latestEntry.final === false ? latestEntry : null
+        )
+        if (streamingEntry) {
+            return updateEntry(deduplicatedEntries, streamingEntry.id, (entry) => ({
                 ...entry,
+                id: turn.id,
                 role: turn.role,
                 text: text || entry.text,
                 final: true
@@ -158,7 +163,6 @@ export function applyRealtimeTranscriptEvent(
         if (entries.some((entry) => entry.id === itemId)) return entries
         return [...entries, { id: itemId, role: explicitRole, text: '', final: false }]
     }
-    if (!itemId) return entries
     const role = explicitRole === 'user'
         || type?.includes('input_transcript')
         || type?.includes('input_audio_transcription')
@@ -169,9 +173,26 @@ export function applyRealtimeTranscriptEvent(
         : typeof item?.text === 'string'
             ? item.text
             : ''
-    if (type === 'input_transcript.added'
-        || type === 'output_transcript.added'
-        || type?.endsWith('.transcript.delta')
+    if (type === 'input_transcript.added' || type === 'output_transcript.added') {
+        if (!delta) return entries
+        // Frameless v3 assigns an item ID to each transcript chunk rather than
+        // to the whole turn. Keep the active role's chunks in one provisional
+        // entry; turn.done below finalizes that entry with the complete text.
+        const latest = entries.at(-1)
+        if (latest && latest.role === role && !latest.final) {
+            return updateEntry(entries, latest.id, (entry) => ({
+                ...entry,
+                text: appendTranscriptDelta(entry.text, delta)
+            }))
+        }
+        const fallbackId = itemId
+            || asNonEmptyString(payload?.event_id)
+            || asNonEmptyString(payload?.response_id)
+            || `frameless-${role}-${entries.length + 1}`
+        return [...entries, { id: fallbackId, role, text: delta.trimStart(), final: false }]
+    }
+    if (!itemId) return entries
+    if (type?.endsWith('.transcript.delta')
         || type?.endsWith('.audio_transcript.delta')
         || type?.endsWith('.input_audio_transcription.delta')) {
         if (!delta) return entries

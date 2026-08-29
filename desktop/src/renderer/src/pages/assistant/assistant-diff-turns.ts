@@ -1,4 +1,6 @@
-import type { AssistantActivity, AssistantMessage, AssistantSessionTurnUsageEntry, FileChangeKind } from '@shared/assistant/contracts'
+import type { AssistantActivity, AssistantMessage, FileChangeKind } from '@shared/assistant/contracts'
+import { reconcileAssistantMessageReplays } from '@shared/assistant/message-reconciliation'
+import { findAssistantPersistedTurnAt, reconcileAssistantUserTurnIds, resolveAssistantTurnIdAlias } from '@shared/assistant/turn-reconciliation'
 import { scanPatchFileSummaries } from '@/lib/diffRendering'
 import { getAssistantRelativeFilePath } from './assistant-file-navigation'
 import type { AssistantDiffTarget, AssistantDiffTurn } from './assistant-diff-types'
@@ -89,13 +91,24 @@ function compareTimelineEntries(
     return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)
 }
 
+type AssistantDiffTurnBoundary = {
+    id: string
+    state?: AssistantDiffTurn['state']
+    requestedAt: string
+    startedAt?: string | null
+    completedAt?: string | null
+    updatedAt?: string
+}
+
 type MutableReviewTurn = {
     id: string
     number?: number
+    state: AssistantDiffTurn['state']
     prompt: string
+    promptAvailable: boolean
     promptAttachments: AssistantDiffTurn['promptAttachments']
     response: string
-    historyUnavailable: boolean
+    responseAvailable: boolean
     createdAt: string
     updatedAt: string
     changes: AssistantDiffTurn['changes']
@@ -107,10 +120,10 @@ type MutableReviewTurn = {
 export function buildAssistantDiffTurns(input: {
     messages: AssistantMessage[]
     activities: AssistantActivity[]
-    turns?: AssistantSessionTurnUsageEntry[]
+    turns?: AssistantDiffTurnBoundary[]
     projectRootPath?: string | null
 }): AssistantDiffTurn[] {
-    const sortedMessages = input.messages.slice().sort(compareTimelineEntries)
+    const sortedMessages = reconcileAssistantMessageReplays(input.messages.slice().sort(compareTimelineEntries))
     const sortedFileActivities = input.activities
         .filter((activity) => activity.kind === 'file-change' && readActivityStatus(activity) !== 'failed')
         .slice()
@@ -119,7 +132,16 @@ export function buildAssistantDiffTurns(input: {
         .slice()
         .sort((left, right) => left.requestedAt.localeCompare(right.requestedAt) || left.id.localeCompare(right.id))
     const persistedTurnNumberById = new Map(persistedTurns.map((turn, index) => [turn.id, index + 1]))
-    const persistedTurnByRequestedAt = new Map(persistedTurns.map((turn) => [turn.requestedAt, turn]))
+    const persistedTurnStateById = new Map(persistedTurns.map((turn) => [turn.id, turn.state || 'completed']))
+    const sortedUserMessages = sortedMessages.filter((message) => message.role === 'user')
+    const { resolvedTurnIdByMessageId, turnIdAliases } = reconcileAssistantUserTurnIds(sortedUserMessages, persistedTurns)
+    const resolveTimelineTurnId = (createdAt: string): string | null => {
+        for (let index = sortedUserMessages.length - 1; index >= 0; index -= 1) {
+            const user = sortedUserMessages[index]
+            if (user && user.createdAt <= createdAt) return resolvedTurnIdByMessageId.get(user.id) || null
+        }
+        return null
+    }
     const resolvePersistedTurnNumberAt = (createdAt: string): number => {
         let low = 0
         let high = persistedTurns.length
@@ -148,33 +170,44 @@ export function buildAssistantDiffTurns(input: {
             .filter((message) => message.role === 'assistant')
         const parsedPrompt = parseUserMessageAttachments(prompt.text || '')
         const promptFallback = parsedPrompt.attachments.length > 0 ? 'Attachment prompt' : 'Message turn'
-        const inferredMessageTurnId = responseMessages.find((message) => message.turnId)?.turnId || null
-        const persistedPromptTurn = persistedTurnByRequestedAt.get(prompt.createdAt) || null
+        const inferredMessageTurnId = resolveAssistantTurnIdAlias(responseMessages.find((message) => message.turnId)?.turnId, turnIdAliases)
         const nextPrompt = sortedMessages[nextUserIndex]
         const inferredActivityTurnId = sortedFileActivities.find((activity) => (
             activity.createdAt >= prompt.createdAt
             && (!nextPrompt || activity.createdAt < nextPrompt.createdAt)
             && activity.turnId
         ))?.turnId || null
-        const turnId = prompt.turnId || persistedPromptTurn?.id || inferredMessageTurnId || inferredActivityTurnId || `message:${prompt.id}`
-        const matchingResponses = responseMessages.filter((message) => !message.turnId || message.turnId === turnId)
+        const turnId = resolvedTurnIdByMessageId.get(prompt.id)
+            || resolveAssistantTurnIdAlias(prompt.turnId, turnIdAliases)
+            || inferredMessageTurnId
+            || resolveAssistantTurnIdAlias(inferredActivityTurnId, turnIdAliases)
+            || `message:${prompt.id}`
+        const matchingResponses = responseMessages.filter((message) => {
+            const responseTurnId = resolveAssistantTurnIdAlias(message.turnId, turnIdAliases)
+            return !responseTurnId || responseTurnId === turnId
+        })
         const finalResponse = matchingResponses[matchingResponses.length - 1]
         const existing = mutableTurns.get(turnId)
         if (existing) {
             existing.number = existing.number || persistedTurnNumberById.get(turnId)
+            existing.state = persistedTurnStateById.get(turnId) || existing.state
             existing.prompt = normalizeText(parsedPrompt.body, existing.prompt || promptFallback)
+            existing.promptAvailable = true
             existing.promptAttachments = parsedPrompt.attachments
             existing.response = normalizeMessageText(finalResponse, existing.response, true)
+            existing.responseAvailable = existing.responseAvailable || Boolean(finalResponse?.text.trim())
             existing.updatedAt = finalResponse?.updatedAt || finalResponse?.createdAt || existing.updatedAt
             continue
         }
         mutableTurns.set(turnId, {
             id: turnId,
             number: persistedTurnNumberById.get(turnId),
+            state: persistedTurnStateById.get(turnId) || 'completed',
             prompt: normalizeText(parsedPrompt.body, promptFallback),
+            promptAvailable: true,
             promptAttachments: parsedPrompt.attachments,
-            response: normalizeMessageText(finalResponse, 'No final response', true),
-            historyUnavailable: false,
+            response: normalizeMessageText(finalResponse, 'Agent did not respond', true),
+            responseAvailable: Boolean(finalResponse?.text.trim()),
             createdAt: prompt.createdAt,
             updatedAt: finalResponse?.updatedAt || finalResponse?.createdAt || prompt.updatedAt || prompt.createdAt,
             changes: [],
@@ -187,7 +220,23 @@ export function buildAssistantDiffTurns(input: {
     for (const activity of sortedFileActivities) {
         const patch = getActivityPatch(activity)
         if (!patch) continue
-        const turnId = activity.turnId || `activity:${activity.id}`
+        const sourceTurnId = resolveAssistantTurnIdAlias(activity.turnId, turnIdAliases)
+        const sourceTurnAlreadyKnown = Boolean(
+            sourceTurnId
+            && (persistedTurnNumberById.has(sourceTurnId) || mutableTurns.has(sourceTurnId))
+        )
+        const persistedTurn = sourceTurnAlreadyKnown
+            ? null
+            : findAssistantPersistedTurnAt(persistedTurns, activity.createdAt)
+        const timelineTurnId = resolveTimelineTurnId(activity.createdAt)
+        const turnId = sourceTurnAlreadyKnown
+            ? sourceTurnId!
+            : sourceTurnId
+                ? persistedTurn?.id || timelineTurnId || sourceTurnId
+                : timelineTurnId || persistedTurn?.id || `activity:${activity.id}`
+        if (persistedTurn && activity.turnId && activity.turnId !== persistedTurn.id) {
+            turnIdAliases.set(activity.turnId, persistedTurn.id)
+        }
         const summaries = scanPatchFileSummaries(patch)
         const paths = summaries.length > 0
             ? summaries.map((summary) => ({
@@ -209,10 +258,12 @@ export function buildAssistantDiffTurns(input: {
             turn = {
                 id: turnId,
                 number: persistedTurnNumberById.get(turnId),
-                prompt: 'File-change activity',
+                state: persistedTurnStateById.get(turnId) || (readActivityStatus(activity) === 'running' ? 'running' : 'completed'),
+                prompt: 'File changes recovered',
+                promptAvailable: false,
                 promptAttachments: [],
-                response: 'Response history unavailable',
-                historyUnavailable: true,
+                response: 'Agent did not respond',
+                responseAvailable: false,
                 createdAt: activity.createdAt,
                 updatedAt: activity.createdAt,
                 changes: [],
@@ -252,10 +303,18 @@ export function buildAssistantDiffTurns(input: {
         mutableTurns.set(persistedTurn.id, {
             id: persistedTurn.id,
             number: persistedTurnNumberById.get(persistedTurn.id),
-            prompt: 'Prompt history unavailable',
+            state: persistedTurn.state || 'completed',
+            prompt: persistedTurn.state === 'running'
+                ? 'Running turn'
+                : persistedTurn.state === 'error'
+                    ? 'Failed turn'
+                    : persistedTurn.state === 'interrupted'
+                        ? 'Interrupted turn'
+                        : 'Turn history unavailable',
+            promptAvailable: false,
             promptAttachments: [],
-            response: 'Response history unavailable',
-            historyUnavailable: true,
+            response: 'Agent did not respond',
+            responseAvailable: false,
             createdAt: persistedTurn.requestedAt,
             updatedAt: persistedTurn.updatedAt || persistedTurn.completedAt || persistedTurn.startedAt || persistedTurn.requestedAt,
             changes: [],
@@ -299,7 +358,7 @@ export function buildAssistantDiffTurns(input: {
             turn.prompt,
             attachmentSearchText,
             turn.response,
-            turn.historyUnavailable ? 'history unavailable missing stored message' : '',
+            !turn.promptAvailable || !turn.responseAvailable ? 'history unavailable missing stored message' : '',
             turn.id,
             `turn ${number}`,
             `#${number}`,
@@ -312,10 +371,14 @@ export function buildAssistantDiffTurns(input: {
         return {
             id: turn.id,
             number,
+            state: turn.state,
+            reviewStatus: null,
             prompt: turn.prompt,
+            promptAvailable: turn.promptAvailable,
             promptAttachments: turn.promptAttachments,
             response: turn.response,
-            historyUnavailable: turn.historyUnavailable,
+            responseAvailable: turn.responseAvailable,
+            historyUnavailable: !turn.promptAvailable || !turn.responseAvailable,
             searchText,
             createdAt: turn.createdAt,
             updatedAt: turn.updatedAt,

@@ -106,6 +106,75 @@ export function stripSerializedAssistantAttachments(text: string): string {
     return parseSerializedAssistantMessage(text).body
 }
 
+function isSerializedImageAttachment(attachment: SerializedAssistantAttachment): boolean {
+    return String(attachment.type || '').trim().toUpperCase() === 'IMAGE'
+        || String(attachment.mime || '').trim().toLowerCase().startsWith('image/')
+        || String(attachment.content || attachment.preview || '').trim().toLowerCase().startsWith('data:image/')
+}
+
+function isSerializedCanonicalMediaAttachment(attachment: SerializedAssistantAttachment): boolean {
+    const path = String(attachment.path || '').replace(/\\/g, '/').toLowerCase()
+    return /canonical zyra transcript/i.test(String(attachment.origin || ''))
+        || path.includes('/assistant/canonical-media/')
+}
+
+function serializeAssistantAttachment(attachment: SerializedAssistantAttachment, index: number): string {
+    const referenceKey = isSerializedClipboardAttachment(attachment.path) ? 'ref' : 'path'
+    const details = [
+        attachment.path ? `${referenceKey}: ${attachment.path}` : null,
+        attachment.mime ? `mime: ${attachment.mime}` : null,
+        attachment.size ? `size: ${attachment.size}` : null,
+        attachment.preview ? `preview: ${attachment.preview}` : null,
+        attachment.note ? `note: ${attachment.note}` : null,
+        attachment.origin ? `origin: ${attachment.origin}` : null,
+        attachment.content ? `content:\n${attachment.content}` : null
+    ].filter((value): value is string => Boolean(value))
+    return [`${index + 1}. ${attachment.name || `Attachment ${index + 1}`} [${attachment.type || 'FILE'}]`, ...details].join('\n')
+}
+
+function renameSerializedAttachmentSection(section: string, name: string | undefined): string {
+    if (!name) return section
+    const lines = String(section || '').trim().split(/\r?\n/)
+    const header = lines[0]?.trim().match(ATTACHMENT_HEADER_PATTERN)
+    if (!header || !lines[0]) return section
+    lines[0] = lines[0].replace(header[1] || '', name)
+    return lines.join('\n')
+}
+
+function renumberSerializedAttachmentSection(section: string, index: number): string {
+    const lines = String(section || '').trim().split(/\r?\n/)
+    if (lines.length === 0 || !lines[0]) return ''
+    lines[0] = ATTACHMENT_HEADER_PATTERN.test(lines[0].trim())
+        ? lines[0].replace(/^\s*\d+\./, `${index + 1}.`)
+        : `${index + 1}. Attachment ${index + 1} [FILE]`
+    return lines.join('\n')
+}
+
+export function replaceSerializedAssistantImageAttachments(text: string, replacementSections: string[]): string {
+    const parsed = parseSerializedAssistantMessage(text)
+    const replacements = replacementSections.map((section) => String(section || '').trim()).filter(Boolean)
+    const sections: string[] = []
+    let replacementIndex = 0
+    parsed.attachments.forEach((attachment, attachmentIndex) => {
+        if (!isSerializedImageAttachment(attachment)) {
+            sections.push(serializeAssistantAttachment(attachment, attachmentIndex))
+            return
+        }
+        if (isSerializedCanonicalMediaAttachment(attachment)) return
+        const replacement = replacements[replacementIndex]
+        replacementIndex += 1
+        sections.push(replacement
+            ? renameSerializedAttachmentSection(replacement, attachment.name)
+            : serializeAssistantAttachment(attachment, attachmentIndex))
+    })
+    sections.push(...replacements.slice(replacementIndex))
+    const normalizedSections = sections
+        .map(renumberSerializedAttachmentSection)
+        .filter(Boolean)
+    if (normalizedSections.length === 0) return parsed.body
+    return `${parsed.body.trimEnd()}\n\nAttached files (${normalizedSections.length}):\n${normalizedSections.join('\n\n')}`.trimStart()
+}
+
 export function isSerializedClipboardAttachment(value: SerializedAssistantAttachment | string | null | undefined): boolean {
     if (typeof value === 'string') {
         return value.trim().toLowerCase().startsWith('clipboard://')

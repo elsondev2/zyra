@@ -2,6 +2,7 @@ import type { ReactNode, RefObject } from 'react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { LegendListRef } from '@legendapp/list/react'
 import type { AssistantActivity, AssistantMessage, AssistantProposedPlan, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
+import { resolveAssistantMessageReferenceId } from '@shared/assistant/message-identity'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import type { AssistantTextStreamingMode, AssistantToolOutputDefaultMode } from '@/lib/settings'
 import { prewarmMarkdownRenders } from '@/components/ui/MarkdownRenderer'
@@ -85,9 +86,13 @@ type AssistantTimelineProps = {
     onViewDiff?: (target: AssistantDiffTarget) => void
     contentInsetEndAdjustment?: number
     hasOlder?: boolean
+    hasNewer?: boolean
     loadingOlder?: boolean
+    loadingNewer?: boolean
     loadOlderError?: string | null
-    onLoadOlder?: () => void
+    loadNewerError?: string | null
+    onLoadOlder?: (turnLimit?: number) => Promise<boolean> | boolean | void
+    onLoadNewer?: (turnLimit?: number) => Promise<boolean> | boolean | void
     onScrollContainer?: (element: HTMLDivElement) => void
 }
 
@@ -124,9 +129,13 @@ function AssistantTimelineImpl({
     onViewDiff,
     contentInsetEndAdjustment = 0,
     hasOlder = false,
+    hasNewer = false,
     loadingOlder = false,
+    loadingNewer = false,
     loadOlderError = null,
+    loadNewerError = null,
     onLoadOlder,
+    onLoadNewer,
     onScrollContainer
 }: AssistantTimelineProps) {
     const [initialLayoutWindowKey, setInitialLayoutWindowKey] = useState<string | null>(null)
@@ -153,6 +162,18 @@ function AssistantTimelineImpl({
     }, [windowKey])
 
     const entries = useAssistantTimelineEntries(messages, activities, proposedPlans)
+    const resolvedLatestAssistantMessageId = useMemo(
+        () => resolveAssistantMessageReferenceId(messages, latestAssistantMessageId),
+        [latestAssistantMessageId, messages]
+    )
+    const turnUsageByAssistantMessageId = useMemo(() => {
+        const next = new Map<string, AssistantSessionTurnUsageEntry>()
+        for (const usage of turnUsageById?.values() || []) {
+            const messageId = resolveAssistantMessageReferenceId(messages, usage.assistantMessageId)
+            if (messageId) next.set(messageId, usage)
+        }
+        return next
+    }, [messages, turnUsageById])
     const listRef = useRef<LegendListRef | null>(null)
     const pendingActivityRevealRef = useRef<string | null>(null)
     const revealActivityInDom = useCallback((activityId: string): boolean => {
@@ -185,11 +206,11 @@ function AssistantTimelineImpl({
             rows: baseRows,
             messages,
             turnUsageById,
-            latestAssistantMessageId,
+            latestAssistantMessageId: resolvedLatestAssistantMessageId,
             latestTurnStartedAt,
             isWorking
         }),
-        [baseRows, isWorking, latestAssistantMessageId, latestTurnStartedAt, messages, turnUsageById]
+        [baseRows, isWorking, latestTurnStartedAt, messages, resolvedLatestAssistantMessageId, turnUsageById]
     )
     const lastAssistantMessageIdByTurn = useMemo(() => {
         const next = new Map<string, string>()
@@ -257,27 +278,13 @@ function AssistantTimelineImpl({
                     startedAt={row.startedAt}
                     completedAt={row.completedAt}
                     running={row.running}
+                    collapseForTerminalResponse={row.terminalResponseVisible}
                     outcome={row.outcome}
                     renderChildren={() => (
                         <div className="[&>*:last-child]:pb-0">
                             {row.rows.map((workRow) => renderRowContainer(workRow, renderRow(workRow)))}
                         </div>
                     )}
-                    renderLiveNarration={row.liveNarrationRow
-                        ? (expanded) => (
-                            <div
-                                data-assistant-live-narration="true"
-                                data-display-mode="compact"
-                                aria-hidden={expanded}
-                                className={cn('pt-2', expanded && 'hidden')}
-                            >
-                                {renderRow(row.liveNarrationRow!, {
-                                    compactLiveNarration: true,
-                                    liveNarration: true
-                                })}
-                            </div>
-                        )
-                        : undefined}
                 />
             )
         }
@@ -398,10 +405,14 @@ function AssistantTimelineImpl({
             <TimelineMessage
                 key={options.liveNarration ? 'active-live-narration' : row.id}
                 message={row.message}
-                isLatestAssistant={row.message.role === 'assistant' && row.message.id === latestAssistantMessageId}
+                isLatestAssistant={row.message.role === 'assistant' && row.message.id === resolvedLatestAssistantMessageId}
                 isLastAssistantInTurn={row.message.role === 'assistant' && !!row.message.turnId && lastAssistantMessageIdByTurn.get(row.message.turnId) === row.message.id}
                 latestTurnStartedAt={latestTurnStartedAt}
-                turnUsage={row.message.role === 'assistant' && row.message.turnId ? (turnUsageById?.get(row.message.turnId) || null) : null}
+                turnUsage={row.message.role === 'assistant'
+                    ? (row.message.turnId ? turnUsageById?.get(row.message.turnId) : null)
+                        || turnUsageByAssistantMessageId.get(row.message.id)
+                        || null
+                    : null}
                 deleting={row.message.id === deletingMessageId}
                 assistantTextStreamingMode={assistantTextStreamingMode}
                 compactLiveNarration={options.compactLiveNarration}
@@ -438,10 +449,15 @@ function AssistantTimelineImpl({
             listRef={listRef}
             scrollContainerRef={scrollContainerRef}
             contentInsetEndAdjustment={contentInsetEndAdjustment}
+            isWorking={isWorking}
             hasOlder={hasOlder}
+            hasNewer={hasNewer}
             loadingOlder={loadingOlder}
+            loadingNewer={loadingNewer}
             loadOlderError={loadOlderError}
+            loadNewerError={loadNewerError}
             onLoadOlder={onLoadOlder}
+            onLoadNewer={onLoadNewer}
             onScrollContainer={onScrollContainer}
             onInitialLayout={handleInitialLayout}
             renderRow={renderRow}

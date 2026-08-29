@@ -51,14 +51,24 @@ assert.doesNotMatch(capabilityProbe, /node:child_process|\b(?:spawn|execFile|exe
 assert.match(capabilityProbe, /createChatGptRealtimeCapabilityReport/u, "Voice capability discovery must use the deterministic manifest");
 
 const accountBoundary = read("src/chatgpt-account.mjs");
-assert.match(accountBoundary, /backend-api\/codex\/realtime\/calls\?intent=quicksilver&architecture=avas/u);
-assert.match(accountBoundary, /"openai-alpha": "quicksilver=v2"/u);
+const realtimeContract = read("src/chatgpt-realtime-contract.mjs");
+assert.match(realtimeContract, /backend-api\/codex\/realtime\/calls\?intent=quicksilver&architecture=avas/u);
+assert.match(realtimeContract, /gpt-live-1-codex/u);
+assert.match(realtimeContract, /quicksilver=v2/u);
+assert.match(accountBoundary, /"openai-alpha": CHATGPT_REALTIME_ALPHA_HEADER/u);
 assert.match(accountBoundary, /"ChatGPT-Account-Id"/u);
 assert.match(accountBoundary, /\{ sdp, session \}/u);
 assert.doesNotMatch(accountBoundary, /node:child_process|\b(?:spawn|execFile)\s*\(/u, "ChatGPT account calls must remain direct HTTP requests");
 
 const utilityBridge = read("src/zyra-ui-bridge.mjs");
 assert.match(utilityBridge, /handleGenerateText[\s\S]*?noSession: true,[\s\S]*?noTools: ["']all["'],/u, "utility text generation must be ephemeral and tool-free");
+assert.match(utilityBridge, /buildCompletedTitleTranscript\(targetRuntime\.session\.state\?\.messages\)/u, "TUI titles use the completed canonical user/final-assistant turn");
+assert.match(utilityBridge, /runtime !== targetRuntime/u, "a delayed TUI title cannot overwrite a different Desktop-selected chat");
+const sdkRuntime = read("src/zyra-sdk.mjs");
+assert.match(sdkRuntime, /removeZyraTitleGenerationMessages\(contextMessages\)/u, "legacy title utility turns are removed from resumed model context");
+
+const tuiApp = read("src/zyra-app.mjs");
+assert.match(tuiApp, /activeRun \|\| runtime\.session\.isStreaming/u, "resumed TUI input follows a canonical turn that another surface already owns");
 
 const piRuntime = read("desktop/src/main/assistant/zyra-pi-runtime.ts");
 assert.match(piRuntime, /async generateText\(/u, "Pi runtime must expose utility text generation");

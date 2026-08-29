@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import initSqlJs from 'sql.js/dist/sql-asm.js'
@@ -659,6 +659,16 @@ assert.ok(codexEvents.some((event) => event.type === 'realtime.session.error'
     && event.category === 'incompatible_protocol'))
 await codexAdapter.close(codexHandle.adapterSessionId, 'test_complete')
 codexAdapter.dispose()
+
+const assistantServiceSource = readFileSync(new URL('../src/main/assistant/service.ts', import.meta.url), 'utf8')
+const canonicalVoiceProjectionSource = assistantServiceSource.match(
+    /private async projectCanonicalVoiceMessage[\s\S]*?\n    private voiceContextVersion/u
+)?.[0] || ''
+assert.match(
+    canonicalVoiceProjectionSource,
+    /queueGeneratedSessionTitle/u,
+    'a committed Voice user transcript must enter the normal model-backed chat-title generation path'
+)
 
 transcriptCommitter.dispose()
 voiceSessions.dispose()

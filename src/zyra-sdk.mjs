@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
@@ -42,6 +42,7 @@ import { AgentFleetController } from "./agents/runtime/fleet-controller.mjs";
 import { createFleetTools } from "./agents/tools.mjs";
 import { WorkflowRuntime } from "./workflows/runtime.mjs";
 import { DEFAULT_TERMINAL_THEME, listTerminalThemes, resolveTerminalTheme } from "./terminal-theme.mjs";
+import { removeZyraTitleGenerationMessages } from "./title-generation.mjs";
 import {
   checkModelAvailability,
   formatModelAvailabilitySummary,
@@ -75,11 +76,26 @@ import {
   toPiThinkingLevel,
 } from "./thinking-levels.mjs";
 import {
+  applyAssistantReasoningSummary,
+  DEFAULT_ASSISTANT_CONTEXT_COMPACTION_THRESHOLD_TOKENS,
+  DEFAULT_ASSISTANT_REASONING_SUMMARY,
+  normalizeAssistantContextCompactionThreshold,
+  normalizeAssistantReasoningSummary,
+  resolveAssistantContextCompactionThreshold,
+  shouldCompactAssistantContext,
+} from "./assistant-runtime-policy.mjs";
+import {
   DEFAULT_MANAGED_BASH_AUTO_POLL_MS,
   ZYRA_WEB_FETCH_TOOL_NAME,
   ZYRA_WEB_SEARCH_TOOL_NAME,
 } from "./tool-contracts.mjs";
 import { installZyraNextTurnCheckpoint } from "./zyra-next-turn-checkpoint.mjs";
+import { createRequestUserInputTool } from "./request-user-input-tool.mjs";
+import {
+  listZyraPromptResourceManifest,
+  readZyraSkillSourceSettings,
+  resolveZyraSkillSources,
+} from "./zyra-prompt-resources.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ZYRA_THEME_CUSTOM_TYPE = "zyra.theme.v1";
@@ -304,6 +320,9 @@ function createZyraBuiltinExtensions(options = {}) {
   if (options.thinkingState) {
     extensions.push(createGpt56ThinkingExtension(options.thinkingState));
   }
+  if (options.reasoningSummaryState) {
+    extensions.push(createReasoningSummaryExtension(options.reasoningSummaryState));
+  }
   if (options.permissionRequest) {
     extensions.push(createZyraPermissionGateExtension({
       project: options.project,
@@ -354,6 +373,24 @@ function createGpt56ThinkingExtension(state) {
   };
 }
 
+function createReasoningSummaryExtension(state) {
+  return {
+    path: "<zyra:reasoning-summary>",
+    resolvedPath: "<zyra:reasoning-summary>",
+    sourceInfo: { source: "builtin", scope: "temporary", label: "Zyra reasoning summaries" },
+    handlers: new Map([
+      ["before_provider_request", [
+        (event) => applyAssistantReasoningSummary(event.payload, state?.value),
+      ]],
+    ]),
+    tools: new Map(),
+    messageRenderers: new Map(),
+    commands: new Map(),
+    flags: new Map(),
+    shortcuts: new Map(),
+  };
+}
+
 function isCodexResponsesPayload(payload) {
   return Boolean(
     payload &&
@@ -368,6 +405,7 @@ function isCodexResponsesPayload(payload) {
 
 function createFastResourceLoader(project, options = {}) {
   const runtime = options.extensionRuntime ?? createEmptyExtensionRuntime();
+  let skillsResult = options.skillsResult ?? { skills: [], diagnostics: [] };
   const extensionsResult = {
     extensions: createZyraBuiltinExtensions(options),
     errors: [],
@@ -375,14 +413,18 @@ function createFastResourceLoader(project, options = {}) {
   };
   return {
     getExtensions: () => extensionsResult,
-    getSkills: () => ({ skills: [], diagnostics: [] }),
+    getSkills: () => skillsResult,
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
     getAgentsFiles: () => ({ agentsFiles: [] }),
     getSystemPrompt: () => undefined,
     getAppendSystemPrompt: () => [],
     extendResources: () => {},
-    reload: async () => {},
+    reload: async () => {
+      if (typeof options.loadSkills === "function") {
+        skillsResult = await options.loadSkills();
+      }
+    },
     project,
   };
 }
@@ -393,14 +435,32 @@ async function createZyraResourceLoader(project, options = {}) {
     loadPiPackage(),
   ]);
   const agentDir = getAgentDir();
-  const settingsManager = SettingsManager.create(project, agentDir);
+  const projectTrusted = options.projectTrusted === true;
+  const settingsManager = SettingsManager.create(project, agentDir, { projectTrusted });
+  const skillSources = await resolveZyraSkillSources({ project, root: ROOT, projectTrusted });
+  const loadSkills = async () => loadZyraSkills(project, {
+    projectTrusted,
+    sources: await resolveZyraSkillSources({ project, root: ROOT, projectTrusted }),
+  });
   if (options.enablePiExtensions) {
-    const loader = new DefaultResourceLoader({ cwd: project, agentDir, settingsManager });
+    let zyraSkills = await loadSkills();
+    const loader = new DefaultResourceLoader({
+      cwd: project,
+      agentDir,
+      settingsManager,
+      additionalSkillPaths: skillSources.map((source) => source.dir),
+      skillsOverride: () => zyraSkills,
+    });
     await loader.reload();
     return {
       agentDir,
       settingsManager,
-      resourceLoader: withZyraBuiltinExtensions(loader, options),
+      resourceLoader: withZyraBuiltinExtensions(loader, {
+        ...options,
+        beforeReload: async () => {
+          zyraSkills = await loadSkills();
+        },
+      }),
     };
   }
   const resourceLoader = createFastResourceLoader(project, {
@@ -410,12 +470,15 @@ async function createZyraResourceLoader(project, options = {}) {
     permissionRequest: options.permissionRequest,
     getPermissionMode: options.getPermissionMode,
     extensionRuntime: createExtensionRuntime(),
+    skillsResult: await loadSkills(),
+    loadSkills,
   });
   return { agentDir, settingsManager, resourceLoader };
 }
 
 function withZyraBuiltinExtensions(resourceLoader, options = {}) {
   const getExtensions = resourceLoader.getExtensions.bind(resourceLoader);
+  const reload = resourceLoader.reload.bind(resourceLoader);
   return new Proxy(resourceLoader, {
     get(target, property, receiver) {
       if (property === "getExtensions") {
@@ -425,6 +488,12 @@ function withZyraBuiltinExtensions(resourceLoader, options = {}) {
             ...loaded,
             extensions: [...createZyraBuiltinExtensions(options), ...(loaded.extensions ?? [])],
           };
+        };
+      }
+      if (property === "reload") {
+        return async () => {
+          await options.beforeReload?.();
+          return reload();
         };
       }
       const value = Reflect.get(target, property, receiver);
@@ -626,6 +695,12 @@ export async function createZyraSession(options = {}) {
   const startupPreferences = resolveZyraStartupPreferences(project, options, preferences);
   const thinking = startupPreferences.thinking;
   const thinkingState = { value: thinking };
+  const reasoningSummaryState = {
+    value: normalizeAssistantReasoningSummary(options.reasoningSummary ?? DEFAULT_ASSISTANT_REASONING_SUMMARY),
+  };
+  const contextCompactionThresholdTokens = normalizeAssistantContextCompactionThreshold(
+    options.contextCompactionThresholdTokens ?? DEFAULT_ASSISTANT_CONTEXT_COMPACTION_THRESHOLD_TOKENS,
+  );
 
   if (!existsSync(project)) {
     throw new Error(`Project path does not exist: ${project}`);
@@ -675,9 +750,11 @@ export async function createZyraSession(options = {}) {
     enablePiExtensions: options.enablePiExtensions || process.env.ZYRA_ENABLE_PI_EXTENSIONS === "1",
     codexServiceTierState,
     thinkingState,
+    reasoningSummaryState,
     permissionRequest: options.permissionRequest,
     getPermissionMode: options.getPermissionMode,
     project,
+    projectTrusted: options.projectTrusted === true || preferences.projectTrusted === true,
   });
   const cwd = sessionManager.getCwd?.() ?? project;
   const managedBash = createManagedBashState();
@@ -703,6 +780,7 @@ export async function createZyraSession(options = {}) {
         shellPath: settingsManager?.getShellPath?.(),
         commandPrefix: settingsManager?.getShellCommandPrefix?.(),
       }),
+      createRequestUserInputTool({ requestUserInput: options.requestUserInput }),
       createZyraWebSearchTool(),
       createZyraWebFetchTool(),
       createZyraWriteTool({
@@ -720,6 +798,12 @@ export async function createZyraSession(options = {}) {
     ],
     ...startupResources,
   });
+
+  const contextMessages = result.session.state?.messages;
+  if (Array.isArray(contextMessages)) {
+    const filteredMessages = removeZyraTitleGenerationMessages(contextMessages);
+    if (filteredMessages.length !== contextMessages.length) contextMessages.splice(0, contextMessages.length, ...filteredMessages);
+  }
 
   browserSessionRef.current = result.session;
   installZyraNextTurnCheckpoint(result.session, managedBash, {
@@ -817,6 +901,7 @@ export async function createZyraSession(options = {}) {
 
   return {
     session: result.session,
+    resourceLoader: startupResources.resourceLoader,
     root: ROOT,
     project,
     sessions,
@@ -828,6 +913,9 @@ export async function createZyraSession(options = {}) {
     memoryStartup,
     thinking: effectiveThinking,
     thinkingState,
+    reasoningSummary: reasoningSummaryState.value,
+    reasoningSummaryState,
+    contextCompactionThresholdTokens,
     webSearch: startupPreferences.webSearch,
     webFetch: startupPreferences.webFetch,
     statusLine: startupPreferences.statusLine,
@@ -974,6 +1062,7 @@ export async function listAvailableModels(options = {}) {
     description: getModelCompatibilityLabel(model)
       ?? (model.name && model.name !== model.id ? model.name : model.provider),
     supportedEfforts: getModelThinkingLevels(model),
+    contextWindow: Number(model.contextWindow) || null,
   }));
 }
 
@@ -1303,6 +1392,7 @@ async function createZyraMemoryWorkerSession({ model } = {}) {
     skipProjectMemory: true,
     skipProfileInjection: true,
     model: model ?? defaults.model,
+    reasoningSummary: "auto",
     surface: "memory-worker",
   });
   upsertSystemPromptBlock(worker.session, "ZYRA_MEMORY_WORKER", [
@@ -1323,9 +1413,22 @@ function memoryRunner(root = defaults.dataRoot) {
 }
 
 export async function runZyraPrompt(runtime, prompt, options = {}) {
+  const promptResource = expandZyraPromptResource(runtime, prompt);
+  const expanded = expandFileMentions(runtime, promptResource);
+  const layeredMemoryPrompt = injectLayeredMemory(runtime.session, defaults.dataRoot, expanded.text);
+  const additionalContextTokens = layeredMemoryPrompt
+    ? estimateMessageTokens({
+        role: "system",
+        content: [{ type: "text", text: layeredMemoryPrompt }],
+        timestamp: Date.now(),
+      })
+    : 0;
+  await compactZyraContextBeforePrompt(runtime, expanded.text, {
+    images: options.images,
+    thresholdTokens: options.contextCompactionThresholdTokens,
+    additionalContextTokens,
+  });
   const beforeEntryCount = sessionEntries(runtime).length;
-  const expanded = expandFileMentions(runtime, prompt);
-  injectLayeredMemory(runtime.session, defaults.dataRoot, expanded.text);
   try {
     await runtime.session.prompt(expanded.text, { source: "interactive", images: options.images });
   } finally {
@@ -1336,7 +1439,8 @@ export async function runZyraPrompt(runtime, prompt, options = {}) {
 
 export async function queueZyraMidRunInput(runtime, prompt, options = {}) {
   const mode = normalizeInterruptModePreference(options.mode) ?? runtime.interruptMode ?? "steer";
-  const expanded = expandFileMentions(runtime, prompt);
+  const promptResource = expandZyraPromptResource(runtime, prompt);
+  const expanded = expandFileMentions(runtime, promptResource);
   injectLayeredMemory(runtime.session, defaults.dataRoot, expanded.text);
   if (mode === "queue") {
     await runtime.session.followUp(expanded.text, options.images);
@@ -1358,7 +1462,8 @@ export async function runZyraBackgroundTextPrompt(runtime, prompt) {
 
 export async function runZyraPrintPrompt(runtime, prompt, options = {}) {
   const beforeEntryCount = sessionEntries(runtime).length;
-  const expanded = expandFileMentions(runtime, prompt);
+  const promptResource = expandZyraPromptResource(runtime, prompt);
+  const expanded = expandFileMentions(runtime, promptResource);
   injectLayeredMemory(runtime.session, defaults.dataRoot, expanded.text);
   try {
     await runtime.session.prompt(expanded.text, { source: "print", images: options.images });
@@ -1908,9 +2013,10 @@ export function listCustomCommands(runtime) {
   const cached = commandCache.get(cacheKey);
   if (cached) return cached;
 
-  const dirs = getCustomCommandDirs(runtime);
+  const sources = getCustomCommandSources(runtime);
   const commands = [];
-  for (const dir of dirs) {
+  for (const source of sources) {
+    const dir = source.dir;
     if (!existsSync(dir)) continue;
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".md")) continue;
@@ -1920,6 +2026,7 @@ export function listCustomCommands(runtime) {
       commands.push({
         name,
         file,
+        scope: source.scope,
         description: extractCommandDescription(text) ?? "custom prompt",
       });
     }
@@ -1967,10 +2074,7 @@ export async function reloadZyraRuntime(runtime) {
 }
 
 export function getCustomCommandScopes(runtime) {
-  return getCustomCommandDirs(runtime).map((dir) => ({
-    dir,
-    scope: path.resolve(dir) === path.resolve(path.join(defaults.root, "commands")) ? "global" : "project",
-  }));
+  return getCustomCommandSources(runtime).map((source) => ({ ...source }));
 }
 
 export function loadCustomCommand(runtime, commandName, args = "") {
@@ -1983,6 +2087,62 @@ export function loadCustomCommand(runtime, commandName, args = "") {
   return argText ? `${body}\n\nUser arguments:\n${argText}` : body;
 }
 
+export function listZyraSkills(runtime) {
+  const skills = runtime?.resourceLoader?.getSkills?.()?.skills ?? [];
+  return skills
+    .map((skill) => ({
+      ...skill,
+      scope: skill.zyraScope ?? resolveZyraResourceScope(skill.filePath, runtime?.project),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export function loadZyraSkillPrompt(runtime, skillName, args = "") {
+  const name = String(skillName ?? "")
+    .replace(/^\//, "")
+    .replace(/^skill:/i, "")
+    .trim()
+    .toLowerCase();
+  const skill = listZyraSkills(runtime).find((item) => item.name.toLowerCase() === name);
+  if (!skill) return undefined;
+
+  const skillPath = path.resolve(skill.filePath);
+  const size = statSync(skillPath).size;
+  if (size > 1024 * 1024) throw new Error(`Skill ${skill.name} exceeds the 1 MB execution limit.`);
+  const instructions = readFileSync(skillPath, "utf8").trim();
+  if (!instructions) throw new Error(`Skill ${skill.name} has no instructions.`);
+  const argText = String(args ?? "").trim();
+  return [
+    `Use the ${skill.name} skill for this request.`,
+    `Skill location: ${skillPath}`,
+    instructions,
+    argText ? `User: ${argText}` : "User: Start the skill workflow for the current request.",
+  ].join("\n\n");
+}
+
+export function expandZyraPromptResource(runtime, prompt) {
+  const text = String(prompt ?? "");
+  const invocation = text.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/);
+  if (!invocation) return text;
+
+  const commandName = invocation[1];
+  const args = invocation[2] ?? "";
+  if (commandName.toLowerCase().startsWith("skill:")) {
+    return loadZyraSkillPrompt(runtime, commandName, args) ?? text;
+  }
+  return loadCustomCommand(runtime, commandName, args) ?? text;
+}
+
+export async function listZyraPromptResources(options = {}) {
+  const project = path.resolve(options.project ?? defaults.project);
+  const preferences = readProjectPreferences(project);
+  return listZyraPromptResourceManifest({
+    project,
+    root: defaults.root,
+    projectTrusted: options.projectTrusted === true || preferences.projectTrusted === true,
+  });
+}
+
 export function saveZyraExitSummary(runtime, summary) {
   const sessionManager = runtime?.session?.sessionManager;
   if (!sessionManager?.getSessionFile?.()) return false;
@@ -1992,6 +2152,82 @@ export function saveZyraExitSummary(runtime, summary) {
     savedAt: new Date().toISOString(),
   });
   return true;
+}
+
+export function setZyraReasoningSummary(runtime, value) {
+  const mode = normalizeAssistantReasoningSummary(value);
+  if (!runtime.reasoningSummaryState) runtime.reasoningSummaryState = { value: mode };
+  else runtime.reasoningSummaryState.value = mode;
+  runtime.reasoningSummary = mode;
+  return mode;
+}
+
+export function setZyraContextCompactionThreshold(runtime, value) {
+  const thresholdTokens = normalizeAssistantContextCompactionThreshold(value);
+  runtime.contextCompactionThresholdTokens = thresholdTokens;
+  return thresholdTokens;
+}
+
+function hasUncompactedConversationEntries(runtime) {
+  const branch = runtime?.session?.sessionManager?.getBranch?.();
+  if (!Array.isArray(branch)) return true;
+  let latestCompactionIndex = -1;
+  for (let index = branch.length - 1; index >= 0; index -= 1) {
+    if (branch[index]?.type === "compaction") {
+      latestCompactionIndex = index;
+      break;
+    }
+  }
+  if (latestCompactionIndex < 0) return branch.some((entry) => entry?.type === "message");
+  return branch.slice(latestCompactionIndex + 1).some((entry) => entry?.type === "message");
+}
+
+export async function compactZyraContextBeforePrompt(runtime, prompt, options = {}) {
+  const thresholdTokens = setZyraContextCompactionThreshold(
+    runtime,
+    options.thresholdTokens ?? runtime.contextCompactionThresholdTokens,
+  );
+  const usage = getRuntimeContextUsage(runtime);
+  const contextTokens = Number(usage?.tokens);
+  const contextWindow = Number(usage?.contextWindow ?? runtime?.session?.model?.contextWindow);
+  const promptTokens = estimateMessageTokens({
+    role: "user",
+    content: [{ type: "text", text: String(prompt || "") }],
+    timestamp: Date.now(),
+  });
+  const shouldCompact = shouldCompactAssistantContext({
+    contextTokens,
+    contextWindow,
+    configuredThreshold: thresholdTokens,
+    promptTokens,
+    additionalContextTokens: options.additionalContextTokens,
+    imageCount: Array.isArray(options.images) ? options.images.length : 0,
+  });
+  const effectiveThresholdTokens = resolveAssistantContextCompactionThreshold(contextWindow, thresholdTokens);
+  if (!shouldCompact || !hasUncompactedConversationEntries(runtime)) {
+    return { compacted: false, contextTokens, contextWindow, effectiveThresholdTokens };
+  }
+  if (runtime?.session?.isStreaming) throw new Error("Wait for the current response to finish before compacting context.");
+  if (runtime?.session?.isCompacting) throw new Error("Wait for context compaction to finish before sending.");
+  if (typeof runtime?.session?.compact !== "function") {
+    throw new Error("This runtime cannot compact context before sending.");
+  }
+  const previousReasoningSummary = runtime?.reasoningSummaryState?.value;
+  if (runtime?.reasoningSummaryState) runtime.reasoningSummaryState.value = "concise";
+  try {
+    await runtime.session.compact();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error || "");
+    if (/Already compacted|Nothing to compact|session too small/i.test(message)) {
+      return { compacted: false, contextTokens, contextWindow, effectiveThresholdTokens };
+    }
+    throw error;
+  } finally {
+    if (runtime?.reasoningSummaryState && previousReasoningSummary) {
+      runtime.reasoningSummaryState.value = previousReasoningSummary;
+    }
+  }
+  return { compacted: true, contextTokens, contextWindow, effectiveThresholdTokens };
 }
 
 export function getRuntimeContextUsage(runtime) {
@@ -2025,24 +2261,51 @@ export function calculateSessionUsage(sessionManager) {
     cacheWrite: 0,
     reasoning: 0,
     cost: 0,
+    costComplete: false,
+    cacheHitPercent: null,
     assistantMessages: 0,
   };
+  let meteredUsageCount = 0;
+  let missingCostCount = 0;
 
   const entries = typeof sessionManager.getEntries === "function" ? sessionManager.getEntries() : [];
   for (const entry of entries) {
-    if (entry?.type !== "message" || entry.message?.role !== "assistant") continue;
-    const messageUsage = entry.message.usage;
+    const role = entry?.type === "message" ? entry.message?.role : null;
+    const messageUsage = role === "assistant" || role === "toolResult"
+      ? entry.message?.usage
+      : entry?.type === "branch_summary" || entry?.type === "compaction"
+        ? entry.usage
+        : null;
     if (!messageUsage) continue;
-    usage.assistantMessages += 1;
-    usage.input += numberValue(messageUsage.input);
-    usage.output += numberValue(messageUsage.output);
-    usage.cacheRead += numberValue(messageUsage.cacheRead);
-    usage.cacheWrite += numberValue(messageUsage.cacheWrite);
+    if (role === "assistant") {
+      usage.assistantMessages += 1;
+      const latestPromptTokens = numberValue(messageUsage.input) + numberValue(messageUsage.cacheRead) + numberValue(messageUsage.cacheWrite);
+      usage.cacheHitPercent = latestPromptTokens > 0
+        ? (numberValue(messageUsage.cacheRead) / latestPromptTokens) * 100
+        : null;
+    }
+    const input = numberValue(messageUsage.input);
+    const output = numberValue(messageUsage.output);
+    const cacheRead = numberValue(messageUsage.cacheRead);
+    const cacheWrite = numberValue(messageUsage.cacheWrite);
+    const hasMeteredUsage = input + output + cacheRead + cacheWrite > 0;
+    const reportedCost = messageUsage.cost?.total;
+    usage.input += input;
+    usage.output += output;
+    usage.cacheRead += cacheRead;
+    usage.cacheWrite += cacheWrite;
     usage.reasoning += extractReasoningTokens(messageUsage);
-    usage.cost += numberValue(messageUsage.cost?.total);
+    if (hasMeteredUsage) {
+      meteredUsageCount += 1;
+      if (typeof reportedCost === "number" && Number.isFinite(reportedCost)) usage.cost += reportedCost;
+      else missingCostCount += 1;
+    } else if (typeof reportedCost === "number" && Number.isFinite(reportedCost)) {
+      usage.cost += reportedCost;
+    }
   }
 
-  usage.total = usage.input + usage.output;
+  usage.total = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  usage.costComplete = meteredUsageCount > 0 && missingCostCount === 0;
   return usage;
 }
 
@@ -2230,10 +2493,11 @@ function injectProjectMemory(session, project) {
 
 function injectLayeredMemory(session, root, query = "") {
   const memory = buildLayeredMemoryContext(root, { query });
-  if (!memory.prompt) return;
+  if (!memory.prompt) return "";
   session._zyraMemoryContext = memory;
   session._zyraMemoryCitation = memory.citation;
   upsertSystemPromptBlock(session, ZYRA_LAYERED_MEMORY_MARKER, memory.prompt);
+  return memory.prompt;
 }
 
 function injectActiveProfile(session, profile, project = defaults.project) {
@@ -2253,11 +2517,99 @@ function findProjectMemoryFiles(project) {
   return files;
 }
 
-function getCustomCommandDirs(runtime) {
+function getCustomCommandSources(runtime) {
   return [
-    path.join(defaults.root, "commands"),
-    path.join(runtime.project, PROJECT_DATA_DIR, "commands"),
+    { dir: path.join(defaults.root, "commands"), scope: "built-in" },
+    { dir: path.join(os.homedir(), PROJECT_DATA_DIR, "commands"), scope: "personal" },
+    { dir: path.join(runtime.project, PROJECT_DATA_DIR, "commands"), scope: "project" },
   ];
+}
+
+function getCustomCommandDirs(runtime) {
+  return getCustomCommandSources(runtime).map((source) => source.dir);
+}
+
+async function loadZyraSkills(project, options = {}) {
+  const { loadSkillsFromDir } = await loadPiPackage();
+  const sources = options.sources ?? await resolveZyraSkillSources({
+    project,
+    root: defaults.root,
+    projectTrusted: options.projectTrusted === true,
+  });
+  const settings = options.skillSourceSettings ?? await readZyraSkillSourceSettings();
+  const candidatesByName = new Map();
+  const sourceRealPaths = new Set();
+  const diagnostics = [];
+  const scopePriority = { "built-in": 0, personal: 1, project: 2 };
+
+  // Sources arrive from low to high priority. Scope is resolved first so a
+  // project skill still wins over a personal skill from a preferred provider.
+  for (let sourceOrder = 0; sourceOrder < sources.length; sourceOrder += 1) {
+    const source = sources[sourceOrder];
+    if (!existsSync(source.dir)) continue;
+    const result = loadSkillsFromDir({ dir: source.dir, source: source.loaderSource });
+    diagnostics.push(...result.diagnostics);
+    for (const skill of result.skills) {
+      const resolvedFile = path.resolve(skill.filePath);
+      const directRootMarkdown = path.dirname(resolvedFile) === path.resolve(source.dir)
+        && path.basename(resolvedFile) !== "SKILL.md";
+      if (!source.allowRootMarkdown && directRootMarkdown) continue;
+      let canonicalFile = resolvedFile;
+      try {
+        canonicalFile = realpathSync.native(resolvedFile);
+      } catch {}
+      const normalizedFile = process.platform === "win32" ? canonicalFile.toLowerCase() : canonicalFile;
+      const pathKey = `${source.sourceId}:${normalizedFile}`;
+      if (sourceRealPaths.has(pathKey)) continue;
+      sourceRealPaths.add(pathKey);
+      const candidates = candidatesByName.get(skill.name) ?? [];
+      candidates.push({
+        ...skill,
+        zyraScope: source.scope,
+        zyraSourceId: source.sourceId,
+        zyraSourceLabel: source.sourceLabel,
+        zyraSourceOrder: sourceOrder,
+      });
+      candidatesByName.set(skill.name, candidates);
+    }
+  }
+
+  const skills = [];
+  for (const [name, candidates] of candidatesByName) {
+    const highestScope = Math.max(...candidates.map((candidate) => scopePriority[candidate.zyraScope] ?? -1));
+    const scoped = candidates.filter((candidate) => (scopePriority[candidate.zyraScope] ?? -1) === highestScope);
+    const preferredSourceId = settings.preferredSourceBySkill[name];
+    const preferred = preferredSourceId
+      ? scoped.filter((candidate) => candidate.zyraSourceId === preferredSourceId)
+      : [];
+    const eligible = preferred.length ? preferred : scoped;
+    const winner = eligible.reduce((current, candidate) => (
+      candidate.zyraSourceOrder > current.zyraSourceOrder ? candidate : current
+    ));
+    if (candidates.length > 1) {
+      diagnostics.push({
+        type: "collision",
+        message: `skill "${name}" uses ${winner.zyraSourceLabel} ${winner.zyraScope}`,
+        path: winner.filePath,
+      });
+    }
+    const { zyraSourceOrder: _sourceOrder, ...publicSkill } = winner;
+    skills.push(publicSkill);
+  }
+
+  return {
+    skills: skills.sort((a, b) => a.name.localeCompare(b.name)),
+    diagnostics,
+  };
+}
+
+function resolveZyraResourceScope(file, project) {
+  const normalized = path.resolve(file).toLowerCase();
+  const projectRoot = path.resolve(project ?? defaults.project).toLowerCase();
+  const homeRoot = path.resolve(os.homedir()).toLowerCase();
+  if (normalized.startsWith(`${projectRoot}${path.sep}`)) return "project";
+  if (normalized.startsWith(`${homeRoot}${path.sep}`)) return "personal";
+  return "built-in";
 }
 
 function commandCacheKey(runtime) {

@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto'
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { createHash, randomUUID } from 'node:crypto'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { existsSync } from 'node:fs'
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline'
@@ -13,17 +13,21 @@ import type {
     AssistantReasoningEffort,
     AssistantRuntimeEvent,
     AssistantRuntimeMode,
+    AssistantSessionUsageTotals,
     AssistantThread,
     AssistantTurnOutcome,
     AssistantTurnUsage,
+    AssistantUserInputAnswer,
     FleetSnapshot
 } from '../../shared/assistant/contracts'
 import { parseAgentSurfaceDescriptor, sanitizeFileChangeRawPayload } from '../../shared/assistant/contracts'
 import { getAssistantModelReasoningEfforts, isAssistantReasoningEffort } from '../../shared/assistant/reasoning-efforts'
+import type { AssistantRuntimePolicy } from '../../shared/assistant/runtime-policy'
 import { analyzeAssistantReadResult } from '../../shared/assistant/read-activity'
 import { isAssistantTransportFailure } from '../../shared/assistant/transport-failure'
 import { resolveZyraRoot } from '../zyra/zyra-root'
 import type { PreparedAssistantPromptImage } from './prompt-images'
+import { toUserInputQuestions } from './codex-runtime-session-utils'
 import { getAssistantCanonicalThreadId } from './thread-identity'
 import {
     emptyAssistantContentParts,
@@ -76,6 +80,41 @@ export type PrivateVoiceTaskResult = {
     providerSessionId: string
 }
 
+export type PrivateVoiceTaskPreparationInput = {
+    localThreadId: string
+    cwd: string
+    model?: string
+    effort?: AssistantReasoningEffort
+    runtimeMode?: AssistantRuntimeMode
+    interactionMode?: AssistantInteractionMode
+    profile?: string
+}
+
+type ResolvedPrivateVoiceTaskConfiguration = {
+    localThreadId: string
+    cwd: string
+    model: string
+    effort: AssistantReasoningEffort
+    runtimeMode: AssistantRuntimeMode
+    interactionMode: AssistantInteractionMode
+    profile: string
+}
+
+type PreparedPrivateVoiceWorker = {
+    key: string
+    privateThreadId: string
+    worker: ZyraPiWorker
+    connectPromise: Promise<Record<string, unknown>>
+    claimed: boolean
+}
+
+type ClaimedPrivateVoiceWorker = {
+    prepared: PreparedPrivateVoiceWorker
+    privateThreadId: string
+    worker: ZyraPiWorker
+    connected: Record<string, unknown>
+}
+
 type ZyraSessionContext = {
     localThreadId: string
     providerThreadId: string
@@ -84,6 +123,7 @@ type ZyraSessionContext = {
     unsubscribe?: () => void
     connected: boolean
     connectPromise: Promise<void> | null
+    reconnectPromise: Promise<void> | null
     cwd: string
     model: string
     thinking: AssistantReasoningEffort
@@ -97,6 +137,7 @@ type ZyraSessionContext = {
     terminalAssistantMessageOutcome: TerminalAssistantMessageOutcome | null
     assistantMessageSequence: number
     activeAssistantItemId: string | null
+    usageAccountedAssistantMessageIds: Set<string>
     toolArgsByCallId: Map<string, Record<string, unknown>>
     toolStartedAtByCallId: Map<string, string>
     commandActivityIdByJobId: Map<string, string>
@@ -107,7 +148,10 @@ type ZyraSessionContext = {
     internalCompletedItemIds: Set<string>
     activeCompaction: ActiveCompactionLifecycle | null
     lastAssistantItemId: string | null
+    lastUsageTurnId: string | null
     lastUsage: AssistantTurnUsage | null
+    sessionUsage: AssistantSessionUsageTotals | null
+    fleetSnapshot: FleetSnapshot | null
 }
 
 type BridgeMessage = {
@@ -139,6 +183,16 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asString(value: unknown): string | null {
     return typeof value === 'string' && value.trim() ? value : null
+}
+
+function readUserInputAnswers(value: unknown): Record<string, AssistantUserInputAnswer> {
+    const record = asRecord(value) || {}
+    return Object.fromEntries(Object.entries(record).map(([questionId, answer]) => [
+        questionId,
+        Array.isArray(answer)
+            ? answer.filter((entry): entry is string => typeof entry === 'string')
+            : typeof answer === 'string' ? answer : ''
+    ]))
 }
 
 function readTerminalAssistantMessageOutcome(message: Record<string, unknown> | null): Omit<TerminalAssistantMessageOutcome, 'turnId'> | null {
@@ -253,12 +307,165 @@ function readUsage(value: unknown): AssistantTurnUsage | null {
         const raw = usage[key]
         return typeof raw === 'number' && Number.isFinite(raw) ? raw : null
     }
+    const cost = asRecord(usage['cost'])
+    const costTotal = cost?.['total']
     return {
         inputTokens: numberValue('input'),
         outputTokens: numberValue('output'),
         cachedInputTokens: numberValue('cacheRead'),
+        cacheWriteTokens: numberValue('cacheWrite'),
         reasoningOutputTokens: numberValue('reasoning') ?? numberValue('reasoningTokens'),
-        totalTokens: numberValue('totalTokens') ?? numberValue('total')
+        totalTokens: numberValue('totalTokens') ?? numberValue('total'),
+        modelContextWindow: numberValue('modelContextWindow'),
+        costUsd: typeof costTotal === 'number' && Number.isFinite(costTotal) ? costTotal : null
+    }
+}
+
+function sumAssistantUsageMetric(left: number | null | undefined, right: number | null | undefined): number | null {
+    const hasLeft = typeof left === 'number' && Number.isFinite(left)
+    const hasRight = typeof right === 'number' && Number.isFinite(right)
+    if (!hasLeft && !hasRight) return null
+    return (hasLeft ? left : 0) + (hasRight ? right : 0)
+}
+
+function getUsageAccountedAssistantMessageIds(context: ZyraSessionContext): Set<string> {
+    if (!context.usageAccountedAssistantMessageIds) context.usageAccountedAssistantMessageIds = new Set()
+    return context.usageAccountedAssistantMessageIds
+}
+
+export function resolveAssistantUsageMessageIdentity(
+    messageValue: unknown,
+    turnId: string,
+    fallbackItemId: string
+): string {
+    const message = asRecord(messageValue)
+    const stableId = asString(message?.['id'])
+        || asString(message?.['messageId'])
+        || asString(message?.['entryId'])
+        || asString(message?.['uuid'])
+    if (stableId) return stableId
+    try {
+        const signature = JSON.stringify({
+            turnId,
+            role: message?.['role'],
+            timestamp: message?.['timestamp'],
+            content: message?.['content'],
+            usage: message?.['usage'],
+            stopReason: message?.['stopReason'],
+            errorMessage: message?.['errorMessage']
+        })
+        return `anonymous-assistant-usage:${createHash('sha256').update(signature).digest('hex').slice(0, 24)}`
+    } catch {
+        return fallbackItemId
+    }
+}
+
+export function shouldAccountAssistantMessageUsage(input: {
+    replay: boolean
+    turnId: string
+    activeTurnId: string | null
+    turnCompleted: boolean
+    messageAlreadyAccounted: boolean
+}): boolean {
+    if (input.replay && (input.activeTurnId !== input.turnId || input.turnCompleted)) return false
+    return !input.messageAlreadyAccounted
+}
+
+export function mergeAssistantTurnUsage(
+    current: AssistantTurnUsage | null,
+    next: AssistantTurnUsage
+): AssistantTurnUsage {
+    return {
+        inputTokens: sumAssistantUsageMetric(current?.inputTokens, next.inputTokens),
+        outputTokens: sumAssistantUsageMetric(current?.outputTokens, next.outputTokens),
+        cachedInputTokens: sumAssistantUsageMetric(current?.cachedInputTokens, next.cachedInputTokens),
+        cacheWriteTokens: sumAssistantUsageMetric(current?.cacheWriteTokens, next.cacheWriteTokens),
+        reasoningOutputTokens: sumAssistantUsageMetric(current?.reasoningOutputTokens, next.reasoningOutputTokens),
+        totalTokens: typeof next.totalTokens === 'number' && next.totalTokens > 0
+            ? next.totalTokens
+            : current?.totalTokens ?? next.totalTokens ?? null,
+        modelContextWindow: typeof next.modelContextWindow === 'number' && next.modelContextWindow > 0
+            ? next.modelContextWindow
+            : current?.modelContextWindow ?? next.modelContextWindow ?? null,
+        costUsd: sumAssistantUsageMetric(current?.costUsd, next.costUsd),
+        sessionCostUsd: typeof next.sessionCostUsd === 'number' && Number.isFinite(next.sessionCostUsd)
+            ? next.sessionCostUsd
+            : current?.sessionCostUsd ?? null,
+        sessionCostComplete: typeof next.sessionCostComplete === 'boolean'
+            ? next.sessionCostComplete
+            : current?.sessionCostComplete ?? null
+    }
+}
+
+export function completeAssistantTurnUsage(
+    turnUsage: AssistantTurnUsage | null,
+    sessionCostUsd: number | null | undefined,
+    sessionCostComplete: boolean | null | undefined
+): AssistantTurnUsage | null {
+    if (!turnUsage && !(typeof sessionCostUsd === 'number' && sessionCostUsd > 0)) return null
+    return {
+        ...(turnUsage || {}),
+        sessionCostUsd: typeof sessionCostUsd === 'number' && Number.isFinite(sessionCostUsd)
+            ? sessionCostUsd
+            : turnUsage?.sessionCostUsd ?? null,
+        sessionCostComplete: typeof sessionCostComplete === 'boolean'
+            ? sessionCostComplete
+            : turnUsage?.sessionCostComplete ?? null
+    }
+}
+
+function buildCompletedTurnUsage(context: ZyraSessionContext): AssistantTurnUsage | null {
+    return completeAssistantTurnUsage(
+        buildLiveAssistantTurnUsage(context),
+        context.sessionUsage?.costUsd,
+        context.sessionUsage?.costComplete
+    )
+}
+
+export function buildLiveAssistantTurnUsage(context: Pick<ZyraSessionContext, 'lastUsage' | 'sessionUsage'>): AssistantTurnUsage | null {
+    const contextTokens = context.sessionUsage?.contextTokens
+    const contextWindow = context.sessionUsage?.modelContextWindow
+    if (!context.lastUsage && !(typeof contextTokens === 'number' && contextTokens > 0)) return null
+    return {
+        ...(context.lastUsage || {}),
+        totalTokens: typeof contextTokens === 'number' && contextTokens > 0
+            ? contextTokens
+            : context.lastUsage?.totalTokens ?? null,
+        modelContextWindow: typeof contextWindow === 'number' && contextWindow > 0
+            ? contextWindow
+            : context.lastUsage?.modelContextWindow ?? null,
+        sessionCostUsd: context.sessionUsage?.costUsd ?? context.lastUsage?.sessionCostUsd ?? null,
+        sessionCostComplete: context.sessionUsage?.costComplete ?? context.lastUsage?.sessionCostComplete ?? null
+    }
+}
+
+function readSessionUsage(
+    value: unknown,
+    contextValue: unknown,
+    threadId: string,
+    autoCompactionEnabled: unknown
+): AssistantSessionUsageTotals | null {
+    const usage = asRecord(value)
+    const context = asRecord(contextValue)
+    if (!usage && !context) return null
+    const numberValue = (record: Record<string, unknown> | null, key: string): number | null => {
+        const raw = record?.[key]
+        return typeof raw === 'number' && Number.isFinite(raw) ? raw : null
+    }
+    return {
+        threadId,
+        inputTokens: numberValue(usage, 'input'),
+        outputTokens: numberValue(usage, 'output'),
+        cachedInputTokens: numberValue(usage, 'cacheRead'),
+        cacheWriteTokens: numberValue(usage, 'cacheWrite'),
+        reasoningOutputTokens: numberValue(usage, 'reasoning'),
+        totalTokens: numberValue(usage, 'total'),
+        contextTokens: numberValue(context, 'tokens'),
+        cacheHitPercent: numberValue(usage, 'cacheHitPercent'),
+        modelContextWindow: numberValue(context, 'contextWindow'),
+        costUsd: numberValue(usage, 'cost'),
+        costComplete: typeof usage?.['costComplete'] === 'boolean' ? usage.costComplete : null,
+        autoCompactionEnabled: typeof autoCompactionEnabled === 'boolean' ? autoCompactionEnabled : null
     }
 }
 
@@ -465,7 +672,7 @@ function prefixPatchLines(value: string, prefix: '+' | '-'): string {
     return value.replace(/\r\n/g, '\n').split('\n').map((line) => `${prefix}${line}`).join('\n')
 }
 
-function buildArgumentPreviewPatch(toolName: string, args: Record<string, unknown> | null): string | null {
+export function buildArgumentPreviewPatch(toolName: string, args: Record<string, unknown> | null): string | null {
     const path = firstToolString(args, ['path', 'filePath', 'file_path', 'targetPath', 'target_path'])
     if (!path) return null
     const normalizedPath = patchPath(path)
@@ -480,6 +687,30 @@ function buildArgumentPreviewPatch(toolName: string, args: Record<string, unknow
             `@@ -1,${oldLines} +1,${newLines} @@`,
             prefixPatchLines(oldText, '-'),
             prefixPatchLines(newText, '+')
+        ].join('\n')
+    }
+    const structuredEdits = Array.isArray(args?.['edits']) ? args.edits : []
+    const structuredHunks: string[] = []
+    let previewLine = 1
+    for (const value of structuredEdits) {
+        const edit = asRecord(value)
+        const previous = typeof edit?.['oldText'] === 'string' ? edit.oldText : null
+        const next = typeof edit?.['newText'] === 'string' ? edit.newText : null
+        if (previous === null || next === null || previous === next) continue
+        const previousLines = previous.replace(/\r\n/g, '\n').split('\n')
+        const nextLines = next.replace(/\r\n/g, '\n').split('\n')
+        structuredHunks.push([
+            `@@ -${previewLine},${previousLines.length} +${previewLine},${nextLines.length} @@`,
+            prefixPatchLines(previous, '-'),
+            prefixPatchLines(next, '+')
+        ].join('\n'))
+        previewLine += Math.max(previousLines.length, nextLines.length) + 2
+    }
+    if (structuredHunks.length > 0) {
+        return [
+            `--- a/${normalizedPath}`,
+            `+++ b/${normalizedPath}`,
+            ...structuredHunks
         ].join('\n')
     }
     const content = firstToolString(args, ['content', 'fileContent', 'file_content', 'text', 'body'])
@@ -566,8 +797,7 @@ export function readPiFileChangeData(input: {
         displayDiff: resultDiff || undefined,
         diffUnavailableReason: canonicalPatch
             ? undefined
-            : unavailableReason
-                || (/\bwrite\b/.test(normalizedTool) && writeExisting ? 'preview-only' : undefined),
+            : unavailableReason || (previewPatch ? 'preview-only' : undefined),
         snapshotBacked: syntheticSnapshot || undefined,
         truncated: details?.['truncated'] === true || undefined
     }
@@ -735,6 +965,57 @@ function normalizeZyraProfile(profile: unknown): string {
     return /^[a-z0-9_-]{1,64}$/.test(normalized) ? normalized : 'default'
 }
 
+function resolvePrivateVoiceTaskConfiguration(
+    input: PrivateVoiceTaskPreparationInput
+): ResolvedPrivateVoiceTaskConfiguration {
+    return {
+        localThreadId: input.localThreadId,
+        cwd: resolve(input.cwd),
+        model: normalizeZyraModel(input.model) || 'openai-codex/gpt-5.6-sol',
+        effort: input.effort || 'high',
+        runtimeMode: input.runtimeMode || 'approval-required',
+        interactionMode: 'default',
+        profile: normalizeZyraProfile(input.profile)
+    }
+}
+
+function getPrivateVoiceWorkerKey(
+    root: string,
+    bridgePath: string,
+    configuration: ResolvedPrivateVoiceTaskConfiguration
+): string {
+    return JSON.stringify([
+        root,
+        bridgePath,
+        configuration.localThreadId,
+        configuration.cwd,
+        configuration.model,
+        configuration.effort,
+        configuration.runtimeMode,
+        configuration.interactionMode,
+        configuration.profile
+    ])
+}
+
+function getPrivateVoiceConnectPayload(
+    configuration: ResolvedPrivateVoiceTaskConfiguration,
+    privateThreadId: string
+): Record<string, unknown> {
+    return {
+        cwd: configuration.cwd,
+        localThreadId: privateThreadId,
+        noSession: true,
+        model: configuration.model,
+        thinking: configuration.effort,
+        profile: configuration.profile,
+        runtimeMode: configuration.runtimeMode,
+        interactionMode: configuration.interactionMode,
+        reasoningSummary: 'auto',
+        surface: 'memory-worker',
+        purpose: 'voice-primary'
+    }
+}
+
 function fallbackZyraModels(): AssistantModelInfo[] {
     return [
         { id: 'openai-codex/gpt-5.5', label: 'gpt-5.5', description: 'openai-codex' },
@@ -754,7 +1035,10 @@ function normalizeModelInfo(value: unknown): AssistantModelInfo | null {
     const supportedEfforts = Array.isArray(record?.['supportedEfforts'])
         ? record.supportedEfforts.filter(isAssistantReasoningEffort)
         : getAssistantModelReasoningEfforts({ id, label })
-    return { id, label, description, supportedEfforts }
+    const contextWindow = typeof record?.['contextWindow'] === 'number' && Number.isFinite(record.contextWindow)
+        ? record.contextWindow
+        : null
+    return { id, label, description, supportedEfforts, contextWindow }
 }
 
 function resolveBridgePath(root = resolveZyraRoot()): string {
@@ -780,19 +1064,6 @@ function resolveNodeLaunch(): NodeLaunch {
     }
 
     return { command: process.execPath || (process.platform === 'win32' ? 'node.exe' : 'node'), env: {} }
-}
-
-function checkNodeLaunch(launch = resolveNodeLaunch()): string | null {
-    const result = spawnSync(launch.command, ['--version'], {
-        env: {
-            ...process.env,
-            ...launch.env
-        },
-        encoding: 'utf8',
-        windowsHide: true
-    })
-    if (!result.error && result.status === 0) return null
-    return result.error?.message || result.stderr?.trim() || `Node launch failed with status ${result.status}`
 }
 
 class ZyraPiWorker {
@@ -965,13 +1236,38 @@ export class ZyraPiRuntime extends EventEmitter {
     private warmWorker: ZyraPiWorker | null = null
     private warmPromise: Promise<AssistantModelInfo[]> | null = null
     private warmWorkerKey: string | null = null
+    private preparedPrivateVoiceWorker: PreparedPrivateVoiceWorker | null = null
     private modelCache: AssistantModelInfo[] = []
     private availabilityCache: { root: string; checkedAt: number; result: { available: boolean; reason: string | null } } | null = null
     private agentServerConnection: DesktopAgentServerConnection | null = null
     private unsubscribeCatalogChanged: (() => void) | null = null
+    private desktopWorkspaceHandler: ((request: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null
+    private desktopWorkspaceCancelHandler: ((requestId: string) => void) | null = null
+    private desktopWorkspaceTurnHandler: ((canonicalChatId: string, turnId: string) => void) | null = null
+    private detachedControlHandler: ((input: { canonicalChatId: string; turnId: string | null; operation: unknown; principal?: unknown; signal: AbortSignal }) => Promise<Record<string, unknown>>) | null = null
+    private desktopWorkspaceTurnEndHandler: ((canonicalChatId: string, turnId: string) => void) | null = null
     private readonly privateVoiceThreadTargets = new Map<string, string>()
     private readonly privateVoiceWorkers = new Map<string, ZyraPiWorker>()
     private readonly privateApprovalWorkers = new Map<string, ZyraPiWorker>()
+
+    setDesktopWorkspaceHandler(handler: ((request: Record<string, unknown>) => Promise<Record<string, unknown>>) | null, cancelHandler: ((requestId: string) => void) | null = null, turnHandler: ((canonicalChatId: string, turnId: string) => void) | null = null, detachedControlHandler: ((input: { canonicalChatId: string; turnId: string | null; operation: unknown; principal?: unknown; signal: AbortSignal }) => Promise<Record<string, unknown>>) | null = null, turnEndHandler: ((canonicalChatId: string, turnId: string) => void) | null = null): void {
+        this.desktopWorkspaceCancelHandler = cancelHandler
+        this.desktopWorkspaceTurnHandler = turnHandler
+        this.detachedControlHandler = detachedControlHandler
+        this.desktopWorkspaceTurnEndHandler = turnEndHandler
+        this.desktopWorkspaceHandler = handler
+        this.agentServerConnection?.setDesktopWorkspaceHandler(async (request) => {
+            if (!this.desktopWorkspaceHandler) throw Object.assign(new Error('Desktop workspace routing is unavailable.'), { code: 'DESKTOP_WORKSPACE_UNAVAILABLE' })
+            return this.desktopWorkspaceHandler(request)
+        })
+        this.agentServerConnection?.setDesktopWorkspaceCancelHandler((requestId) => this.desktopWorkspaceCancelHandler?.(requestId))
+        this.agentServerConnection?.setDesktopWorkspaceTurnHandler((canonicalChatId, turnId) => this.desktopWorkspaceTurnHandler?.(canonicalChatId, turnId))
+        this.agentServerConnection?.setDesktopWorkspaceTurnEndHandler((canonicalChatId, turnId) => this.desktopWorkspaceTurnEndHandler?.(canonicalChatId, turnId))
+        this.agentServerConnection?.setDetachedControlHandler(async (input) => {
+            if (!this.detachedControlHandler) throw Object.assign(new Error('Detached Browser control is unavailable.'), { code: 'CONTROL_DRIVER_UNAVAILABLE' })
+            return this.detachedControlHandler(input)
+        })
+    }
 
     async checkAvailability(forceRefresh = false): Promise<{ available: boolean; reason: string | null }> {
         const root = resolveZyraRoot()
@@ -1000,10 +1296,11 @@ export class ZyraPiRuntime extends EventEmitter {
         if (!existsSync(agentServerClientPath)) {
             return remember({ available: false, reason: `Zyra agent-server client not found at ${agentServerClientPath}` })
         }
-        const nodeLaunchError = checkNodeLaunch()
-        if (nodeLaunchError) {
-            return remember({ available: false, reason: `Node runtime for Zyra bridge is unavailable: ${nodeLaunchError}` })
-        }
+        // Electron is itself the Node host for the bridge. Do not synchronously
+        // launch a second process here just to probe `--version`: Windows can
+        // hold process creation behind security scanning, which would block the
+        // Electron main loop and every renderer IPC call. The real bridge/server
+        // launch remains authoritative and reports its own actionable error.
         return remember({ available: true, reason: null })
     }
 
@@ -1174,16 +1471,12 @@ export class ZyraPiRuntime extends EventEmitter {
         const existingContext = this.getSessionContext(thread.id)
             || (thread.providerThreadId ? this.getSessionContext(thread.providerThreadId) : null)
         if (existingContext) {
-            if (!existingContext.worker.isAlive()) {
-                this.disconnect(existingContext.localThreadId)
-            } else {
-                try {
-                    await this.ensureConnected(existingContext)
-                    return
-                } catch (error) {
-                    this.releaseSessionContext(existingContext)
-                    throw error
-                }
+            try {
+                await this.ensureConnected(existingContext)
+                return
+            } catch (error) {
+                this.releaseSessionContext(existingContext)
+                throw error
             }
         }
 
@@ -1206,13 +1499,14 @@ export class ZyraPiRuntime extends EventEmitter {
             worker,
             connected: false,
             connectPromise: null,
+            reconnectPromise: null,
             cwd,
             model,
             thinking: isAssistantReasoningEffort(thread.thinking)
                 ? thread.thinking
                 : (isAssistantReasoningEffort(thread.latestTurn?.effort) ? thread.latestTurn.effort : 'medium'),
             runtimeMode: thread.runtimeMode,
-            interactionMode: thread.interactionMode,
+            interactionMode: 'default',
             profile: normalizeZyraProfile(thread.profile),
             webSearch: typeof thread.webSearch === 'boolean' ? thread.webSearch : null,
             webFetch: typeof thread.webFetch === 'boolean' ? thread.webFetch : null,
@@ -1221,6 +1515,7 @@ export class ZyraPiRuntime extends EventEmitter {
             terminalAssistantMessageOutcome: null,
             assistantMessageSequence: 0,
             activeAssistantItemId: null,
+            usageAccountedAssistantMessageIds: new Set(),
             toolArgsByCallId: new Map(),
             toolStartedAtByCallId: new Map(),
             commandActivityIdByJobId: new Map(),
@@ -1231,7 +1526,10 @@ export class ZyraPiRuntime extends EventEmitter {
             internalCompletedItemIds: new Set(),
             activeCompaction: null,
             lastAssistantItemId: null,
-            lastUsage: null
+            lastUsageTurnId: null,
+            lastUsage: null,
+            sessionUsage: null,
+            fleetSnapshot: null
         }
         worker.setControlRequestHandler(async (operation, signal, principalValue) => {
             if (principalValue !== undefined) {
@@ -1264,7 +1562,7 @@ export class ZyraPiRuntime extends EventEmitter {
                 cwd,
                 model,
                 runtimeMode: thread.runtimeMode,
-                interactionMode: thread.interactionMode,
+                interactionMode: 'default',
                 profile: context.profile,
                 webSearch: context.webSearch ?? undefined,
                 webFetch: context.webFetch ?? undefined
@@ -1292,6 +1590,7 @@ export class ZyraPiRuntime extends EventEmitter {
         try {
             await this.ensureConnected(context)
         } catch (error) {
+            if (this.getSessionContext(context.localThreadId) !== context) return
             const message = error instanceof Error ? error.message : 'Zyra session connection failed.'
             this.releaseSessionContext(context)
             this.emitRuntime({
@@ -1309,6 +1608,14 @@ export class ZyraPiRuntime extends EventEmitter {
     hasSession(threadId: string): boolean {
         const context = this.getSessionContext(threadId)
         return Boolean(context?.connected && context.worker.isAlive())
+    }
+
+    getSessionUsage(threadId: string): AssistantSessionUsageTotals | null {
+        return this.getSessionContext(threadId)?.sessionUsage || null
+    }
+
+    getFleetSnapshot(threadId: string): FleetSnapshot | null {
+        return this.getSessionContext(threadId)?.fleetSnapshot || null
     }
 
     async configureSession(
@@ -1329,7 +1636,7 @@ export class ZyraPiRuntime extends EventEmitter {
             model,
             thinking: configuration.effort,
             runtimeMode: configuration.runtimeMode,
-            interactionMode: configuration.interactionMode,
+            interactionMode: 'default',
             profile
         })
         const config = asRecord(result['config']) || result
@@ -1340,7 +1647,7 @@ export class ZyraPiRuntime extends EventEmitter {
             : config['runtimeMode'] === 'approval-required'
                 ? 'approval-required'
                 : configuration.runtimeMode
-        context.interactionMode = configuration.interactionMode
+        context.interactionMode = 'default'
         context.profile = normalizeZyraProfile(config['profile'] || profile)
     }
 
@@ -1355,6 +1662,8 @@ export class ZyraPiRuntime extends EventEmitter {
             serviceTier?: 'fast'
             profile?: string
             images?: PreparedAssistantPromptImage[]
+            reasoningSummary?: AssistantRuntimePolicy['reasoningSummary']
+            contextCompactionThresholdTokens?: number
         }
     ): Promise<{ turnId: string; providerThreadId: string | null }> {
         const context = this.requireSession(threadId)
@@ -1368,6 +1677,7 @@ export class ZyraPiRuntime extends EventEmitter {
         context.terminalAssistantMessageOutcome = null
         context.assistantMessageSequence = 0
         context.activeAssistantItemId = null
+        getUsageAccountedAssistantMessageIds(context).clear()
         context.toolArgsByCallId.clear()
         context.toolStartedAtByCallId.clear()
         context.assistantTextByItemId.clear()
@@ -1375,12 +1685,15 @@ export class ZyraPiRuntime extends EventEmitter {
         context.internalTextByItemId.clear()
         context.internalCompletedItemIds.clear()
         context.lastAssistantItemId = null
+        context.lastUsageTurnId = turnId
         context.lastUsage = null
         context.model = normalizeZyraModel(options?.model) || context.model
         context.thinking = options?.effort || context.thinking
         context.runtimeMode = options?.runtimeMode || context.runtimeMode
-        context.interactionMode = options?.interactionMode || context.interactionMode
+        context.interactionMode = 'default'
         context.profile = normalizeZyraProfile(options?.profile || context.profile)
+        try { getAgentControlBroker().materializeUserAuthorizedBrowserGrant(threadId, turnId) }
+        catch { /* A stale optional TUI Browser intent must never block the canonical turn. */ }
 
         this.emitRuntime({
             eventId: randomUUID(),
@@ -1402,17 +1715,121 @@ export class ZyraPiRuntime extends EventEmitter {
         return { turnId, providerThreadId: context.providerThreadId }
     }
 
+    async preparePrivateVoiceTask(input: PrivateVoiceTaskPreparationInput): Promise<void> {
+        const startedAt = Date.now()
+        const root = resolveZyraRoot()
+        const bridgePath = resolveBridgePath(root)
+        const configuration = resolvePrivateVoiceTaskConfiguration(input)
+        const key = getPrivateVoiceWorkerKey(root, bridgePath, configuration)
+        const current = this.preparedPrivateVoiceWorker
+        if (current?.key === key) {
+            if (!current.claimed) {
+                try {
+                    await current.connectPromise
+                } catch (error) {
+                    if (this.preparedPrivateVoiceWorker !== current) return
+                    throw error
+                }
+            }
+            log.info('[AssistantVoiceTiming] Primary worker ready', {
+                threadId: configuration.localThreadId,
+                reused: true,
+                claimed: current.claimed,
+                durationMs: Date.now() - startedAt
+            })
+            return
+        }
+        if (current?.claimed) return
+        this.disposePreparedPrivateVoiceTask()
+
+        const worker = new ZyraPiWorker(root, bridgePath, configuration.cwd)
+        const privateThreadId = `voice-private:prepared:${randomUUID()}`
+        const prepared: PreparedPrivateVoiceWorker = {
+            key,
+            privateThreadId,
+            worker,
+            connectPromise: worker.request('connect', getPrivateVoiceConnectPayload(configuration, privateThreadId)),
+            claimed: false
+        }
+        this.preparedPrivateVoiceWorker = prepared
+        try {
+            await prepared.connectPromise
+            log.info('[AssistantVoiceTiming] Primary worker ready', {
+                threadId: configuration.localThreadId,
+                reused: false,
+                claimed: false,
+                durationMs: Date.now() - startedAt
+            })
+        } catch (error) {
+            const cancelled = this.preparedPrivateVoiceWorker !== prepared
+            if (!cancelled) this.preparedPrivateVoiceWorker = null
+            worker.dispose()
+            if (cancelled) return
+            throw error
+        }
+    }
+
+    disposePreparedPrivateVoiceTask(): void {
+        const prepared = this.preparedPrivateVoiceWorker
+        if (!prepared) return
+        this.preparedPrivateVoiceWorker = null
+        prepared.worker.dispose()
+    }
+
+    private async claimPreparedPrivateVoiceWorker(
+        root: string,
+        bridgePath: string,
+        configuration: ResolvedPrivateVoiceTaskConfiguration,
+        signal: AbortSignal
+    ): Promise<ClaimedPrivateVoiceWorker | null> {
+        const prepared = this.preparedPrivateVoiceWorker
+        if (!prepared) return null
+        const key = getPrivateVoiceWorkerKey(root, bridgePath, configuration)
+        if (prepared.key !== key) {
+            if (!prepared.claimed) this.disposePreparedPrivateVoiceTask()
+            return null
+        }
+        if (prepared.claimed) return null
+
+        prepared.claimed = true
+        const abort = () => {
+            if (this.preparedPrivateVoiceWorker === prepared) this.preparedPrivateVoiceWorker = null
+            prepared.worker.dispose()
+        }
+        signal.addEventListener('abort', abort, { once: true })
+        try {
+            const connected = await prepared.connectPromise
+            if (signal.aborted) throw signal.reason || new Error('Private Voice task cancelled.')
+            if (this.preparedPrivateVoiceWorker !== prepared) return null
+            return {
+                prepared,
+                privateThreadId: prepared.privateThreadId,
+                worker: prepared.worker,
+                connected
+            }
+        } catch (error) {
+            if (this.preparedPrivateVoiceWorker === prepared) this.preparedPrivateVoiceWorker = null
+            prepared.worker.dispose()
+            if (signal.aborted) throw signal.reason || error
+            log.warn('[ZyraPiRuntime] prepared Voice worker failed; falling back to a fresh worker', error)
+            return null
+        } finally {
+            signal.removeEventListener('abort', abort)
+        }
+    }
+
     async runPrivateVoiceTask(input: PrivateVoiceTaskInput): Promise<PrivateVoiceTaskResult> {
         if (input.signal.aborted) throw input.signal.reason || new Error('Private Voice task cancelled.')
         if (this.privateVoiceWorkers.has(input.taskId)) throw new Error(`Private Voice task ${input.taskId} is already running.`)
+        const taskStartedAt = Date.now()
         const root = resolveZyraRoot()
-        const worker = new ZyraPiWorker(root, resolveBridgePath(root), input.cwd)
-        const privateThreadId = `voice-private:${input.taskId}`
-        const model = normalizeZyraModel(input.model) || 'openai-codex/gpt-5.6-sol'
-        const effort = input.effort || 'high'
-        const runtimeMode = input.runtimeMode || 'approval-required'
-        const interactionMode = input.interactionMode || 'default'
-        const profile = input.profile || 'default'
+        const bridgePath = resolveBridgePath(root)
+        const configuration = resolvePrivateVoiceTaskConfiguration(input)
+        const prepared = await this.claimPreparedPrivateVoiceWorker(root, bridgePath, configuration, input.signal)
+        if (input.signal.aborted) throw input.signal.reason || new Error('Private Voice task cancelled.')
+        const worker = prepared?.worker || new ZyraPiWorker(root, bridgePath, configuration.cwd)
+        const privateThreadId = prepared?.privateThreadId || `voice-private:${input.taskId}`
+        const { model, effort, runtimeMode, interactionMode, profile } = configuration
         const context: ZyraSessionContext = {
             localThreadId: privateThreadId,
             providerThreadId: privateThreadId,
@@ -1420,7 +1837,8 @@ export class ZyraPiRuntime extends EventEmitter {
             worker: worker as unknown as ZyraWorkerLike,
             connected: true,
             connectPromise: null,
-            cwd: input.cwd,
+            reconnectPromise: null,
+            cwd: configuration.cwd,
             model,
             thinking: effort,
             runtimeMode,
@@ -1433,6 +1851,7 @@ export class ZyraPiRuntime extends EventEmitter {
             terminalAssistantMessageOutcome: null,
             assistantMessageSequence: 0,
             activeAssistantItemId: null,
+            usageAccountedAssistantMessageIds: new Set(),
             toolArgsByCallId: new Map(),
             toolStartedAtByCallId: new Map(),
             commandActivityIdByJobId: new Map(),
@@ -1443,7 +1862,10 @@ export class ZyraPiRuntime extends EventEmitter {
             internalCompletedItemIds: new Set(),
             activeCompaction: null,
             lastAssistantItemId: null,
-            lastUsage: null
+            lastUsageTurnId: input.taskId,
+            lastUsage: null,
+            sessionUsage: null,
+            fleetSnapshot: null
         }
         this.privateVoiceThreadTargets.set(privateThreadId, input.localThreadId)
         this.privateVoiceWorkers.set(input.taskId, worker)
@@ -1459,19 +1881,13 @@ export class ZyraPiRuntime extends EventEmitter {
             void worker.request('abort').catch(() => undefined)
         }
         input.signal.addEventListener('abort', abort, { once: true })
+        let promptStartedAt: number | null = null
+        let completedSuccessfully = false
         try {
-            const connected = await worker.request('connect', {
-                cwd: input.cwd,
-                localThreadId: privateThreadId,
-                noSession: true,
-                model,
-                thinking: effort,
-                profile,
-                runtimeMode,
-                interactionMode,
-                surface: 'memory-worker'
-            })
+            const connected = prepared?.connected
+                || await worker.request('connect', getPrivateVoiceConnectPayload(configuration, privateThreadId))
             context.providerThreadId = String(connected['threadId'] || connected['providerThreadId'] || privateThreadId)
+            promptStartedAt = Date.now()
             await worker.request('prompt', {
                 prompt: input.prompt,
                 turnId: input.taskId,
@@ -1481,6 +1897,7 @@ export class ZyraPiRuntime extends EventEmitter {
                 runtimeMode,
                 interactionMode,
                 serviceTier: input.serviceTier,
+                reasoningSummary: 'auto',
                 skipTitleGeneration: true
             })
             if (input.signal.aborted) throw input.signal.reason || new Error('Private Voice task cancelled.')
@@ -1511,15 +1928,41 @@ export class ZyraPiRuntime extends EventEmitter {
                 || ''
             ).trim()
             if (!text) throw new Error('The strong agent completed without a Voice-ready result.')
+            completedSuccessfully = true
             return {
                 taskId: input.taskId,
                 text,
                 providerSessionId: context.providerThreadId
             }
         } finally {
+            const finishedAt = Date.now()
+            const canReusePreparedWorker = Boolean(
+                completedSuccessfully
+                && prepared
+                && this.preparedPrivateVoiceWorker === prepared.prepared
+                && worker.isAlive()
+                && !input.signal.aborted
+            )
+            if (canReusePreparedWorker && prepared) {
+                prepared.prepared.claimed = false
+            } else {
+                if (prepared && this.preparedPrivateVoiceWorker === prepared.prepared) {
+                    this.preparedPrivateVoiceWorker = null
+                }
+                worker.dispose()
+            }
+            log.info('[AssistantVoiceTiming] Primary task finished', {
+                threadId: input.localThreadId,
+                taskId: input.taskId,
+                workerCache: prepared ? 'hit' : 'miss',
+                workerReadyMs: promptStartedAt === null ? null : promptStartedAt - taskStartedAt,
+                modelAndToolsMs: promptStartedAt === null ? null : finishedAt - promptStartedAt,
+                totalMs: finishedAt - taskStartedAt,
+                reusable: canReusePreparedWorker,
+                outcome: completedSuccessfully ? 'completed' : input.signal.aborted ? 'cancelled' : 'failed'
+            })
             input.signal.removeEventListener('abort', abort)
             unsubscribe()
-            worker.dispose()
             this.privateVoiceWorkers.delete(input.taskId)
             this.privateVoiceThreadTargets.delete(privateThreadId)
             for (const [requestId, requestWorker] of this.privateApprovalWorkers) {
@@ -1576,8 +2019,10 @@ export class ZyraPiRuntime extends EventEmitter {
         await context.worker.request('approval.respond', { requestId, decision })
     }
 
-    async respondUserInput(_threadId: string, _requestId: string, _answers: Record<string, string | string[]>): Promise<void> {
-        return
+    async respondUserInput(threadId: string, requestId: string, answers: Record<string, string | string[]>): Promise<void> {
+        const context = this.requireSession(threadId)
+        await this.ensureConnected(context)
+        await context.worker.request('user_input.respond', { requestId, answers, cancelled: false })
     }
 
     private releaseSessionContext(context: ZyraSessionContext): void {
@@ -1611,6 +2056,7 @@ export class ZyraPiRuntime extends EventEmitter {
     }
 
     dispose(): void {
+        this.disposePreparedPrivateVoiceTask()
         for (const worker of this.privateVoiceWorkers.values()) worker.dispose()
         this.privateVoiceWorkers.clear()
         this.privateVoiceThreadTargets.clear()
@@ -1627,7 +2073,19 @@ export class ZyraPiRuntime extends EventEmitter {
 
     private getAgentServerConnection(root: string): DesktopAgentServerConnection {
         if (!this.agentServerConnection) {
-            this.agentServerConnection = new DesktopAgentServerConnection(root)
+            this.agentServerConnection = new DesktopAgentServerConnection(root, {
+                openDesktopWorkspace: async (request) => {
+                    if (!this.desktopWorkspaceHandler) throw Object.assign(new Error('Desktop workspace routing is unavailable.'), { code: 'DESKTOP_WORKSPACE_UNAVAILABLE' })
+                    return this.desktopWorkspaceHandler(request)
+                },
+                cancelDesktopWorkspace: (requestId) => this.desktopWorkspaceCancelHandler?.(requestId),
+                handleDesktopWorkspaceTurn: (canonicalChatId, turnId) => this.desktopWorkspaceTurnHandler?.(canonicalChatId, turnId),
+                handleDesktopWorkspaceTurnEnded: (canonicalChatId, turnId) => this.desktopWorkspaceTurnEndHandler?.(canonicalChatId, turnId),
+                handleDetachedControl: async (input) => {
+                    if (!this.detachedControlHandler) throw Object.assign(new Error('Detached Browser control is unavailable.'), { code: 'CONTROL_DRIVER_UNAVAILABLE' })
+                    return this.detachedControlHandler(input)
+                }
+            })
             this.unsubscribeCatalogChanged = this.agentServerConnection.onCatalogChanged((change) => this.emit('catalog.changed', change))
         }
         return this.agentServerConnection
@@ -1697,8 +2155,11 @@ export class ZyraPiRuntime extends EventEmitter {
             effort?: AssistantReasoningEffort
             serviceTier?: 'fast'
             images?: PreparedAssistantPromptImage[]
+            reasoningSummary?: AssistantRuntimePolicy['reasoningSummary']
+            contextCompactionThresholdTokens?: number
         }
     ): Promise<void> {
+        let preserveServerOwnedTurn = false
         try {
             await this.ensureConnected(context)
             await context.worker.request('prompt', {
@@ -1711,6 +2172,8 @@ export class ZyraPiRuntime extends EventEmitter {
                 webSearch: context.webSearch ?? undefined,
                 webFetch: context.webFetch ?? undefined,
                 images: options?.images,
+                reasoningSummary: options?.reasoningSummary,
+                contextCompactionThresholdTokens: options?.contextCompactionThresholdTokens,
                 skipTitleGeneration: true
             })
             if (context.activeTurnId !== turnId) return
@@ -1728,7 +2191,7 @@ export class ZyraPiRuntime extends EventEmitter {
                     outcome: 'completed',
                     effort: options?.effort,
                     serviceTier: options?.serviceTier,
-                    usage: context.lastUsage
+                    usage: buildCompletedTurnUsage(context)
                 }
             })
         } catch (error) {
@@ -1736,6 +2199,16 @@ export class ZyraPiRuntime extends EventEmitter {
             const message = error instanceof Error ? error.message : 'Zyra prompt failed.'
             const transportFailed = isAssistantTransportFailure(error)
             if (transportFailed) context.connected = false
+            if (transportFailed && context.worker.serverOwnedLifecycle) {
+                preserveServerOwnedTurn = true
+                log.warn('[ZyraPiRuntime] Desktop transport detached while the canonical turn remains server-owned', {
+                    threadId: context.localThreadId,
+                    turnId,
+                    error: message
+                })
+                this.reconnectDetachedSession(context)
+                return
+            }
             if (isExpectedBridgeDisposalError(error)) {
                 if (context.activeTurnId === turnId) context.activeTurnId = null
                 markTurnCompleted(context, turnId)
@@ -1776,7 +2249,7 @@ export class ZyraPiRuntime extends EventEmitter {
                 payload: { state: sessionState, error: message, message }
             })
         } finally {
-            if (context.activeTurnId === turnId) {
+            if (!preserveServerOwnedTurn && context.activeTurnId === turnId) {
                 getAgentControlBroker().revokePrincipal(
                     { type: 'root', threadId: context.localThreadId, turnId },
                     'Root Browser control ended with its turn.'
@@ -1787,25 +2260,33 @@ export class ZyraPiRuntime extends EventEmitter {
     }
 
     private async ensureConnected(context: ZyraSessionContext): Promise<void> {
-        if (context.connected) return
+        if (context.connected && context.worker.isAlive()) return
         if (context.connectPromise) return context.connectPromise
 
-        context.connectPromise = (async () => {
+        context.connected = false
+        const pending = (async () => {
             const shouldResumeProviderSession = Boolean(context.resumeProviderThreadId)
             const requestedThreadId = shouldResumeProviderSession ? context.resumeProviderThreadId || undefined : undefined
-            const result = await context.worker.request('connect', {
-                cwd: context.cwd,
-                localThreadId: context.localThreadId,
-                threadId: requestedThreadId,
-                providerThreadId: requestedThreadId,
-                noSession: false,
-                model: context.model,
-                thinking: context.thinking,
-                profile: context.profile,
-                runtimeMode: context.runtimeMode,
-                webSearch: context.webSearch ?? undefined,
-                webFetch: context.webFetch ?? undefined
-            })
+            let result: Record<string, unknown>
+            try {
+                result = await context.worker.request('connect', {
+                    cwd: context.cwd,
+                    localThreadId: context.localThreadId,
+                    threadId: requestedThreadId,
+                    providerThreadId: requestedThreadId,
+                    noSession: false,
+                    model: context.model,
+                    thinking: context.thinking,
+                    profile: context.profile,
+                    runtimeMode: context.runtimeMode,
+                    webSearch: context.webSearch ?? undefined,
+                    webFetch: context.webFetch ?? undefined
+                })
+            } catch (error) {
+                if (this.getSessionContext(context.localThreadId) !== context) return
+                throw error
+            }
+            if (this.getSessionContext(context.localThreadId) !== context) return
             const previousProviderThreadId = context.providerThreadId
             const providerThreadId = String(result['threadId'] || result['providerThreadId'] || context.resumeProviderThreadId || context.providerThreadId || randomUUID())
             const model = String(result['model'] || context.model)
@@ -1819,6 +2300,8 @@ export class ZyraPiRuntime extends EventEmitter {
             const webSearch = typeof result['webSearch'] === 'boolean' ? result['webSearch'] : context.webSearch
             const webFetch = typeof result['webFetch'] === 'boolean' ? result['webFetch'] : context.webFetch
             const agentServerActiveTurnId = asString(result['agentServerActiveTurnId'])
+            const agentServerLatestTurnId = asString(result['agentServerLatestTurnId'])
+            const agentServerOrphanedTurnId = asString(result['agentServerOrphanedTurnId'])
             context.providerThreadId = providerThreadId
             context.resumeProviderThreadId = providerThreadId
             context.model = model
@@ -1827,10 +2310,17 @@ export class ZyraPiRuntime extends EventEmitter {
             context.runtimeMode = runtimeMode
             context.webSearch = webSearch
             context.webFetch = webFetch
+            context.sessionUsage = readSessionUsage(
+                result['usage'],
+                result['contextUsage'],
+                context.localThreadId,
+                result['autoCompactionEnabled']
+            )
             context.connected = true
             if (agentServerActiveTurnId && !context.activeTurnId) context.activeTurnId = agentServerActiveTurnId
             const connectedFleet = asRecord(result['fleet']) as unknown as FleetSnapshot | null
             if (connectedFleet) {
+                context.fleetSnapshot = connectedFleet
                 this.emitRuntime({
                     eventId: randomUUID(),
                     type: 'fleet.snapshot.updated',
@@ -1875,15 +2365,68 @@ export class ZyraPiRuntime extends EventEmitter {
                 providerThreadId,
                 payload: { providerThreadId, cwd: context.cwd, state: agentServerActiveTurnId ? 'running' : 'ready' }
             })
+            if (agentServerOrphanedTurnId && !context.completedTurnIds.has(agentServerOrphanedTurnId)) {
+                markTurnCompleted(context, agentServerOrphanedTurnId)
+                this.emitRuntime({
+                    eventId: randomUUID(),
+                    type: 'turn.completed',
+                    createdAt: nowIso(),
+                    threadId: context.localThreadId,
+                    providerThreadId,
+                    turnId: agentServerOrphanedTurnId,
+                    payload: { outcome: 'interrupted', usage: buildCompletedTurnUsage(context) }
+                })
+                if (context.activeTurnId === agentServerOrphanedTurnId) context.activeTurnId = null
+            }
             context.worker.flushReplay()
+            const attachedUsage = buildLiveAssistantTurnUsage(context)
+            if (attachedUsage && agentServerLatestTurnId) {
+                this.emitRuntime({
+                    eventId: randomUUID(),
+                    type: 'thread.token-usage.updated',
+                    createdAt: nowIso(),
+                    threadId: context.localThreadId,
+                    providerThreadId,
+                    turnId: agentServerLatestTurnId,
+                    payload: { usage: attachedUsage }
+                })
+            }
         })()
+        context.connectPromise = pending
 
         try {
-            await context.connectPromise
-        } catch (error) {
-            context.connectPromise = null
-            throw error
+            await pending
+        } finally {
+            if (context.connectPromise === pending) context.connectPromise = null
         }
+    }
+
+    private reconnectDetachedSession(context: ZyraSessionContext): void {
+        if (context.reconnectPromise) return
+        const pending = (async () => {
+            let attempt = 0
+            while (this.getSessionContext(context.localThreadId) === context) {
+                try {
+                    await this.ensureConnected(context)
+                    return
+                } catch (error) {
+                    attempt += 1
+                    if (attempt === 1 || attempt % 8 === 0) {
+                        log.warn('[ZyraPiRuntime] Retrying canonical agent-server attachment', {
+                            threadId: context.localThreadId,
+                            turnId: context.activeTurnId,
+                            attempt,
+                            error
+                        })
+                    }
+                    await new Promise((resolve) => setTimeout(resolve, Math.min(15_000, 250 * attempt)))
+                }
+            }
+        })()
+        context.reconnectPromise = pending
+        void pending.finally(() => {
+            if (context.reconnectPromise === pending) context.reconnectPromise = null
+        })
     }
 
     private handleZyraEvent(context: ZyraSessionContext, eventValue: unknown, metadata?: ZyraWorkerEventMetadata): void {
@@ -1891,6 +2434,19 @@ export class ZyraPiRuntime extends EventEmitter {
         if (!event) return
         const type = asString(event['type'])
         if (!type) return
+        if (type === 'server.transport.detached') {
+            context.connected = false
+            context.connectPromise = null
+            this.reconnectDetachedSession(context)
+            return
+        }
+        const sessionUsage = readSessionUsage(
+            event['sessionUsage'],
+            event['contextUsage'],
+            context.localThreadId,
+            event['autoCompactionEnabled']
+        )
+        if (sessionUsage && metadata?.replay !== true) context.sessionUsage = sessionUsage
         if (type === 'session_config') {
             const model = asString(event['model']) || context.model
             const thinking = isAssistantReasoningEffort(event['thinking']) ? event['thinking'] : context.thinking
@@ -1932,6 +2488,7 @@ export class ZyraPiRuntime extends EventEmitter {
             context.terminalAssistantMessageOutcome = null
             context.assistantMessageSequence = 0
             context.activeAssistantItemId = null
+            getUsageAccountedAssistantMessageIds(context).clear()
             context.toolArgsByCallId.clear()
             context.toolStartedAtByCallId.clear()
             context.assistantTextByItemId.clear()
@@ -1939,7 +2496,9 @@ export class ZyraPiRuntime extends EventEmitter {
             context.internalTextByItemId.clear()
             context.internalCompletedItemIds.clear()
             context.lastAssistantItemId = null
+            context.lastUsageTurnId = observedTurnId
             context.lastUsage = null
+            try { getAgentControlBroker().materializeUserAuthorizedBrowserGrant(context.localThreadId, observedTurnId) } catch {}
             this.emitRuntime({
                 eventId: randomUUID(),
                 type: 'turn.started',
@@ -1977,7 +2536,7 @@ export class ZyraPiRuntime extends EventEmitter {
                     ...(outcome === 'failed' ? {
                         errorMessage: terminalMessageOutcome?.errorMessage || asString(event['errorMessage']) || 'Zyra prompt failed.'
                     } : {}),
-                    usage: context.lastUsage
+                    usage: buildCompletedTurnUsage(context)
                 }
             })
             if (terminalMessageOutcome) context.terminalAssistantMessageOutcome = null
@@ -1994,6 +2553,7 @@ export class ZyraPiRuntime extends EventEmitter {
         if (type === 'fleet_snapshot' || type.startsWith('agent.') || type.startsWith('workflow.')) {
             const fleet = asRecord(event['fleet'] || event['fleetSnapshot']) as unknown as FleetSnapshot | null
             if (!fleet) return
+            context.fleetSnapshot = fleet
             this.emitRuntime({
                 eventId: randomUUID(),
                 type: 'fleet.snapshot.updated',
@@ -2059,6 +2619,44 @@ export class ZyraPiRuntime extends EventEmitter {
             return
         }
 
+        if (type === 'user_input_requested') {
+            const requestId = asString(event['requestId'])
+            if (!requestId) return
+            const questions = toUserInputQuestions(
+                event['questions'],
+                (value) => asRecord(value) || undefined,
+                (value) => asString(value) || undefined
+            )
+            if (questions.length === 0) return
+            this.emitRuntime({
+                eventId: randomUUID(),
+                type: 'user-input.requested',
+                createdAt: nowIso(),
+                threadId: context.localThreadId,
+                providerThreadId: context.providerThreadId,
+                turnId: turnId || undefined,
+                requestId,
+                payload: { questions }
+            })
+            return
+        }
+
+        if (type === 'user_input_resolved') {
+            const requestId = asString(event['requestId'])
+            if (!requestId) return
+            this.emitRuntime({
+                eventId: randomUUID(),
+                type: 'user-input.resolved',
+                createdAt: nowIso(),
+                threadId: context.localThreadId,
+                providerThreadId: context.providerThreadId,
+                turnId: turnId || undefined,
+                requestId,
+                payload: { answers: readUserInputAnswers(event['answers']) }
+            })
+            return
+        }
+
         if (type === 'message_start' || type === 'message_update' || type === 'message_end') {
             const message = asRecord(event['message'])
             const role = asString(message?.['role'])
@@ -2094,7 +2692,40 @@ export class ZyraPiRuntime extends EventEmitter {
                 hasThinkingBlock: context.internalTextByItemId.has(itemId)
             }
             const content = extractAssistantEventContentParts(event, currentContent, type)
-            context.lastUsage = readUsage(message?.['usage']) || context.lastUsage
+            const messageUsage = type === 'message_end' ? readUsage(message?.['usage']) : null
+            const usageMessageId = resolveAssistantUsageMessageIdentity(message, turnId, itemId)
+            const usageAccountedMessageIds = getUsageAccountedAssistantMessageIds(context)
+            if (messageUsage && shouldAccountAssistantMessageUsage({
+                replay: metadata?.replay === true,
+                turnId,
+                activeTurnId: context.activeTurnId,
+                turnCompleted: context.completedTurnIds.has(turnId),
+                messageAlreadyAccounted: context.lastUsageTurnId === turnId
+                    && usageAccountedMessageIds.has(usageMessageId)
+            })) {
+                if (context.lastUsageTurnId !== turnId) {
+                    context.lastUsageTurnId = turnId
+                    context.lastUsage = null
+                    usageAccountedMessageIds.clear()
+                }
+                usageAccountedMessageIds.add(usageMessageId)
+                context.lastUsage = mergeAssistantTurnUsage(context.lastUsage, messageUsage)
+            }
+            const liveTurnUsage = metadata?.replay === true || (!sessionUsage && !messageUsage)
+                ? null
+                : buildLiveAssistantTurnUsage(context)
+            if (liveTurnUsage) {
+                this.emitRuntime({
+                    eventId: randomUUID(),
+                    type: 'thread.token-usage.updated',
+                    createdAt: asString(event['timestamp']) || nowIso(),
+                    threadId: context.localThreadId,
+                    providerThreadId: context.providerThreadId,
+                    turnId,
+                    sourceSequence: metadata?.sequence,
+                    payload: { usage: liveTurnUsage }
+                })
+            }
             if (hasAssistantThinkingText(content) || isReasoningOnlyAssistantEvent(event)) {
                 this.streamInternalText(context, turnId, content.thinking || content.text, itemId)
             }
@@ -2231,6 +2862,30 @@ export class ZyraPiRuntime extends EventEmitter {
                     }
                 }
             })
+            const estimatedTokensAfter = typeof result?.['estimatedTokensAfter'] === 'number'
+                ? result.estimatedTokensAfter
+                : null
+            const activeCompactionTurnId = lifecycle.turnId || turnId
+            if (status === 'completed' && estimatedTokensAfter != null && estimatedTokensAfter >= 0 && activeCompactionTurnId) {
+                context.sessionUsage = {
+                    ...(context.sessionUsage || { threadId: context.localThreadId }),
+                    threadId: context.localThreadId,
+                    contextTokens: estimatedTokensAfter
+                }
+                const compactedUsage = buildLiveAssistantTurnUsage(context)
+                if (compactedUsage) {
+                    this.emitRuntime({
+                        eventId: randomUUID(),
+                        type: 'thread.token-usage.updated',
+                        createdAt: completedAt,
+                        threadId: context.localThreadId,
+                        providerThreadId: context.providerThreadId,
+                        turnId: activeCompactionTurnId,
+                        sourceSequence: metadata?.sequence,
+                        payload: { usage: compactedUsage }
+                    })
+                }
+            }
             context.activeCompaction = null
             return
         }

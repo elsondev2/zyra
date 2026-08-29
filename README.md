@@ -30,6 +30,8 @@ Zyra separates public tool behavior from optional local context:
 
 The public repo should not include private relationship context, raw exports, local datasets, or person-specific prompt assumptions.
 
+Product analytics is optional and disabled by default. When configured, it sends only allowlisted coarse outcomes under a random installation ID. Prompts, responses, files, paths, URLs, Browser history, account identity, terminal content, and raw errors are excluded. See [Product analytics](docs/architecture/product-analytics.md) and [setup](docs/guides/product-analytics-setup.md).
+
 ## Run It Locally
 
 ```powershell
@@ -155,6 +157,7 @@ Inside chat:
 - `/themes`, `/thinking`, and `/models` adjust runtime behavior.
 - `/reload` restarts Zyra from disk and resumes the chat.
 - `/reload --soft` reloads commands, themes, prompt, and memory only.
+- `/skill:<name> <task>` explicitly runs a discovered local Agent Skill. Typing `/` in Desktop opens a project-aware picker above the composer while retaining Desktop's `/yolo`, `/safe`, and `/include` commands.
 
 The complete agent/workflow guide, safety boundaries, definition formats, persistence layout, and desktop controls are in [docs/guides/subagents-workflows.md](docs/guides/subagents-workflows.md). Current provider compatibility and deferred model work are tracked in [docs/guides/model-support.md](docs/guides/model-support.md).
 
@@ -174,7 +177,9 @@ Start with the [Voice-Agent Architecture](docs/architecture/voice-agent/README.m
 - `src/agents/` owns event-sourced fleet authority, child Pi sessions, routing, isolation, and output safety. `src/workflows/` owns validation, QuickJS execution, scheduling, caching, approvals, and budgets.
 - `AGENTS.md` keeps project rules that should survive across chats.
 - `commands/` is where repeated workflows can become slash commands.
+- `~/.zyra/commands/<name>.md` is the personal command path available across projects.
 - `.zyra/commands/<name>.md` is the project-local command path.
+- Skills follow Pi's local Agent Skills locations: `~/.pi/agent/skills`, `~/.agents/skills`, trusted project `.pi/skills`, and trusted ancestor `.agents/skills`. Zyra also keeps `skills/`, `~/.zyra/skills`, and project `.zyra/skills` for compatibility. Settings > Skills can opt into compatible Codex, Claude Code, or explicitly selected folders and resolve name collisions. Project scope still wins over personal scope.
 - `.zyra/profiles/<name>.md` is the local private profile overlay path.
 
 Commands should earn their place. The tool should grow from real use, not from pretending every workflow is known in advance.

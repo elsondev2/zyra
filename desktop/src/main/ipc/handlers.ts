@@ -2,8 +2,11 @@
  * Zyra - IPC Handler Registry
  */
 
-import { app, BrowserWindow, ipcMain as electronIpcMain } from 'electron'
+import { app, BrowserWindow, webContents } from 'electron'
 import log from 'electron-log'
+import { BROWSER_DOWNLOADS_ACTION_CHANNEL, BROWSER_DOWNLOADS_FOLDER_ACTION_CHANNEL, BROWSER_DOWNLOADS_FOLDER_LIST_CHANNEL, BROWSER_DOWNLOADS_LIST_CHANNEL, BROWSER_DOWNLOADS_PREVIEW_CHANNEL } from '../../shared/browser-downloads'
+import { BROWSER_PAGE_ICON_CHANNEL } from '../../shared/browser-favicon'
+import { getTerminalCommandStatus, installTerminalCommand, removeTerminalCommand } from '../terminal-command-service'
 import {
     handleGetFileSystemRoots,
 } from './handlers/system-handlers'
@@ -38,6 +41,7 @@ import {
     handleAssistantGetAccountOverview,
     handleAssistantGetFleetSnapshot,
     handleAssistantGetHistoryPage,
+    handleAssistantGetSkillSourceOverview,
     handleAssistantHydrateHistoryBody,
     handleAssistantGetReviewIndex,
     handleAssistantGetSessionTurnUsage,
@@ -49,10 +53,12 @@ import {
     handleAssistantInterruptTurn,
     handleAssistantIngestRealtimeVoiceEvent,
     handleAssistantListModels,
+    handleAssistantListPromptResources,
     handleAssistantNewThread,
     handleAssistantPersistClipboardImage,
     handleAssistantRedeemAccountReset,
     handleAssistantResolveClipboardAttachment,
+    handleAssistantRegenerateSessionTitle,
     handleAssistantRenameSession,
     handleAssistantRespondApproval,
     handleAssistantRespondUserInput,
@@ -62,6 +68,7 @@ import {
     handleAssistantSubscribeRealtimeVoice,
     handleAssistantTranscribeVoice,
     handleAssistantUnsubscribeRealtimeVoice,
+    handleAssistantUpdateSkillSourceSettings,
     handleAssistantWorkflowAction,
     handleAssistantSearchTurns,
     handleAssistantSelectSession,
@@ -94,6 +101,7 @@ import {
     handleGetProjectDetails,
     handleInstallProjectDependencies,
     handleGetProjectProcesses,
+    handleGetRunningLocalServers,
     handleGetProjectSessions
 } from './handlers/project-details-handlers'
 import {
@@ -103,6 +111,7 @@ import {
     handleGetPathInfo,
     handlePasteFileSystemItem,
     handleMoveFileSystemItem,
+    handleReadBinaryFile,
     handleReadFileContent,
     handleReadTextFileFull,
     handleRenameFileSystemItem,
@@ -114,16 +123,39 @@ import {
     handleClosePreviewTerminal,
     handleCreatePreviewTerminal,
     handleListPreviewTerminalSessions,
+    handleRegisterPreviewTerminalWorkspace,
+    handleReleasePreviewTerminalWorkspace,
     handleResizePreviewTerminal,
     handleSetPreviewTerminalTitle,
     handleWritePreviewTerminal
 } from './handlers/preview-terminal-handlers'
 import { handleRunPythonPreview, handleStopPythonPreview } from './handlers/python-preview-handlers'
 import {
+    handleBrowserDownloadAction,
+    handleBrowserDownloadsFolderAction,
+    handleCheckBrowserThreatNavigation,
+    handleClearBrowserHistory,
     handleClearBrowserPreviewData,
+    handleGetBrowserAdBlockStatus,
+    handleGetBrowserDownloadPreviewTarget,
+    handleGetBrowserPageIcon,
+    handleListBrowserDownloads,
+    handleListBrowserDownloadsFolder,
+    handleGetBrowserBackgroundProviderStatus,
+    handleGetBrowserHistory,
+    handleGetBrowserRemoteBackgrounds,
     handleGetBrowserLinkPreview,
     handleGetBrowserPreviewConfig,
-    handleOpenBrowserPreviewExternal
+    handleGetBrowserSearchSuggestions,
+    handleImportExternalBrowserHistory,
+    handleOpenBrowserPreviewExternal,
+    handleProceedBrowserThreatWarning,
+    handleRecordBrowserHistory,
+    handleScanExternalBrowserHistoryProfiles,
+    handleSetBrowserAdBlockEnabled,
+    handleDismissBrowserThreatWarning,
+    handleTrackBrowserRemoteBackground,
+    handleValidateBrowserUnsplashAccessKey
 } from './handlers/browser-preview-handlers'
 import {
     handleCancelBrowserPreviewAnnotation,
@@ -224,11 +256,16 @@ import {
     UPDATE_INSTALL_CHANNEL
 } from '../update/manager'
 import type { DesktopSetupServices } from '../setup'
+import { configureBrowserAdBlockService } from '../browser-adblock-service'
+import { configureBrowserBackgroundService } from '../browser-background-service'
+import { configureBrowserThreatProtectionService } from '../browser-threat-protection-service'
+import { BROWSER_ADBLOCK_DETECTED_CHANNEL, BROWSER_THREAT_BLOCKED_CHANNEL } from '../../shared/contracts/devscope-api'
 import {
     onboardingRequiredError,
     registerSetupIpcHandlers
 } from './handlers/setup-handlers'
 import { createOnboardingGatedIpcMain } from './onboarding-ipc-gate'
+import { ipcMain as trustedIpcMain } from './trusted-ipc'
 
 const PRE_ONBOARDING_ALLOWED_INVOKE_CHANNELS = new Set([
     'devscope:selectFolder',
@@ -236,7 +273,7 @@ const PRE_ONBOARDING_ALLOWED_INVOKE_CHANNELS = new Set([
     'window:getRuntimeInfo'
 ])
 let isOnboardingAccessAllowed = () => false
-const ipcMain = createOnboardingGatedIpcMain(electronIpcMain, {
+const ipcMain = createOnboardingGatedIpcMain(trustedIpcMain, {
     isAccessAllowed: () => isOnboardingAccessAllowed(),
     allowedBeforeOnboarding: PRE_ONBOARDING_ALLOWED_INVOKE_CHANNELS,
     blockedResult: onboardingRequiredError
@@ -247,6 +284,23 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
 
     isOnboardingAccessAllowed = () => setupServices.onboarding.isAccessAllowed()
     configureHostedAiSecretResolver((provider) => setupServices.secrets.getHostedAiKey(provider))
+    configureBrowserBackgroundService(setupServices.secrets, app.getPath('userData'))
+    configureBrowserAdBlockService({
+        preferences: setupServices.preferences,
+        userDataPath: app.getPath('userData'),
+        notify: (event) => {
+            for (const window of BrowserWindow.getAllWindows()) {
+                if (!window.isDestroyed()) window.webContents.send(BROWSER_ADBLOCK_DETECTED_CHANNEL, event)
+            }
+        }
+    })
+    configureBrowserThreatProtectionService({
+        userDataPath: app.getPath('userData'),
+        notify: (ownerWebContentsId, warning) => {
+            const owner = webContents.fromId(ownerWebContentsId)
+            if (owner && !owner.isDestroyed()) owner.send(BROWSER_THREAT_BLOCKED_CHANNEL, warning)
+        }
+    })
     registerSetupIpcHandlers(setupServices)
     const requireCompletedSetup = <T extends (...args: any[]) => any>(handler: T) => (
         (...args: Parameters<T>) => setupServices.onboarding.isAccessAllowed()
@@ -304,6 +358,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(ASSISTANT_IPC.redeemAccountReset, requireCompletedSetup(handleAssistantRedeemAccountReset))
     ipcMain.handle(ASSISTANT_IPC.getSessionTurnUsage, requireCompletedSetup(handleAssistantGetSessionTurnUsage))
     ipcMain.handle(ASSISTANT_IPC.listModels, requireCompletedSetup(handleAssistantListModels))
+    ipcMain.handle(ASSISTANT_IPC.listPromptResources, requireCompletedSetup(handleAssistantListPromptResources))
+    ipcMain.handle(ASSISTANT_IPC.getSkillSourceOverview, requireCompletedSetup(handleAssistantGetSkillSourceOverview))
+    ipcMain.handle(ASSISTANT_IPC.updateSkillSourceSettings, requireCompletedSetup(handleAssistantUpdateSkillSourceSettings))
     ipcMain.handle(ASSISTANT_IPC.connect, requireCompletedSetup(handleAssistantConnect))
     ipcMain.handle(ASSISTANT_IPC.disconnect, requireCompletedSetup(handleAssistantDisconnect))
     ipcMain.handle(ASSISTANT_IPC.createSession, requireCompletedSetup(handleAssistantCreateSession))
@@ -316,6 +373,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(ASSISTANT_IPC.getTurnDetail, requireCompletedSetup(handleAssistantGetTurnDetail))
     ipcMain.handle(ASSISTANT_IPC.searchTurns, requireCompletedSetup(handleAssistantSearchTurns))
     ipcMain.handle(ASSISTANT_IPC.renameSession, requireCompletedSetup(handleAssistantRenameSession))
+    ipcMain.handle(ASSISTANT_IPC.regenerateSessionTitle, requireCompletedSetup(handleAssistantRegenerateSessionTitle))
     ipcMain.handle(ASSISTANT_IPC.archiveSession, requireCompletedSetup(handleAssistantArchiveSession))
     ipcMain.handle(ASSISTANT_IPC.deleteSession, requireCompletedSetup(handleAssistantDeleteSession))
     ipcMain.handle(ASSISTANT_IPC.deleteMessage, requireCompletedSetup(handleAssistantDeleteMessage))
@@ -354,6 +412,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle('devscope:openInTerminal', handleOpenInTerminal)
     ipcMain.handle('devscope:listInstalledIdes', handleListInstalledIdes)
     ipcMain.handle('devscope:openProjectInIde', handleOpenProjectInIde)
+    ipcMain.handle('devscope:previewTerminal:registerWorkspace', handleRegisterPreviewTerminalWorkspace)
+    ipcMain.handle('devscope:previewTerminal:releaseWorkspace', handleReleasePreviewTerminalWorkspace)
     ipcMain.handle('devscope:previewTerminal:create', handleCreatePreviewTerminal)
     ipcMain.handle('devscope:previewTerminal:list', handleListPreviewTerminalSessions)
     ipcMain.handle('devscope:previewTerminal:write', handleWritePreviewTerminal)
@@ -362,6 +422,27 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle('devscope:previewTerminal:clear', handleClearPreviewTerminal)
     ipcMain.handle('devscope:previewTerminal:close', handleClosePreviewTerminal)
     ipcMain.handle('devscope:browserPreview:getConfig', handleGetBrowserPreviewConfig)
+    ipcMain.handle('devscope:browserPreview:checkThreatNavigation', handleCheckBrowserThreatNavigation)
+    ipcMain.handle('devscope:browserPreview:proceedThreatWarning', handleProceedBrowserThreatWarning)
+    ipcMain.handle('devscope:browserPreview:dismissThreatWarning', handleDismissBrowserThreatWarning)
+    ipcMain.handle(BROWSER_DOWNLOADS_LIST_CHANNEL, handleListBrowserDownloads)
+    ipcMain.handle(BROWSER_DOWNLOADS_ACTION_CHANNEL, handleBrowserDownloadAction)
+    ipcMain.handle(BROWSER_DOWNLOADS_PREVIEW_CHANNEL, handleGetBrowserDownloadPreviewTarget)
+    ipcMain.handle(BROWSER_DOWNLOADS_FOLDER_LIST_CHANNEL, handleListBrowserDownloadsFolder)
+    ipcMain.handle(BROWSER_DOWNLOADS_FOLDER_ACTION_CHANNEL, handleBrowserDownloadsFolderAction)
+    ipcMain.handle(BROWSER_PAGE_ICON_CHANNEL, handleGetBrowserPageIcon)
+    ipcMain.handle('devscope:browserPreview:getHistory', handleGetBrowserHistory)
+    ipcMain.handle('devscope:browserPreview:getSearchSuggestions', handleGetBrowserSearchSuggestions)
+    ipcMain.handle('devscope:browserPreview:scanExternalHistory', handleScanExternalBrowserHistoryProfiles)
+    ipcMain.handle('devscope:browserPreview:importExternalHistory', handleImportExternalBrowserHistory)
+    ipcMain.handle('devscope:browserPreview:recordHistory', handleRecordBrowserHistory)
+    ipcMain.handle('devscope:browserPreview:clearHistory', handleClearBrowserHistory)
+    ipcMain.handle('devscope:browserPreview:getAdBlockStatus', handleGetBrowserAdBlockStatus)
+    ipcMain.handle('devscope:browserPreview:setAdBlockEnabled', handleSetBrowserAdBlockEnabled)
+    ipcMain.handle('devscope:browserPreview:getBackgroundProviderStatus', handleGetBrowserBackgroundProviderStatus)
+    ipcMain.handle('devscope:browserPreview:validateUnsplashAccessKey', handleValidateBrowserUnsplashAccessKey)
+    ipcMain.handle('devscope:browserPreview:getRemoteBackgrounds', handleGetBrowserRemoteBackgrounds)
+    ipcMain.handle('devscope:browserPreview:trackRemoteBackground', handleTrackBrowserRemoteBackground)
     ipcMain.handle('devscope:browserPreview:clearData', handleClearBrowserPreviewData)
     ipcMain.handle('devscope:browserPreview:clearCache', handleClearBrowserPreviewCache)
     ipcMain.handle('devscope:browserPreview:clearCookies', handleClearBrowserPreviewCookies)
@@ -388,6 +469,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle('devscope:installProjectDependencies', handleInstallProjectDependencies)
     ipcMain.handle('devscope:getFileTree', handleGetFileTree)
     ipcMain.handle('devscope:readFileContent', handleReadFileContent)
+    ipcMain.handle('devscope:readBinaryFile', handleReadBinaryFile)
     ipcMain.handle('devscope:readTextFileFull', handleReadTextFileFull)
     ipcMain.handle('devscope:getPathInfo', handleGetPathInfo)
     ipcMain.handle('devscope:writeTextFile', handleWriteTextFile)
@@ -400,6 +482,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle('devscope:moveFileSystemItem', handleMoveFileSystemItem)
     ipcMain.handle('devscope:getProjectSessions', handleGetProjectSessions)
     ipcMain.handle('devscope:getProjectProcesses', handleGetProjectProcesses)
+    ipcMain.handle('devscope:getRunningLocalServers', handleGetRunningLocalServers)
 
     ipcMain.handle('devscope:getGitHistory', handleGetGitHistory)
     ipcMain.handle('devscope:getGitHistoryCount', handleGetGitHistoryCount)
@@ -483,6 +566,18 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
         const targetWindow = BrowserWindow.fromWebContents(event.sender)
         if (!targetWindow || targetWindow.isDestroyed()) return false
         return targetWindow.isMaximized() || targetWindow.isFullScreen()
+    })
+    ipcMain.handle('window:getTerminalCommandStatus', async () => {
+        try { return { success: true, status: await getTerminalCommandStatus() } }
+        catch (error) { return { success: false, error: error instanceof Error ? error.message : 'Could not inspect the terminal command.' } }
+    })
+    ipcMain.handle('window:installTerminalCommand', async () => {
+        try { return { success: true, status: await installTerminalCommand() } }
+        catch (error) { return { success: false, error: error instanceof Error ? error.message : 'Could not install the terminal command.' } }
+    })
+    ipcMain.handle('window:removeTerminalCommand', async () => {
+        try { return { success: true, status: await removeTerminalCommand() } }
+        catch (error) { return { success: false, error: error instanceof Error ? error.message : 'Could not remove the terminal command.' } }
     })
     ipcMain.handle('window:getRuntimeInfo', () => {
         const platform = process.platform as ZyraDesktopPlatform

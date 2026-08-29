@@ -260,7 +260,7 @@ assert.equal(migrated.assistantProductProfile, 'builder')
 assert.equal(migrated.assistantDefaultModel, 'legacy-model')
 assert.equal(migrated.assistantTitleModel, 'openai-codex/gpt-5.6-luna')
 assert.equal(migrated.assistantDefaultRuntimeMode, 'full-access')
-assert.equal(migrated.assistantDefaultInteractionMode, 'plan')
+assert.equal('assistantDefaultInteractionMode' in migrated, false, 'retired Plan-mode preferences are removed')
 assert.equal(migrated.assistantDefaultEffort, 'high')
 assert.equal(migrated.assistantDefaultFastMode, true)
 
@@ -294,6 +294,8 @@ assert.equal(findSettingsSearchTargets('terminal-runtime', 'font size')[0]?.targ
 assert.equal(findSettingsSearchTargets('connections', 'phone')[0]?.label, 'Other devices', 'Settings keywords must locate future-facing device controls')
 assert.equal(findSettingsSearchTargets('assistant', 'web access')[0]?.label, 'Web access', 'Settings search must locate the web default after it leaves onboarding')
 assert.equal(findSettingsSearchTargets('assistant', 'luna')[0]?.label, 'Chat title model', 'Settings search must locate the independent chat-title model')
+assert.equal(findSettingsSearchTargets('assistant', 'detailed reasoning')[0]?.label, 'Reasoning summaries', 'Settings search must locate readable reasoning controls')
+assert.equal(findSettingsSearchTargets('assistant', '256k')[0]?.label, 'Context limit', 'Settings search must locate the real automatic-compaction boundary')
 
 const settingsShellSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/SettingsShell.tsx'), 'utf8')
 assert.match(
@@ -304,6 +306,7 @@ assert.match(
 assert.match(settingsShellSource, /<section ref=\{contentScrollRef\}[^>]+overflow-y-auto/, 'the reset must target the real Settings content scroller')
 assert.match(settingsShellSource, /data-settings-sidebar-peek="true"/, 'collapsed Settings should expose the same left-edge peek target as chat')
 assert.match(settingsShellSource, /zyra-sidebar-floating-surface absolute bottom-3 left-2 top-2 z-\[60\]/, 'collapsed Settings should use the shared floating bubble surface')
+assert.match(settingsShellSource, /width: `\$\{ASSISTANT_BUBBLE_SIDEBAR_WIDTH\}px`/, 'the Settings bubble should use the same stable wide width as chat')
 assert.match(settingsShellSource, /schedulePreviewClose\(ASSISTANT_SIDEBAR_COLLAPSE_MORPH_MS\)/, 'Settings collapse should retain the shared bubble morph before closing')
 assert.match(settingsShellSource, /aria-label=\{previewPinned \? 'Unpin bubble sidebar' : 'Pin bubble sidebar'\}/, 'the Settings bubble should expose the shared pin control')
 assert.match(settingsShellSource, /aria-label="Expand sidebar"/, 'the Settings bubble should expose the shared expand control')
@@ -324,12 +327,28 @@ assert.match(
     /Names new chats without adding the title request to the conversation\./,
     'the title-model row must explain that utility prompts stay out of the chat timeline'
 )
+assert.match(
+    assistantSettingsSource,
+    /title="Reasoning summaries"[\s\S]{0,1200}<option value="detailed">Detailed<\/option>/,
+    'Assistant Settings must expose the provider-supported detailed reasoning-summary mode'
+)
+assert.match(
+    assistantSettingsSource,
+    /title="Context limit"[\s\S]{0,1200}assistantContextCompactionThresholdTokens: Number\(event\.target\.value\)/,
+    'Assistant Settings must persist the real automatic-compaction threshold'
+)
+assert.match(
+    assistantSettingsSource,
+    /ASSISTANT_CONTEXT_COMPACTION_THRESHOLD_OPTIONS\.map/,
+    'the context selector must use the shared bounded runtime policy options'
+)
 const accountSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/AccountSettings.tsx'), 'utf8')
 const accountResetCreditsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/AccountResetCreditsSection.tsx'), 'utf8')
 const connectionsSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/ConnectionsSettings.tsx'), 'utf8')
 const browserControlSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/BrowserControlSettings.tsx'), 'utf8')
 const settingsNavigationSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/settings-navigation.tsx'), 'utf8')
 const settingsRouteLoadersSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/settings-route-loaders.ts'), 'utf8')
+const skillsSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/SkillsSettings.tsx'), 'utf8')
 const appSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/App.tsx'), 'utf8')
 assert.match(
     assistantSettingsSource,
@@ -389,6 +408,16 @@ assert.match(
 assert.match(settingsNavigationSource, /label: 'Account'[\s\S]{0,220}to: '\/settings\/account'/, 'Account must be a real top-level Settings destination')
 assert.match(appSource, /<Route path="account" element=\{<AccountSettings \/>\}/, 'the Account navigation destination must render the real account page')
 assert.match(appSource, /const AccountSettings = lazy\(loadAccountSettings\)/, 'Settings lazy routes must reuse the same preloadable module loader')
+assert.match(settingsNavigationSource, /label: 'Skills'[\s\S]{0,260}to: '\/settings\/skills'/, 'Skills must be a real top-level Settings destination')
+assert.match(appSource, /<Route path="skills" element=\{<SkillsSettings \/>\}/, 'the Skills destination must render the real source manager')
+assert.match(settingsRouteLoadersSource, /'\/settings\/skills': loadSkillsSettings/, 'Skills must participate in Settings intent preloading')
+assert.match(skillsSettingsSource, /title="Resolution order"[\s\S]{0,520}Project skills still win over personal skills/, 'Skills settings must explain deterministic scope and source priority')
+assert.match(skillsSettingsSource, /getSkillSourceOverview\(selectedProjectPath\)/, 'Skills settings must inspect personal and current-project source folders')
+assert.match(skillsSettingsSource, /cachedOverviewProjectKey === projectCacheKey\(projectPath\)/, 'Skills settings must not reuse one project overview for another project')
+assert.match(skillsSettingsSource, /updateSkillSourceSettings\(settings, selectedProjectPath\)/, 'source choices must persist through Desktop IPC with current-project context')
+assert.match(skillsSettingsSource, /window\.devscope\.selectFolder\(\)/, 'users must be able to add another compatible agent skill folder')
+assert.match(skillsSettingsSource, /function updateConflictPreference[\s\S]{0,520}preferredSourceBySkill/, 'conflict choices must persist as per-skill source overrides')
+assert.match(skillsSettingsSource, /title="Resolve skill names"[\s\S]{0,2600}updateConflictPreference/, 'overlapping skill names must expose an explicit per-name source choice')
 assert.match(settingsShellSource, /<Suspense fallback=\{<SettingsRouteFallback \/>\}>[\s\S]{0,100}<Outlet \/>/, 'first-visit page loading must preserve the Settings sidebar and shell')
 assert.match(settingsShellSource, /onPointerEnter=\{\(\) => preloadSettingsRoute\(item\.to\)\}[\s\S]{0,160}onFocus=\{\(\) => preloadSettingsRoute\(item\.to\)\}/, 'Settings destinations must preload from mouse and keyboard intent')
 assert.match(settingsRouteLoadersSource, /'\/settings\/account': loadAccountSettings[\s\S]*'\/settings\/about': loadAboutSettings/, 'every Settings destination must participate in intent preloading')
@@ -451,6 +480,7 @@ const settingsCss = readFileSync(resolve(import.meta.dir, '../src/renderer/src/i
 assert.match(settingsCss, /\.zyra-settings-switch\[data-state='checked'\]/, 'Checked switch CSS must be explicit')
 assert.match(settingsCss, /\.zyra-settings-switch:focus-visible/, 'Switch focus state must remain visible')
 assert.match(settingsCss, /\.zyra-settings-section-body > \* \+ \*/, 'Every Settings row type must share section dividers')
+assert.match(settingsCss, /\.settings-content-scrollbar\s*\{[^}]*scrollbar-gutter:\s*stable;/, 'Settings pages must reserve the content scrollbar gutter even when a page is short')
 assert.doesNotMatch(settingsCss, /\.zyra-settings-footer::before/, 'Back to chats must not retain the old gradient-only divider')
 assert.match(settingsLayoutSource, /max-h-\[calc\(100vh-2\.5rem\)\][\s\S]{0,120}flex-col overflow-hidden/, 'Settings dialogs must remain viewport bounded')
 assert.match(settingsLayoutSource, /min-h-0 overflow-y-auto space-y-3/, 'Settings dialog bodies must scroll independently between fixed header and footer')

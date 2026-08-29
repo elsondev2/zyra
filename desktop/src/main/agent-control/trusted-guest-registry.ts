@@ -12,6 +12,7 @@ export type TrustedBrowserGuest = {
     guest: WebContents
     tabId: string | null
     ownerThreadId: string | null
+    sessionMode: 'normal' | 'incognito' | null
     registeredAt: string
 }
 
@@ -28,6 +29,7 @@ class TrustedGuestRegistry {
             guest,
             tabId: null,
             ownerThreadId: null,
+            sessionMode: null,
             registeredAt: new Date().toISOString()
         }
         this.byGuestId.set(guest.id, entry)
@@ -38,20 +40,36 @@ class TrustedGuestRegistry {
         return entry
     }
 
-    bind(ownerWebContentsId: number, guestWebContentsId: number, tabId: string, ownerThreadId: string): TrustedBrowserGuest {
+    bind(ownerWebContentsId: number, guestWebContentsId: number, tabId: string, ownerThreadId: string, sessionMode: 'normal' | 'incognito'): TrustedBrowserGuest {
         const entry = this.byGuestId.get(guestWebContentsId)
         if (!entry || entry.guest.isDestroyed()) throw new AgentControlError('CONTROL_TARGET_NOT_FOUND', 'The Browser guest is not registered in main.')
         if (entry.ownerWebContentsId !== ownerWebContentsId) throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The Browser guest belongs to another window.')
         if (!isTrustedBrowserTabId(tabId)) throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Browser tab identity is invalid.')
         if (!/^[a-zA-Z0-9][a-zA-Z0-9:._-]{0,191}$/.test(ownerThreadId)) throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Browser owner thread identity is invalid.')
+        if (sessionMode !== 'normal' && sessionMode !== 'incognito') throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Browser session mode is invalid.')
         if (entry.ownerThreadId && entry.ownerThreadId !== ownerThreadId) throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The Browser guest is already bound to another thread.')
+        if (entry.sessionMode && entry.sessionMode !== sessionMode) throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The Browser guest is already bound to another session mode.')
         entry.tabId = tabId
         entry.ownerThreadId = ownerThreadId
+        entry.sessionMode = sessionMode
+        return entry
+    }
+
+    transferOwner(guestWebContentsId: number, previousOwnerWebContentsId: number, ownerWebContentsId: number): TrustedBrowserGuest {
+        const entry = this.byGuestId.get(guestWebContentsId)
+        if (!entry || entry.guest.isDestroyed()) throw new AgentControlError('CONTROL_TARGET_NOT_FOUND', 'The Browser guest is no longer available.')
+        if (entry.ownerWebContentsId !== previousOwnerWebContentsId) throw new AgentControlError('CONTROL_SCOPE_DENIED', 'The Browser guest owner changed during transfer.')
+        entry.ownerWebContentsId = ownerWebContentsId
         return entry
     }
 
     findByIdentity(guestIdentity: string): TrustedBrowserGuest | undefined {
         return [...this.byGuestId.values()].find((entry) => entry.guestIdentity === guestIdentity)
+    }
+
+    findByGuestId(guestWebContentsId: number): TrustedBrowserGuest | undefined {
+        const entry = this.byGuestId.get(guestWebContentsId)
+        return entry && !entry.guest.isDestroyed() ? entry : undefined
     }
 
     resolveOwned(ownerWebContentsId: number, guestWebContentsId: number, tabId: string): TrustedBrowserGuest {

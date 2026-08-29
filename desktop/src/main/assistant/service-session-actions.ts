@@ -14,9 +14,14 @@ import {
     parseDevContextCompactionTestCommand,
     type AssistantDevContextCompactionTestCommand
 } from '../../shared/assistant/dev-context-compaction-test'
-import { isAssistantSessionProjectLocked } from '../../shared/assistant/session-project'
+import {
+    isAssistantSessionProjectLocked,
+    isAssistantThreadProjectWarmupOnly
+} from '../../shared/assistant/session-project'
+import { normalizeAssistantRuntimePolicy } from '../../shared/assistant/runtime-policy'
 import { is } from '../utils'
 import { prepareAssistantPromptImages } from './prompt-images'
+import { isCanonicalPresenceActive } from './service-canonical-presence'
 import { buildDeleteMessagePlan } from './service-history'
 import { createAssistantSessionRecord, createAssistantUserMessage, createRunningLatestTurn } from './service-records'
 import type { AssistantServiceActionDeps } from './service-action-deps'
@@ -41,6 +46,7 @@ import {
     queueGeneratedSessionTitle,
     shouldGenerateSessionTitleForPrompt
 } from './session-title-generation'
+import { respondToAssistantUserInputWithRuntime } from './user-input-response'
 import {
     createAssistantId,
     deriveSessionTitleFromPrompt,
@@ -328,11 +334,13 @@ export async function setAssistantSessionProjectPathAction(
     }
     const occurredAt = nowIso()
     for (const thread of session.threads) {
+        const connectionOnlyWarmup = isAssistantThreadProjectWarmupOnly(thread)
         deps.runtime.disconnect(getAssistantCanonicalThreadId(thread))
         deps.appendEvent('thread.updated', occurredAt, {
             threadId: thread.id,
             patch: {
                 cwd: route.projectPath,
+                ...(connectionOnlyWarmup ? { state: 'ready' as const, lastError: null } : {}),
                 updatedAt: occurredAt
             }
         }, sessionId, thread.id)
@@ -486,6 +494,12 @@ export async function sendAssistantPromptAction(
     }
 
     const promptImages = await prepareAssistantPromptImages(options?.images)
+    const runtimePolicy = normalizeAssistantRuntimePolicy(
+        await deps.getRuntimePolicy?.().catch((error) => {
+            log.warn('[Assistant] Failed to read the runtime policy preference', error)
+            return undefined
+        })
+    )
     const persistedFirstUserMessage = isDefaultSessionTitle(session.title)
         ? null
         : await deps.getFirstUserMessageText(session.id)
@@ -522,7 +536,7 @@ export async function sendAssistantPromptAction(
     const updatedThreadPatch: Partial<AssistantThread> & Pick<AssistantThread, 'model' | 'runtimeMode' | 'interactionMode' | 'cwd' | 'state' | 'lastError' | 'activePlan' | 'updatedAt'> = {
         model: options?.model || thread.model,
         runtimeMode: options?.runtimeMode || thread.runtimeMode,
-        interactionMode: options?.interactionMode || thread.interactionMode,
+        interactionMode: 'default',
         cwd: runtimeCwd,
         state: hasLiveRuntimeSession ? 'running' : 'starting',
         lastError: null,
@@ -542,11 +556,13 @@ export async function sendAssistantPromptAction(
         const result = await deps.runtime.sendPrompt(runtimeThreadId, input, {
             model: options?.model,
             runtimeMode: options?.runtimeMode,
-            interactionMode: options?.interactionMode,
+            interactionMode: 'default',
             effort: options?.effort,
             serviceTier: options?.serviceTier,
             profile: options?.profile,
-            images: promptImages.length > 0 ? promptImages : undefined
+            images: promptImages.length > 0 ? promptImages : undefined,
+            reasoningSummary: runtimePolicy.reasoningSummary,
+            contextCompactionThresholdTokens: runtimePolicy.contextCompactionThresholdTokens
         })
         const latestTurn = createRunningLatestTurn(result.turnId, occurredAt, options)
         deps.appendEvent('thread.latest-turn.updated', occurredAt, { threadId: thread.id, latestTurn }, session.id, thread.id)
@@ -630,7 +646,13 @@ export async function respondAssistantUserInputAction(
     await deps.ensureReady()
     const target = findThreadForUserInput(deps.getSnapshot(), input.requestId)
     if (!target) throw new Error(`Unknown user-input request ${input.requestId}.`)
-    await deps.runtime.respondUserInput(getAssistantCanonicalThreadId(target.thread), input.requestId, input.answers)
+    await respondToAssistantUserInputWithRuntime({
+        runtime: deps.runtime,
+        thread: target.thread,
+        cwd: deps.getSessionRuntimeCwd(target.session, target.thread),
+        requestId: input.requestId,
+        answers: input.answers
+    })
     return { success: true as const }
 }
 
@@ -641,12 +663,14 @@ export async function getAssistantRuntimeStatusAction(deps: AssistantServiceActi
     const thread = getActiveThread(session)
     const activeRuntimeThreadId = thread ? getAssistantCanonicalThreadId(thread) : null
     const liveConnected = activeRuntimeThreadId ? deps.runtime.hasSession(activeRuntimeThreadId) : false
+    const canonicalConnected = isCanonicalPresenceActive(thread?.canonicalPresence)
+    const connected = liveConnected || canonicalConnected
     return {
         available: availability.available,
-        connected: liveConnected,
+        connected,
         selectedSessionId: session?.id || null,
         activeThreadId: thread?.id || null,
-        state: liveConnected ? (thread?.state || 'disconnected') : 'disconnected',
+        state: connected ? (thread?.state || 'disconnected') : 'disconnected',
         reason: availability.reason
     }
 }

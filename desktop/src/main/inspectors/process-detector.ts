@@ -4,13 +4,23 @@
  * Checks for dev servers, node processes, and other development tools
  */
 
-import { exec } from 'child_process'
+import { exec, execFile } from 'child_process'
 import { promisify } from 'util'
-import { normalize, resolve } from 'path'
+import { normalize, posix, resolve, win32 } from 'path'
 import log from 'electron-log'
 import net from 'net'
+import { request as httpRequest } from 'node:http'
+import { request as httpsRequest } from 'node:https'
 
 const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
+const LOCAL_SERVER_SCAN_TTL_MS = 10_000
+const LOCAL_SERVER_SCAN_CACHE_LIMIT = 8
+const LOCAL_SERVER_PROBE_TIMEOUT_MS = 650
+const LOCAL_SERVER_TITLE_MAX_BYTES = 64 * 1024
+const LOCAL_SERVER_TITLE_MAX_LENGTH = 160
+const PROCESS_INVENTORY_TTL_MS = 5_000
+const PORT_INVENTORY_TTL_MS = 3_000
 
 export interface ProcessInfo {
     pid: number
@@ -26,50 +36,109 @@ export interface ProjectProcessStatus {
     activePorts: number[]
 }
 
-// Common development server ports
-const DEV_SERVER_PORTS = [
-    3000,  // React, Next.js, Express default
-    3001,  // React alternate
-    4200,  // Angular
-    5173,  // Vite
-    5174,  // Vite alternate
-    5000,  // Flask, Various
-    8000,  // Django, Python HTTP
-    8080,  // Common dev server
-    8081,  // Metro bundler (React Native)
-    4000,  // Phoenix, GraphQL
-    9000,  // PHP built-in
-    1234,  // Parcel
-    4321,  // Astro
-    3333,  // Adonis
-    5555,  // Expo
-    19000, // Expo
-    19001, // Expo
-    19002, // Expo DevTools
-]
+export interface RunningLocalServer {
+    pid: number | null
+    port: number
+    url: string
+    pageTitle?: string
+    processName: string
+    attachedToProject: boolean
+}
+
+type DetectedProcess = {
+    pid: number
+    parentPid: number | null
+    name: string
+    command: string
+}
+
+let processInventoryCache: { expiresAt: number; promise: Promise<DetectedProcess[]> } | null = null
+let portInventoryCache: { expiresAt: number; promise: Promise<Map<number, number>> } | null = null
+
+export function commandReferencesProjectPath(command: string, projectPath: string, platform = process.platform): boolean {
+    if (!String(command || '').trim() || !String(projectPath || '').trim()) return false
+    const pathApi = platform === 'win32' ? win32 : posix
+    const normalizeForMatch = (value: string) => {
+        const normalized = pathApi.normalize(pathApi.resolve(value)).replace(/\\/g, '/')
+        return platform === 'win32' ? normalized.toLowerCase() : normalized
+    }
+    const target = normalizeForMatch(projectPath).replace(/\/$/, '')
+    const haystack = (platform === 'win32' ? command.toLowerCase() : command).replace(/\\/g, '/')
+    let index = haystack.indexOf(target)
+    while (index >= 0) {
+        const before = haystack[index - 1] || ''
+        const after = haystack[index + target.length] || ''
+        const startsAtBoundary = !before || /[\s"'=(:,;]/.test(before)
+        const endsAtBoundary = !after || after === '/' || /[\s"',;:)]/.test(after)
+        if (startsAtBoundary && endsAtBoundary) return true
+        index = haystack.indexOf(target, index + 1)
+    }
+    return false
+}
+
+function isProcessAttachedToProject(pid: number, processByPid: Map<number, DetectedProcess>, projectPath: string): boolean {
+    if (!projectPath) return false
+    const visited = new Set<number>()
+    let currentPid: number | null = pid
+    for (let depth = 0; currentPid && depth < 12 && !visited.has(currentPid); depth += 1) {
+        visited.add(currentPid)
+        const row = processByPid.get(currentPid)
+        if (!row) return false
+        if (commandReferencesProjectPath(row.command, projectPath)) return true
+        currentPid = row.parentPid
+    }
+    return false
+}
+
+function portRange(start: number, end: number): number[] {
+    return Array.from({ length: end - start + 1 }, (_, index) => start + index)
+}
+
+// Common defaults plus the short auto-increment ranges used by local development tools.
+const DEV_SERVER_PORTS = [...new Set([
+    1234,
+    ...portRange(3000, 3010),
+    3333,
+    ...portRange(4000, 4010),
+    4173,
+    4200,
+    4321,
+    ...portRange(5000, 5010),
+    ...portRange(5173, 5180),
+    5555,
+    6006,
+    7007,
+    7860,
+    ...portRange(8000, 8010),
+    ...portRange(8080, 8090),
+    8501,
+    8787,
+    8888,
+    ...portRange(9000, 9010),
+    19000,
+    19001,
+    19002
+])]
 
 /**
  * Check if a port is in use
  */
 async function isPortInUse(port: number): Promise<boolean> {
-    return new Promise((resolve) => {
-        const server = net.createServer()
-
-        server.once('error', (err: any) => {
-            if (err.code === 'EADDRINUSE') {
-                resolve(true)
-            } else {
-                resolve(false)
-            }
-        })
-
-        server.once('listening', () => {
-            server.close()
-            resolve(false)
-        })
-
-        server.listen(port, '127.0.0.1')
+    const probe = (host: string) => new Promise<boolean>((resolve) => {
+        const socket = net.createConnection({ host, port })
+        let settled = false
+        const finish = (open: boolean) => {
+            if (settled) return
+            settled = true
+            socket.destroy()
+            resolve(open)
+        }
+        socket.setTimeout(180, () => finish(false))
+        socket.once('connect', () => finish(true))
+        socket.once('error', () => finish(false))
     })
+    const results = await Promise.all([probe('127.0.0.1'), probe('::1')])
+    return results.some(Boolean)
 }
 
 /**
@@ -100,93 +169,285 @@ export async function getActivePorts(): Promise<number[]> {
  * Get processes running in a specific directory (Windows)
  */
 async function getProcessesInDirectory(projectPath: string): Promise<ProcessInfo[]> {
-    const processes: ProcessInfo[] = []
-    const normalizedPath = normalize(resolve(projectPath)).toLowerCase()
-
+    const resolvedProjectPath = normalize(resolve(projectPath))
     try {
-        // Use WMIC to get processes with their command line
-        const { stdout } = await execAsync(
-            'wmic process get processid,name,commandline /format:csv',
-            { timeout: 5000, maxBuffer: 1024 * 1024 }
-        )
-
-        const lines = stdout.trim().split('\n').slice(1) // Skip header
-
-        for (const line of lines) {
-            if (!line.trim()) continue
-
-            const parts = line.split(',')
-            if (parts.length < 4) continue
-
-            const commandLine = parts.slice(1, -2).join(',').toLowerCase()
-            const name = parts[parts.length - 2]?.trim()
-            const pid = parseInt(parts[parts.length - 1]?.trim(), 10)
-
-            if (isNaN(pid) || !name) continue
-
-            // Check if process is related to our project path
-            if (commandLine.includes(normalizedPath)) {
-                let type: ProcessInfo['type'] = 'other'
-
-                if (name.toLowerCase().includes('node')) {
-                    type = 'node'
-                } else if (name.toLowerCase().includes('python')) {
-                    type = 'python'
-                }
-
-                // Check if it's a dev server by checking command line
-                if (
-                    commandLine.includes('dev') ||
-                    commandLine.includes('start') ||
-                    commandLine.includes('serve') ||
-                    commandLine.includes('vite') ||
-                    commandLine.includes('next') ||
-                    commandLine.includes('webpack')
-                ) {
-                    type = 'dev-server'
-                }
-
-                processes.push({
-                    pid,
-                    name,
-                    command: commandLine.substring(0, 200), // Truncate
-                    type
-                })
+        const rows = await readProcessInventory()
+        const processByPid = new Map(rows.map((row) => [row.pid, row]))
+        return rows.flatMap((row): ProcessInfo[] => {
+            const commandLine = row.command.toLowerCase()
+            if (!isProcessAttachedToProject(row.pid, processByPid, resolvedProjectPath)) return []
+            let type: ProcessInfo['type'] = row.name.toLowerCase().includes('node') || row.name.toLowerCase().includes('bun')
+                ? 'node'
+                : row.name.toLowerCase().includes('python')
+                    ? 'python'
+                    : 'other'
+            if (/\b(?:dev|start|serve|vite|next|webpack|parcel|astro|nuxt|uvicorn|gunicorn)\b/i.test(commandLine)) {
+                type = 'dev-server'
             }
-        }
+            return [{
+                pid: row.pid,
+                name: row.name,
+                command: row.command.slice(0, 200),
+                type
+            }]
+        })
     } catch (err) {
-        log.warn('[ProcessDetector] Failed to get processes:', err)
+        log.warn('[ProcessDetector] Project process inventory unavailable', { errorType: err instanceof Error ? err.name : 'UnknownError' })
+        return []
     }
+}
 
-    return processes
+async function readWindowsProcesses(): Promise<DetectedProcess[]> {
+    const commands = [
+        "$ErrorActionPreference='Stop'; @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Select-Object ProcessId,ParentProcessId,Name,CommandLine) | ConvertTo-Json -Compress -Depth 3",
+        "$ErrorActionPreference='Stop'; @(Get-WmiObject -Class Win32_Process -ErrorAction Stop | Select-Object ProcessId,ParentProcessId,Name,CommandLine) | ConvertTo-Json -Compress -Depth 3"
+    ]
+    let stdout = ''
+    let lastError: unknown = null
+    for (const command of commands) {
+        try {
+            const result = await execFileAsync('powershell.exe', [
+                '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command
+            ], {
+                timeout: 12_000,
+                maxBuffer: 8 * 1024 * 1024,
+                windowsHide: true
+            })
+            stdout = result.stdout
+            if (stdout.trim()) break
+        } catch (error) {
+            lastError = error
+            await new Promise((resolve) => setTimeout(resolve, 120))
+        }
+    }
+    if (!stdout.trim()) throw lastError instanceof Error ? lastError : new Error('Windows process inventory is unavailable.')
+    const parsed = JSON.parse(stdout || '[]') as unknown
+    const rows = Array.isArray(parsed) ? parsed : parsed ? [parsed] : []
+    return rows.flatMap((entry): DetectedProcess[] => {
+        if (!entry || typeof entry !== 'object') return []
+        const row = entry as Record<string, unknown>
+        const pid = Number(row['ProcessId'])
+        const parentPid = Number(row['ParentProcessId'])
+        const name = String(row['Name'] || '').trim()
+        if (!Number.isInteger(pid) || pid <= 0 || !name) return []
+        return [{
+            pid,
+            parentPid: Number.isInteger(parentPid) && parentPid > 0 ? parentPid : null,
+            name,
+            command: String(row['CommandLine'] || name)
+        }]
+    })
+}
+
+async function readProcessInventory(): Promise<DetectedProcess[]> {
+    const now = Date.now()
+    if (processInventoryCache && processInventoryCache.expiresAt > now) return processInventoryCache.promise
+    const promise = (process.platform === 'win32' ? readWindowsProcesses() : readPosixProcesses()).then((rows) => {
+        processInventoryCache = { expiresAt: Date.now() + PROCESS_INVENTORY_TTL_MS, promise: Promise.resolve(rows) }
+        return rows
+    }, (error) => {
+        processInventoryCache = null
+        throw error
+    })
+    processInventoryCache = { expiresAt: Number.POSITIVE_INFINITY, promise }
+    return promise
+}
+
+async function readPosixProcesses(): Promise<DetectedProcess[]> {
+    const { stdout } = await execAsync('ps -axo pid=,ppid=,comm=,args=', { timeout: 5_000, maxBuffer: 4 * 1024 * 1024 })
+    return stdout.split(/\r?\n/).flatMap((line): DetectedProcess[] => {
+        const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\S+)\s*(.*)$/)
+        if (!match) return []
+        const parentPid = Number(match[2])
+        return [{
+            pid: Number(match[1]),
+            parentPid: Number.isInteger(parentPid) && parentPid > 0 ? parentPid : null,
+            name: match[3],
+            command: match[4] || match[3]
+        }]
+    })
 }
 
 /**
  * Get port listeners for specific ports (Windows)
  */
-async function getPortListeners(ports: number[]): Promise<Map<number, number>> {
+async function scanPortListeners(): Promise<Map<number, number>> {
     const portToPid = new Map<number, number>()
 
     try {
-        const { stdout } = await execAsync('netstat -ano -p TCP', { timeout: 5000 })
-        const lines = stdout.trim().split('\n')
-
-        for (const line of lines) {
-            const match = line.match(/:(\d+)\s+.*LISTENING\s+(\d+)/)
-            if (match) {
-                const port = parseInt(match[1], 10)
-                const pid = parseInt(match[2], 10)
-
-                if (ports.includes(port)) {
-                    portToPid.set(port, pid)
-                }
-            }
+        const { stdout } = process.platform === 'win32'
+            ? await execAsync('netstat -ano', { timeout: 5_000 })
+            : await execAsync('lsof -nP -iTCP -sTCP:LISTEN', { timeout: 5_000 })
+        for (const line of stdout.split(/\r?\n/)) {
+            const match = process.platform === 'win32'
+                ? line.match(/:(\d+)\s+\S+\s+LISTENING\s+(\d+)/i)
+                : line.match(/^\S+\s+(\d+)\s+.*:(\d+)\s+\(LISTEN\)\s*$/i)
+            if (!match) continue
+            const port = Number(process.platform === 'win32' ? match[1] : match[2])
+            const pid = Number(process.platform === 'win32' ? match[2] : match[1])
+            if (Number.isInteger(pid) && pid > 0) portToPid.set(port, pid)
         }
     } catch (err) {
-        log.warn('[ProcessDetector] Failed to get port listeners:', err)
+        if (process.platform !== 'win32') {
+            try {
+                const { stdout } = await execAsync('ss -ltnp', { timeout: 5_000 })
+                for (const line of stdout.split(/\r?\n/)) {
+                    const match = line.match(/:(\d+)\s+.*pid=(\d+)/i)
+                    if (!match) continue
+                    const port = Number(match[1])
+                    const pid = Number(match[2])
+                    if (Number.isInteger(pid) && pid > 0) portToPid.set(port, pid)
+                }
+            } catch {
+                log.warn('[ProcessDetector] Failed to get port listeners:', err)
+            }
+        } else {
+            log.warn('[ProcessDetector] Failed to get port listeners:', err)
+        }
     }
 
     return portToPid
+}
+
+async function getPortListeners(ports?: number[]): Promise<Map<number, number>> {
+    const now = Date.now()
+    if (!portInventoryCache || portInventoryCache.expiresAt <= now) {
+        const promise = scanPortListeners().then((listeners) => {
+            portInventoryCache = { expiresAt: Date.now() + PORT_INVENTORY_TTL_MS, promise: Promise.resolve(listeners) }
+            return listeners
+        }, (error) => {
+            portInventoryCache = null
+            throw error
+        })
+        portInventoryCache = { expiresAt: Number.POSITIVE_INFINITY, promise }
+    }
+    const listeners = await portInventoryCache.promise
+    if (!ports) return listeners
+    const requested = new Set(ports)
+    return new Map([...listeners].filter(([port]) => requested.has(port)))
+}
+
+type LocalHttpMetadata = {
+    protocol: 'http' | 'https'
+    pageTitle?: string
+}
+
+function decodeLocalServerTitleEntities(value: string): string {
+    const namedEntities: Record<string, string> = {
+        amp: '&',
+        apos: "'",
+        gt: '>',
+        lt: '<',
+        nbsp: ' ',
+        quot: '"'
+    }
+    return value.replace(/&(?:#(\d+)|#x([\da-f]+)|([a-z]+));/gi, (match, decimal, hexadecimal, named) => {
+        if (named) return namedEntities[String(named).toLowerCase()] ?? match
+        const codePoint = Number.parseInt(decimal || hexadecimal, decimal ? 10 : 16)
+        if (!Number.isFinite(codePoint) || codePoint <= 0 || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) return ''
+        return String.fromCodePoint(codePoint)
+    })
+}
+
+export function sanitizeLocalServerPageTitle(value: string): string | undefined {
+    const title = decodeLocalServerTitleEntities(String(value || ''))
+        .replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    return title ? title.slice(0, LOCAL_SERVER_TITLE_MAX_LENGTH) : undefined
+}
+
+function extractLocalServerPageTitle(html: string): string | undefined {
+    const match = html.match(/<title(?:\s[^>]*)?>([\s\S]*?)<\/title\s*>/i)
+    return match ? sanitizeLocalServerPageTitle(match[1]) : undefined
+}
+
+async function detectLocalHttpProtocol(port: number): Promise<LocalHttpMetadata | null> {
+    const probe = (protocol: 'http' | 'https', host: string) => new Promise<LocalHttpMetadata | null>((resolve) => {
+        let responseStarted = false
+        let settled = false
+        let request: ReturnType<typeof httpRequest> | undefined
+        const finish = (result: LocalHttpMetadata | null) => {
+            if (settled) return
+            settled = true
+            clearTimeout(deadline)
+            resolve(result)
+        }
+        const deadline = setTimeout(() => {
+            request?.destroy()
+            finish(responseStarted ? { protocol } : null)
+        }, LOCAL_SERVER_PROBE_TIMEOUT_MS)
+        request = (protocol === 'https' ? httpsRequest : httpRequest)({
+            host,
+            port,
+            path: '/',
+            method: 'GET',
+            headers: {
+                accept: 'text/html,application/xhtml+xml',
+                'accept-encoding': 'identity'
+            },
+            timeout: LOCAL_SERVER_PROBE_TIMEOUT_MS,
+            ...(protocol === 'https' ? { rejectUnauthorized: false } : {})
+        }, (response) => {
+            responseStarted = true
+            const contentType = String(response.headers['content-type'] || '').toLowerCase()
+            const contentEncoding = String(response.headers['content-encoding'] || '').toLowerCase()
+            if ((contentType && !contentType.includes('html') && !contentType.includes('xhtml')) || (contentEncoding && contentEncoding !== 'identity')) {
+                response.destroy()
+                finish({ protocol })
+                return
+            }
+            const chunks: Buffer[] = []
+            let byteCount = 0
+            const finishFromBody = () => {
+                const pageTitle = extractLocalServerPageTitle(Buffer.concat(chunks).toString('utf8'))
+                response.destroy()
+                finish(pageTitle ? { protocol, pageTitle } : { protocol })
+            }
+            response.on('data', (chunk: Buffer | string) => {
+                const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+                const remaining = LOCAL_SERVER_TITLE_MAX_BYTES - byteCount
+                if (remaining > 0) {
+                    chunks.push(buffer.subarray(0, remaining))
+                    byteCount += Math.min(buffer.length, remaining)
+                }
+                const html = Buffer.concat(chunks).toString('utf8')
+                if (/<\/title\s*>/i.test(html) || /<\/head\s*>/i.test(html) || byteCount >= LOCAL_SERVER_TITLE_MAX_BYTES) finishFromBody()
+            })
+            response.once('end', finishFromBody)
+            response.once('error', () => finish({ protocol }))
+        })
+        request.once('timeout', () => {
+            request.destroy()
+            finish(responseStarted ? { protocol } : null)
+        })
+        request.once('error', () => finish(responseStarted ? { protocol } : null))
+        request.end()
+    })
+    for (const protocol of ['http', 'https'] as const) {
+        const results = await Promise.all([probe(protocol, '127.0.0.1'), probe(protocol, '::1')])
+        const pageWithTitle = results.find((result) => result?.pageTitle)
+        if (pageWithTitle) return pageWithTitle
+        const reachablePage = results.find((result): result is LocalHttpMetadata => Boolean(result))
+        if (reachablePage) return reachablePage
+    }
+    return null
+}
+
+export function sanitizeLocalServerProcessName(value: string): string {
+    const basename = String(value || '').split(/[\\/]/).pop()?.trim().replace(/[\u0000-\u001f\u007f]/g, '') || ''
+    return basename.slice(0, 96) || 'Local development server'
+}
+
+function isLocalDevelopmentServerCandidate(port: number, processRow: { name: string; command: string } | undefined): boolean {
+    if (DEV_SERVER_PORTS.includes(port)) return true
+    if (!processRow) return false
+    const name = sanitizeLocalServerProcessName(processRow.name).toLowerCase().replace(/\.exe$/, '')
+    const command = processRow.command.toLowerCase()
+    if (/\b(?:zyra-ui-bridge|browser-assistant-bridge|agent-server[\\/](?:main|bridge-worker))\b/.test(command)) return false
+    if (/^(?:node|bun|deno|python\d*|pythonw|ruby|php|java|dotnet|go)$/.test(name)) return true
+    return /(?:server|serve|api|caddy|nginx|httpd|jupyter|streamlit|gradio)/.test(name)
+        || /\b(?:vite|next|webpack|parcel|astro|nuxt|storybook|uvicorn|gunicorn|flask|django|rails)\b/.test(command)
 }
 
 /**
@@ -224,7 +485,81 @@ export async function detectProjectProcesses(projectPath: string): Promise<Proje
 }
 
 /**
- * Quick check if project has any running processes (faster than full detection)
+ * Find browser-openable local development servers and classify the selected project's listeners.
+ */
+const runningLocalServerScans = new Map<string, { expiresAt: number; promise: Promise<RunningLocalServer[]> }>()
+
+async function scanRunningLocalServers(resolvedProjectPath: string): Promise<RunningLocalServer[]> {
+    const listeners = await getPortListeners()
+    if (listeners.size === 0) return []
+    const processRows = await readProcessInventory().catch((error) => {
+        log.warn('[ProcessDetector] Process inventory unavailable; falling back to known development ports', { errorType: error instanceof Error ? error.name : 'UnknownError' })
+        return []
+    })
+    const processByPid = new Map(processRows.map((entry) => [entry.pid, entry]))
+    const attachedByPid = new Map<number, boolean>()
+    const isAttached = (pid: number) => {
+        const cached = attachedByPid.get(pid)
+        if (cached !== undefined) return cached
+        const attached = isProcessAttachedToProject(pid, processByPid, resolvedProjectPath)
+        attachedByPid.set(pid, attached)
+        return attached
+    }
+    const candidates = [...listeners.entries()]
+        .filter(([port, pid]) => port >= 1_024 && isLocalDevelopmentServerCandidate(port, processByPid.get(pid)))
+        .sort(([leftPort, leftPid], [rightPort, rightPid]) => {
+            const leftAttached = isAttached(leftPid)
+            const rightAttached = isAttached(rightPid)
+            return Number(rightAttached) - Number(leftAttached) || leftPort - rightPort
+        })
+        .slice(0, 128)
+    const metadataRows = await Promise.all(candidates.map(async ([port, pid]) => ({
+        port,
+        pid,
+        metadata: await detectLocalHttpProtocol(port)
+    })))
+
+    return metadataRows.flatMap((entry): RunningLocalServer[] => {
+        if (!entry.metadata) return []
+        const processRow = processByPid.get(entry.pid)
+        return [{
+            pid: entry.pid,
+            port: entry.port,
+            url: `${entry.metadata.protocol}://localhost:${entry.port}/`,
+            ...(entry.metadata.pageTitle ? { pageTitle: entry.metadata.pageTitle } : {}),
+            processName: sanitizeLocalServerProcessName(processRow?.name || ''),
+            attachedToProject: isAttached(entry.pid)
+        }]
+    })
+}
+
+export async function detectRunningLocalServers(projectPath?: string): Promise<RunningLocalServer[]> {
+    const resolvedProjectPath = String(projectPath || '').trim()
+        ? normalize(resolve(String(projectPath)))
+        : ''
+    const cacheKey = process.platform === 'win32' ? resolvedProjectPath.toLowerCase() : resolvedProjectPath
+    const now = Date.now()
+    const cached = runningLocalServerScans.get(cacheKey)
+    if (cached && cached.expiresAt > now) {
+        runningLocalServerScans.delete(cacheKey)
+        runningLocalServerScans.set(cacheKey, cached)
+        return cached.promise
+    }
+    const entry = {
+        expiresAt: now + LOCAL_SERVER_SCAN_TTL_MS,
+        promise: scanRunningLocalServers(resolvedProjectPath)
+    }
+    runningLocalServerScans.set(cacheKey, entry)
+    while (runningLocalServerScans.size > LOCAL_SERVER_SCAN_CACHE_LIMIT) {
+        const oldestKey = runningLocalServerScans.keys().next().value
+        if (typeof oldestKey !== 'string') break
+        runningLocalServerScans.delete(oldestKey)
+    }
+    return entry.promise
+}
+
+/**
+ * Quick check if a project has any running processes (faster than full detection).
  */
 export async function isProjectLive(projectPath: string): Promise<boolean> {
     const normalizedPath = normalize(resolve(projectPath)).toLowerCase()

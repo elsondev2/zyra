@@ -1,7 +1,7 @@
 import { createContext, lazy, Suspense, useContext, useEffect, useState, type ReactNode } from 'react'
-import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import TitleBar from './components/layout/TitleBar'
-import { LoadingSpinner } from './components/ui/LoadingState'
+import { AppBootSkeleton, AppRouteSkeleton } from './components/ui/AppRouteSkeleton'
 import { SettingsProvider, useSettings } from './lib/settings'
 import { CommandPaletteProvider } from './lib/commandPalette'
 import CommandPalette from './components/CommandPalette'
@@ -31,6 +31,7 @@ import {
     loadProjectsSettings,
     loadProviderSettings,
     loadSettingsShell,
+    loadSkillsSettings,
     loadSourceControlSettings,
     loadTerminalRuntimeSettings,
     loadVoiceSettings
@@ -39,7 +40,6 @@ import {
 const loadAssistantRoute = () => import('./pages/Assistant')
 const Assistant = lazy(loadAssistantRoute)
 const InstructorVoiceLab = lazy(() => import('./pages/assistant/InstructorVoiceLab'))
-const Explorer = lazy(() => import('./pages/Explorer'))
 const SettingsShell = lazy(loadSettingsShell)
 const GeneralSettings = lazy(loadGeneralSettings)
 const AppearanceSettings = lazy(loadAppearanceSettings)
@@ -49,6 +49,7 @@ const BrowserControlSettings = lazy(loadBrowserControlSettings)
 const FilesEditorSettings = lazy(loadFilesEditorSettings)
 const TerminalRuntimeSettings = lazy(loadTerminalRuntimeSettings)
 const AssistantSettings = lazy(loadAssistantSettings)
+const SkillsSettings = lazy(loadSkillsSettings)
 const AccountSettings = lazy(loadAccountSettings)
 const AISettings = lazy(loadProviderSettings)
 const GitSettings = lazy(loadSourceControlSettings)
@@ -57,6 +58,8 @@ const MemorySettings = lazy(loadMemorySettings)
 const ArchivedChatsSettings = lazy(loadArchivedChatsSettings)
 const LogsSettings = lazy(loadDiagnosticsSettings)
 const AboutSettings = lazy(loadAboutSettings)
+const AssistantBrowserPopupWindow = lazy(() => import('./pages/assistant/AssistantBrowserPopupWindow').then((module) => ({ default: module.AssistantBrowserPopupWindow })))
+const AssistantUtilityWindow = lazy(() => import('./pages/assistant/utility/AssistantUtilityWindow').then((module) => ({ default: module.AssistantUtilityWindow })))
 
 interface TerminalContextType {
     isOpen: boolean
@@ -83,7 +86,8 @@ const TerminalContext = createContext<TerminalContextType>(BASE_TERMINAL_CONTEXT
 export const useTerminal = () => useContext(TerminalContext)
 
 function PageLoader() {
-    return <LoadingSpinner message="Loading..." affectsAppChrome />
+    const location = useLocation()
+    return <AppRouteSkeleton pathname={location.pathname} />
 }
 
 function AssistantRoute() {
@@ -106,8 +110,6 @@ function AssistantRoute() {
 }
 
 function MainContent() {
-    const { settings } = useSettings()
-
     useEffect(() => {
         const preload = () => {
             void loadAssistantRoute().catch(() => undefined)
@@ -137,6 +139,7 @@ function MainContent() {
                         <Route path="appearance" element={<AppearanceSettings />} />
                         <Route path="account" element={<AccountSettings />} />
                         <Route path="assistant" element={<AssistantSettings />} />
+                        <Route path="skills" element={<SkillsSettings />} />
                         <Route path="voice" element={<VoiceSettings />} />
                         <Route path="connections" element={<ConnectionsSettings />} />
                         <Route path="browser-control" element={<BrowserControlSettings />} />
@@ -163,9 +166,9 @@ function MainContent() {
                     <Route path="/home/*" element={<Navigate to="/assistant" replace />} />
                     <Route path="/projects" element={<Navigate to="/assistant" replace />} />
                     <Route path="/projects/*" element={<Navigate to="/assistant" replace />} />
-                    <Route path="/folder-browse/*" element={<Navigate to="/explorer" replace />} />
-                    <Route path="/explorer" element={settings.explorerTabEnabled ? <Explorer /> : <Navigate to="/settings/projects" replace />} />
-                    <Route path="/explorer/*" element={settings.explorerTabEnabled ? <Explorer /> : <Navigate to="/settings/projects" replace />} />
+                    <Route path="/folder-browse/*" element={<Navigate to="/assistant" replace />} />
+                    <Route path="/explorer" element={<Navigate to="/assistant" replace />} />
+                    <Route path="/explorer/*" element={<Navigate to="/assistant" replace />} />
                     <Route path="/tasks" element={<Navigate to="/assistant" replace />} />
                     <Route path="/tasks/*" element={<Navigate to="/assistant" replace />} />
                     <Route path="/terminals" element={<Navigate to="/assistant" replace />} />
@@ -209,6 +212,7 @@ function TerminalContextProvider({ children }: { children: ReactNode }) {
 
 function DevLoadingPreviewOverlay() {
     const [visible, setVisible] = useState(false)
+    const location = useLocation()
 
     useEffect(() => {
         if (!import.meta.env.DEV) return
@@ -228,7 +232,7 @@ function DevLoadingPreviewOverlay() {
 
     return (
         <div className="fixed bottom-0 left-0 right-0 top-[34px] z-40 bg-sparkle-bg">
-            <LoadingSpinner message="Preview loading screen" className="h-full" minHeightClassName="min-h-0" affectsAppChrome />
+            <AppRouteSkeleton pathname={location.pathname} />
         </div>
     )
 }
@@ -267,10 +271,30 @@ function NormalDesktopApp() {
 }
 
 function App() {
+    const assistantUtilityWindow = /^#\/assistant-utility(?:[/?]|$)/.test(window.location.hash)
+    if (assistantUtilityWindow) {
+        return (
+            <SettingsProvider>
+                <Suspense fallback={<AppRouteSkeleton pathname="/assistant-utility" />}>
+                    <AssistantUtilityWindow />
+                </Suspense>
+            </SettingsProvider>
+        )
+    }
+    const browserPopupWindow = /^#\/browser-popup(?:[/?]|$)/.test(window.location.hash)
+    if (browserPopupWindow) {
+        return (
+            <SettingsProvider>
+                <Suspense fallback={<AppRouteSkeleton pathname="/browser-popup" />}>
+                    <AssistantBrowserPopupWindow />
+                </Suspense>
+            </SettingsProvider>
+        )
+    }
     return (
         <SettingsProvider>
             <OnboardingProvider>
-                <OnboardingGate>
+                <OnboardingGate loadingFallback={<AppBootSkeleton />}>
                     <NormalDesktopApp />
                 </OnboardingGate>
             </OnboardingProvider>

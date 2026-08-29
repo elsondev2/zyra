@@ -53,7 +53,7 @@ The implementation must not:
 - Approve purchases, messages, publishing, deletion, account changes, or other external side effects silently.
 - Persist active grants across an app restart by default.
 - Give Browser, Chrome, or Windows control to a subagent without an explicit attenuated lease.
-- Weaken the existing global Browser profile, webview sandbox, permission denial, download denial, or HTTP(S)-only navigation policy.
+- Weaken the existing global Browser profile, main-owned page sandbox, permission denial, download denial, or HTTP(S)-only navigation policy.
 
 ---
 
@@ -63,17 +63,18 @@ The implementation builds on the current Browser rather than creating a second e
 
 Existing authority:
 
+- `desktop/src/main/browser-view-manager.ts`
+  - creates and retains one sandboxed, context-isolated, Node-free `WebContentsView` per Browser tab;
+  - owns page navigation, popup policy, shell attachment, and lossless owner-window transfer.
 - `desktop/src/main/index.ts`
-  - gates `will-attach-webview`;
-  - forces sandbox, context isolation, Node isolation, and web security;
-  - handles guest navigation and popup policy.
+  - disables renderer webview tags and composes the Browser view, popup, and utility-window owners.
 - `desktop/src/main/ipc/handlers/browser-preview-handlers.ts`
   - owns the one exact persistent Browser partition;
   - owns the global local Browser session;
   - denies permissions and downloads;
   - owns safe external navigation and data clearing.
 - `desktop/src/renderer/src/pages/assistant/AssistantBrowserWebview.tsx`
-  - owns one retained guest webview and navigation events.
+  - reports an inert page slot and consumes typed main-owned page events.
 - `desktop/src/renderer/src/pages/assistant/AssistantBrowserWorkspace.tsx`
   - owns Browser tabs, toolbar, retained mounting, and global profile UI.
 - `desktop/src/renderer/src/pages/assistant/assistant-browser-workspace-state.ts`
@@ -467,18 +468,18 @@ Do not persist active grants, raw screenshots, page trees, field contents, or pa
 
 ### 9.1 Trusted guest registry
 
-Extend `did-attach-webview` handling in main.
+Register each page when `BrowserViewManager` constructs its `WebContentsView`.
 
 Main must:
 
-- Verify the exact global Browser partition.
-- Verify the owner BrowserWindow.
-- Verify the existing sandbox and navigation policy.
+- Supply the exact global Browser session directly.
+- Verify the authoritative owner BrowserWindow.
+- Construct the page with the existing sandbox and navigation policy and no preload.
 - Mint an opaque guest control identity.
-- Track lifecycle by trusted `webContents` reference.
-- Remove the target immediately when destroyed.
+- Track lifecycle by trusted `webContents` reference while allowing its shell owner to change atomically during reparenting.
+- Remove the target immediately when the page is explicitly closed or its final owner disappears.
 
-The renderer may associate its local tab ID with a main-minted target token. Main verifies sender ownership and guest identity. A raw renderer-provided `webContents` ID is insufficient authority.
+The renderer may associate its stable local tab ID with the main-owned page identity exposed through the typed state contract. Main verifies sender ownership and guest identity. A raw renderer-provided `webContents` ID is insufficient authority.
 
 ### 9.2 CDP ownership
 

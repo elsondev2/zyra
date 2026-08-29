@@ -26,6 +26,7 @@ export type ControlTarget =
         kind: 'zyra-browser'
         targetId: string
         tabId: string
+        sessionMode: 'normal' | 'incognito'
         ownerThreadId: string
         guestIdentity: string
         origin: string | null
@@ -292,6 +293,7 @@ export type ControlInspectorWorkspaceKind =
 
 export type ControlBrowserWorkspaceTab = {
     tabId: string
+    sessionMode: 'normal' | 'incognito'
     targetId: string | null
     trusted: boolean
     url: string | null

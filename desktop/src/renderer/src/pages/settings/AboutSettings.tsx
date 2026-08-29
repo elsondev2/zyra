@@ -1,5 +1,6 @@
-import type { ReactNode } from 'react'
-import { Download, ExternalLink, Github, RefreshCw, Rocket } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Download, ExternalLink, Github, RefreshCw, Rocket, SquareTerminal } from 'lucide-react'
+import type { DevScopeTerminalCommandStatus } from '@shared/contracts/devscope-api'
 import { getUpdateActionLabel, useAppUpdates } from '@/lib/app-updates'
 import { formatDesktopVersion, resolveDesktopReleaseChannel } from '@/lib/release-build-metadata'
 import { useWindowChrome } from '@/lib/useWindowChrome'
@@ -27,6 +28,32 @@ export default function AboutSettings() {
         clearSkippedVersion
     } = useAppUpdates()
 
+    const [terminalCommand, setTerminalCommand] = useState<DevScopeTerminalCommandStatus | null>(null)
+    const [terminalCommandBusy, setTerminalCommandBusy] = useState(false)
+    const [terminalCommandError, setTerminalCommandError] = useState<string | null>(null)
+    useEffect(() => {
+        let cancelled = false
+        void window.devscope.window.getTerminalCommandStatus().then((result) => {
+            if (!cancelled && result.success) setTerminalCommand(result.status)
+        })
+        return () => { cancelled = true }
+    }, [])
+    const toggleTerminalCommand = async () => {
+        setTerminalCommandBusy(true)
+        setTerminalCommandError(null)
+        try {
+            const result = terminalCommand?.installed
+                ? await window.devscope.window.removeTerminalCommand()
+                : await window.devscope.window.installTerminalCommand()
+            if (!result.success) throw new Error(result.error)
+            setTerminalCommand(result.status)
+        } catch (error) {
+            setTerminalCommandError(error instanceof Error ? error.message : 'Could not update the terminal command.')
+        } finally {
+            setTerminalCommandBusy(false)
+        }
+    }
+
     const busy = pendingAction !== null
     const updateSummary = getUpdateActionLabel(updateState)
     const updateStatus = updateState?.status ?? 'idle'
@@ -52,6 +79,16 @@ export default function AboutSettings() {
                 <SettingsRow title="Platform" description="Native Desktop host for this client." control={<span className="text-xs font-medium text-sparkle-text-secondary">{platformLabel}</span>} />
                 <SettingsRow title="Application stack" description="Host runtime and architecture." control={<span className="text-xs font-medium text-sparkle-text-secondary">{runtimeLabel}</span>} />
                 <SettingsRow title="License" description="Source-code license used by this project." control={<span className="text-xs font-medium text-sparkle-text-secondary">Apache-2.0</span>} />
+            </SettingsSection>
+
+            <SettingsSection title="Terminal">
+                {terminalCommandError ? <SettingsNotice tone="error">{terminalCommandError}</SettingsNotice> : null}
+                <SettingsRow
+                    title="zyra command"
+                    description={terminalCommand?.installed ? `Installed at ${terminalCommand.path}` : 'Run the bundled Zyra TUI from any terminal.'}
+                    status={terminalCommand?.installed ? (terminalCommand.pathConfigured ? 'Ready' : 'Installed · add its folder to PATH') : 'Not installed'}
+                    control={<SettingsButton onClick={() => void toggleTerminalCommand()} disabled={terminalCommandBusy}><SquareTerminal size={12} />{terminalCommand?.installed ? 'Remove' : 'Install'}</SettingsButton>}
+                />
             </SettingsSection>
 
             <SettingsSection title="Updates" headerAction={<SettingsButton variant="ghost" onClick={openModal}>Open Update Center</SettingsButton>}>

@@ -44,6 +44,8 @@ const PROJECT_TYPES_DATA: Record<string, { displayName: string; icon: string; th
     'swiftui': { displayName: 'SwiftUI', icon: 'swift', themeColor: '#F05138' }
 }
 
+const failedCustomIconPaths = new Set<string>()
+
 const FRAMEWORKS_DATA: Record<string, { displayName: string; icon: string; themeColor: string }> = {
     'react': { displayName: 'React', icon: 'react', themeColor: '#61DAFB' },
     'nextjs': { displayName: 'Next.js', icon: 'nextdotjs', themeColor: '#000000' },
@@ -111,11 +113,11 @@ export default function ProjectIcon({
     ...props
 }: ProjectIconProps) {
     const { settings } = useSettings()
-    const [customImgError, setCustomImgError] = useState(false)
+    const [customImgError, setCustomImgError] = useState(() => Boolean(customIconPath && failedCustomIconPaths.has(customIconPath)))
     const [genericImgError, setGenericImgError] = useState(false)
 
     useEffect(() => {
-        setCustomImgError(false)
+        setCustomImgError(Boolean(customIconPath && failedCustomIconPaths.has(customIconPath)))
     }, [customIconPath])
 
     useEffect(() => {
@@ -147,7 +149,10 @@ export default function ProjectIcon({
                     height={size}
                     className="w-full h-full object-contain"
                     style={{ filter: iconShadow }}
-                    onError={() => setCustomImgError(true)}
+                    onError={() => {
+                        failedCustomIconPaths.add(customIconPath)
+                        setCustomImgError(true)
+                    }}
                     loading="lazy"
                 />
             </div>

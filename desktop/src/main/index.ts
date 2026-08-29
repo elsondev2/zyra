@@ -3,7 +3,8 @@
  * Main Process Entry Point
  */
 
-import { app, BrowserWindow, Menu, dialog, shell, ipcMain, nativeTheme, protocol, globalShortcut, session, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, Menu, dialog, shell, nativeTheme, protocol, globalShortcut, session, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { initializeProtectedMedia } from './protected-media-service'
 import { isAbsolute, join } from 'path'
 import { existsSync, statSync } from 'fs'
 import { writeFile } from 'node:fs/promises'
@@ -11,18 +12,36 @@ import { pathToFileURL } from 'node:url'
 import { electronApp, is } from './utils'
 import log from 'electron-log'
 import { registerIpcHandlers } from './ipc'
+import { ipcMain, registerTrustedIpcSender } from './ipc/trusted-ipc'
+import { configurePreviewTerminalWorkspaceAuthorizer } from './ipc/handlers/preview-terminal-handlers'
 import { configureAssistantService, disposeAssistantService, getAssistantService } from './assistant'
+import { AssistantUtilityWindowManager, type ResolvedUtilityChat, type UtilityWindowCreationOptions } from './assistant/assistant-utility-window-manager'
 import { persistAssistantClipboardImage, resolveAssistantClipboardAttachment } from './assistant/clipboard-attachments'
 import { getCodexVoiceTranscriptionState, transcribeVoiceWithCodex } from './assistant/codex-voice-transcription'
 import { BrowserClientRuntime } from './browser-client-runtime'
-import { disposeUpdater, initializeUpdater, registerUpdateWindow } from './update/manager'
+import { configureUpdateAnalytics, disposeUpdater, initializeUpdater, registerUpdateWindow } from './update/manager'
 import { registerFileProtocol } from './file-protocol'
-import { isSafeBrowserNavigationUrl, isZyraBrowserPartition } from './ipc/handlers/browser-preview-handlers'
+import { configureBrowserActionAnalytics, configureBrowserPermissionAnalytics, flushGlobalBrowserProfileStorage, isSafeBrowserNavigationUrl } from './ipc/handlers/browser-preview-handlers'
 import { disposeAgentControlBroker, getAgentControlBroker } from './agent-control'
 import { trustedBrowserGuests } from './agent-control/trusted-guest-registry'
 import { resolveZyraWindowChromePolicy, type ZyraDesktopPlatform } from '../shared/platform-window-chrome'
+import {
+    BROWSER_PREVIEW_OPEN_TAB_REQUESTED_CHANNEL,
+    type DevScopeBrowserOpenTabRequest
+} from '../shared/contracts/devscope-api'
+import { BrowserPopupManager } from './browser-popup-manager'
+import { BrowserViewManager } from './browser-view-manager'
+import { disposeBrowserThreatProtectionService, getBrowserThreatProtectionService } from './browser-threat-protection-service'
 import { createDesktopSetupServices } from './setup'
 import { resolveZyraRoot } from './zyra/zyra-root'
+import { registerInstalledDesktop } from './desktop-install-registration'
+import { dispatchDesktopTui, isDesktopTuiDispatch } from './desktop-tui-dispatcher'
+import { createRendererHangRecorder } from './diagnostics/renderer-hang-recorder'
+import { BROWSER_POPUP_PRELOAD_ARGUMENT } from '../shared/preload-surfaces'
+import { configureBrowserDownloadAnalytics } from './browser-download-service'
+import { inspectProjectAnalyticsCapabilities } from './analytics/project-capabilities'
+
+app.enableSandbox()
 
 const APP_NAME = "Zyra"
 const DEV_APP_NAME = `${APP_NAME}-dev`
@@ -38,10 +57,12 @@ type RuntimeIdentity = {
 
 function resolveRuntimeIdentity(): RuntimeIdentity {
     if (is.dev) {
+        const instanceSuffix = String(process.env.ZYRA_DEV_INSTANCE_SUFFIX || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').slice(0, 32)
+        const appName = instanceSuffix ? `${DEV_APP_NAME}-${instanceSuffix}` : DEV_APP_NAME
         return {
-            appName: DEV_APP_NAME,
-            appUserModelId: DEV_APP_USER_MODEL_ID,
-            userDataDirectoryName: DEV_APP_NAME,
+            appName,
+            appUserModelId: instanceSuffix ? `${DEV_APP_USER_MODEL_ID}.${instanceSuffix}` : DEV_APP_USER_MODEL_ID,
+            userDataDirectoryName: appName,
             isDevRuntime: true
         }
     }
@@ -68,7 +89,11 @@ function applyRuntimeIdentity(identity: RuntimeIdentity): void {
 
 applyRuntimeIdentity(runtimeIdentity)
 
+const launchStartedAt = performance.now()
 const setupServices = createDesktopSetupServices(app.getPath('userData'))
+configureUpdateAnalytics((properties) => setupServices.analytics.capture({ event: 'zyra_v1_app_lifecycle', properties }))
+configureBrowserDownloadAnalytics((properties) => setupServices.analytics.capture({ event: 'zyra_v1_browser', properties }))
+configureBrowserPermissionAnalytics((outcome) => setupServices.analytics.capture({ event: 'zyra_v1_browser', properties: { action: 'permission', outcome } }))
 
 // Configure logging
 const verboseMainLogs = process.env.ZYRA_VERBOSE_LOGS === '1'
@@ -77,6 +102,28 @@ log.transports.console.level = verboseMainLogs ? 'debug' : 'warn'
 console.log = log.log
 console.error = log.error
 console.warn = log.warn
+
+let isIncognitoBrowserWebContents = (_webContentsId: number): boolean => false
+let hasIncognitoBrowserContents = (): boolean => false
+
+const rendererHangRecorder = createRendererHangRecorder({
+    userDataPath: app.getPath('userData'),
+    getAssistantContext: () => getAssistantService().getHangDiagnosticContext(),
+    onIncident: (incident) => {
+        if (incident.reason.includes('process-gone')) return
+        if (incident.webContentsId !== null && isIncognitoBrowserWebContents(incident.webContentsId)) return
+        if (hasIncognitoBrowserContents()) return
+        setupServices.analytics.capture({
+            event: 'zyra_v1_app_lifecycle',
+            properties: {
+                action: 'hang',
+                outcome: 'completed',
+                process_kind: incident.processKind,
+                ...(incident.durationMs === undefined ? {} : { duration_ms: incident.durationMs })
+            }
+        })
+    }
+})
 
 let mainWindow: BrowserWindow | null = null
 let quickPreviewWindow: BrowserWindow | null = null
@@ -108,17 +155,20 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 const getPreloadPath = (): string => {
-    const preloadMjs = join(__dirname, '../preload/index.mjs')
+    const preloadCjs = join(__dirname, '../preload/index.cjs')
     const preloadJs = join(__dirname, '../preload/index.js')
-    return existsSync(preloadMjs) ? preloadMjs : preloadJs
+    return existsSync(preloadCjs) ? preloadCjs : preloadJs
 }
 
 const getAppIconPath = (): string | undefined => {
     const family = runtimeIdentity.isDevRuntime ? 'dev' : 'prod'
     const theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
-    const variantName = `zyra-${family}-${theme}.png`
-    const masterName = `zyra-${family}.png`
-    const fallbackName = runtimeIdentity.isDevRuntime ? 'icon-dev.png' : 'icon.png'
+    const extension = process.platform === 'win32' ? 'ico' : 'png'
+    const variantName = `zyra-${family}-${theme}.${extension}`
+    const masterName = `zyra-${family}.${extension}`
+    const fallbackName = runtimeIdentity.isDevRuntime
+        ? `icon-dev.${extension}`
+        : `icon.${extension}`
     const candidates = [
         join(process.cwd(), 'resources/branding/icons', variantName),
         join(app.getAppPath(), 'resources/branding/icons', variantName),
@@ -274,6 +324,7 @@ function attachWindowStateEvents(window: BrowserWindow): void {
     const publish = () => {
         if (window.isDestroyed() || window.webContents.isDestroyed()) return
         window.webContents.send('window:maximized-changed', window.isMaximized() || window.isFullScreen())
+        window.webContents.send('window:fullscreen-changed', window.isFullScreen())
     }
     window.on('maximize', publish)
     window.on('unmaximize', publish)
@@ -300,45 +351,94 @@ function lockWindowZoom(window: BrowserWindow): void {
     void webContents.setVisualZoomLevelLimits(1, 1).catch(() => {})
 }
 
-function registerBrowserPreviewWebviewSecurity(window: BrowserWindow): void {
-    window.webContents.on('will-attach-webview', (event, webPreferences, params) => {
-        const partition = String(params.partition || '')
-        const sourceUrl = String(params.src || 'about:blank')
-        const safeSource = sourceUrl === 'about:blank' || isSafeBrowserNavigationUrl(sourceUrl)
-        if (!isZyraBrowserPartition(partition) || !safeSource || params.preload) {
-            event.preventDefault()
-            return
-        }
-
-        webPreferences.preload = undefined
-        webPreferences.sandbox = true
-        webPreferences.contextIsolation = true
-        webPreferences.nodeIntegration = false
-        webPreferences.nodeIntegrationInSubFrames = false
-        webPreferences.nodeIntegrationInWorker = false
-        webPreferences.backgroundThrottling = false
-        webPreferences.webSecurity = true
-        webPreferences.allowRunningInsecureContent = false
-        webPreferences.navigateOnDragDrop = false
-        webPreferences.safeDialogs = true
-    })
-
-    window.webContents.on('did-attach-webview', (_event, guestContents) => {
-        trustedBrowserGuests.register(window.webContents.id, guestContents)
-        guestContents.setWindowOpenHandler(({ url }) => {
-            if (isSafeBrowserNavigationUrl(url)) void shell.openExternal(url)
-            return { action: 'deny' }
-        })
-        guestContents.on('will-navigate', (event, url) => {
-            if (url === 'about:blank' || isSafeBrowserNavigationUrl(url)) return
-            event.preventDefault()
-        })
-        guestContents.on('will-redirect', (event, url) => {
-            if (isSafeBrowserNavigationUrl(url)) return
-            event.preventDefault()
-        })
-    })
+function isSafeBrowserWindowOpenUrl(url: string): boolean {
+    return url === 'about:blank' || isSafeBrowserNavigationUrl(url)
 }
+
+function requestBrowserTab(
+    ownerWindow: BrowserWindow,
+    sourceGuestWebContentsId: number,
+    url: string,
+    activate: boolean
+): void {
+    if (ownerWindow.isDestroyed() || !isSafeBrowserWindowOpenUrl(url)) return
+    const threatProtection = getBrowserThreatProtectionService()
+    if (url !== 'about:blank' && threatProtection && !threatProtection.consumeOneTimeAllowance(sourceGuestWebContentsId, url)) {
+        const sourceGuest = trustedBrowserGuests.findByGuestId(sourceGuestWebContentsId)?.guest
+        const warning = threatProtection.blockNavigation({
+            ownerWebContentsId: ownerWindow.webContents.id,
+            sourceGuestWebContentsId,
+            blockedGuestWebContentsId: sourceGuestWebContentsId,
+            navigationKind: 'new-tab',
+            previousUrl: sourceGuest?.getURL() || '',
+            url,
+            proceed: () => requestBrowserTab(ownerWindow, sourceGuestWebContentsId, url, activate)
+        })
+        if (warning) return
+    }
+    const payload: DevScopeBrowserOpenTabRequest = {
+        sourceGuestWebContentsId,
+        url: url === 'about:blank' ? '' : url,
+        activate
+    }
+    ownerWindow.webContents.send(BROWSER_PREVIEW_OPEN_TAB_REQUESTED_CHANNEL, payload)
+}
+
+const browserPopupManager = new BrowserPopupManager({
+    createShellWindow: createBrowserPopupShellWindow,
+    requestTab: requestBrowserTab,
+    captureAnalytics: (properties) => setupServices.analytics.capture({ event: 'zyra_v1_browser', properties })
+})
+browserPopupManager.registerIpc()
+
+let assistantUtilityWindowManager!: AssistantUtilityWindowManager
+const browserViewManager = new BrowserViewManager({
+    popupManager: browserPopupManager,
+    resolveOwnerId: (window) => {
+        if (mainWindow && !mainWindow.isDestroyed() && mainWindow === window) return 'main'
+        const utilityWindowId = assistantUtilityWindowManager?.windowIdForWebContents(window.webContents.id)
+        return utilityWindowId ? `utility:${utilityWindowId}` : null
+    },
+    canUseBrowser: () => setupServices.onboarding.isAccessAllowed(),
+    captureAnalytics: (properties) => setupServices.analytics.capture({ event: 'zyra_v1_browser', properties })
+})
+browserViewManager.registerIpc()
+isIncognitoBrowserWebContents = (webContentsId) => (
+    browserViewManager.isIncognitoWebContents(webContentsId)
+    || browserPopupManager.isIncognitoWebContents(webContentsId)
+)
+hasIncognitoBrowserContents = () => browserViewManager.hasIncognitoContents() || browserPopupManager.hasIncognitoContents()
+configureBrowserActionAnalytics((input) => {
+    const allowed = input.guestWebContentsId === undefined
+        ? browserViewManager.isAnalyticsAllowedForOwner(input.ownerWebContentsId)
+        : browserViewManager.isAnalyticsAllowedForGuest(input.guestWebContentsId)
+    if (allowed) setupServices.analytics.capture({ event: 'zyra_v1_browser', properties: input.properties })
+})
+
+assistantUtilityWindowManager = new AssistantUtilityWindowManager({
+    userDataPath: app.getPath('userData'),
+    createWindow: createAssistantUtilityShellWindow,
+    activateWindow: (window, windowId) => loadRendererRoute(window, `/assistant-utility/${encodeURIComponent(windowId)}`),
+    resolveChat: resolveAssistantUtilityChat,
+    getMainWindow: () => mainWindow,
+    browserViews: browserViewManager,
+    captureAnalytics: (properties) => setupServices.analytics.capture({ event: 'zyra_v1_utility_window', properties })
+})
+assistantUtilityWindowManager.registerIpc()
+configurePreviewTerminalWorkspaceAuthorizer(async (event, owner) => {
+    if (owner?.kind === 'main-workspace') {
+        if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.id !== event.sender.id) {
+            throw new Error('Main terminal workspace registration requires the main Zyra renderer.')
+        }
+        return owner.runtimeId
+    }
+    if (owner?.kind === 'utility-tab') {
+        const runtimeId = await assistantUtilityWindowManager.resolveOwnedTerminalRuntimeId(event.sender.id, owner.tabId)
+        if (runtimeId) return runtimeId
+        throw new Error('Terminal tab identity does not belong to this Zyra window.')
+    }
+    throw new Error('Preview terminal workspace owner is invalid.')
+})
 
 function registerEditableContextMenu(window: BrowserWindow): void {
     window.webContents.on('context-menu', (_event, params) => {
@@ -430,6 +530,27 @@ function loadRendererRoute(window: BrowserWindow, routeWithSearch: string): void
     void window.loadFile(join(__dirname, '../renderer/index.html'), { hash: routeWithSearch })
 }
 
+function isTrustedRendererLocation(value: string): boolean {
+    try {
+        const candidate = new URL(value)
+        const expected = is.dev && process.env['ELECTRON_RENDERER_URL']
+            ? new URL(process.env['ELECTRON_RENDERER_URL'])
+            : pathToFileURL(join(__dirname, '../renderer/index.html'))
+        return candidate.protocol === expected.protocol
+            && candidate.host === expected.host
+            && candidate.pathname === expected.pathname
+    } catch {
+        return false
+    }
+}
+
+function configureTrustedRendererWindow(window: BrowserWindow): void {
+    registerTrustedIpcSender(window.webContents, isTrustedRendererLocation)
+    window.webContents.on('will-navigate', (event, url) => {
+        if (!isTrustedRendererLocation(url)) event.preventDefault()
+    })
+}
+
 function buildExternalExplorerRoute(folderPath: string): string {
     return `/explorer/${encodeURIComponent(folderPath)}?${EXTERNAL_EXPLORER_LAUNCH_QUERY}`
 }
@@ -467,16 +588,17 @@ function createWindow(showOnReady = true, initialRoute = '/'): BrowserWindow {
         ...(iconPath ? { icon: iconPath } : {}),
         webPreferences: {
             preload: getPreloadPath(),
-            sandbox: false,
+            sandbox: true,
             contextIsolation: true,
             nodeIntegration: false,
-            webviewTag: true,
+            webviewTag: false,
             // Pause renderer presentation while hidden; visibility reconciliation
             // snaps transient queues to current Assistant state on restore.
             backgroundThrottling: true,
             devTools: true
         }
     })
+    configureTrustedRendererWindow(window)
 
     window.on('ready-to-show', () => {
         if (showOnReady) window.show()
@@ -504,7 +626,6 @@ function createWindow(showOnReady = true, initialRoute = '/'): BrowserWindow {
         }
     })
 
-    registerBrowserPreviewWebviewSecurity(window)
     registerEditableContextMenu(window)
     attachWindowStateEvents(window)
     lockWindowZoom(window)
@@ -512,6 +633,126 @@ function createWindow(showOnReady = true, initialRoute = '/'): BrowserWindow {
     registerUpdateWindow(window)
 
     return window
+}
+
+function escapeUtilityProvisionalText(value: string): string {
+    return value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character] || character)
+}
+
+function assistantUtilityProvisionalUrl(options: UtilityWindowCreationOptions): string {
+    const label = escapeUtilityProvisionalText(String(options.label || 'Workspace').slice(0, 160))
+    const accent = /^#[0-9a-f]{6}$/i.test(String(options.accentColor || '')) ? String(options.accentColor) : '#5b8cff'
+    const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="color-scheme" content="dark"><title>Zyra</title><style>*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#0c121f;color:#f0f4f8;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}.bar{height:34px;display:flex;align-items:center;border-bottom:1px solid #222d3f;background:#101827;box-shadow:inset 0 2px 0 ${accent}}.brand{width:76px;height:100%;display:flex;align-items:center;padding:0 12px;border-right:1px solid #222d3f;color:#aeb7c5;font-size:11px;font-weight:650}.tab{height:28px;max-width:220px;margin-left:4px;padding:0 10px;display:flex;align-items:center;gap:7px;border:1px solid color-mix(in srgb,${accent} 30%,#2a3548);border-radius:6px;background:color-mix(in srgb,${accent} 10%,#131c2c);font-size:10px;font-weight:600}.dot{width:7px;height:7px;flex:0 0 auto;border-radius:50%;background:${accent}}.label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.surface{height:calc(100% - 34px);display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 36%,color-mix(in srgb,${accent} 8%,transparent),transparent 42%),#0c121f}.status{display:flex;align-items:center;gap:8px;color:#7f8a9b;font-size:11px}.spinner{width:12px;height:12px;border:1.5px solid #344158;border-top-color:${accent};border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.spinner{animation:none}}</style></head><body><div class="bar"><div class="brand">Zyra</div><div class="tab"><span class="dot"></span><span class="label">${label}</span></div></div><div class="surface"><div class="status"><span class="spinner"></span><span>${label}</span></div></div></body></html>`
+    return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
+}
+
+function createAssistantUtilityShellWindow(windowId: string, creationOptions: UtilityWindowCreationOptions = {}): BrowserWindow {
+    const iconPath = getAppIconPath()
+    const window = new BrowserWindow({
+        width: 1120,
+        height: 760,
+        minWidth: 720,
+        minHeight: 480,
+        show: false,
+        title: 'Zyra',
+        ...getWindowChromeOptions(),
+        backgroundColor: '#0c121f',
+        ...(iconPath ? { icon: iconPath } : {}),
+        webPreferences: {
+            preload: getPreloadPath(),
+            sandbox: true,
+            contextIsolation: true,
+            nodeIntegration: false,
+            webviewTag: false,
+            backgroundThrottling: false,
+            devTools: is.dev
+        }
+    })
+    configureTrustedRendererWindow(window)
+    window.setMenu(null)
+    window.setMenuBarVisibility(false)
+    window.on('focus', () => lockWindowZoom(window))
+    window.webContents.on('did-finish-load', () => lockWindowZoom(window))
+    window.webContents.on('will-navigate', (event) => event.preventDefault())
+    window.webContents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
+        if (isMainFrame) log.error('[AssistantUtilityRenderer] load failed', { code, description, url })
+    })
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    registerEditableContextMenu(window)
+    attachWindowStateEvents(window)
+    lockWindowZoom(window)
+    if (creationOptions.provisional) {
+        void window.loadURL(assistantUtilityProvisionalUrl(creationOptions))
+    } else {
+        loadRendererRoute(window, `/assistant-utility/${encodeURIComponent(windowId)}`)
+    }
+    return window
+}
+
+async function resolveAssistantUtilityChat(canonicalChatId: string): Promise<ResolvedUtilityChat | null> {
+    const snapshot = await getAssistantService().getSnapshot()
+    for (const session of snapshot.sessions) {
+        for (const thread of session.threads) {
+            if (thread.providerThreadId !== canonicalChatId && thread.id !== canonicalChatId) continue
+            return {
+                canonicalChatId,
+                sessionId: session.id,
+                threadId: thread.id,
+                chatTitle: session.title || 'Untitled chat',
+                projectPath: session.projectPath || thread.cwd || ''
+            }
+        }
+    }
+    return null
+}
+
+function createBrowserPopupShellWindow(input: {
+    id: string
+    width: number
+    height: number
+}): BrowserWindow {
+    const iconPath = getAppIconPath()
+    let popupWindow: BrowserWindow | null = null
+    try {
+        popupWindow = new BrowserWindow({
+            modal: false,
+            skipTaskbar: false,
+            width: input.width,
+            height: input.height,
+            minWidth: 420,
+            minHeight: 520,
+            show: false,
+            title: 'Zyra Browser',
+            ...getWindowChromeOptions(),
+            backgroundColor: '#0c121f',
+            ...(iconPath ? { icon: iconPath } : {}),
+            webPreferences: {
+                preload: getPreloadPath(),
+                additionalArguments: [BROWSER_POPUP_PRELOAD_ARGUMENT],
+                sandbox: true,
+                contextIsolation: true,
+                nodeIntegration: false,
+                webviewTag: false,
+                backgroundThrottling: false,
+                devTools: is.dev
+            }
+        })
+        configureTrustedRendererWindow(popupWindow)
+        popupWindow.setMenu(null)
+        popupWindow.setMenuBarVisibility(false)
+        popupWindow.on('focus', () => popupWindow && lockWindowZoom(popupWindow))
+        popupWindow.webContents.on('did-finish-load', () => popupWindow && lockWindowZoom(popupWindow))
+        popupWindow.webContents.on('will-navigate', (event) => event.preventDefault())
+        popupWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+        registerEditableContextMenu(popupWindow)
+        attachWindowStateEvents(popupWindow)
+        lockWindowZoom(popupWindow)
+        loadRendererRoute(popupWindow, `/browser-popup/${encodeURIComponent(input.id)}`)
+        return popupWindow
+    } catch (error) {
+        if (popupWindow && !popupWindow.isDestroyed()) popupWindow.destroy()
+        throw error
+    }
 }
 
 function createQuickPreviewWindow(filePath: string): BrowserWindow {
@@ -537,13 +778,14 @@ function createQuickPreviewWindow(filePath: string): BrowserWindow {
         ...(iconPath ? { icon: iconPath } : {}),
         webPreferences: {
             preload: getPreloadPath(),
-            sandbox: false,
+            sandbox: true,
             contextIsolation: true,
             nodeIntegration: false,
             webviewTag: false,
             devTools: true
         }
     })
+    configureTrustedRendererWindow(window)
 
     window.on('ready-to-show', () => window.show())
     window.on('focus', () => {
@@ -581,6 +823,11 @@ function openFolderInMainWindow(folderPath: string): BrowserWindow {
         return mainWindow
     }
     const route = buildExternalExplorerRoute(folderPath)
+    void inspectProjectAnalyticsCapabilities(folderPath).then((capabilities) => {
+        setupServices.analytics.capture({ event: 'zyra_v1_project', properties: { action: 'open', outcome: 'completed', ...capabilities } })
+    }).catch(() => {
+        setupServices.analytics.capture({ event: 'zyra_v1_project', properties: { action: 'open', outcome: 'failed', error_code: 'unknown' } })
+    })
 
     if (!mainWindow || mainWindow.isDestroyed()) {
         mainWindow = createWindow(true, route)
@@ -627,6 +874,7 @@ function startNormalDesktopRuntime(): void {
     if (normalDesktopRuntimeStarted || !setupServices.onboarding.isAccessAllowed()) return
     normalDesktopRuntimeStarted = true
     void initializeUpdater()
+    if (!launchAsBackgroundHost) void assistantUtilityWindowManager.restorePersistedWindows(true)
     revealPendingShellLaunchTargets()
 }
 
@@ -660,8 +908,10 @@ async function runPackagedLaunchSmoke(): Promise<void> {
     })}\n`, { encoding: 'utf8', mode: 0o600 })
 }
 
-const initialShellLaunchTarget = extractShellLaunchTargetFromArgv(process.argv)
-const hasSingleInstanceLock = app.requestSingleInstanceLock()
+const tuiDispatchRequested = isDesktopTuiDispatch()
+const initialShellLaunchTarget = tuiDispatchRequested ? null : extractShellLaunchTargetFromArgv(process.argv)
+const launchAsBackgroundHost = process.argv.includes('--zyra-background-host')
+const hasSingleInstanceLock = tuiDispatchRequested || app.requestSingleInstanceLock()
 
 if (!hasSingleInstanceLock) {
     app.quit()
@@ -674,6 +924,11 @@ app.on('open-file', (event, filePath) => {
 })
 
 app.on('second-instance', (_event, argv) => {
+    if (argv.includes('--zyra-background-host')) return
+    setupServices.analytics.capture({
+        event: 'zyra_v1_app_lifecycle',
+        properties: { action: 'launch_ready', outcome: 'ready', launch_bucket: 'warm' }
+    })
     const shellLaunchTarget = extractShellLaunchTargetFromArgv(argv)
     if (shellLaunchTarget) {
         handleShellLaunchTarget(shellLaunchTarget)
@@ -691,7 +946,23 @@ app.on('second-instance', (_event, argv) => {
     mainWindow.focus()
 })
 
+app.on('web-contents-created', (_event, contents) => {
+    if (contents.getType() === 'webview') contents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    rendererHangRecorder.attach(contents)
+})
+
 app.whenReady().then(async () => {
+    if (tuiDispatchRequested) {
+        try {
+            app.exit(await dispatchDesktopTui())
+        } catch (error) {
+            log.error('[DesktopTui] launch failed', error)
+            app.exit(1)
+        }
+        return
+    }
+    void initializeProtectedMedia()
+    void registerInstalledDesktop().catch((error) => log.warn('[DesktopInstall] could not register this installation', error))
     if (process.env.ZYRA_PACKAGED_SMOKE === '1') {
         try {
             await runPackagedLaunchSmoke()
@@ -714,7 +985,15 @@ app.whenReady().then(async () => {
     }
     configureAssistantService({
         getNewChatExecutionDefaults: () => setupServices.preferences.getNewChatWebDefaults(),
-        getTitleGenerationModel: () => setupServices.preferences.getAssistantTitleModel()
+        openDesktopWorkspace: (request) => assistantUtilityWindowManager.openFromTui(request),
+        cancelDesktopWorkspace: (requestId) => assistantUtilityWindowManager.cancelFromTui(requestId),
+        handleDesktopWorkspaceTurn: (canonicalChatId, turnId) => assistantUtilityWindowManager.handleTuiTurn(canonicalChatId, turnId),
+        handleDetachedControl: (input) => assistantUtilityWindowManager.handleDetachedControl(input),
+        handleDesktopWorkspaceTurnEnded: (canonicalChatId, turnId) => assistantUtilityWindowManager.handleTuiTurnEnded(canonicalChatId, turnId),
+        getTitleGenerationModel: () => setupServices.preferences.getAssistantTitleModel(),
+        getTitleAutomation: () => setupServices.preferences.getAssistantTitleAutomation(),
+        getRuntimePolicy: () => setupServices.preferences.getAssistantRuntimePolicy(),
+        captureAnalytics: (input) => setupServices.analytics.capture(input)
     })
     configureApplicationMenu(setupServices.onboarding.isAccessAllowed())
     setupServices.onboarding.subscribe((snapshot) => {
@@ -758,7 +1037,7 @@ app.whenReady().then(async () => {
     const setupComplete = setupServices.onboarding.isAccessAllowed()
     if (initialShellLaunchTarget && !setupComplete) pendingShellLaunchTargets.push(initialShellLaunchTarget)
     // Keep the full app alive in background for completed shell file-preview launches.
-    const launchHidden = setupComplete && initialShellLaunchTarget?.kind === 'file'
+    const launchHidden = launchAsBackgroundHost || (setupComplete && initialShellLaunchTarget?.kind === 'file')
     const initialRoute = setupComplete && initialShellLaunchTarget?.kind === 'directory'
         ? buildExternalExplorerRoute(initialShellLaunchTarget.path)
         : '/'
@@ -768,6 +1047,15 @@ app.whenReady().then(async () => {
         createQuickPreviewWindow(initialShellLaunchTarget.path)
     }
     startNormalDesktopRuntime()
+    setupServices.analytics.capture({
+        event: 'zyra_v1_app_lifecycle',
+        properties: {
+            action: 'launch_ready',
+            outcome: 'ready',
+            launch_bucket: 'cold',
+            duration_ms: performance.now() - launchStartedAt
+        }
+    })
 
     app.on('activate', function () {
         if (!mainWindow || mainWindow.isDestroyed()) {
@@ -780,6 +1068,16 @@ app.whenReady().then(async () => {
     })
 
     app.on('render-process-gone', (_event, webContents, details) => {
+        rendererHangRecorder.captureRendererGone(webContents, {
+            reason: details.reason,
+            exitCode: details.exitCode
+        })
+        if (!quitCleanupStarted && details.reason !== 'clean-exit' && !isIncognitoBrowserWebContents(webContents.id) && !hasIncognitoBrowserContents()) {
+            setupServices.analytics.capture({
+                event: 'zyra_v1_app_lifecycle',
+                properties: { action: 'crash', outcome: 'failed', process_kind: 'renderer', error_code: 'renderer_gone' }
+            })
+        }
         log.error('[Process] Renderer gone', {
             id: webContents.id,
             reason: details.reason,
@@ -788,6 +1086,18 @@ app.whenReady().then(async () => {
     })
 
     app.on('child-process-gone', (_event, details) => {
+        rendererHangRecorder.captureChildProcessGone({ ...details })
+        if (!quitCleanupStarted && details.reason !== 'clean-exit' && !hasIncognitoBrowserContents()) {
+            setupServices.analytics.capture({
+                event: 'zyra_v1_app_lifecycle',
+                properties: {
+                    action: 'crash',
+                    outcome: 'failed',
+                    process_kind: details.type === 'GPU' ? 'gpu' : details.type === 'Utility' ? 'utility' : 'other',
+                    error_code: 'unknown'
+                }
+            })
+        }
         log.error('[Process] Child process gone', details)
     })
 })
@@ -802,21 +1112,36 @@ app.on('before-quit', (event) => {
     event.preventDefault()
     if (quitCleanupStarted) return
     quitCleanupStarted = true
-    globalShortcut.unregisterAll()
-    const browserRuntime = browserClientRuntime
-    browserClientRuntime = null
-    disposeUpdater()
-    void Promise.all([
-        browserRuntime?.stop().catch((error) => log.warn('[Shutdown] Browser runtime cleanup failed', error)),
-        disposeAssistantService(),
-        setupServices.auth.dispose().catch((error) => log.warn('[Shutdown] OpenAI auth worker cleanup failed', error)),
-        disposeAgentControlBroker().catch((error) => log.warn('[Shutdown] Agent Control cleanup failed', error))
-    ]).then(() => {
+    if (!setupServices.onboarding.isAccessAllowed()) {
+        setupServices.analytics.capture({ event: 'zyra_v1_onboarding', properties: { action: 'abandoned', outcome: 'cancelled' } })
+    }
+    setupServices.analytics.capture({
+        event: 'zyra_v1_app_lifecycle',
+        properties: { action: 'shutdown', outcome: 'started' }
+    })
+    void flushGlobalBrowserProfileStorage().then(() => {
+        globalShortcut.unregisterAll()
+        browserViewManager.dispose()
+        const browserRuntime = browserClientRuntime
+        browserClientRuntime = null
+        disposeUpdater()
+        return Promise.all([
+            browserRuntime?.stop().catch((error) => log.warn('[Shutdown] Browser runtime cleanup failed', error)),
+            disposeAssistantService(),
+            assistantUtilityWindowManager.dispose(),
+            setupServices.auth.dispose().catch((error) => log.warn('[Shutdown] OpenAI auth worker cleanup failed', error)),
+            disposeAgentControlBroker().catch((error) => log.warn('[Shutdown] Agent Control cleanup failed', error)),
+            disposeBrowserThreatProtectionService().catch((error) => log.warn('[Shutdown] Browser phishing protection cleanup failed', error)),
+            setupServices.analytics.flush(1_500)
+        ])
+    }).then(async () => {
+        await setupServices.analytics.shutdown(250)
+        rendererHangRecorder.dispose()
         quitCleanupComplete = true
         app.quit()
     }).catch((error) => {
         quitCleanupStarted = false
-        log.error('[Shutdown] Zyra kept running because Assistant state could not be committed.', error)
+        log.error('[Shutdown] Zyra kept running because local state could not be committed.', error)
         if (!mainWindow || mainWindow.isDestroyed()) {
             mainWindow = createWindow(true)
             ensureIpcHandlersRegistered(mainWindow)
@@ -825,7 +1150,7 @@ app.on('before-quit', (event) => {
         }
         dialog.showErrorBox(
             'Zyra could not finish saving',
-            'Zyra is still running so your pending chat state is not discarded. Free some disk space or fix the storage error, then quit again.'
+            'Zyra is still running so pending chat and Browser state are not discarded. Free some disk space or fix the storage error, then quit again.'
         )
     })
 })
@@ -852,6 +1177,12 @@ ipcMain.on('window:close', (event) => {
     log.info('Window close requested')
     resolveSenderWindow(event)?.close()
 })
+
+ipcMain.on('window:setFullScreen', (event, enabled: unknown) => {
+    resolveSenderWindow(event)?.setFullScreen(enabled === true)
+})
+
+ipcMain.handle('window:isFullScreen', (event) => resolveSenderWindow(event)?.isFullScreen() === true)
 
 ipcMain.handle('window:isMaximized', (event) => {
     const targetWindow = resolveSenderWindow(event)

@@ -1,0 +1,20 @@
+{
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "types": [
+            "node"
+        ],
+        "incremental": true,
+        "tsBuildInfoFile": "./node_modules/.cache/typescript/shared.tsbuildinfo"
+    },
+    "include": [
+        "src/shared/**/*",
+        "src/types/**/*"
+    ],
+    "exclude": [
+        "node_modules",
+        "dist",
+        "out"
+    ],
+    "references": []
+}

@@ -1,6 +1,11 @@
 import log from 'electron-log'
-import type { AssistantDomainEvent, AssistantSession } from '../../shared/assistant/contracts'
-import { DEFAULT_ASSISTANT_TITLE_MODEL } from '../../shared/assistant/title-generation'
+import type { AssistantDomainEvent, AssistantReviewTurnIndexEntry, AssistantSession } from '../../shared/assistant/contracts'
+import {
+    ASSISTANT_TITLE_GENERATION_PROMPT_PREFIX,
+    DEFAULT_ASSISTANT_TITLE_MODEL,
+    normalizeAssistantAutoTitleTurnInterval,
+    type AssistantTitleAutomationPreferences
+} from '../../shared/assistant/title-generation'
 import {
     getSerializedAttachmentDisplayName,
     isSerializedClipboardAttachment,
@@ -14,6 +19,9 @@ const TITLE_GENERATION_FALLBACK_MODEL = 'openai-codex/gpt-5.4-mini'
 const ATTACHMENT_EXCERPT_LIMIT = 240
 const BODY_EXCERPT_LIMIT = 720
 const ATTACHMENT_LIMIT = 4
+const RETITLE_TURN_LIMIT = 4
+const RETITLE_USER_EXCERPT_LIMIT = 720
+const RETITLE_ASSISTANT_EXCERPT_LIMIT = 1_200
 const pendingTitleGenerationSessionIds = new Set<string>()
 
 type AppendEvent = (
@@ -96,7 +104,7 @@ function buildSessionTitlePrompt(messageText: string, seedTitle: string): string
         : ''
 
     return [
-        'You write concise titles for coding assistant chat sessions.',
+        ASSISTANT_TITLE_GENERATION_PROMPT_PREFIX,
         'Return only the title text. Do not use quotes, markdown, JSON, or commentary.',
         `Keep the title under ${SESSION_TITLE_MAX_LENGTH} characters.`,
         'Prefer concrete technical nouns and task intent over generic wording.',
@@ -111,6 +119,36 @@ function buildSessionTitlePrompt(messageText: string, seedTitle: string): string
         'Attachment context:',
         attachmentLines || '(no attachments)'
     ].join('\n') + attachmentOverflow
+}
+
+export function buildSessionRetitlePrompt(turns: AssistantReviewTurnIndexEntry[], currentTitle: string): string {
+    const recentTurns = turns
+        .filter((turn) => turn.state === 'completed' && turn.prompt?.text.trim() && turn.response?.text.trim())
+        .sort((left, right) => left.requestedAt.localeCompare(right.requestedAt) || left.id.localeCompare(right.id))
+        .slice(-RETITLE_TURN_LIMIT)
+    const transcript = recentTurns.map((turn, index) => {
+        const userPrompt = clip(parseSerializedAssistantMessage(turn.prompt?.text || '').body, RETITLE_USER_EXCERPT_LIMIT)
+        const finalResponse = clip(turn.response?.text || '', RETITLE_ASSISTANT_EXCERPT_LIMIT)
+        return [
+            `Turn ${index + 1}`,
+            `User prompt: ${userPrompt || '(empty)'}`,
+            `Final assistant response: ${finalResponse || '(empty)'}`
+        ].join('\n')
+    }).join('\n\n')
+
+    return [
+        ASSISTANT_TITLE_GENERATION_PROMPT_PREFIX,
+        'Return only the title text. Do not use quotes, markdown, JSON, or commentary.',
+        `Keep the title under ${SESSION_TITLE_MAX_LENGTH} characters.`,
+        'Name the current coherent topic represented by the recent completed turns.',
+        'Prefer concrete technical nouns and task intent over generic wording.',
+        'Do not mention tools, implementation steps, or that the title was regenerated.',
+        '',
+        `Current title: ${clip(currentTitle, SESSION_TITLE_MAX_LENGTH) || 'Untitled thread'}`,
+        '',
+        'Recent completed turns:',
+        transcript || '(no completed conversation available)'
+    ].join('\n')
 }
 
 function shouldApplyGeneratedTitle(session: AssistantSession | null, seedTitle: string): boolean {
@@ -177,12 +215,90 @@ async function generateSessionTitleText(args: {
     return null
 }
 
+export function shouldAutoRegenerateSessionTitle(
+    completedTurnCount: number,
+    preferences: AssistantTitleAutomationPreferences
+): boolean {
+    if (!preferences.enabled) return false
+    const turnInterval = normalizeAssistantAutoTitleTurnInterval(preferences.turnInterval)
+    return completedTurnCount >= turnInterval && completedTurnCount % turnInterval === 0
+}
+
 export function shouldGenerateSessionTitleForPrompt(session: AssistantSession, persistedFirstUserMessage?: string | null): boolean {
     if (isDefaultSessionTitle(session.title)) return true
 
     const firstMessage = persistedFirstUserMessage || firstUserMessageText(session)
     if (!firstMessage) return false
     return session.title.trim() === deriveSessionTitleFromPrompt(firstMessage).trim()
+}
+
+type SessionTitleGenerationTask = {
+    sessionId: string
+    threadId: string
+    prompt: string
+    seedTitle: string
+    cwd: string
+    preferredModel?: string | null
+    generateText: AssistantTitleTextGenerator
+    getSnapshot: () => { sessions: AssistantSession[] }
+    appendEvent: AppendEvent
+    onApplied?: (title: string) => void | Promise<void>
+    announceState: boolean
+}
+
+async function runSessionTitleGeneration(args: SessionTitleGenerationTask): Promise<string | null> {
+    if (pendingTitleGenerationSessionIds.has(args.sessionId)) return null
+    pendingTitleGenerationSessionIds.add(args.sessionId)
+    let settledState = false
+    if (args.announceState) {
+        const occurredAt = nowIso()
+        args.appendEvent('session.updated', occurredAt, {
+            sessionId: args.sessionId,
+            patch: { titleGenerating: true }
+        }, args.sessionId, args.threadId)
+    }
+
+    try {
+        const generatedText = await generateSessionTitleText({
+            prompt: args.prompt,
+            cwd: args.cwd,
+            preferredModel: args.preferredModel,
+            generateText: args.generateText
+        })
+        if (!generatedText) return null
+
+        const nextTitle = sanitizeGeneratedSessionTitle(generatedText, args.seedTitle)
+        if (!nextTitle || nextTitle === args.seedTitle.trim()) return null
+
+        const session = args.getSnapshot().sessions.find((entry) => entry.id === args.sessionId) || null
+        if (!shouldApplyGeneratedTitle(session, args.seedTitle)) return null
+
+        const occurredAt = nowIso()
+        args.appendEvent('session.updated', occurredAt, {
+            sessionId: args.sessionId,
+            patch: {
+                title: nextTitle,
+                titleGenerating: false,
+                updatedAt: occurredAt
+            }
+        }, args.sessionId, args.threadId)
+        settledState = true
+        try {
+            await args.onApplied?.(nextTitle)
+        } catch (error) {
+            log.warn('[Assistant] Generated title applied locally but canonical metadata update failed:', error)
+        }
+        return nextTitle
+    } finally {
+        pendingTitleGenerationSessionIds.delete(args.sessionId)
+        if (args.announceState && !settledState) {
+            const occurredAt = nowIso()
+            args.appendEvent('session.updated', occurredAt, {
+                sessionId: args.sessionId,
+                patch: { titleGenerating: false }
+            }, args.sessionId, args.threadId)
+        }
+    }
 }
 
 export function queueGeneratedSessionTitle(args: {
@@ -197,41 +313,32 @@ export function queueGeneratedSessionTitle(args: {
     appendEvent: AppendEvent
     onApplied?: (title: string) => void | Promise<void>
 }): Promise<void> {
-    if (pendingTitleGenerationSessionIds.has(args.sessionId)) return Promise.resolve()
-    pendingTitleGenerationSessionIds.add(args.sessionId)
-
-    const prompt = buildSessionTitlePrompt(args.messageText, args.seedTitle)
-    const task = (async () => {
-        const generatedText = await generateSessionTitleText({
-            prompt,
-            cwd: args.cwd,
-            preferredModel: args.preferredModel,
-            generateText: args.generateText
-        })
-        if (!generatedText) return
-
-        const nextTitle = sanitizeGeneratedSessionTitle(generatedText, args.seedTitle)
-        if (!nextTitle || nextTitle === args.seedTitle.trim()) return
-
-        const session = args.getSnapshot().sessions.find((entry) => entry.id === args.sessionId) || null
-        if (!shouldApplyGeneratedTitle(session, args.seedTitle)) return
-
-        const occurredAt = nowIso()
-        args.appendEvent('session.updated', occurredAt, {
-            sessionId: args.sessionId,
-            patch: {
-                title: nextTitle,
-                updatedAt: occurredAt
-            }
-        }, args.sessionId, args.threadId)
-        await args.onApplied?.(nextTitle)
-    })()
-    task.then(
-        () => pendingTitleGenerationSessionIds.delete(args.sessionId),
-        () => pendingTitleGenerationSessionIds.delete(args.sessionId)
-    )
+    const task = runSessionTitleGeneration({
+        ...args,
+        prompt: buildSessionTitlePrompt(args.messageText, args.seedTitle),
+        announceState: false
+    }).then(() => undefined)
     task.catch((error) => {
         log.warn('[Assistant] Session title generation task failed:', error)
     })
     return task
+}
+
+export function regenerateSessionTitle(args: {
+    sessionId: string
+    threadId: string
+    turns: AssistantReviewTurnIndexEntry[]
+    seedTitle: string
+    cwd: string
+    preferredModel?: string | null
+    generateText: AssistantTitleTextGenerator
+    getSnapshot: () => { sessions: AssistantSession[] }
+    appendEvent: AppendEvent
+    onApplied?: (title: string) => void | Promise<void>
+}): Promise<string | null> {
+    return runSessionTitleGeneration({
+        ...args,
+        prompt: buildSessionRetitlePrompt(args.turns, args.seedTitle),
+        announceState: true
+    })
 }

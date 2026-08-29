@@ -1,0 +1,141 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import type { AssistantUtilityTab } from '../src/shared/assistant/utility-window'
+import { buildAssistantUtilityTabGroups, resolveVisibleAssistantUtilityTabs } from '../src/renderer/src/pages/assistant/utility/assistant-utility-tab-groups'
+import { ASSISTANT_TAB_TEAR_OFF_THRESHOLD, isAssistantTabTearOff } from '../src/renderer/src/pages/assistant/assistant-tab-drag-modifier'
+
+const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8')
+const manager = read('../src/main/assistant/assistant-utility-window-manager.ts')
+const app = read('../src/renderer/src/App.tsx')
+const windowSource = read('../src/renderer/src/pages/assistant/utility/AssistantUtilityWindow.tsx')
+const host = read('../src/renderer/src/pages/assistant/utility/AssistantUtilityWorkspaceHost.tsx')
+const filesWorkspace = read('../src/renderer/src/pages/assistant/AssistantFilesWorkspace.tsx')
+const previewInteractions = read('../src/renderer/src/components/ui/file-preview/useFilePreviewModalInteractions.tsx')
+const actionsMenu = read('../src/renderer/src/components/ui/FileActionsMenu.tsx')
+const inspector = read('../src/renderer/src/pages/assistant/AssistantInspectorSidebar.tsx')
+const panel = read('../src/renderer/src/pages/assistant/AssistantDiffPanel.tsx')
+const utilityContract = read('../src/shared/assistant/utility-window.ts')
+const utilityPreload = read('../src/preload/adapters/assistant-utility-adapter.ts')
+
+assert.match(app, /#\\\/assistant-utility/)
+assert.match(manager, /showInactive\(\)/, 'TUI-opened windows do not steal focus')
+assert.match(manager, /waitForDestination\(tab, target\.id, targetWindow\)/, 'cross-window moves prepare the target before removing the source')
+assert.match(manager, /serializeMove/, 'cross-window move commits are serialized')
+assert.match(manager, /waitForMainMove/, 'moving back to the main window requires an acknowledgement before source removal')
+assert.match(manager, /browser:utility:/, 'utility Browser IDs satisfy the trusted Browser identity contract')
+assert.match(manager, /canonicalChatId !== tab\.canonicalChatId/, 'main-window drops preserve chat ownership')
+assert.match(manager, /input\.sourceTabId\s*\? state\.tabs\.find\(\(tab\) => tab\.id === input\.sourceTabId\)/, 'the main process resolves a group-scoped plus from a tab owned by that window')
+assert.match(utilityContract, /AssistantUtilityAddTabInput[\s\S]{0,160}sourceTabId\?: string/, 'group add requests identify a validated source tab without supplying chat ownership')
+assert.doesNotMatch(utilityContract, /AssistantUtilityAddTabInput[\s\S]{0,160}canonicalChatId/, 'the renderer cannot supply a stale or different chat scope for the plus menu')
+assert.match(manager, /utility:\$\{chat\.canonicalChatId\}:\$\{workspace\}:\$\{randomUUID\(\)\}/, 'every non-Browser utility tab instance has a globally unique identity')
+assert.match(manager, /target\.tabs\.some\(\(entry\) => entry\.id === tab\.id\)/, 'cross-window moves reject duplicate target identities')
+assert.match(manager, /const seenTabIds = new Set<string>\(\)/, 'persisted duplicate tab identities migrate before windows restore')
+assert.match(manager, /removeExactTabFromWindow\(target, tab\)/, 'failed moves roll back only the exact inserted instance')
+assert.match(manager, /await this\.pruneEmptyWindow\(target\)/, 'failed moves prune newly created ghost windows')
+assert.match(manager, /!targetWindow\.isVisible\(\) \|\| targetWindow\.isMinimized\(\)/, 'hidden and minimized windows cannot receive stale drop targets')
+assert.match(manager, /windowStackOrder\.get\(rightId\)/, 'overlapping visible drop targets resolve by current window stacking recency')
+assert.match(utilityContract, /addTab: 'devscope:assistantUtility:addTab'/, 'independent new-tab requests use a typed IPC channel')
+assert.match(utilityPreload, /ASSISTANT_UTILITY_IPC\.addTab/, 'the new-tab command crosses the narrow preload adapter')
+assert.match(utilityContract, /faviconUrl\?: string/, 'independent Browser tabs retain their page icon metadata')
+assert.match(manager, /sanitizeBrowserPersistentUrl\(patch\.faviconUrl, 4_096\)/, 'persisted utility favicons remain bounded and HTTP-only')
+assert.match(host, /faviconUrl: browserTab\.faviconUrl/, 'live Browser favicon changes reach independent-window tab chrome')
+assert.match(windowSource, /<AssistantBrowserPageIcon faviconUrl=\{tab\.faviconUrl \|\| null\} pageUrl=\{tab\.url \|\| null\}/, 'independent Browser tabs render the shared favicon fallback chain')
+assert.match(windowSource, /horizontalListSortingStrategy/)
+assert.match(windowSource, /group\.title/)
+assert.match(windowSource, /GROUP_COLORS/)
+assert.match(windowSource, /h-\[34px\]/, 'utility tabs share the window title bar')
+assert.doesNotMatch(windowSource, /function UtilityChrome/, 'utility tabs do not sit below a separate chrome row')
+assert.match(windowSource, /onClick=\{\(\) => toggleGroup\(group\.id\)\}/, 'chat labels toggle their tab group')
+assert.match(windowSource, /title=\{`Add tab to \$\{group\.title\}`\}/, 'each multi-chat group owns an explicit scoped plus action')
+assert.match(windowSource, /addTab\(\{ windowId, workspace, sourceTabId, sessionMode \}\)/, 'the scoped plus preserves group identity and explicit Browser storage mode without selecting that group first')
+assert.match(windowSource, /choicesLabel: 'Choose Browser tab type'[\s\S]*Normal tab[\s\S]*Incognito tab/, 'Browser tab type is selected from the scoped add-tab flyout')
+assert.match(actionsMenu, /submenuRef[\s\S]*createPortal\([\s\S]*role="menu"/, 'tab-type choices render in a separate attached portal flyout')
+assert.doesNotMatch(actionsMenu, /role="group"[^>]*tab types/, 'tab-type choices do not expand inline inside the parent menu')
+assert.match(windowSource, /activeTab && !groupedChrome/, 'the ambiguous global plus is hidden when per-group plus actions are present')
+assert.doesNotMatch(windowSource, /ChevronDown|ChevronUp/, 'group pills stay free of disclosure arrows')
+assert.match(actionsMenu, />Add tab<\/[a-z]+>/, 'the opened add menu has a clear action heading')
+assert.match(actionsMenu, /\{menuLabel\}/, 'the opened add menu names its target group')
+assert.match(actionsMenu, /--file-actions-menu-accent/, 'the complete add menu surface inherits its group color')
+assert.match(actionsMenu, /background: `color-mix\(in srgb, \$\{accentColor\} 6%, var\(--surface-floating\)\)`/, 'the group color uses a restrained wash across the full menu surface')
+assert.match(actionsMenu, /inset 0 2px 0 color-mix/, 'a crisp group-colored edge makes ownership immediately visible')
+assert.doesNotMatch(actionsMenu, /linear-gradient\(155deg/, 'the muddy heavy group gradient is removed')
+assert.match(windowSource, /Plus size=\{12\} strokeWidth=\{2\.2\} className="-translate-y-px"/, 'the group plus is optically centered inside its pill')
+assert.match(windowSource, /GROUP_DISCLOSURE_MS = 180/, 'chat groups use the established compact disclosure timing')
+assert.match(windowSource, /animatingClosedGroupIds\.has\(group\.id\)/, 'group tabs remain mounted at zero width while disclosure motion settles')
+assert.match(windowSource, /window\.requestAnimationFrame\(\(\) => \{\s*const secondFrameId = window\.requestAnimationFrame/, 'expanding tabs receive a painted collapsed frame before opening')
+assert.match(windowSource, /if \(reducedMotion\) \{[\s\S]{0,700}setCollapsedGroupIds/, 'group disclosure bypasses animation when reduced motion is requested')
+assert.match(inspector, /width 180ms cubic-bezier\(0\.22, 1, 0\.36, 1\)/, 'neighboring tabs resize smoothly as groups open and close')
+assert.match(windowSource, /groupedChrome \? \(/, 'chat grouping chrome is conditional')
+assert.match(windowSource, /<SortableInspectorTab/, 'independent windows render the exact docked Inspector tab component')
+assert.match(windowSource, /sortable=\{!animatingClosedGroupIds\.has\(group\.id\)\}/, 'independent tabs remain draggable except during their disclosure transition')
+assert.match(inspector, /sortable=\{tabs\.length > 1 \|\| Boolean\(tabTearOff\)\}/, 'a single docked tab remains draggable when tear-off is available')
+assert.match(windowSource, /<InspectorTabDragPreview/, 'independent windows use the exact docked lifted preview')
+assert.match(inspector, /data-inspector-tab-drag-preview[\s\S]{0,1800}gap-1\.5 overflow-hidden pl-2 pr-1[\s\S]{0,500}<InspectorTabIdentity/, 'the lifted drag preview preserves the resting tab icon/text gap and padding')
+assert.match(windowSource, /createAssistantTabDragWithTearOff/, 'independent and docked strips share the same tear-off threshold controller')
+assert.match(windowSource, /event\.active\.rect\.current\.initial \|\| activeElement\?\.getBoundingClientRect\(\)/, 'independent tear-off recovers the real tab rect when dnd-kit supplies no initial rect')
+assert.match(inspector, /event\.active\.rect\.current\.initial \|\| activeElement\?\.getBoundingClientRect\(\)/, 'docked tear-off recovers the real tab rect when dnd-kit supplies no initial rect')
+assert.doesNotMatch(windowSource, /function UtilityTab|PanelTopOpen/, 'independent tabs have no separate styling or hover detach button')
+assert.match(windowSource, /title="Add tab"[\s\S]*triggerIcon=\{<Plus size=\{13\} \/>\}/, 'independent windows expose the real add-tab menu')
+assert.match(windowSource, /<\/SortableContext>\s*\{activeTab && !groupedChrome \? \([\s\S]{0,400}<FileActionsMenu[\s\S]{0,600}rootClassName="no-drag sticky right-0/, 'the single-group add button follows the final tab and is replaced by scoped group actions when needed')
+assert.match(inspector, /<\/SortableContext>\s*<FileActionsMenu[\s\S]{0,600}rootClassName="no-drag sticky right-0[\s\S]{0,600}<\/div>/, 'the docked add-tab button follows the final tab and sticks only within an overflowing rail')
+assert.doesNotMatch(windowSource, /role="tablist" className="no-drag/, 'unused strip space remains native window-drag space')
+assert.match(windowSource, /tearOffActiveRef\.current/, 'the same modifier activation drives both the lifted preview and committed tear-off')
+assert.match(windowSource, /suppressTabSelectionRef\.current = tabId/, 'post-drag pointer release cannot accidentally select a background tab')
+assert.match(windowSource, /onPreviewEnter=\{handleTabPreviewEnter\}/, 'independent tabs retain the docked hover-preview behavior')
+assert.match(windowSource, /dropAnimation=\{reducedMotion \? null/)
+assert.match(windowSource, /const refreshMovedDropZone = \(\) => \{[\s\S]*dropZoneWindowPositionRef\.current === nextWindowPosition[\s\S]*return/, 'stationary utility windows skip repeated drop-zone layout and IPC work')
+assert.match(inspector, /const refreshMovedDropZone = \(\) => \{[\s\S]*dropZoneWindowPositionRef\.current === nextWindowPosition[\s\S]*return/, 'the stationary main Inspector skips repeated drop-zone layout and IPC work')
+assert.match(windowSource, /RETAINED_WORKSPACE_KINDS = new Set<AssistantUtilityTab\['workspace'\]>\(\['browser', 'terminal'\]\)/, 'only Browser and Terminal sessions remain mounted while hidden')
+assert.match(windowSource, /const latestCapsule = capsuleByTabIdRef\.current\.get\(tab\.id\) \|\| tab\.stateCapsule[\s\S]*tab=\{renderedTab\}/, 'unmounted workspace tabs restore their latest in-memory state capsule')
+assert.match(windowSource, /lazy\(async \(\) => \(\{[\s\S]{0,180}AssistantUtilityWorkspaceHost/, 'the independent title strip loads before heavy workspace renderers')
+assert.match(windowSource, /state\.provisional && activeTab/, 'a native tear-off shows lightweight themed chrome instead of a black workspace reload')
+assert.match(manager, /target\.provisional = true/, 'native tear-off marks its cursor-following window as provisional')
+assert.match(manager, /await this\.waitForProvisionalSurface\(targetWindow\)/, 'the cursor-following window appears only after its lightweight native surface is paintable')
+assert.match(manager, /targetWindowId === session\.targetWindowId[\s\S]{0,180}provisional\.provisional = false/, 'standalone drop activates the real workspace only after release')
+assert.match(host, /surfaceRequest=\{surfaceRequest\}/, 'background Browser tabs request an exact stable tab identity')
+assert.match(host, /onLocalControlTargetChange=\{\(tabId\)/, 'Browser transfers acknowledge only a target emitted by the destination guest')
+assert.doesNotMatch(host, /state\.tabs\.some\(\(entry\) => entry\.tabId === tab\.id && entry\.targetId\)/, 'source-window control targets cannot satisfy destination readiness')
+assert.match(host, /getTurnDetail/, 'historical utility diffs hydrate full turn details')
+assert.match(host, /const needsReviewData = active && reviewWorkspace/, 'Review data stays scoped to the active utility workspace')
+assert.match(host, /enabled: needsReviewData,\s*prefetch: false/, 'inactive utility tabs cannot index complete long-chat Review history')
+assert.match(host, /projected: projectedFleet, enabled: active/, 'hidden Details tabs cannot refresh fleet state')
+assert.match(host, /<AssistantFilesWorkspace/, 'independent Files tabs use the same adaptive workspace as docked Inspector tabs')
+assert.doesNotMatch(filesWorkspace, /shellMode=/, 'independent Files windows use the same centered preview modal as the main window')
+assert.doesNotMatch(previewInteractions, /useNavigate/, 'opening a file cannot crash a Router-free independent window')
+assert.match(inspector, /tabTearOff\.begin\(/, 'crossing the strip starts a provisional native window before mouse-up')
+assert.match(inspector, /tabTearOff\.finish\(/, 'mouse-up commits or merges the provisional native window')
+assert.match(panel, /utility\.beginTearOff\(\{ sourceWindowId: 'main', tab, screenPoint, grabOffset \}\)/, 'docked tabs use the provisional native tear-off owner instead of the obsolete one-shot detach path')
+assert.match(panel, /onIncomingMainTab/)
+assert.match(panel, /browserWorkspaceState\.tabs\.some\(\(tab\) => tab\.tabId === browserTabId && Boolean\(tab\.targetId\)\)/, 'Browser moves back to main acknowledge only after trusted target binding')
+assert.match(panel, /MAIN_BROWSER_MOVE_READY_TIMEOUT_MS[\s\S]*handleCloseTab\(browserTabId\)/, 'failed Browser returns remove the exact destination tab before the source times out')
+assert.match(panel, /browserControllerRef\.current\?\.closeTab\(browserTabId\)/, 'changing chats rolls back Browser destinations that have not acknowledged readiness')
+
+assert.equal(ASSISTANT_TAB_TEAR_OFF_THRESHOLD, 44)
+assert.equal(isAssistantTabTearOff({ left: 20, right: 120, top: 0, bottom: 28 }, { left: 0, right: 400, top: 0, bottom: 34 }), false, 'in-strip movement remains horizontal sorting')
+assert.equal(isAssistantTabTearOff({ left: 20, right: 120, top: 79, bottom: 107 }, { left: 0, right: 400, top: 0, bottom: 34 }), true, 'crossing 44px below the strip enters native tear-off')
+
+const tab = (id: string, canonicalChatId: string, chatTitle: string): AssistantUtilityTab => ({
+    id,
+    canonicalChatId,
+    sessionId: `session:${canonicalChatId}`,
+    threadId: `thread:${canonicalChatId}`,
+    chatTitle,
+    projectPath: '',
+    workspace: 'browser',
+    title: id,
+    colorIndex: canonicalChatId === 'chat-a' ? 1 : 2,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z'
+})
+const groups = buildAssistantUtilityTabGroups([
+    tab('a-1', 'chat-a', 'Testing'),
+    tab('a-2', 'chat-a', 'Testing'),
+    tab('b-1', 'chat-b', 'Hello')
+])
+assert.deepEqual(groups.map((group) => [group.title, group.tabs.map((entry) => entry.id)]), [
+    ['Testing', ['a-1', 'a-2']],
+    ['Hello', ['b-1']]
+])
+assert.deepEqual(resolveVisibleAssistantUtilityTabs(groups, new Set(['chat-a'])).map((entry) => entry.id), ['b-1'], 'collapsed chat groups hide only their tabs')
+assert.deepEqual(resolveVisibleAssistantUtilityTabs([groups[0]], new Set(['chat-a'])).map((entry) => entry.id), ['a-1', 'a-2'], 'a single chat stays as a simple ungrouped strip')
+console.log('Assistant independent utility windows: ok')

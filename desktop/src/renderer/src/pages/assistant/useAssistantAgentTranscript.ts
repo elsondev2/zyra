@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AgentRunState, AgentTranscriptPage } from '@shared/assistant/contracts'
-import { mergeAssistantAgentTranscriptPages } from './assistant-agent-presentation'
+import {
+    mergeAssistantAgentTranscriptPages,
+    mergeAssistantAgentTranscriptRefresh
+} from './assistant-agent-presentation'
+
+const LIVE_TRANSCRIPT_REFRESH_MS = 1_000
+const TERMINAL_TRANSCRIPT_REFRESH_DELAYS_MS = [0, 250, 1_000]
+const LIVE_AGENT_STATUSES = new Set<AgentRunState['status']>(['queued', 'starting', 'running', 'waiting', 'blocked', 'recovering'])
 
 type TranscriptLoadState = {
     agentRunId: string | null
@@ -72,6 +79,55 @@ export function useAssistantAgentTranscript(
 
         return () => { cancelled = true }
     }, [agentRunId, revision, sessionFile, threadId])
+
+    useEffect(() => {
+        if (!threadId || !agentRunId || !sessionFile) return
+        let cancelled = false
+        let requestRunning = false
+        const refreshLatest = async () => {
+            if (cancelled || requestRunning) return
+            requestRunning = true
+            try {
+                const response = await window.devscope.assistant.agentAction({
+                    threadId,
+                    action: 'transcript',
+                    payload: { agentRunId, limit: 30 }
+                })
+                if (cancelled || !response.success) return
+                const latestPage = readTranscriptPage(response.result)
+                setState((current) => current.agentRunId === agentRunId
+                    ? {
+                        agentRunId,
+                        page: current.page
+                            ? mergeAssistantAgentTranscriptRefresh(current.page, latestPage)
+                            : latestPage,
+                        loading: false,
+                        error: null
+                    }
+                    : current)
+            } catch {
+                // The initial loader owns visible errors; live refresh keeps the last good page.
+            } finally {
+                requestRunning = false
+            }
+        }
+
+        const timeoutIds: number[] = []
+        let intervalId: number | null = null
+        if (run && LIVE_AGENT_STATUSES.has(run.status)) {
+            void refreshLatest()
+            intervalId = window.setInterval(() => void refreshLatest(), LIVE_TRANSCRIPT_REFRESH_MS)
+        } else {
+            for (const delay of TERMINAL_TRANSCRIPT_REFRESH_DELAYS_MS) {
+                timeoutIds.push(window.setTimeout(() => void refreshLatest(), delay))
+            }
+        }
+        return () => {
+            cancelled = true
+            if (intervalId !== null) window.clearInterval(intervalId)
+            for (const timeoutId of timeoutIds) window.clearTimeout(timeoutId)
+        }
+    }, [agentRunId, run?.completedAt, run?.status, sessionFile, threadId])
 
     useEffect(() => () => {
         requestSequenceRef.current += 1

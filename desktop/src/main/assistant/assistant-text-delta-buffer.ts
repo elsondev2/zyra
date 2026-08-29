@@ -25,6 +25,7 @@ export class AssistantTextDeltaBuffer {
     private readonly flushDelayMs: number
     private readonly onFlush: (entry: AssistantTextDeltaEntry) => void
     private readonly entries = new Map<string, AssistantTextDeltaEntry>()
+    private readonly startedMessages = new Map<string, Pick<AssistantTextDeltaEntry, 'threadId' | 'messageId'>>()
     private flushTimer: NodeJS.Timeout | null = null
 
     constructor(options: AssistantTextDeltaBufferOptions) {
@@ -34,6 +35,15 @@ export class AssistantTextDeltaBuffer {
 
     queue(entry: AssistantTextDeltaEntry): void {
         const key = getBufferKey(entry.threadId, entry.messageId)
+        if (!this.startedMessages.has(key)) {
+            this.startedMessages.set(key, {
+                threadId: entry.threadId,
+                messageId: entry.messageId
+            })
+            this.onFlush({ ...entry })
+            return
+        }
+
         const existing = this.entries.get(key)
         if (existing) {
             existing.delta = `${existing.delta}${entry.delta}`
@@ -64,6 +74,14 @@ export class AssistantTextDeltaBuffer {
             this.onFlush(entry)
         }
 
+        if (target) {
+            for (const [key, message] of this.startedMessages) {
+                if (message.threadId !== target.threadId) continue
+                if (target.messageId && message.messageId !== target.messageId) continue
+                this.startedMessages.delete(key)
+            }
+        }
+
         if (this.entries.size === 0) {
             this.clearFlushTimer()
         } else if (!target) {
@@ -73,6 +91,7 @@ export class AssistantTextDeltaBuffer {
 
     dispose(): void {
         this.flush()
+        this.startedMessages.clear()
         this.clearFlushTimer()
     }
 

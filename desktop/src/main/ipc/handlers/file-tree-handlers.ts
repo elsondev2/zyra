@@ -1,9 +1,10 @@
 import { shell } from 'electron'
-import { access, cp, lstat, mkdir, open as fsOpen, readFile, readdir, rename, rm, stat, writeFile } from 'fs/promises'
+import { access, cp, lstat, mkdir, open as fsOpen, opendir, readFile, readdir, rename, rm, stat, writeFile } from 'fs/promises'
 import { basename, dirname, join, parse, relative, resolve, sep } from 'path'
 import log from 'electron-log'
 import { checkIsGitRepo, getGitStatus, type GitFileStatus } from '../../inspectors/git'
 import { invalidateScanProjectsCache } from '../../services/project-discovery-service'
+import { readBinaryPreviewFile } from './binary-preview-file'
 import {
     handleCreateFileSystemItem,
     handleDeleteFileSystemItem,
@@ -31,12 +32,48 @@ interface FileTreeNode {
     modifiedAt?: number
     children?: FileTreeNode[]
     childrenLoaded?: boolean
+    hasDirectoryChildren?: boolean
     isHidden: boolean
     gitStatus?: GitFileStatus
 }
 
-const PREVIEW_MAX_BYTES = 2 * 1024 * 1024
+const PREVIEW_MAX_BYTES = 8 * 1024 * 1024
 const BINARY_DETECTION_BYTES = 4096
+const FILE_METADATA_CONCURRENCY = 24
+const DIRECTORY_CHILD_HINT_CONCURRENCY = 12
+const SKIPPED_TREE_DIRECTORY_NAMES = new Set(['node_modules', '.git'])
+
+async function mapWithConcurrency<T, R>(values: readonly T[], concurrency: number, worker: (value: T) => Promise<R>): Promise<R[]> {
+    const results = new Array<R>(values.length)
+    let nextIndex = 0
+    async function runWorker(): Promise<void> {
+        while (nextIndex < values.length) {
+            const index = nextIndex
+            nextIndex += 1
+            results[index] = await worker(values[index])
+        }
+    }
+    await Promise.all(Array.from({ length: Math.min(Math.max(1, concurrency), values.length) }, () => runWorker()))
+    return results
+}
+
+function includeTreeEntry(name: string, showHidden: boolean): boolean {
+    if (!showHidden && name.startsWith('.')) return false
+    return !SKIPPED_TREE_DIRECTORY_NAMES.has(name.toLowerCase())
+}
+
+async function hasVisibleDirectoryChild(directoryPath: string, showHidden: boolean): Promise<boolean | undefined> {
+    try {
+        const directory = await opendir(directoryPath)
+        for await (const entry of directory) {
+            if (entry.isDirectory() && includeTreeEntry(entry.name, showHidden)) return true
+        }
+        return false
+    } catch {
+        // Preserve the expandable fallback when permissions or transient I/O prevent a reliable answer.
+        return undefined
+    }
+}
 
 function normalizePathForComparison(pathValue: string): string {
     const normalized = resolve(String(pathValue || ''))
@@ -66,14 +103,16 @@ export async function handleGetFileTree(
         rootPath?: string
         includeGitStatus?: boolean
         includeFileSize?: boolean
+        includeDirectoryChildHint?: boolean
     }
 ) {
-    log.info('IPC: getFileTree', projectPath, options)
+    log.debug('IPC: getFileTree', projectPath, options)
 
     const showHidden = options?.showHidden ?? false
     const maxDepth = options?.maxDepth ?? 20
     const includeGitStatus = options?.includeGitStatus ?? true
     const includeFileSize = options?.includeFileSize ?? true
+    const includeDirectoryChildHint = options?.includeDirectoryChildHint ?? false
     const resolvedProjectPath = resolve(projectPath)
     const resolvedRootPath = resolve(options?.rootPath || projectPath)
 
@@ -112,10 +151,14 @@ export async function handleGetFileTree(
             if (maxDepth >= 0 && depth > maxDepth) return []
 
             const entries = await readdir(currentPath, { withFileTypes: true })
-            const nodes = await Promise.all(entries.map(async (entry) => {
+            const concurrency = includeFileSize
+                ? FILE_METADATA_CONCURRENCY
+                : includeDirectoryChildHint
+                    ? DIRECTORY_CHILD_HINT_CONCURRENCY
+                    : entries.length || 1
+            const nodes = await mapWithConcurrency(entries, concurrency, async (entry) => {
                 const isHiddenEntry = entry.name.startsWith('.')
-                if (!showHidden && isHiddenEntry) return null
-                if (entry.name === 'node_modules' || entry.name === '.git') return null
+                if (!includeTreeEntry(entry.name, showHidden)) return null
 
                 const fullPath = join(currentPath, entry.name)
                 const relativePath = relative(resolvedProjectPath, fullPath).replace(/\\/g, '/')
@@ -126,12 +169,18 @@ export async function handleGetFileTree(
                     const children = shouldLoadChildren
                         ? await readDirRec(fullPath, depth + 1)
                         : undefined
+                    const hasDirectoryChildren = !includeDirectoryChildHint
+                        ? undefined
+                        : children
+                            ? children.some((child) => child.type === 'directory')
+                            : await hasVisibleDirectoryChild(fullPath, showHidden)
                     return {
                         name: entry.name,
                         path: fullPath,
                         type: 'directory',
                         children,
                         childrenLoaded: shouldLoadChildren,
+                        hasDirectoryChildren,
                         isHidden: isHiddenEntry,
                         gitStatus: status
                     } satisfies FileTreeNode
@@ -163,7 +212,7 @@ export async function handleGetFileTree(
                     }
                 }
                 return null
-            }))
+            })
 
             const filteredNodes = nodes.filter((node): node is NonNullable<typeof node> => node !== null)
 
@@ -183,23 +232,39 @@ export async function handleGetFileTree(
     }
 }
 
-export async function handleReadFileContent(_event: Electron.IpcMainInvokeEvent, filePath: string) {
-    log.info('IPC: readFileContent', filePath)
+export async function handleReadFileContent(
+    _event: Electron.IpcMainInvokeEvent,
+    filePath: string,
+    options?: { knownSize?: number | null; knownModifiedAt?: number | null }
+) {
+    log.debug('IPC: readFileContent', filePath)
 
     try {
-        await access(filePath)
-        const stats = await stat(filePath)
-        const size = stats.size
-
         const fileHandle = await fsOpen(filePath, 'r')
         try {
-            const probeBytes = Math.min(BINARY_DETECTION_BYTES, size)
-            const probeBuffer = Buffer.alloc(probeBytes)
+            const stats = await fileHandle.stat()
+            const size = stats.size
+            if (
+                typeof options?.knownSize === 'number'
+                && typeof options.knownModifiedAt === 'number'
+                && options.knownSize === size
+                && options.knownModifiedAt === stats.mtimeMs
+            ) {
+                return {
+                    success: true,
+                    notModified: true,
+                    size,
+                    modifiedAt: stats.mtimeMs
+                }
+            }
+            const previewBytes = Math.min(size, PREVIEW_MAX_BYTES)
+            const previewBuffer = Buffer.alloc(previewBytes)
+            const probeBytes = Math.min(BINARY_DETECTION_BYTES, previewBytes)
             if (probeBytes > 0) {
-                await fileHandle.read(probeBuffer, 0, probeBytes, 0)
+                await fileHandle.read(previewBuffer, 0, probeBytes, 0)
             }
 
-            if (isLikelyBinaryBuffer(probeBuffer.subarray(0, probeBytes))) {
+            if (isLikelyBinaryBuffer(previewBuffer.subarray(0, probeBytes))) {
                 return {
                     success: false,
                     error: 'Binary files cannot be previewed safely in text mode.',
@@ -208,10 +273,8 @@ export async function handleReadFileContent(_event: Electron.IpcMainInvokeEvent,
                 }
             }
 
-            const previewBytes = Math.min(size, PREVIEW_MAX_BYTES)
-            const previewBuffer = Buffer.alloc(previewBytes)
-            if (previewBytes > 0) {
-                await fileHandle.read(previewBuffer, 0, previewBytes, 0)
+            if (previewBytes > probeBytes) {
+                await fileHandle.read(previewBuffer, probeBytes, previewBytes - probeBytes, probeBytes)
             }
 
             const content = previewBuffer.toString('utf-8')
@@ -234,15 +297,24 @@ export async function handleReadFileContent(_event: Electron.IpcMainInvokeEvent,
     }
 }
 
-export async function handleReadTextFileFull(_event: Electron.IpcMainInvokeEvent, filePath: string) {
-    log.info('IPC: readTextFileFull', filePath)
+export async function handleReadBinaryFile(_event: Electron.IpcMainInvokeEvent, filePath: string) {
+    log.debug('IPC: readBinaryFile', filePath)
 
     try {
-        await access(filePath)
-        const fileStats = await stat(filePath)
+        return await readBinaryPreviewFile(filePath)
+    } catch (err: any) {
+        log.error('Failed to read binary file:', err)
+        return { success: false, error: err.message }
+    }
+}
 
+export async function handleReadTextFileFull(_event: Electron.IpcMainInvokeEvent, filePath: string) {
+    log.debug('IPC: readTextFileFull', filePath)
+
+    try {
         const fileHandle = await fsOpen(filePath, 'r')
         try {
+            const fileStats = await fileHandle.stat()
             const probeBytes = Math.min(BINARY_DETECTION_BYTES, fileStats.size)
             const probeBuffer = Buffer.alloc(probeBytes)
             if (probeBytes > 0) {
@@ -257,16 +329,16 @@ export async function handleReadTextFileFull(_event: Electron.IpcMainInvokeEvent
                     size: fileStats.size
                 }
             }
+
+            const fullText = await fileHandle.readFile({ encoding: 'utf-8' })
+            return {
+                success: true,
+                content: fullText,
+                size: fileStats.size,
+                modifiedAt: fileStats.mtimeMs
+            }
         } finally {
             await fileHandle.close().catch(() => undefined)
-        }
-
-        const fullText = await readFile(filePath, 'utf-8')
-        return {
-            success: true,
-            content: fullText,
-            size: fileStats.size,
-            modifiedAt: fileStats.mtimeMs
         }
     } catch (err: any) {
         log.error('Failed to read full text file:', err)

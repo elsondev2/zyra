@@ -7,6 +7,7 @@ import type {
     ControlSideEffectClass,
     DelegatedControlLeaseRequest
 } from './contracts'
+import type { BrowserSessionMode } from '../browser-view'
 
 export const AGENT_CONTROL_IPC = {
     getState: 'zyra:agent-control:get-state',
@@ -37,6 +38,7 @@ export type BrowserSurfaceOpenRequest = {
     threadId: string
     mode?: 'open' | 'reveal' | 'layout' | 'resize' | 'close' | 'refresh' | 'external'
     tabId: string
+    sessionMode?: BrowserSessionMode
     targetId?: string
     secondaryTabId?: string
     secondaryTargetId?: string
@@ -66,7 +68,7 @@ export type RendererControlGrantInput = {
 
 export type AgentControlBridgeOperation =
     | { operation: 'list_targets'; targetKind?: 'zyra-browser' | 'chrome-tab' }
-    | { operation: 'open_tab'; reveal?: boolean }
+    | { operation: 'open_tab'; reveal?: boolean; sessionMode?: BrowserSessionMode }
     | { operation: 'reveal_tab'; targetId: string }
     | { operation: 'close_tab'; targetId: string; grantId: string }
     | { operation: 'refresh_tab'; targetId: string; grantId: string }

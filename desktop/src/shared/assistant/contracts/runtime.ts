@@ -25,8 +25,15 @@ export interface AssistantTurnUsage {
     outputTokens?: number | null
     reasoningOutputTokens?: number | null
     cachedInputTokens?: number | null
+    cacheWriteTokens?: number | null
     totalTokens?: number | null
     modelContextWindow?: number | null
+    /** Cost attributed to this Desktop turn. */
+    costUsd?: number | null
+    /** Cumulative model cost recorded for the canonical thread at turn completion. */
+    sessionCostUsd?: number | null
+    /** True only when every metered provider response was represented in sessionCostUsd. */
+    sessionCostComplete?: boolean | null
 }
 
 export type AssistantApprovalRequestType = 'command' | 'file-read' | 'file-change'
@@ -40,16 +47,39 @@ export interface AssistantPlanStep {
     status: AssistantPlanStepStatus
 }
 
+export type AssistantUserInputQuestionType =
+    | 'text'
+    | 'single_select'
+    | 'multi_select'
+    | 'confirm'
+    | 'file_select'
+    | 'number'
+    | 'date'
+    | 'ranking'
+
+export type AssistantUserInputAnswer = string | string[]
+
 export interface AssistantUserInputQuestionOption {
     label: string
     description: string
+    recommended?: boolean
 }
 
 export interface AssistantUserInputQuestion {
     id: string
     header: string
     question: string
+    type: AssistantUserInputQuestionType
     options: AssistantUserInputQuestionOption[]
+    required: boolean
+    allowOther: boolean
+    placeholder?: string
+    multiple?: boolean
+    min?: number
+    max?: number
+    step?: number
+    minSelections?: number
+    maxSelections?: number
 }
 
 export interface AssistantRuntimeEventBase {
@@ -194,7 +224,7 @@ export type AssistantRuntimeEvent =
     | (AssistantRuntimeEventBase & {
         type: 'user-input.resolved'
         payload: {
-            answers: Record<string, string | string[]>
+            answers: Record<string, AssistantUserInputAnswer>
         }
     })
     | (AssistantRuntimeEventBase & {

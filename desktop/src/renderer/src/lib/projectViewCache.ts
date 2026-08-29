@@ -5,14 +5,20 @@ type GitSnapshotLike = Record<string, any>
 const CACHE_TTL_MS = 2 * 60 * 1000
 const PERSISTED_GIT_CACHE_TTL_MS = 30 * 60 * 1000
 const PERSISTED_GIT_CACHE_KEY_PREFIX = 'devscope:git-snapshot:v1:'
+const MAX_PREVIEW_FOLDER_TREE_CACHE_ENTRIES = 80
+const PREVIEW_FOLDER_TREE_MAX_STALE_MS = 30 * 60 * 1000
 
 const projectDetailsCache = new Map<string, { value: ProjectDetailsLike; updatedAt: number }>()
 const fileTreeCache = new Map<string, { value: FileTreeLike; updatedAt: number }>()
 const previewFolderTreeCache = new Map<string, { value: FileTreeLike; updatedAt: number }>()
+const previewFolderTreeInFlight = new Map<string, Promise<FileTreeLike>>()
 const gitSnapshotCache = new Map<string, { value: GitSnapshotLike; updatedAt: number }>()
 
 function normalizePathKey(projectPath: string): string {
-    return String(projectPath || '').trim().replace(/\\/g, '/').toLowerCase()
+    const normalized = String(projectPath || '').trim().replace(/\\/g, '/')
+    return /^[a-z]:\//i.test(normalized) || normalized.startsWith('//')
+        ? normalized.toLowerCase()
+        : normalized
 }
 
 function isFresh(updatedAt: number): boolean {
@@ -212,22 +218,66 @@ function buildPreviewFolderTreeCacheKey(rootPath: string, folderPath: string): s
     return `${normalizedRootPath}::${normalizedFolderPath}`
 }
 
-export function getCachedPreviewFolderTree(rootPath: string, folderPath: string): FileTreeLike | null {
+export function getCachedPreviewFolderTreeStatus(
+    rootPath: string,
+    folderPath: string
+): { value: FileTreeLike; stale: boolean } | null {
     const key = buildPreviewFolderTreeCacheKey(rootPath, folderPath)
     if (!key) return null
     const cached = previewFolderTreeCache.get(key)
     if (!cached) return null
-    if (!isFresh(cached.updatedAt)) {
+    const ageMs = Date.now() - cached.updatedAt
+    if (ageMs > PREVIEW_FOLDER_TREE_MAX_STALE_MS) {
         previewFolderTreeCache.delete(key)
         return null
     }
-    return cached.value
+    previewFolderTreeCache.delete(key)
+    previewFolderTreeCache.set(key, cached)
+    return { value: cached.value, stale: !isFresh(cached.updatedAt) }
+}
+
+export function getCachedPreviewFolderTree(rootPath: string, folderPath: string): FileTreeLike | null {
+    return getCachedPreviewFolderTreeStatus(rootPath, folderPath)?.value || null
+}
+
+export function getOrCreatePreviewFolderTreeRequest(
+    rootPath: string,
+    folderPath: string,
+    loader: () => Promise<FileTreeLike>
+): Promise<FileTreeLike> {
+    const key = buildPreviewFolderTreeCacheKey(rootPath, folderPath)
+    if (!key) return loader()
+    const existing = previewFolderTreeInFlight.get(key)
+    if (existing) return existing
+    const request = loader().finally(() => {
+        if (previewFolderTreeInFlight.get(key) === request) previewFolderTreeInFlight.delete(key)
+    })
+    previewFolderTreeInFlight.set(key, request)
+    return request
 }
 
 export function setCachedPreviewFolderTree(rootPath: string, folderPath: string, value: FileTreeLike): void {
     const key = buildPreviewFolderTreeCacheKey(rootPath, folderPath)
     if (!key || !Array.isArray(value)) return
+    previewFolderTreeCache.delete(key)
     previewFolderTreeCache.set(key, { value, updatedAt: Date.now() })
+    while (previewFolderTreeCache.size > MAX_PREVIEW_FOLDER_TREE_CACHE_ENTRIES) {
+        const oldestKey = previewFolderTreeCache.keys().next().value
+        if (typeof oldestKey !== 'string') break
+        previewFolderTreeCache.delete(oldestKey)
+    }
+}
+
+export function invalidateCachedPreviewFolderTreeRoot(rootPath: string): void {
+    const normalizedRootPath = normalizePathKey(rootPath)
+    if (!normalizedRootPath) return
+    const prefix = `${normalizedRootPath}::`
+    for (const key of previewFolderTreeCache.keys()) {
+        if (key.startsWith(prefix)) previewFolderTreeCache.delete(key)
+    }
+    for (const key of previewFolderTreeInFlight.keys()) {
+        if (key.startsWith(prefix)) previewFolderTreeInFlight.delete(key)
+    }
 }
 
 export function getCachedProjectGitSnapshot(projectPath: string): GitSnapshotLike | null {
@@ -261,6 +311,7 @@ export function clearProjectViewCaches(): void {
     projectDetailsCache.clear()
     fileTreeCache.clear()
     previewFolderTreeCache.clear()
+    previewFolderTreeInFlight.clear()
     gitSnapshotCache.clear()
     if (typeof window === 'undefined' || !window.localStorage) return
     const keys: string[] = []

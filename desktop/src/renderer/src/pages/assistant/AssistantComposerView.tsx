@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type WheelEvent as ReactWheelEvent } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type WheelEvent as ReactWheelEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useSettings } from '@/lib/settings'
+import { readAssistantSkillSourceRevision } from '@/lib/assistant/assistant-skill-source-revision'
 import { cn } from '@/lib/utils'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { ConfirmModal } from '@/components/ui/ConfirmModal'
-import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import {
     ChevronDown,
     ChevronUp,
@@ -13,8 +14,6 @@ import {
     FileImage,
     FileText,
     GripVertical,
-    ListTodo,
-    MessageSquare,
     Pencil,
     Plus,
     SendHorizontal,
@@ -24,22 +23,84 @@ import {
 import AssistantAttachmentPreviewModal from './AssistantAttachmentPreviewModal'
 import { AssistantVoiceRecorderBar } from './AssistantVoiceRecorderBar'
 import { AssistantNewChatProjectChip } from './AssistantNewChatProjectChip'
+import { AssistantComposerContextIndicator } from './AssistantComposerContextIndicator'
+import { AssistantBusySendSplitButton } from './AssistantBusySendSplitButton'
+import { AssistantComposerCommandMenu } from './AssistantComposerCommandMenu'
 import { ComposerAttachmentsShelf, ComposerFooterControls, ComposerMentionMenu, ComposerRealtimeVoiceButton, ComposerSendButton, ComposerVoiceButton } from './AssistantComposerSections'
 import { formatAssistantModelLabel } from './assistant-model-labels'
 import {
     renderInlineMentionOverlay,
     reconcileInlineMentionTags,
 } from './assistant-composer-inline-mentions'
-import type { AssistantVoiceExecutionConfiguration } from '@shared/assistant/contracts'
+import type { AssistantPromptResourcesPayload, AssistantVoiceExecutionConfiguration } from '@shared/assistant/contracts'
 import type { AssistantComposerController } from './useAssistantComposerController'
 import { writeFullAccessConfirmSuppressed } from './assistant-safety-preferences'
 import { deriveAssistantComposerViewState, shouldShowComposerRealtimeVoicePrimaryAction } from './assistant-composer-view-state'
+import { buildAssistantVoiceExecutionConfiguration } from './assistant-voice-execution-configuration'
 import {
     getContentTypeTag,
     getContextFileMeta,
     isPastedTextAttachment,
     toKbLabel
 } from './assistant-composer-utils'
+import {
+    applyAssistantComposerCommandItem,
+    buildAssistantComposerCommandItems,
+    findAssistantComposerSlashToken,
+    getAssistantComposerCommandOptionId,
+    type AssistantComposerCommandItem
+} from './assistant-composer-command-menu'
+
+const PROMPT_RESOURCE_CACHE_TTL_MS = 30_000
+const PROMPT_RESOURCE_CACHE_MAX_PROJECTS = 24
+const promptResourceCache = new Map<string, { expiresAt: number; revision: string; value: AssistantPromptResourcesPayload }>()
+const promptResourceRequests = new Map<string, { revision: string; promise: Promise<AssistantPromptResourcesPayload> }>()
+
+function readCachedPromptResources(projectPath?: string | null): AssistantPromptResourcesPayload | null {
+    const key = projectPath?.trim() || '<global>'
+    const cached = promptResourceCache.get(key)
+    if (!cached || cached.expiresAt <= Date.now() || cached.revision !== readAssistantSkillSourceRevision()) {
+        promptResourceCache.delete(key)
+        return null
+    }
+    return cached.value
+}
+
+async function loadPromptResources(projectPath?: string | null): Promise<AssistantPromptResourcesPayload> {
+    const key = projectPath?.trim() || '<global>'
+    const revision = readAssistantSkillSourceRevision()
+    const cached = readCachedPromptResources(projectPath)
+    if (cached) return cached
+
+    let requestEntry = promptResourceRequests.get(key)
+    if (!requestEntry || requestEntry.revision !== revision) {
+        const promise = window.devscope.assistant.listPromptResources(projectPath).then((result) => {
+            if (!result.success) throw new Error(result.error || 'Could not load commands and skills.')
+            const value = {
+                commands: result.commands,
+                skills: result.skills,
+                diagnostics: result.diagnostics
+            }
+            promptResourceCache.delete(key)
+            promptResourceCache.set(key, {
+                expiresAt: Date.now() + PROMPT_RESOURCE_CACHE_TTL_MS,
+                revision,
+                value
+            })
+            while (promptResourceCache.size > PROMPT_RESOURCE_CACHE_MAX_PROJECTS) {
+                const oldest = promptResourceCache.keys().next().value
+                if (!oldest) break
+                promptResourceCache.delete(oldest)
+            }
+            return value
+        }).finally(() => {
+            if (promptResourceRequests.get(key)?.promise === promise) promptResourceRequests.delete(key)
+        })
+        requestEntry = { revision, promise }
+        promptResourceRequests.set(key, requestEntry)
+    }
+    return requestEntry.promise
+}
 
 export function AssistantComposerView({
     controller,
@@ -51,16 +112,24 @@ export function AssistantComposerView({
     onStartRealtimeVoice?: (configuration: AssistantVoiceExecutionConfiguration) => void
 }) {
     const navigate = useNavigate()
-    const { settings } = useSettings()
+    const { settings, updateSettings } = useSettings()
+    const commandMenuId = useId()
     const transcriptionEnabled = settings.assistantTranscriptionEnabled
     const capabilities = controller.capabilities
     const canSend = capabilities.canSend
     const showBusySendActions = capabilities.showBusySendActions
-    const defaultBusyActionLabel = controller.busyMessageMode === 'force' ? 'Force' : 'Queue'
-    const secondaryBusyActionLabel = controller.busyMessageMode === 'force' ? 'Queue' : 'Force'
     const [showBrowserSpeechFallbackModal, setShowBrowserSpeechFallbackModal] = useState(false)
     const [textareaScrollTop, setTextareaScrollTop] = useState(0)
     const [draggedQueuedMessageId, setDraggedQueuedMessageId] = useState<string | null>(null)
+    const [promptResources, setPromptResources] = useState<AssistantPromptResourcesPayload | null>(() =>
+        readCachedPromptResources(controller.projectPath)
+    )
+    const [promptResourcesLoading, setPromptResourcesLoading] = useState(!promptResources)
+    const [promptResourcesError, setPromptResourcesError] = useState<string | null>(null)
+    const [activeCommandIndex, setActiveCommandIndex] = useState(0)
+    const [slashMenuDismissed, setSlashMenuDismissed] = useState(false)
+    const [slashMenuPresent, setSlashMenuPresent] = useState(false)
+    const [slashMenuAnimatedOpen, setSlashMenuAnimatedOpen] = useState(false)
     const attachmentShelfRef = useRef<HTMLDivElement | null>(null)
     const hasFloatingShelf = controller.queuedMessages.length > 0 || controller.contextFiles.length > 0
     const hasInlineMentionOverlay = controller.text.length > 0 && controller.inlineMentionTags.length > 0
@@ -72,9 +141,7 @@ export function AssistantComposerView({
         controller,
         settings
     })
-    const composerPlaceholder = controller.selectedInteractionMode === 'plan'
-        ? 'Add plan step...'
-        : capabilities.placeholder
+    const composerPlaceholder = capabilities.placeholder
     const sendActionDisabled = capabilities.sendDisabled || (voiceBusy && !capabilities.canStop)
     const currentSubmitLabel = controller.isDirty && controller.dirtySubmitLabel
         ? controller.dirtySubmitLabel
@@ -94,6 +161,68 @@ export function AssistantComposerView({
         && settings.assistantTranscriptionEngine === 'codex'
         && (controller.voiceInput.isRecording || controller.voiceInput.isTranscribing)
     const composerMotionDuration = showCodexRecorder ? 320 : 240
+    const slashToken = useMemo(
+        () => findAssistantComposerSlashToken(controller.text, controller.composerCursor),
+        [controller.composerCursor, controller.text]
+    )
+    const commandItems = useMemo(
+        () => buildAssistantComposerCommandItems(promptResources, slashToken?.query || ''),
+        [promptResources, slashToken?.query]
+    )
+    const showSlashMenu = Boolean(
+        slashToken
+        && !slashMenuDismissed
+        && !showCodexRecorder
+        && !capabilities.inputDisabled
+    )
+    const showTopShelf = slashMenuPresent || hasFloatingShelf
+
+    useEffect(() => {
+        let cancelled = false
+        const cached = readCachedPromptResources(controller.projectPath)
+        setPromptResources(cached)
+        setPromptResourcesLoading(!cached)
+        setPromptResourcesError(null)
+        void loadPromptResources(controller.projectPath).then((resources) => {
+            if (cancelled) return
+            setPromptResources(resources)
+            setPromptResourcesLoading(false)
+        }).catch((error) => {
+            if (cancelled) return
+            setPromptResourcesLoading(false)
+            setPromptResourcesError(error instanceof Error ? error.message : 'Could not load commands and skills.')
+        })
+        return () => {
+            cancelled = true
+        }
+    }, [controller.projectPath])
+
+    useEffect(() => {
+        setSlashMenuDismissed(false)
+    }, [controller.text])
+
+    useEffect(() => {
+        setActiveCommandIndex(0)
+    }, [slashToken?.query])
+
+    useEffect(() => {
+        if (commandItems.length === 0) {
+            setActiveCommandIndex(0)
+            return
+        }
+        setActiveCommandIndex((current) => Math.min(current, commandItems.length - 1))
+    }, [commandItems.length])
+
+    useEffect(() => {
+        if (showSlashMenu) {
+            setSlashMenuPresent(true)
+            const frameId = window.requestAnimationFrame(() => setSlashMenuAnimatedOpen(true))
+            return () => window.cancelAnimationFrame(frameId)
+        }
+        setSlashMenuAnimatedOpen(false)
+        const timerId = window.setTimeout(() => setSlashMenuPresent(false), 300)
+        return () => window.clearTimeout(timerId)
+    }, [showSlashMenu])
 
     useEffect(() => {
         if (settings.assistantTranscriptionEngine !== 'browser') {
@@ -218,12 +347,87 @@ export function AssistantComposerView({
         }
     }, [controller.onOverflowWheel, getNormalizedWheelDelta, syncTextareaScroll])
 
+    const selectCommandItem = useCallback((item: AssistantComposerCommandItem) => {
+        if (!slashToken) return
+        const next = applyAssistantComposerCommandItem(controller.text, slashToken, item)
+        controller.setInlineMentionTags((current) => reconcileInlineMentionTags(controller.text, next.text, current))
+        controller.setText(next.text)
+        controller.setComposerCursor(next.cursor)
+        if (controller.historyCursor != null) controller.setHistoryCursor(null)
+        window.requestAnimationFrame(() => {
+            const textarea = controller.textareaRef.current
+            textarea?.focus()
+            textarea?.setSelectionRange(next.cursor, next.cursor)
+        })
+    }, [controller, slashToken])
+
+    const handleComposerKeyDown = useCallback((event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+        if (!showSlashMenu) {
+            controller.handleKeyDown(event)
+            return
+        }
+
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault()
+            if (commandItems.length > 0) {
+                const direction = event.key === 'ArrowDown' ? 1 : -1
+                setActiveCommandIndex((current) => (current + direction + commandItems.length) % commandItems.length)
+            }
+            return
+        }
+
+        if (event.key === 'Enter' || event.key === 'Tab') {
+            event.preventDefault()
+            const selected = commandItems[activeCommandIndex]
+            if (selected) selectCommandItem(selected)
+            return
+        }
+
+        if (event.key === 'Escape') {
+            event.preventDefault()
+            setSlashMenuDismissed(true)
+            return
+        }
+
+        controller.handleKeyDown(event)
+    }, [activeCommandIndex, commandItems, controller, selectCommandItem, showSlashMenu])
+
     return (
         <>
             <div className="relative flex pointer-events-none flex-col gap-0">
-                {hasFloatingShelf ? (
-                    <div ref={attachmentShelfRef} className="pointer-events-none absolute inset-x-0 bottom-full z-50 mb-[-2px]">
-                        <div className="flex flex-col gap-1" onWheel={handleShelfWheel}>
+                {showTopShelf ? (
+                    <div
+                        ref={attachmentShelfRef}
+                        className={cn(
+                            'pointer-events-none absolute inset-x-0 bottom-full',
+                            slashMenuPresent ? 'z-30 mb-[-13px]' : 'z-50 mb-[-2px]'
+                        )}
+                    >
+                        <div className="flex flex-col gap-1" onWheel={slashMenuPresent ? undefined : handleShelfWheel}>
+                            {slashMenuPresent ? (
+                                <AnimatedHeight
+                                    isOpen={slashMenuAnimatedOpen}
+                                    duration={300}
+                                    unmountOnExit
+                                    contentClassName={cn(
+                                        'origin-bottom transition-[transform,opacity,filter] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
+                                        slashMenuAnimatedOpen
+                                            ? 'translate-y-0 opacity-100 blur-0'
+                                            : 'translate-y-4 opacity-0 blur-[1px]'
+                                    )}
+                                >
+                                    <AssistantComposerCommandMenu
+                                        menuId={commandMenuId}
+                                        items={commandItems}
+                                        activeIndex={activeCommandIndex}
+                                        loading={promptResourcesLoading}
+                                        error={promptResourcesError}
+                                        onActiveIndexChange={setActiveCommandIndex}
+                                        onSelect={selectCommandItem}
+                                    />
+                                </AnimatedHeight>
+                            ) : (
+                                <>
                             <AnimatedHeight isOpen={controller.queuedMessages.length > 0} duration={220}>
                                 <div
                                     data-composer-attachment-item="true"
@@ -377,6 +581,8 @@ export function AssistantComposerView({
                                 onPreview={controller.setPreviewAttachment}
                                 onRemove={controller.removeAttachment}
                             />
+                                </>
+                            )}
                         </div>
                     </div>
                 ) : null}
@@ -496,9 +702,17 @@ export function AssistantComposerView({
                                         onScroll={(event) => syncTextareaScroll(event.currentTarget)}
                                         onKeyUp={(event) => controller.syncComposerCursor(event.currentTarget)}
                                         onSelect={(event) => controller.syncComposerCursor(event.currentTarget)}
-                                        onKeyDown={controller.handleKeyDown}
+                                        onKeyDown={handleComposerKeyDown}
                                         onPaste={controller.handlePaste}
                                         onWheel={handleTextareaWheel}
+                                        role="combobox"
+                                        aria-autocomplete="list"
+                                        aria-haspopup="listbox"
+                                        aria-expanded={showSlashMenu}
+                                        aria-controls={showSlashMenu ? commandMenuId : undefined}
+                                        aria-activedescendant={showSlashMenu && commandItems[activeCommandIndex]
+                                            ? getAssistantComposerCommandOptionId(commandMenuId, commandItems[activeCommandIndex].id)
+                                            : undefined}
                                         spellCheck={!hasInlineMentionOverlay}
                                         className={cn(
                                             'relative max-h-[120px] w-full resize-none overflow-y-auto bg-transparent pl-[3px] pr-2 font-normal tracking-normal [letter-spacing:0] caret-sparkle-text outline-none placeholder:font-normal placeholder:tracking-normal placeholder:[letter-spacing:0] placeholder:text-sparkle-text-muted/70 selection:bg-sparkle-card-hover',
@@ -513,7 +727,7 @@ export function AssistantComposerView({
                             </div>
                         </AnimatedHeight>
                         <div className={cn(
-                            'flex items-center justify-between',
+                            'flex items-center justify-between [container-type:inline-size]',
                             showCodexRecorder
                                 ? 'gap-2 px-1.5 py-1.5'
                                 : controller.isCompactFooter
@@ -588,7 +802,11 @@ export function AssistantComposerView({
                                 onReconnect={controller.onReconnect}
                             />
 
-                            <div className="flex shrink-0 items-center gap-2">
+                            <div className={cn('assistant-composer-footer-actions flex shrink-0 items-center', showBusySendActions ? 'gap-1.5 [--assistant-footer-action-gap:0.375rem]' : 'gap-2 [--assistant-footer-action-gap:0.5rem]')}>
+                                <AssistantComposerContextIndicator
+                                    usage={controller.latestTurnUsage}
+                                    modelContextWindow={controller.selectedModelContextWindow}
+                                />
                                 {controller.showCancelWhenDirty && controller.isDirty ? (
                                     <button
                                         type="button"
@@ -605,29 +823,16 @@ export function AssistantComposerView({
                                     disabled={capabilities.voiceDisabled || controller.voiceInput.isStarting || controller.voiceInput.isTranscribing}
                                     onToggle={controller.voiceInput.toggleRecording}
                                 />
-                                {controller.queuedMessageCount > 0 ? (
-                                    <span className="inline-flex h-[36px] items-center rounded-full border border-transparent bg-white/[0.03] px-3 text-[11px] font-medium text-sparkle-text-secondary">
-                                        {controller.queuedMessageCount} queued
-                                    </span>
-                                ) : null}
                                 {showBusySendActions ? (
                                     <>
-                                        <button
-                                            type="button"
-                                            onClick={() => void controller.handleSend()}
-                                            className="inline-flex h-[36px] items-center justify-center rounded-full border border-[var(--accent-primary)] bg-[var(--accent-primary)] px-3.5 text-[12px] font-semibold text-[var(--accent-contrast)] transition-all duration-150 hover:scale-[1.03] hover:bg-[color-mix(in_srgb,var(--accent-primary)_88%,var(--color-text))]"
-                                            title={`${defaultBusyActionLabel} this message while the current turn is still running`}
-                                        >
-                                            {defaultBusyActionLabel}
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => void (controller.busyMessageMode === 'force' ? controller.handleQueueSend() : controller.handleForceSend())}
-                                            className="inline-flex h-[36px] items-center justify-center rounded-full border border-transparent bg-white/[0.03] px-3.5 text-[12px] font-semibold text-sparkle-text-secondary transition-colors hover:bg-white/[0.05] hover:text-sparkle-text"
-                                            title={`${secondaryBusyActionLabel} this message instead of using the default busy-send action`}
-                                        >
-                                            {secondaryBusyActionLabel}
-                                        </button>
+                                        <AssistantBusySendSplitButton
+                                            defaultMode={controller.busyMessageMode}
+                                            disabled={sendActionDisabled}
+                                            queuedCount={controller.queuedMessageCount}
+                                            onModeUsed={(assistantBusyMessageMode) => updateSettings({ assistantBusyMessageMode })}
+                                            onQueue={controller.handleQueueSend}
+                                            onForce={controller.handleForceSend}
+                                        />
                                         <ComposerSendButton
                                             disabled={sendActionDisabled}
                                             isConnected={controller.isConnected}
@@ -641,14 +846,16 @@ export function AssistantComposerView({
                                         />
                                     </>
                                 ) : showRealtimeVoicePrimaryAction ? (
-                                    <ComposerRealtimeVoiceButton onStart={() => onStartRealtimeVoice?.({
-                                        model: controller.selectedModel,
-                                        runtimeMode: controller.selectedRuntimeMode,
-                                        effort: controller.selectedEffort,
-                                        interactionMode: controller.selectedInteractionMode,
-                                        profile: controller.zyraProfile || 'default',
-                                        serviceTier: controller.fastModeEnabled ? 'fast' : undefined
-                                    })} />
+                                    <ComposerRealtimeVoiceButton onStart={() => onStartRealtimeVoice?.(
+                                        buildAssistantVoiceExecutionConfiguration({
+                                            model: controller.selectedModel,
+                                            runtimeMode: controller.selectedRuntimeMode,
+                                            effort: controller.selectedEffort,
+                                            interactionMode: controller.selectedInteractionMode,
+                                            profile: controller.zyraProfile,
+                                            fastModeEnabled: controller.fastModeEnabled
+                                        })
+                                    )} />
                                 ) : (
                                     <ComposerSendButton
                                         disabled={sendActionDisabled}

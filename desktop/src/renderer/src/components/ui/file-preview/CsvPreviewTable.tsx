@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { MAX_CSV_ROWS } from './constants'
 import { schedulePreviewWork } from './schedule-preview-work'
-import { detectCsvDelimiter, extractColorValues, parseDelimitedContent } from './utils'
+import { detectCsvDelimiter, extractColorValues, parseDelimitedContent, parseDelimitedContentChunked } from './utils'
 
 interface CsvPreviewTableProps {
     content: string
@@ -98,10 +98,14 @@ export default function CsvPreviewTable({ content, language, useDistinctColumnCo
         let cancelled = false
         setIsRendering(true)
 
-        const cancelScheduledWork = schedulePreviewWork(() => {
+        const renderCsvPreview = async () => {
             if (cancelled) return
             const delimiter = language === 'tsv' ? '\t' : detectCsvDelimiter(content)
-            const rows = parseDelimitedContent(content, delimiter).filter(row => row.some(cell => cell.trim().length > 0))
+            const parsedRows = content.length > 100_000
+                ? await parseDelimitedContentChunked(content, delimiter, () => cancelled)
+                : parseDelimitedContent(content, delimiter)
+            if (cancelled) return
+            const rows = parsedRows.filter(row => row.some(cell => cell.trim().length > 0))
 
             if (rows.length === 0) {
                 setCsvPreview({ header: [], body: [], totalRows: 0 })
@@ -118,7 +122,8 @@ export default function CsvPreviewTable({ content, language, useDistinctColumnCo
                 totalRows: bodyRows.length
             })
             setIsRendering(false)
-        }, content.length > 100_000)
+        }
+        const cancelScheduledWork = schedulePreviewWork(() => { void renderCsvPreview() }, content.length > 100_000)
 
         return () => {
             cancelled = true

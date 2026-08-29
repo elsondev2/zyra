@@ -248,14 +248,30 @@ function Ensure-PathEntry($Dir) {
 }
 
 function Ensure-ZyraCommands($Root) {
-  $shimDir = Join-Path $Root "shims"
+  $shimDir = Join-Path $env:LOCALAPPDATA "Zyra\bin"
   $zyraShim = Join-Path $shimDir "zyra.cmd"
+  $desktopExe = $null
+  $desktopRegistration = Join-Path $HOME ".zyra\desktop-install-v1.json"
+  if (Test-Path $desktopRegistration) {
+    try {
+      $registration = Get-Content -Raw $desktopRegistration | ConvertFrom-Json
+      $packageVersion = (Get-Content -Raw (Join-Path $Root "package.json") | ConvertFrom-Json).version
+      $expectedArch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
+      $desktopItem = Get-Item -LiteralPath $registration.executable -ErrorAction Stop
+      $signature = Get-AuthenticodeSignature -LiteralPath $desktopItem.FullName
+      if ($registration.version -eq 1 -and $registration.appVersion -eq $packageVersion -and $registration.platform -eq "win32" -and $registration.architecture -eq $expectedArch -and -not $desktopItem.PSIsContainer -and -not $desktopItem.LinkType -and $signature.Status -eq "Valid") { $desktopExe = $desktopItem.FullName }
+    } catch {}
+  }
   New-Item -ItemType Directory -Force -Path $shimDir | Out-Null
+  $desktopBatchPath = if ($desktopExe) { $desktopExe.Replace('%', '%%') } else { $null }
+  $rootBatchPath = $Root.Replace('%', '%%')
+  $desktopLine = if ($desktopBatchPath) { 'if exist "' + $desktopBatchPath + '" ("' + $desktopBatchPath + '" --tui %* & exit /b %ERRORLEVEL%)' } else { 'rem Zyra Desktop is not registered.' }
   $zyraContent = @"
 @echo off
 setlocal
-set "ZYRA_ROOT=%~dp0.."
-call "%ZYRA_ROOT%\zyra.cmd" %*
+rem zyra-managed-launcher:v1
+$desktopLine
+if exist "$rootBatchPath\zyra.cmd" call "$rootBatchPath\zyra.cmd" %*
 exit /b %ERRORLEVEL%
 "@
   Set-Content -Path $zyraShim -Value $zyraContent -Encoding ASCII

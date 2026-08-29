@@ -8,6 +8,7 @@
     "files": [
         "src/types/sqljs.d.ts",
         "src/types/build-metadata.d.ts",
+        "src/types/window.d.ts",
         "src/renderer/src/vite-env.d.ts",
         "src/renderer/src/monaco-workers.d.ts",
         "src/preload/index.ts",

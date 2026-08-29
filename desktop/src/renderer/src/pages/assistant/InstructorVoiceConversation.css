@@ -41,7 +41,7 @@
 }
 
 .instructor-voice-conversation-scroll::-webkit-scrollbar-thumb {
-    border-radius: 999px;
+    border-radius: 0;
     background: color-mix(in srgb, currentColor 22%, transparent);
 }
 

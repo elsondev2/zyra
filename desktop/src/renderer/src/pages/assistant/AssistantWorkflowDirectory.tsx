@@ -47,7 +47,7 @@ export function AssistantWorkflowDirectory({
 
     return (
         <section className="flex min-h-0 flex-1 flex-col" data-testid="assistant-workflow-directory">
-            <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-3 py-3 [scrollbar-gutter:stable]">
+            <div data-assistant-capsule-scroll="workflows-directory" className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-3 py-3 [scrollbar-gutter:stable]">
                 <div className="mx-auto w-full max-w-[56rem]">
                     <header className="mb-3 flex flex-wrap items-end justify-between gap-2 border-b border-white/[0.04] pb-3">
                         <div>

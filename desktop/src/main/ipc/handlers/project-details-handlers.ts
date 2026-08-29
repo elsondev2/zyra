@@ -1,6 +1,6 @@
 import { access, readFile, readdir, stat } from 'fs/promises'
 import { exec } from 'child_process'
-import { join } from 'path'
+import { join, normalize, resolve } from 'path'
 import { promisify } from 'util'
 import log from 'electron-log'
 import si from 'systeminformation'
@@ -21,6 +21,14 @@ import {
 } from '../../services/project-dependencies'
 
 const execAsync = promisify(exec)
+const PROJECT_DETAILS_CACHE_TTL_MS = 10_000
+const PROJECT_DETAILS_CACHE_LIMIT = 24
+const projectDetailsCache = new Map<string, { expiresAt: number; promise: Promise<unknown> }>()
+
+function projectDetailsCacheKey(projectPath: string): string {
+    const normalizedPath = normalize(resolve(String(projectPath || '')))
+    return process.platform === 'win32' ? normalizedPath.toLowerCase() : normalizedPath
+}
 
 function getPreferredReadmeFile(entries: string[]): string | null {
     const readmeCandidates = entries.filter((entry) => {
@@ -168,7 +176,7 @@ function inferProcessCategory(
     return 'background'
 }
 
-export async function handleGetProjectDetails(_event: Electron.IpcMainInvokeEvent, projectPath: string) {
+async function readProjectDetails(projectPath: string) {
     log.info('IPC: getProjectDetails', projectPath)
 
     try {
@@ -257,12 +265,35 @@ export async function handleGetProjectDetails(_event: Electron.IpcMainInvokeEven
     }
 }
 
+export async function handleGetProjectDetails(_event: Electron.IpcMainInvokeEvent, projectPath: string) {
+    const cacheKey = projectDetailsCacheKey(projectPath)
+    const now = Date.now()
+    const cached = projectDetailsCache.get(cacheKey)
+    if (cached && cached.expiresAt > now) {
+        projectDetailsCache.delete(cacheKey)
+        projectDetailsCache.set(cacheKey, cached)
+        return cached.promise
+    }
+    const entry = {
+        expiresAt: now + PROJECT_DETAILS_CACHE_TTL_MS,
+        promise: readProjectDetails(projectPath)
+    }
+    projectDetailsCache.set(cacheKey, entry)
+    while (projectDetailsCache.size > PROJECT_DETAILS_CACHE_LIMIT) {
+        const oldestKey = projectDetailsCache.keys().next().value
+        if (typeof oldestKey !== 'string') break
+        projectDetailsCache.delete(oldestKey)
+    }
+    return entry.promise
+}
+
 export async function handleInstallProjectDependencies(
     _event: Electron.IpcMainInvokeEvent,
     projectPath: string,
     options?: { onlyMissing?: boolean }
 ) {
     log.info('IPC: installProjectDependencies', { projectPath, onlyMissing: Boolean(options?.onlyMissing) })
+    projectDetailsCache.delete(projectDetailsCacheKey(projectPath))
     const mode = options?.onlyMissing ? 'missing' : 'all'
 
     try {
@@ -323,6 +354,17 @@ export async function handleInstallProjectDependencies(
 
 export async function handleGetProjectSessions(_event: Electron.IpcMainInvokeEvent, _projectPath: string) {
     return { success: true, sessions: [] }
+}
+
+export async function handleGetRunningLocalServers(_event: Electron.IpcMainInvokeEvent, projectPath?: string) {
+    try {
+        const { detectRunningLocalServers } = await import('../../inspectors/process-detector')
+        const servers = await detectRunningLocalServers(projectPath)
+        return { success: true, servers }
+    } catch (err: any) {
+        log.error('Failed to get running local servers:', err)
+        return { success: false, error: err.message, servers: [] }
+    }
 }
 
 export async function handleGetProjectProcesses(_event: Electron.IpcMainInvokeEvent, projectPath: string) {

@@ -202,8 +202,13 @@ assert.match(
 )
 assert.match(
     instructorLiveTranscriptSource,
-    /animatePresentation = !reduceMotion && !shouldSnap[\s\S]*?scrollToLatest\(animatePresentation \? 'smooth' : 'auto'\)/,
-    'voice transcript words and scrolling must skip hidden animation batches'
+    /useLayoutEffect\(\(\) => \{[\s\S]{0,180}viewport\.scrollTop = viewport\.scrollHeight/,
+    'voice transcript scrolling must settle directly without animation batches'
+)
+assert.doesNotMatch(
+    instructorLiveTranscriptSource,
+    /requestAnimationFrame|behavior:\s*'smooth'|scrollToLatest/,
+    'the live Voice transcript must not retain an animated scroll queue while hidden'
 )
 assert.match(
     strandsSource,
@@ -217,13 +222,13 @@ assert.match(
 )
 assert.match(
     desktopMainSource,
-    /webviewTag: true,[\s\S]{0,240}?backgroundThrottling: true/,
-    'the main renderer should pause hidden presentation rather than spend resources animating off-screen'
+    /webviewTag: false,[\s\S]{0,240}?backgroundThrottling: true/,
+    'the main renderer should disable webview tags and pause hidden presentation rather than animate off-screen'
 )
 assert.match(
-    desktopMainSource,
-    /webPreferences\.backgroundThrottling = false/,
-    'Browser guests retain their existing background execution policy'
+    readFileSync(new URL('../src/main/browser-view-manager.ts', import.meta.url), 'utf8'),
+    /backgroundThrottling: false/,
+    'main-owned Browser pages retain their existing background execution policy'
 )
 
 const visibilitySource = new FakeRendererVisibilitySource()

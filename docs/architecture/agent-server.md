@@ -51,7 +51,9 @@ The existing `src/zyra-ui-bridge.mjs` remains the first worker implementation. M
 
 Browser and Windows authority remains in the trusted desktop main process. When a server-owned worker emits a control request, the server routes it only to an attached client that explicitly advertised the matching authority. TUI clients do not gain desktop control by connecting.
 
-If no authorized desktop client is attached, the control request fails closed while the text chat remains alive.
+A separate `desktop-workspace` authority handles user-typed TUI commands such as `/browser`, `/details-ui`, `/explore-files`, `/resources`, `/subagents-ui`, `/diff-ui`, and `/terminal-ui`. The authenticated server resolves the canonical chat, forwards a bounded presentation request only to a verified Desktop client, and matches the exact response ID. This route can open or arrange trusted UI; it cannot execute model tools, approve arbitrary control grants, mutate transcripts, or grant a TUI process general Desktop authority. `/browser --background` may arm one exact-tab, current-root grant intent because the command itself is a local user action; a normal bounded grant is issued only for a real root turn and remains subject to target, origin, duration, action-budget, turn-lifecycle, and Emergency Stop rules.
+
+If no authorized desktop client is attached, the TUI can launch a registered installed Desktop in background-host mode and retry briefly. If Desktop is absent or cannot authenticate, the request fails closed while text chat remains alive.
 
 ## Canonical Chat Catalog
 

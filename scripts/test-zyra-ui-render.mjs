@@ -8,6 +8,7 @@ import { buildProfileChangePrompt, handleSlash } from "../src/slash-command-hand
 import { getSlashCommand } from "../src/slash-commands.mjs";
 import { getSlashSuggestions } from "../src/slash-suggestions.mjs";
 import { markOnboardingComplete, readOnboardingState, shouldRunOnboarding } from "../src/onboarding.mjs";
+import { projectHistoryEntries } from "../src/agent-server/tui-runtime.mjs";
 import { AssistantMessageLifecycle, createZyraUi, mergeAssistantTextDelta } from "../src/zyra-ui.mjs";
 import { getZyraAvailableThinkingLevels, getZyraModelThinkingLevels, getZyraThinkingLevel, registerZyraRuntimeModels, resolveZyraStartupPreferences, setModel, setProfile, setThinking, setWebFetch, setWebSearch, setZyraTheme, syncZyraThinkingLevel } from "../src/zyra-sdk.mjs";
 import { applyGpt56ThinkingEffort, GPT_56_THINKING_LEVELS } from "../src/thinking-levels.mjs";
@@ -18,8 +19,8 @@ import { renderAccountStatusBox, renderCodexUsageBox, renderStatusBox } from "..
 import { ZyraComponentHost, EditorComponent, StaticLinesComponent, UserMessageComponent, renderToolBlock } from "../src/tui/zyra-tui.mjs";
 import { renderLinesWithinWidth, stripAnsi } from "../src/tui/render-utils.mjs";
 
-function assistantMessage(text = "", id = "assistant-1") {
-  return { id, role: "assistant", content: text ? [{ type: "text", text }] : [] };
+function assistantMessage(text = "", id = "assistant-1", stopReason = "stop") {
+  return { id, role: "assistant", stopReason, content: text ? [{ type: "text", text }] : [] };
 }
 
 function updateEvent(text, delta, id = "assistant-1") {
@@ -173,6 +174,31 @@ function runUiEventCaptureRegression() {
     `UI event path must commit the assistant answer once, not redraw snapshots into transcript. Captured:\n${captured}`,
   );
   assert.match(captured, /You asked where the original Zyra project was/);
+  const plain = stripAnsi(captured);
+  assert.match(plain, /─{20,}[\s\S]*Yep/, "the final response begins below one clear divider after live work flags");
+}
+
+function runNarrationFinalDividerRegression() {
+  const captured = captureStdout(() => {
+    const ui = createZyraUi();
+    const narration = assistantMessage("I’ll inspect the source first.", "assistant-narration", "toolUse");
+    ui.event({ type: "message_start", message: narration });
+    ui.event({ type: "message_end", message: narration });
+    ui.event({ type: "turn_end" });
+
+    const final = assistantMessage("The source is fixed.", "assistant-final", "stop");
+    ui.event({ type: "message_start", message: final });
+    ui.event({ type: "message_end", message: final });
+    ui.event({ type: "agent_end" });
+  });
+  const plain = stripAnsi(captured);
+  const narrationIndex = plain.indexOf("I’ll inspect the source first.");
+  const dividerIndex = plain.search(/─{20,}/);
+  const finalIndex = plain.indexOf("The source is fixed.");
+
+  assert.equal((plain.match(/─{20,}/g) ?? []).length, 1, "one semantic divider belongs to the final response only");
+  assert.equal(narrationIndex >= 0 && dividerIndex > narrationIndex, true, "narration renders before the final-response divider");
+  assert.equal(finalIndex > dividerIndex, true, "the final response begins below its divider");
 }
 
 function runToolOutputStyleRegression() {
@@ -307,7 +333,9 @@ function runCommandCardStableHeightRegression() {
     { ...base, state: "done", result: { content: [{ type: "text", text: "one\ntwo\nthree\nfour\nfive" }] }, durationMs: 16000 },
   ].map((state) => renderToolBlock(state, undefined, 80).map(stripAnsi));
 
-  assert.equal(new Set(snapshots.map((lines) => lines.length)).size, 1, "start, update, and completion must keep one command-card height");
+  assert.equal(snapshots[0].length < snapshots[1].length, true, "an empty command result must not reserve phantom output rows");
+  assert.equal(snapshots[1].length <= snapshots[2].length, true, "command cards grow only when visible output exists");
+  assert.equal(snapshots[2].length < snapshots[3].length, true, "the bounded preview adapts to the actual visible output count");
   assert.equal(snapshots.every((lines) => lines.every((line) => line.length <= 80)), true, "every command-card snapshot must fit its terminal width");
   assert.equal(snapshots.some((lines) => lines.some((line) => /action: run/.test(line))), false, "command cards should omit internal managed-tool control arguments");
   assert.match(snapshots.at(-1).join("\n"), /\.\.\. 3 earlier output lines/);
@@ -319,7 +347,7 @@ function runCommandCardStableHeightRegression() {
     partialResult: { content: [{ type: "text", text: "\x1b[2J\x1b[Hdanger\rrewrite\tok\x1b]0;owned\x07" }] },
   }, undefined, 80);
   const hostilePlain = hostile.map(stripAnsi).join("\n");
-  assert.equal(hostile.length, snapshots[0].length, "terminal control bytes must not change the fixed card height");
+  assert.equal(hostile.length, snapshots[1].length + 1, "sanitized multiline output adds only its one visible extra row");
   assert.equal(hostile.join("\n").includes("\x1b[2J"), false, "command output must not clear Zyra's terminal");
   assert.equal(hostile.join("\n").includes("\x1b]"), false, "command output must not emit terminal-title or OSC sequences");
   assert.equal(/[\r\t]/.test(hostile.join("\n")), false, "command output must normalize carriage returns and tabs before rendering");
@@ -379,6 +407,48 @@ function runEditToolPiLikeRegression() {
   assert.doesNotMatch(plain, /\| edit 1 replacement/);
   assert.doesNotMatch(plain, /change 0b -> 0b/);
   assert.match(plain, /0\.1s succeeded/);
+
+  const fileChangeLines = renderToolBlock({
+    fileChange: {
+      category: "file-change",
+      toolName: "edit",
+      status: "completed",
+      paths: ["src/example.mjs"],
+      additions: 1,
+      deletions: 1,
+      displayDiff: "-const value = 1;\n+const value = 2;",
+    },
+  }, undefined, 70).map(stripAnsi);
+  assert.equal(fileChangeLines[1]?.trim(), "", "Edit has one empty surface row above its header like other tools");
+  assert.equal(fileChangeLines.at(-2)?.trim(), "", "Edit has one empty surface row below its body like other tools");
+}
+
+function runWriteFileChangeMatchesEditRegression() {
+  const lines = renderToolBlock({
+    fileChange: {
+      category: "file-change",
+      toolName: "write",
+      status: "completed",
+      paths: ["src/new-file.mjs"],
+      additions: 3,
+      deletions: 0,
+      displayDiff: [
+        "diff --git a/src/new-file.mjs b/src/new-file.mjs",
+        "new file mode 100644",
+        "--- /dev/null",
+        "+++ b/src/new-file.mjs",
+        "@@ -0,0 +1,3 @@",
+        "+const value = 1;",
+        "+const ready = true;",
+        "+export { value, ready };",
+      ].join("\n"),
+    },
+  }, undefined, 80).map(stripAnsi);
+  const plain = lines.join("\n");
+
+  assert.match(plain, /> write src\/new-file\.mjs \+3\/-0/, "Write uses the same compact file-change header as Edit");
+  assert.doesNotMatch(plain, /diff --git|new file mode|--- \/dev\/null|\+\+\+ b\/|@@ /, "Write hides raw patch plumbing from its compact body");
+  assert.match(plain, /\+ const value = 1;/, "Write keeps the actual added content visible");
 }
 
 function runToolCallThemeStylingRegression() {
@@ -481,6 +551,39 @@ function runInteractiveNoTurnEndDuplicateRegression() {
 
   assert.equal((before.match(/Final answer/g) ?? []).length, 1);
   assert.equal((after.match(/Final answer/g) ?? []).length, 1, "turn_end/agent_end must not append a delayed duplicate");
+}
+
+function runInteractiveImageUserMessageDedupRegression() {
+  const ui = createZyraUi();
+  ui._debugBeginInteractiveForTests();
+  const text = "Review this screenshot";
+  ui._debugEchoUserMessageForTests(text, [{ index: 1, mimeType: "image/png" }]);
+  ui.event({
+    type: "message_start",
+    message: {
+      id: "user-image-1",
+      role: "user",
+      content: [
+        { type: "text", text },
+        { type: "image", mimeType: "image/png", data: "fixture" },
+      ],
+    },
+  });
+
+  const plain = ui._debugRenderLinesForTests(80).map(stripAnsi).join("\n");
+  assert.equal((plain.match(/Review this screenshot/g) ?? []).length, 1, "an image-bearing user turn must reconcile its optimistic and canonical echoes");
+  assert.equal((plain.match(/Image attached/g) ?? []).length, 1, "one image should render one attachment label");
+  assert.doesNotMatch(plain, /\[Image 1: image\/png\]/, "canonical image metadata must not create a second user card");
+
+  const imageOnlyUi = createZyraUi();
+  imageOnlyUi._debugBeginInteractiveForTests();
+  imageOnlyUi._debugEchoUserMessageForTests("", [{ index: 1, mimeType: "image/png" }]);
+  imageOnlyUi.event({
+    type: "message_start",
+    message: { id: "user-image-only", role: "user", content: [{ type: "image", mimeType: "image/png", data: "fixture" }] },
+  });
+  const imageOnly = imageOnlyUi._debugRenderLinesForTests(80).map(stripAnsi).join("\n");
+  assert.equal((imageOnly.match(/Image attached/g) ?? []).length, 1, "an image-only turn must also reconcile to one user card");
 }
 
 function runTurnEndKeepsRuntimeBusyRegression() {
@@ -818,13 +921,10 @@ function runRunningToolStartsImmediatelyRegression() {
   });
 
   const plain = ui._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
-  assert.match(plain, /edit running/, "tool start should render immediately as running");
-  assert.match(plain, /path src\/example\.mjs/);
-  assert.match(plain, /live preview/);
-  assert.match(plain, /\+2\/-1/);
-  assert.match(plain, /--- a\/src\/example\.mjs/);
+  assert.match(plain, /> edit running src\/example\.mjs \+2\/-1/, "tool start should render its path and diff count in one compact header");
+  assert.doesNotMatch(plain, /\bpath\b|live preview/);
+  assert.doesNotMatch(plain, /--- a\/|\+\+\+ b\/|@@ /, "file-change cards omit raw patch headers and hunks");
   assert.match(plain, /- const value = 1;/);
-  assert.match(plain, /\+\+\+ b\/src\/example\.mjs/);
   assert.match(plain, /\+ const value = 2;/);
 }
 
@@ -844,7 +944,7 @@ function runFileChangeAuthoritativeReconciliationRegression() {
   });
   const preview = ui._debugRenderLinesForTests(54).map(stripAnsi).join("\n");
   assert.match(preview, /> edit running/);
-  assert.match(preview, /live preview/);
+  assert.doesNotMatch(preview, /live preview|\bpath\b/, "running edit metadata stays in the compact header");
   assert.match(preview, /\+ const value = 2;/);
   assert.equal(preview.split("\n").every((line) => line.length <= 54), true, "running edit preview must respect terminal width");
 
@@ -862,8 +962,8 @@ function runFileChangeAuthoritativeReconciliationRegression() {
     isError: false,
   });
   const completed = ui._debugRenderLinesForTests(54).map(stripAnsi).join("\n");
-  assert.equal((completed.match(/> edit applied/g) ?? []).length, 1, "result details must replace preview inside one mutable card");
-  assert.match(completed, /applied · provider result/);
+  assert.equal((completed.match(/> edit src\/live-edit\.mjs \+1\/-1/g) ?? []).length, 1, "result details must replace preview inside one compact mutable card");
+  assert.doesNotMatch(completed, /\bapplied\b|provider result|\bpath\b/);
   assert.match(completed, /\+\s+const value = 3;/);
   assert.doesNotMatch(completed, /\+\s+const value = 2;/, "authoritative result diff must replace provisional content");
   assert.equal(completed.split("\n").every((line) => line.length <= 54), true, "completed edit result must respect terminal width");
@@ -912,7 +1012,7 @@ function runLateFileChangeEventsStayTerminalRegression() {
   });
 
   const plain = ui._debugRenderLinesForTests(70).map(stripAnsi).join("\n");
-  assert.equal((plain.match(/> edit applied/g) ?? []).length, 1, "late events must keep one completed card");
+  assert.equal((plain.match(/> edit src\/late-edit\.mjs \+1\/-1/g) ?? []).length, 1, "late events must keep one completed card");
   assert.equal((plain.match(/> edit running/g) ?? []).length, 0, "late updates must not regress a completed operation");
   assert.equal((plain.match(/! edit failed/g) ?? []).length, 0, "duplicate completions must not replace terminal state");
   assert.doesNotMatch(plain, /late running update|duplicate completion/);
@@ -931,8 +1031,8 @@ function runFailedFileChangePreviewRegression() {
     isError: true,
   });
   const failed = ui._debugRenderLinesForTests(60).map(stripAnsi).join("\n");
-  assert.equal((failed.match(/! write failed/g) ?? []).length, 1);
-  assert.match(failed, /failed · preview not applied/);
+  assert.equal((failed.match(/! write failed src\/blocked\.mjs \+2\/-0/g) ?? []).length, 1);
+  assert.doesNotMatch(failed, /preview not applied|\bpath\b/);
   assert.match(failed, /\+ uncommitted/);
   assert.doesNotMatch(failed, /applied ·/);
 }
@@ -959,8 +1059,8 @@ function runSnapshotBackedWriteRenderingRegression() {
     },
   });
   const plain = ui._debugRenderLinesForTests(64).map(stripAnsi).join("\n");
-  assert.equal((plain.match(/> write applied/g) ?? []).length, 1);
-  assert.match(plain, /applied · snapshot-backed/);
+  assert.equal((plain.match(/> write src\/existing\.mjs \+1\/-1/g) ?? []).length, 1);
+  assert.doesNotMatch(plain, /\bapplied\b|snapshot-backed|\bpath\b/);
   assert.match(plain, /\+\s+after/);
   assert.doesNotMatch(plain, /live preview/);
 }
@@ -979,7 +1079,7 @@ function runFileChangeEventsWithoutIdsRegression() {
     },
   });
   const plain = ui._debugRenderLinesForTests(70).map(stripAnsi).join("\n");
-  assert.equal((plain.match(/> edit applied/g) ?? []).length, 1, "no-ID file changes must reuse their one active component");
+  assert.equal((plain.match(/> edit src\/no-id\.mjs \+1\/-1/g) ?? []).length, 1, "no-ID file changes must reuse their one active component");
   assert.match(plain, /\+\s+final/);
   assert.doesNotMatch(plain, /\+\s+new/);
 }
@@ -1025,15 +1125,15 @@ function runConsecutiveToolSpacingRegression() {
   const lines = ui._debugRenderLinesForTests(80).map(stripAnsi);
   const firstEnd = lines.findIndex((line) => line.includes("a-output"));
   const firstFooter = lines.findIndex((line, index) => index > firstEnd && line.includes("succeeded"));
-  const secondStart = lines.findIndex((line) => line.includes("write applied"));
+  const secondStart = lines.findIndex((line) => line.includes("> write b.txt"));
   assert.ok(firstEnd >= 0, "first tool output should render");
   assert.ok(firstFooter > firstEnd, "first tool footer should render after output");
   assert.ok(secondStart > firstEnd, "second tool should render after first tool");
   const between = lines.slice(firstFooter + 1, secondStart);
-  assert.equal(between.length, 3, "consecutive tool calls should keep one outside gap plus inner padding");
-  assert.equal(between[0].trim(), "", "first tool should keep bottom inner padding");
-  assert.equal(between[1], "", "consecutive tool calls should have exactly one outside blank line between them");
-  assert.equal(between[2].trim(), "", "second tool should keep top inner padding");
+  assert.equal(between.length, 3, "a compact file change keeps its top inner padding plus one outside gap");
+  assert.equal(between[0].trim(), "", "the previous tool keeps its bottom inner padding");
+  assert.equal(between[1], "", "consecutive tools keep exactly one outside blank line");
+  assert.equal(between[2].trim(), "", "the Edit block keeps one empty surface row above its header");
 }
 
 function runAssistantAndToolInterleaveRegression() {
@@ -1059,6 +1159,107 @@ function runAssistantAndToolInterleaveRegression() {
   const plain = ui._debugRenderLinesForTests(70).map(stripAnsi).join("\n");
   assert.equal((plain.match(/Reading files/g) ?? []).length, 1, "assistant stream should not become raw interleaved blocks");
   assert.equal((plain.match(/read/g) ?? []).length, 1, "tool output should stay in its keyed component");
+}
+
+function runHistoricalTranscriptSequenceRegression() {
+  const ui = createZyraUi();
+  ui.history([
+    { type: "message_start", message: { role: "user", content: [{ type: "text", text: "Historical prompt" }] }, historical: true },
+    { type: "message_start", message: assistantMessage("Historical narration", "history-narration"), historical: true },
+    { type: "message_end", message: assistantMessage("Historical narration", "history-narration"), historical: true },
+    { type: "tool_execution_start", toolName: "read", toolCallId: "history-read", args: { path: "src/a.mjs" }, historical: true },
+    { type: "tool_execution_end", toolName: "read", toolCallId: "history-read", args: { path: "src/a.mjs" }, result: { content: [{ type: "text", text: "body" }] }, historical: true },
+    { type: "tool_execution_start", toolName: "edit", toolCallId: "history-edit", args: { path: "src/a.mjs", oldString: "old\n", newString: "new\n" }, historical: true },
+    { type: "tool_execution_end", toolName: "edit", toolCallId: "history-edit", result: { content: [{ type: "text", text: "Successfully replaced" }], details: { patch: "--- a/src/a.mjs\n+++ b/src/a.mjs\n@@ -1 +1 @@\n-old\n+new" } }, historical: true },
+    { type: "message_start", message: assistantMessage("Historical final", "history-final"), historical: true },
+    { type: "message_end", message: assistantMessage("Historical final", "history-final"), historical: true },
+  ]);
+  ui._debugBeginInteractiveForTests();
+  const plain = ui._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
+  const positions = ["Historical prompt", "Historical narration", "read src/a.mjs", "edit src/a.mjs +1/-1", "Historical final"].map((value) => plain.indexOf(value));
+  assert.equal(positions.every((position) => position >= 0), true, "resume keeps prompts, narration, tools, edits, and final text visible");
+  assert.match(plain, /- old[\s\S]*\+ new/, "resumed edits retain their transcript-backed diff preview");
+  assert.deepEqual([...positions].sort((left, right) => left - right), positions, "resume renders canonical transcript events in sequence");
+  assert.doesNotMatch(plain, /─{20,}/, "historical assistant messages do not add live-result dividers");
+}
+
+function runHistoricalBashCommandRegression() {
+  const ui = createZyraUi();
+  ui.history([
+    {
+      type: "tool_execution_start",
+      toolName: "bash",
+      toolCallId: "history-bash-check",
+      args: { command: "npm run check:quick", timeout: 120 },
+      historical: true,
+    },
+    {
+      type: "tool_execution_end",
+      toolName: "bash",
+      toolCallId: "history-bash-check",
+      args: { command: "npm run check:quick", timeout: 120 },
+      result: { content: [{ type: "text", text: "quick checks: ok" }] },
+      historical: true,
+    },
+  ]);
+  ui._debugBeginInteractiveForTests();
+  const plain = ui._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
+  assert.match(plain, /\$ npm run check:quick/, "resumed Bash commands remain visible instead of being swallowed by live check aggregation");
+  assert.match(plain, /quick checks: ok/, "resumed Bash result previews remain attached to their commands");
+}
+
+function runResumedFileChangeDetailsRegression() {
+  const toolCallId = "history-edit-with-details";
+  const entries = [
+    {
+      type: "message",
+      id: "history-user-entry",
+      message: { id: "history-user", role: "user", content: [{ type: "text", text: "Update the build command." }] },
+    },
+    {
+      type: "message",
+      id: "history-assistant-entry",
+      message: {
+        id: "history-assistant",
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [{
+          type: "toolCall",
+          id: toolCallId,
+          name: "edit",
+          arguments: {
+            path: "desktop/package.json",
+            edits: [{ oldText: "electron-vite build", newText: "node production-build.mjs" }],
+          },
+        }],
+      },
+    },
+    {
+      type: "message",
+      id: "history-tool-result-entry",
+      message: {
+        role: "toolResult",
+        toolCallId,
+        toolName: "edit",
+        content: [{ type: "text", text: "Successfully replaced 1 block." }],
+        details: {
+          diff: "- 13 build: electron-vite build\n+ 13 build: node production-build.mjs",
+          patch: "--- desktop/package.json\n+++ desktop/package.json\n@@ -13 +13 @@\n-build: electron-vite build\n+build: node production-build.mjs",
+        },
+      },
+    },
+  ];
+  const events = projectHistoryEntries(entries);
+  const completedEdit = events.find((event) => event.type === "tool_execution_end" && event.toolCallId === toolCallId);
+  assert.match(completedEdit?.result?.details?.patch ?? "", /electron-vite build/, "resume projection retains saved tool-result patch details");
+
+  const ui = createZyraUi();
+  ui.history(events);
+  ui._debugBeginInteractiveForTests();
+  const plain = ui._debugRenderLinesForTests(90).map(stripAnsi).join("\n");
+  assert.match(plain, /> edit desktop\/package\.json \+1\/-1/, "resumed Edit restores authoritative diff counts");
+  assert.match(plain, /- .*electron-vite build[\s\S]*\+ .*node production-build\.mjs/, "resumed Edit restores its saved before/after diff");
+  assert.doesNotMatch(plain, /\+0\/-0/, "resumed file changes never collapse to null diff values when persisted details exist");
 }
 
 function runTerminalLineControlSanitizationRegression() {
@@ -1979,6 +2180,7 @@ function runFixedOnlyInputRenderAvoidsTranscriptReplayRegression() {
 function runStatusLineColorRegression() {
   const runtime = {
     profile: "builder",
+    permissionMode: "full-access",
     terminalTheme: {
       name: "status-test",
       colors: {
@@ -2008,13 +2210,16 @@ function runStatusLineColorRegression() {
 
   assert.match(line, /\x1b\[38;2;255;0;0m gpt-test/);
   assert.match(line, /\x1b\[38;2;255;255;0m medium/);
-  assert.match(line, /\x1b\[38;5;75mbuilder/);
+  assert.match(line, /\x1b\[38;5;213mfull access/);
+  assert.doesNotMatch(stripAnsi(line), /\bbuilder\b/, "the footer shows permission mode instead of the profile overlay");
   assert.match(line, /\x1b\[38;2;255;255;0mContext 28% left/);
   assert.match(line, /\x1b\[38;5;82m\$0\.300/);
 
+  runtime.permissionMode = "approval-required";
   runtime.session.getContextUsage = () => undefined;
   runtime.session.sessionManager.getEntries = () => [];
   const freshLine = renderStatusLine(runtime, 120);
+  assert.match(freshLine, /\x1b\[38;2;255;0;255mapproval required/);
   assert.match(freshLine, /\x1b\[38;2;0;255;0mContext 100% left/);
   assert.match(freshLine, /\x1b\[38;2;119;119;119m\$0\.000/);
 }
@@ -2543,6 +2748,7 @@ runMarkdownCodeBlockRegression();
 runMergeHelperRegression();
 runSnapshotDeltaPollutionRegression();
 runUiEventCaptureRegression();
+runNarrationFinalDividerRegression();
 runToolOutputStyleRegression();
 runPiLikeToolPresentationRegression();
 runToolCommandInlineRunningTimeRegression();
@@ -2553,9 +2759,11 @@ runCommandCardStableHeightRegression();
 runToolOutputWordWrapRegression();
 runReadToolCompactPresentationRegression();
 runEditToolPiLikeRegression();
+runWriteFileChangeMatchesEditRegression();
 runToolCallThemeStylingRegression();
 runInteractiveAssistantComponentRegression();
 runInteractiveNoTurnEndDuplicateRegression();
+runInteractiveImageUserMessageDedupRegression();
 runTurnEndKeepsRuntimeBusyRegression();
 runCompactionLifecycleRegression();
 runInteractiveToolComponentRegression();
@@ -2571,6 +2779,9 @@ runFileChangeEventsWithoutIdsRegression();
 runWriteToolRicherRepresentationRegression();
 runConsecutiveToolSpacingRegression();
 runAssistantAndToolInterleaveRegression();
+runHistoricalTranscriptSequenceRegression();
+runHistoricalBashCommandRegression();
+runResumedFileChangeDetailsRegression();
 runTerminalLineControlSanitizationRegression();
 runWidthFitRegression();
 runStaticPanelsThroughHostRegression();

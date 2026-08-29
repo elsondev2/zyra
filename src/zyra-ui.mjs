@@ -12,6 +12,7 @@ import { selectWebTools } from "./web-tools-picker.mjs";
 import { promptSecret as promptSecretInput } from "./secret-input.mjs";
 import { normalizeAgentSurfaceTool } from "./agent-surface.mjs";
 import { normalizeToolFileChangeState } from "./file-change-lifecycle.mjs";
+import { createRequestUserInputDialog } from "./request-user-input-dialog.mjs";
 import { UserMessageComponent, AssistantMessageComponent, CheckedCommandsComponent, StoppedCommandsComponent, ToolMessageComponent } from "./tui/components/message-components.mjs";
 import { SubagentMessageComponent } from "./tui/components/subagent-message.mjs";
 import { WorkflowMessageComponent } from "./tui/components/workflow-message.mjs";
@@ -80,6 +81,7 @@ export function createZyraUi(options = {}) {
   let activeAssistantKey = "";
   let activeProgress = null;
   let pendingAssistantCommit = null;
+  let assistantDividerPending = false;
   let isBusy = false;
   let suppressWorking = false;
   let activityLabel = "";
@@ -120,6 +122,7 @@ export function createZyraUi(options = {}) {
     activeAssistantKey = "";
     activeProgress = null;
     pendingAssistantCommit = null;
+    assistantDividerPending = false;
     isBusy = false;
     suppressWorking = false;
     activityLabel = "";
@@ -159,13 +162,16 @@ export function createZyraUi(options = {}) {
     if (!hasAssistantContent(content)) return;
     if (!activeAssistantComponent) {
       activeAssistantKey = `assistant-${assistantMessageIdentity(options.message) || Date.now()}`;
-      activeAssistantComponent = new AssistantMessageComponent(activeAssistantKey, content, theme);
+      activeAssistantComponent = new AssistantMessageComponent(activeAssistantKey, content, theme, {
+        showDivider: options.showDivider ?? assistantDividerPending,
+      });
+      assistantDividerPending = false;
       if (inputActive) host.append(activeAssistantComponent);
     }
     activeAssistantComponent.setContent(content, options);
   };
 
-  const commitAssistant = (message, content) => {
+  const commitAssistant = (message, content, options = {}) => {
     if (!hasAssistantContent(content)) return;
     const id = assistantMessageIdentity(message);
     const key = assistantContentKey(content);
@@ -174,9 +180,9 @@ export function createZyraUi(options = {}) {
       if (id && committedAssistantIds.has(id) && committedAssistantKeys.has(key)) return;
       if (id) committedAssistantIds.add(id);
       committedAssistantKeys.add(key);
-      setAssistantComponentContent(content, { final: true, message });
+      setAssistantComponentContent(content, { final: true, message, showDivider: options.showDivider });
     } else {
-      pendingAssistantCommit = { id, key, content };
+      pendingAssistantCommit = { id, key, content, showDivider: options.showDivider, historical: options.historical === true };
     }
   };
 
@@ -187,8 +193,11 @@ export function createZyraUi(options = {}) {
     if ((pending.id && committedAssistantIds.has(pending.id)) || committedAssistantKeys.has(pending.key)) return;
     if (pending.id) committedAssistantIds.add(pending.id);
     committedAssistantKeys.add(pending.key);
-    const component = new AssistantMessageComponent(`assistant-committed-${pending.id || Date.now()}`, pending.content, theme);
-    host.printLines(component.render(host.width()));
+    const component = new AssistantMessageComponent(`assistant-committed-${pending.id || Date.now()}`, pending.content, theme, {
+      showDivider: pending.showDivider === true,
+    });
+    if (pending.historical) host.append(component);
+    else host.printLines(component.render(host.width()));
   };
 
   const setActivityLabel = (label = "") => {
@@ -241,20 +250,21 @@ export function createZyraUi(options = {}) {
     const imageAttachments = Array.isArray(options.imageAttachments) ? options.imageAttachments.filter(Boolean) : [];
     if (!normalized && imageAttachments.length === 0) return;
     if (normalized && !options.force && consumeSuppressedUserMessage(normalized)) return;
-    if (normalized && !options.force && consumeRecentlyEchoedUserMessage(normalized)) return;
+    if (!options.force && consumeRecentlyEchoedUserMessage(normalized, imageAttachments)) return;
     host.append(new UserMessageComponent(`user-${Date.now()}-${Math.random()}`, normalized, theme, { imageAttachments }));
   };
 
-  const rememberEchoedUserMessage = (text) => {
-    const normalized = normalizeUserMessageText(text);
-    if (!normalized) return;
-    recentlyEchoedUserMessages.push(normalized);
+  const rememberEchoedUserMessage = (text, imageAttachments = []) => {
+    const key = userMessageEchoKey(text, imageAttachments);
+    if (!key) return;
+    recentlyEchoedUserMessages.push(key);
     if (recentlyEchoedUserMessages.length > 12) recentlyEchoedUserMessages.shift();
   };
 
-  const consumeRecentlyEchoedUserMessage = (text) => {
-    const normalized = normalizeUserMessageText(text);
-    const index = recentlyEchoedUserMessages.findIndex((item) => item === normalized);
+  const consumeRecentlyEchoedUserMessage = (text, imageAttachments = []) => {
+    const key = userMessageEchoKey(text, imageAttachments);
+    if (!key) return false;
+    const index = recentlyEchoedUserMessages.findIndex((item) => item === key);
     if (index < 0) return false;
     recentlyEchoedUserMessages.splice(index, 1);
     return true;
@@ -290,8 +300,9 @@ export function createZyraUi(options = {}) {
     }
   };
 
-  const beginAssistant = (message) => {
+  const beginAssistant = (message, options = {}) => {
     suppressWorking = false;
+    assistantDividerPending = options.showDivider === true;
     setActivityLabel("thinking");
     assistantLifecycle.start(message);
     activeAssistantComponent = null;
@@ -317,7 +328,7 @@ export function createZyraUi(options = {}) {
     }
   };
 
-  const finishAssistant = (message) => {
+  const finishAssistant = (message, options = {}) => {
     setActivityLabel("writing");
     suppressWorking = true;
     const finalContent = assistantLifecycle.end(message);
@@ -326,7 +337,10 @@ export function createZyraUi(options = {}) {
       return;
     }
     if (activeProgress) activeProgress.done = true;
-    commitAssistant(message, finalContent);
+    commitAssistant(message, finalContent, {
+      historical: options.historical === true,
+      showDivider: options.showDivider ?? assistantDividerPending,
+    });
   };
 
   const rememberTerminalTool = (toolCallId, tool) => {
@@ -376,7 +390,7 @@ export function createZyraUi(options = {}) {
     if (fileChange) next.fileChange = fileChange;
 
     const checkCommand = isCheckCommandTool(next);
-    const completedCheck = checkCommand && next.surface.lifecycle === "completed";
+    const completedCheck = checkCommand && next.surface.lifecycle === "completed" && !next.historical;
     const stoppedCommand = next.surface.kind === "command" && next.surface.lifecycle === "stopped";
     if (activeProgress) {
       if (completedCheck) recordCheckedCommand(next);
@@ -416,14 +430,14 @@ export function createZyraUi(options = {}) {
       return;
     }
     if (stoppedCommand) {
-      if (inputActive && !component.host) host.append(component);
-      if (!inputActive) host.printLines(component.render(host.width()));
+      if ((inputActive || next.historical) && !component.host) host.append(component);
+      if (!inputActive && !next.historical) host.printLines(component.render(host.width()));
       recordStoppedCommand(next);
       if (inputActive) host.invalidate();
       return;
     }
-    if (inputActive && !component.host) host.append(component);
-    if (!inputActive) host.printLines(component.render(host.width()));
+    if ((inputActive || next.historical) && !component.host) host.append(component);
+    if (!inputActive && !next.historical) host.printLines(component.render(host.width()));
     else host.invalidate();
   };
 
@@ -598,8 +612,11 @@ export function createZyraUi(options = {}) {
         host.invalidate();
         return;
       }
-      if (event.type === "message_start" && event.message?.role === "user") appendUserMessage(userMessageText(event.message));
-      if (event.type === "message_start" && event.message?.role === "assistant") beginAssistant(event.message);
+      if (event.type === "message_start" && event.message?.role === "user") {
+        const content = extractUserMessageContent(event.message);
+        appendUserMessage(content.text, { imageAttachments: content.imageAttachments });
+      }
+      if (event.type === "message_start" && event.message?.role === "assistant") beginAssistant(event.message, { showDivider: false });
       if (event.type === "message_update" && event.message?.role === "assistant") {
         streamAssistantEvent(event);
         return;
@@ -612,7 +629,17 @@ export function createZyraUi(options = {}) {
       if (event.type === "tool_execution_start") updateTool(event, "running");
       if (event.type === "tool_execution_update") updateTool(event, "running");
       if (event.type === "tool_execution_end") updateTool(event, event.isError ? "error" : "done");
-      if (event.type === "message_end" && event.message?.role === "assistant") finishAssistant(event.message);
+      if (event.type === "message_end" && event.message?.role === "assistant") {
+        finishAssistant(event.message, {
+          historical: event.historical === true,
+          showDivider: event.historical !== true && isFinalAssistantResponse(event.message),
+        });
+        if (event.historical === true) {
+          flushAssistantCommit();
+          activeAssistantComponent = null;
+          activeAssistantKey = "";
+        }
+      }
       if (event.type === "turn_end") {
         flushNonInteractiveCommandSummaries();
         flushAssistantCommit();
@@ -714,6 +741,18 @@ export function createZyraUi(options = {}) {
         host.invalidate({ force: true });
       }
     },
+    async requestUserInput(request = {}, options = {}) {
+      if (!inputActive || options.signal?.aborted) return { answers: {}, cancelled: true };
+      const dialog = createRequestUserInputDialog(request, { theme });
+      if (!dialog) return { answers: {}, cancelled: true };
+      const cancel = () => dialog.cancel?.();
+      options.signal?.addEventListener?.("abort", cancel, { once: true });
+      try {
+        return (await runZyraInputDialog(host, dialog)) || { answers: {}, cancelled: true };
+      } finally {
+        options.signal?.removeEventListener?.("abort", cancel);
+      }
+    },
     async requestApproval(request = {}, options = {}) {
       if (!inputActive || options.signal?.aborted) return "decline";
       const command = String(request.command || request.detail || "").replace(/\s+/g, " ").trim();
@@ -769,7 +808,7 @@ export function createZyraUi(options = {}) {
           getActivityLabel: () => activityLabel,
           suppressWorking: () => suppressWorking,
           onUserMessage(text, metadata = {}) {
-            rememberEchoedUserMessage(text);
+            rememberEchoedUserMessage(text, metadata.imageAttachments);
             appendUserMessage(text, { force: true, imageAttachments: metadata.imageAttachments });
           },
           onError(error) {
@@ -805,6 +844,10 @@ export function createZyraUi(options = {}) {
     _host: host,
     _debugBeginInteractiveForTests() {
       inputActive = true;
+    },
+    _debugEchoUserMessageForTests(text, imageAttachments = []) {
+      rememberEchoedUserMessage(text, imageAttachments);
+      appendUserMessage(text, { force: true, imageAttachments });
     },
     _debugRenderLinesForTests(width = host.width()) {
       return host.renderLines(width);
@@ -1223,13 +1266,48 @@ function assistantMessageIdentity(message = {}) {
   return value ? String(value) : "";
 }
 
-function userMessageText(message = {}) {
+function isFinalAssistantResponse(message = {}) {
+  const stopReason = String(message.stopReason ?? message.stop_reason ?? "").trim().toLowerCase();
+  return stopReason === "stop" || stopReason === "end_turn";
+}
+
+function extractUserMessageContent(message = {}) {
   const content = message.content ?? message.text ?? "";
-  return normalizeUserMessageText(extractText(content));
+  if (!Array.isArray(content)) {
+    return {
+      text: normalizeUserMessageText(typeof content === "string" ? content : content?.text),
+      imageAttachments: [],
+    };
+  }
+  const text = [];
+  const imageAttachments = [];
+  for (const part of content) {
+    if (part?.type === "text" && part.text) {
+      text.push(part.text);
+      continue;
+    }
+    if (part?.type !== "image") continue;
+    imageAttachments.push({
+      index: imageAttachments.length + 1,
+      mimeType: part.mimeType || part.mime_type || "image",
+      width: Number(part.width) || undefined,
+      height: Number(part.height) || undefined,
+    });
+  }
+  return {
+    text: normalizeUserMessageText(text.join("\n")),
+    imageAttachments,
+  };
 }
 
 function normalizeUserMessageText(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function userMessageEchoKey(text, imageAttachments = []) {
+  const normalized = normalizeUserMessageText(text);
+  const imageCount = Array.isArray(imageAttachments) ? imageAttachments.filter(Boolean).length : 0;
+  return normalized || imageCount > 0 ? `${normalized}\u0000${imageCount}` : "";
 }
 
 export function extractAssistantContent(content) {

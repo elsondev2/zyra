@@ -74,6 +74,7 @@ export function useAssistantQueuedComposer(args: {
     isThreadWorking: boolean
     activeTurnId: string | null
     busyMessageMode: AssistantBusyMessageMode
+    onSendingChange?: (sending: boolean) => void
     dispatchPrompt: (
         sessionId: string,
         prompt: string,
@@ -90,6 +91,7 @@ export function useAssistantQueuedComposer(args: {
         isThreadWorking,
         activeTurnId,
         busyMessageMode,
+        onSendingChange,
         dispatchPrompt,
         interruptTurn
     } = args
@@ -118,12 +120,14 @@ export function useAssistantQueuedComposer(args: {
         options: AssistantComposerSendOptions
     ) => {
         setSendingComposerPrompt(true)
+        onSendingChange?.(true)
         try {
             return await dispatchPrompt(sessionId, prompt, contextFiles, options)
         } finally {
             setSendingComposerPrompt(false)
+            onSendingChange?.(false)
         }
-    }, [dispatchPrompt])
+    }, [dispatchPrompt, onSendingChange])
 
     const enqueuePreviewPrompt = useCallback((
         command: AssistantQueuePreviewCommand,

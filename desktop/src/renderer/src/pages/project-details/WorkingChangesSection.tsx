@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type Dispatch, type MouseEvent, type SetStateAction } from 'react'
 import { Check, Copy } from 'lucide-react'
-import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { cn } from '@/lib/utils'
 import { DiffStats } from './DiffStats'
 import type { DiffMode, WorkingChangeItem } from './workingChangesTypes'
@@ -162,7 +162,7 @@ export function WorkingChangesSection({
                                     <span className={cn('rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase', badge.className)}>
                                         {badge.label}
                                     </span>
-                                    <VscodeEntryIcon pathValue={file.path} kind="file" theme={iconTheme} className="shrink-0" />
+                                    <FileEntryIcon pathValue={file.path} kind="file" theme={iconTheme} className="shrink-0" />
                                     <button
                                         onClick={() => {
                                             onSetPendingActionPath(file.path)

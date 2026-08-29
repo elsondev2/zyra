@@ -7,6 +7,7 @@ import {
   fetchCodexUsageStats,
   isCodexResetCreditAvailable,
   loadCustomCommand,
+  loadZyraSkillPrompt,
   loginZyraAuth,
   reloadZyraRuntime,
   runZyraPrompt,
@@ -38,6 +39,13 @@ import { buildProjectStartPrompt } from "./project-start.mjs";
 import { getSlashCommand, parseSlashInput } from "./slash-commands.mjs";
 import { normalizeWebToolsMode } from "./web-tools-picker.mjs";
 import {
+  DESKTOP_WORKSPACE_COMMANDS,
+  formatDesktopWorkspaceResult,
+  parseDesktopWorkspaceCommand,
+} from "./desktop-workspace-commands.mjs";
+import { captureCliEvent } from "./analytics/cli.mjs";
+import { classifyErrorCode, normalizeAnalyticsCommandName } from "./analytics/contracts.mjs";
+import {
   formatCodexResetCreditsSummary,
   formatCodexResetRedemptionWarning,
   formatCodexUsageSnapshot,
@@ -46,8 +54,36 @@ import {
 export async function handleSlash(runtime, ui, input, controls = {}) {
   const text = String(input ?? "").trim();
   if (!text.startsWith("/") && !["exit", "quit"].includes(text.toLowerCase())) return false;
-
   const parsed = parseSlashInput(text.startsWith("/") ? text : `/${text}`);
+  const commandName = normalizeAnalyticsCommandName(parsed.command?.name ?? parsed.commandName);
+  const skillCommand = /^\/skill:/i.test(text);
+  const workspaceCommand = DESKTOP_WORKSPACE_COMMANDS.includes(parsed.command?.name ?? parsed.commandName);
+  const captureWrapperOutcome = !workspaceCommand && !skillCommand;
+  if (captureWrapperOutcome) captureCliEvent("zyra_v1_cli", {
+    action: "slash_command",
+    command: commandName,
+    outcome: "started",
+  });
+  try {
+    const result = await handleSlashCommand(runtime, ui, text, parsed, controls);
+    if (captureWrapperOutcome) captureCliEvent("zyra_v1_cli", {
+      action: "slash_command",
+      command: commandName,
+      outcome: "completed",
+    });
+    return result;
+  } catch (error) {
+    if (captureWrapperOutcome) captureCliEvent("zyra_v1_cli", {
+      action: "slash_command",
+      command: commandName,
+      outcome: "failed",
+      error_code: classifyErrorCode(error),
+    });
+    throw error;
+  }
+}
+
+async function handleSlashCommand(runtime, ui, text, parsed, controls = {}) {
   const command = parsed.command;
   const name = command?.name ?? parsed.commandName;
   const arg = parsed.arg;
@@ -92,6 +128,14 @@ export async function handleSlash(runtime, ui, input, controls = {}) {
       return runProfile(runtime, ui, arg);
     case "memory":
       return runMemory(runtime, ui, arg);
+    case "browser":
+    case "details-ui":
+    case "explore-files":
+    case "resources":
+    case "subagents-ui":
+    case "diff-ui":
+    case "terminal-ui":
+      return runDesktopWorkspace(runtime, ui, name, arg);
     case "web":
       return runWeb(runtime, ui, arg);
     case "websearch":
@@ -149,6 +193,30 @@ export async function handleSlash(runtime, ui, input, controls = {}) {
     default:
       return runCustomSlashCommand(runtime, ui, `/${parsed.commandName}`, arg, controls);
   }
+}
+
+async function runDesktopWorkspace(runtime, ui, commandName, arg) {
+  if (!DESKTOP_WORKSPACE_COMMANDS.includes(commandName)) return false;
+  if (typeof runtime.agentServer?.openDesktopWorkspace !== "function") {
+    captureCliEvent("zyra_v1_cli", { action: "workspace_command", command: normalizeAnalyticsCommandName(commandName), outcome: "unavailable", error_code: "unavailable" });
+    ui.info("Zyra Desktop is required for this command.");
+    return true;
+  }
+  try {
+    const command = parseDesktopWorkspaceCommand(commandName, arg);
+    const result = await runtime.agentServer.openDesktopWorkspace(command);
+    captureCliEvent("zyra_v1_cli", { action: "workspace_command", command: normalizeAnalyticsCommandName(commandName), outcome: "completed" });
+    ui.info(formatDesktopWorkspaceResult(command, result));
+  } catch (error) {
+    captureCliEvent("zyra_v1_cli", { action: "workspace_command", command: normalizeAnalyticsCommandName(commandName), outcome: "failed", error_code: classifyErrorCode(error) });
+    const code = String(error?.code || "");
+    if (code === "DESKTOP_WORKSPACE_UNAVAILABLE" || code === "AGENT_SERVER_TIMEOUT") {
+      ui.info("Zyra Desktop is not connected. Open Desktop and retry.");
+      return true;
+    }
+    ui.info(error instanceof Error ? error.message : "Could not open Zyra Desktop.");
+  }
+  return true;
 }
 
 async function runAgents(runtime, ui, arg) {
@@ -633,12 +701,20 @@ async function runInterruptMode(runtime, ui, arg) {
 }
 
 async function runCustomSlashCommand(runtime, ui, rawCommand, arg, controls) {
-  const customPrompt = loadCustomCommand(runtime, rawCommand, arg);
-  if (customPrompt) {
+  const skillMatch = rawCommand.match(/^\/skill:([a-z0-9][a-z0-9_-]{0,63})$/i);
+  const prompt = skillMatch
+    ? loadZyraSkillPrompt(runtime, rawCommand, arg)
+    : loadCustomCommand(runtime, rawCommand, arg);
+  if (prompt) {
+    if (skillMatch) captureCliEvent("zyra_v1_cli", { action: "skill", skill: skillMatch[1].toLowerCase(), outcome: "started" });
     controls.setTerminalTitleState?.("thinking");
     try {
-      await runZyraPrompt(runtime, customPrompt);
+      await runZyraPrompt(runtime, prompt);
+      if (skillMatch) captureCliEvent("zyra_v1_cli", { action: "skill", skill: skillMatch[1].toLowerCase(), outcome: "completed" });
       controls.notifyTerminalIfUnfocused?.();
+    } catch (error) {
+      if (skillMatch) captureCliEvent("zyra_v1_cli", { action: "skill", skill: skillMatch[1].toLowerCase(), outcome: "failed", error_code: classifyErrorCode(error) });
+      throw error;
     } finally {
       controls.setTerminalTitleState?.("ready");
     }

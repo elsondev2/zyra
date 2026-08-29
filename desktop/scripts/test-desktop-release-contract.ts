@@ -12,8 +12,15 @@ const rootLock = readJson(path.join(repositoryRoot, 'package-lock.json'))
 const desktopPackage = readJson(path.join(desktopRoot, 'package.json'))
 const desktopLock = readJson(path.join(desktopRoot, 'package-lock.json'))
 const build = desktopPackage.build
+const localReleaseArchiveSource = readFileSync(path.join(repositoryRoot, 'scripts', 'build-release.mjs'), 'utf8')
+const allowlistedTuiArchiveSource = readFileSync(path.join(repositoryRoot, 'scripts', 'build-tui-release.mjs'), 'utf8')
 
 assert.equal(rootPackage.version, '0.6.0')
+assert.equal(rootPackage.scripts['release:zip'], 'node scripts/build-release.mjs', 'the local release shortcut stays stable')
+assert.match(localReleaseArchiveSource, /build-tui-release\.mjs/, 'the local release shortcut delegates to the canonical allowlisted TUI archive builder')
+assert.doesNotMatch(localReleaseArchiveSource, /git["', ]+archive|checksums\.txt/, 'the local shortcut cannot archive the whole repository or emit the obsolete checksum format')
+assert.match(allowlistedTuiArchiveSource, /const include = \[[\s\S]*'bin',[\s\S]*'src',[\s\S]*'analytics',[\s\S]*'prompts'/, 'the canonical TUI archive includes the shared analytics catalog beside runtime source')
+assert(rootPackage.files.includes('analytics'), 'the npm/TUI package allowlist includes the versioned analytics catalog')
 assert.equal(desktopPackage.version, rootPackage.version, 'root and Desktop versions must be lockstep')
 assert(JSON.stringify(build.extraResources || []).includes('.release/zyra-node'), 'desktop packages the pinned Node runtime')
 assert.equal(rootLock.version, rootPackage.version)
@@ -29,30 +36,62 @@ assert.equal(desktopPackage.license, 'Apache-2.0')
 
 assert.equal(build.appId, 'app.zyra.desktop')
 assert.equal(build.productName, 'Zyra')
-assert.equal(desktopPackage.devDependencies.electron, '43.4.0', 'Electron must remain deliberately pinned')
-assert.equal(desktopLock.packages['node_modules/electron'].version, '43.4.0')
+assert.equal(build.asar, true, 'packaged application code must remain inside app.asar')
+assert.deepEqual(build.electronFuses, {
+    runAsNode: true,
+    enableCookieEncryption: true,
+    enableNodeOptionsEnvironmentVariable: false,
+    enableNodeCliInspectArguments: false,
+    enableEmbeddedAsarIntegrityValidation: true,
+    onlyLoadAppFromAsar: true
+})
+assert.match(desktopPackage.devDependencies.electron, /castlabs\/electron-releases[\s\S]*v43\.2\.0%2Bwvcus/, 'Widevine-capable Electron must remain deliberately pinned')
+assert.equal(desktopLock.packages['node_modules/electron'].version, '43.2.0+wvcus')
+assert.equal(build.electronDownload?.mirror, 'https://github.com/castlabs/electron-releases/releases/download/v', 'packaging must download the Widevine-capable Electron distribution')
+assert.equal(build.afterPack, 'scripts/release/widevine-vmp-after-pack.cjs', 'macOS VMP signing must run before code signing')
+assert.equal(build.afterSign, 'scripts/release/widevine-vmp-after-sign.cjs', 'Windows VMP signing must run after code signing')
 assert.equal(desktopPackage.devDependencies['electron-builder'], '26.15.3')
 assert.equal(desktopLock.packages['node_modules/electron-builder'].version, '26.15.3')
 assert.equal(desktopPackage.dependencies['node-pty'], '1.1.0', 'node-pty ABI input must be pinned')
 assert.equal(build.npmRebuild, false, 'Node-API node-pty binaries must not be forced through Electron ABI rebuilds')
 assert(build.asarUnpack.includes('node_modules/node-pty/**'))
+assert(desktopPackage.scripts.postinstall.includes('ensure-electron.mjs'))
 assert(desktopPackage.scripts.postinstall.includes('verify-node-pty-install.mjs'))
 assert(desktopPackage.scripts['native:prepare'].includes('verify-node-pty-install.mjs'))
 assert(desktopPackage.scripts['test:native-abi'].includes('test-node-pty-electron.mjs'))
+const runtimeContractSource = readFileSync(path.join(desktopRoot, 'scripts', 'release', 'runtime-contract.mjs'), 'utf8')
+assert.match(runtimeContractSource, /RUNTIME_SOURCE_DIRECTORIES[^\n]*\['src', 'analytics'/, 'Desktop runtime staging includes the shared analytics catalog directory')
+assert.match(runtimeContractSource, /'analytics\/events\.v1\.json'[\s\S]*'src\/analytics\/client\.mjs'/, 'Desktop runtime validation requires analytics catalog and client entrypoints')
 const packageScript = readFileSync(path.join(desktopRoot, 'scripts', 'release', 'package-desktop.mjs'), 'utf8')
 const packagedValidator = readFileSync(path.join(desktopRoot, 'scripts', 'release', 'validate-packaged-app.mjs'), 'utf8')
 const signatureVerifier = readFileSync(path.join(desktopRoot, 'scripts', 'release', 'verify-platform-signature.mjs'), 'utf8')
+const signatureMarkerValidator = readFileSync(path.join(desktopRoot, 'scripts', 'release', 'validate-signature-markers.mjs'), 'utf8')
 const preflightSource = readFileSync(path.join(desktopRoot, 'scripts', 'release', 'preflight.mjs'), 'utf8')
+const vmpSignerSource = readFileSync(path.join(desktopRoot, 'scripts', 'release', 'widevine-vmp-sign.cjs'), 'utf8')
+const vmpAfterPackSource = readFileSync(path.join(desktopRoot, 'scripts', 'release', 'widevine-vmp-after-pack.cjs'), 'utf8')
+const releaseWorkflowSource = readFileSync(path.join(repositoryRoot, '.github', 'workflows', 'desktop-release.yml'), 'utf8')
 const persistenceSource = readFileSync(path.join(desktopRoot, 'src', 'main', 'assistant', 'persistence.ts'), 'utf8')
 const nativeSqliteSource = readFileSync(path.join(desktopRoot, 'src', 'main', 'assistant', 'native-sqlite-adapter.ts'), 'utf8')
 assert(packageScript.includes('validate-packaged-app.mjs'), 'every native package must validate its installed resource layout')
 assert(packageScript.includes('`--version=${version}`'), 'signature verification must receive the exact release version')
 assert(signatureVerifier.includes('platformReleaseContract(version, platform)'), 'signature verification must use the canonical artifact name')
+assert(signatureVerifier.includes("'widevine-vmp'") && signatureVerifier.includes("'verify-pkg'"), 'final packaged applications must verify Widevine VMP signing')
+assert(signatureMarkerValidator.includes("check.name === 'widevine-vmp'") && signatureMarkerValidator.includes("'widevine-vmp', 'codesign'"), 'release assembly requires Widevine VMP evidence on Windows and macOS')
 assert(packagedValidator.includes('runPackagedLaunchSmoke'), 'every native package must execute its installed main process')
+assert(packagedValidator.includes('getCurrentFuseWire'), 'every native package must verify the fuses on its actual executable')
 assert(packagedValidator.includes("platform === 'windows' ? 180_000 : 90_000"), 'cold unsigned package scans need a bounded native-platform launch allowance')
 assert(packagedValidator.includes("ZYRA_PACKAGED_SMOKE: '1'"), 'packaged launch smoke must use the bounded release probe')
 assert(preflightSource.includes("const taggedPublication = mode === 'tag'"), 'every public tag must enter the signing gate')
 assert(preflightSource.includes("require_signing=${taggedPublication ? 'true' : 'false'}"), 'alpha, beta, and stable tags must all require native signing')
+assert(preflightSource.includes("'EVS_ACCOUNT_NAME'") && preflightSource.includes("'EVS_PASSWD'"), 'tagged releases require Widevine VMP credentials')
+assert(preflightSource.includes("ZYRA_ACCEPT_ECS_SECURITY_DELTA === 'true'"), 'tagged releases require explicit acceptance of the current ECS patch-level delta')
+assert(vmpSignerSource.includes("'before-code-sign'") && vmpSignerSource.includes("platform !== 'darwin'"), 'macOS VMP signing runs before Apple code signing')
+assert(vmpAfterPackSource.includes('Electron Framework.sig') && vmpAfterPackSource.includes('arm64') && vmpAfterPackSource.includes('x64'), 'macOS universal staging removes incompatible per-architecture VMP signatures before merging')
+assert.match(releaseWorkflowSource, /- name: Build native package and updater metadata\s+env:\s+EVS_ACCOUNT_NAME:[\s\S]*EVS_PASSWD:/, 'EVS credentials are scoped to the native packaging step')
+assert.match(releaseWorkflowSource, /EVS_ACCOUNT_NAME: \$\{\{ github\.event_name == 'push' && secrets\.EVS_ACCOUNT_NAME \|\| '' \}\}/, 'manual rehearsals do not receive EVS credentials during preflight')
+assert.match(releaseWorkflowSource, /EVS_ACCOUNT_NAME: \$\{\{ needs\.preflight\.outputs\.publish == 'true' && matrix\.platform != 'linux'/, 'unsigned native rehearsals do not receive EVS credentials during packaging')
+assert.match(releaseWorkflowSource, /- name: Smoke Widevine protected media[\s\S]*npm --prefix desktop run smoke:protected-media/, 'native release runners probe Widevine before packaging')
+assert(vmpSignerSource.includes("'after-code-sign'") && vmpSignerSource.includes("platform !== 'win32'"), 'Windows VMP signing runs after Authenticode')
 assert(!preflightSource.includes('stablePublication'), 'prerelease tags must not bypass signing/notarization')
 assert.match(persistenceSource, /Boolean\(process\.versions\.electron\)[\s\S]*openNativeAssistantDatabase/, 'Electron production persistence must use disk-backed native SQLite')
 assert.match(nativeSqliteSource, /node:sqlite[\s\S]*journal_mode = WAL/, 'native Assistant persistence must use Electron’s bundled SQLite with WAL durability')
@@ -61,7 +100,7 @@ assert(desktopPackage.scripts['test:native-sqlite'].includes('test-native-sqlite
 const globalResources = build.extraResources
 assert(globalResources.some((entry: { from: string; to: string }) => entry.from === '../LICENSE' && entry.to === 'LICENSE'))
 assert(globalResources.some((entry: { from: string; to: string }) => entry.from === '../THIRD_PARTY_NOTICES.md' && entry.to === 'THIRD_PARTY_NOTICES.md'))
-assert.match(readFileSync(path.join(repositoryRoot, 'THIRD_PARTY_NOTICES.md'), 'utf8'), /OpenAI logo from SVGL[\s\S]*MIT License/)
+assert.match(readFileSync(path.join(repositoryRoot, 'THIRD_PARTY_NOTICES.md'), 'utf8'), /OpenAI and browser logos from SVGL[\s\S]*MIT License/)
 assert(globalResources.some((entry: { from: string; to: string }) => entry.from === '.release/zyra-runtime' && entry.to === 'zyra-runtime'))
 assert(
     globalResources.some((entry: { from: string; to: string }) =>
@@ -159,7 +198,10 @@ for (const secret of [
     'ZYRA_MACOS_CERTIFICATE_PASSWORD',
     'ZYRA_MACOS_NOTARIZATION_API_KEY',
     'ZYRA_MACOS_NOTARIZATION_KEY_ID',
-    'ZYRA_MACOS_NOTARIZATION_ISSUER_ID'
+    'ZYRA_MACOS_NOTARIZATION_ISSUER_ID',
+    'EVS_ACCOUNT_NAME',
+    'EVS_PASSWD',
+    'ZYRA_ACCEPT_ECS_SECURITY_DELTA'
 ]) {
     assert(releaseWorkflow.includes(secret), `release workflow must gate ${secret}`)
 }

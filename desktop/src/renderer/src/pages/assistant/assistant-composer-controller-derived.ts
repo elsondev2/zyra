@@ -18,7 +18,6 @@ type AssistantComposerSettingsDefaults = Pick<
     Settings,
     | 'assistantDefaultEffort'
     | 'assistantDefaultFastMode'
-    | 'assistantDefaultInteractionMode'
     | 'assistantDefaultModel'
     | 'assistantDefaultPromptTemplate'
     | 'assistantDefaultRuntimeMode'
@@ -125,7 +124,7 @@ export function resolveAssistantComposerFallbackState(input: {
         ...(input.useSettingsDefaults ? input.settingsDefaults : {}),
         ...(activeModel ? { model: activeModel } : {}),
         ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
-        ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
+        ...(input.interactionMode ? { interactionMode: 'default' as const } : {}),
         ...(input.activeEffort ? { effort: input.activeEffort } : {}),
         ...(typeof input.activeFastModeEnabled === 'boolean'
             ? { fastModeEnabled: input.activeFastModeEnabled }
@@ -163,13 +162,12 @@ export function useAssistantComposerSessionDefaults(input: {
         draft: settings.assistantDefaultPromptTemplate || undefined,
         model: settings.assistantDefaultModel.trim() || undefined,
         runtimeMode: settings.assistantDefaultRuntimeMode,
-        interactionMode: settings.assistantDefaultInteractionMode,
+        interactionMode: 'default',
         effort: settings.assistantDefaultEffort,
         fastModeEnabled: settings.assistantDefaultFastMode
     }), [
         settings.assistantDefaultEffort,
         settings.assistantDefaultFastMode,
-        settings.assistantDefaultInteractionMode,
         settings.assistantDefaultModel,
         settings.assistantDefaultPromptTemplate,
         settings.assistantDefaultRuntimeMode

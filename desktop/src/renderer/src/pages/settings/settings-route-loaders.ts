@@ -3,6 +3,7 @@ export const loadGeneralSettings = () => import('../Settings')
 export const loadAppearanceSettings = () => import('./AppearanceSettings')
 export const loadAccountSettings = () => import('./AccountSettings')
 export const loadAssistantSettings = () => import('./AssistantSettings')
+export const loadSkillsSettings = () => import('./SkillsSettings')
 export const loadVoiceSettings = () => import('./VoiceSettings')
 export const loadConnectionsSettings = () => import('./ConnectionsSettings')
 export const loadBrowserControlSettings = () => import('./BrowserControlSettings')
@@ -21,6 +22,7 @@ const routeLoaders: Record<string, () => Promise<unknown>> = {
     '/settings/appearance': loadAppearanceSettings,
     '/settings/account': loadAccountSettings,
     '/settings/assistant': loadAssistantSettings,
+    '/settings/skills': loadSkillsSettings,
     '/settings/voice': loadVoiceSettings,
     '/settings/connections': loadConnectionsSettings,
     '/settings/browser-control': loadBrowserControlSettings,

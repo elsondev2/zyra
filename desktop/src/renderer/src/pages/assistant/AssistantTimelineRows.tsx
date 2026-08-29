@@ -1,5 +1,5 @@
 import { memo, useEffect, useId, useMemo, useRef, useState } from 'react'
-import { Check, ChevronDown, Copy, Gauge, Loader2, RotateCcw, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Copy, Gauge, Loader2, RotateCcw, Trash2 } from 'lucide-react'
 import type { AssistantActivity, AssistantMessage, AssistantProposedPlan, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
 import type { ComposerContextFile } from './assistant-composer-types'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
@@ -130,7 +130,7 @@ export const TimelineThought = memo(({ activity }: { activity: AssistantActivity
                     />
                 </span>
             </button>
-            <AnimatedHeight isOpen={expanded}>
+            <AnimatedHeight isOpen={expanded} unmountOnExit>
                     <div id={panelId} className="mt-1.5 w-full text-white/35">
                         {presentationActive ? (
                             <StreamingAssistantText
@@ -183,7 +183,7 @@ export const TimelineThoughtGroup = memo(({ activities }: { activities: Assistan
                     />
                 </span>
             </button>
-            <AnimatedHeight isOpen={expanded}>
+            <AnimatedHeight isOpen={expanded} unmountOnExit>
                 <div id={panelId} className="space-y-3 pt-1.5">
                     {thoughts.map((thought, index) => (
                         <div key={thought.activity.id} className={cn(index > 0 && 'border-t border-white/[0.05] pt-3')}>
@@ -296,7 +296,7 @@ export const TimelineCommandCheckpointGroup = memo(({
                     )}
                 />
             </button>
-            <AnimatedHeight isOpen={expanded}>
+            <AnimatedHeight isOpen={expanded} unmountOnExit>
                 <div className="ml-3 border-l border-white/[0.05] pl-3 pt-1">
                     {activities.map((activity) => {
                         const targetActivityId = targetActivityIdByCheckpointId.get(activity.id) || null
@@ -382,7 +382,7 @@ export const TimelineWorkTraceGroup = memo(({
                     />
                 </span>
             </button>
-            <AnimatedHeight isOpen={expanded}>
+            <AnimatedHeight isOpen={expanded} unmountOnExit>
                 <div id={panelId} className="space-y-2.5 pt-1.5">
                     {activities.map((activity, index) => {
                         if (isInternalAssistantActivity(activity)) {
@@ -985,17 +985,17 @@ export function TimelineWorkingIndicator({ startedAt, label = 'Working...' }: { 
         return () => window.clearInterval(intervalId)
     }, [label, startedAt])
     return (
-        <div className="max-w-4xl py-0.5">
-            <div className="flex min-h-7 items-center gap-2 text-[11px] text-white/32">
-                <span className="inline-flex items-center gap-[3px]">
-                    <span className="h-1 w-1 animate-pulse rounded-full bg-white/25" />
-                    <span className="h-1 w-1 animate-pulse rounded-full bg-white/25 [animation-delay:200ms]" />
-                    <span className="h-1 w-1 animate-pulse rounded-full bg-white/25 [animation-delay:400ms]" />
+        <div className="max-w-4xl py-0.5" data-assistant-work-summary-shell="true">
+            <div className="inline-flex min-h-7 items-center gap-1 text-[11px] text-white/32">
+                <span data-assistant-working-dots="true" className="mr-0.5 inline-flex shrink-0 items-center gap-[3px]" aria-hidden="true">
+                    <span className="h-1 w-1 rounded-full bg-white/25 motion-safe:animate-pulse" />
+                    <span className="h-1 w-1 rounded-full bg-white/25 motion-safe:animate-pulse [animation-delay:200ms]" />
+                    <span className="h-1 w-1 rounded-full bg-white/25 motion-safe:animate-pulse [animation-delay:400ms]" />
                 </span>
                 <span ref={statusTextRef} className="shrink-0 font-medium">{statusText}</span>
-                <span className="h-px min-w-5 flex-1 bg-white/[0.07]" aria-hidden="true" />
-                <Loader2 size={11} className="animate-spin text-white/22" />
+                <ChevronRight size={12} aria-hidden="true" className="shrink-0 text-white/20" />
             </div>
+            <div className="h-px w-full bg-white/[0.07]" aria-hidden="true" />
         </div>
     )
 }

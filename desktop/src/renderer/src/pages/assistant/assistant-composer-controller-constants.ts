@@ -21,7 +21,7 @@ export function buildEffortSliderTicks(optionCount: number): string {
     const sliderMax = safeCount - 1
     return Array.from({ length: safeCount }, (_, index) => {
         const position = sliderMax > 0 ? 2.8 + ((94.4 * index) / sliderMax) : 50
-        return `radial-gradient(circle at ${position}% 50%, rgba(255, 255, 255, 0.24) 0 4px, transparent 4.4px)`
+        return `radial-gradient(circle at ${position}% 50%, color-mix(in srgb, var(--color-text) 34%, transparent) 0 1.35px, transparent 1.6px)`
     }).join(', ')
 }
 

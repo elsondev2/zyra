@@ -28,7 +28,7 @@ export function renderStatusLine(runtime, width = Math.max(24, (process.stdout.c
   const modelLabel = model?.id ?? "no-model";
   const thinking = getZyraThinkingLevel(runtime);
   const codexMode = formatCodexMode(runtime);
-  const profile = runtime.profile ?? "auto";
+  const permissionMode = formatPermissionMode(runtime.permissionMode);
   const activity = String(state.activity ?? "").trim();
   const contextUsage = getRuntimeContextUsage(runtime);
   const context = formatContext(contextUsage);
@@ -39,10 +39,10 @@ export function renderStatusLine(runtime, width = Math.max(24, (process.stdout.c
   const maxWidth = Math.max(24, width);
   const theme = getStatusLineTheme(runtime);
   if (mode === "minimal") {
-    return renderMinimalStatusLine({ theme, contextUsage, modelLabel, profile, context, cost, maxWidth });
+    return renderMinimalStatusLine({ theme, contextUsage, modelLabel, permissionMode, context, cost, maxWidth });
   }
 
-  const modelStatus = `${modelLabel} ${thinking}${codexMode ? `/${codexMode}` : ""}${sep}${profile}`;
+  const modelStatus = `${modelLabel} ${thinking}${codexMode ? `/${codexMode}` : ""}${sep}${permissionMode}`;
   const leftPlain = activity ? ` ${modelStatus}${sep}${activity}` : ` ${modelStatus}`;
   const rightBudget = Math.max(8, maxWidth - visibleWidth(leftPlain) - 1);
   const rightPlain = buildRightStatus(context, cwd, cost, rightBudget);
@@ -59,7 +59,7 @@ export function renderStatusLine(runtime, width = Math.max(24, (process.stdout.c
     color(theme.primary, ` ${modelLabel}`),
     color(theme.warning, ` ${thinking}${codexMode ? `/${codexMode}` : ""}`),
     low(theme.muted, sep),
-    color(profileColor(theme, profile), profile),
+    color(permissionModeColor(theme, permissionMode), permissionMode),
     activity ? low(theme.muted, sep) : "",
     activity ? color(theme.info, activity) : "",
   ].join("");
@@ -94,8 +94,8 @@ function formatCodexMode(runtime) {
   return "";
 }
 
-function renderMinimalStatusLine({ theme, contextUsage, modelLabel, profile, context, cost, maxWidth }) {
-  const leftPlain = ` ${modelLabel}${sep}${profile}`;
+function renderMinimalStatusLine({ theme, contextUsage, modelLabel, permissionMode, context, cost, maxWidth }) {
+  const leftPlain = ` ${modelLabel}${sep}${permissionMode}`;
   const rightPlain = `${context}${sep}${cost}`;
   const gap = Math.max(1, maxWidth - visibleWidth(leftPlain) - visibleWidth(rightPlain));
   const plain = truncateToWidth(`${leftPlain}${" ".repeat(gap)}${rightPlain}`, maxWidth, "...");
@@ -107,7 +107,7 @@ function renderMinimalStatusLine({ theme, contextUsage, modelLabel, profile, con
   const left = [
     color(theme.primary, ` ${modelLabel}`),
     low(theme.muted, sep),
-    color(profileColor(theme, profile), profile),
+    color(permissionModeColor(theme, permissionMode), permissionMode),
   ].join("");
   const right = [
     color(contextColor(theme, contextUsage), context),
@@ -236,11 +236,12 @@ function contextColor(theme, usage) {
   return theme.success;
 }
 
-function profileColor(theme, profile) {
-  const value = String(profile ?? "").toLowerCase();
-  if (value === "builder") return blue;
-  if (value === "learner") return pink;
-  return theme.accent;
+function formatPermissionMode(value) {
+  return value === "full-access" ? "full access" : "approval required";
+}
+
+function permissionModeColor(theme, permissionMode) {
+  return permissionMode === "full access" ? pink : theme.accent || blue;
 }
 
 function costColor(theme, cost) {

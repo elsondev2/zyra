@@ -140,6 +140,45 @@ const slashCommands = [
     submitOnEnter: true,
   },
   {
+    name: "browser",
+    description: "open Zyra Browser",
+    panelLabel: "/browser [url|list|show] [--background]",
+    submitOnEnter: true,
+  },
+  {
+    name: "details-ui",
+    description: "open graphical chat details",
+    submitOnEnter: true,
+  },
+  {
+    name: "explore-files",
+    description: "open the graphical file explorer",
+    panelLabel: "/explore-files [path]",
+    submitOnEnter: true,
+  },
+  {
+    name: "resources",
+    description: "open graphical chat resources",
+    submitOnEnter: true,
+  },
+  {
+    name: "subagents-ui",
+    aliases: ["agents-ui"],
+    description: "open graphical agents and workflows",
+    submitOnEnter: true,
+  },
+  {
+    name: "diff-ui",
+    description: "open graphical chat diffs",
+    submitOnEnter: true,
+  },
+  {
+    name: "terminal-ui",
+    description: "open a graphical terminal",
+    panelLabel: "/terminal-ui [path]",
+    submitOnEnter: true,
+  },
+  {
     name: "web",
     description: "choose web tools",
     inlineArgs: ["all", "none", "websearch", "webfetch"],

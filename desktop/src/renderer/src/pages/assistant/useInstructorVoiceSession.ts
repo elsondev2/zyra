@@ -194,16 +194,17 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
         for (const command of pendingClientCommandsRef.current) {
             if (sentClientCommandIdsRef.current.has(command.commandId)) continue
             if (!isCurrentRealtimeVoiceClientCommand(command, binding)) continue
-            const createsResponse = command.messages.some((message) => message.type === 'response.create')
-            const requiresIdleResponse = createsResponse
-                || command.messages.some((message) => message.type === 'session.context.append')
+            const startsResponse = command.messages.some((message) =>
+                message.type === 'session.context.append' && message.channel === 'speakable'
+            )
+            const requiresIdleResponse = command.messages.some((message) => message.type === 'session.context.append')
             if (requiresIdleResponse && realtimeResponseActiveRef.current) {
                 remaining.push(command)
                 continue
             }
             if (sendRealtimeVoiceClientCommand(channel, command, binding)) {
                 sentClientCommandIdsRef.current.add(command.commandId)
-                if (createsResponse) realtimeResponseActiveRef.current = true
+                if (startsResponse) realtimeResponseActiveRef.current = true
             } else {
                 remaining.push(command)
             }
@@ -516,6 +517,13 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
         try {
             if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === 'undefined') {
                 throw new Error('WebRTC microphone access is unavailable in this window.')
+            }
+
+            if (binding?.sessionId) {
+                void window.devscope.assistant.connect({
+                    sessionId: binding.sessionId,
+                    voicePreparation: options.executionConfiguration
+                }).catch(() => undefined)
             }
 
             setStatus('requesting-microphone')

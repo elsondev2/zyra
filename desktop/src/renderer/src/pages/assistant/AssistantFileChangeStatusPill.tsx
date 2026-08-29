@@ -11,22 +11,22 @@ const STATUS_PRESENTATION: Record<AssistantFileChangeStatus, {
     modified: {
         code: 'M',
         label: 'Modified',
-        className: 'border-amber-400/25 bg-amber-500/[0.10] text-amber-200'
+        className: 'border-[color-mix(in_srgb,var(--status-warning)_26%,transparent)] bg-[color-mix(in_srgb,var(--status-warning)_10%,transparent)] text-[color-mix(in_srgb,var(--status-warning)_70%,var(--color-text))]'
     },
     untracked: {
         code: 'U',
         label: 'New / untracked',
-        className: 'border-emerald-400/25 bg-emerald-500/[0.10] text-emerald-200'
+        className: 'border-[color-mix(in_srgb,var(--status-success)_26%,transparent)] bg-[color-mix(in_srgb,var(--status-success)_10%,transparent)] text-[color-mix(in_srgb,var(--status-success)_70%,var(--color-text))]'
     },
     deleted: {
         code: 'D',
         label: 'Deleted',
-        className: 'border-red-400/25 bg-red-500/[0.10] text-red-200'
+        className: 'border-[color-mix(in_srgb,var(--status-danger)_26%,transparent)] bg-[color-mix(in_srgb,var(--status-danger)_10%,transparent)] text-[color-mix(in_srgb,var(--status-danger)_70%,var(--color-text))]'
     },
     renamed: {
         code: 'R',
         label: 'Renamed',
-        className: 'border-violet-400/25 bg-violet-500/[0.10] text-violet-200'
+        className: 'border-[color-mix(in_srgb,var(--accent-primary)_26%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)] text-[color-mix(in_srgb,var(--accent-primary)_70%,var(--color-text))]'
     }
 }
 

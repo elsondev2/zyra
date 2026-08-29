@@ -1,6 +1,7 @@
 import {
     useCallback,
     useEffect,
+    useLayoutEffect,
     useMemo,
     useRef,
     useState,
@@ -9,11 +10,14 @@ import {
 import { ChevronDown, ChevronRight, MoreHorizontal } from 'lucide-react'
 import type { DevScopeFileTreeNode } from '@shared/contracts/devscope-project-contracts'
 import type { FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
-import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
+import { FileSystemEntryIcon } from './FileSystemEntryIcon'
 import { cn } from '@/lib/utils'
 import {
     buildVisiblePreviewTreeModel,
     normalizePreviewTreePath,
+    previewDirectoryCanExpand,
+    previewTreeAnchoredScrollTop,
     type PreviewVirtualTreeRow
 } from './previewVirtualTreeModel'
 import { usePreviewVirtualWindow } from './usePreviewVirtualWindow'
@@ -22,6 +26,27 @@ import {
     PreviewTreeContextMenu,
     type PreviewTreeMenuAnchor
 } from './PreviewTreeContextMenu'
+
+const PREVIEW_TREE_EXPANSION_CACHE_LIMIT = 24
+const previewTreeExpansionCache = new Map<string, Set<string>>()
+
+function readCachedExpansion(key: string, fallback: ReadonlySet<string>): Set<string> {
+    const cached = previewTreeExpansionCache.get(key)
+    if (!cached) return new Set(fallback)
+    previewTreeExpansionCache.delete(key)
+    previewTreeExpansionCache.set(key, cached)
+    return new Set([...fallback, ...cached])
+}
+
+function retainCachedExpansion(key: string, expanded: ReadonlySet<string>): void {
+    previewTreeExpansionCache.delete(key)
+    previewTreeExpansionCache.set(key, new Set(expanded))
+    while (previewTreeExpansionCache.size > PREVIEW_TREE_EXPANSION_CACHE_LIMIT) {
+        const oldestKey = previewTreeExpansionCache.keys().next().value
+        if (typeof oldestKey !== 'string') break
+        previewTreeExpansionCache.delete(oldestKey)
+    }
+}
 
 type PreviewTreeMenuState = {
     node: DevScopeFileTreeNode
@@ -37,10 +62,15 @@ export function PreviewVirtualFileTree({
     nameLayout,
     theme,
     revealTargetRequestId = null,
+    revealReady = true,
     onRevealTargetHandled,
     onOpenFile,
+    onActivateDirectory,
+    onPrefetchFile,
     onExpandDirectory,
-    getNodeActions
+    onExpandedPathKeysChange,
+    getNodeActions,
+    presentation = 'tree'
 }: {
     nodes: DevScopeFileTreeNode[]
     rootPath: string
@@ -51,19 +81,30 @@ export function PreviewVirtualFileTree({
     nameLayout: 'wrap' | 'horizontal'
     theme: 'light' | 'dark'
     revealTargetRequestId?: string | null
+    revealReady?: boolean
     onRevealTargetHandled?: (requestId: string) => void
     onOpenFile: (node: DevScopeFileTreeNode) => void
+    onActivateDirectory?: (node: DevScopeFileTreeNode) => void
+    onPrefetchFile?: (node: DevScopeFileTreeNode) => void
     onExpandDirectory: (node: DevScopeFileTreeNode) => void | Promise<void>
+    onExpandedPathKeysChange?: (paths: ReadonlySet<string>) => void
     getNodeActions: (node: DevScopeFileTreeNode) => FileActionsMenuItem[]
+    presentation?: 'tree' | 'workspace' | 'navigation'
 }) {
-    const rowHeight = nameLayout === 'wrap' ? 40 : 24
+    const rowHeight = presentation === 'workspace' || presentation === 'navigation' ? 32 : nameLayout === 'wrap' ? 40 : 24
+    const directoryOnly = presentation === 'navigation'
+    const directoryCanExpand = useCallback(
+        (node: DevScopeFileTreeNode) => previewDirectoryCanExpand(node, directoryOnly),
+        [directoryOnly]
+    )
     const selectedPathKey = normalizePreviewTreePath(selectedPath || '')
     const rootPathKey = normalizePreviewTreePath(rootPath)
     const requestedExpansionKeys = useMemo(
         () => new Set([...expandedPathKeys].map(normalizePreviewTreePath)),
         [expandedPathKeys]
     )
-    const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() => new Set(requestedExpansionKeys))
+    const expansionCacheKey = `${rootPathKey}:${presentation}`
+    const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() => readCachedExpansion(expansionCacheKey, requestedExpansionKeys))
     const [activeKey, setActiveKey] = useState(selectedPathKey)
     const [menuState, setMenuState] = useState<PreviewTreeMenuState>(null)
     const expandedKeysRef = useRef(expandedKeys)
@@ -76,6 +117,8 @@ export function PreviewVirtualFileTree({
     const menuStateRef = useRef<PreviewTreeMenuState>(menuState)
     const rowElementsRef = useRef(new Map<string, HTMLDivElement>())
     const typeNavigationRef = useRef({ value: '', updatedAt: 0 })
+    const previousRowsRef = useRef<readonly PreviewVirtualTreeRow[]>([])
+    const previousRowsRootKeyRef = useRef(rootPathKey)
     menuStateRef.current = menuState
 
     const visibleTreeModel = useMemo(
@@ -85,8 +128,25 @@ export function PreviewVirtualFileTree({
     const { rows, rowIndexByKey, horizontalContentWidth } = visibleTreeModel
     const { range, scrollElementRef, scrollToIndex } = usePreviewVirtualWindow({
         rowCount: rows.length,
-        rowHeight
+        rowHeight,
+        restoreKey: `${rootPathKey}:${presentation}:${nameLayout}`
     })
+
+    const preserveViewportAnchor = useCallback(() => {
+        const scrollElement = scrollElementRef.current
+        const previousRows = previousRowsRef.current
+        const sameRoot = previousRowsRootKeyRef.current === rootPathKey
+        previousRowsRef.current = rows
+        previousRowsRootKeyRef.current = rootPathKey
+        if (!scrollElement || !sameRoot || previousRows.length === 0 || previousRows === rows) return
+        const anchoredScrollTop = previewTreeAnchoredScrollTop(previousRows, rowIndexByKey, scrollElement.scrollTop, rowHeight)
+        if (anchoredScrollTop === null || Math.abs(anchoredScrollTop - scrollElement.scrollTop) < 0.5) return
+        scrollElement.scrollTop = anchoredScrollTop
+    }, [rootPathKey, rowHeight, rowIndexByKey, rows, scrollElementRef])
+
+    useLayoutEffect(() => {
+        preserveViewportAnchor()
+    }, [preserveViewportAnchor])
 
     useEffect(() => {
         if (mountedRootPathRef.current === rootPathKey) return
@@ -120,6 +180,11 @@ export function PreviewVirtualFileTree({
     }, [collapseAllRequest])
 
     useEffect(() => {
+        retainCachedExpansion(expansionCacheKey, expandedKeys)
+        onExpandedPathKeysChange?.(new Set(expandedKeys))
+    }, [expandedKeys, expansionCacheKey, onExpandedPathKeysChange])
+
+    useEffect(() => {
         if (selectedPathKey) setActiveKey(selectedPathKey)
     }, [selectedPathKey])
 
@@ -132,6 +197,7 @@ export function PreviewVirtualFileTree({
     useEffect(() => {
         if (
             !revealTargetRequestId
+            || !revealReady
             || !selectedPathKey
             || appliedRevealRequestsRef.current.has(revealTargetRequestId)
         ) return
@@ -139,12 +205,12 @@ export function PreviewVirtualFileTree({
         if (targetIndex === undefined) return
         setActiveKey(selectedPathKey)
         const frameId = window.requestAnimationFrame(() => {
-            scrollToIndex(targetIndex, 'auto')
+            scrollToIndex(targetIndex, 'center')
             appliedRevealRequestsRef.current.add(revealTargetRequestId)
             onRevealTargetHandled?.(revealTargetRequestId)
         })
         return () => window.cancelAnimationFrame(frameId)
-    }, [onRevealTargetHandled, revealTargetRequestId, rowIndexByKey, scrollToIndex, selectedPathKey])
+    }, [onRevealTargetHandled, revealReady, revealTargetRequestId, rowIndexByKey, scrollToIndex, selectedPathKey])
 
     useEffect(() => {
         const pendingFocusKey = pendingFocusKeyRef.current
@@ -184,8 +250,16 @@ export function PreviewVirtualFileTree({
         })
     }, [onExpandDirectory])
 
+    useEffect(() => {
+        for (const pathKey of expandedKeys) {
+            const rowIndex = rowIndexByKey.get(pathKey)
+            const row = rowIndex === undefined ? null : rows[rowIndex]
+            if (row?.node.type === 'directory') requestDirectoryLoad(row.node)
+        }
+    }, [expandedKeys, requestDirectoryLoad, rowIndexByKey, rows])
+
     const toggleDirectory = useCallback((node: DevScopeFileTreeNode, forceExpanded?: boolean) => {
-        if (node.type !== 'directory') return
+        if (!directoryCanExpand(node)) return
         const pathKey = normalizePreviewTreePath(node.path)
         const nextExpanded = forceExpanded ?? !expandedKeysRef.current.has(pathKey)
         const nextExpandedKeys = new Set(expandedKeysRef.current)
@@ -194,7 +268,7 @@ export function PreviewVirtualFileTree({
         expandedKeysRef.current = nextExpandedKeys
         setExpandedKeys(nextExpandedKeys)
         if (nextExpanded) requestDirectoryLoad(node)
-    }, [requestDirectoryLoad])
+    }, [directoryCanExpand, requestDirectoryLoad])
 
     const openFile = useCallback((row: PreviewVirtualTreeRow) => {
         setActiveKey(row.key)
@@ -239,7 +313,7 @@ export function PreviewVirtualFileTree({
             activateRowAtIndex(rows.length - 1)
             return
         }
-        if (event.key === 'ArrowRight' && row.node.type === 'directory') {
+        if (event.key === 'ArrowRight' && directoryCanExpand(row.node)) {
             event.preventDefault()
             if (!expandedKeysRef.current.has(row.key)) {
                 toggleDirectory(row.node, true)
@@ -250,7 +324,7 @@ export function PreviewVirtualFileTree({
             return
         }
         if (event.key === 'ArrowLeft') {
-            if (row.node.type === 'directory' && expandedKeysRef.current.has(row.key)) {
+            if (directoryCanExpand(row.node) && expandedKeysRef.current.has(row.key)) {
                 event.preventDefault()
                 toggleDirectory(row.node, false)
                 return
@@ -264,8 +338,10 @@ export function PreviewVirtualFileTree({
         }
         if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault()
-            if (row.node.type === 'directory') toggleDirectory(row.node)
-            else openFile(row)
+            if (row.node.type === 'directory') {
+                if (onActivateDirectory && (event.key === 'Enter' || !directoryCanExpand(row.node))) onActivateDirectory(row.node)
+                else toggleDirectory(row.node)
+            } else openFile(row)
             return
         }
         if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
@@ -296,7 +372,7 @@ export function PreviewVirtualFileTree({
                 break
             }
         }
-    }, [activateRowAtIndex, getNodeActions, openFile, openMenuForRow, rowIndexByKey, rows, toggleDirectory])
+    }, [activateRowAtIndex, directoryCanExpand, getNodeActions, onActivateDirectory, openFile, openMenuForRow, rowIndexByKey, rows, toggleDirectory])
 
     const visibleRows = rows.slice(range.start, range.end)
     const menuItems = menuState ? getNodeActions(menuState.node) : []
@@ -306,11 +382,12 @@ export function PreviewVirtualFileTree({
             <div
                 ref={scrollElementRef}
                 role="tree"
-                aria-label="Preview project files"
+                aria-label={presentation === 'workspace' ? 'Workspace files' : presentation === 'navigation' ? 'Workspace folder tree' : 'Preview project files'}
                 className={cn(
                     'min-h-0 flex-1 overscroll-contain [scrollbar-gutter:stable]',
                     nameLayout === 'horizontal' ? 'overflow-auto' : 'overflow-x-hidden overflow-y-auto'
                 )}
+                style={{ overflowAnchor: 'none' }}
             >
                 <div
                     className="relative min-w-full"
@@ -322,7 +399,8 @@ export function PreviewVirtualFileTree({
                     {visibleRows.map((row, visibleIndex) => {
                         const rowIndex = range.start + visibleIndex
                         const directory = row.node.type === 'directory'
-                        const expanded = directory && expandedKeys.has(row.key)
+                        const directoryExpandable = directoryCanExpand(row.node)
+                        const expanded = directoryExpandable && expandedKeys.has(row.key)
                         const active = activeKey === row.key
                         return (
                             <div
@@ -336,14 +414,16 @@ export function PreviewVirtualFileTree({
                                 aria-level={row.depth + 1}
                                 aria-posinset={row.positionInSet}
                                 aria-setsize={row.setSize}
-                                aria-expanded={directory ? expanded : undefined}
+                                aria-expanded={directoryExpandable ? expanded : undefined}
                                 aria-selected={active}
                                 data-preview-tree-row={row.key}
                                 className={cn(
-                                    'group/tree-row absolute left-0 flex w-full cursor-default items-center rounded-[5px] pr-1 text-xs text-sparkle-text-secondary outline-none transition-colors',
+                                    'group/tree-row absolute left-0 flex w-full cursor-default items-center pr-1 text-xs text-sparkle-text-secondary outline-none transition-colors',
+                                    presentation === 'tree' && 'rounded-[5px]',
+                                    presentation !== 'tree' && 'border-b border-white/[0.035]',
                                     active
-                                        ? 'bg-[color-mix(in_srgb,var(--accent-primary,#38bdf8)_16%,transparent)] text-sparkle-text'
-                                        : 'hover:bg-white/[0.055] focus:bg-white/[0.055]'
+                                        ? 'bg-[color-mix(in_srgb,var(--accent-primary,#38bdf8)_14%,transparent)] text-sparkle-text'
+                                        : 'hover:bg-white/[0.04] focus:bg-white/[0.04]'
                                 )}
                                 style={{
                                     height: rowHeight,
@@ -352,8 +432,13 @@ export function PreviewVirtualFileTree({
                                 }}
                                 onClick={() => {
                                     setActiveKey(row.key)
-                                    if (directory) toggleDirectory(row.node)
-                                    else openFile(row)
+                                    if (directory) {
+                                        if (onActivateDirectory) onActivateDirectory(row.node)
+                                        else toggleDirectory(row.node)
+                                    } else openFile(row)
+                                }}
+                                onPointerEnter={() => {
+                                    if (!directory) onPrefetchFile?.(row.node)
                                 }}
                                 onContextMenu={(event) => {
                                     event.preventDefault()
@@ -368,7 +453,7 @@ export function PreviewVirtualFileTree({
                                 }}
                                 onKeyDown={(event) => handleRowKeyDown(event, row, rowIndex)}
                             >
-                                {directory ? (
+                                {directoryExpandable ? (
                                     <button
                                         type="button"
                                         tabIndex={-1}
@@ -383,13 +468,17 @@ export function PreviewVirtualFileTree({
                                         {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
                                     </button>
                                 ) : <span className="size-4 shrink-0" aria-hidden="true" />}
-                                <VscodeEntryIcon
-                                    pathValue={row.node.path}
-                                    kind={directory ? 'directory' : 'file'}
-                                    theme={theme}
-                                    className="mx-0.5 size-4"
-                                    loading="lazy"
-                                />
+                                {presentation === 'workspace' || presentation === 'navigation' ? (
+                                    <FileSystemEntryIcon path={row.node.path} kind={directory ? 'directory' : 'file'} expanded={expanded} light={theme === 'light'} size={17} className="mx-0.5" />
+                                ) : (
+                                    <FileEntryIcon
+                                        pathValue={row.node.path}
+                                        kind={directory ? 'directory' : 'file'}
+                                        theme={theme}
+                                        className="mx-0.5 size-4"
+                                        loading="lazy"
+                                    />
+                                )}
                                 <span className={cn(
                                     'min-w-0 flex-1',
                                     nameLayout === 'wrap'

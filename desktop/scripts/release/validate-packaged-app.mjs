@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { access, lstat, mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { FuseV1Options, getCurrentFuseWire } from '@electron/fuses'
 import { normalizeReleasePlatform } from './release-contract.mjs'
 import { validateRuntimeStage } from './runtime-contract.mjs'
 
@@ -60,6 +61,26 @@ async function findPackagedExecutable(resources, platform) {
     throw new Error(`Packaged ${platform} executable is missing; checked ${candidates.join(', ')}`)
 }
 
+async function validatePackagedFuses(resources, platform) {
+    const executable = await findPackagedExecutable(resources, platform)
+    const fuses = await getCurrentFuseWire(executable)
+    const enabled = 49
+    const disabled = 48
+    const expected = new Map([
+        [FuseV1Options.RunAsNode, enabled],
+        [FuseV1Options.EnableCookieEncryption, enabled],
+        [FuseV1Options.EnableNodeOptionsEnvironmentVariable, disabled],
+        [FuseV1Options.EnableNodeCliInspectArguments, disabled],
+        [FuseV1Options.EnableEmbeddedAsarIntegrityValidation, enabled],
+        [FuseV1Options.OnlyLoadAppFromAsar, enabled]
+    ])
+    for (const [fuse, state] of expected) {
+        if (fuses[fuse] !== state) {
+            throw new Error(`Packaged Electron fuse ${FuseV1Options[fuse]} is ${fuses[fuse]}; expected ${state}.`)
+        }
+    }
+}
+
 async function runPackagedLaunchSmoke(resources, platform, version) {
     const executable = await findPackagedExecutable(resources, platform)
     const launchTimeoutMs = platform === 'windows' ? 180_000 : 90_000
@@ -113,6 +134,18 @@ const version = arg('version')
 if (!version) throw new Error('validate-packaged-app requires --version')
 const resources = await findResourcesDirectory(rawDirectory)
 if (!resources) throw new Error(`Could not find a packaged app resources directory under ${rawDirectory}`)
+const expectedProductionVmp = arg('expected-production-vmp', 'false') === 'true'
+const productionVmpMarkerPath = path.join(resources, 'zyra-widevine-vmp.json')
+if (expectedProductionVmp) {
+    await requireNonempty(productionVmpMarkerPath, 'Production Widevine VMP marker')
+    const marker = JSON.parse(await readFile(productionVmpMarkerPath, 'utf8'))
+    const expectedPlatform = platform === 'windows' ? 'win32' : platform === 'macos' ? 'darwin' : 'linux'
+    if (marker.schemaVersion !== 1 || marker.productionVmp !== true || marker.platform !== expectedPlatform) {
+        throw new Error('Production Widevine VMP marker is invalid for this package')
+    }
+} else if (await exists(productionVmpMarkerPath)) {
+    throw new Error('Unsigned or unpacked packages must not claim production Widevine VMP status')
+}
 
 await requireNonempty(path.join(resources, 'LICENSE'), 'Packaged Apache-2.0 license')
 const runtimeRoot = path.join(resources, 'zyra-runtime')
@@ -143,6 +176,7 @@ if (platform === 'windows') {
     ], 'Packaged Linux node-pty binding')
 }
 
+await validatePackagedFuses(resources, platform)
 await runPackagedLaunchSmoke(resources, platform, version)
 
 console.log(`Validated packaged ${platform} app resources at ${resources}`)

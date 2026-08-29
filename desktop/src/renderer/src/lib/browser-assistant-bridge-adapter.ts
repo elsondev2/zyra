@@ -317,6 +317,18 @@ export function createBrowserAssistantBridgeAdapter(): DevScopeApi['assistant'] 
         redeemAccountReset: remoteAssistantMethod('redeemAccountReset'),
         getSessionTurnUsage: remoteAssistantMethod('getSessionTurnUsage'),
         listModels: remoteAssistantMethod('listModels'),
+        listPromptResources: async () => ({
+            success: false,
+            error: 'Commands and skills are available only in trusted Zyra Desktop windows.'
+        }),
+        getSkillSourceOverview: async () => ({
+            success: false,
+            error: 'Skill sources can be managed only in Zyra Desktop.'
+        }),
+        updateSkillSourceSettings: async () => ({
+            success: false,
+            error: 'Skill sources can be managed only in Zyra Desktop.'
+        }),
         connect: remoteAssistantMethod('connect'),
         disconnect: remoteAssistantMethod('disconnect'),
         createSession: remoteAssistantMethod('createSession'),
@@ -329,6 +341,7 @@ export function createBrowserAssistantBridgeAdapter(): DevScopeApi['assistant'] 
         getTurnDetail: remoteAssistantMethod('getTurnDetail'),
         searchTurns: remoteAssistantMethod('searchTurns'),
         renameSession: remoteAssistantMethod('renameSession'),
+        regenerateSessionTitle: remoteAssistantMethod('regenerateSessionTitle'),
         archiveSession: remoteAssistantMethod('archiveSession'),
         deleteSession: remoteAssistantMethod('deleteSession'),
         deleteMessage: remoteAssistantMethod('deleteMessage'),

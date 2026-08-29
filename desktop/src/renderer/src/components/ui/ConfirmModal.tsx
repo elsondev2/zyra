@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '@/lib/utils'
 
@@ -13,6 +13,7 @@ interface ConfirmModalProps {
     variant?: 'danger' | 'warning' | 'info'
     fullscreen?: boolean
     checkboxLabel?: string
+    visual?: ReactNode
 }
 
 export function ConfirmModal({
@@ -25,7 +26,8 @@ export function ConfirmModal({
     onCancel,
     variant = 'danger',
     fullscreen = false,
-    checkboxLabel
+    checkboxLabel,
+    visual
 }: ConfirmModalProps) {
     const [checkboxChecked, setCheckboxChecked] = useState(false)
     const titleId = useId()
@@ -75,22 +77,25 @@ export function ConfirmModal({
                     fullscreen ? 'max-w-xl' : 'max-w-[440px]'
                 )}
             >
-                <div className="px-5 py-4">
-                    <h2 id={titleId} className="text-[14px] font-semibold tracking-[-0.01em] text-sparkle-text">{title}</h2>
-                    <p id={messageId} className="mt-1.5 text-[12px] leading-5 text-sparkle-text-secondary">
-                        {message}
-                    </p>
-                    {checkboxLabel ? (
-                        <label className="mt-4 flex w-fit cursor-pointer items-center gap-2 text-[12px] text-sparkle-text-muted transition-colors hover:text-sparkle-text-secondary">
-                            <input
-                                type="checkbox"
-                                checked={checkboxChecked}
-                                onChange={(event) => setCheckboxChecked(event.currentTarget.checked)}
-                                className="size-3.5 shrink-0 rounded border-white/15 bg-transparent accent-[var(--accent-primary)]"
-                            />
-                            <span>{checkboxLabel}</span>
-                        </label>
-                    ) : null}
+                <div className={cn('px-5 py-4', Boolean(visual) && 'flex items-start gap-3.5')}>
+                    {visual ? <div className="mt-0.5 shrink-0">{visual}</div> : null}
+                    <div className="min-w-0 flex-1">
+                        <h2 id={titleId} className="text-[14px] font-semibold tracking-[-0.01em] text-sparkle-text">{title}</h2>
+                        <p id={messageId} className="mt-1.5 text-[12px] leading-5 text-sparkle-text-secondary">
+                            {message}
+                        </p>
+                        {checkboxLabel ? (
+                            <label className="mt-4 flex w-fit cursor-pointer items-center gap-2 text-[12px] text-sparkle-text-muted transition-colors hover:text-sparkle-text-secondary">
+                                <input
+                                    type="checkbox"
+                                    checked={checkboxChecked}
+                                    onChange={(event) => setCheckboxChecked(event.currentTarget.checked)}
+                                    className="size-3.5 shrink-0 rounded border-white/15 bg-transparent accent-[var(--accent-primary)]"
+                                />
+                                <span>{checkboxLabel}</span>
+                            </label>
+                        ) : null}
+                    </div>
                 </div>
 
                 <footer className="flex items-center justify-end gap-2 border-t border-white/[0.08] px-4 py-3">

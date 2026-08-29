@@ -6,7 +6,8 @@ import type {
     AssistantCreatePlaygroundLabInput,
     AssistantCreateSessionInput,
     AssistantDeclinePendingPlaygroundLabRequestInput,
-    AssistantSendPromptOptions
+    AssistantSendPromptOptions,
+    AssistantVoiceExecutionConfiguration
 } from '@shared/assistant/contracts'
 import {
     getActiveAssistantThread,
@@ -34,6 +35,7 @@ import {
     areAssistantSessionsRailSelectionsEqual,
     areAssistantWorkspaceSelectionsEqual
 } from './assistant-store-selection-helpers'
+import { shouldHideAssistantRowsForSelection } from './assistant-history-state'
 export function useAssistantStoreSelector<T>(
     selector: (state: AssistantStoreState) => T,
     isEqual: (left: T, right: T) => boolean = Object.is
@@ -82,13 +84,15 @@ const assistantStoreActions = {
     selectThread: (input: { sessionId: string; threadId: string }, options?: { force?: boolean }) => assistantStore.selectThread(input, options).then(() => undefined),
     renameSession: (sessionId: string, title: string) => assistantStore.renameSession(sessionId, title).then(() => undefined),
     renameSessionResult: (sessionId: string, title: string) => assistantStore.renameSession(sessionId, title),
+    regenerateSessionTitleResult: (sessionId: string) => assistantStore.regenerateSessionTitle(sessionId),
     archiveSession: (sessionId: string, archived = true) => assistantStore.archiveSession(sessionId, archived).then(() => undefined),
     archiveSessionResult: (sessionId: string, archived = true) => assistantStore.archiveSession(sessionId, archived),
     deleteSession: (sessionId: string) => assistantStore.deleteSession(sessionId).then(() => undefined),
     deleteSessionResult: (sessionId: string) => assistantStore.deleteSession(sessionId),
     deleteMessage: (messageId: string, sessionId?: string) => assistantStore.deleteMessage({ messageId, sessionId }).then(() => undefined),
     deleteMessageResult: (messageId: string, sessionId?: string) => assistantStore.deleteMessage({ messageId, sessionId }),
-    loadOlderHistory: (threadId?: string) => assistantStore.loadOlderHistory(threadId),
+    loadOlderHistory: (threadId?: string, turnLimit?: number) => assistantStore.loadOlderHistory(threadId, turnLimit),
+    loadNewerHistory: (threadId?: string, turnLimit?: number) => assistantStore.loadNewerHistory(threadId, turnLimit),
     clearLogs: (sessionId?: string) => assistantStore.clearLogs(sessionId ? { sessionId } : undefined).then(() => undefined),
     clearLogsResult: (sessionId?: string) => assistantStore.clearLogs(sessionId ? { sessionId } : undefined),
     clearCommandError: () => assistantStore.clearError(),
@@ -105,6 +109,8 @@ const assistantStoreActions = {
     newThread: (sessionId?: string) => assistantStore.newThread(sessionId).then(() => undefined),
     sendPrompt: (prompt: string, options?: AssistantSendPromptOptions) => assistantStore.sendPrompt(prompt, options).then(() => undefined),
     sendPromptResult: (prompt: string, options?: AssistantSendPromptOptions) => assistantStore.sendPrompt(prompt, options),
+    warmSelectedSessionConnection: (voicePreparation?: AssistantVoiceExecutionConfiguration) =>
+        assistantStore.warmSelectedSessionConnection(voicePreparation),
     interruptTurn: (turnId?: string, sessionId?: string) => assistantStore.interruptTurn(turnId, sessionId).then(() => undefined),
     connect: (sessionId?: string) => assistantStore.connect(sessionId ? { sessionId } : undefined).then(() => undefined),
     connectResult: (sessionId?: string) => assistantStore.connect(sessionId ? { sessionId } : undefined),
@@ -225,6 +231,15 @@ export function useAssistantConversationStore() {
             activeSelectionHydrationKey
             && state.selectionTransitionKey === activeSelectionHydrationKey
         )
+        const selectionHydrating = Boolean(
+            activeSelectionHydrationKey
+            && state.selectionHydrationKey === activeSelectionHydrationKey
+        )
+        const hideRowsForInitialHydration = shouldHideAssistantRowsForSelection({
+            selectionTransitioning,
+            selectionHydrating,
+            thread: activeThread
+        })
 
         return {
             knownModels: state.snapshot.knownModels,
@@ -236,15 +251,15 @@ export function useAssistantConversationStore() {
             commandPending: state.commandPending,
             pendingCreateSessionInput: state.pendingCreateSessionInput,
             commandError: state.error,
-            selectionHydrating: selectionTransitioning || Boolean(activeSelectionHydrationKey && state.selectionHydrationKey === activeSelectionHydrationKey),
+            selectionHydrating: selectionTransitioning || selectionHydrating,
             history: activeThread ? state.historyByThreadId[activeThread.id] || null : null,
             selectedSession,
             activeThread,
-            timelineMessages: selectionTransitioning ? [] : getAssistantTimelineMessages(activeThread),
-            activityFeed: selectionTransitioning ? [] : getAssistantActivityFeed(activeThread),
-            pendingUserInputs: selectionTransitioning ? [] : getAssistantPendingUserInputs(activeThread),
-            activePlan: selectionTransitioning ? null : getAssistantActivePlan(activeThread),
-            latestProposedPlan: selectionTransitioning ? null : getAssistantLatestProposedPlan(activeThread),
+            timelineMessages: hideRowsForInitialHydration ? [] : getAssistantTimelineMessages(activeThread),
+            activityFeed: hideRowsForInitialHydration ? [] : getAssistantActivityFeed(activeThread),
+            pendingUserInputs: hideRowsForInitialHydration ? [] : getAssistantPendingUserInputs(activeThread),
+            activePlan: hideRowsForInitialHydration ? null : getAssistantActivePlan(activeThread),
+            latestProposedPlan: hideRowsForInitialHydration ? null : getAssistantLatestProposedPlan(activeThread),
             phase,
             phaseLabel: getAssistantThreadPhaseLabel(activeThread)
         }
