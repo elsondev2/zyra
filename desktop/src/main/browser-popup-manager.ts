@@ -234,7 +234,7 @@ export class BrowserPopupManager {
         } else if (command.type === 'stop') {
             page.stop()
         } else if (command.type === 'navigate') {
-            void page.loadURL(command.url).catch((error) => log.debug('[BrowserPopup] Navigation failed', error))
+            this.navigatePopup(popup, command.url)
         } else if (command.type === 'copy-address') {
             const url = page.getURL()
             if (isSafePopupUrl(url)) clipboard.writeText(url === 'about:blank' ? '' : url)
@@ -251,6 +251,29 @@ export class BrowserPopupManager {
             this.runPopupShortcut(popup, command.action)
         }
         this.publishState(popup)
+    }
+
+    private navigatePopup(popup: ManagedBrowserPopup, url: string): boolean {
+        const page = popup.pageContents
+        const threatProtection = getBrowserThreatProtectionService()
+        if (threatProtection?.checkUrl(url) && !threatProtection.consumeOneTimeAllowance(page.id, url)) {
+            const warning = threatProtection.blockNavigation({
+                ownerWebContentsId: popup.ownerWindow.webContents.id,
+                sourceGuestWebContentsId: popup.sourceGuestWebContentsId,
+                blockedGuestWebContentsId: page.id,
+                navigationKind: 'popup',
+                previousUrl: page.getURL(),
+                url,
+                proceed: () => {
+                    if (!popup.disposed && !page.isDestroyed()) {
+                        void page.loadURL(url).catch((error) => log.debug('[BrowserThreatProtection] Allowed popup navigation failed.', error))
+                    }
+                }
+            })
+            if (warning) return false
+        }
+        void page.loadURL(url).catch((error) => log.debug('[BrowserPopup] Navigation failed', error))
+        return true
     }
 
     private readState(popup: ManagedBrowserPopup): BrowserPopupState {
