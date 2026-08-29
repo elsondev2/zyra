@@ -5,6 +5,16 @@ export const ANALYTICS_CATALOG_ID = catalog.catalogId
 export type AnalyticsEventName = keyof typeof catalog.events
 export type AnalyticsSource = 'desktop_main' | 'desktop_renderer' | 'cli'
 export type AnalyticsWorkspaceKind = 'chat' | 'browser' | 'files' | 'terminal' | 'agents' | 'resources' | 'diff' | 'unknown'
+export type AnalyticsOnboardingStep = 'welcome' | 'connection' | 'appearance' | 'projects' | 'finish' | 'unknown'
+
+export function normalizeAnalyticsOnboardingStep(value: unknown): AnalyticsOnboardingStep {
+    if (value === 'welcome') return 'welcome'
+    if (value === 'connect-openai') return 'connection'
+    if (value === 'appearance') return 'appearance'
+    if (value === 'projects') return 'projects'
+    if (value === 'review') return 'finish'
+    return 'unknown'
+}
 
 export function normalizeAnalyticsWorkspaceKind(value: string): AnalyticsWorkspaceKind {
     if (value === 'details' || value === 'turn') return 'chat'
@@ -35,6 +45,7 @@ export type AnalyticsEventInput<Name extends AnalyticsEventName = AnalyticsEvent
 
 export type AnalyticsStatus = {
     requested: boolean
+    preferenceSet: boolean
     enabled: boolean
     configured: boolean
     reason: string

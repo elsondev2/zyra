@@ -114,6 +114,8 @@ import type {
     ExternalBrowserHistoryScanResult
 } from '../external-browser-history-contracts'
 import type {
+    AccountConnectionAnalyticsInput,
+    AccountConnectionStatusInput,
     BeginOnboardingReviewInput,
     CancelOnboardingReviewInput,
     CommitOnboardingStepInput,
@@ -517,9 +519,9 @@ export interface DevScopeSecretsApi {
 export interface DevScopeOnboardingApi {
     getState: () => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>
     getAuthStatus: () => Promise<DevScopeResult<{ status: OnboardingAuthStatus }>>
-    getConnectionsStatus: () => Promise<DevScopeResult<{ status: OpenAIConnectionsStatus }>>
-    connectChatGpt: () => Promise<DevScopeResult<{ status: OnboardingAuthStatus }>>
-    connectApiKey: (apiKey: string) => Promise<DevScopeResult<{ status: OnboardingAuthStatus }>>
+    getConnectionsStatus: (input?: AccountConnectionStatusInput) => Promise<DevScopeResult<{ status: OpenAIConnectionsStatus }>>
+    connectChatGpt: (input?: AccountConnectionAnalyticsInput) => Promise<DevScopeResult<{ status: OnboardingAuthStatus }>>
+    connectApiKey: (apiKey: string, input?: AccountConnectionAnalyticsInput) => Promise<DevScopeResult<{ status: OnboardingAuthStatus }>>
     disconnectOpenAI: (input: DisconnectOpenAIInput) => Promise<DevScopeResult<{ status: OpenAIConnectionsStatus }>>
     updateAppearance: (input: UpdateOnboardingAppearanceInput) => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>
     commitStep: (input: CommitOnboardingStepInput) => Promise<DevScopeResult<{ snapshot: OnboardingSnapshot }>>
@@ -677,6 +679,7 @@ export interface DevScopeApi {
         } | null
     }>>
     getProjectDetails: (projectPath: string) => Promise<DevScopeResult<{ project: DevScopeProjectDetails }>>
+    recordProjectOpen: (projectPath: string) => Promise<DevScopeResult>
     getFileTree: (
         projectPath: string,
         options?: {

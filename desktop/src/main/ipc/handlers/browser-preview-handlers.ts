@@ -195,22 +195,23 @@ export function scheduleGlobalBrowserProfileFlush(delayMs = 1_500): void {
     }, Math.max(100, delayMs))
 }
 
-type BrowserActionAnalyticsInput = {
-    ownerWebContentsId: number
-    guestWebContentsId?: number
-    properties: {
-        action: 'history_import' | 'ad_block' | 'threat'
-        outcome: 'completed' | 'failed' | 'blocked' | 'allowed' | 'denied'
-        item_count?: number
-        error_code?: string
-    }
+type BrowserActionAnalyticsProperties = {
+    action: 'history_import' | 'ad_block' | 'threat'
+    outcome: 'completed' | 'failed' | 'blocked' | 'allowed' | 'denied'
+    item_count?: number
+    error_code?: string
 }
 
-let captureBrowserActionAnalytics: ((input: BrowserActionAnalyticsInput) => void) | null = null
+let captureBrowserActionAnalytics: ((properties: BrowserActionAnalyticsProperties) => void) | null = null
+let resolveBrowserActionAnalyticsAllowed: ((ownerWebContentsId: number, guestWebContentsId?: number) => boolean) | null = null
 let captureBrowserPermissionAnalytics: ((outcome: 'allowed' | 'denied') => void) | null = null
 
-export function configureBrowserActionAnalytics(capture: typeof captureBrowserActionAnalytics): void {
+export function configureBrowserActionAnalytics(
+    capture: typeof captureBrowserActionAnalytics,
+    resolveAllowed: typeof resolveBrowserActionAnalyticsAllowed
+): void {
     captureBrowserActionAnalytics = capture
+    resolveBrowserActionAnalyticsAllowed = resolveAllowed
 }
 
 export function configureBrowserPermissionAnalytics(capture: typeof captureBrowserPermissionAnalytics): void {
@@ -368,27 +369,35 @@ export async function handleCheckBrowserThreatNavigation(
 }
 
 export async function handleProceedBrowserThreatWarning(event: IpcMainInvokeEvent, decisionId: string) {
+    const service = getBrowserThreatProtectionService()
+    const warningAtStart = service?.getPendingWarning(event.sender.id, String(decisionId || '')) || null
+    const analyticsAllowed = warningAtStart
+        ? resolveBrowserActionAnalyticsAllowed?.(event.sender.id, warningAtStart.sourceGuestWebContentsId) === true
+        : false
     try {
-        const service = getBrowserThreatProtectionService()
         if (!service) throw new Error('Browser phishing protection is not available.')
-        const warning = await service.proceed(event.sender.id, String(decisionId || ''))
-        captureBrowserActionAnalytics?.({ ownerWebContentsId: event.sender.id, guestWebContentsId: warning.sourceGuestWebContentsId, properties: { action: 'threat', outcome: 'allowed' } })
+        await service.proceed(event.sender.id, String(decisionId || ''))
+        if (analyticsAllowed) captureBrowserActionAnalytics?.({ action: 'threat', outcome: 'allowed' })
         return { success: true as const }
     } catch (error) {
-        captureBrowserActionAnalytics?.({ ownerWebContentsId: event.sender.id, properties: { action: 'threat', outcome: 'failed', error_code: 'unknown' } })
+        if (analyticsAllowed) captureBrowserActionAnalytics?.({ action: 'threat', outcome: 'failed', error_code: 'unknown' })
         return { success: false as const, error: error instanceof Error ? error.message : 'The blocked navigation could not continue.' }
     }
 }
 
 export async function handleDismissBrowserThreatWarning(event: IpcMainInvokeEvent, decisionId: string) {
+    const service = getBrowserThreatProtectionService()
+    const warningAtStart = service?.getPendingWarning(event.sender.id, String(decisionId || '')) || null
+    const analyticsAllowed = warningAtStart
+        ? resolveBrowserActionAnalyticsAllowed?.(event.sender.id, warningAtStart.sourceGuestWebContentsId) === true
+        : false
     try {
-        const service = getBrowserThreatProtectionService()
         if (!service) throw new Error('Browser phishing protection is not available.')
-        const warning = service.dismiss(event.sender.id, String(decisionId || ''))
-        captureBrowserActionAnalytics?.({ ownerWebContentsId: event.sender.id, guestWebContentsId: warning.sourceGuestWebContentsId, properties: { action: 'threat', outcome: 'blocked' } })
+        service.dismiss(event.sender.id, String(decisionId || ''))
+        if (analyticsAllowed) captureBrowserActionAnalytics?.({ action: 'threat', outcome: 'blocked' })
         return { success: true as const }
     } catch (error) {
-        captureBrowserActionAnalytics?.({ ownerWebContentsId: event.sender.id, properties: { action: 'threat', outcome: 'failed', error_code: 'unknown' } })
+        if (analyticsAllowed) captureBrowserActionAnalytics?.({ action: 'threat', outcome: 'failed', error_code: 'unknown' })
         return { success: false as const, error: error instanceof Error ? error.message : 'The blocked navigation could not be dismissed.' }
     }
 }
@@ -432,12 +441,13 @@ export async function handleImportExternalBrowserHistory(
     event: IpcMainInvokeEvent,
     input: ExternalBrowserHistoryImportInput
 ) {
+    const analyticsAllowed = resolveBrowserActionAnalyticsAllowed?.(event.sender.id) === true
     try {
         const result = await getExternalBrowserHistoryService().import(input)
-        captureBrowserActionAnalytics?.({ ownerWebContentsId: event.sender.id, properties: { action: 'history_import', outcome: 'completed', item_count: result.added + result.updated } })
+        if (analyticsAllowed) captureBrowserActionAnalytics?.({ action: 'history_import', outcome: 'completed', item_count: result.added + result.updated })
         return { success: true as const, result }
     } catch (error: unknown) {
-        captureBrowserActionAnalytics?.({ ownerWebContentsId: event.sender.id, properties: { action: 'history_import', outcome: 'failed', error_code: 'unknown' } })
+        if (analyticsAllowed) captureBrowserActionAnalytics?.({ action: 'history_import', outcome: 'failed', error_code: 'unknown' })
         log.warn('[BrowserPreview] External browser history import failed', { errorType: error instanceof Error ? error.name : 'UnknownError' })
         return { success: false as const, error: error instanceof Error && /expired|Select between|valid import start date/.test(error.message) ? error.message : 'Could not import browser history. Close the selected browser and retry.' }
     }
@@ -468,13 +478,14 @@ export async function handleSetBrowserAdBlockEnabled(
 ) {
     const service = getBrowserAdBlockService()
     if (!service) return { success: false as const, error: 'Restart Zyra Desktop to load built-in ad blocking.' }
+    const analyticsAllowed = resolveBrowserActionAnalyticsAllowed?.(event.sender.id) === true
     try {
         const enabled = input?.enabled === true
         const status = await service.setEnabled(enabled, input?.promptDismissed === true)
-        captureBrowserActionAnalytics?.({ ownerWebContentsId: event.sender.id, properties: { action: 'ad_block', outcome: enabled ? 'completed' : 'denied' } })
+        if (analyticsAllowed) captureBrowserActionAnalytics?.({ action: 'ad_block', outcome: enabled ? 'completed' : 'denied' })
         return { success: true as const, status }
     } catch (error) {
-        captureBrowserActionAnalytics?.({ ownerWebContentsId: event.sender.id, properties: { action: 'ad_block', outcome: 'failed', error_code: 'unknown' } })
+        if (analyticsAllowed) captureBrowserActionAnalytics?.({ action: 'ad_block', outcome: 'failed', error_code: 'unknown' })
         return { success: false as const, error: error instanceof Error ? error.message : 'Built-in ad blocking could not be configured.' }
     }
 }

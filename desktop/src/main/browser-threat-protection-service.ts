@@ -164,6 +164,12 @@ export class BrowserThreatProtectionService {
         return warning
     }
 
+    getPendingWarning(ownerWebContentsId: number, decisionId: string): DevScopeBrowserThreatWarning | null {
+        this.pruneEphemeralState()
+        const decision = this.pendingDecisions.get(decisionId)
+        return decision?.ownerWebContentsId === ownerWebContentsId ? decision.warning : null
+    }
+
     async proceed(ownerWebContentsId: number, decisionId: string): Promise<DevScopeBrowserThreatWarning> {
         this.pruneEphemeralState()
         const decision = this.pendingDecisions.get(decisionId)

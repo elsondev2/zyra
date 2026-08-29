@@ -53,13 +53,15 @@ for (const required of [
     'ONBOARDING_IPC.connectChatGpt',
     'ONBOARDING_IPC.connectApiKey',
     'ONBOARDING_IPC.updateAppearance',
-    'ONBOARDING_IPC.commitStep'
+    'ONBOARDING_IPC.commitStep',
+    'ANALYTICS_IPC.getStatus',
+    'ANALYTICS_IPC.setEnabled'
 ]) {
     assert.ok(preOnboardingSetupAllowlist.includes(required), `${required} must remain available to mandatory setup`)
 }
 assert.doesNotMatch(
     preOnboardingSetupAllowlist,
-    /DEVICE_PREFERENCES_IPC\.update|DEVICE_SECRETS_IPC\.updateHostedAiKeys|ONBOARDING_IPC\.getConnectionsStatus|ONBOARDING_IPC\.disconnectOpenAI/,
+    /DEVICE_PREFERENCES_IPC\.update|DEVICE_SECRETS_IPC\.updateHostedAiKeys|ONBOARDING_IPC\.getConnectionsStatus|ONBOARDING_IPC\.disconnectOpenAI|ANALYTICS_IPC\.capture/,
     'pre-onboarding renderers must not mutate normal preferences, replace secrets, inspect the account, or disconnect credentials'
 )
 assert.match(setupHandlersSource, /input\?\.confirmed !== true/)

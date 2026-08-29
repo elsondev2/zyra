@@ -99,6 +99,7 @@ import {
 } from './handlers/project-discovery-handlers'
 import {
     handleGetProjectDetails,
+    handleRecordProjectOpen,
     handleInstallProjectDependencies,
     handleGetProjectProcesses,
     handleGetRunningLocalServers,
@@ -466,6 +467,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle('devscope:pythonPreview:stop', handleStopPythonPreview)
     ipcMain.handle('devscope:copyToClipboard', handleCopyToClipboard)
     ipcMain.handle('devscope:getProjectDetails', handleGetProjectDetails)
+    ipcMain.handle('devscope:recordProjectOpen', handleRecordProjectOpen)
     ipcMain.handle('devscope:installProjectDependencies', handleInstallProjectDependencies)
     ipcMain.handle('devscope:getFileTree', handleGetFileTree)
     ipcMain.handle('devscope:readFileContent', handleReadFileContent)

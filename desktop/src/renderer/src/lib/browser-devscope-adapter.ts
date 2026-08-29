@@ -1019,6 +1019,7 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
         openProjectInIde: () => unavailable('IDE actions require the Zyra desktop bridge.'),
         installProjectDependencies: () => unavailable('Dependency installation requires the Zyra desktop bridge.'),
         getProjectDetails: () => unavailable('Project details require the Zyra desktop bridge.'),
+        recordProjectOpen: () => unavailable('Project navigation analytics requires the Zyra desktop bridge.'),
         getFileTree: () => ok({ tree: [], files: [], folders: [] }),
         listBranches: () => ok({ branches: [] }),
         getGitStatusDetailed: () => ok({ status: null }),

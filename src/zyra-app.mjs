@@ -269,6 +269,8 @@ async function runMain() {
   });
   if (parsed.command === "version") {
     process.stdout.write(`${formatZyraVersion()}\n`);
+    cliStartupCompleted = true;
+    captureCliEvent("zyra_v1_cli", { action: "startup", command: "version", outcome: "completed", runtime: useEmbeddedRuntime ? "embedded" : "client" });
     return;
   }
 

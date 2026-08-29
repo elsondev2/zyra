@@ -350,6 +350,7 @@ export class AssistantService {
     private voicePrimaryPreparationGeneration = 0
     private voiceStartedAt = 0
     private voiceFirstResponseCaptured = false
+    private voiceFailureCaptured = false
     private readonly planBuffers = new Map<string, string>()
     private readonly assistantTextBuffers = new Map<string, string>()
     private readonly suppressedAssistantTextTurns = new Set<string>()
@@ -445,7 +446,8 @@ export class AssistantService {
                     event: 'zyra_v1_voice',
                     properties: { action: 'first_response', outcome: 'completed', duration_ms: Date.now() - this.voiceStartedAt }
                 })
-            } else if (event.type === 'session.error') {
+            } else if (event.type === 'session.error' && !this.voiceFailureCaptured) {
+                this.voiceFailureCaptured = true
                 this.captureAnalytics({
                     event: 'zyra_v1_voice',
                     properties: { action: 'fail', outcome: 'failed', error_code: classifyAnalyticsError(event.message) }
@@ -1079,6 +1081,7 @@ export class AssistantService {
         }
         this.voiceStartedAt = Date.now()
         this.voiceFirstResponseCaptured = false
+        this.voiceFailureCaptured = false
         this.captureAnalytics({
             event: 'zyra_v1_voice',
             properties: { action: 'start', outcome: 'started', mode: input.conversationId ? 'conversation' : 'voice_lab' }
@@ -1091,7 +1094,10 @@ export class AssistantService {
             try {
                 return await this.startCanonicalRealtimeVoice(input, senderId, pending.abortController.signal)
             } catch (error) {
-                this.captureAnalytics({ event: 'zyra_v1_voice', properties: { action: 'fail', outcome: 'failed', mode: 'conversation', error_code: classifyAnalyticsError(error) } })
+                if (!this.voiceFailureCaptured) {
+                    this.voiceFailureCaptured = true
+                    this.captureAnalytics({ event: 'zyra_v1_voice', properties: { action: 'fail', outcome: 'failed', mode: 'conversation', error_code: classifyAnalyticsError(error) } })
+                }
                 throw error
             } finally {
                 this.voiceTransitioningThreadIds.delete(transitionKey)
@@ -1115,7 +1121,10 @@ export class AssistantService {
             return { success: true as const, ...result }
         } catch (error) {
             if (this.realtimeVoiceOwnerId === senderId) this.realtimeVoiceOwnerId = null
-            this.captureAnalytics({ event: 'zyra_v1_voice', properties: { action: 'fail', outcome: 'failed', mode: 'voice_lab', error_code: classifyAnalyticsError(error) } })
+            if (!this.voiceFailureCaptured) {
+                this.voiceFailureCaptured = true
+                this.captureAnalytics({ event: 'zyra_v1_voice', properties: { action: 'fail', outcome: 'failed', mode: 'voice_lab', error_code: classifyAnalyticsError(error) } })
+            }
             throw error
         }
     }

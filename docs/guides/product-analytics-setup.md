@@ -13,7 +13,6 @@ Use a PostHog project capture key with the `phc_` prefix. Zyra rejects `phx_` pe
 Set placeholders through your normal private environment management:
 
 ```text
-ZYRA_ANALYTICS_ENABLED=true
 ZYRA_POSTHOG_PROJECT_KEY=<POSTHOG_PROJECT_KEY>
 ZYRA_POSTHOG_HOST=https://us.i.posthog.com
 ```
@@ -29,7 +28,7 @@ ZYRA_POSTHOG_ALLOWED_HOSTS=analytics.example.net
 
 The allowlist contains hostnames only. Do not include a protocol, path, port, credentials, query string, or fragment.
 
-An environment value for `ZYRA_ANALYTICS_ENABLED` overrides the persisted toggle. Desktop Settings then shows that the environment manages the setting.
+Production Desktop/CLI clients require the shared user preference even if `ZYRA_ANALYTICS_ENABLED=true` is present, so release configuration cannot bypass consent. `ZYRA_ANALYTICS_ENABLED=false` remains an operator kill switch and makes the setting environment-managed.
 
 ## Persisted configuration
 
@@ -45,12 +44,17 @@ The standalone CLI reads:
 <ZYRA_STATE_DIR or ~/.zyra>/analytics/config.json
 ```
 
-Example with placeholders:
+The product-wide consent choice is stored separately:
+
+```text
+<ZYRA_STATE_DIR or ~/.zyra>/analytics/consent.json
+```
+
+Example local destination configuration with placeholders:
 
 ```json
 {
   "schemaVersion": 1,
-  "enabled": true,
   "projectKey": "<POSTHOG_PROJECT_KEY>",
   "host": "https://us.i.posthog.com"
 }
@@ -61,14 +65,13 @@ For self-hosted PostHog:
 ```json
 {
   "schemaVersion": 1,
-  "enabled": true,
   "projectKey": "<POSTHOG_PROJECT_KEY>",
   "host": "https://analytics.example.net",
   "allowedHosts": ["analytics.example.net"]
 }
 ```
 
-Desktop Settings > General > Privacy changes only `enabled`. Main preserves existing project and host values. If no valid project key and host exist yet, attempting to enable shows "Needs setup" without creating analytics state; add the private configuration first, then enable it. Turning analytics off immediately cancels timers and removes queued events. The random installation UUID remains for stable re-opt-in; it is randomly generated and contains no device or account identity. The renderer receives a redacted status and never receives the key, capture URL, custom hostname, or UUID.
+The onboarding welcome records an explicit Share diagnostics and usage or No thanks decision, and the final review lets the user confirm or change it. Desktop Settings > General > Privacy and `/analytics on|off` update the same product-wide preference. Main preserves existing project and host values. If the user opts in before a valid project key and host exist, Zyra saves only preference files and shows "Needs setup"; it creates no installation identity, event queue, or network work. Adding the release configuration later activates that saved preference. Turning analytics off cancels the current transport, removes queued events, and makes other Desktop/CLI/TUI clients stop before another capture or retry. A random installation UUID remains only after analytics was previously active, preserving stable re-opt-in without using device or account identity. The renderer receives a redacted status and never receives the key, capture URL, custom hostname, or UUID.
 
 ## PostHog project settings
 

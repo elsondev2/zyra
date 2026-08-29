@@ -10,6 +10,7 @@ The main risks are content smuggling through arbitrary properties, credential ex
 
 ## Controls
 
+- The onboarding welcome requires an explicit analytics choice, the final review can change it, and Desktop Settings or `/analytics off` withdraws the shared Desktop/CLI/TUI preference.
 - One checked-in catalog allowlists event names, property names, enums, bounds, and error codes.
 - Main sanitizes renderer events after trusted IPC. Unknown fields disappear.
 - The preload exposes analytics only to trusted Zyra shell renderers. Managed web pages have no preload. Browser popups use a reduced preload without analytics. Remote Browser clients do not receive the adapter.
@@ -34,7 +35,7 @@ A new event or property requires:
 4. a review of renderer, remote-page, logs, sessions, and queue persistence;
 5. measured frequency and queue impact.
 
-Opt-out deletes queued events and cancels timers and network retries. The random installation UUID remains for stable re-opt-in and contains no device or account derivation.
+Opt-out writes the shared preference, deletes the current client's queue, cancels its timer and transport, and causes sibling clients to delete their queues before another capture or retry. A transport request already accepted by the network stack may finish while opt-out is being written. Saving consent before release configuration creates only preference files, with no installation UUID or event queue. After analytics has been active, the random installation UUID remains for stable re-opt-in and contains no device or account derivation.
 
 ## Incident response
 

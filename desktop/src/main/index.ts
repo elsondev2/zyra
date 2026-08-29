@@ -14,6 +14,7 @@ import log from 'electron-log'
 import { registerIpcHandlers } from './ipc'
 import { ipcMain, registerTrustedIpcSender } from './ipc/trusted-ipc'
 import { configurePreviewTerminalWorkspaceAuthorizer } from './ipc/handlers/preview-terminal-handlers'
+import { configureProjectOpenAnalytics } from './ipc/handlers/project-details-handlers'
 import { configureAssistantService, disposeAssistantService, getAssistantService } from './assistant'
 import { AssistantUtilityWindowManager, type ResolvedUtilityChat, type UtilityWindowCreationOptions } from './assistant/assistant-utility-window-manager'
 import { persistAssistantClipboardImage, resolveAssistantClipboardAttachment } from './assistant/clipboard-attachments'
@@ -40,6 +41,7 @@ import { createRendererHangRecorder } from './diagnostics/renderer-hang-recorder
 import { BROWSER_POPUP_PRELOAD_ARGUMENT } from '../shared/preload-surfaces'
 import { configureBrowserDownloadAnalytics } from './browser-download-service'
 import { inspectProjectAnalyticsCapabilities } from './analytics/project-capabilities'
+import { normalizeAnalyticsOnboardingStep } from '../shared/analytics/contracts'
 import { buildAssistantFilesShellLaunchRoute } from '../shared/assistant/files-shell-launch-route'
 import { BROWSER_LOCAL_FILE_SCHEME } from '../shared/browser-view'
 
@@ -93,6 +95,7 @@ applyRuntimeIdentity(runtimeIdentity)
 
 const launchStartedAt = performance.now()
 const setupServices = createDesktopSetupServices(app.getPath('userData'))
+configureProjectOpenAnalytics((projectPath, outcome) => captureProjectOpenAnalytics(projectPath, outcome))
 configureUpdateAnalytics((properties) => setupServices.analytics.capture({ event: 'zyra_v1_app_lifecycle', properties }))
 configureBrowserDownloadAnalytics((properties) => setupServices.analytics.capture({ event: 'zyra_v1_browser', properties }))
 configureBrowserPermissionAnalytics((outcome) => setupServices.analytics.capture({ event: 'zyra_v1_browser', properties: { action: 'permission', outcome } }))
@@ -416,12 +419,12 @@ isIncognitoBrowserWebContents = (webContentsId) => (
     || browserPopupManager.isIncognitoWebContents(webContentsId)
 )
 hasIncognitoBrowserContents = () => browserViewManager.hasIncognitoContents() || browserPopupManager.hasIncognitoContents()
-configureBrowserActionAnalytics((input) => {
-    const allowed = input.guestWebContentsId === undefined
-        ? browserViewManager.isAnalyticsAllowedForOwner(input.ownerWebContentsId)
-        : browserViewManager.isAnalyticsAllowedForGuest(input.guestWebContentsId)
-    if (allowed) setupServices.analytics.capture({ event: 'zyra_v1_browser', properties: input.properties })
-})
+configureBrowserActionAnalytics(
+    (properties) => setupServices.analytics.capture({ event: 'zyra_v1_browser', properties }),
+    (ownerWebContentsId, guestWebContentsId) => guestWebContentsId === undefined
+        ? browserViewManager.isAnalyticsAllowedForOwner(ownerWebContentsId)
+        : browserViewManager.isAnalyticsAllowedForGuest(guestWebContentsId)
+)
 
 assistantUtilityWindowManager = new AssistantUtilityWindowManager({
     userDataPath: app.getPath('userData'),
@@ -818,6 +821,18 @@ function createQuickPreviewWindow(filePath: string): BrowserWindow {
     return window
 }
 
+function captureProjectOpenAnalytics(projectPath: string, outcome: 'completed' | 'failed' = 'completed'): void {
+    if (outcome === 'failed') {
+        setupServices.analytics.capture({ event: 'zyra_v1_project', properties: { action: 'open', outcome: 'failed', error_code: 'unknown' } })
+        return
+    }
+    void inspectProjectAnalyticsCapabilities(projectPath).then((capabilities) => {
+        setupServices.analytics.capture({ event: 'zyra_v1_project', properties: { action: 'open', outcome: 'completed', ...capabilities } })
+    }).catch(() => {
+        setupServices.analytics.capture({ event: 'zyra_v1_project', properties: { action: 'open', outcome: 'failed', error_code: 'unknown' } })
+    })
+}
+
 function openFolderInMainWindow(folderPath: string): BrowserWindow {
     if (!setupServices.onboarding.isAccessAllowed()) {
         pendingShellLaunchTargets.push({ kind: 'directory', path: folderPath })
@@ -831,11 +846,7 @@ function openFolderInMainWindow(folderPath: string): BrowserWindow {
         return mainWindow
     }
     const route = buildExternalExplorerRoute(folderPath)
-    void inspectProjectAnalyticsCapabilities(folderPath).then((capabilities) => {
-        setupServices.analytics.capture({ event: 'zyra_v1_project', properties: { action: 'open', outcome: 'completed', ...capabilities } })
-    }).catch(() => {
-        setupServices.analytics.capture({ event: 'zyra_v1_project', properties: { action: 'open', outcome: 'failed', error_code: 'unknown' } })
-    })
+    captureProjectOpenAnalytics(folderPath)
 
     if (!mainWindow || mainWindow.isDestroyed()) {
         mainWindow = createWindow(true, route)
@@ -983,9 +994,20 @@ app.whenReady().then(async () => {
     }
 
     electronApp.setAppUserModelId(runtimeIdentity.appUserModelId)
-    await setupServices.onboarding.initialize().catch((error) => {
+    const initialOnboardingSnapshot = await setupServices.onboarding.initialize().catch((error) => {
         log.error('[Onboarding] failed to hydrate mandatory setup state', error)
+        return null
     })
+    if (initialOnboardingSnapshot?.record?.status === 'in-progress') {
+        setupServices.analytics.capture({
+            event: 'zyra_v1_onboarding',
+            properties: {
+                action: 'step_started',
+                step: normalizeAnalyticsOnboardingStep(initialOnboardingSnapshot.record.currentStep),
+                outcome: 'started'
+            }
+        })
+    }
     if (setupServices.onboarding.shouldShowOnboarding()) {
         void setupServices.auth.prewarm().catch((error) => {
             log.warn('[Onboarding] OpenAI connection prewarm failed', error)

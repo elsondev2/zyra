@@ -153,6 +153,7 @@ export function useFilePreview(): UseFilePreviewReturn {
     const [previewTabsState, setPreviewTabsState] = useState<PreviewTabState[]>([])
     const [activePreviewTabId, setActivePreviewTabId] = useState<string | null>(null)
     const activePreviewRequestIdRef = useRef(0)
+    const previewRequestByTabRef = useRef(new Map<string, number>())
     const focusLineRequestIdRef = useRef(0)
     const activePreviewTab = useMemo(
         () => previewTabsState.find((tab) => tab.id === activePreviewTabId) || null,
@@ -185,6 +186,7 @@ export function useFilePreview(): UseFilePreviewReturn {
 
         const requestId = activePreviewRequestIdRef.current + 1
         activePreviewRequestIdRef.current = requestId
+        previewRequestByTabRef.current.set(tabId, requestId)
         const cached = readPreviewContentCache(sharedPreviewContentCache, file.path)
 
         updatePreviewTab(tabId, (tab) => ({
@@ -200,6 +202,8 @@ export function useFilePreview(): UseFilePreviewReturn {
 
         try {
             const snapshot = await loadPreviewContentSnapshot(file.path)
+            if (previewRequestByTabRef.current.get(tabId) !== requestId) return
+            previewRequestByTabRef.current.delete(tabId)
             setPreviewTabsState((currentTabs) => currentTabs.map((tab) => (
                 tab.id === tabId && tab.requestId === requestId
                     ? { ...tab, ...snapshot, loading: false }
@@ -216,6 +220,8 @@ export function useFilePreview(): UseFilePreviewReturn {
                 }
             })
         } catch (err) {
+            if (previewRequestByTabRef.current.get(tabId) !== requestId) return
+            previewRequestByTabRef.current.delete(tabId)
             captureProductEvent({ event: 'zyra_v1_files', properties: { action: 'preview', outcome: 'failed', preview_kind: analyticsPreviewKind(previewTarget.type), duration_ms: performance.now() - startedAt, error_code: 'unknown' } })
             console.error('Failed to load file:', err)
             setPreviewTabsState((currentTabs) => currentTabs.map((tab) => (
@@ -241,8 +247,10 @@ export function useFilePreview(): UseFilePreviewReturn {
             return
         }
         preloadPreviewRenderer(previewTarget.type)
-        if (!previewTarget.needsContent) {
-            captureProductEvent({ event: 'zyra_v1_files', properties: { action: 'preview', outcome: 'completed', preview_kind: analyticsPreviewKind(previewTarget.type), size_bucket: 'unknown' } })
+        const captureContentlessPreview = () => {
+            if (!previewTarget.needsContent) {
+                captureProductEvent({ event: 'zyra_v1_files', properties: { action: 'preview', outcome: 'completed', preview_kind: analyticsPreviewKind(previewTarget.type), size_bucket: 'unknown' } })
+            }
         }
 
         const requestedFocusLine = typeof options?.focusLine === 'number' && options.focusLine > 0
@@ -281,6 +289,7 @@ export function useFilePreview(): UseFilePreviewReturn {
             if (previewTarget.needsContent && !existingTab.content && !existingTab.loading) {
                 await loadPreviewTabContent(existingTab.id, file, ext)
             }
+            captureContentlessPreview()
             return
         }
 
@@ -289,6 +298,7 @@ export function useFilePreview(): UseFilePreviewReturn {
 
         if (mode === 'replace' && activePreviewTabId) {
             targetTabId = activePreviewTabId
+            previewRequestByTabRef.current.delete(targetTabId)
             setPreviewTabsState((currentTabs) => currentTabs.map((tab) => (
                 tab.id === activePreviewTabId
                     ? {
@@ -333,6 +343,7 @@ export function useFilePreview(): UseFilePreviewReturn {
         }
 
         setActivePreviewTabId(targetTabId)
+        captureContentlessPreview()
 
         if (shouldLoad) {
             await loadPreviewTabContent(targetTabId, file, ext)
@@ -359,6 +370,7 @@ export function useFilePreview(): UseFilePreviewReturn {
     }, [previewTabsState])
 
     const closePreviewTab = useCallback((tabId: string) => {
+        previewRequestByTabRef.current.delete(tabId)
         setPreviewTabsState((currentTabs) => {
             const targetIndex = currentTabs.findIndex((tab) => tab.id === tabId)
             if (targetIndex < 0) return currentTabs
@@ -387,6 +399,7 @@ export function useFilePreview(): UseFilePreviewReturn {
 
     const closePreview = () => {
         activePreviewRequestIdRef.current += 1
+        previewRequestByTabRef.current.clear()
         setPreviewTabsState([])
         setActivePreviewTabId(null)
     }

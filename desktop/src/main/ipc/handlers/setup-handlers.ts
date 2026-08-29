@@ -1,6 +1,8 @@
 import { BrowserWindow } from 'electron'
 import {
     ONBOARDING_IPC,
+    type AccountConnectionAnalyticsInput,
+    type AccountConnectionStatusInput,
     type BeginOnboardingReviewInput,
     type CancelOnboardingReviewInput,
     type CommitOnboardingStepInput,
@@ -20,7 +22,7 @@ import {
     type UpdateHostedAiSecretsInput
 } from '../../../shared/preferences/secrets-contracts'
 import type { DesktopSetupServices } from '../../setup'
-import { ANALYTICS_IPC } from '../../../shared/analytics/contracts'
+import { ANALYTICS_IPC, normalizeAnalyticsOnboardingStep } from '../../../shared/analytics/contracts'
 import { classifyAnalyticsErrorCode as analyticsErrorCode } from '../../../shared/analytics/error-code'
 import { createOnboardingGatedIpcMain } from '../onboarding-ipc-gate'
 import { ipcMain as trustedIpcMain } from '../trusted-ipc'
@@ -90,10 +92,9 @@ export function registerSetupIpcHandlers(services: DesktopSetupServices): void {
         snapshot: await services.preferences.update(input)
     })))
 
-    ipcMain.handle(ANALYTICS_IPC.getStatus, () => analyticsResult(async () => {
-        await services.analytics.initialize()
-        return { status: services.analytics.status() }
-    }))
+    ipcMain.handle(ANALYTICS_IPC.getStatus, () => analyticsResult(async () => ({
+        status: await services.analytics.refreshStatus()
+    })))
     ipcMain.handle(ANALYTICS_IPC.setEnabled, (_event, enabled: unknown) => analyticsResult(async () => {
         if (typeof enabled !== 'boolean') throw new Error('Analytics enabled value must be boolean.')
         return { status: await services.analytics.updateEnabled(enabled) }
@@ -118,28 +119,39 @@ export function registerSetupIpcHandlers(services: DesktopSetupServices): void {
     ipcMain.handle(ONBOARDING_IPC.getAuthStatus, () => result(async () => ({
         status: await services.onboarding.getAuthStatus()
     })))
-    ipcMain.handle(ONBOARDING_IPC.getConnectionsStatus, () => result(async () => ({
-        status: await services.auth.getConnectionsStatus()
-    })))
-    ipcMain.handle(ONBOARDING_IPC.connectChatGpt, () => result(async () => {
-        services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action: 'connect', method: 'subscription', outcome: 'started' } })
+    ipcMain.handle(ONBOARDING_IPC.getConnectionsStatus, (_event, input?: AccountConnectionStatusInput) => result(async () => {
+        const retry = input?.analyticsAction === 'retry'
+        if (retry) services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action: 'retry', method: 'unknown', outcome: 'started' } })
         try {
-            const status = await services.onboarding.connectChatGpt()
-            services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action: 'connect', method: 'subscription', outcome: status.verified ? 'completed' : 'failed', ...(status.verified ? {} : { error_code: 'authorization_failed' }) } })
+            const status = await services.auth.getConnectionsStatus()
+            if (retry) services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action: 'retry', method: 'unknown', outcome: 'completed' } })
             return { status }
         } catch (error) {
-            services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action: 'connect', method: 'subscription', outcome: 'failed', error_code: analyticsErrorCode(error) } })
+            if (retry) services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action: 'retry', method: 'unknown', outcome: 'failed', error_code: analyticsErrorCode(error) } })
             throw error
         }
     }))
-    ipcMain.handle(ONBOARDING_IPC.connectApiKey, (_event, apiKey: string) => result(async () => {
-        services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action: 'connect', method: 'api', outcome: 'started' } })
+    ipcMain.handle(ONBOARDING_IPC.connectChatGpt, (_event, input?: AccountConnectionAnalyticsInput) => result(async () => {
+        const action = input?.analyticsAction === 'replace' ? 'replace' : 'connect'
+        services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action, method: 'subscription', outcome: 'started' } })
         try {
-            const status = await services.onboarding.connectApiKey(apiKey)
-            services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action: 'connect', method: 'api', outcome: status.verified ? 'completed' : 'failed', ...(status.verified ? {} : { error_code: 'authorization_failed' }) } })
+            const status = await services.onboarding.connectChatGpt()
+            services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action, method: 'subscription', outcome: status.verified ? 'completed' : 'failed', ...(status.verified ? {} : { error_code: 'authorization_failed' }) } })
             return { status }
         } catch (error) {
-            services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action: 'connect', method: 'api', outcome: 'failed', error_code: analyticsErrorCode(error) } })
+            services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action, method: 'subscription', outcome: 'failed', error_code: analyticsErrorCode(error) } })
+            throw error
+        }
+    }))
+    ipcMain.handle(ONBOARDING_IPC.connectApiKey, (_event, apiKey: string, input?: AccountConnectionAnalyticsInput) => result(async () => {
+        const action = input?.analyticsAction === 'replace' ? 'replace' : 'connect'
+        services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action, method: 'api', outcome: 'started' } })
+        try {
+            const status = await services.onboarding.connectApiKey(apiKey)
+            services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action, method: 'api', outcome: status.verified ? 'completed' : 'failed', ...(status.verified ? {} : { error_code: 'authorization_failed' }) } })
+            return { status }
+        } catch (error) {
+            services.analytics.capture({ event: 'zyra_v1_account_connection', properties: { action, method: 'api', outcome: 'failed', error_code: analyticsErrorCode(error) } })
             throw error
         }
     }))
@@ -168,15 +180,24 @@ export function registerSetupIpcHandlers(services: DesktopSetupServices): void {
             event: 'zyra_v1_onboarding',
             properties: {
                 action: snapshot.accessAllowed ? 'completed' : 'step_completed',
-                step: onboardingAnalyticsStep(input?.step),
+                step: normalizeAnalyticsOnboardingStep(input?.step),
                 outcome: 'completed'
             }
         })
+        if (!snapshot.accessAllowed && snapshot.record) {
+            services.analytics.capture({
+                event: 'zyra_v1_onboarding',
+                properties: { action: 'step_started', step: normalizeAnalyticsOnboardingStep(snapshot.record.currentStep), outcome: 'started' }
+            })
+        }
         return { snapshot }
     }))
     ipcMain.handle(ONBOARDING_IPC.navigate, (_event, input: NavigateOnboardingInput) => result(async () => {
         const snapshot = await services.onboarding.navigate(input)
-        services.analytics.capture({ event: 'zyra_v1_onboarding', properties: { action: 'step_back', step: onboardingAnalyticsStep(input?.step), outcome: 'completed' } })
+        services.analytics.capture({ event: 'zyra_v1_onboarding', properties: { action: 'step_back', step: normalizeAnalyticsOnboardingStep(input?.step), outcome: 'completed' } })
+        if (snapshot.record) {
+            services.analytics.capture({ event: 'zyra_v1_onboarding', properties: { action: 'step_started', step: normalizeAnalyticsOnboardingStep(snapshot.record.currentStep), outcome: 'started' } })
+        }
         return { snapshot }
     }))
     ipcMain.handle(ONBOARDING_IPC.beginReview, (_event, input: BeginOnboardingReviewInput) => result(async () => {
@@ -207,12 +228,3 @@ export function requireOnboardingAccess(services: DesktopSetupServices): void {
 }
 
 export type { OnboardingSnapshot }
-
-function onboardingAnalyticsStep(value: unknown): 'welcome' | 'connection' | 'appearance' | 'projects' | 'finish' | 'unknown' {
-    if (value === 'welcome') return 'welcome'
-    if (value === 'connect-openai') return 'connection'
-    if (value === 'appearance') return 'appearance'
-    if (value === 'projects') return 'projects'
-    if (value === 'review') return 'finish'
-    return 'unknown'
-}

@@ -154,7 +154,7 @@
       "retention": "90 days",
       "properties": {
         "action": { "type": "enum", "values": ["startup", "slash_command", "skill", "workspace_command", "recovery"] },
-        "command": { "type": "enum", "values": ["chat", "ask", "inspect", "doctor", "threads", "login", "logout", "auth", "account", "codexusage", "update", "onboarding", "help", "commands", "agents", "agent", "subtask", "workflows", "workflow", "start", "session", "profile", "memory", "browser", "details_ui", "explore_files", "resources", "subagents_ui", "diff_ui", "terminal_ui", "web", "websearch", "webfetch", "new", "compact", "consolidate", "older", "thinking", "mode", "themes", "models", "statusline", "notifications", "interrupt", "exit", "custom", "unknown"] },
+        "command": { "type": "enum", "values": ["chat", "ask", "inspect", "doctor", "threads", "login", "logout", "auth", "account", "codexusage", "update", "version", "onboarding", "help", "commands", "agents", "agent", "subtask", "workflows", "workflow", "start", "session", "profile", "memory", "browser", "details_ui", "explore_files", "resources", "subagents_ui", "diff_ui", "terminal_ui", "web", "websearch", "webfetch", "new", "compact", "consolidate", "older", "thinking", "mode", "themes", "models", "analytics", "statusline", "notifications", "interrupt", "exit", "custom", "unknown"] },
         "skill": { "type": "safe_name" },
         "outcome": { "type": "enum", "values": ["started", "completed", "failed", "cancelled", "recovered", "unavailable", "unknown"] },
         "session_mode": { "type": "enum", "values": ["new", "continue", "resume", "none", "unknown"] },

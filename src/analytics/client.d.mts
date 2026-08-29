@@ -1,6 +1,7 @@
 export type AnalyticsSource = 'desktop_main' | 'desktop_renderer' | 'cli'
 export type AnalyticsStatus = {
     requested: boolean
+    preferenceSet: boolean
     enabled: boolean
     configured: boolean
     reason: string
@@ -19,6 +20,8 @@ export type AnalyticsTransport = (input: {
 export type ProductAnalyticsOptions = {
     storageDirectory: string
     configPath?: string
+    preferencePath?: string
+    requireExplicitPreference?: boolean
     source: AnalyticsSource
     appVersion: string
     platform?: string
@@ -35,6 +38,7 @@ export type ProductAnalyticsOptions = {
     maxQueueSize?: number
     maxEventAgeMs?: number
     flushIntervalMs?: number
+    inactiveRefreshIntervalMs?: number
     retryDelaysMs?: number[]
     autoFlush?: boolean
 }
@@ -42,6 +46,7 @@ export class ProductAnalyticsClient {
     constructor(options: ProductAnalyticsOptions)
     initialize(): Promise<void>
     status(): AnalyticsStatus
+    refreshStatus(): Promise<AnalyticsStatus>
     updateEnabled(enabled: boolean): Promise<AnalyticsStatus>
     capture(event: string, properties?: Record<string, unknown>): Promise<boolean>
     flush(options?: { maxAttempts?: number }): Promise<boolean>

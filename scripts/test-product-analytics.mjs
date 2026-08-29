@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,8 +39,10 @@ try {
   await testConcurrentClients();
   await testRendererOwnedEventReload();
   await testImmediateOptOut();
+  await testOptOutDoesNotBlockOnQueueCleanup();
   await testOptOutWhileCaptureWaitsForQueueLock();
   await testPersistedToggleAndRedactedStatus();
+  await testSharedExplicitConsentAndCrossClientOptOut();
   await testRepresentativeCatalogEvents();
   await testInstrumentationReachability();
   await testRendererAndCredentialBoundaries();
@@ -81,6 +83,76 @@ function testWindowsExclusiveOpenErrors() {
   assert.equal(isRetryableExclusiveOpenError({ code: "EINVAL" }, "win32"), false);
 }
 
+async function testSharedExplicitConsentAndCrossClientOptOut() {
+  const rootDirectory = await temporaryDirectory("shared-consent");
+  const preferencePath = path.join(rootDirectory, "shared", "consent.json");
+  const desktopDirectory = path.join(rootDirectory, "desktop");
+  const cliDirectory = path.join(rootDirectory, "cli");
+  await mkdir(desktopDirectory, { recursive: true });
+  await writeFile(path.join(desktopDirectory, "config.json"), JSON.stringify({ schemaVersion: 1, enabled: true, projectKey: VALID_KEY, host: "https://us.i.posthog.com" }));
+  let transportCalls = 0;
+  let notifyRetrySleep;
+  let releaseRetrySleep;
+  const retrySleeping = new Promise((resolve) => { notifyRetrySleep = resolve; });
+  const retryRelease = new Promise((resolve) => { releaseRetrySleep = resolve; });
+
+  const desktop = createProductAnalytics(clientOptions(desktopDirectory, {
+    env: VALID_ENV,
+    preferencePath,
+    requireExplicitPreference: true,
+  }));
+  await desktop.initialize();
+  assert.equal(desktop.status().enabled, false, "release or legacy configuration cannot bypass explicit consent");
+  assert.equal(desktop.status().preferenceSet, false);
+  await assert.rejects(stat(path.join(desktopDirectory, "installation-id")));
+
+  const cli = createProductAnalytics(clientOptions(cliDirectory, {
+    env: VALID_ENV,
+    preferencePath,
+    requireExplicitPreference: true,
+    retryDelaysMs: [1],
+    transport: async () => {
+      transportCalls += 1;
+      return { ok: false, retryable: true };
+    },
+    sleep: async () => {
+      notifyRetrySleep();
+      await retryRelease;
+    },
+  }));
+  await cli.initialize();
+  assert.equal(cli.status().enabled, false);
+  assert.equal((await desktop.updateEnabled(true)).enabled, true);
+  assert.equal((await cli.refreshStatus()).enabled, true, "Desktop consent is shared with an already-running CLI/TUI client");
+  const killed = createProductAnalytics(clientOptions(path.join(rootDirectory, "operator-disabled"), {
+    env: { ...VALID_ENV, ZYRA_ANALYTICS_ENABLED: "false" },
+    preferencePath,
+    requireExplicitPreference: true,
+  }));
+  await killed.initialize();
+  assert.equal(killed.status().enabled, false, "the explicit operator kill switch overrides user opt-in");
+  assert.equal(killed.status().canChangeEnabled, false);
+  assert.equal(await cli.capture("zyra_v1_cli", { action: "startup" }), true);
+
+  const flushing = cli.flush({ maxAttempts: 2 });
+  await retrySleeping;
+  await desktop.updateEnabled(false);
+  releaseRetrySleep();
+  assert.equal(await flushing, false);
+  assert.equal(transportCalls, 1, "a sibling process observes opt-out before retrying");
+  assert.equal(await cli.capture("zyra_v1_cli", { action: "startup" }), false);
+  await assert.rejects(stat(path.join(cliDirectory, "queue.json")), "inactive clients delete their persisted queue");
+  assert.equal(JSON.parse(await readFile(preferencePath, "utf8")).enabled, false);
+
+  const inactiveDirectory = path.join(rootDirectory, "inactive");
+  await mkdir(inactiveDirectory, { recursive: true });
+  await writeFile(path.join(inactiveDirectory, "config.json"), JSON.stringify({ schemaVersion: 1, enabled: false }));
+  await writeFile(path.join(inactiveDirectory, "queue.json"), JSON.stringify({ schemaVersion: 1, events: [{ event: "zyra_v1_cli", timestamp: new Date().toISOString(), properties: { action: "startup" } }] }));
+  const inactive = createProductAnalytics(clientOptions(inactiveDirectory, { env: {} }));
+  await inactive.initialize();
+  await assert.rejects(stat(path.join(inactiveDirectory, "queue.json")), "startup with inactive configuration removes an old queue");
+}
+
 async function testDisabledIsInert() {
   const parentDirectory = await temporaryDirectory("disabled");
   const storageDirectory = path.join(parentDirectory, "analytics-state");
@@ -93,6 +165,7 @@ async function testDisabledIsInert() {
   }));
   await client.initialize();
   assert.equal(client.status().enabled, false);
+  assert.equal(client.status().preferenceSet, false);
   assert.equal(await client.capture("zyra_v1_cli", { action: "startup" }), false);
   assert.equal(await client.flush(), true);
   assert.equal(calls, 0);
@@ -107,6 +180,7 @@ async function testDisabledIsInert() {
   }));
   await unconfigured.initialize();
   assert.equal(unconfigured.status().enabled, false);
+  assert.equal(unconfigured.status().preferenceSet, true);
   assert.equal(await unconfigured.capture("zyra_v1_cli", { action: "startup" }), false);
   assert.equal(unconfiguredCalls, 0);
   await assert.rejects(readFile(unconfiguredDirectory, "utf8"));
@@ -115,7 +189,10 @@ async function testDisabledIsInert() {
   const attemptedStatus = await attemptedOptIn.updateEnabled(true);
   assert.equal(attemptedStatus.enabled, false);
   assert.equal(attemptedStatus.requested, true);
-  await assert.rejects(readFile(attemptedOptInDirectory, "utf8"), undefined, "unconfigured opt-in creates no analytics state");
+  assert.equal(attemptedStatus.preferenceSet, true);
+  assert.deepEqual(JSON.parse(await readFile(path.join(attemptedOptInDirectory, "config.json"), "utf8")), { schemaVersion: 1, enabled: true }, "unconfigured opt-in remembers consent without activating capture");
+  await assert.rejects(readFile(path.join(attemptedOptInDirectory, "installation-id"), "utf8"), undefined, "unconfigured consent creates no installation identity");
+  await assert.rejects(readFile(path.join(attemptedOptInDirectory, "queue.json"), "utf8"), undefined, "unconfigured consent creates no event queue");
 
   const corruptDirectory = await temporaryDirectory("corrupt-config");
   await writeFile(path.join(corruptDirectory, "config.json"), "{not-json", "utf8");
@@ -436,6 +513,30 @@ async function testImmediateOptOut() {
   assert.equal(await concurrentClient.capture("zyra_v1_cli", { action: "startup", outcome: "started" }), false, "other CLI clients observe persisted opt-out before their next capture");
 }
 
+async function testOptOutDoesNotBlockOnQueueCleanup() {
+  const storageDirectory = await temporaryDirectory("opt-out-cleanup-lock");
+  await writeFile(path.join(storageDirectory, "config.json"), `${JSON.stringify({ schemaVersion: 1, enabled: true, projectKey: VALID_KEY, host: "https://us.i.posthog.com" })}\n`, "utf8");
+  const client = createProductAnalytics(clientOptions(storageDirectory, { env: {} }));
+  await client.initialize();
+  await client.capture("zyra_v1_cli", { action: "startup", outcome: "started" });
+  await writeFile(path.join(storageDirectory, "queue.lock"), "held", "utf8");
+  const startedAt = performance.now();
+  const status = await client.updateEnabled(false);
+  assert.equal(status.enabled, false);
+  assert.ok(performance.now() - startedAt < 500, "saved opt-out is not blocked by queue cleanup");
+  await rm(path.join(storageDirectory, "queue.lock"), { force: true });
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      await stat(path.join(storageDirectory, "queue.json"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    } catch (error) {
+      if (error?.code === "ENOENT") return;
+      throw error;
+    }
+  }
+  assert.fail("background opt-out queue cleanup did not finish");
+}
+
 async function testOptOutWhileCaptureWaitsForQueueLock() {
   const storageDirectory = await temporaryDirectory("opt-out-during-lock-wait");
   await writeFile(path.join(storageDirectory, "config.json"), `${JSON.stringify({
@@ -517,7 +618,7 @@ async function testPersistedToggleAndRedactedStatus() {
   const disabled = await client.updateEnabled(false);
   assert.equal(disabled.enabled, false);
   assert.equal(disabled.queueSize, 0);
-  assert.equal(clearedTimers, 1);
+  assert.ok(clearedTimers >= 1);
   await assert.rejects(readFile(path.join(storageDirectory, "queue.json"), "utf8"));
   assert.equal(await client.flush(), true);
   assert.equal(networkCalls, 0);
@@ -569,6 +670,7 @@ async function testInstrumentationReachability() {
     "desktop/src/main/browser-popup-manager.ts",
     "desktop/src/main/browser-download-service.ts",
     "desktop/src/main/ipc/handlers/browser-preview-handlers.ts",
+    "desktop/src/main/ipc/handlers/project-details-handlers.ts",
     "desktop/src/main/assistant/assistant-utility-window-manager.ts",
     "desktop/src/main/update/manager.ts",
     "desktop/src/main/diagnostics/renderer-hang-recorder.ts",
@@ -578,6 +680,7 @@ async function testInstrumentationReachability() {
     "desktop/src/renderer/src/pages/assistant/AssistantBrowserHistoryImportDialog.tsx",
     "desktop/src/renderer/src/pages/assistant/AssistantBrowserWorkspace.tsx",
     "desktop/src/renderer/src/pages/settings/SettingsShell.tsx",
+    "desktop/src/renderer/src/pages/folder-browse/useFolderBrowseActions.ts",
     "desktop/src/renderer/src/lib/settings.tsx",
     "src/zyra-app.mjs",
     "src/slash-command-handlers.mjs",
@@ -585,7 +688,7 @@ async function testInstrumentationReachability() {
   ].map(async (file) => [file, await source(file)])));
   const combined = Object.values(sources).join("\n");
   for (const event of ANALYTICS_EVENT_NAMES) assert.match(combined, new RegExp(event), `${event} has a real instrumentation owner`);
-  for (const action of ["abandoned", "connect", "context_compaction", "first_response", "save", "history_import", "terminal_transfer", "settings_section", "update_check", "workspace_command", "recovery"]) {
+  for (const action of ["step_started", "abandoned", "connect", "replace", "retry", "context_compaction", "first_response", "save", "history_import", "terminal_transfer", "settings_section", "update_check", "workspace_command", "recovery"]) {
     assert.match(combined, new RegExp(`['\"]${action}['\"]`), `representative action ${action} is wired`);
   }
   assert.match(sources["desktop/src/main/browser-view-manager.ts"], /sessionMode === 'normal'[\s\S]*captureAnalytics/);
@@ -596,7 +699,13 @@ async function testInstrumentationReachability() {
   assert.doesNotMatch(sources["desktop/src/renderer/src/pages/assistant/AssistantBrowserHistoryImportDialog.tsx"], /captureProductEvent|zyra_v1_browser/);
   assert.doesNotMatch(sources["desktop/src/renderer/src/pages/assistant/AssistantBrowserWorkspace.tsx"], /captureProductEvent|zyra_v1_browser/);
   assert.match(sources["desktop/src/main/ipc/handlers/browser-preview-handlers.ts"], /captureBrowserActionAnalytics/);
+  assert.match(sources["desktop/src/main/ipc/handlers/browser-preview-handlers.ts"], /handleImportExternalBrowserHistory[\s\S]*const analyticsAllowed[\s\S]*await getExternalBrowserHistoryService\(\)\.import/);
+  assert.match(sources["desktop/src/main/ipc/handlers/browser-preview-handlers.ts"], /handleSetBrowserAdBlockEnabled[\s\S]*const analyticsAllowed[\s\S]*await service\.setEnabled/);
+  assert.match(sources["desktop/src/main/ipc/handlers/browser-preview-handlers.ts"], /getPendingWarning[\s\S]*warningAtStart\.sourceGuestWebContentsId/);
   assert.match(sources["desktop/src/main/index.ts"], /isAnalyticsAllowedForOwner[\s\S]*isAnalyticsAllowedForGuest/);
+  assert.match(sources["desktop/src/main/ipc/handlers/project-details-handlers.ts"], /handleRecordProjectOpen[\s\S]*recordProjectOpenAnalytics\(event\.sender\.id/);
+  assert.doesNotMatch(sources["desktop/src/main/ipc/handlers/project-details-handlers.ts"].match(/handleGetProjectDetails[\s\S]*?handleRecordProjectOpen/)?.[0] || "", /recordProjectOpenAnalytics/);
+  assert.match(sources["desktop/src/renderer/src/pages/folder-browse/useFolderBrowseActions.ts"], /recordProjectOpen\?\.\(project\.path\)[\s\S]*recordProjectOpen\?\.\(decodedPath\)/);
   assert.match(sources["desktop/src/main/index.ts"], /isIncognitoBrowserWebContents[\s\S]*hasIncognitoBrowserContents/);
   assert.match(sources["desktop/src/main/index.ts"], /render-process-gone[\s\S]*!isIncognitoBrowserWebContents/);
   assert.doesNotMatch(combined, /captureProductEvent\([^)]*(?:transcript\.delta|command_output|scroll|mousemove|keydown)/s, "high-frequency content loops are not capture points");
@@ -616,6 +725,8 @@ async function testRendererAndCredentialBoundaries() {
   const runtimeContract = await source("desktop/scripts/release/runtime-contract.mjs");
   const rootPackage = JSON.parse(await source("package.json"));
   const analyticsClient = await source("src/analytics/client.mjs");
+  const cliAnalytics = await source("src/analytics/cli.mjs");
+  const slashCommands = await source("src/slash-commands.mjs");
   const cliSessionStore = await source("src/zyra-sdk.mjs");
   const agentJournal = await source("src/agent-server/event-journal.mjs");
   const desktopPersistence = await source("desktop/src/main/assistant/persistence.ts");
@@ -625,7 +736,11 @@ async function testRendererAndCredentialBoundaries() {
   assert.doesNotMatch(browserRelay, /Analytics|analytics/);
   assert.doesNotMatch(rendererAnalytics, /POSTHOG|projectKey|personalApi|captureUrl/i);
   assert.match(desktopAnalyticsService, /RENDERER_ANALYTICS_EVENTS = new Set\(\['zyra_v1_files', 'zyra_v1_workspace_ui'\]\)/);
+  assert.match(desktopAnalyticsService, /preferencePath:[\s\S]*requireExplicitPreference: true/);
+  assert.match(cliAnalytics, /preferencePath:[\s\S]*requireExplicitPreference: true/);
+  assert.match(slashCommands, /name: "analytics"[\s\S]*\/analytics \[status\|on\|off\]/);
   assert.match(setupHandlers, /Product analytics could not be updated\./);
+  assert.match(setupHandlers, /status: await services\.analytics\.refreshStatus\(\)/);
   assert.doesNotMatch(setupHandlers.match(/async function analyticsResult[\s\S]*?\n}/)?.[0] || '', /error\.message/);
   assert.match(browserViewManager, /preload: undefined/);
   assert.match(browserPopupManager, /preload: undefined/);

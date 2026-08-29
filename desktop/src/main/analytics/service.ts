@@ -1,4 +1,5 @@
-import { join } from 'node:path'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { app } from 'electron'
 import {
     createProductAnalytics,
@@ -20,14 +21,19 @@ export class DesktopAnalyticsService {
     constructor(userDataPath: string, options: {
         client?: ProductAnalyticsClient
         env?: Record<string, string | undefined>
+        preferencePath?: string
     } = {}) {
+        const env = options.env || process.env
+        const sharedStateRoot = resolve(env.ZYRA_STATE_DIR || join(homedir(), '.zyra'))
         this.client = options.client || createProductAnalytics({
             storageDirectory: join(userDataPath, 'analytics'),
+            preferencePath: options.preferencePath || join(sharedStateRoot, 'analytics', 'consent.json'),
+            requireExplicitPreference: true,
             source: 'desktop_main',
             appVersion: app.getVersion(),
             platform: process.platform,
             architecture: process.arch,
-            env: options.env || process.env
+            env
         })
     }
 
@@ -37,6 +43,10 @@ export class DesktopAnalyticsService {
 
     status(): AnalyticsStatus {
         return this.client.status()
+    }
+
+    refreshStatus(): Promise<AnalyticsStatus> {
+        return this.client.refreshStatus()
     }
 
     updateEnabled(enabled: boolean): Promise<AnalyticsStatus> {
@@ -55,7 +65,6 @@ export class DesktopAnalyticsService {
         } catch {}
         if (bytes > MAX_RENDERER_EVENT_BYTES) return false
         await this.client.initialize()
-        if (!this.client.status().enabled) return false
         const now = Date.now()
         if (now - this.rendererRateWindowStartedAt >= 60_000) {
             this.rendererRateWindowStartedAt = now
@@ -63,7 +72,7 @@ export class DesktopAnalyticsService {
         }
         if (this.rendererRateWindowCount >= 120) return false
         this.rendererRateWindowCount += 1
-        return this.client.capture(input.event, {
+        const accepted = await this.client.capture(input.event, {
             ...input.properties,
             schema_version: 1,
             source: 'desktop_renderer',
@@ -71,6 +80,8 @@ export class DesktopAnalyticsService {
             platform: normalizeAnalyticsPlatform(process.platform),
             architecture: normalizeAnalyticsArchitecture(process.arch)
         })
+        if (!accepted) this.rendererRateWindowCount = Math.max(0, this.rendererRateWindowCount - 1)
+        return accepted
     }
 
     async flush(timeoutMs = 1_500): Promise<void> {

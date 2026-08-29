@@ -43,13 +43,15 @@ import {
   formatDesktopWorkspaceResult,
   parseDesktopWorkspaceCommand,
 } from "./desktop-workspace-commands.mjs";
-import { captureCliEvent } from "./analytics/cli.mjs";
+import { captureCliEvent, getCliAnalyticsStatus, updateCliAnalyticsEnabled } from "./analytics/cli.mjs";
 import { classifyErrorCode, normalizeAnalyticsCommandName } from "./analytics/contracts.mjs";
 import {
   formatCodexResetCreditsSummary,
   formatCodexResetRedemptionWarning,
   formatCodexUsageSnapshot,
 } from "./codex-reset-format.mjs";
+
+const UNKNOWN_SLASH_COMMAND = Symbol("unknown-slash-command");
 
 export async function handleSlash(runtime, ui, input, controls = {}) {
   const text = String(input ?? "").trim();
@@ -69,9 +71,10 @@ export async function handleSlash(runtime, ui, input, controls = {}) {
     if (captureWrapperOutcome) captureCliEvent("zyra_v1_cli", {
       action: "slash_command",
       command: commandName,
-      outcome: "completed",
+      outcome: result === UNKNOWN_SLASH_COMMAND ? "failed" : "completed",
+      ...(result === UNKNOWN_SLASH_COMMAND ? { error_code: "invalid_input" } : {}),
     });
-    return result;
+    return result === UNKNOWN_SLASH_COMMAND ? true : result;
   } catch (error) {
     if (captureWrapperOutcome) captureCliEvent("zyra_v1_cli", {
       action: "slash_command",
@@ -184,6 +187,8 @@ async function handleSlashCommand(runtime, ui, text, parsed, controls = {}) {
       return runThemes(runtime, ui, arg);
     case "models":
       return runModels(runtime, ui, arg);
+    case "analytics":
+      return runAnalyticsPreference(ui, arg);
     case "statusline":
       return runStatusLine(runtime, ui, arg);
     case "notifications":
@@ -679,6 +684,29 @@ function runStatusLine(runtime, ui, arg) {
   return true;
 }
 
+async function runAnalyticsPreference(ui, arg) {
+  const choice = String(arg || "").trim().toLowerCase();
+  if (!choice || choice === "status") {
+    const status = await getCliAnalyticsStatus();
+    const label = status.enabled ? "on" : status.preferenceSet ? "off" : "not chosen";
+    ui.info(`Product analytics: ${label}. Use /analytics on or /analytics off.`);
+    return true;
+  }
+  if (choice !== "on" && choice !== "off") {
+    ui.info("Use /analytics on, /analytics off, or /analytics status.");
+    return true;
+  }
+  const status = await updateCliAnalyticsEnabled(choice === "on");
+  if (choice === "off") {
+    ui.info("Product analytics is off. Queued events were removed.");
+    return true;
+  }
+  ui.info(status.enabled
+    ? "Product analytics is on. Zyra shares coarse feature usage, timings, and allowlisted diagnostic codes. It never sends prompts, responses, transcripts, files, paths, URLs, account identity, or terminal content."
+    : "Your analytics choice was saved. This build has no configured analytics destination, so Zyra sends nothing.");
+  return true;
+}
+
 function runNotifications(runtime, ui, arg) {
   if (!arg) {
     ui.info(`Notifications: ${runtime.notifications ?? "unfocused"}. Use /notifications unfocused|always|off.`);
@@ -723,6 +751,7 @@ async function runCustomSlashCommand(runtime, ui, rawCommand, arg, controls) {
 
   if (!getSlashCommand(rawCommand)) {
     ui.error(new Error("Unknown slash command. Type /commands."));
+    return UNKNOWN_SLASH_COMMAND;
   }
   return true;
 }

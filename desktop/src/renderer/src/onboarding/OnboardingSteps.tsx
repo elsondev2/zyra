@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ArrowRight, Check, ChevronRight, FolderOpen, KeyRound, Palette, RefreshCw } from 'lucide-react'
+import { ArrowRight, BarChart3, Check, ChevronRight, FolderOpen, KeyRound, Palette, RefreshCw } from 'lucide-react'
 import type {
     OnboardingAppearanceSelection,
     OnboardingAuthStatus,
@@ -15,22 +15,67 @@ import { OpenAiLogo } from '@/components/ui/OpenAiLogo'
 import { ZyraLogoASCII } from '@/components/ui/ZyraLogo'
 import { cn } from '@/lib/utils'
 
-export function WelcomeStep({ saving, error, onStart }: {
+type OnboardingAnalyticsChoiceProps = {
+    analyticsChoice: boolean | null
+    analyticsConfigured: boolean
+    analyticsManagedByEnvironment: boolean
+    analyticsLoading: boolean
+    analyticsError: string | null
+    onAnalyticsChoice: (enabled: boolean) => void
+}
+
+function OnboardingAnalyticsChoice({
+    analyticsChoice,
+    analyticsConfigured,
+    analyticsManagedByEnvironment,
+    analyticsLoading,
+    analyticsError,
+    onAnalyticsChoice
+}: OnboardingAnalyticsChoiceProps) {
+    return (
+        <section className="w-full border-y border-[var(--surface-divider)] py-4 text-left" aria-labelledby="onboarding-analytics-title">
+            <div className="flex items-start gap-3 px-1">
+                <span className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-md bg-[color-mix(in_srgb,var(--accent-primary)_10%,transparent)] text-[var(--accent-primary)]"><BarChart3 size={15} /></span>
+                <span className="min-w-0">
+                    <h2 id="onboarding-analytics-title" className="text-[12px] font-semibold text-sparkle-text">Help improve Zyra</h2>
+                    <p className="mt-1 text-[10px] leading-4 text-sparkle-text-muted">Share feature usage, performance timings, and allowlisted diagnostic codes. Zyra never sends prompts, responses, transcripts, files, paths, URLs, account identity, or terminal content.</p>
+                </span>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2" role="radiogroup" aria-label="Product analytics preference">
+                <button type="button" role="radio" aria-checked={analyticsChoice === true} disabled={analyticsLoading || analyticsManagedByEnvironment} onClick={() => onAnalyticsChoice(true)} className={cn('min-h-12 rounded-md border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-55', analyticsChoice === true ? 'border-[color-mix(in_srgb,var(--accent-primary)_58%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_9%,transparent)]' : 'border-[var(--surface-divider)] hover:bg-[var(--surface-hover)]')}>
+                    <span className="block text-[10px] font-semibold text-sparkle-text">Share diagnostics and usage</span>
+                    <span className="mt-0.5 block text-[9px] text-sparkle-text-muted">No account or content data</span>
+                </button>
+                <button type="button" role="radio" aria-checked={analyticsChoice === false} disabled={analyticsLoading || analyticsManagedByEnvironment} onClick={() => onAnalyticsChoice(false)} className={cn('min-h-12 rounded-md border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-55', analyticsChoice === false ? 'border-[color-mix(in_srgb,var(--accent-primary)_58%,transparent)] bg-[color-mix(in_srgb,var(--accent-primary)_9%,transparent)]' : 'border-[var(--surface-divider)] hover:bg-[var(--surface-hover)]')}>
+                    <span className="block text-[10px] font-semibold text-sparkle-text">No thanks</span>
+                    <span className="mt-0.5 block text-[9px] text-sparkle-text-muted">Keep product analytics off</span>
+                </button>
+            </div>
+            {analyticsLoading ? <p role="status" className="mt-2 text-[9px] text-sparkle-text-muted">Saving analytics preference...</p> : null}
+            {analyticsChoice === true && !analyticsConfigured && !analyticsLoading ? <p role="status" className="mt-2 text-[9px] text-[var(--status-warning)]">Preference saved. Analytics is unavailable in this build.</p> : null}
+            {analyticsManagedByEnvironment ? <p className="mt-2 text-[9px] text-sparkle-text-muted">This build manages the analytics setting.</p> : null}
+            {analyticsError ? <p role="alert" className="mt-2 text-[9px] text-[var(--status-danger)]">{analyticsError}</p> : null}
+        </section>
+    )
+}
+
+export function WelcomeStep({ saving, error, onStart, ...analyticsProps }: {
     saving: boolean
     error: string | null
     onStart: () => void
-}) {
+} & OnboardingAnalyticsChoiceProps) {
     return (
         <section className="mx-auto flex w-full max-w-[520px] flex-col items-center text-center" aria-labelledby="onboarding-welcome-title">
             <h1 id="onboarding-welcome-title" className="text-[18px] font-medium tracking-[-0.025em] text-sparkle-text-secondary sm:text-[20px]">
                 Welcome to
             </h1>
             <ZyraLogoASCII size="lg" variant="loading" className="mt-5 drop-shadow-[0_0_24px_color-mix(in_srgb,var(--accent-primary)_22%,transparent)]" />
+            <div className="mt-8 w-full"><OnboardingAnalyticsChoice {...analyticsProps} /></div>
             <button
                 type="button"
-                disabled={saving}
+                disabled={saving || analyticsProps.analyticsLoading || analyticsProps.analyticsChoice === null}
                 onClick={onStart}
-                className="mt-10 inline-flex h-11 min-w-[142px] items-center justify-center gap-2 rounded-md bg-[var(--accent-primary)] px-5 text-[13px] font-semibold text-[var(--accent-on-primary)] shadow-[0_10px_30px_color-mix(in_srgb,var(--accent-primary)_22%,transparent)] transition-[opacity,transform] hover:-translate-y-px hover:opacity-92 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
+                className="mt-6 inline-flex h-11 min-w-[142px] items-center justify-center gap-2 rounded-md bg-[var(--accent-primary)] px-5 text-[13px] font-semibold text-[var(--accent-on-primary)] shadow-[0_10px_30px_color-mix(in_srgb,var(--accent-primary)_22%,transparent)] transition-[opacity,transform] hover:-translate-y-px hover:opacity-92 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
             >
                 Start setup<ArrowRight size={14} />
             </button>
@@ -227,7 +272,23 @@ export function ProjectsStep({ selection, onChange }: {
     )
 }
 
-export function ReviewStep({ record }: { record: OnboardingRecord }) {
+export function ReviewStep({
+    record,
+    analyticsChoice,
+    analyticsConfigured,
+    analyticsManagedByEnvironment,
+    analyticsLoading,
+    analyticsError,
+    onAnalyticsChoice
+}: {
+    record: OnboardingRecord
+    analyticsChoice: boolean | null
+    analyticsConfigured: boolean
+    analyticsManagedByEnvironment: boolean
+    analyticsLoading: boolean
+    analyticsError: string | null
+    onAnalyticsChoice: (enabled: boolean) => void
+}) {
     const appearance = record.data.appearance
     const lightThemeName = appearance
         ? getThemeDefinition(appearance.appearanceLightTheme).name
@@ -294,9 +355,11 @@ export function ReviewStep({ record }: { record: OnboardingRecord }) {
                 ))}
             </dl>
 
-            <p className="mt-5 flex items-center justify-center gap-1.5 text-center text-[11px] leading-5 text-sparkle-text-muted">
+            <div className="mt-4"><OnboardingAnalyticsChoice analyticsChoice={analyticsChoice} analyticsConfigured={analyticsConfigured} analyticsManagedByEnvironment={analyticsManagedByEnvironment} analyticsLoading={analyticsLoading} analyticsError={analyticsError} onAnalyticsChoice={onAnalyticsChoice} /></div>
+
+            <p className="mt-4 flex items-center justify-center gap-1.5 text-center text-[11px] leading-5 text-sparkle-text-muted">
                 <Check size={11} className="text-[var(--status-success)]" />
-                You can fine-tune everything later in Settings.
+                You can change this later in Settings.
             </p>
         </div>
     )

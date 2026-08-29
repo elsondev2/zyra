@@ -1041,14 +1041,16 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     }, [replaceSettings])
 
     const updateSettings = useCallback((partial: Partial<Settings>) => {
-        if (partial.appearanceThemeMode) {
-            captureProductEvent({ event: 'zyra_v1_workspace_ui', properties: { action: 'theme_mode', theme_mode: partial.appearanceThemeMode } })
-        }
-        if (typeof partial.accessibilityReduceMotion === 'boolean') {
-            captureProductEvent({ event: 'zyra_v1_workspace_ui', properties: { action: 'accessibility_toggle', enabled: partial.accessibilityReduceMotion } })
-        }
-        if (typeof partial.assistantAgentInboxSidebarEnabled === 'boolean') {
-            captureProductEvent({ event: 'zyra_v1_workspace_ui', properties: { action: 'agent_inbox_disclosure', enabled: partial.assistantAgentInboxSidebarEnabled } })
+        const capturePersistedAnalyticsChanges = () => {
+            if (partial.appearanceThemeMode) {
+                captureProductEvent({ event: 'zyra_v1_workspace_ui', properties: { action: 'theme_mode', theme_mode: partial.appearanceThemeMode } })
+            }
+            if (typeof partial.accessibilityReduceMotion === 'boolean') {
+                captureProductEvent({ event: 'zyra_v1_workspace_ui', properties: { action: 'accessibility_toggle', enabled: partial.accessibilityReduceMotion } })
+            }
+            if (typeof partial.assistantAgentInboxSidebarEnabled === 'boolean') {
+                captureProductEvent({ event: 'zyra_v1_workspace_ui', properties: { action: 'agent_inbox_disclosure', enabled: partial.assistantAgentInboxSidebarEnabled } })
+            }
         }
         const rendererPartial: Partial<Settings> = { ...partial }
         if (Object.prototype.hasOwnProperty.call(partial, 'groqApiKey')) {
@@ -1096,6 +1098,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
             }
             if (!result.success) throw new Error(result.error || 'Could not save device preferences.')
             applyPreferenceSnapshot(result.snapshot)
+            capturePersistedAnalyticsChanges()
         }).catch((error) => {
             console.error('Failed to save main-owned settings:', error)
             setPreferencesError(error instanceof Error ? error.message : 'Could not save device preferences.')

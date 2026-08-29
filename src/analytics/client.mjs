@@ -7,10 +7,12 @@ import {
 } from "./contracts.mjs";
 
 const CONFIG_SCHEMA_VERSION = 1;
+const PREFERENCE_SCHEMA_VERSION = 1;
 const QUEUE_SCHEMA_VERSION = 1;
 const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_MAX_QUEUE_SIZE = 200;
 const DEFAULT_FLUSH_INTERVAL_MS = 10_000;
+const DEFAULT_INACTIVE_REFRESH_INTERVAL_MS = 1_000;
 const DEFAULT_MAX_EVENT_AGE_MS = 7 * 24 * 60 * 60 * 1_000;
 const QUEUE_LOCK_TIMEOUT_MS = 2_000;
 const QUEUE_LOCK_STALE_MS = 10_000;
@@ -37,6 +39,8 @@ export class ProductAnalyticsClient {
     if (!options.storageDirectory) throw new Error("Analytics storageDirectory is required.");
     this.storageDirectory = path.resolve(options.storageDirectory);
     this.configPath = path.resolve(options.configPath || path.join(this.storageDirectory, "config.json"));
+    this.preferencePath = path.resolve(options.preferencePath || this.configPath);
+    this.requireExplicitPreference = options.requireExplicitPreference === true;
     this.identityPath = path.join(this.storageDirectory, "installation-id");
     this.queuePath = path.join(this.storageDirectory, "queue.json");
     this.queueLockPath = path.join(this.storageDirectory, "queue.lock");
@@ -55,6 +59,7 @@ export class ProductAnalyticsClient {
     this.maxQueueSize = boundInteger(options.maxQueueSize, 1, 1_000, DEFAULT_MAX_QUEUE_SIZE);
     this.maxEventAgeMs = boundInteger(options.maxEventAgeMs, 1_000, 30 * 24 * 60 * 60 * 1_000, DEFAULT_MAX_EVENT_AGE_MS);
     this.flushIntervalMs = boundInteger(options.flushIntervalMs, 250, 300_000, DEFAULT_FLUSH_INTERVAL_MS);
+    this.inactiveRefreshIntervalMs = boundInteger(options.inactiveRefreshIntervalMs, 100, 60_000, DEFAULT_INACTIVE_REFRESH_INTERVAL_MS);
     this.retryDelaysMs = Array.isArray(options.retryDelaysMs)
       ? options.retryDelaysMs.slice(0, 5).map((value) => boundInteger(value, 0, 60_000, 0))
       : [...DEFAULT_RETRY_DELAYS_MS];
@@ -71,6 +76,7 @@ export class ProductAnalyticsClient {
     this.acceptingCaptures = true;
     this.cancellationGeneration = 0;
     this.activeFlushController = null;
+    this.lastConfigurationRefreshAtMs = 0;
   }
 
   initialize() {
@@ -85,6 +91,7 @@ export class ProductAnalyticsClient {
   status() {
     return Object.freeze({
       requested: this.config.requested,
+      preferenceSet: this.config.preferenceSet,
       enabled: this.config.active,
       configured: this.config.configured,
       reason: this.config.reason,
@@ -96,21 +103,30 @@ export class ProductAnalyticsClient {
     });
   }
 
+  refreshStatus() {
+    return this.runExclusive(async () => {
+      await this.initialize();
+      await this.refreshPersistedConfiguration({ force: true });
+      return this.status();
+    });
+  }
+
   updateEnabled(enabled) {
     if (typeof enabled !== "boolean") return Promise.reject(new Error("Analytics enabled value must be boolean."));
-    if (!enabled && parseEnabled(this.env.ZYRA_ANALYTICS_ENABLED) === undefined) return this.disablePersistedAnalytics();
+    if (!enabled && (this.requireExplicitPreference || parseEnabled(this.env.ZYRA_ANALYTICS_ENABLED) === undefined)) return this.disablePersistedAnalytics();
     return this.runExclusive(async () => {
       await this.initialize();
       if (this.config.enabledSource === "environment") return this.status();
       const persisted = await this.readPersistedConfigForUpdate();
       const next = { ...(isRecord(persisted) ? persisted : {}), schemaVersion: CONFIG_SCHEMA_VERSION, enabled: true };
-      const proposed = resolveAnalyticsConfig({ env: this.env, persisted: next });
+      const proposed = resolveAnalyticsConfig({ env: this.configurationEnvironment(), persisted: next });
+      await writeJsonAtomically(this.configPath, next);
+      await this.writeSharedPreference(true);
+      this.config = proposed;
       if (!proposed.active) {
-        this.config = proposed;
+        await this.clearInactiveQueue();
         return this.status();
       }
-      await writeJsonAtomically(this.configPath, next);
-      this.config = proposed;
       if (!this.installationId) {
         this.installationId = await this.readOrCreateInstallationId();
         this.queue = await this.readQueue();
@@ -123,16 +139,66 @@ export class ProductAnalyticsClient {
   async disablePersistedAnalytics() {
     await this.initialize();
     const repairMalformedConfig = this.config.reason === "config_invalid";
+    await this.writeSharedPreference(false);
     this.cancellationGeneration += 1;
     this.activeFlushController?.abort();
     this.clearScheduledFlush();
-    this.config = disabledConfig("disabled", "persisted", false);
+    this.config = disabledConfig("disabled", "persisted", false, true);
     this.queue = [];
-    const persisted = await this.readPersistedConfigForUpdate(repairMalformedConfig);
-    const next = { ...(isRecord(persisted) ? persisted : {}), schemaVersion: CONFIG_SCHEMA_VERSION, enabled: false };
-    await writeJsonAtomically(this.configPath, next);
-    await this.withQueueLock(() => rm(this.queuePath, { force: true }));
+    try {
+      const persisted = await this.readPersistedConfigForUpdate(repairMalformedConfig);
+      const next = { ...(isRecord(persisted) ? persisted : {}), schemaVersion: CONFIG_SCHEMA_VERSION, enabled: false };
+      await writeJsonAtomically(this.configPath, next);
+    } catch (error) {
+      if (this.preferencePath === this.configPath) throw error;
+      // The shared preference is authoritative. A later startup repairs local state.
+    }
+    const queueCleanup = this.clearInactiveQueue({ forceLock: true }).catch(() => undefined);
+    let cleanupTimer = null;
+    await Promise.race([
+      queueCleanup,
+      new Promise((resolve) => {
+        cleanupTimer = this.setTimer(resolve, 100);
+        cleanupTimer?.unref?.();
+      }),
+    ]);
+    if (cleanupTimer) this.clearTimer(cleanupTimer);
     return this.status();
+  }
+
+  configurationEnvironment() {
+    if (!this.requireExplicitPreference || parseEnabled(this.env.ZYRA_ANALYTICS_ENABLED) === false) return this.env;
+    return { ...this.env, ZYRA_ANALYTICS_ENABLED: undefined };
+  }
+
+  async writeSharedPreference(enabled) {
+    if (this.preferencePath === this.configPath) return;
+    await writeJsonAtomically(this.preferencePath, {
+      schemaVersion: PREFERENCE_SCHEMA_VERSION,
+      enabled,
+    });
+  }
+
+  async readResolvedPersistedConfiguration() {
+    const persistedConfig = await readConfigFile(this.configPath);
+    if (this.preferencePath === this.configPath) return persistedConfig;
+    const persistedPreference = await readConfigFile(this.preferencePath);
+    if (persistedPreference.invalid) return { invalid: true, value: null };
+    const preference = persistedPreference.value;
+    if (isRecord(preference) && typeof preference.enabled === "boolean") {
+      return {
+        invalid: persistedConfig.invalid,
+        value: {
+          ...(isRecord(persistedConfig.value) ? persistedConfig.value : {}),
+          enabled: preference.enabled,
+        },
+      };
+    }
+    if (this.requireExplicitPreference && isRecord(persistedConfig.value)) {
+      const { enabled: _legacyEnabled, ...configuration } = persistedConfig.value;
+      return { invalid: persistedConfig.invalid, value: configuration };
+    }
+    return persistedConfig;
   }
 
   async readPersistedConfigForUpdate(repairMalformed = false) {
@@ -148,7 +214,6 @@ export class ProductAnalyticsClient {
     if (!this.acceptingCaptures) return Promise.resolve(false);
     return this.runExclusive(async () => {
       await this.initialize();
-      if (!this.config.active) return false;
       await this.refreshPersistedConfiguration();
       if (!this.config.active || !this.installationId) return false;
       const sanitized = sanitizeAnalyticsEvent({ event, properties }, this.commonProperties());
@@ -160,7 +225,7 @@ export class ProductAnalyticsClient {
         timestamp: this.now().toISOString(),
       };
       const persisted = await this.withQueueLock(async () => {
-        await this.refreshPersistedConfiguration();
+        await this.refreshPersistedConfiguration({ queueLockHeld: true });
         if (!this.config.active) return { accepted: false, queue: [] };
         const queue = await this.readQueueUnlocked();
         queue.push(entry);
@@ -221,16 +286,21 @@ export class ProductAnalyticsClient {
     }
   }
 
-  async refreshPersistedConfiguration() {
+  async refreshPersistedConfiguration({ queueLockHeld = false, force = false } = {}) {
     if (this.config.enabledSource === "environment") return;
-    const persistedConfig = await readConfigFile(this.configPath);
+    const nowMs = this.now().getTime();
+    if (!force && !this.config.active && nowMs - this.lastConfigurationRefreshAtMs < this.inactiveRefreshIntervalMs) return;
+    this.lastConfigurationRefreshAtMs = nowMs;
+    const persistedConfig = await this.readResolvedPersistedConfiguration();
     const next = persistedConfig.invalid
       ? disabledConfig("config_invalid", "persisted")
-      : resolveAnalyticsConfig({ env: this.env, persisted: persistedConfig.value });
+      : resolveAnalyticsConfig({ env: this.configurationEnvironment(), persisted: persistedConfig.value });
     this.config = next;
     if (!next.active) {
+      this.cancellationGeneration += 1;
+      this.activeFlushController?.abort();
       this.clearScheduledFlush();
-      this.queue = [];
+      await this.clearInactiveQueue({ queueLockHeld, forceLock: !queueLockHeld });
       return;
     }
     if (!this.installationId) {
@@ -239,14 +309,36 @@ export class ProductAnalyticsClient {
     }
   }
 
-  async initializeInternal() {
-    const persistedConfig = await readConfigFile(this.configPath);
-    if (persistedConfig.invalid && parseEnabled(this.env.ZYRA_ANALYTICS_ENABLED) === undefined) {
-      this.config = disabledConfig("config_invalid", "persisted");
+  async clearInactiveQueue({ queueLockHeld = false, forceLock = false } = {}) {
+    this.queue = [];
+    if (queueLockHeld) {
+      await rm(this.queuePath, { force: true });
       return;
     }
-    this.config = resolveAnalyticsConfig({ env: this.env, persisted: persistedConfig.value });
-    if (!this.config.active) return;
+    if (!forceLock) {
+      try {
+        await stat(this.queuePath);
+      } catch (error) {
+        if (error?.code === "ENOENT") return;
+        throw error;
+      }
+    }
+    await this.withQueueLock(() => rm(this.queuePath, { force: true }));
+  }
+
+  async initializeInternal() {
+    const persistedConfig = await this.readResolvedPersistedConfiguration();
+    this.lastConfigurationRefreshAtMs = this.now().getTime();
+    if (persistedConfig.invalid && parseEnabled(this.configurationEnvironment().ZYRA_ANALYTICS_ENABLED) === undefined) {
+      this.config = disabledConfig("config_invalid", "persisted");
+      await this.clearInactiveQueue();
+      return;
+    }
+    this.config = resolveAnalyticsConfig({ env: this.configurationEnvironment(), persisted: persistedConfig.value });
+    if (!this.config.active) {
+      await this.clearInactiveQueue();
+      return;
+    }
     await mkdir(this.storageDirectory, { recursive: true });
     this.installationId = await this.readOrCreateInstallationId();
     this.queue = await this.readQueue();
@@ -327,7 +419,6 @@ export class ProductAnalyticsClient {
   }
 
   async flushInternal(options = {}) {
-    if (!this.config.active) return true;
     await this.refreshPersistedConfiguration();
     if (!this.config.active || !this.installationId) return true;
     this.clearScheduledFlush();
@@ -371,6 +462,7 @@ export class ProductAnalyticsClient {
     this.activeFlushController = flushController;
     try {
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        await this.refreshPersistedConfiguration();
         if (flushGeneration !== this.cancellationGeneration || !this.config.active) {
           await this.finishClaimedBatch(batch, false);
           return false;
@@ -511,17 +603,19 @@ export function resolveAnalyticsConfig({ env = {}, persisted = null } = {}) {
     : {};
   if (environmentEnabled === "invalid") return disabledConfig("config_invalid", "environment");
   const enabledSource = environmentEnabled === undefined ? "persisted" : "environment";
+  const preferenceSet = environmentEnabled !== undefined || typeof record.enabled === "boolean";
   const requested = environmentEnabled === undefined ? record.enabled === true : environmentEnabled;
-  if (!requested) return disabledConfig("disabled", enabledSource, false);
+  if (!requested) return disabledConfig("disabled", enabledSource, false, preferenceSet);
 
   const projectKey = String(env.ZYRA_POSTHOG_PROJECT_KEY ?? record.projectKey ?? "").trim();
   const rawHost = String(env.ZYRA_POSTHOG_HOST ?? record.host ?? "").trim();
   const customHosts = normalizeAllowedHosts(env.ZYRA_POSTHOG_ALLOWED_HOSTS ?? record.allowedHosts);
-  if (!PROJECT_KEY_PATTERN.test(projectKey)) return disabledConfig("project_key_invalid", enabledSource, true);
+  if (!PROJECT_KEY_PATTERN.test(projectKey)) return disabledConfig("project_key_invalid", enabledSource, true, preferenceSet);
   const endpoint = validatePostHogEndpoint(rawHost, customHosts);
-  if (!endpoint.valid) return disabledConfig(endpoint.reason, enabledSource, true);
+  if (!endpoint.valid) return disabledConfig(endpoint.reason, enabledSource, true, preferenceSet);
   return Object.freeze({
     requested: true,
+    preferenceSet,
     configured: true,
     active: true,
     reason: "ready",
@@ -594,9 +688,10 @@ function withoutQueueClaim(entry) {
   return unclaimed;
 }
 
-function disabledConfig(reason, enabledSource = "persisted", requested = false) {
+function disabledConfig(reason, enabledSource = "persisted", requested = false, preferenceSet = false) {
   return Object.freeze({
     requested,
+    preferenceSet,
     configured: false,
     active: false,
     reason,

@@ -53,6 +53,12 @@ const slashCommands = [
     terminalState: "compacting",
   },
   {
+    name: "analytics",
+    description: "view or change product analytics",
+    panelLabel: "/analytics [status|on|off]",
+    inlineArgs: ["status", "on", "off"],
+  },
+  {
     name: "statusline",
     aliases: ["status-line"],
     description: "edit the bottom status line",

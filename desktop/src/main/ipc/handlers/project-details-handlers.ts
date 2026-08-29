@@ -23,7 +23,27 @@ import {
 const execAsync = promisify(exec)
 const PROJECT_DETAILS_CACHE_TTL_MS = 10_000
 const PROJECT_DETAILS_CACHE_LIMIT = 24
-const projectDetailsCache = new Map<string, { expiresAt: number; promise: Promise<unknown> }>()
+type ProjectDetailsResult = Awaited<ReturnType<typeof readProjectDetails>>
+const projectDetailsCache = new Map<string, { expiresAt: number; promise: Promise<ProjectDetailsResult> }>()
+const projectOpenAnalyticsAt = new Map<string, number>()
+let captureProjectOpenAnalytics: ((projectPath: string, outcome: 'completed' | 'failed') => void) | null = null
+
+export function configureProjectOpenAnalytics(capture: typeof captureProjectOpenAnalytics): void {
+    captureProjectOpenAnalytics = capture
+}
+
+function recordProjectOpenAnalytics(ownerWebContentsId: number, projectPath: string, succeeded: boolean): void {
+    const now = Date.now()
+    const key = `${ownerWebContentsId}:${projectDetailsCacheKey(projectPath)}`
+    const previous = projectOpenAnalyticsAt.get(key) || 0
+    if (now - previous < 2_000) return
+    projectOpenAnalyticsAt.set(key, now)
+    if (projectOpenAnalyticsAt.size > 100) {
+        const oldest = projectOpenAnalyticsAt.keys().next().value
+        if (typeof oldest === 'string') projectOpenAnalyticsAt.delete(oldest)
+    }
+    captureProjectOpenAnalytics?.(projectPath, succeeded ? 'completed' : 'failed')
+}
 
 function projectDetailsCacheKey(projectPath: string): string {
     const normalizedPath = normalize(resolve(String(projectPath || '')))
@@ -269,22 +289,30 @@ export async function handleGetProjectDetails(_event: Electron.IpcMainInvokeEven
     const cacheKey = projectDetailsCacheKey(projectPath)
     const now = Date.now()
     const cached = projectDetailsCache.get(cacheKey)
+    let result: ProjectDetailsResult
     if (cached && cached.expiresAt > now) {
         projectDetailsCache.delete(cacheKey)
         projectDetailsCache.set(cacheKey, cached)
-        return cached.promise
+        result = await cached.promise
+    } else {
+        const entry = {
+            expiresAt: now + PROJECT_DETAILS_CACHE_TTL_MS,
+            promise: readProjectDetails(projectPath)
+        }
+        projectDetailsCache.set(cacheKey, entry)
+        while (projectDetailsCache.size > PROJECT_DETAILS_CACHE_LIMIT) {
+            const oldestKey = projectDetailsCache.keys().next().value
+            if (typeof oldestKey !== 'string') break
+            projectDetailsCache.delete(oldestKey)
+        }
+        result = await entry.promise
     }
-    const entry = {
-        expiresAt: now + PROJECT_DETAILS_CACHE_TTL_MS,
-        promise: readProjectDetails(projectPath)
-    }
-    projectDetailsCache.set(cacheKey, entry)
-    while (projectDetailsCache.size > PROJECT_DETAILS_CACHE_LIMIT) {
-        const oldestKey = projectDetailsCache.keys().next().value
-        if (typeof oldestKey !== 'string') break
-        projectDetailsCache.delete(oldestKey)
-    }
-    return entry.promise
+    return result
+}
+
+export function handleRecordProjectOpen(event: Electron.IpcMainInvokeEvent, projectPath: string) {
+    recordProjectOpenAnalytics(event.sender.id, projectPath, true)
+    return { success: true as const }
 }
 
 export async function handleInstallProjectDependencies(

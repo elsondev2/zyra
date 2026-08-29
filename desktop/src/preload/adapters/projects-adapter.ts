@@ -60,6 +60,7 @@ export function createProjectsAdapter() {
         installProjectDependencies: (projectPath: string, options?: { onlyMissing?: boolean }) =>
             ipcRenderer.invoke('devscope:installProjectDependencies', projectPath, options),
         getProjectDetails: (projectPath: string) => ipcRenderer.invoke('devscope:getProjectDetails', projectPath),
+        recordProjectOpen: (projectPath: string) => ipcRenderer.invoke('devscope:recordProjectOpen', projectPath),
         getFileTree: (
             projectPath: string,
             options?: {
