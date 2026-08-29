@@ -1,4 +1,5 @@
 import {
+  chooseVerifiedApiModel,
   configureOpenAIApiKey,
   removeZyraAuthMethod,
   verifyOpenAIApiKey,
@@ -41,7 +42,7 @@ export async function getZyraAuthStatus(provider = "openai-codex", options = {})
 export async function configureZyraOpenAIApiKey(apiKey, options = {}) {
   const AuthStorage = await loadPiAuthStorage();
   const authStorage = options.authStorage ?? AuthStorage.create();
-  return configureOpenAIApiKey(authStorage, apiKey, options);
+  return withVerifiedApiModel(await configureOpenAIApiKey(authStorage, apiKey, options));
 }
 
 export async function verifyZyraOpenAIApiAuth(options = {}) {
@@ -49,7 +50,11 @@ export async function verifyZyraOpenAIApiAuth(options = {}) {
   const authStorage = options.authStorage ?? AuthStorage.create();
   if (!authStorage.hasAuth?.("openai")) throw new Error("OpenAI API is not connected.");
   const key = await authStorage.getApiKey("openai");
-  return verifyOpenAIApiKey(key, options);
+  return withVerifiedApiModel(await verifyOpenAIApiKey(key, options));
+}
+
+function withVerifiedApiModel(verification) {
+  return { ...verification, model: chooseVerifiedApiModel(verification) };
 }
 
 export async function removeZyraAuth(method, options = {}) {

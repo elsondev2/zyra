@@ -25,22 +25,35 @@ const appearanceSelection = {
 
 async function verifyOpenAiConnectionContract() {
     let apiConfigured = false
+    let subscriptionConfigured = true
     let verifiedApiKey: string | null = null
     let verificationCalls = 0
+    const defaultPreferences = new DevicePreferencesService(join(root, 'setup', 'api-default-preferences.json'), now)
+    const readDefaultModel = async () => String((await defaultPreferences.get({ surface: 'desktop' })).settings.assistantDefaultModel || '')
     const apiAuth = new OpenAIConnectionService({
         now,
         openExternal: () => undefined,
+        getAssistantDefaultModel: readDefaultModel,
+        setAssistantDefaultModel: async (assistantDefaultModel) => {
+            await defaultPreferences.updateSharedFromMain({ assistantDefaultModel })
+        },
         loadAccount: async () => ({
             // A pre-existing subscription must not let an unverified API-key action pass.
-            buildChatGptAccountStatus: async () => ({ provider: 'openai-codex', status: { configured: true }, usage: {} })
+            buildChatGptAccountStatus: async () => ({ provider: 'openai-codex', status: { configured: subscriptionConfigured }, usage: subscriptionConfigured ? {} : undefined })
         }),
         loadSdk: async () => ({
             loginZyraAuth: async () => undefined,
-            configureZyraOpenAIApiKey: async (key: string) => { apiConfigured = true; verifiedApiKey = key; verificationCalls += 1 },
-            verifyZyraOpenAIApiAuth: async () => ({ ok: true }),
+            configureZyraOpenAIApiKey: async (key: string) => {
+                apiConfigured = true
+                verifiedApiKey = key
+                verificationCalls += 1
+                return { ok: true, model: 'openai/gpt-5.6-luna' }
+            },
+            verifyZyraOpenAIApiAuth: async () => ({ ok: true, model: 'openai/gpt-5.6-luna' }),
             getZyraAuthStatus: async () => ({ provider: 'openai', status: { configured: apiConfigured } }),
             removeZyraAuth: async (method: 'subscription' | 'api') => {
                 if (method === 'api') apiConfigured = false
+                if (method === 'subscription') subscriptionConfigured = false
             }
         })
     })
@@ -49,11 +62,70 @@ async function verifyOpenAiConnectionContract() {
     assert.equal(verificationCalls, 1, 'API-key onboarding must execute Pi’s provider verification call')
     assert.equal(apiStatus.method, 'api-key')
     assert.equal(apiStatus.verified, true)
+    assert.equal(await readDefaultModel(), 'openai/gpt-5.6-luna', 'API-only onboarding persists a verified API-backed model for the first chat')
     const connectedMethods = await apiAuth.getConnectionsStatus()
     assert.equal(connectedMethods.apiKey.verified, true)
     assert.equal(connectedMethods.chatgpt.verified, true)
     const disconnectedMethods = await apiAuth.disconnect('api-key')
     assert.equal(disconnectedMethods.apiKey.configured, false)
+    assert.equal(await readDefaultModel(), 'openai-codex/gpt-5.6-sol', 'disconnecting the selected API connection falls back to verified ChatGPT')
+
+    await apiAuth.connectApiKey('replacement-openai-key')
+    assert.equal(await readDefaultModel(), 'openai-codex/gpt-5.6-sol', 'adding another connection does not replace an explicit usable default')
+    await apiAuth.disconnect('chatgpt')
+    assert.equal(await readDefaultModel(), 'openai/gpt-5.6-luna', 'disconnecting the selected ChatGPT connection falls back to the verified API model')
+    await apiAuth.disconnect('api-key')
+    assert.equal(await readDefaultModel(), '', 'disconnecting the last selected connection clears the unavailable default')
+
+    await defaultPreferences.updateSharedFromMain({ assistantDefaultModel: 'openai-codex/gpt-5.6-sol' })
+    await apiAuth.connectApiKey('stale-default-replacement-key')
+    assert.equal(await readDefaultModel(), 'openai/gpt-5.6-luna', 'a stale disconnected-provider default cannot survive a successful API connection')
+
+    let releaseRemoval: (() => void) | null = null
+    let removalStarted: (() => void) | null = null
+    const removalStartedPromise = new Promise<void>((resolve) => { removalStarted = resolve })
+    const serializedDisconnect = new OpenAIConnectionService({
+        now,
+        openExternal: () => undefined,
+        loadAccount: async () => ({
+            buildChatGptAccountStatus: async () => ({ provider: 'openai-codex', status: { configured: false } })
+        }),
+        loadSdk: async () => ({
+            loginZyraAuth: async () => undefined,
+            configureZyraOpenAIApiKey: async () => ({ model: 'openai/gpt-5.6-luna' }),
+            verifyZyraOpenAIApiAuth: async () => ({ model: 'openai/gpt-5.6-luna' }),
+            getZyraAuthStatus: async () => ({ provider: 'openai', status: { configured: false } }),
+            removeZyraAuth: async () => {
+                removalStarted?.()
+                await new Promise<void>((resolve) => { releaseRemoval = resolve })
+            }
+        })
+    })
+    const firstDisconnect = serializedDisconnect.disconnect('api-key')
+    await removalStartedPromise
+    await assert.rejects(serializedDisconnect.disconnect('chatgpt'), /Wait for the current OpenAI connection action/)
+    releaseRemoval?.()
+    await firstDisconnect
+
+    let removalCalls = 0
+    const failedPreferenceWrite = new OpenAIConnectionService({
+        now,
+        openExternal: () => undefined,
+        getAssistantDefaultModel: async () => 'openai/gpt-5.6-luna',
+        setAssistantDefaultModel: async () => { throw new Error('preference disk unavailable') },
+        loadAccount: async () => ({
+            buildChatGptAccountStatus: async () => ({ provider: 'openai-codex', status: { configured: true }, usage: {} })
+        }),
+        loadSdk: async () => ({
+            loginZyraAuth: async () => undefined,
+            configureZyraOpenAIApiKey: async () => ({ model: 'openai/gpt-5.6-luna' }),
+            verifyZyraOpenAIApiAuth: async () => ({ model: 'openai/gpt-5.6-luna' }),
+            getZyraAuthStatus: async () => ({ provider: 'openai', status: { configured: true } }),
+            removeZyraAuth: async () => { removalCalls += 1 }
+        })
+    })
+    await assert.rejects(failedPreferenceWrite.disconnect('api-key'), /preference disk unavailable/)
+    assert.equal(removalCalls, 0, 'a failed fallback preference write cannot delete the still-selected credential')
 
     let chatConnected = false
     let openedUrl: string | null = null

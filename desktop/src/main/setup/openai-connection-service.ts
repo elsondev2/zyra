@@ -17,10 +17,15 @@ type ChatGptStatusResult = {
     tokenExpiresAt?: string | null
 }
 
+type ApiVerificationResult = {
+    model?: unknown
+    availableModelIds?: unknown
+}
+
 type ZyraSdkAuthModule = {
     loginZyraAuth(provider: string, options: Record<string, unknown>): Promise<unknown>
-    configureZyraOpenAIApiKey(apiKey: string, options?: Record<string, unknown>): Promise<unknown>
-    verifyZyraOpenAIApiAuth(options?: Record<string, unknown>): Promise<unknown>
+    configureZyraOpenAIApiKey(apiKey: string, options?: Record<string, unknown>): Promise<ApiVerificationResult>
+    verifyZyraOpenAIApiAuth(options?: Record<string, unknown>): Promise<ApiVerificationResult>
     getZyraAuthStatus(provider: string): Promise<AuthStatusResult>
     removeZyraAuth(method: 'subscription' | 'api', options?: Record<string, unknown>): Promise<unknown>
 }
@@ -36,7 +41,11 @@ export type OpenAIConnectionServiceDependencies = {
     prewarm?: () => Promise<void>
     dispose?: () => Promise<unknown> | unknown
     now?: () => Date
+    getAssistantDefaultModel?: () => Promise<string>
+    setAssistantDefaultModel?: (model: string) => Promise<void>
 }
+
+const CHATGPT_DEFAULT_MODEL = 'openai-codex/gpt-5.6-sol'
 
 function moduleUrl(relativePath: string): string {
     return pathToFileURL(join(resolveZyraRoot(), ...relativePath.split('/'))).href
@@ -54,6 +63,24 @@ function errorMessage(error: unknown): string {
     return error instanceof Error && error.message.trim() ? error.message : 'OpenAI connection verification failed.'
 }
 
+function verifiedApiModel(verification: ApiVerificationResult): string | null {
+    const model = typeof verification?.model === 'string' ? verification.model.trim() : ''
+    return model.startsWith('openai/') && model.length <= 256 ? model : null
+}
+
+function apiVerificationSupportsModel(verification: ApiVerificationResult, model: string): boolean {
+    if (!model.startsWith('openai/')) return false
+    if (verifiedApiModel(verification) === model) return true
+    const modelId = model.slice('openai/'.length)
+    return Array.isArray(verification.availableModelIds)
+        && verification.availableModelIds.some((candidate) => candidate === modelId)
+}
+
+function disconnectedMethodOwnsDefault(method: OnboardingAuthMethod, model: string): boolean {
+    if (method === 'chatgpt') return !model || model.startsWith('openai-codex/')
+    return model.startsWith('openai/')
+}
+
 function isUsableSubscription(status: ChatGptStatusResult): boolean {
     if (status.status?.configured !== true) return false
     if (status.usage && !status.usageError) return true
@@ -65,9 +92,11 @@ function isUsableSubscription(status: ChatGptStatusResult): boolean {
 export class OpenAIConnectionService {
     private operation: Promise<OnboardingAuthStatus> | null = null
     private verifiedCache: { status: OnboardingAuthStatus; expiresAt: number } | null = null
+    private disconnectOperation: Promise<OpenAIConnectionsStatus> | null = null
     private readonly loadSdk: () => Promise<ZyraSdkAuthModule>
     private readonly loadAccount: () => Promise<ChatGptAccountModule>
     private readonly now: () => Date
+    private lastVerifiedApiModel: string | null = null
 
     constructor(private readonly dependencies: OpenAIConnectionServiceDependencies) {
         this.loadSdk = dependencies.loadSdk || loadSdkModule
@@ -85,6 +114,7 @@ export class OpenAIConnectionService {
 
     getStatus(): Promise<OnboardingAuthStatus> {
         if (this.operation) return this.operation
+        if (this.disconnectOperation) return this.disconnectOperation.then(() => this.getStatus())
         if (this.verifiedCache && this.verifiedCache.expiresAt > this.now().getTime()) {
             return Promise.resolve({ ...this.verifiedCache.status, checkedAt: this.now().toISOString() })
         }
@@ -93,6 +123,44 @@ export class OpenAIConnectionService {
 
     async getConnectionsStatus(): Promise<OpenAIConnectionsStatus> {
         if (this.operation) await this.operation.catch(() => undefined)
+        if (this.disconnectOperation) await this.disconnectOperation.catch(() => undefined)
+        return this.readConnectionsStatus()
+    }
+
+    disconnect(method: OnboardingAuthMethod): Promise<OpenAIConnectionsStatus> {
+        if (method !== 'chatgpt' && method !== 'api-key') return Promise.reject(new Error('Choose a valid OpenAI connection to disconnect.'))
+        if (this.operation || this.disconnectOperation) return Promise.reject(new Error('Wait for the current OpenAI connection action to finish.'))
+
+        const tracked = this.performDisconnect(method)
+        this.disconnectOperation = tracked
+        const clear = () => {
+            if (this.disconnectOperation === tracked) this.disconnectOperation = null
+        }
+        void tracked.then(clear, clear)
+        return tracked
+    }
+
+    private async performDisconnect(method: OnboardingAuthMethod): Promise<OpenAIConnectionsStatus> {
+        this.verifiedCache = null
+        const currentDefault = await this.dependencies.getAssistantDefaultModel?.() || ''
+        const beforeStatus = await this.readConnectionsStatus()
+        const ownsDefault = disconnectedMethodOwnsDefault(method, currentDefault)
+        const fallback = method === 'chatgpt'
+            ? beforeStatus.apiKey.verified ? this.lastVerifiedApiModel || '' : ''
+            : beforeStatus.chatgpt.verified ? CHATGPT_DEFAULT_MODEL : ''
+
+        if (ownsDefault) await this.dependencies.setAssistantDefaultModel?.(fallback)
+        const sdk = await this.loadSdk()
+        try {
+            await sdk.removeZyraAuth(method === 'chatgpt' ? 'subscription' : 'api')
+        } catch (error) {
+            if (ownsDefault) await this.dependencies.setAssistantDefaultModel?.(currentDefault).catch(() => undefined)
+            throw error
+        }
+        return this.readConnectionsStatus()
+    }
+
+    private async readConnectionsStatus(): Promise<OpenAIConnectionsStatus> {
         const [chatgpt, apiKey] = await Promise.all([
             this.readChatGptConnection(),
             this.readApiKeyConnection()
@@ -100,17 +168,9 @@ export class OpenAIConnectionService {
         return { chatgpt, apiKey, checkedAt: this.now().toISOString() }
     }
 
-    async disconnect(method: OnboardingAuthMethod): Promise<OpenAIConnectionsStatus> {
-        if (method !== 'chatgpt' && method !== 'api-key') throw new Error('Choose a valid OpenAI connection to disconnect.')
-        if (this.operation) throw new Error('Wait for the current OpenAI connection action to finish.')
-        this.verifiedCache = null
-        const sdk = await this.loadSdk()
-        await sdk.removeZyraAuth(method === 'chatgpt' ? 'subscription' : 'api')
-        return this.getConnectionsStatus()
-    }
-
     connectChatGpt(): Promise<OnboardingAuthStatus> {
         if (this.operation) return this.operation
+        if (this.disconnectOperation) return Promise.reject(new Error('Wait for the current OpenAI connection action to finish.'))
         return this.track((async () => {
             const sdk = await this.loadSdk()
             await sdk.loginZyraAuth('openai-codex', {
@@ -133,11 +193,22 @@ export class OpenAIConnectionService {
 
     connectApiKey(apiKey: string): Promise<OnboardingAuthStatus> {
         if (this.operation) return this.operation
+        if (this.disconnectOperation) return Promise.reject(new Error('Wait for the current OpenAI connection action to finish.'))
         return this.track((async () => {
             const key = typeof apiKey === 'string' ? apiKey.trim() : ''
             if (!key || /\s/.test(key) || key.length > 4_096) throw new Error('Enter a valid OpenAI API key.')
             const sdk = await this.loadSdk()
-            await sdk.configureZyraOpenAIApiKey(key)
+            const verification = await sdk.configureZyraOpenAIApiKey(key)
+            const model = verifiedApiModel(verification)
+            if (!model) throw new Error('The API key is valid, but no supported GPT-5.6 API model is available to this account.')
+            this.lastVerifiedApiModel = model
+            const currentDefault = await this.dependencies.getAssistantDefaultModel?.() || ''
+            const keepCurrentDefault = currentDefault.startsWith('openai/')
+                ? apiVerificationSupportsModel(verification, currentDefault)
+                : currentDefault.startsWith('openai-codex/')
+                    ? (await this.readChatGptConnection()).verified
+                    : Boolean(currentDefault)
+            if (!keepCurrentDefault) await this.dependencies.setAssistantDefaultModel?.(model)
             return {
                 checking: false,
                 verified: true,
@@ -212,7 +283,10 @@ export class OpenAIConnectionService {
                     checkedAt
                 }
             }
-            await sdk.verifyZyraOpenAIApiAuth()
+            const verification = await sdk.verifyZyraOpenAIApiAuth()
+            const model = verifiedApiModel(verification)
+            if (!model) throw new Error('The API key is valid, but no supported GPT-5.6 API model is available to this account.')
+            this.lastVerifiedApiModel = model
             return {
                 method: 'api-key',
                 provider: 'openai',
@@ -223,6 +297,7 @@ export class OpenAIConnectionService {
                 checkedAt
             }
         } catch (error) {
+            this.lastVerifiedApiModel = null
             return {
                 method: 'api-key',
                 provider: 'openai',
@@ -282,7 +357,10 @@ export class OpenAIConnectionService {
             const status = await sdk.getZyraAuthStatus('openai')
             apiConfigured = status.status?.configured === true
             if (apiConfigured) {
-                await sdk.verifyZyraOpenAIApiAuth()
+                const verification = await sdk.verifyZyraOpenAIApiAuth()
+                const model = verifiedApiModel(verification)
+                if (!model) throw new Error('The API key is valid, but no supported GPT-5.6 API model is available to this account.')
+                this.lastVerifiedApiModel = model
                 return {
                     checking: false,
                     verified: true,

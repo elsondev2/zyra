@@ -270,6 +270,7 @@ export class DevicePreferencesService {
     }
 
     async get(input: GetDevicePreferencesInput): Promise<DevicePreferencesSnapshot> {
+        await this.operationQueue
         const surface = isDevicePreferenceSurface(input?.surface) ? input.surface : 'browser'
         if (surface === 'desktop' && isRecord(input?.legacySettings)) {
             await this.migrateDesktopLegacy(input.legacySettings)

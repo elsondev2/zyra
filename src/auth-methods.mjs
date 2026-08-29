@@ -91,8 +91,10 @@ export async function configureOpenAIApiKey(authStorage, apiKey, options = {}) {
   if (!authStorage?.set) throw createAuthError("Pi auth storage is unavailable.", "auth_storage_unavailable");
   const key = normalizeApiKey(apiKey);
   const verification = await verifyOpenAIApiKey(key, options);
+  const model = chooseVerifiedApiModel(verification);
+  if (!model) throw createAuthError("The API key is valid, but no supported GPT-5.6 API model is available to this account.", "unsupported_api_model");
   authStorage.set(ZYRA_API_PROVIDER, { type: "api_key", key });
-  return verification;
+  return { ...verification, model };
 }
 
 export function removeZyraAuthMethod(authStorage, method) {

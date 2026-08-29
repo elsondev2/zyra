@@ -839,7 +839,7 @@ interface SettingsContextType {
     settings: Settings
     preferencesHydrated: boolean
     preferencesError: string | null
-    updateSettings: (partial: Partial<Settings>) => void
+    updateSettings: (partial: Partial<Settings>) => Promise<void>
     updateHostedAiSecrets: (partial: UpdateHostedAiSecretsInput) => Promise<void>
     clearCache: () => void
 }
@@ -1082,7 +1082,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
                 .catch((error) => console.error('Failed to save OS-owned credentials:', error))
         }
 
-        if (Object.keys(preferencePatch).length === 0) return
+        if (Object.keys(preferencePatch).length === 0) return Promise.resolve()
         writeQueueRef.current = writeQueueRef.current.then(async () => {
             const save = () => window.devscope.preferences.update({
                 surface: bootstrap.surface,
@@ -1101,6 +1101,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
             setPreferencesError(error instanceof Error ? error.message : 'Could not save device preferences.')
             return refreshPreferences().catch(() => undefined)
         })
+        return writeQueueRef.current
     }, [applyPreferenceSnapshot, bootstrap.surface, refreshPreferences, replaceSettings, updateHostedAiSecrets])
 
     const clearCache = useCallback(() => {

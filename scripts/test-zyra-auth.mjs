@@ -58,6 +58,24 @@ async function testInvalidKeyIsNotStored() {
   assert.equal(auth.hasAuth("openai"), false);
 }
 
+async function testUnsupportedApiModelDoesNotReplaceCredential() {
+  const auth = new FakeAuthStorage();
+  auth.set("openai", { type: "api_key", key: "existing-key" });
+  let calls = 0;
+  await assert.rejects(
+    () => configureOpenAIApiKey(auth, "unsupported-key", {
+      fetch: async () => {
+        calls += 1;
+        return calls === 1
+          ? response(404, { error: { message: "model missing" } })
+          : response(200, { data: [{ id: "gpt-4.1" }] });
+      },
+    }),
+    /no supported GPT-5\.6 API model/i,
+  );
+  assert.equal(auth.values.get("openai")?.key, "existing-key", "unsupported replacement keys never overwrite the working credential");
+}
+
 async function testValidKeyWithoutLunaFallsBack() {
   let calls = 0;
   const verification = await verifyOpenAIApiKey("sk-valid-key", {
@@ -227,6 +245,7 @@ async function testLogoutFallsBackToOtherConnectedMethod() {
 
 await testVerificationAndStorage();
 await testInvalidKeyIsNotStored();
+await testUnsupportedApiModelDoesNotReplaceCredential();
 await testValidKeyWithoutLunaFallsBack();
 testStatusAndRemoval();
 await testBrowserFirstOAuthContract();

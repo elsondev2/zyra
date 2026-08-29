@@ -284,7 +284,7 @@ export default function AccountSettings() {
             if (!target) throw new Error(method === 'chatgpt'
                 ? 'Pi did not report an available ChatGPT subscription model.'
                 : 'This API key did not report a supported OpenAI API model.')
-            updateSettings({ assistantDefaultModel: target.id })
+            await updateSettings({ assistantDefaultModel: target.id })
         } catch (error) {
             setConnectionError(error instanceof Error ? error.message : 'Could not switch the new-chat connection.')
         } finally {

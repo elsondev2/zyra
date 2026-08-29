@@ -29,7 +29,13 @@ export function createDesktopSetupServices(userDataPath: string): DesktopSetupSe
         loadSdk: async () => authWorker.sdk,
         loadAccount: async () => authWorker.account,
         prewarm: () => authWorker.warm(),
-        dispose: () => authWorker.dispose()
+        dispose: () => authWorker.dispose(),
+        getAssistantDefaultModel: async () => String(
+            (await preferences.get({ surface: 'desktop' })).settings.assistantDefaultModel || ''
+        ),
+        setAssistantDefaultModel: async (assistantDefaultModel) => {
+            await preferences.updateSharedFromMain({ assistantDefaultModel })
+        }
     })
     const onboarding = new OnboardingService(
         join(setupDirectory, 'onboarding.json'),
