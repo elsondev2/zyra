@@ -29,7 +29,10 @@ ${StrStr}
   FileWrite $0 "set $\"ZYRA_ROOT=$3\resources\zyra-runtime$\"$\r$\n"
   FileWrite $0 "set $\"ZYRA_DATA_ROOT=%USERPROFILE%$\"$\r$\n"
   FileWrite $0 "set $\"ZYRA_DISTRIBUTION=desktop-bundle$\"$\r$\n"
-  FileWrite $0 "if exist $\"$3\resources\zyra-node\node.exe$\" ($\"$3\resources\zyra-node\node.exe$\" $\"$3\resources\zyra-runtime\bin\zyra.mjs$\" %* & exit /b %ERRORLEVEL%)$\r$\n"
+  FileWrite $0 "if not exist $\"$3\resources\zyra-node\node.exe$\" goto zyra_cli_fallback$\r$\n"
+  FileWrite $0 "$\"$3\resources\zyra-node\node.exe$\" $\"$3\resources\zyra-runtime\bin\zyra.mjs$\" %*$\r$\n"
+  FileWrite $0 "exit /b %ERRORLEVEL%$\r$\n"
+  FileWrite $0 ":zyra_cli_fallback$\r$\n"
   FileWrite $0 "if exist $\"$LOCALAPPDATA\Zyra\zyra.cmd$\" call $\"$LOCALAPPDATA\Zyra\zyra.cmd$\" %*$\r$\n"
   FileWrite $0 "exit /b %ERRORLEVEL%$\r$\n"
   FileClose $0

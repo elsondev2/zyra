@@ -52,6 +52,18 @@ try {
       "CMD cannot expand the Desktop exit code before launching Desktop",
     );
 
+    const nsisInstallerSource = readFileSync(path.join(root, "desktop", "build", "installer.nsh"), "utf8");
+    assert.match(
+      nsisInstallerSource,
+      /if not exist .*zyra-node\\node\.exe.*goto zyra_cli_fallback[\s\S]*zyra-node\\node\.exe.*zyra-runtime\\bin\\zyra\.mjs.*%\*[\s\S]*exit \/b %ERRORLEVEL%[\s\S]*:zyra_cli_fallback/,
+      "the NSIS-managed launcher must read bundled Node's exit code outside a parenthesized CMD block",
+    );
+    assert.doesNotMatch(
+      nsisInstallerSource,
+      /if exist .*zyra-node\\node\.exe.*\(.*zyra-runtime\\bin\\zyra\.mjs.*%ERRORLEVEL%.*\)/,
+      "the NSIS-managed launcher cannot expand ERRORLEVEL before bundled Node exits",
+    );
+
     const directDesktopFailure = spawnSync(process.execPath, ["--tui"], { encoding: "utf8" });
     assert.notEqual(directDesktopFailure.status, 0, "the regression fixture needs a failing executable invocation");
     const shimPath = path.join(project, "desktop-exit-code.cmd");
