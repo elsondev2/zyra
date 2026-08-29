@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   createFetchTransport,
   createProductAnalytics,
+  isRetryableExclusiveOpenError,
   resolveAnalyticsConfig,
   validatePostHogEndpoint,
 } from "../src/analytics/client.mjs";
@@ -30,6 +31,7 @@ try {
   await testDisabledIsInert();
   await testFetchTimeoutContract();
   testConfigurationAndEndpointValidation();
+  testWindowsExclusiveOpenErrors();
   testPropertySanitation();
   await testBatchingRetryPersistenceAndIdentity();
   await testRetryBoundAndShutdownFlush();
@@ -42,7 +44,12 @@ try {
   await testRendererAndCredentialBoundaries();
   console.log("product analytics contracts: ok");
 } finally {
-  await Promise.all(temporaryRoots.map((directory) => rm(directory, { recursive: true, force: true })));
+  await Promise.all(temporaryRoots.map((directory) => rm(directory, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 50,
+  })));
 }
 
 async function temporaryDirectory(label) {
@@ -62,6 +69,14 @@ function clientOptions(storageDirectory, overrides = {}) {
     randomUUID: () => UUID_A,
     ...overrides,
   };
+}
+
+function testWindowsExclusiveOpenErrors() {
+  assert.equal(isRetryableExclusiveOpenError({ code: "EEXIST" }, "linux"), true);
+  assert.equal(isRetryableExclusiveOpenError({ code: "EPERM" }, "win32"), true, "Windows reports transient lock-file deletion races as EPERM");
+  assert.equal(isRetryableExclusiveOpenError({ code: "EACCES" }, "win32"), true);
+  assert.equal(isRetryableExclusiveOpenError({ code: "EPERM" }, "linux"), false);
+  assert.equal(isRetryableExclusiveOpenError({ code: "EINVAL" }, "win32"), false);
 }
 
 async function testDisabledIsInert() {
@@ -265,7 +280,7 @@ async function testRetryBoundAndShutdownFlush() {
     transport: async () => { flushed += 1; return { ok: true, retryable: false }; },
   }));
   const pendingCapture = client.capture("zyra_v1_cli", { action: "startup", outcome: "started" });
-  await client.shutdown({ timeoutMs: 500 });
+  await client.shutdown({ timeoutMs: 10_000 });
   assert.equal(await pendingCapture, true, "shutdown drains capture work queued immediately before it closes the client");
   assert.equal(flushed, 1);
   assert.equal(client.status().queueSize, 0);

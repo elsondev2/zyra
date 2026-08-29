@@ -282,7 +282,7 @@ export class ProductAnalyticsClient {
         const ownedIdentityFile = Boolean(handle);
         if (handle) await handle.close().catch(() => undefined);
         if (ownedIdentityFile) await rm(this.identityPath, { force: true }).catch(() => undefined);
-        if (error?.code !== "EEXIST") throw error;
+        if (!isRetryableExclusiveOpenError(error)) throw error;
       }
       await this.sleep(20);
     }
@@ -442,7 +442,7 @@ export class ProductAnalyticsClient {
         if (lockHandle) await lockHandle.close().catch(() => undefined);
         lockHandle = null;
         if (ownedLockFile) await rm(this.queueLockPath, { force: true }).catch(() => undefined);
-        if (error?.code !== "EEXIST") throw error;
+        if (!isRetryableExclusiveOpenError(error)) throw error;
         const lockStats = await stat(this.queueLockPath).catch(() => null);
         if (lockStats && Date.now() - lockStats.mtimeMs > QUEUE_LOCK_STALE_MS) {
           await rm(this.queueLockPath, { force: true }).catch(() => undefined);
@@ -490,6 +490,11 @@ export class ProductAnalyticsClient {
     this.operationQueue = next.then(() => undefined, () => undefined);
     return next;
   }
+}
+
+export function isRetryableExclusiveOpenError(error, platform = process.platform) {
+  const code = error && typeof error === "object" ? error.code : undefined;
+  return code === "EEXIST" || (platform === "win32" && (code === "EPERM" || code === "EACCES"));
 }
 
 export function resolveAnalyticsConfig({ env = {}, persisted = null } = {}) {
