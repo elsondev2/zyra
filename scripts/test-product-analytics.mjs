@@ -37,6 +37,7 @@ try {
   await testRetryBoundAndShutdownFlush();
   await testQueueAgeBound();
   await testConcurrentClients();
+  await testRendererOwnedEventReload();
   await testImmediateOptOut();
   await testOptOutWhileCaptureWaitsForQueueLock();
   await testPersistedToggleAndRedactedStatus();
@@ -379,6 +380,32 @@ async function testConcurrentClients() {
   const drained = JSON.parse(await readFile(path.join(storageDirectory, "queue.json"), "utf8"));
   assert.equal(drained.events.length, 0);
   await assert.rejects(readFile(path.join(storageDirectory, "queue.lock"), "utf8"));
+}
+
+async function testRendererOwnedEventReload() {
+  const storageDirectory = await temporaryDirectory("renderer-owned-reload");
+  const renderer = createProductAnalytics(clientOptions(storageDirectory, {
+    env: VALID_ENV,
+    source: "desktop_renderer",
+  }));
+  assert.equal(await renderer.capture("zyra_v1_files", { action: "preview" }), true);
+
+  const payloads = [];
+  const main = createProductAnalytics(clientOptions(storageDirectory, {
+    env: VALID_ENV,
+    source: "desktop_main",
+    randomUUID: () => UUID_B,
+    transport: async ({ payload }) => {
+      payloads.push(payload);
+      return { ok: true, retryable: false };
+    },
+  }));
+  await main.initialize();
+  assert.equal(main.status().queueSize, 1, "main reload preserves an event owned by the renderer");
+  assert.equal(await main.flush(), true);
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].batch[0].event, "zyra_v1_files");
+  assert.equal(payloads[0].batch[0].properties.source, "desktop_renderer");
 }
 
 async function testImmediateOptOut() {

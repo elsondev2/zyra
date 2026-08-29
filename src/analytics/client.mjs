@@ -311,7 +311,7 @@ export class ProductAnalyticsClient {
       if (!Number.isFinite(timestampMs) || timestampMs - nowMs > MAX_FUTURE_CLOCK_SKEW_MS || nowMs - timestampMs > this.maxEventAgeMs) return [];
       const sanitized = sanitizeAnalyticsEvent({
         event: entry.event,
-        properties: { ...entry.properties, ...this.commonProperties() },
+        properties: { ...this.commonProperties(), ...entry.properties },
       }, this.commonProperties());
       if (!sanitized) return [];
       const claimExpiresAt = Number(entry.claimExpiresAt);
