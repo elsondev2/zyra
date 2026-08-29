@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import type { PreviewFile, PreviewMediaItem, PreviewMeta, PreviewOpenOptions, PreviewTab } from './types'
 import type { FilePreviewChromeContext } from './filePreviewChromePolicy'
 
@@ -28,6 +29,7 @@ export interface FilePreviewModalProps extends PreviewMeta {
     onClosePreviewTab?: (tabId: string) => void
     onReorderPreviewTabs?: (activeTabId: string, overTabId: string | null) => void
     mediaItems?: PreviewMediaItem[]
+    navigationSidebar?: ReactNode
     onSaved?: (filePath: string) => Promise<void> | void
     onShowToast?: (message: string, tone?: 'success' | 'error' | 'info') => void
     onClose: () => void

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, ExternalLink, RefreshCw, RotateCcw } from 'lucide-react'
+import { AlertTriangle, ExternalLink, RotateCcw } from 'lucide-react'
 import { useThemeRevision } from '@/lib/use-theme-revision'
 import { OfficePreviewToolbar } from './OfficePreviewToolbar'
 import {
@@ -171,10 +171,7 @@ export default function OfficePreviewContent({
                 <div ref={containerRef} className="h-full min-h-0 w-full overflow-hidden" aria-label={`${type.toUpperCase()} preview for ${fileName}`} />
                 {!ready && !fatalError ? (
                     <div className="absolute inset-0 flex items-center justify-center bg-[var(--office-preview-desk)]">
-                        <div className="flex items-center gap-2 text-[11px] text-sparkle-text-muted">
-                            <RefreshCw className="size-3.5 animate-spin" />
-                            <span>Rendering {type.toUpperCase()} locally…</span>
-                        </div>
+                        <span className="text-[11px] font-medium text-sparkle-text-muted/70">Rendering file...</span>
                     </div>
                 ) : null}
                 {fatalError ? (

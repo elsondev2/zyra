@@ -159,12 +159,12 @@ export default function CsvPreviewTable({ content, language, useDistinctColumnCo
         <div className="w-full h-full min-h-0 bg-sparkle-card rounded-xl border border-white/5 overflow-hidden flex flex-col">
             <div className="px-4 py-2.5 border-b border-white/5 text-xs text-white/50 bg-black/20">
                 {isRendering
-                    ? 'Rendering CSV preview...'
+                    ? 'Rendering file...'
                     : `${csvPreview.totalRows} rows ${csvPreview.totalRows > 0 ? `(showing ${pageStartLabel}-${pageEndLabel})` : ''}`}
             </div>
             {isRendering ? (
                 <div className="flex flex-1 items-center justify-center text-xs text-white/50">
-                    Rendering CSV preview...
+                    Rendering file...
                 </div>
             ) : csvPreview.header.length > 0 ? (
                 <div className="flex-1 min-h-0 overflow-auto custom-scrollbar">

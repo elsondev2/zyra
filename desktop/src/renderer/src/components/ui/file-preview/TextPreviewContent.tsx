@@ -1,5 +1,4 @@
 import { lazy, memo, Suspense, useEffect, useMemo, useState, type RefObject } from 'react'
-import { RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { HIGHLIGHT_MAX_CHARS, HIGHLIGHT_MAX_LINES } from './constants'
 import type { PreviewFile, PreviewMeta } from './types'
@@ -12,8 +11,8 @@ import type { editor as MonacoEditor } from 'monaco-editor'
 const FileMarkdownPreview = lazy(() => import('./FileMarkdownPreview'))
 const CsvPreviewTable = lazy(() => import('./CsvPreviewTable'))
 
-function PreviewRendererFallback({ label: _label }: { label: string }) {
-    return <PreviewContentSkeleton className="min-h-36" />
+function PreviewRendererFallback({ label }: { label: string }) {
+    return <PreviewContentSkeleton className="min-h-36" label={label} />
 }
 
 interface TextPreviewContentProps {
@@ -153,7 +152,7 @@ function TextPreviewContent({
 
             {file.type === 'md' && (
                 <div className={markdownContainerClassName}>
-                    <Suspense fallback={<PreviewRendererFallback label="Preparing Markdown preview…" />}>
+                    <Suspense fallback={<PreviewRendererFallback label="Rendering file..." />}>
                         <FileMarkdownPreview
                             key={file.path}
                             content={content}
@@ -173,12 +172,7 @@ function TextPreviewContent({
                     {jsonState.formatted ? (
                         <SyntaxPreview content={jsonState.formatted} language="json" filePath={file.path} focusLine={focusLine} onEditorMount={onEditorMount} height={isExpanded ? '100%' : undefined} />
                     ) : jsonState.isFormatting ? (
-                        <div className="flex h-full items-center justify-center">
-                            <div className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/65">
-                                <RefreshCw size={14} className="animate-spin text-[var(--accent-primary)]" />
-                                Formatting JSON preview...
-                            </div>
-                        </div>
+                        <PreviewContentSkeleton label="Rendering file..." />
                     ) : (
                         <div className={isExpanded ? 'h-full flex flex-col' : ''}>
                             {jsonState.invalid && (
@@ -197,7 +191,7 @@ function TextPreviewContent({
 
             {file.type === 'csv' && (
                 <div className="w-full h-full min-h-0 flex-1">
-                    <Suspense fallback={<PreviewRendererFallback label="Preparing table preview…" />}>
+                    <Suspense fallback={<PreviewRendererFallback label="Rendering file..." />}>
                         <CsvPreviewTable
                             content={content}
                             language={file.language}

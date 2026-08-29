@@ -42,32 +42,21 @@ export function PreviewTreeSkeleton({
     )
 }
 
-const CONTENT_LINE_WIDTHS = ['54%', '76%', '68%', '39%', '72%', '61%', '81%', '46%', '66%', '58%', '74%', '35%']
-
-export function PreviewContentSkeleton({ className }: { className?: string }) {
+export function PreviewContentSkeleton({
+    className,
+    label = 'Loading file...'
+}: {
+    className?: string
+    label?: string
+}) {
     return (
         <div
-            className={cn('flex h-full min-h-[16rem] w-full overflow-hidden bg-sparkle-card', className)}
+            className={cn('flex h-full min-h-[16rem] w-full items-center justify-center overflow-hidden bg-sparkle-card px-6 text-center', className)}
             role="status"
-            aria-label="Loading file preview"
+            aria-live="polite"
+            aria-label={label}
         >
-            <div className="w-12 shrink-0 border-r border-[var(--surface-divider)]/70 px-2 py-4" aria-hidden="true">
-                {CONTENT_LINE_WIDTHS.map((_, index) => (
-                    <span key={index} className="mb-2.5 block h-2 w-full rounded-[2px] bg-sparkle-text/[0.035]" />
-                ))}
-            </div>
-            <div className="min-w-0 flex-1 px-4 py-4" aria-hidden="true">
-                {CONTENT_LINE_WIDTHS.map((width, index) => (
-                    <span
-                        key={index}
-                        className="mb-2.5 block h-2 animate-pulse rounded-[2px] bg-sparkle-text/[0.055] motion-reduce:animate-none"
-                        style={{ width, marginLeft: index === 2 || index === 3 || index === 7 ? 18 : 0 }}
-                    />
-                ))}
-            </div>
-            <div className="hidden w-16 shrink-0 border-l border-[var(--surface-divider)]/60 px-2 py-4 sm:block" aria-hidden="true">
-                <span className="block h-24 w-full rounded-[2px] bg-sparkle-text/[0.035]" />
-            </div>
+            <span className="text-[11px] font-medium text-sparkle-text-muted/70">{label}</span>
         </div>
     )
 }

@@ -83,7 +83,7 @@ export default function SyntaxPreview({
     return (
         <div className="devscope-monaco-preview w-full h-full min-h-0" style={{ height: height || '100%', background: 'var(--color-card)' }}>
             <Suspense
-                fallback={<PreviewContentSkeleton />}
+                fallback={<PreviewContentSkeleton label="Rendering file..." />}
             >
                 <MonacoEditorComponent
                     value={safeContent}

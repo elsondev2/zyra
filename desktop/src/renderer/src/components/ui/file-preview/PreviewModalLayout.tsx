@@ -50,6 +50,7 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
         previewBytes,
         projectPath,
         mediaItems,
+        navigationSidebar: navigationSidebarOverride,
         openMediaItem,
         onInternalLinkClick,
         onLinkNotice,
@@ -345,7 +346,7 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
         </Suspense>
     ) : null
 
-    const navigationSidebar = (
+    const fileNavigationSidebar = (
         <Suspense fallback={<PreviewSidebarFallback label="Loading navigator…" />}>
             <PreviewNavigationSidebar
                 file={file}
@@ -359,6 +360,7 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
             />
         </Suspense>
     )
+    const navigationSidebar = navigationSidebarOverride ?? fileNavigationSidebar
 
     const modalContent = (
         <div

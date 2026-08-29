@@ -12,6 +12,7 @@ export type PreviewModalLayoutProps = {
     previewBytes?: number
     projectPath?: string
     mediaItems: PreviewMediaItem[]
+    navigationSidebar?: ReactNode
     openMediaItem: (item: PreviewMediaItem) => Promise<void>
     onInternalLinkClick: (href: string) => Promise<boolean | void> | boolean | void
     onLinkNotice?: (message: string, tone: 'info' | 'error') => void

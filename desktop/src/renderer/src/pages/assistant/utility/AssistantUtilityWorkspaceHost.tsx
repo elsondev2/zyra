@@ -16,6 +16,7 @@ import { useAssistantStoreSelector } from '@/lib/assistant/store'
 import { AssistantBrowserWorkspace, type AssistantBrowserWorkspaceController } from '../AssistantBrowserWorkspace'
 import { AssistantFilesWorkspace } from '../AssistantFilesWorkspace'
 import { AssistantFleetWorkspace } from '../AssistantFleetWorkspace'
+import { AssistantPreviewResourceNavigator } from '../AssistantPreviewResourceNavigator'
 import { AssistantResourcesWorkspace } from '../AssistantResourcesWorkspace'
 import { AssistantReviewLanding } from '../AssistantReviewLanding'
 import { AssistantTerminalWorkspace } from '../AssistantTerminalWorkspace'
@@ -126,6 +127,15 @@ export function AssistantUtilityWorkspaceHost({ tab, active, windowId, onStateCa
         void window.devscope.assistantUtility.tabReady(windowId, tab.id)
     }, [tab.id, tab.workspace, windowId])
 
+    const previewResourceNavigator = tab.workspace === 'resources' && preview.previewFile ? (
+        <AssistantPreviewResourceNavigator
+            turns={turns}
+            projectPath={tab.projectPath || null}
+            activeFilePath={preview.previewFile.path}
+            onOpenPreview={preview.openPreview}
+            onOpenUrl={(url) => { void window.devscope.openBrowserPreviewExternal(url) }}
+        />
+    ) : undefined
     const previewModal = preview.previewFile ? (
         <FilePreviewModal
             file={preview.previewFile}
@@ -141,6 +151,7 @@ export function AssistantUtilityWorkspaceHost({ tab, active, windowId, onStateCa
             active={active}
             chromeContext="peek"
             mediaItems={preview.previewMediaItems}
+            navigationSidebar={previewResourceNavigator}
             onOpenLinkedPreview={preview.openPreview}
             onOpenLinkedPreviewInNewTab={preview.openPreviewInNewTab}
             onSelectPreviewTab={preview.setActivePreviewTab}

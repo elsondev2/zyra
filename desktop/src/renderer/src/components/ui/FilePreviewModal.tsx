@@ -52,6 +52,7 @@ export function FilePreviewModal({
     onClosePreviewTab,
     onReorderPreviewTabs,
     mediaItems = [],
+    navigationSidebar,
     onSaved,
     onShowToast,
     onClose
@@ -76,7 +77,9 @@ export function FilePreviewModal({
         ? initialPresentation?.expanded ?? settings.filePreviewOpenInFullscreen
         : false
     const navigatorRequested = file.openNavigator === true || isDirectory
-    const navigatorInitiallyAvailable = chromePolicy.navigator === 'always'
+    const hasNavigationSidebarOverride = navigationSidebar != null
+    const navigatorInitiallyAvailable = hasNavigationSidebarOverride
+        || chromePolicy.navigator === 'always'
         || (chromePolicy.navigator === 'requested' && navigatorRequested)
     const [windowedNavigatorEnabled, setWindowedNavigatorEnabled] = useState(navigatorInitiallyAvailable)
     const [handledNavigatorRevealRequests, setHandledNavigatorRevealRequests] = useState<ReadonlySet<string>>(() => new Set())
@@ -97,7 +100,7 @@ export function FilePreviewModal({
         })
     }, [])
     const defaultLeftPanelOpen = navigatorInitiallyAvailable
-        && (navigatorRequested || settings.filePreviewFullscreenShowLeftPanel)
+        && (hasNavigationSidebarOverride || navigatorRequested || settings.filePreviewFullscreenShowLeftPanel)
     const defaultRightPanelOpen = initialMode === 'edit' && settings.filePreviewFullscreenShowRightPanel
     const canRunPython = file.type === 'code'
         && (file.language === 'python' || /\.py$/i.test(file.name) || /\.py$/i.test(file.path))
@@ -227,6 +230,11 @@ export function FilePreviewModal({
     }, [leftPanelOpen, ownsAppTitleBarNavigator])
 
     useEffect(() => {
+        if (hasNavigationSidebarOverride) {
+            setWindowedNavigatorEnabled(true)
+            setLeftPanelOpen(true)
+            return
+        }
         if (chromePolicy.navigator === 'none') {
             setWindowedNavigatorEnabled(false)
             return
@@ -234,7 +242,7 @@ export function FilePreviewModal({
         if (chromePolicy.navigator !== 'always' && !navigatorRequested) return
         setWindowedNavigatorEnabled(true)
         if (navigatorRequested) setLeftPanelOpen(true)
-    }, [chromePolicy.navigator, navigatorRequested, setLeftPanelOpen])
+    }, [chromePolicy.navigator, hasNavigationSidebarOverride, navigatorRequested, setLeftPanelOpen])
 
     useEffect(() => {
         if (chromePolicy.allowFullscreen || !isExpanded) return
@@ -482,6 +490,7 @@ export function FilePreviewModal({
             previewBytes={previewBytes ?? undefined}
             projectPath={projectPath}
             mediaItems={effectiveMediaItems}
+            navigationSidebar={navigationSidebar}
             openMediaItem={openMediaItem}
             onInternalLinkClick={handleInternalMarkdownLink}
             onLinkNotice={onShowToast}
