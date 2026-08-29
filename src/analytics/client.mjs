@@ -159,13 +159,17 @@ export class ProductAnalyticsClient {
         properties: sanitized.properties,
         timestamp: this.now().toISOString(),
       };
-      this.queue = await this.withQueueLock(async () => {
+      const persisted = await this.withQueueLock(async () => {
+        await this.refreshPersistedConfiguration();
+        if (!this.config.active) return { accepted: false, queue: [] };
         const queue = await this.readQueueUnlocked();
         queue.push(entry);
         if (queue.length > this.maxQueueSize) queue.splice(0, queue.length - this.maxQueueSize);
         await this.persistQueueUnlocked(queue);
-        return queue;
+        return { accepted: true, queue };
       });
+      this.queue = persisted.queue;
+      if (!persisted.accepted) return false;
       if (this.autoFlush && this.queue.length >= this.batchSize) {
         await this.flushInternal({ maxAttempts: 1 });
       } else {

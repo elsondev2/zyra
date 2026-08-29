@@ -38,6 +38,7 @@ try {
   await testQueueAgeBound();
   await testConcurrentClients();
   await testImmediateOptOut();
+  await testOptOutWhileCaptureWaitsForQueueLock();
   await testPersistedToggleAndRedactedStatus();
   await testRepresentativeCatalogEvents();
   await testInstrumentationReachability();
@@ -406,6 +407,53 @@ async function testImmediateOptOut() {
   assert.equal(await flush, false);
   assert.equal(await client.capture("zyra_v1_cli", { action: "startup", outcome: "started" }), false);
   assert.equal(await concurrentClient.capture("zyra_v1_cli", { action: "startup", outcome: "started" }), false, "other CLI clients observe persisted opt-out before their next capture");
+}
+
+async function testOptOutWhileCaptureWaitsForQueueLock() {
+  const storageDirectory = await temporaryDirectory("opt-out-during-lock-wait");
+  await writeFile(path.join(storageDirectory, "config.json"), `${JSON.stringify({
+    schemaVersion: 1,
+    enabled: true,
+    projectKey: VALID_KEY,
+    host: "https://us.i.posthog.com",
+  })}\n`, "utf8");
+  let releaseCaptureWait;
+  let releaseDisableWait;
+  let captureWaitStarted;
+  let disableWaitStarted;
+  const captureWait = new Promise((resolve) => { releaseCaptureWait = resolve; });
+  const disableWait = new Promise((resolve) => { releaseDisableWait = resolve; });
+  const captureStarted = new Promise((resolve) => { captureWaitStarted = resolve; });
+  const disableStarted = new Promise((resolve) => { disableWaitStarted = resolve; });
+  let lockWaitCount = 0;
+  const client = createProductAnalytics(clientOptions(storageDirectory, {
+    env: {},
+    sleep: async () => {
+      lockWaitCount += 1;
+      if (lockWaitCount === 1) {
+        captureWaitStarted();
+        await captureWait;
+        return;
+      }
+      if (lockWaitCount === 2) {
+        disableWaitStarted();
+        await disableWait;
+      }
+    },
+  }));
+  await client.initialize();
+  const queueLockPath = path.join(storageDirectory, "queue.lock");
+  await writeFile(queueLockPath, "test-held-lock\n", "utf8");
+  const capture = client.capture("zyra_v1_cli", { action: "startup", outcome: "started" });
+  await captureStarted;
+  const disable = client.updateEnabled(false);
+  await disableStarted;
+  await rm(queueLockPath, { force: true });
+  releaseDisableWait();
+  assert.equal((await disable).enabled, false);
+  releaseCaptureWait();
+  assert.equal(await capture, false, "a capture waiting for queue.lock must honor an opt-out that completes first");
+  await assert.rejects(readFile(path.join(storageDirectory, "queue.json"), "utf8"), undefined, "opt-out leaves no queued event on disk");
 }
 
 async function testPersistedToggleAndRedactedStatus() {
