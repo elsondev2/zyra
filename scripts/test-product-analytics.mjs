@@ -12,6 +12,10 @@ import {
   validatePostHogEndpoint,
 } from "../src/analytics/client.mjs";
 import {
+  BUNDLED_RELEASE_ANALYTICS_CONFIG,
+  withBundledReleaseAnalyticsConfig,
+} from "../src/analytics/release-config.mjs";
+import {
   ANALYTICS_EVENT_NAMES,
   sanitizeAnalyticsEvent,
 } from "../src/analytics/contracts.mjs";
@@ -31,6 +35,7 @@ try {
   await testDisabledIsInert();
   await testFetchTimeoutContract();
   testConfigurationAndEndpointValidation();
+  testBundledReleaseConfiguration();
   testWindowsExclusiveOpenErrors();
   testPropertySanitation();
   await testBatchingRetryPersistenceAndIdentity();
@@ -73,6 +78,24 @@ function clientOptions(storageDirectory, overrides = {}) {
     randomUUID: () => UUID_A,
     ...overrides,
   };
+}
+
+function testBundledReleaseConfiguration() {
+  assert.match(BUNDLED_RELEASE_ANALYTICS_CONFIG.projectToken, /^phc_[A-Za-z0-9_-]{40,200}$/);
+  assert.equal(BUNDLED_RELEASE_ANALYTICS_CONFIG.host, "https://us.i.posthog.com");
+  const disabled = withBundledReleaseAnalyticsConfig({}, false);
+  assert.equal(disabled.ZYRA_POSTHOG_PROJECT_KEY, undefined);
+  const configured = withBundledReleaseAnalyticsConfig({}, true);
+  assert.equal(configured.ZYRA_POSTHOG_PROJECT_KEY, BUNDLED_RELEASE_ANALYTICS_CONFIG.projectToken);
+  assert.equal(configured.ZYRA_POSTHOG_HOST, BUNDLED_RELEASE_ANALYTICS_CONFIG.host);
+  const overridden = withBundledReleaseAnalyticsConfig({
+    ZYRA_POSTHOG_PROJECT_KEY: VALID_KEY,
+    ZYRA_POSTHOG_HOST: "https://eu.i.posthog.com",
+    ZYRA_ANALYTICS_ENABLED: "false",
+  }, true);
+  assert.equal(overridden.ZYRA_POSTHOG_PROJECT_KEY, VALID_KEY);
+  assert.equal(overridden.ZYRA_POSTHOG_HOST, "https://eu.i.posthog.com");
+  assert.equal(overridden.ZYRA_ANALYTICS_ENABLED, "false");
 }
 
 function testWindowsExclusiveOpenErrors() {
@@ -725,6 +748,7 @@ async function testRendererAndCredentialBoundaries() {
   const runtimeContract = await source("desktop/scripts/release/runtime-contract.mjs");
   const rootPackage = JSON.parse(await source("package.json"));
   const analyticsClient = await source("src/analytics/client.mjs");
+  const releaseAnalyticsConfig = await source("src/analytics/release-config.mjs");
   const cliAnalytics = await source("src/analytics/cli.mjs");
   const slashCommands = await source("src/slash-commands.mjs");
   const cliSessionStore = await source("src/zyra-sdk.mjs");
@@ -736,8 +760,12 @@ async function testRendererAndCredentialBoundaries() {
   assert.doesNotMatch(browserRelay, /Analytics|analytics/);
   assert.doesNotMatch(rendererAnalytics, /POSTHOG|projectKey|personalApi|captureUrl/i);
   assert.match(desktopAnalyticsService, /RENDERER_ANALYTICS_EVENTS = new Set\(\['zyra_v1_files', 'zyra_v1_workspace_ui'\]\)/);
+  assert.match(desktopAnalyticsService, /app\.isPackaged[\s\S]*withBundledReleaseAnalyticsConfig/);
   assert.match(desktopAnalyticsService, /preferencePath:[\s\S]*requireExplicitPreference: true/);
+  assert.match(cliAnalytics, /existsSync\(path\.join\(repositoryRoot, "\.git"\)\)[\s\S]*withBundledReleaseAnalyticsConfig/);
   assert.match(cliAnalytics, /preferencePath:[\s\S]*requireExplicitPreference: true/);
+  assert.match(releaseAnalyticsConfig, /projectToken: "phc_[A-Za-z0-9_-]{40,200}"/);
+  assert.doesNotMatch(releaseAnalyticsConfig, /phx_|personal|secret/i);
   assert.match(slashCommands, /name: "analytics"[\s\S]*\/analytics \[status\|on\|off\]/);
   assert.match(setupHandlers, /Product analytics could not be updated\./);
   assert.match(setupHandlers, /status: await services\.analytics\.refreshStatus\(\)/);
@@ -768,8 +796,12 @@ async function testRendererAndCredentialBoundaries() {
   const hardcodedKeyPattern = /\b(?:phc|phx)_[A-Za-z0-9_-]{40,}\b/g;
   for (const file of trackedTextFiles.filter((entry) => !entry.endsWith("package-lock.json") && !entry.endsWith("bun.lock"))) {
     const text = await source(file).catch(() => "");
-    assert.equal(hardcodedKeyPattern.test(text), false, `hardcoded PostHog key in ${file}`);
-    hardcodedKeyPattern.lastIndex = 0;
+    const hardcodedKeys = text.match(hardcodedKeyPattern) || [];
+    if (file === "src/analytics/release-config.mjs") {
+      assert.deepEqual(hardcodedKeys, [BUNDLED_RELEASE_ANALYTICS_CONFIG.projectToken], "only the public release project token may be bundled");
+    } else {
+      assert.equal(hardcodedKeys.length, 0, `hardcoded PostHog key in ${file}`);
+    }
   }
 }
 

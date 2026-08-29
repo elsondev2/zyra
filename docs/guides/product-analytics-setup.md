@@ -6,11 +6,13 @@ Zyra product analytics is off by default. It stays inert until all three conditi
 2. a valid PostHog project capture key is present;
 3. an approved HTTPS PostHog host is present.
 
-Use a PostHog project capture key with the `phc_` prefix. Zyra rejects `phx_` personal API keys and does not need one.
+Use a PostHog project capture key with the `phc_` prefix. Zyra rejects `phx_` personal API keys and does not need one. The official release bundles Zyra's public project token and US ingestion host in main/CLI code. Renderer and Browser pages never receive them.
+
+Source checkouts do not use the bundled release destination. Packaged Desktop builds and standalone distributions activate it only after the user opts in. Set `ZYRA_ANALYTICS_USE_RELEASE_CONFIG=0` to disable the bundled destination or `ZYRA_ANALYTICS_ENABLED=false` as the operator kill switch.
 
 ## Environment configuration
 
-Set placeholders through your normal private environment management:
+Use environment values to override the bundled destination for staging, local testing, or a regional migration:
 
 ```text
 ZYRA_POSTHOG_PROJECT_KEY=<POSTHOG_PROJECT_KEY>

@@ -8,6 +8,7 @@ import {
     type AnalyticsStatus,
     type ProductAnalyticsClient
 } from '../../../../src/analytics/client.mjs'
+import { withBundledReleaseAnalyticsConfig } from '../../../../src/analytics/release-config.mjs'
 import type { AnalyticsEventInput, AnalyticsEventName } from '../../shared/analytics/contracts'
 
 const MAX_RENDERER_EVENT_BYTES = 8 * 1024
@@ -22,8 +23,11 @@ export class DesktopAnalyticsService {
         client?: ProductAnalyticsClient
         env?: Record<string, string | undefined>
         preferencePath?: string
+        useReleaseConfig?: boolean
     } = {}) {
-        const env = options.env || process.env
+        const baseEnv = options.env || process.env
+        const useReleaseConfig = options.useReleaseConfig ?? (app.isPackaged && baseEnv.ZYRA_ANALYTICS_USE_RELEASE_CONFIG !== '0')
+        const env = withBundledReleaseAnalyticsConfig(baseEnv, useReleaseConfig)
         const sharedStateRoot = resolve(env.ZYRA_STATE_DIR || join(homedir(), '.zyra'))
         this.client = options.client || createProductAnalytics({
             storageDirectory: join(userDataPath, 'analytics'),

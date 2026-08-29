@@ -14,7 +14,7 @@ The main risks are content smuggling through arbitrary properties, credential ex
 - One checked-in catalog allowlists event names, property names, enums, bounds, and error codes.
 - Main sanitizes renderer events after trusted IPC. Unknown fields disappear.
 - The preload exposes analytics only to trusted Zyra shell renderers. Managed web pages have no preload. Browser popups use a reduced preload without analytics. Remote Browser clients do not receive the adapter.
-- Main returns redacted status only. Project keys, capture URLs, and configured hostnames never cross to renderers.
+- Main returns redacted status only. The bundled public project token, capture URL, and configured hostname never cross to renderers or Browser pages. Personal and project-secret API keys are prohibited.
 - Endpoint validation requires HTTPS, an approved hostname, root path, and no URL credentials, query, or fragment.
 - A random UUID identifies one installation. Account, OAuth, email, username, device name, path, and project data do not contribute. Capture events set `$process_person_profile` to `false`; the PostHog project must also disable IP capture.
 - Queue count, file size, local event age, batch, timeout, retry, and shutdown bounds prevent resource amplification and indefinite offline retention.

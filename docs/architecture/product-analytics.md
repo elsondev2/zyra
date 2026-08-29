@@ -8,7 +8,7 @@ Zyra has an optional PostHog capture integration for coarse product outcomes. Th
 
 The versioned catalog lives at [`analytics/events.v1.json`](../../analytics/events.v1.json). The CLI and Desktop use the same catalog and sanitizer.
 
-Desktop main owns configuration, installation identity, queue persistence, batching, retries, and capture requests. The Electron preload exposes a narrow `zyraAnalytics` adapter only to trusted Zyra renderers. Browser popup pages have no analytics adapter. Remote Browser clients do not receive this API through the DevScope relay.
+Desktop main owns configuration, installation identity, queue persistence, batching, retries, and capture requests. Packaged Desktop and standalone distributions may load the checked-in public `phc_` project token and approved ingestion host from `src/analytics/release-config.mjs`; source checkouts leave that destination inactive by default. The Electron preload exposes a narrow `zyraAnalytics` adapter only to trusted Zyra renderers. Browser popup pages have no analytics adapter. Remote Browser clients do not receive this API through the DevScope relay.
 
 Renderer events cross trusted IPC as an event name and bounded properties. Main accepts only the two renderer-owned catalog events, caps renderer submissions at 120 per minute, and applies the catalog owner and property sanitizer again before queueing. A renderer cannot forge main/CLI events, add arbitrary properties, or override the PostHog destination, project key, installation identity, retry policy, or retention settings.
 
