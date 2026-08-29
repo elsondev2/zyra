@@ -39,6 +39,7 @@ import type {
     CanonicalMessageCommitReceipt,
     FleetOperationInput,
     FleetSnapshot,
+    ForegroundRouteClaim,
     RealtimeDomainEvent
 } from '../../shared/assistant/contracts'
 import {
@@ -72,6 +73,7 @@ import { PiCanonicalMessageWriter } from './foreground/pi-canonical-message-writ
 import { AssistantRealtimeContinuitySource } from './voice/assistant-realtime-continuity-source'
 import { CanonicalVoiceSessionController } from './voice/canonical-voice-session-controller'
 import { CanonicalVoiceTranscriptCommitter } from './voice/canonical-voice-transcript-committer'
+import { CanonicalTypedVoiceResponseCommitter } from './voice/canonical-typed-voice-response-committer'
 import { ChatGptRealtimeForegroundAdapter } from './voice/codex-realtime-foreground-adapter'
 import { probeDirectChatGptRealtimeCapabilitiesAsync } from './voice/codex-realtime-capability-probe'
 import {
@@ -209,6 +211,9 @@ type TypedVoiceResponseRequest = {
     active: ActiveCanonicalVoice | null
     expectedAdapterSessionId: string
     canonicalMessageId?: string
+    routeClaim?: ForegroundRouteClaim
+    assistantMessageId?: string
+    assistantProviderItemId?: string
 }
 
 type PendingCanonicalVoiceStart = {
@@ -281,6 +286,7 @@ export class AssistantService {
     private canonicalRealtimeAdapter: ChatGptRealtimeForegroundAdapter | null = null
     private canonicalVoiceSessions: CanonicalVoiceSessionController | null = null
     private canonicalVoiceCommitter: CanonicalVoiceTranscriptCommitter | null = null
+    private canonicalTypedVoiceCommitter: CanonicalTypedVoiceResponseCommitter | null = null
     private canonicalVoiceSetupPromise: Promise<void> | null = null
     private canonicalVoiceUnsubscribe: (() => void) | null = null
     private activeCanonicalVoice: ActiveCanonicalVoice | null = null
@@ -350,6 +356,7 @@ export class AssistantService {
     private readonly autoTitleMilestones = new Set<string>()
     private readonly readyPromise: Promise<void>
     private disposePromise: Promise<void> | null = null
+    private disposeRequested = false
     private readonly actionDeps: AssistantServiceActionDeps
 
     private state: AssistantStateRecord = {
@@ -1147,10 +1154,11 @@ export class AssistantService {
         const route = routes.activeRoute(active.conversationId)
         if (route.surface_mode !== 'voice') throw new Error('Voice no longer owns this conversation.')
         const occurredAt = normalizeClientVoiceMessageCreatedAt(input.clientMessageCreatedAt, route.created_at)
-        const messageId = `voice_user_${createHash('sha256')
+        const messageIdentity = createHash('sha256')
             .update(`${active.conversationId}:${clientMessageId}`)
             .digest('hex')
-            .slice(0, 40)}`
+            .slice(0, 40)
+        const messageId = `voice_user_${messageIdentity}`
         await gateway.commitMessage({
             conversationId: active.conversationId,
             messageId,
@@ -1187,7 +1195,10 @@ export class AssistantService {
             turnId,
             active,
             expectedAdapterSessionId: active.adapterSessionId,
-            canonicalMessageId: messageId
+            canonicalMessageId: messageId,
+            routeClaim: foregroundRouteClaim(route),
+            assistantMessageId: `voice_assistant_${messageIdentity}`,
+            assistantProviderItemId: `typed-response:${clientMessageId}`
         })
         return { success: true as const, mode: 'text-turn' as const }
     }
@@ -1261,9 +1272,31 @@ export class AssistantService {
             ? ''
             : String(result.error || 'Zyra could not generate the typed Voice response.').trim().slice(0, 1_000)
         if (input.active) {
+            const committer = this.requireCanonicalTypedVoiceCommitter()
+            if (text) {
+                if (!input.routeClaim || !input.assistantMessageId || !input.assistantProviderItemId) {
+                    throw new Error('Typed Voice response ownership is incomplete.')
+                }
+                const receipt = await committer.commit({
+                    adapterSessionId: input.expectedAdapterSessionId,
+                    conversationId: input.active.conversationId,
+                    routeClaim: input.routeClaim,
+                    messageId: input.assistantMessageId,
+                    providerItemId: input.assistantProviderItemId,
+                    text,
+                    completedAt: new Date().toISOString()
+                })
+                if (!receipt) return
+            }
+            if (!committer.isAccepting(input.expectedAdapterSessionId)) return
             await this.requireCanonicalRealtimeAdapter().deliverComposerResponse(
                 input.expectedAdapterSessionId,
-                { turnId: input.turnId, text, ...(error ? { error } : {}) }
+                {
+                    turnId: input.turnId,
+                    text,
+                    ...(text && input.assistantMessageId ? { canonicalMessageId: input.assistantMessageId } : {}),
+                    ...(error ? { error } : {})
+                }
             )
             return
         }
@@ -1334,6 +1367,7 @@ export class AssistantService {
 
     dispose(): Promise<void> {
         if (this.disposePromise) return this.disposePromise
+        this.disposeRequested = true
         this.externalEventSubscribers.clear()
         this.externalRealtimeVoiceSubscribers.clear()
         this.assistantTextDeltaBuffer.dispose()
@@ -1351,14 +1385,17 @@ export class AssistantService {
         this.canonicalHistoryLoadPromises.clear()
         this.canonicalHistoryRefresh.clear()
         this.activeCanonicalVoice = null
-        this.canonicalVoiceCommitter?.dispose()
-        this.canonicalVoiceUnsubscribe?.()
-        this.canonicalVoiceSessions?.dispose()
-        this.canonicalRealtimeAdapter?.dispose()
-        this.realtimeVoiceRuntime.dispose()
-        this.runtime.dispose()
         const pending = (async () => {
             await this.readyPromise.catch(() => undefined)
+            await this.canonicalVoiceSetupPromise?.catch(() => undefined)
+            await this.canonicalTypedVoiceCommitter?.dispose()
+            await this.canonicalVoiceCommitter?.flush().catch(() => undefined)
+            this.canonicalVoiceCommitter?.dispose()
+            this.canonicalVoiceUnsubscribe?.()
+            this.canonicalVoiceSessions?.dispose()
+            this.canonicalRealtimeAdapter?.dispose()
+            this.realtimeVoiceRuntime.dispose()
+            this.runtime.dispose()
             await this.persistence.close()
             this.foregroundPersistence?.close()
         })()
@@ -1431,9 +1468,11 @@ export class AssistantService {
             (input, receipt) => this.projectCanonicalVoiceMessage(input, receipt)
         )
         const gateway = new ConversationGateway(persistence, writer)
+        const typedVoiceCommitter = new CanonicalTypedVoiceResponseCommitter(gateway)
         this.foregroundPersistence = persistence
         this.foregroundRoutes = routes
         this.conversationGateway = gateway
+        this.canonicalTypedVoiceCommitter = typedVoiceCommitter
         this.realtimeContinuity = new AssistantRealtimeContinuitySource(
             (conversationId) => this.readCanonicalVoiceContinuity(conversationId)
         )
@@ -1469,12 +1508,14 @@ export class AssistantService {
     }
 
     private async ensureCanonicalVoiceSetup(): Promise<void> {
+        if (this.disposeRequested) throw new Error('Assistant Voice is disposing.')
         if (this.canonicalVoiceSetupPromise) return this.canonicalVoiceSetupPromise
         this.canonicalVoiceSetupPromise = (async () => {
             const probe = await probeDirectChatGptRealtimeCapabilitiesAsync({
                 transcriptIdentityBridge: true,
                 ownerScopedClientCommands: true
             })
+            if (this.disposeRequested) throw new Error('Assistant Voice is disposing.')
             const adapter = new ChatGptRealtimeForegroundAdapter(this.realtimeVoiceRuntime, probe.evidence)
             const sessions = new CanonicalVoiceSessionController(
                 this.requireForegroundRoutes(),
@@ -1532,6 +1573,9 @@ export class AssistantService {
         if (this.activeCanonicalVoice) await this.stopCanonicalVoiceInternal('replaced')
         throwIfVoiceStartAborted(signal)
 
+        const historyPreload = record.thread.providerThreadId
+            ? this.ensureCanonicalHistoryLoaded(record.session, record.thread)
+            : null
         const runtimeThreadId = record.thread.providerThreadId || record.thread.id
         if (!this.runtime.hasSession(runtimeThreadId)) {
             await this.runtime.connect(record.thread, this.getSessionRuntimeCwd(record.session, record.thread))
@@ -1548,6 +1592,7 @@ export class AssistantService {
             || connected.thread.state === 'waiting') {
             throw new Error('Wait for the current strong-assistant turn to finish before starting Voice.')
         }
+        if (historyPreload) await historyPreload
         await this.ensureCanonicalHistoryLoaded(connected.session, connected.thread)
         throwIfVoiceStartAborted(signal)
         const conversationId = connected.thread.providerThreadId
@@ -1580,6 +1625,7 @@ export class AssistantService {
                 attachedTaskIds: this.attachedTaskIds(connected.thread.id),
                 signal
             })
+            this.requireCanonicalTypedVoiceCommitter().activate(activation.handle.adapterSessionId)
             this.activeCanonicalVoice = {
                 conversationId,
                 localThreadId: connected.thread.id,
@@ -1623,6 +1669,7 @@ export class AssistantService {
         const stop = (async () => {
             this.queuedVoiceStrongRequests.delete(active.conversationId)
             this.activeVoiceStrongTasks.get(active.conversationId)?.abortController.abort(new Error('Voice session ended.'))
+            await this.requireCanonicalTypedVoiceCommitter().beginStop(active.adapterSessionId)
             await this.canonicalVoiceCommitter?.flush()
             const routes = this.requireForegroundRoutes()
             const route = routes.activeRoute(active.conversationId)
@@ -1862,10 +1909,22 @@ export class AssistantService {
         const route = this.requireForegroundRoutes().activeRoute(active.conversationId)
         if (route.surface_mode !== 'voice' || route.realtime_session_id === null) return
         const now = Date.now()
+        const canonicalMessageId = `voice_result_${taskId}`
+        const committer = this.requireCanonicalTypedVoiceCommitter()
+        const receipt = await committer.commit({
+            adapterSessionId: active.adapterSessionId,
+            conversationId: active.conversationId,
+            routeClaim: foregroundRouteClaim(route),
+            messageId: canonicalMessageId,
+            providerItemId: `voice-result:${taskId}`,
+            text,
+            completedAt: new Date(now).toISOString()
+        })
+        if (!receipt || !committer.isAccepting(active.adapterSessionId)) return
         await this.requireCanonicalRealtimeAdapter().requestSpeech(active.adapterSessionId, {
             narrationId: `voice_narration_${taskId}`,
             deliveryId: `voice_delivery_${taskId}`,
-            canonicalMessageId: `voice_result_${taskId}`,
+            canonicalMessageId,
             text,
             safeFacts: [text],
             expiresAt: new Date(now + 2 * 60 * 1000).toISOString(),
@@ -2039,6 +2098,11 @@ export class AssistantService {
     private requireCanonicalVoiceSessions(): CanonicalVoiceSessionController {
         if (!this.canonicalVoiceSessions) throw new Error('Canonical Voice controller is not ready.')
         return this.canonicalVoiceSessions
+    }
+
+    private requireCanonicalTypedVoiceCommitter(): CanonicalTypedVoiceResponseCommitter {
+        if (!this.canonicalTypedVoiceCommitter) throw new Error('Canonical typed Voice committer is not ready.')
+        return this.canonicalTypedVoiceCommitter
     }
 
     private scheduleSelectedCanonicalSessionSynchronization(sessionId: string, generation: number): void {

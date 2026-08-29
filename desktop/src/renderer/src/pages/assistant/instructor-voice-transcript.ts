@@ -9,6 +9,7 @@ export interface InstructorTranscriptEntry {
     role: string
     text: string
     final: boolean
+    canonicalMessageId?: string
     images?: InstructorTranscriptImage[]
 }
 
@@ -208,14 +209,15 @@ export function applyRealtimeTranscriptEvent(
         || type?.endsWith('.audio_transcript.done')
         || type?.endsWith('.input_audio_transcription.completed')) {
         const text = String(payload?.transcript ?? payload?.text ?? '').trim()
-        const deduplicatedEntries = removeMatchingComposerResponse(entries, role, text, itemId)
+        const final = role === 'user'
+        const deduplicatedEntries = final ? removeMatchingComposerResponse(entries, role, text, itemId) : entries
         const existing = deduplicatedEntries.find((entry) => entry.id === itemId)
-        if (!existing) return text ? [...deduplicatedEntries, { id: itemId, role, text, final: true }] : deduplicatedEntries
+        if (!existing) return text ? [...deduplicatedEntries, { id: itemId, role, text, final }] : deduplicatedEntries
         return updateEntry(deduplicatedEntries, itemId, (entry) => ({
             ...entry,
             role,
             text: text || entry.text,
-            final: true
+            final
         }))
     }
 

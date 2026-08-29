@@ -19,7 +19,11 @@ import {
     readRealtimeInputSpeechBoundary
 } from './assistant-realtime-input-recovery'
 import {
+    consumeCanonicalVoiceSpeechReplay,
     isCurrentRealtimeVoiceClientCommand,
+    isCurrentRealtimeVoicePresentationEvent,
+    normalizeRealtimeVoiceSpeechText,
+    readRealtimeVoiceAssistantCompletion,
     readRealtimeVoiceResponseActivity,
     sendRealtimeVoiceClientCommand,
     type RealtimeVoiceClientCommandBinding
@@ -52,7 +56,7 @@ type CanonicalVoiceBinding = {
     sessionId: string
 }
 
-const ACTIVITY_UPDATE_INTERVAL_MS = 48
+const ACTIVITY_UPDATE_INTERVAL_MS = 96
 const REALTIME_INPUT_TRANSCRIPT_FALLBACK_DELAY_MS = 1_500
 const REALTIME_INPUT_CAPTURE_PREROLL_MS = 650
 const REALTIME_PEER_DISCONNECT_GRACE_MS = 3_000
@@ -177,6 +181,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
     const pendingClientCommandsRef = useRef<AssistantRealtimeVoiceClientCommandEvent[]>([])
     const sentClientCommandIdsRef = useRef(new Set<string>())
     const realtimeResponseActiveRef = useRef(false)
+    const pendingCanonicalSpeechReplaysRef = useRef<Array<{ canonicalMessageId: string; normalizedText: string }>>([])
     const bridgeQueueRef = useRef<Promise<void>>(Promise.resolve())
     const [status, setStatus] = useState<InstructorVoiceStatus>('idle')
     const [startedAt, setStartedAt] = useState<string | null>(null)
@@ -204,7 +209,25 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
             }
             if (sendRealtimeVoiceClientCommand(channel, command, binding)) {
                 sentClientCommandIdsRef.current.add(command.commandId)
-                if (startsResponse) realtimeResponseActiveRef.current = true
+                if (startsResponse) {
+                    realtimeResponseActiveRef.current = true
+                    if (command.canonicalMessageId) {
+                        const speechText = command.messages
+                            .filter((message) => message.type === 'session.context.append' && message.channel === 'speakable')
+                            .map((message) => message.type === 'session.context.append' ? message.content[0].text : '')
+                            .join('')
+                        const normalizedText = normalizeRealtimeVoiceSpeechText(speechText)
+                        if (normalizedText) {
+                            pendingCanonicalSpeechReplaysRef.current.push({
+                                canonicalMessageId: command.canonicalMessageId,
+                                normalizedText
+                            })
+                            if (pendingCanonicalSpeechReplaysRef.current.length > 32) {
+                                pendingCanonicalSpeechReplaysRef.current.shift()
+                            }
+                        }
+                    }
+                }
             } else {
                 remaining.push(command)
             }
@@ -282,6 +305,7 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
         pendingClientCommandsRef.current = []
         sentClientCommandIdsRef.current.clear()
         realtimeResponseActiveRef.current = false
+        pendingCanonicalSpeechReplaysRef.current = []
         const dataChannel = dataChannelRef.current
         dataChannelRef.current = null
         if (dataChannel) {
@@ -419,6 +443,8 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
                 setRealtimeVersion(event.realtimeVersion || null)
                 return
             }
+            if ((event.type === 'composer.response.delta' || event.type === 'composer.response.done')
+                && !isCurrentRealtimeVoicePresentationEvent(event, realtimeClientBindingRef.current)) return
             if (event.type === 'composer.response.delta') {
                 const entryId = `composer-response-${event.turnId}`
                 setTranscript((current) => {
@@ -447,11 +473,12 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
                             id: entryId,
                             role: 'assistant',
                             text,
-                            final: true
+                            final: true,
+                            canonicalMessageId: event.canonicalMessageId
                         }]
                     }
                     const next = current.slice()
-                    next[index] = { ...next[index], text, final: true }
+                    next[index] = { ...next[index], text, final: true, canonicalMessageId: event.canonicalMessageId }
                     return next
                 })
                 return
@@ -646,6 +673,15 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
                         readiness.sessionInitialized = true
                         markActiveIfReady()
                     }
+                    const assistantCompletion = readRealtimeVoiceAssistantCompletion(payload)
+                    const speechReplay = assistantCompletion
+                        ? consumeCanonicalVoiceSpeechReplay(
+                            pendingCanonicalSpeechReplaysRef.current,
+                            assistantCompletion.text
+                        )
+                        : { canonicalMessageId: null, remaining: pendingCanonicalSpeechReplaysRef.current }
+                    pendingCanonicalSpeechReplaysRef.current = speechReplay.remaining
+                    const canonicalSpeechMessageId = speechReplay.canonicalMessageId || undefined
                     const responseActivity = readRealtimeVoiceResponseActivity(payload)
                     if (responseActivity === 'started') realtimeResponseActiveRef.current = true
                     else if (responseActivity === 'finished') {
@@ -703,7 +739,13 @@ export function useInstructorVoiceSession(binding?: CanonicalVoiceBinding) {
                             activeInputCaptureIdRef.current = null
                         }
                     }
-                    setTranscript((current) => applyRealtimeTranscriptEvent(current, payload))
+                    setTranscript((current) => {
+                        const next = applyRealtimeTranscriptEvent(current, payload)
+                        if (!assistantCompletion || !canonicalSpeechMessageId) return next
+                        return next.map((entry) => entry.id === assistantCompletion.providerItemId
+                            ? { ...entry, canonicalMessageId: canonicalSpeechMessageId }
+                            : entry)
+                    })
                     // Invoke IPC immediately so any later navigation request is
                     // ordered after this provider event in Electron. The aggregate
                     // promise remains only as the local Stop/unmount drain barrier.

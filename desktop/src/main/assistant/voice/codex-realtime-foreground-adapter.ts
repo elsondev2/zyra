@@ -47,8 +47,8 @@ export interface ChatGptRealtimeTransport {
         realtimeSessionGeneration?: number
     }>
     appendContext(items: Array<{ role: 'developer' | 'user' | 'assistant'; text: string }>): Promise<void>
-    requestSpeech(text: string): Promise<void>
-    presentComposerResponse(input: { turnId: string; text?: string; error?: string }): void
+    requestSpeech(text: string, canonicalMessageId?: string): Promise<void>
+    presentComposerResponse(input: { turnId: string; text?: string; error?: string; canonicalMessageId?: string }): void
     stop(): Promise<void>
     on(event: 'event', listener: (payload: AssistantRealtimeVoiceEvent) => void): unknown
     off(event: 'event', listener: (payload: AssistantRealtimeVoiceEvent) => void): unknown
@@ -65,6 +65,7 @@ interface ChatGptAdapterSession {
     hydrationReplayBudget: Map<string, number>
     suppressedHydrationProviderItemIds: Set<string>
     completedTranscriptProviderItemIds: Set<string>
+    pendingCanonicalSpeechReplays: Array<{ canonicalMessageId: string; normalizedText: string }>
 }
 
 export class ChatGptRealtimeForegroundAdapter implements RealtimeForegroundAdapter {
@@ -109,7 +110,8 @@ export class ChatGptRealtimeForegroundAdapter implements RealtimeForegroundAdapt
             webRtcTurnRoles: new Map(),
             hydrationReplayBudget: createHydrationReplayBudget(input.hydrationSeed.items),
             suppressedHydrationProviderItemIds: new Set(),
-            completedTranscriptProviderItemIds: new Set()
+            completedTranscriptProviderItemIds: new Set(),
+            pendingCanonicalSpeechReplays: []
         }
         this.sessions.set(adapterSessionId, session)
         this.currentAdapterSessionId = adapterSessionId
@@ -200,12 +202,20 @@ export class ChatGptRealtimeForegroundAdapter implements RealtimeForegroundAdapt
 
     async deliverComposerResponse(
         sessionId: string,
-        input: { turnId: string; text?: string; error?: string }
+        input: { turnId: string; text?: string; error?: string; canonicalMessageId?: string }
     ): Promise<{ mode: 'text-turn' }> {
-        this.requireCurrentSession(sessionId)
+        const session = this.requireCurrentSession(sessionId)
         this.runtime.presentComposerResponse(input)
         const text = String(input.text || '').trim()
-        if (text) await this.runtime.requestSpeech(text)
+        if (text && input.canonicalMessageId) addCanonicalSpeechReplay(session, input.canonicalMessageId, text)
+        if (text) {
+            try {
+                await this.runtime.requestSpeech(text, input.canonicalMessageId)
+            } catch (error) {
+                if (input.canonicalMessageId) removeCanonicalSpeechReplay(session, input.canonicalMessageId)
+                throw error
+            }
+        }
         return { mode: 'text-turn' }
     }
 
@@ -214,6 +224,8 @@ export class ChatGptRealtimeForegroundAdapter implements RealtimeForegroundAdapt
         const event = normalizeWebRtcTranscriptEvent(value, session.webRtcTurnRoles)
         if (event && session.suppressedHydrationProviderItemIds.has(event.providerItemId)) return
         if (event && session.completedTranscriptProviderItemIds.has(event.providerItemId)) return
+        if (event?.kind === 'completed' && event.role === 'assistant'
+            && consumeCanonicalSpeechReplay(session, event.text, event.providerItemId)) return
         if (event?.kind === 'completed' && consumeHydrationReplay(
             session,
             event.role,
@@ -249,7 +261,13 @@ export class ChatGptRealtimeForegroundAdapter implements RealtimeForegroundAdapt
             throw new Error('ChatGPT speech request carries a stale Voice route claim.')
         }
         if (Date.parse(item.expiresAt) <= Date.parse(this.clock.now())) throw new Error('ChatGPT speech request expired.')
-        await this.runtime.requestSpeech(item.text)
+        addCanonicalSpeechReplay(session, item.canonicalMessageId, item.text)
+        try {
+            await this.runtime.requestSpeech(item.text, item.canonicalMessageId)
+        } catch (error) {
+            removeCanonicalSpeechReplay(session, item.canonicalMessageId)
+            throw error
+        }
         return {
             sessionId,
             deliveryId: item.deliveryId,
@@ -300,6 +318,10 @@ export class ChatGptRealtimeForegroundAdapter implements RealtimeForegroundAdapt
         if (event.type === 'transcript.delta' || event.type === 'transcript.done') {
             if (event.providerItemId && session.suppressedHydrationProviderItemIds.has(event.providerItemId)) return
             if (event.providerItemId && session.completedTranscriptProviderItemIds.has(event.providerItemId)) return
+            if (event.type === 'transcript.done'
+                && event.providerItemId
+                && event.role === 'assistant'
+                && consumeCanonicalSpeechReplay(session, event.text, event.providerItemId)) return
             if (event.type === 'transcript.done'
                 && event.providerItemId
                 && consumeHydrationReplay(
@@ -378,6 +400,36 @@ function hydrationReplayKey(role: 'user' | 'assistant', text: string): string {
     return `${role}\0${text.replace(/\s+/gu, ' ').trim()}`
 }
 
+function normalizeCanonicalSpeechText(text: string): string {
+    return text.normalize('NFKC').toLocaleLowerCase('en-US').replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+}
+
+function addCanonicalSpeechReplay(session: ChatGptAdapterSession, canonicalMessageId: string, text: string): void {
+    const normalizedText = normalizeCanonicalSpeechText(text)
+    if (!normalizedText) return
+    session.pendingCanonicalSpeechReplays.push({ canonicalMessageId, normalizedText })
+    if (session.pendingCanonicalSpeechReplays.length > 32) session.pendingCanonicalSpeechReplays.shift()
+}
+
+function removeCanonicalSpeechReplay(session: ChatGptAdapterSession, canonicalMessageId: string): void {
+    session.pendingCanonicalSpeechReplays = session.pendingCanonicalSpeechReplays
+        .filter((entry) => entry.canonicalMessageId !== canonicalMessageId)
+}
+
+function consumeCanonicalSpeechReplay(
+    session: ChatGptAdapterSession,
+    text: string,
+    providerItemId: string
+): boolean {
+    const normalizedText = normalizeCanonicalSpeechText(text)
+    const index = session.pendingCanonicalSpeechReplays
+        .findIndex((entry) => entry.normalizedText === normalizedText)
+    if (index < 0) return false
+    session.pendingCanonicalSpeechReplays.splice(index, 1)
+    session.completedTranscriptProviderItemIds.add(providerItemId)
+    return true
+}
+
 type NormalizedWebRtcTranscriptEvent =
     | { kind: 'delta'; role: 'user' | 'assistant'; providerItemId: string; delta: string }
     | { kind: 'completed'; role: 'user' | 'assistant'; providerItemId: string; text: string }
@@ -428,6 +480,9 @@ export function normalizeWebRtcTranscriptEvent(
         || type.endsWith('.audio_transcript.done')
         || type.endsWith('.input_audio_transcription.completed')) {
         const text = String(turn?.['transcript'] ?? payload?.['transcript'] ?? payload?.['text'] ?? '').trim()
+        if (role === 'assistant' && type !== 'turn.done') {
+            return text ? { kind: 'delta', role, providerItemId: turnId, delta: text } : null
+        }
         turnRoles.delete(turnId)
         return text ? { kind: 'completed', role, providerItemId: turnId, text } : null
     }

@@ -76,6 +76,11 @@ type RecorderOptions = {
     onIncident?: (incident: { reason: string; processKind: 'main' | 'renderer' | 'other'; webContentsId: number | null; durationMs?: number }) => void
 }
 
+function cpuProfileCapturedAt(fileName: string): number {
+    const match = fileName.match(/-(\d+)\.cpuprofile$/)
+    return match ? Number(match[1]) : 0
+}
+
 function finiteNumber(value: unknown, fallback = 0): number {
     return typeof value === 'number' && Number.isFinite(value) ? value : fallback
 }
@@ -333,8 +338,7 @@ export function createRendererHangRecorder(options: RecorderOptions) {
             await writeFile(profilePath, serialized, { encoding: 'utf8', mode: 0o600 })
             const profiles = (await readdir(diagnosticsDirectory))
                 .filter((entry) => entry.endsWith('.cpuprofile'))
-                .sort()
-                .reverse()
+                .sort((left, right) => cpuProfileCapturedAt(right) - cpuProfileCapturedAt(left))
             await Promise.all(profiles.slice(CPU_PROFILE_RETAIN_COUNT).map((entry) => (
                 unlink(join(diagnosticsDirectory, entry)).catch(() => undefined)
             )))

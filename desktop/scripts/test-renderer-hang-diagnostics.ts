@@ -33,6 +33,7 @@ assert.match(recorderSource, /REPORT_FILE_MAX_BYTES = 5 \* 1024 \* 1024/, 'incid
 assert.match(recorderSource, /HIGH_CPU_THRESHOLD_PERCENT = 4\.5[\s\S]*HIGH_CPU_CONSECUTIVE_SAMPLES = 3[\s\S]*CPU_PROFILE_DURATION_MS = 5_000/, 'CPU profiling starts only after sustained high renderer CPU and remains time-bounded')
 assert.match(recorderSource, /now - state\.createdAt >= 20_000/, 'CPU profiling ignores ordinary renderer startup work')
 assert.match(recorderSource, /CPU_PROFILE_RETAIN_COUNT = 3[\s\S]*\.endsWith\('\.cpuprofile'\)/, 'diagnostic CPU profiles have bounded retention')
+assert.match(recorderSource, /cpuProfileCapturedAt\(right\) - cpuProfileCapturedAt\(left\)/, 'profile retention keeps the newest captures across every renderer ID')
 assert.match(recorderSource, /Profiler\.start[\s\S]*Profiler\.stop[\s\S]*sustained-renderer-high-cpu/, 'a pathological responsive renderer yields an attributable Chromium CPU profile')
 assert.match(recorderSource, /mode: 0o600/, 'incident reports are private to the local user')
 assert.match(recorderSource, /const visible = state\.lastHeartbeat\?\.visibility === 'visible'[\s\S]{0,180}!owner\?\.isMinimized\(\)/, 'the heartbeat watchdog ignores hidden and minimized renderers')

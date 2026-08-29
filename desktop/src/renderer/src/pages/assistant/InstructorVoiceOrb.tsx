@@ -97,7 +97,7 @@ export function InstructorVoiceOrb({
                         refraction={2.1}
                         dispersion={2.7}
                         glassSize={0.96}
-                        maxFps={active ? 30 : connecting ? 24 : 12}
+                        maxFps={active ? 20 : connecting ? 16 : 8}
                         className="pointer-events-none"
                     />
                 </div>

@@ -20,7 +20,12 @@ import {
 import { shouldShowComposerRealtimeVoicePrimaryAction } from '../src/renderer/src/pages/assistant/assistant-composer-view-state'
 import { buildAssistantVoiceExecutionConfiguration } from '../src/renderer/src/pages/assistant/assistant-voice-execution-configuration'
 import {
+    consumeCanonicalVoiceSpeechReplay,
     isCurrentRealtimeVoiceClientCommand,
+    isCurrentRealtimeVoicePresentationEvent,
+    normalizeRealtimeVoiceSpeechText,
+    readRealtimeVoiceAssistantCompletion,
+    readRealtimeVoiceProviderItemId,
     readRealtimeVoiceResponseActivity,
     sendRealtimeVoiceClientCommand
 } from '../src/renderer/src/pages/assistant/assistant-realtime-client-commands'
@@ -119,6 +124,21 @@ assert.equal(readRealtimeVoiceResponseActivity({
     type: 'turn.done',
     turn: { id: 'user-turn', role: 'user', transcript: 'Question.' }
 }), null)
+assert.deepEqual(readRealtimeVoiceAssistantCompletion({
+    type: 'turn.done',
+    turn: { id: 'assistant-turn', role: 'assistant', transcript: '**Typed response!**' }
+}), { providerItemId: 'assistant-turn', text: '**Typed response!**' })
+assert.equal(normalizeRealtimeVoiceSpeechText('**Typed response!**'), 'typed response')
+assert.equal(normalizeRealtimeVoiceSpeechText('typed RESPONSE.'), 'typed response')
+const pendingCanonicalSpeech = [{ canonicalMessageId: 'canonical-typed-response', normalizedText: 'typed response' }]
+const unrelatedSpeech = consumeCanonicalVoiceSpeechReplay(pendingCanonicalSpeech, 'An unrelated assistant response.')
+assert.equal(unrelatedSpeech.canonicalMessageId, null)
+assert.equal(unrelatedSpeech.remaining, pendingCanonicalSpeech, 'an interleaved unrelated response cannot consume the pending canonical replay')
+assert.deepEqual(consumeCanonicalVoiceSpeechReplay(unrelatedSpeech.remaining, '**Typed RESPONSE!**'), {
+    canonicalMessageId: 'canonical-typed-response',
+    remaining: []
+})
+assert.equal(readRealtimeVoiceProviderItemId({ type: 'turn.delta', turn_id: 'assistant-turn' }), 'assistant-turn')
 
 const normalizedRealtimeMessage = normalizeInstructorRealtimeMessage({
     text: '  What changed?  ',
@@ -172,8 +192,8 @@ assert.equal((createCallInputs[0]?.['signal'] as AbortSignal).aborted, false)
 assert.deepEqual(directRuntimeEvents.slice(0, 2).map((event) => event.type), ['session.starting', 'session.started'])
 
 await directRuntime.appendContext([{ role: 'developer', text: multibyteContext }])
-await directRuntime.requestSpeech('Narrate this result.')
-directRuntime.presentComposerResponse({ turnId: 'typed-turn-1', text: 'Typed response.' })
+await directRuntime.requestSpeech('Narrate this result.', 'canonical-spoken-result')
+directRuntime.presentComposerResponse({ turnId: 'typed-turn-1', text: 'Typed response.', canonicalMessageId: 'canonical-typed-response-1' })
 const clientCommands = directRuntimeEvents.filter((event) => event.type === 'client.command')
 assert.equal(clientCommands.length, 2)
 for (const command of clientCommands) {
@@ -189,10 +209,24 @@ assert.equal(
 )
 assert.equal(clientCommands[1].messages.every((message: any) => message.type === 'session.context.append'), true)
 assert.equal(clientCommands[1].messages.every((message: any) => message.channel === 'speakable'), true)
-assert.equal(
-    directRuntimeEvents.some((event) => event.type === 'composer.response.done' && event.text === 'Typed response.'),
-    true
-)
+assert.equal(clientCommands[1].canonicalMessageId, 'canonical-spoken-result')
+const directComposerResponse = directRuntimeEvents.find((event) => event.type === 'composer.response.done')
+assert.equal(directComposerResponse?.text, 'Typed response.')
+assert.equal(directComposerResponse?.canonicalMessageId, 'canonical-typed-response-1')
+assert.equal(isCurrentRealtimeVoicePresentationEvent(directComposerResponse, rendererCommandBinding), false)
+assert.equal(isCurrentRealtimeVoicePresentationEvent(directComposerResponse, {
+    adapterSessionId: 'adapter-session-1',
+    realtimeSessionId: 'rtc_test_voice',
+    realtimeSessionGeneration: 7
+}), true, 'typed Voice presentation events carry the exact owning generation')
+assert.equal(isCurrentRealtimeVoicePresentationEvent({
+    ...directComposerResponse,
+    realtimeSessionGeneration: 6
+}, {
+    adapterSessionId: 'adapter-session-1',
+    realtimeSessionId: 'rtc_test_voice',
+    realtimeSessionGeneration: 7
+}), false, 'a stale typed response cannot appear in a replacement Voice generation')
 assert.equal(directRuntime.isCurrentClientCommand({ ...clientCommands[0], realtimeSessionGeneration: 6 }), false)
 await directRuntime.stop()
 assert.deepEqual(directRuntimeEvents.at(-1).messages, [{ type: 'session.close' }])
@@ -322,6 +356,11 @@ dataChannelTranscript = applyRealtimeTranscriptEvent(dataChannelTranscript, {
     item_id: 'assistant-item-1',
     transcript: 'You have 120 GB free.'
 })
+assert.equal(dataChannelTranscript[0]?.final, false, 'assistant audio transcript completion remains provisional until turn.done')
+dataChannelTranscript = applyRealtimeTranscriptEvent(dataChannelTranscript, {
+    type: 'turn.done',
+    turn: { id: 'assistant-item-1', role: 'assistant', transcript: 'You have 120 GB free.' }
+})
 dataChannelTranscript = applyRealtimeTranscriptEvent(dataChannelTranscript, {
     type: 'conversation.item.input_audio_transcription.completed',
     item_id: 'user-item-1',
@@ -377,6 +416,37 @@ assert.deepEqual(
     [{ role: 'assistant', text: 'Hey there! Zyra here, spelled with a Y.', streaming: false }],
     'the regular Chat timeline must receive one Voice message after Frameless transcript reconciliation'
 )
+assert.equal(projectVoiceLiveTimelineMessages({
+    transcript: [{ id: 'assistant-partial', role: 'assistant', text: 'ZYRA', final: false }],
+    canonicalMessages: [],
+    voiceStartedAt: '2026-08-24T12:00:00.000Z'
+}).messages.length, 0, 'provisional assistant chunks stay in the Voice stage instead of looking canonical in Chat')
+assert.equal(projectVoiceLiveTimelineMessages({
+    transcript: [{ id: 'composer-response-typed-turn', role: 'assistant', text: 'ZYRA_VOICE_SINGLE_830', final: true }],
+    canonicalMessages: [],
+    voiceStartedAt: '2026-08-24T12:00:00.000Z'
+}).messages.length, 0, 'composer responses use their canonical row rather than a final-looking local Chat message')
+assert.equal(projectVoiceLiveTimelineMessages({
+    transcript: [{
+        id: 'spoken-provider-turn',
+        role: 'assistant',
+        text: 'ZYRA_VOICE_SINGLE_830!',
+        final: true,
+        canonicalMessageId: 'canonical-typed-response'
+    }],
+    canonicalMessages: [{
+        id: 'canonical-typed-response',
+        role: 'assistant',
+        text: 'ZYRA_VOICE_SINGLE_830',
+        turnId: 'canonical-turn',
+        streaming: false,
+        providerItemId: 'typed-response:830',
+        modality: 'voice',
+        createdAt: '2026-08-24T12:00:01.000Z',
+        updatedAt: '2026-08-24T12:00:01.000Z'
+    }],
+    voiceStartedAt: '2026-08-24T12:00:00.000Z'
+}).messages.length, 0, 'a spoken provider replay remains hidden by canonical message identity even when its wording changes')
 const committedFramelessMessage: AssistantMessage = {
     id: 'canonical-frameless-message-1',
     role: 'assistant',
@@ -428,6 +498,26 @@ assert.deepEqual(normalizeWebRtcTranscriptEvent(recoveredUserTranscript), {
     providerItemId: 'user-speech-item',
     text: 'Recovered speech.'
 }, 'a locally recovered speech segment must cross the same identity-bearing canonical commit boundary')
+assert.deepEqual(normalizeWebRtcTranscriptEvent({
+    type: 'response.audio_transcript.done',
+    item_id: 'assistant-partial-item',
+    role: 'assistant',
+    transcript: 'ZYRA'
+}), {
+    kind: 'delta',
+    role: 'assistant',
+    providerItemId: 'assistant-partial-item',
+    delta: 'ZYRA'
+}, 'assistant transcript done events remain provisional until the authoritative turn.done')
+assert.deepEqual(normalizeWebRtcTranscriptEvent({
+    type: 'turn.done',
+    turn: { id: 'assistant-partial-item', role: 'assistant', transcript: 'ZYRA_VOICE_SINGLE_830' }
+}), {
+    kind: 'completed',
+    role: 'assistant',
+    providerItemId: 'assistant-partial-item',
+    text: 'ZYRA_VOICE_SINGLE_830'
+}, 'turn.done is the canonical assistant completion')
 
 const voiceTaskStartedAt = '2026-08-10T10:00:00.000Z'
 const runningVoiceTaskActivity = buildVoiceStrongTaskActivity({
@@ -745,7 +835,8 @@ assert.doesNotMatch(voiceConversationStyles, /--sparkle-/)
 assert.match(voiceOrbSource, /animateLayout/)
 assert.match(voiceOrbSource, /instructor-voice-orb-render-surface/)
 assert.match(voiceOrbSource, /instructor-voice-orb-volume/)
-assert.match(voiceOrbSource, /maxFps=\{active \? 30 : connecting \? 24 : 12\}/, 'the Voice orb must use an explicit active, connecting, and idle frame budget')
+assert.match(voiceOrbSource, /maxFps=\{active \? 20 : connecting \? 16 : 8\}/, 'the Voice orb keeps its two-pass WebGL work inside a bounded active, connecting, and idle frame budget')
+assert.match(voiceSessionSource, /ACTIVITY_UPDATE_INTERVAL_MS = 96/, 'Voice activity reaches React at no more than roughly ten updates per second')
 assert.match(strandsSource, /frameIntervalMs = 1_000 \/ Math\.min\(60, Math\.max\(1, current\.maxFps\)\)/, 'the WebGL loop must enforce its configured frame ceiling')
 assert.match(strandsSource, /antialias: false/, 'the full-screen shader must not pay for redundant multisampling')
 assert.match(voiceOrbStyles, /--instructor-orb-layout-scale/)
@@ -871,6 +962,26 @@ assert.match(
     assistantServiceSource,
     /prepareVoicePrimaryWorker\(connected\.thread\.id, projectCwd, executionConfiguration\)[\s\S]{0,500}startVoice\(/u,
     'the chat-scoped primary-agent worker must still prepare while realtime Voice signaling is in flight as a fallback'
+)
+assert.match(
+    assistantServiceSource,
+    /const historyPreload = record\.thread\.providerThreadId[\s\S]{0,900}runtime\.connect[\s\S]{0,900}if \(historyPreload\) await historyPreload/u,
+    'cold Voice overlaps canonical history hydration with the already-required Assistant connection'
+)
+assert.match(
+    readFileSync(new URL('../src/main/assistant/voice/codex-realtime-foreground-adapter.ts', import.meta.url), 'utf8'),
+    /requestSpeech\(item\.text, item\.canonicalMessageId\)/u,
+    'primary-task narration carries its canonical identity through the speakable command'
+)
+assert.match(
+    assistantServiceSource,
+    /private async submitVoiceTaskNarration[\s\S]{0,900}committer\.commit\([\s\S]{0,500}providerItemId: `voice-result:\$\{taskId\}`[\s\S]{0,500}requestSpeech/u,
+    'primary-task narration becomes canonical before its spoken replay'
+)
+assert.match(
+    assistantServiceSource,
+    /this\.disposeRequested = true[\s\S]{0,2500}await this\.canonicalVoiceSetupPromise\?\.catch/u,
+    'service disposal fences and drains asynchronous Voice capability setup before teardown'
 )
 assert.match(
     zyraRuntimeSource,
