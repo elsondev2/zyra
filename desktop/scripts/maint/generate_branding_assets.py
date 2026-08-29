@@ -4,7 +4,7 @@ from pathlib import Path
 import shutil
 import sys
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -15,37 +15,22 @@ BLUEPRINT_SOURCE_PATH = BRANDING_DIR / 'zyra-blueprint-source.png'
 APP_ICON_DIR = BRANDING_DIR / 'icons'
 DEV_ICON_SOURCE_PATH = APP_ICON_DIR / 'zyra-dev-source.png'
 PROD_ICON_SOURCE_PATH = APP_ICON_DIR / 'zyra-prod-source.png'
+APPROVED_ICON_SOURCE_PATH = APP_ICON_DIR / 'zyra-flat-approved-source.png'
 
 MASTER_SIZE = 1024
 ICON_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
 LINUX_ICON_SIZES = (16, 32, 48, 64, 128, 256, 512, 1024)
-APP_ICON_SOURCE_PADDING_RATIO = 0.08
-APP_ICON_TILE_INSET_RATIO = 0.022
-APP_ICON_TILE_RADIUS_RATIO = 0.18
-APP_ICON_VARIANTS = {
-    'zyra-dev.png': ('dev', 'balanced'),
-    'zyra-dev-light.png': ('dev', 'light-shell'),
-    'zyra-dev-dark.png': ('dev', 'dark-shell'),
-    'zyra-prod.png': ('prod', 'balanced'),
-    'zyra-prod-light.png': ('prod', 'light-shell'),
-    'zyra-prod-dark.png': ('prod', 'dark-shell')
-}
-APP_ICON_TONES = {
-    'balanced': (1.0, 1.0, 1.0),
-    'light-shell': (0.92, 1.08, 0.98),
-    'dark-shell': (1.06, 1.02, 1.08)
-}
-APP_ICON_SIZE_TUNING = {
-    16: (1.35, 0.78, 1.30, 1.12),
-    24: (1.30, 0.82, 1.30, 1.12),
-    32: (1.25, 0.85, 1.30, 1.12),
-    48: (1.20, 0.88, 1.24, 1.10),
-    64: (1.18, 0.90, 1.20, 1.08),
-    128: (1.14, 0.93, 1.18, 1.08),
-    256: (1.10, 0.95, 1.18, 1.06),
-    512: (1.07, 0.97, 1.18, 1.05),
-    1024: (1.04, 0.98, 1.18, 1.04)
-}
+APP_ICON_VARIANTS = (
+    'zyra-dev.png',
+    'zyra-dev-light.png',
+    'zyra-dev-dark.png',
+    'zyra-prod.png',
+    'zyra-prod-light.png',
+    'zyra-prod-dark.png'
+)
+APP_ICON_BACKGROUND = (4, 20, 43, 255)
+APP_ICON_MARK = (57, 206, 230, 255)
+APP_ICON_OPTICAL_SIZES = {16, 24, 32}
 
 
 def load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -256,136 +241,84 @@ def load_blueprint_master(size: int) -> Image.Image:
     return draw_blueprint_mark(size)
 
 
-def detect_app_icon_crop_box() -> tuple[int, int, int, int]:
-    if not DEV_ICON_SOURCE_PATH.exists():
-        raise FileNotFoundError(f'Missing app icon source: {DEV_ICON_SOURCE_PATH}')
-
-    source = Image.open(DEV_ICON_SOURCE_PATH).convert('RGBA')
-    mark_mask = source.getchannel('A').point(lambda value: 255 if value >= 128 else 0)
-    mark_bounds = mark_mask.getbbox()
-    if not mark_bounds:
-        raise ValueError('Could not detect the Zyra mark in the selected development icon source.')
-
-    left, top, right, bottom = mark_bounds
-    padding = round((bottom - top) * APP_ICON_SOURCE_PADDING_RATIO)
-    left -= padding
-    top -= padding
-    right += padding
-    bottom += padding
-    side = max(right - left, bottom - top)
-    center_x = (left + right) / 2
-    center_y = (top + bottom) / 2
-    square = (
-        round(center_x - side / 2),
-        round(center_y - side / 2),
-        round(center_x + side / 2),
-        round(center_y + side / 2)
-    )
-    if square[0] < 0 or square[1] < 0 or square[2] > source.width or square[3] > source.height:
-        raise ValueError('The selected app icon crop falls outside its source canvas.')
-    return square
+def load_approved_app_icon_master() -> Image.Image:
+    if not APPROVED_ICON_SOURCE_PATH.exists():
+        raise FileNotFoundError(f'Missing approved app icon source: {APPROVED_ICON_SOURCE_PATH}')
+    source = Image.open(APPROVED_ICON_SOURCE_PATH).convert('RGBA')
+    if source.size != (MASTER_SIZE, MASTER_SIZE):
+        raise ValueError('The approved app icon source must remain 1024px square.')
+    return source
 
 
-def load_app_icon_layers(source_path: Path, crop_box: tuple[int, int, int, int]) -> tuple[Image.Image, Image.Image]:
-    if not source_path.exists():
-        raise FileNotFoundError(f'Missing app icon source: {source_path}')
-
-    # Convert the hidden RGB artwork before resizing so the source's soft glow
-    # and gray/cyan field remain available behind its clean alpha mark.
-    background = Image.open(source_path).convert('RGB').crop(crop_box)
-    mark = Image.open(source_path).convert('RGBA').crop(crop_box)
-    return background, mark
-
-
-def nearest_app_icon_tuning(size: int) -> tuple[float, float, float, float]:
-    nearest = min(APP_ICON_SIZE_TUNING, key=lambda candidate: abs(candidate - size))
-    return APP_ICON_SIZE_TUNING[nearest]
+def approved_app_icon_masks(source: Image.Image) -> tuple[Image.Image, Image.Image]:
+    tile_alpha = source.getchannel('A')
+    mark_mask = Image.new('L', source.size, 0)
+    mark_mask.putdata([
+        255 if alpha > 0 and green > 100 and blue > 100 and red < 100 else 0
+        for red, green, blue, alpha in source.getdata()
+    ])
+    if not mark_mask.getbbox():
+        raise ValueError('The approved app icon source does not contain the cyan Zyra mark.')
+    return tile_alpha, mark_mask
 
 
-def render_app_icon(
-    layers: tuple[Image.Image, Image.Image],
-    *,
-    family: str,
-    tone: str,
-    size: int
-) -> Image.Image:
-    background_source, mark_source = layers
-    background_contrast, background_brightness, mark_brightness, mark_contrast = nearest_app_icon_tuning(size)
-    tone_brightness, tone_contrast, tone_mark_brightness = APP_ICON_TONES[tone]
+def render_16px_optical_mark() -> Image.Image:
+    mark_mask = Image.new('L', (16, 16), 0)
+    draw = ImageDraw.Draw(mark_mask)
+    draw.rectangle((3, 2, 12, 13), outline=255, width=1)
+    draw.line(((5, 4), (10, 4), (10, 9), (8, 9)), fill=255, width=1)
+    draw.line(((5, 4), (5, 7), (8, 7)), fill=255, width=1)
+    draw.line(((5, 8), (5, 11), (10, 11), (10, 10), (8, 10)), fill=255, width=1)
+    draw.line(((9, 5), (9, 7)), fill=255, width=1)
+    draw.line(((6, 9), (6, 10)), fill=255, width=1)
+    return mark_mask
 
-    background = background_source.resize((size, size), Image.Resampling.LANCZOS)
-    background = ImageEnhance.Contrast(background).enhance(background_contrast * tone_contrast)
-    background = ImageEnhance.Brightness(background).enhance(background_brightness * tone_brightness)
-    background = ImageEnhance.Color(background).enhance(0.95 if family == 'dev' else 0.0)
-    image = background.convert('RGBA')
 
-    mark_alpha = mark_source.getchannel('A').resize((size, size), Image.Resampling.LANCZOS)
-    if size <= 32:
-        mark_alpha = mark_alpha.point(lambda value: 255 if value >= 72 else 0)
-    mark = mark_source.convert('RGB').resize((size, size), Image.Resampling.LANCZOS)
-    mark = ImageEnhance.Brightness(mark).enhance(mark_brightness * tone_mark_brightness)
-    mark = ImageEnhance.Contrast(mark).enhance(mark_contrast)
+def clamp_approved_app_icon_palette(image: Image.Image) -> Image.Image:
+    red, green, blue, alpha = image.convert('RGBA').split()
+    red = red.point(lambda value: max(APP_ICON_BACKGROUND[0], min(57, value)))
+    green = green.point(lambda value: max(APP_ICON_BACKGROUND[1], min(207, value)))
+    blue = blue.point(lambda value: max(APP_ICON_BACKGROUND[2], min(231, value)))
+    return Image.merge('RGBA', (red, green, blue, alpha))
 
-    outline = mark_alpha.filter(ImageFilter.MaxFilter(3)) if size >= 24 else mark_alpha
-    outline_color = (36, 92, 102, 255) if family == 'dev' else (52, 52, 52, 255)
-    image.paste(outline_color, (0, 0, size, size), outline)
-    image.paste(mark.convert('RGBA'), (0, 0), mark_alpha)
 
-    tile_mask = Image.new('L', (size, size), 0)
-    tile_draw = ImageDraw.Draw(tile_mask)
-    inset = max(1, round(size * APP_ICON_TILE_INSET_RATIO))
-    radius = max(2, round(size * APP_ICON_TILE_RADIUS_RATIO))
-    tile_draw.rounded_rectangle(
-        (inset, inset, size - 1 - inset, size - 1 - inset),
-        radius=radius,
-        fill=255
-    )
-    image.putalpha(tile_mask)
+def render_app_icon(source: Image.Image, size: int) -> Image.Image:
+    if size > 64:
+        if size == MASTER_SIZE:
+            return source.copy()
+        return clamp_approved_app_icon_palette(source.resize((size, size), Image.Resampling.LANCZOS))
 
-    border_color = (34, 210, 235, 210) if family == 'dev' else (242, 242, 242, 220)
-    ImageDraw.Draw(image).rounded_rectangle(
-        (inset, inset, size - 1 - inset, size - 1 - inset),
-        radius=radius,
-        outline=border_color,
-        width=max(1, round(size * 0.01))
-    )
+    tile_alpha_source, mark_mask_source = approved_app_icon_masks(source)
+    tile_alpha = tile_alpha_source.resize((size, size), Image.Resampling.LANCZOS)
+    mark_mask = render_16px_optical_mark() if size == 16 else mark_mask_source.resize((size, size), Image.Resampling.LANCZOS)
+    if size in APP_ICON_OPTICAL_SIZES and size != 16:
+        mark_mask = mark_mask.point(lambda value: 255 if value >= 96 else 0)
+    elif size <= 64 and size != 16:
+        mark_mask = mark_mask.point(lambda value: 255 if value >= 112 else 0)
+
+    image = Image.new('RGBA', (size, size), APP_ICON_BACKGROUND)
+    image.putalpha(tile_alpha)
+    mark_layer = Image.new('RGBA', (size, size), APP_ICON_MARK)
+    mark_layer.putalpha(ImageChops.multiply(mark_mask, tile_alpha))
+    image.alpha_composite(mark_layer)
     return image
 
 
-def save_app_icon_png(
-    layers: tuple[Image.Image, Image.Image],
-    *,
-    family: str,
-    tone: str,
-    path: Path,
-    size: int
-) -> None:
+def save_app_icon_png(source: Image.Image, *, path: Path, size: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    render_app_icon(layers, family=family, tone=tone, size=size).save(path, format='PNG', optimize=True)
+    render_app_icon(source, size).save(path, format='PNG', optimize=True)
 
 
-def save_app_icon_ico(
-    layers: tuple[Image.Image, Image.Image],
-    *,
-    family: str,
-    tone: str,
-    path: Path
-) -> None:
+def save_app_icon_ico(source: Image.Image, *, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    frames = [render_app_icon(layers, family=family, tone=tone, size=size[0]) for size in ICON_SIZES]
+    frames = [render_app_icon(source, size[0]) for size in ICON_SIZES]
     frames[-1].save(path, format='ICO', sizes=ICON_SIZES, append_images=frames[:-1])
 
 
-def save_app_icon_icns(
-    layers: tuple[Image.Image, Image.Image],
-    *,
-    family: str,
-    tone: str,
-    path: Path
-) -> None:
+def save_app_icon_icns(source: Image.Image, *, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    sizes = (32, 64, 128, 256, 512, 1024)
-    frames = [render_app_icon(layers, family=family, tone=tone, size=size) for size in sizes]
+    sizes = (16, 32, 64, 128, 256, 512, 1024)
+    frames = [render_app_icon(source, size) for size in sizes]
     frames[-1].save(path, format='ICNS', append_images=frames[:-1])
 
 
@@ -408,40 +341,23 @@ def main() -> None:
         save_png(clean_master, clean_brand_path, 1024)
         save_png(blueprint_master, blueprint_path, 1024)
 
-    crop_box = detect_app_icon_crop_box()
-    app_icon_layers = {
-        'dev': load_app_icon_layers(DEV_ICON_SOURCE_PATH, crop_box),
-        'prod': load_app_icon_layers(PROD_ICON_SOURCE_PATH, crop_box)
-    }
-    for file_name, (family, tone) in APP_ICON_VARIANTS.items():
+    approved_app_icon = load_approved_app_icon_master()
+    for file_name in APP_ICON_VARIANTS:
         variant_path = APP_ICON_DIR / file_name
-        save_app_icon_png(
-            app_icon_layers[family],
-            family=family,
-            tone=tone,
-            path=variant_path,
-            size=1024
-        )
-        save_app_icon_ico(
-            app_icon_layers[family],
-            family=family,
-            tone=tone,
-            path=variant_path.with_suffix('.ico')
-        )
+        save_app_icon_png(approved_app_icon, path=variant_path, size=1024)
+        save_app_icon_ico(approved_app_icon, path=variant_path.with_suffix('.ico'))
 
     icon_png = ROOT / 'resources' / 'icon.png'
     dev_icon_png = ROOT / 'resources' / 'icon-dev.png'
-    save_app_icon_png(app_icon_layers['prod'], family='prod', tone='balanced', path=icon_png, size=512)
-    save_app_icon_png(app_icon_layers['dev'], family='dev', tone='balanced', path=dev_icon_png, size=512)
-    save_app_icon_ico(app_icon_layers['prod'], family='prod', tone='balanced', path=ROOT / 'resources' / 'icon.ico')
-    save_app_icon_ico(app_icon_layers['dev'], family='dev', tone='balanced', path=ROOT / 'resources' / 'icon-dev.ico')
-    save_app_icon_icns(app_icon_layers['prod'], family='prod', tone='balanced', path=ROOT / 'resources' / 'icon.icns')
+    save_app_icon_png(approved_app_icon, path=icon_png, size=512)
+    save_app_icon_png(approved_app_icon, path=dev_icon_png, size=512)
+    save_app_icon_ico(approved_app_icon, path=ROOT / 'resources' / 'icon.ico')
+    save_app_icon_ico(approved_app_icon, path=ROOT / 'resources' / 'icon-dev.ico')
+    save_app_icon_icns(approved_app_icon, path=ROOT / 'resources' / 'icon.icns')
     linux_icon_dir = ROOT / 'resources' / 'icons'
     for size in LINUX_ICON_SIZES:
         save_app_icon_png(
-            app_icon_layers['prod'],
-            family='prod',
-            tone='balanced',
+            approved_app_icon,
             path=linux_icon_dir / f'{size}x{size}.png',
             size=size
         )
@@ -458,7 +374,7 @@ def main() -> None:
             print(f'  {BLUEPRINT_SOURCE_PATH.relative_to(ROOT)}')
         print(f'  {clean_brand_path.relative_to(ROOT)}')
         print(f'  {blueprint_path.relative_to(ROOT)}')
-    for source_path in (DEV_ICON_SOURCE_PATH, PROD_ICON_SOURCE_PATH):
+    for source_path in (DEV_ICON_SOURCE_PATH, PROD_ICON_SOURCE_PATH, APPROVED_ICON_SOURCE_PATH):
         print(f'  {source_path.relative_to(ROOT)}')
     for file_name in APP_ICON_VARIANTS:
         variant_path = APP_ICON_DIR / file_name
