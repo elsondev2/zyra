@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -38,6 +38,36 @@ try {
   assert.equal(direct.stdout.trim(), expected);
   assert.equal(direct.stderr, "");
   assert.equal(existsSync(path.join(project, ".zyra")), false, "direct source version must not create project state");
+
+  if (process.platform === "win32") {
+    const installSource = readFileSync(path.join(root, "install.ps1"), "utf8");
+    assert.match(
+      installSource,
+      /if not exist .* goto zyra_cli_fallback[\s\S]*--tui %\*[\s\S]*exit \/b %ERRORLEVEL%[\s\S]*:zyra_cli_fallback/,
+      "the managed Desktop shim must read ERRORLEVEL after Desktop exits, outside a parenthesized CMD block",
+    );
+    assert.doesNotMatch(
+      installSource,
+      /if exist .*\(.*--tui %\*.*%ERRORLEVEL%.*\)/,
+      "CMD cannot expand the Desktop exit code before launching Desktop",
+    );
+
+    const directDesktopFailure = spawnSync(process.execPath, ["--tui"], { encoding: "utf8" });
+    assert.notEqual(directDesktopFailure.status, 0, "the regression fixture needs a failing executable invocation");
+    const shimPath = path.join(project, "desktop-exit-code.cmd");
+    writeFileSync(shimPath, [
+      "@echo off",
+      "setlocal",
+      `if not exist "${process.execPath}" goto zyra_cli_fallback`,
+      `"${process.execPath}" --tui`,
+      "exit /b %ERRORLEVEL%",
+      ":zyra_cli_fallback",
+      "exit /b 97",
+      "",
+    ].join("\r\n"), "ascii");
+    const shimFailure = spawnSync(shimPath, [], { encoding: "utf8", shell: true });
+    assert.equal(shimFailure.status, directDesktopFailure.status, "the managed shim must return Desktop's actual TUI exit code");
+  }
 } finally {
   rmSync(project, { recursive: true, force: true });
 }

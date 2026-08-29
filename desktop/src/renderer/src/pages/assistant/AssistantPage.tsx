@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import type { AssistantActivity, AssistantMessage, AssistantSession, AssistantTurnDetail, FleetSnapshot } from '@shared/assistant/contracts'
 import { reconcileAssistantMessageReplays } from '@shared/assistant/message-reconciliation'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
@@ -19,6 +20,7 @@ import { useAssistantBrowserSurfaceRequests } from './useAssistantBrowserSurface
 import { useAssistantPageSidebarState } from './useAssistantPageSidebarState'
 import { useAssistantReviewIndex } from './useAssistantReviewIndex'
 import { useAssistantChatRouting } from './useAssistantChatRouting'
+import { parseAssistantFilesShellLaunchRequest } from '@shared/assistant/files-shell-launch-route'
 
 type AssistantPageShellSelection = {
     bootstrapped: boolean
@@ -76,6 +78,18 @@ function areAssistantDiffSourceSelectionsEqual(left: AssistantDiffSourceSelectio
 export default function AssistantPage() {
     const actions = useAssistantStoreActions()
     const preview = useFilePreview()
+    const location = useLocation()
+    const incomingFilesShellLaunchRequest = useMemo(
+        () => parseAssistantFilesShellLaunchRequest(location.search),
+        [location.search]
+    )
+    const [filesShellLaunchRequest, setFilesShellLaunchRequest] = useState(incomingFilesShellLaunchRequest)
+    useEffect(() => {
+        if (!incomingFilesShellLaunchRequest) return
+        setFilesShellLaunchRequest((current) => current?.id === incomingFilesShellLaunchRequest.id
+            ? current
+            : incomingFilesShellLaunchRequest)
+    }, [incomingFilesShellLaunchRequest])
     const shell = useAssistantStoreSelector<AssistantPageShellSelection>((state) => {
         const selectedSession = getSelectedAssistantSession(state.snapshot)
 
@@ -359,6 +373,17 @@ export default function AssistantPage() {
         setRightPanelMode('none')
     }, [setRightPanelMode, shell.selectedSessionId])
 
+    useEffect(() => {
+        if (!filesShellLaunchRequest) return
+        diffSessionIdRef.current = shell.selectedSessionId
+        prepareInspector()
+        setRightPanelMode('review')
+    }, [filesShellLaunchRequest?.id, prepareInspector, setRightPanelMode])
+
+    const handleFilesShellLaunchRequestHandled = useCallback((requestId: string) => {
+        setFilesShellLaunchRequest((current) => current?.id === requestId ? null : current)
+    }, [])
+
     const handleStartDetachedPlaygroundChat = useCallback(async () => {
         setRailMode('work')
         await actions.createSession({ mode: 'work' })
@@ -559,6 +584,8 @@ export default function AssistantPage() {
                                     selectedTurnId={effectiveDiffTurnId}
                                     selectedDiff={selectedDiff}
                                     projectPath={diffSource.projectRootPath}
+                                    filesShellLaunchRequest={filesShellLaunchRequest}
+                                    onFilesShellLaunchRequestHandled={handleFilesShellLaunchRequestHandled}
                                     fleetSnapshot={diffSource.fleetSnapshot}
                                     browserSurfaceRequest={browserSurfaceRequest}
                                     onBrowserSurfaceRequestHandled={handleBrowserSurfaceRequestHandled}

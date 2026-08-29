@@ -1,5 +1,6 @@
 import { createContext, lazy, Suspense, useContext, useEffect, useState, type ReactNode } from 'react'
 import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { migrateLegacyExplorerShellLaunchRoute } from '@shared/assistant/files-shell-launch-route'
 import TitleBar from './components/layout/TitleBar'
 import { AppBootSkeleton, AppRouteSkeleton } from './components/ui/AppRouteSkeleton'
 import { SettingsProvider, useSettings } from './lib/settings'
@@ -109,6 +110,11 @@ function AssistantRoute() {
     )
 }
 
+function RetiredExplorerRedirect() {
+    const location = useLocation()
+    return <Navigate to={migrateLegacyExplorerShellLaunchRoute(location.pathname, location.search)} replace />
+}
+
 function MainContent() {
     useEffect(() => {
         const preload = () => {
@@ -167,8 +173,8 @@ function MainContent() {
                     <Route path="/projects" element={<Navigate to="/assistant" replace />} />
                     <Route path="/projects/*" element={<Navigate to="/assistant" replace />} />
                     <Route path="/folder-browse/*" element={<Navigate to="/assistant" replace />} />
-                    <Route path="/explorer" element={<Navigate to="/assistant" replace />} />
-                    <Route path="/explorer/*" element={<Navigate to="/assistant" replace />} />
+                    <Route path="/explorer" element={<RetiredExplorerRedirect />} />
+                    <Route path="/explorer/*" element={<RetiredExplorerRedirect />} />
                     <Route path="/tasks" element={<Navigate to="/assistant" replace />} />
                     <Route path="/tasks/*" element={<Navigate to="/assistant" replace />} />
                     <Route path="/terminals" element={<Navigate to="/assistant" replace />} />

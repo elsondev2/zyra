@@ -1,6 +1,7 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type TransitionEvent as ReactTransitionEvent, type UIEvent } from 'react'
 import { Bot, FileDiff, Files, Globe2, Library, LoaderCircle, MessageSquareText, PanelRight, ShieldAlert, SquareTerminal, TriangleAlert, Volume2 } from 'lucide-react'
 import type { FleetSnapshot } from '@shared/assistant/contracts'
+import type { AssistantFilesShellLaunchRequest } from '@shared/assistant/files-shell-launch-route'
 import type { ControlStateSnapshot, ControlWorkspaceSnapshot } from '@shared/agent-control/contracts'
 import type { BrowserSurfaceOpenRequest } from '@shared/agent-control/protocol'
 import type { BrowserSessionMode } from '@shared/browser-view'
@@ -122,6 +123,8 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     selectedTurnId: string | null
     selectedDiff: AssistantDiffTarget | null
     projectPath: string | null
+    filesShellLaunchRequest: AssistantFilesShellLaunchRequest | null
+    onFilesShellLaunchRequestHandled: (requestId: string) => void
     fleetSnapshot: FleetSnapshot | null
     browserSurfaceRequest: BrowserSurfaceOpenRequest | null
     onBrowserSurfaceRequestHandled: (requestId: string) => void
@@ -151,6 +154,8 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
         selectedTurnId,
         selectedDiff,
         projectPath,
+        filesShellLaunchRequest,
+        onFilesShellLaunchRequestHandled,
         fleetSnapshot,
         browserSurfaceRequest,
         onBrowserSurfaceRequestHandled,
@@ -163,10 +168,12 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
         onClose
     } = props
     const { settings } = useSettings()
+    const browserWorkspaceKey = sessionId || projectPath || 'detached'
     const reviewFileRevealSequenceRef = useRef(-1)
     const browserNavigationSequenceRef = useRef(1)
     const browserUiTabSequenceRef = useRef(1)
     const processedBrowserSurfaceRequestRef = useRef<string | null>(null)
+    const processedFilesShellLaunchRequestRef = useRef<string | null>(null)
     const pendingBrowserTabIdsRef = useRef(new Set<string>())
     const pendingMainBrowserMovesRef = useRef(new Map<string, Set<string>>())
     const pendingMainBrowserMoveTimersRef = useRef(new Map<string, number>())
@@ -211,6 +218,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     const [resourceDrillDownTurnId, setResourceDrillDownTurnId] = useState<string | null>(null)
     const [resourceDrillDownDiff, setResourceDrillDownDiff] = useState<AssistantDiffTarget | null>(null)
     const [explorerViewCapsule, setExplorerViewCapsule] = useState<AssistantUtilityExplorerStateCapsule | null>(null)
+    const [filesShellLaunchRoot, setFilesShellLaunchRoot] = useState<{ workspaceKey: string; folderPath: string } | null>(null)
     const [controlState, setControlState] = useState<ControlStateSnapshot | null>(null)
     const [browserWorkspaceState, setBrowserWorkspaceState] = useState<ControlWorkspaceSnapshot['browser']>({
         open: false,
@@ -221,7 +229,9 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     })
     const { developerToast, showDeveloperToast, dismissDeveloperToast } = useAssistantInspectorDeveloperToast()
 
-    const browserWorkspaceKey = sessionId || projectPath || 'detached'
+    const filesProjectPath = filesShellLaunchRoot?.workspaceKey === browserWorkspaceKey
+        ? filesShellLaunchRoot.folderPath
+        : filesShellLaunchRequest?.folderPath || projectPath
 
     const ensureUtilityTabId = useCallback((workspaceTabId: string, workspace: AssistantUtilityWorkspaceKind) => {
         const existing = utilityTabIdByWorkspaceIdRef.current.get(workspaceTabId)
@@ -263,11 +273,11 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     useEffect(() => () => window.clearTimeout(loadingTimerRef.current), [])
 
     useEffect(() => {
-        if (!projectPath) return
+        if (!filesProjectPath) return
         const warmFilesWorkspace = () => {
             void import('./AssistantFilesWorkspace')
             preloadPreviewRenderer('code')
-            void warmPreviewFileSearchIndex(projectPath)
+            void warmPreviewFileSearchIndex(filesProjectPath)
         }
         if (typeof window.requestIdleCallback === 'function') {
             const idleId = window.requestIdleCallback(warmFilesWorkspace, { timeout: 1200 })
@@ -275,7 +285,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
         }
         const timeoutId = window.setTimeout(warmFilesWorkspace, 240)
         return () => window.clearTimeout(timeoutId)
-    }, [projectPath])
+    }, [filesProjectPath])
 
     useEffect(() => {
         let cancelled = false
@@ -362,8 +372,34 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
         browserControllerRef.current = null
         pendingBrowserTabIdsRef.current.clear()
         processedBrowserSurfaceRequestRef.current = null
+        processedFilesShellLaunchRequestRef.current = null
         setWorkspaceHydratedKey(browserWorkspaceKey)
     }, [browserWorkspaceKey, defaultTerminalRuntimeId, settings.assistantBrowserRestoreTabs])
+
+    useEffect(() => {
+        if (
+            !open
+            || !filesShellLaunchRequest
+            || workspaceHydratedKey !== browserWorkspaceKey
+            || processedFilesShellLaunchRequestRef.current === filesShellLaunchRequest.id
+        ) return
+
+        const capsule: AssistantUtilityExplorerStateCapsule = {
+            version: 1,
+            workspace: 'explorer',
+            currentFolderPath: filesShellLaunchRequest.folderPath
+        }
+        processedFilesShellLaunchRequestRef.current = filesShellLaunchRequest.id
+        setFilesShellLaunchRoot({ workspaceKey: browserWorkspaceKey, folderPath: filesShellLaunchRequest.folderPath })
+        setHydrationCapsules((current) => ({ ...current, [EXPLORER_TAB.id]: capsule }))
+        setExplorerViewCapsule(capsule)
+        setWorkspaceTabs((current) => current.some((tab) => tab.id === EXPLORER_TAB.id)
+            ? current
+            : [...current, EXPLORER_TAB])
+        setActiveTabId(EXPLORER_TAB.id)
+        beginTabTransition(EXPLORER_TAB.id)
+        onFilesShellLaunchRequestHandled(filesShellLaunchRequest.id)
+    }, [beginTabTransition, browserWorkspaceKey, filesShellLaunchRequest, onFilesShellLaunchRequestHandled, open, workspaceHydratedKey])
 
     useEffect(() => {
         if (workspaceHydratedKey !== browserWorkspaceKey) return
@@ -429,8 +465,8 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
         ? selectedDiff
         : reviewContextTurn?.files[0]?.target || null
     const filesTabContext = useMemo(
-        () => resolveFilesWorkspaceTabContext(explorerViewCapsule?.activePreview, projectPath),
-        [explorerViewCapsule?.activePreview, projectPath]
+        () => resolveFilesWorkspaceTabContext(explorerViewCapsule?.activePreview, filesProjectPath),
+        [explorerViewCapsule?.activePreview, filesProjectPath]
     )
     const diffTabContext = useMemo(() => resolveDiffWorkspaceTabContext({
         turnCount: turns.length,
@@ -991,13 +1027,15 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
             url: browserTab?.url || undefined,
             faviconUrl: browserTab?.faviconUrl || undefined,
             terminalRuntimeId: workspace === 'terminal' ? terminalRuntimeId : undefined,
-            path: workspace === 'explorer' || workspace === 'terminal' ? projectPath || undefined : undefined,
+            path: workspace === 'explorer'
+                ? filesProjectPath || undefined
+                : workspace === 'terminal' ? projectPath || undefined : undefined,
             turnId: workspaceTab.kind === 'turn' ? workspaceTab.turnId : undefined,
             stateCapsule,
             createdAt: now,
             updatedAt: now
         }
-    }, [browserTabs, canonicalChatId, chatTitle, ensureUtilityTabId, projectPath, readWorkspaceCapsule, resourceDrillDownDiff, resourceDrillDownTurnId, reviewTurnId, sessionId, tabs, terminalRuntimeId, threadId, visibleSelectedDiff, workspaceTabs])
+    }, [browserTabs, canonicalChatId, chatTitle, ensureUtilityTabId, filesProjectPath, projectPath, readWorkspaceCapsule, resourceDrillDownDiff, resourceDrillDownTurnId, reviewTurnId, sessionId, tabs, terminalRuntimeId, threadId, visibleSelectedDiff, workspaceTabs])
 
     const mainTabTearOff = useMemo(() => isElectronRendererRuntime() ? {
         begin: async (tabId: string, screenPoint: { x: number; y: number }, grabOffset: { x: number; y: number }): Promise<string | null> => {
@@ -1384,7 +1422,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                     <div className={activeWorkspaceTab?.kind === 'explorer' ? 'flex min-h-0 flex-1' : 'hidden'}>
                         <Suspense fallback={<PreviewTreeSkeleton />}>
                             <AssistantFilesWorkspace
-                                projectPath={projectPath}
+                                projectPath={filesProjectPath}
                                 active={open && activeWorkspaceTab?.kind === 'explorer'}
                                 publishNavigatorToAppTitleBar
                                 stateCapsule={explorerHydrationCapsule?.workspace === 'explorer' ? explorerHydrationCapsule : undefined}

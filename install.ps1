@@ -265,7 +265,14 @@ function Ensure-ZyraCommands($Root) {
   New-Item -ItemType Directory -Force -Path $shimDir | Out-Null
   $desktopBatchPath = if ($desktopExe) { $desktopExe.Replace('%', '%%') } else { $null }
   $rootBatchPath = $Root.Replace('%', '%%')
-  $desktopLine = if ($desktopBatchPath) { 'if exist "' + $desktopBatchPath + '" ("' + $desktopBatchPath + '" --tui %* & exit /b %ERRORLEVEL%)' } else { 'rem Zyra Desktop is not registered.' }
+  $desktopLine = if ($desktopBatchPath) {
+    @(
+      'if not exist "' + $desktopBatchPath + '" goto zyra_cli_fallback',
+      '"' + $desktopBatchPath + '" --tui %*',
+      'exit /b %ERRORLEVEL%',
+      ':zyra_cli_fallback'
+    ) -join "`r`n"
+  } else { 'rem Zyra Desktop is not registered.' }
   $zyraContent = @"
 @echo off
 setlocal

@@ -7,6 +7,11 @@ import {
     ASSISTANT_MIN_LEFT_SIDEBAR_WIDTH,
     resolveStoredAssistantLeftSidebarWidth
 } from '../src/renderer/src/pages/assistant/assistant-pane-layout'
+import {
+    buildAssistantFilesShellLaunchRoute,
+    migrateLegacyExplorerShellLaunchRoute,
+    parseAssistantFilesShellLaunchRequest
+} from '../src/shared/assistant/files-shell-launch-route'
 
 assert.equal(resolveStoredAssistantLeftSidebarWidth(null), 322)
 assert.equal(resolveStoredAssistantLeftSidebarWidth('999'), ASSISTANT_MAX_LEFT_SIDEBAR_WIDTH)
@@ -35,6 +40,32 @@ assert.equal(appSource.includes('window.requestIdleCallback(preload'), true, 'th
 assert.equal(appSource.includes('<AssistantRouteShell'), true, 'cold navigation paints the Assistant-shaped shell immediately')
 assert.equal(appSource.includes('agentInboxEnabled={settings.assistantAgentInboxSidebarEnabled}'), true, 'the fallback sidebar must match the selected loaded sidebar mode')
 assert.equal(appSource.includes('<Route path="/assistant" element={<AssistantRoute />}'), true)
+assert.match(appSource, /RetiredExplorerRedirect/, 'retired Explorer shell-launch routes preserve their requested folder while entering Assistant')
+
+const shellLaunchFolder = 'C:\\Users\\Example Person\\project #1'
+const shellLaunchRoute = buildAssistantFilesShellLaunchRoute(shellLaunchFolder, '?source=shell')
+assert.equal(shellLaunchRoute, '/assistant?source=shell&shellLaunch=1&workspace=files&path=C%3A%5CUsers%5CExample+Person%5Cproject+%231')
+assert.deepEqual(parseAssistantFilesShellLaunchRequest(shellLaunchRoute.split('?')[1]), {
+    id: shellLaunchRoute,
+    folderPath: shellLaunchFolder
+})
+assert.equal(
+    migrateLegacyExplorerShellLaunchRoute(`/explorer/${encodeURIComponent(shellLaunchFolder)}`, '?shellLaunch=1&source=shell'),
+    '/assistant?shellLaunch=1&source=shell&workspace=files&path=C%3A%5CUsers%5CExample+Person%5Cproject+%231'
+)
+assert.equal(migrateLegacyExplorerShellLaunchRoute('/explorer/old-project', ''), '/assistant', 'ordinary retired Explorer links do not become shell launches')
+
+const mainSource = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8')
+assert.match(mainSource, /buildAssistantFilesShellLaunchRoute\(folderPath\)/, 'main-owned directory launches target integrated Files directly')
+const assistantPageSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantPage.tsx', import.meta.url), 'utf8')
+const assistantDiffPanelSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantDiffPanel.tsx', import.meta.url), 'utf8')
+const pageShellLaunchSource = appSource + assistantPageSource
+assert.match(pageShellLaunchSource, /parseAssistantFilesShellLaunchRequest/, 'Assistant consumes the bounded shell-launch request')
+assert.match(pageShellLaunchSource, /filesShellLaunchRequest/, 'Assistant carries the requested folder into its Inspector')
+assert.match(assistantPageSource, /handleFilesShellLaunchRequestHandled[\s\S]{0,220}current\?\.id === requestId \? null/, 'canonical chat routing may drop the query only after Files consumes the request')
+assert.doesNotMatch(assistantPageSource, /filesShellLaunchRequest\?\.id[\s\S]{0,100}shell\.selectedSessionId\]/, 'switching chats cannot replay a consumed shell launch')
+assert.match(assistantDiffPanelSource, /setFilesShellLaunchRoot\(\{ workspaceKey: browserWorkspaceKey, folderPath:/, 'the requested root is retained inside only the consuming chat workspace')
+assert.match(assistantDiffPanelSource, /filesShellLaunchRoot\?\.workspaceKey === browserWorkspaceKey/, 'a shell-opened root cannot leak into another chat workspace')
 
 const routeShellSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantRouteShell.tsx', import.meta.url), 'utf8')
 assert.equal(routeShellSource.includes('usePublishAssistantTitleBarContent(titleBarContent)'), true, 'the fallback should preserve the loaded title-bar content region')

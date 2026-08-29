@@ -40,6 +40,7 @@ import { createRendererHangRecorder } from './diagnostics/renderer-hang-recorder
 import { BROWSER_POPUP_PRELOAD_ARGUMENT } from '../shared/preload-surfaces'
 import { configureBrowserDownloadAnalytics } from './browser-download-service'
 import { inspectProjectAnalyticsCapabilities } from './analytics/project-capabilities'
+import { buildAssistantFilesShellLaunchRoute } from '../shared/assistant/files-shell-launch-route'
 
 app.enableSandbox()
 
@@ -135,7 +136,6 @@ let quitCleanupComplete = false
 const pendingShellLaunchTargets: ShellLaunchTarget[] = []
 const FILE_PROTOCOL = 'zyra'
 const QUICK_PREVIEW_ROUTE = '/quick-open'
-const EXTERNAL_EXPLORER_LAUNCH_QUERY = 'shellLaunch=1'
 
 type ShellLaunchTarget = {
     kind: 'file' | 'directory'
@@ -552,7 +552,7 @@ function configureTrustedRendererWindow(window: BrowserWindow): void {
 }
 
 function buildExternalExplorerRoute(folderPath: string): string {
-    return `/explorer/${encodeURIComponent(folderPath)}?${EXTERNAL_EXPLORER_LAUNCH_QUERY}`
+    return buildAssistantFilesShellLaunchRoute(folderPath)
 }
 
 function configureMainRendererMediaPermissions(): void {
