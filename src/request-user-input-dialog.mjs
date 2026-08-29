@@ -181,10 +181,6 @@ export class RequestUserInputDialogComponent {
         this.done({ answers: {}, cancelled: true });
         return;
       }
-      if (matchesKey(data, "s") && question.required === false && !this.editor.getText().trim()) {
-        this.saveAndAdvance(question, "");
-        return;
-      }
       this.editor.handleInput(data);
       this.host?.invalidate({ fixedOnly: true, force: true });
       return;
@@ -291,13 +287,18 @@ export class RequestUserInputDialogComponent {
     }
     if (this.validationMessage) container.addChild(new Text(`${this.theme.warning}${this.validationMessage}${reset}`, 1, 0));
     const help = this.inputMode
-      ? "enter continue • esc dismiss"
+      ? this.inputPurpose === "other" ? "enter continue • esc choices" : "enter continue • esc dismiss"
       : question.type === "ranking"
         ? "↑↓ navigate • shift+↑↓ reorder • enter continue • ← back • esc dismiss"
         : question.type === "multi_select" || question.type === "file_select"
           ? "↑↓ navigate • space toggle • enter continue • ← back • esc dismiss"
           : "↑↓ navigate • enter choose • ← back • esc dismiss";
-    container.addChild(new Text(`${this.theme.dimMuted}${question.required === false ? `${help} • s skip` : help}${reset}`, 1, 0));
+    const helpWithSkip = question.required !== false
+      ? help
+      : this.inputMode
+        ? this.inputPurpose === "other" ? help : `${help} • empty enter skip`
+        : `${help} • s skip`;
+    container.addChild(new Text(`${this.theme.dimMuted}${helpWithSkip}${reset}`, 1, 0));
     container.addChild(border());
     return container.render(safeWidth);
   }

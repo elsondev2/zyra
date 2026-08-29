@@ -62,6 +62,26 @@ assert.match(toolResult.content[0].text, /Single: A/);
 assert.match(toolResult.content[0].text, /Multi: A, B/);
 assert.deepEqual(toolResult.details.answers.multi, ["A", "B"]);
 
+const optionalTextDialog = createRequestUserInputDialog({ questions: [
+  { id: "optional-text", header: "Optional", question: "Add a note", type: "text", required: false },
+] });
+optionalTextDialog.component.setHost({ invalidate() {}, width: () => 100, height: () => 40 });
+optionalTextDialog.component.handleInput("s");
+assert.equal(optionalTextDialog.component.editor.getText(), "s", "lowercase s must reach an optional text editor");
+optionalTextDialog.component.submitEditor("small");
+optionalTextDialog.component.handleInput("\r");
+assert.deepEqual(await optionalTextDialog.result, { answers: { "optional-text": "small" }, cancelled: false });
+
+const optionalOtherDialog = createRequestUserInputDialog({ questions: [
+  { id: "optional-other", header: "Optional", question: "Choose or write", type: "single_select", required: false, allowOther: true, options: [{ label: "Known" }] },
+] });
+optionalOtherDialog.component.setHost({ invalidate() {}, width: () => 100, height: () => 40 });
+optionalOtherDialog.component.handleInput("\x1b[B");
+optionalOtherDialog.component.handleInput("\r");
+assert.equal(optionalOtherDialog.component.inputPurpose, "other");
+optionalOtherDialog.component.handleInput("s");
+assert.equal(optionalOtherDialog.component.editor.getText(), "s", "lowercase s must reach an optional Something else editor");
+
 // Exercise every supported question type through the same interaction path used by the TUI.
 const dialog = createRequestUserInputDialog({ questions: [
   { id: "text", header: "Text", question: "Say something", type: "text" },
