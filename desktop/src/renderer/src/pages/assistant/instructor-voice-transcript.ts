@@ -86,6 +86,17 @@ function updateEntry(
     return next
 }
 
+function findTranscriptCompletionTarget(
+    entries: InstructorTranscriptEntry[],
+    id: string,
+    role: string
+): InstructorTranscriptEntry | null {
+    const existing = entries.find((entry) => entry.id === id)
+    if (existing) return existing
+    const latest = entries.at(-1)
+    return latest?.role === role && !latest.final ? latest : null
+}
+
 /**
  * Applies the identity-bearing transcript events emitted on ChatGPT realtime v3's
  * WebRTC data channel. Turn IDs are the source of truth, so replaying a turn
@@ -133,10 +144,10 @@ export function applyRealtimeTranscriptEvent(
         if (!turn) return entries
         const text = turn.transcript.trim()
         const deduplicatedEntries = removeMatchingComposerResponse(entries, turn.role, text, turn.id)
-        const existing = deduplicatedEntries.find((entry) => entry.id === turn.id)
-        const latestEntry = deduplicatedEntries.at(-1)
-        const streamingEntry = existing || (
-            latestEntry?.role === turn.role && latestEntry.final === false ? latestEntry : null
+        const streamingEntry = findTranscriptCompletionTarget(
+            deduplicatedEntries,
+            turn.id,
+            turn.role
         )
         if (streamingEntry) {
             return updateEntry(deduplicatedEntries, streamingEntry.id, (entry) => ({
@@ -160,10 +171,10 @@ export function applyRealtimeTranscriptEvent(
         || asNonEmptyString(payload?.item_id)
         || asNonEmptyString(payload?.turn_id)
     const explicitRole = asNonEmptyString(item?.role) || asNonEmptyString(payload?.role)
-    if (type === 'conversation.item.created' && itemId && (explicitRole === 'user' || explicitRole === 'assistant')) {
-        if (entries.some((entry) => entry.id === itemId)) return entries
-        return [...entries, { id: itemId, role: explicitRole, text: '', final: false }]
-    }
+    // Frameless emits conversation items for transcript chunks, not logical
+    // utterances. Speech boundaries, turn events, and transcript data create
+    // the visible entry; projecting this envelope would split one utterance.
+    if (type === 'conversation.item.created') return entries
     const role = explicitRole === 'user'
         || type?.includes('input_transcript')
         || type?.includes('input_audio_transcription')
@@ -211,10 +222,11 @@ export function applyRealtimeTranscriptEvent(
         const text = String(payload?.transcript ?? payload?.text ?? '').trim()
         const final = role === 'user'
         const deduplicatedEntries = final ? removeMatchingComposerResponse(entries, role, text, itemId) : entries
-        const existing = deduplicatedEntries.find((entry) => entry.id === itemId)
-        if (!existing) return text ? [...deduplicatedEntries, { id: itemId, role, text, final }] : deduplicatedEntries
-        return updateEntry(deduplicatedEntries, itemId, (entry) => ({
+        const streamingEntry = findTranscriptCompletionTarget(deduplicatedEntries, itemId, role)
+        if (!streamingEntry) return text ? [...deduplicatedEntries, { id: itemId, role, text, final }] : deduplicatedEntries
+        return updateEntry(deduplicatedEntries, streamingEntry.id, (entry) => ({
             ...entry,
+            id: itemId,
             role,
             text: text || entry.text,
             final

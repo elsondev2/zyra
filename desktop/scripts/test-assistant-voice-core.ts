@@ -213,11 +213,32 @@ await assert.rejects(
     (error: unknown) => error instanceof ForegroundRouteConflictError && error.code === 'route_conflict'
 )
 
+const canonicalRecordCountBeforeUserPartials = writer.records('chat_voice_core').length
+realtime.emitTranscript({
+    sessionId: activation.handle.adapterSessionId,
+    role: 'user',
+    providerItemId: 'voice_user_chunk_1',
+    text: 'Hello',
+    completed: false
+})
+realtime.emitTranscript({
+    sessionId: activation.handle.adapterSessionId,
+    role: 'user',
+    providerItemId: 'voice_user_chunk_2',
+    text: 'Hello, respond with',
+    completed: false
+})
+await transcriptCommitter.flush()
+assert.equal(
+    writer.records('chat_voice_core').length,
+    canonicalRecordCountBeforeUserPartials,
+    'partial user transcript chunks must never become standalone canonical messages'
+)
 realtime.emitTranscript({
     sessionId: activation.handle.adapterSessionId,
     role: 'user',
     providerItemId: 'voice_item_user_1',
-    text: 'What is the task doing?',
+    text: 'Hello, respond with exactly I am here',
     completed: true
 })
 realtime.emitTranscript({
@@ -232,12 +253,41 @@ realtime.emitTranscript({
     role: 'assistant',
     providerItemId: 'voice_item_assistant_1',
     text: 'It is still running under the same task authority.',
+    completed: true
+})
+realtime.emitTranscript({
+    sessionId: activation.handle.adapterSessionId,
+    role: 'user',
+    providerItemId: 'voice_user_chunk_3',
+    text: 'Some',
+    completed: false
+})
+realtime.emitTranscript({
+    sessionId: activation.handle.adapterSessionId,
+    role: 'user',
+    providerItemId: 'voice_item_user_2',
+    text: 'Some other random long statement',
     completed: true
 })
 await transcriptCommitter.flush()
-assert.equal(committedVoiceReceipts.length, 3, 'replayed provider completion returns the same receipt to subscribers')
-assert.equal(new Set(committedVoiceReceipts).size, 2)
-assert.equal(writer.records('chat_voice_core').length, 4)
+assert.equal(committedVoiceReceipts.length, 4, 'replayed provider completion returns the same receipt to subscribers')
+assert.equal(new Set(committedVoiceReceipts).size, 3)
+assert.equal(writer.records('chat_voice_core').length, 5)
+const committedSpokenUsers = writer.records('chat_voice_core')
+    .filter((entry) => entry.input.providerItemId.startsWith('voice_item_user_'))
+assert.deepEqual(
+    committedSpokenUsers.map((entry) => [entry.input.providerItemId, entry.input.text]),
+    [
+        ['voice_item_user_1', 'Hello, respond with exactly I am here'],
+        ['voice_item_user_2', 'Some other random long statement']
+    ],
+    'consecutive spoken finals each create one canonical user message'
+)
+assert.equal(
+    writer.records('chat_voice_core').some((entry) => entry.input.providerItemId.startsWith('voice_user_chunk_')),
+    false,
+    'no provisional chunk identity can reach canonical persistence'
+)
 
 realtime.onBeforeConnectReady = null
 const replacement = await voiceSessions.startVoice({

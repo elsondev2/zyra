@@ -371,6 +371,174 @@ assert.deepEqual(dataChannelTranscript.map(({ id, role, text, final }) => ({ id,
     { id: 'user-item-1', role: 'user', text: 'How much storage is free?', final: true }
 ])
 
+const liveUserVoiceStartedAt = '2026-08-29T09:32:00.000Z'
+const projectVisibleUserVoiceTexts = (
+    currentTranscript: Parameters<typeof projectVoiceLiveTimelineMessages>[0]['transcript'],
+    canonicalMessages: AssistantMessage[]
+) => {
+    const projection = projectVoiceLiveTimelineMessages({
+        transcript: currentTranscript,
+        canonicalMessages,
+        voiceStartedAt: liveUserVoiceStartedAt,
+        nowMs: Date.parse('2026-08-29T09:32:30.000Z')
+    })
+    return [...canonicalMessages, ...projection.messages]
+        .filter((message) => message.role === 'user')
+        .map((message) => message.text)
+}
+const applyTranscriptEvents = (
+    initial: typeof dataChannelTranscript,
+    events: unknown[]
+) => events.reduce(applyRealtimeTranscriptEvent, initial)
+
+let framelessUserTranscript: typeof dataChannelTranscript = [{
+    id: 'user-speech-item-1',
+    role: 'user',
+    text: '',
+    final: false
+}]
+framelessUserTranscript = applyTranscriptEvents(framelessUserTranscript, [{
+    type: 'conversation.item.created',
+    item: { id: 'user-transcript-chunk-1', role: 'user' }
+}, {
+    type: 'input_transcript.added',
+    item: { id: 'user-transcript-chunk-1', text: 'Hello' }
+}])
+assert.deepEqual(
+    projectVisibleUserVoiceTexts(framelessUserTranscript, []),
+    ['Hello'],
+    'the first provisional chunk projects as one live user utterance'
+)
+assert.deepEqual(
+    framelessUserTranscript.map(({ id, final }) => ({ id, final })),
+    [{ id: 'user-speech-item-1', final: false }],
+    'the speech boundary owns the stable provisional identity'
+)
+framelessUserTranscript = applyTranscriptEvents(framelessUserTranscript, [{
+    type: 'conversation.item.created',
+    item: { id: 'user-transcript-chunk-2', role: 'user' }
+}, {
+    type: 'input_transcript.added',
+    item: { id: 'user-transcript-chunk-2', text: 'Hello, respond with' }
+}])
+assert.deepEqual(
+    projectVisibleUserVoiceTexts(framelessUserTranscript, []),
+    ['Hello, respond with'],
+    'cumulative per-chunk transcript items must replace one stable live user utterance in place'
+)
+assert.equal(
+    framelessUserTranscript[0]?.id,
+    'user-speech-item-1',
+    'per-chunk transport IDs cannot replace the logical utterance identity'
+)
+framelessUserTranscript = applyRealtimeTranscriptEvent(framelessUserTranscript, {
+    type: 'conversation.item.input_audio_transcription.completed',
+    item_id: 'user-speech-item-1',
+    transcript: 'Hello, respond with exactly I am here'
+})
+assert.deepEqual(
+    projectVisibleUserVoiceTexts(framelessUserTranscript, []),
+    ['Hello, respond with exactly I am here'],
+    'the final user transcript must promote the same live utterance without retaining partial bubbles'
+)
+assert.deepEqual(
+    framelessUserTranscript.map(({ id, final }) => ({ id, final })),
+    [{ id: 'user-speech-item-1', final: true }],
+    'final promotion preserves the speech item identity and settles it once'
+)
+const firstCanonicalVoiceUser: AssistantMessage = {
+    id: 'canonical-user-speech-item-1',
+    role: 'user',
+    text: 'Hello, respond with exactly I am here',
+    turnId: null,
+    streaming: false,
+    providerItemId: 'user-speech-item-1',
+    modality: 'voice',
+    createdAt: '2026-08-29T09:32:08.697Z',
+    updatedAt: '2026-08-29T09:32:08.697Z'
+}
+assert.deepEqual(
+    projectVisibleUserVoiceTexts(framelessUserTranscript, [firstCanonicalVoiceUser]),
+    ['Hello, respond with exactly I am here'],
+    'canonical promotion must replace the live user projection and leave one visible row'
+)
+
+framelessUserTranscript = [...framelessUserTranscript, {
+    id: 'user-speech-item-2',
+    role: 'user',
+    text: '',
+    final: false
+}]
+framelessUserTranscript = applyTranscriptEvents(framelessUserTranscript, [{
+    type: 'conversation.item.created',
+    item: { id: 'user-transcript-chunk-3', role: 'user' }
+}, {
+    type: 'input_transcript.added',
+    item: { id: 'user-transcript-chunk-3', text: 'Some' }
+}])
+assert.deepEqual(
+    projectVisibleUserVoiceTexts(framelessUserTranscript, [firstCanonicalVoiceUser]),
+    ['Hello, respond with exactly I am here', 'Some'],
+    'a consecutive utterance must add only one new provisional user row'
+)
+assert.equal(
+    framelessUserTranscript.at(-1)?.id,
+    'user-speech-item-2',
+    'a consecutive speech boundary receives its own stable identity'
+)
+framelessUserTranscript = applyRealtimeTranscriptEvent(framelessUserTranscript, {
+    type: 'conversation.item.input_audio_transcription.completed',
+    item_id: 'user-speech-item-2',
+    transcript: 'Some other random long statement'
+})
+const secondCanonicalVoiceUser: AssistantMessage = {
+    id: 'canonical-user-speech-item-2',
+    role: 'user',
+    text: 'Some other random long statement',
+    turnId: null,
+    streaming: false,
+    providerItemId: 'user-speech-item-2',
+    modality: 'voice',
+    createdAt: '2026-08-29T09:32:18.921Z',
+    updatedAt: '2026-08-29T09:32:18.921Z'
+}
+assert.deepEqual(
+    projectVisibleUserVoiceTexts(
+        framelessUserTranscript,
+        [firstCanonicalVoiceUser, secondCanonicalVoiceUser]
+    ),
+    ['Hello, respond with exactly I am here', 'Some other random long statement'],
+    'the consecutive final must reconcile to one canonical user row without an orphaned partial'
+)
+
+const turnlessUserTranscript = applyTranscriptEvents([], [{
+    type: 'conversation.item.created',
+    item: { id: 'legacy-user-chunk-1', role: 'user' }
+}, {
+    type: 'input_transcript.added',
+    item: { id: 'legacy-user-chunk-1', text: 'Legacy' }
+}, {
+    type: 'conversation.item.created',
+    item: { id: 'legacy-user-chunk-2', role: 'user' }
+}, {
+    type: 'input_transcript.added',
+    item: { id: 'legacy-user-chunk-2', text: 'Legacy turnless input' }
+}, {
+    type: 'conversation.item.input_audio_transcription.completed',
+    item_id: 'legacy-user-final',
+    transcript: 'Legacy turnless input completed'
+}])
+assert.deepEqual(
+    turnlessUserTranscript.map(({ id, role, text, final }) => ({ id, role, text, final })),
+    [{
+        id: 'legacy-user-final',
+        role: 'user',
+        text: 'Legacy turnless input completed',
+        final: true
+    }],
+    'turnless legacy chunks must promote one provisional row to the final provider identity'
+)
+
 let framelessTranscript: typeof dataChannelTranscript = []
 for (const [id, text] of [
     ['transcript-chunk-1', 'Hey there'],
@@ -498,6 +666,25 @@ assert.deepEqual(normalizeWebRtcTranscriptEvent(recoveredUserTranscript), {
     providerItemId: 'user-speech-item',
     text: 'Recovered speech.'
 }, 'a locally recovered speech segment must cross the same identity-bearing canonical commit boundary')
+assert.deepEqual(normalizeWebRtcTranscriptEvent({
+    type: 'input_transcript.added',
+    item: { id: 'user-transcript-chunk', text: 'Partial speech' }
+}), {
+    kind: 'delta',
+    role: 'user',
+    providerItemId: 'user-transcript-chunk',
+    delta: 'Partial speech'
+}, 'per-chunk user transcript items remain noncanonical deltas')
+assert.deepEqual(normalizeWebRtcTranscriptEvent({
+    type: 'conversation.item.input_audio_transcription.completed',
+    item_id: 'user-speech-item',
+    transcript: 'Final speech'
+}), {
+    kind: 'completed',
+    role: 'user',
+    providerItemId: 'user-speech-item',
+    text: 'Final speech'
+}, 'only the identity-bearing completed user transcript crosses the canonical commit boundary')
 assert.deepEqual(normalizeWebRtcTranscriptEvent({
     type: 'response.audio_transcript.done',
     item_id: 'assistant-partial-item',
