@@ -67,6 +67,20 @@ async function temporaryDirectory(label) {
   return directory;
 }
 
+async function waitForFileRemoval(file, message, timeoutMs = 2_500) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    try {
+      await stat(file);
+    } catch (error) {
+      if (error?.code === "ENOENT") return;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.fail(message);
+}
+
 function clientOptions(storageDirectory, overrides = {}) {
   return {
     storageDirectory,
@@ -530,8 +544,11 @@ async function testImmediateOptOut() {
   assert.ok(performance.now() - disabledStartedAt < 250, "opt-out does not wait behind an in-flight transport");
   assert.equal(disabled.enabled, false);
   assert.equal(disabled.queueSize, 0);
-  await assert.rejects(readFile(path.join(storageDirectory, "queue.json"), "utf8"));
   assert.equal(await flush, false);
+  await waitForFileRemoval(
+    path.join(storageDirectory, "queue.json"),
+    "opt-out did not finish removing the queue after the cancelled transport settled",
+  );
   assert.equal(await client.capture("zyra_v1_cli", { action: "startup", outcome: "started" }), false);
   assert.equal(await concurrentClient.capture("zyra_v1_cli", { action: "startup", outcome: "started" }), false, "other CLI clients observe persisted opt-out before their next capture");
 }
@@ -548,16 +565,10 @@ async function testOptOutDoesNotBlockOnQueueCleanup() {
   assert.equal(status.enabled, false);
   assert.ok(performance.now() - startedAt < 500, "saved opt-out is not blocked by queue cleanup");
   await rm(path.join(storageDirectory, "queue.lock"), { force: true });
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    try {
-      await stat(path.join(storageDirectory, "queue.json"));
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    } catch (error) {
-      if (error?.code === "ENOENT") return;
-      throw error;
-    }
-  }
-  assert.fail("background opt-out queue cleanup did not finish");
+  await waitForFileRemoval(
+    path.join(storageDirectory, "queue.json"),
+    "background opt-out queue cleanup did not finish",
+  );
 }
 
 async function testOptOutWhileCaptureWaitsForQueueLock() {

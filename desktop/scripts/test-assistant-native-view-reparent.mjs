@@ -10,7 +10,11 @@ const smokeScript = join(scriptDirectory, 'assistant-native-view-reparent-smoke.
 const userDataPath = await mkdtemp(join(tmpdir(), 'zyra-browser-reparent-'))
 try {
     const exitCode = await new Promise((resolveExit, reject) => {
-        const child = spawn(electronPath, [smokeScript], {
+        const electronArgs = [
+            ...(process.platform === 'linux' && process.env.CI ? ['--no-sandbox'] : []),
+            smokeScript
+        ]
+        const child = spawn(electronPath, electronArgs, {
             cwd: resolve(scriptDirectory, '..'),
             env: { ...process.env, ZYRA_REPARENT_SMOKE_USER_DATA: userDataPath },
             stdio: 'inherit',

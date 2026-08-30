@@ -17,6 +17,7 @@ const agentControl = read('../src/main/agent-control/index.ts')
 const agentControlBroker = read('../src/main/agent-control/agent-control-broker.ts')
 const popupManager = read('../src/main/browser-popup-manager.ts')
 const preload = read('../src/preload/adapters/browser-view-adapter.ts')
+const nativeViewSmokeLauncher = read('./test-assistant-native-view-reparent.mjs')
 
 assert.equal(new Set(Object.values(BROWSER_VIEW_IPC)).size, Object.values(BROWSER_VIEW_IPC).length, 'Browser view channels must remain unique')
 assert.equal(isBrowserDevscopeBridgePath(['browserView']), false, 'remote pages cannot invoke native Browser view ownership or transfer APIs')
@@ -64,5 +65,10 @@ assert.doesNotMatch(diffPanel, /Moving this Browser tab to another window reload
 assert.match(main, /browserViews: browserViewManager/, 'the utility transfer coordinator must use the main Browser view service')
 assert.equal((main.match(/webviewTag: false/g) || []).length >= 2, true, 'main and utility shell renderers must disable webview tags')
 assert.doesNotMatch(main, /will-attach-webview|did-attach-webview/, 'the live Browser architecture must not rely on renderer webview attachment hooks')
+assert.match(
+    nativeViewSmokeLauncher,
+    /process\.platform === 'linux' && process\.env\.CI[\s\S]*'--no-sandbox'/,
+    'the native-view smoke must bypass Chromium SUID sandbox setup only on isolated Linux CI runners'
+)
 
 console.log('Browser live-transfer contracts: ok')

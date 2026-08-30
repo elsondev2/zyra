@@ -143,6 +143,10 @@ for (const file of packagedMachOFiles.filter((entry) => entry.architecture === '
 }
 
 const outsideCheckout = mkdtempSync(path.join(os.tmpdir(), 'zyra-packaged-runtime-contract-'))
+// Darwin limits Unix-domain socket paths to 104 bytes. Keep the isolated agent
+// state short so this test exercises packaged runtime startup rather than an
+// unrelated overlong temporary path created by the CI runner.
+const agentState = mkdtempSync(path.join(os.tmpdir(), 'za-'))
 try {
     const sdkUrl = pathToFileURL(path.join(runtimeRoot, 'src', 'zyra-sdk.mjs')).href
     const memoryUrl = pathToFileURL(path.join(runtimeRoot, 'src', 'zyra-memory.mjs')).href
@@ -167,7 +171,6 @@ try {
     } else {
         assert.equal(existsSync(path.join(resourcesPath, 'zyra-node', 'electron-run-as-node.txt')), true, 'Unix resources declare the signed Electron Node runtime')
     }
-    const agentState = path.join(outsideCheckout, 'agent-state')
     let expectedCachedNode: string | null = null
     if (process.platform === 'win32') {
         const stagedNode = path.join(resourcesPath, 'zyra-node', 'node.exe')
@@ -210,13 +213,15 @@ try {
         }
     }
 } finally {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-        try {
-            rmSync(outsideCheckout, { recursive: true, force: true })
-            break
-        } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'EACCES' || attempt === 99) throw error
-            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100)
+    for (const directory of [outsideCheckout, agentState]) {
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+            try {
+                rmSync(directory, { recursive: true, force: true })
+                break
+            } catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== 'EACCES' || attempt === 99) throw error
+                Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100)
+            }
         }
     }
 }
