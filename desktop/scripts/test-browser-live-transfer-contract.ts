@@ -70,5 +70,10 @@ assert.match(
     /process\.platform === 'linux' && process\.env\.CI[\s\S]*'--no-sandbox'/,
     'the native-view smoke must bypass Chromium SUID sandbox setup only on isolated Linux CI runners'
 )
+assert.match(
+    nativeViewSmokeLauncher,
+    /process\.platform === 'linux'[\s\S]*process\.env\.CI[\s\S]*!process\.env\.DISPLAY[\s\S]*'xvfb-run'[\s\S]*'--auto-servernum'/,
+    'headless Linux CI must provide Electron with a virtual display'
+)
 
 console.log('Browser live-transfer contracts: ok')

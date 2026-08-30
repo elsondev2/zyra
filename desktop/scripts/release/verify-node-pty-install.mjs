@@ -1,4 +1,4 @@
-import { access, readFile } from 'node:fs/promises'
+import { access, chmod, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -18,9 +18,22 @@ for (const target of ['win32-x64', 'darwin-x64', 'darwin-arm64']) {
     })
 }
 for (const target of ['darwin-x64', 'darwin-arm64']) {
-    await access(path.join(packageRoot, 'prebuilds', target, 'spawn-helper')).catch(() => {
+    const helper = path.join(packageRoot, 'prebuilds', target, 'spawn-helper')
+    await access(helper).catch(() => {
         throw new Error(`node-pty is missing the packaged ${target} spawn-helper`)
     })
+}
+
+// node-pty 1.1.0's published macOS prebuilds omit the executable bit on
+// spawn-helper. Restore it after every install so both CI and packaged apps can
+// create a PTY instead of failing with the opaque "posix_spawnp failed" error.
+if (process.platform === 'darwin') {
+    const helper = path.join(packageRoot, 'prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper')
+    await chmod(helper, 0o755)
+    const helperMode = (await stat(helper)).mode
+    if ((helperMode & 0o111) === 0) {
+        throw new Error(`node-pty spawn-helper is not executable: ${path.relative(desktopRoot, helper)}`)
+    }
 }
 
 const prebuildRoot = path.join(packageRoot, 'prebuilds', `${process.platform}-${process.arch}`)
