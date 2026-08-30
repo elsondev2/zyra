@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { createZyraPiRuntime } from "../pi-runtime.mjs";
 import {
   defaults,
   getProjectSessionsDir,
@@ -53,7 +53,7 @@ export async function createZyraTuiClientRuntime(options = {}) {
   const connected = asRecord(attached.connected) || {};
   const connectedConfig = normalizeRemoteChatConfig(asRecord(connected.config) || connected);
   const canonicalChatId = String(attached.canonicalChatId || attached.sessionKey);
-  const modelRegistry = ModelRegistry.create(AuthStorage.create());
+  const { modelRegistry } = await createZyraPiRuntime();
   registerZyraRuntimeModels(modelRegistry);
   const model = resolveModel(modelRegistry, String(connectedConfig.model || connected.model || preferences.model));
   const sessionFile = typeof connected.sessionFile === "string" ? connected.sessionFile : null;

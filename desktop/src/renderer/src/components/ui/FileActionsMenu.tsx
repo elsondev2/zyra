@@ -393,6 +393,7 @@ export function FileActionsMenu({
             {open && presentation === 'portal' && menuPosition && typeof document !== 'undefined' && createPortal(
                 <div
                     ref={menuRef}
+                    data-zyra-native-view-occluder="true"
                     className={cn(
                         'fixed z-[340]',
                         compact ? 'w-44' : 'min-w-[180px]',
@@ -416,6 +417,7 @@ export function FileActionsMenu({
                     ref={submenuRef}
                     role="menu"
                     aria-label={items.find((item) => item.id === expandedItemId)?.choicesLabel || 'Choose tab type'}
+                    data-zyra-native-view-occluder="true"
                     className="assistant-menu-in-right fixed z-[350] w-[168px] rounded-[7px] border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1 shadow-[0_18px_48px_rgba(0,0,0,0.38)] backdrop-blur-xl"
                     style={{ top: `${submenuPosition.top}px`, left: `${submenuPosition.left}px` }}
                     onClick={(event) => event.stopPropagation()}

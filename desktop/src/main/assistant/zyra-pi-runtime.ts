@@ -2742,6 +2742,11 @@ export class ZyraPiRuntime extends EventEmitter {
                 const terminalOutcome = readTerminalAssistantMessageOutcome(message)
                 if (terminalOutcome) {
                     context.terminalAssistantMessageOutcome = { turnId, ...terminalOutcome }
+                } else if (context.terminalAssistantMessageOutcome?.turnId === turnId) {
+                    // Pi can emit a failed assistant message and then recover within the
+                    // same agent turn. A later successful message is authoritative for
+                    // the eventual agent_end boundary and must clear the stale failure.
+                    context.terminalAssistantMessageOutcome = null
                 }
                 if (context.activeAssistantItemId === itemId) {
                     context.activeAssistantItemId = null

@@ -62,7 +62,7 @@ The staged contract contains:
 - built-in `agents/` definitions discovered by the fleet loader;
 - built-in `workflows/` definitions discovered by the workflow loader;
 - optional built-in `commands/` and `themes/` when present;
-- root `package.json`, `package-lock.json`, Apache-2.0 `LICENSE`, and production `node_modules/` installed from that lock;
+- root `package.json`, `package-lock.json`, Apache-2.0 `LICENSE`, `NOTICE`, both third-party legal files, and production `node_modules/` installed from that lock;
 - `zyra-runtime-manifest.json`, with sorted source paths, sizes, and SHA-256 hashes.
 
 Stage and validate it with:
@@ -254,4 +254,8 @@ Run only the native package command available on the current OS. Cross-platform 
 
 ## Licensing
 
-Zyra is licensed under Apache License 2.0. The repository `LICENSE`, root package metadata, Desktop package metadata, staged runtime manifest, About settings, and release validation must all report `Apache-2.0` consistently.
+Zyra is licensed under Apache License 2.0. Keep the canonical `LICENSE` text unchanged. `NOTICE` records `Copyright 2026 Elson Erick Mgaya`, and `THIRD_PARTY_NOTICES.md` explains asset and platform-runtime notices.
+
+Run `npm run licenses:generate` after either production lockfile or a pinned release runtime changes. Commit the generated `THIRD_PARTY_LICENSES.txt`, then run `npm run licenses:check`. Release preflight rejects a stale dependency manifest, a dropped legal file, or a Bun or Node runtime version that no longer matches the generated bundle.
+
+Every Desktop package must contain `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, and `THIRD_PARTY_LICENSES.txt`. Electron and Chromium keep their upstream license files beside the app. Windows packages also keep the .NET license and third-party notices beside the self-contained computer-use sidecar. Standalone TUI executables extract the four Zyra legal files with their embedded runtime resources.

@@ -185,7 +185,11 @@ export class ZyraAgentServerClient extends EventEmitter {
     // ignored stdio, so Windows carries Node. Signed macOS/Linux Electron binaries
     // run the same entrypoint with ELECTRON_RUN_AS_NODE.
     const { executable, electronAsNode } = resolveAgentServerNodeLaunch(this.dataRoot);
-    const child = spawn(executable, [entry, "--channel", this.paths.channel], {
+    const standalone = process.env.ZYRA_STANDALONE === "1";
+    const childArgs = standalone
+      ? ["--internal-agent-server", "--channel", this.paths.channel]
+      : [entry, "--channel", this.paths.channel];
+    const child = spawn(executable, childArgs, {
       cwd: this.root,
       detached: true,
       windowsHide: true,

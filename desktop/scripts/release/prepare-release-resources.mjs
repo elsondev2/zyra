@@ -1,8 +1,10 @@
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { access, copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { normalizeReleasePlatform } from './release-contract.mjs'
+import { NODE_RELEASE_RUNTIME_VERSION } from './runtime-contract.mjs'
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url))
 const desktopRoot = path.resolve(scriptDirectory, '..', '..')
@@ -33,6 +35,25 @@ async function requireFile(file, label) {
     })
 }
 
+function resolveDotnetRoot() {
+    const candidates = [process.env.DOTNET_ROOT]
+    try {
+        const locator = process.platform === 'win32' ? 'where.exe' : 'which'
+        const executable = execFileSync(locator, ['dotnet'], { encoding: 'utf8' }).split(/\r?\n/).find(Boolean)
+        if (executable) candidates.push(path.dirname(executable.trim()))
+    } catch {
+        // The explicit and standard installation paths below still apply.
+    }
+    if (process.platform === 'win32' && process.env.ProgramFiles) {
+        candidates.push(path.join(process.env.ProgramFiles, 'dotnet'))
+    }
+    for (const candidate of candidates.filter(Boolean)) {
+        if (existsSync(path.join(candidate, 'LICENSE.txt'))
+            && existsSync(path.join(candidate, 'ThirdPartyNotices.txt'))) return candidate
+    }
+    throw new Error('The .NET SDK license files are missing. Install the pinned .NET 8 SDK before packaging Windows.')
+}
+
 const platform = normalizeReleasePlatform(arg('platform', process.platform))
 const hostPlatform = normalizeReleasePlatform(process.platform)
 if (platform !== hostPlatform) {
@@ -51,6 +72,9 @@ const nodeRuntimeDirectory = path.join(desktopRoot, '.release', 'zyra-node')
 await rm(nodeRuntimeDirectory, { recursive: true, force: true })
 await mkdir(nodeRuntimeDirectory, { recursive: true })
 if (process.platform === 'win32') {
+    if (process.versions.node !== NODE_RELEASE_RUNTIME_VERSION) {
+        throw new Error(`Windows releases must package Node.js ${NODE_RELEASE_RUNTIME_VERSION}; got ${process.versions.node}.`)
+    }
     const nodeRuntimePath = path.join(nodeRuntimeDirectory, 'node.exe')
     await copyFile(process.execPath, nodeRuntimePath)
     await requireFile(nodeRuntimePath, 'Pinned Windows Node runtime')
@@ -80,7 +104,20 @@ if (platform === 'windows') {
         '-p:DebugSymbols=false',
         '-o', sidecarOutput
     ], repositoryRoot)
-    for (const fileName of ['Zyra.ComputerUse.exe', 'Zyra.ComputerUse.runtimeconfig.json', 'coreclr.dll', 'hostfxr.dll']) {
+    const dotnetRoot = resolveDotnetRoot()
+    await copyFile(path.join(dotnetRoot, 'LICENSE.txt'), path.join(sidecarOutput, 'DOTNET-LICENSE.txt'))
+    await copyFile(
+        path.join(dotnetRoot, 'ThirdPartyNotices.txt'),
+        path.join(sidecarOutput, 'DOTNET-THIRD-PARTY-NOTICES.txt')
+    )
+    for (const fileName of [
+        'Zyra.ComputerUse.exe',
+        'Zyra.ComputerUse.runtimeconfig.json',
+        'coreclr.dll',
+        'hostfxr.dll',
+        'DOTNET-LICENSE.txt',
+        'DOTNET-THIRD-PARTY-NOTICES.txt'
+    ]) {
         await requireFile(path.join(sidecarOutput, fileName), 'Self-contained Windows computer-use sidecar')
     }
 }

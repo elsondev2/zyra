@@ -1,38 +1,45 @@
 #!/usr/bin/env node
 import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { ZyraAgentServer } from "./server.mjs";
 import { getAgentServerPaths, normalizeAgentServerChannel } from "./paths.mjs";
 
-const options = parse(process.argv.slice(2));
-const root = path.resolve(process.env.ZYRA_ROOT || path.resolve(import.meta.dirname, "../.."));
-const paths = getAgentServerPaths({ channel: options.channel });
-mkdirSync(paths.stateDirectory, { recursive: true });
-const lockFd = acquireLock(paths);
-if (lockFd === null) process.exit(0);
+export async function runZyraAgentServer(args = process.argv.slice(2)) {
+  const options = parse(args);
+  const root = path.resolve(process.env.ZYRA_ROOT || path.resolve(import.meta.dirname, "../.."));
+  const paths = getAgentServerPaths({ channel: options.channel });
+  mkdirSync(paths.stateDirectory, { recursive: true });
+  const lockFd = acquireLock(paths);
+  if (lockFd === null) return;
 
-const server = new ZyraAgentServer({ root, channel: options.channel });
-let stopping = false;
-const stop = async (reason) => {
-  if (stopping) return;
-  stopping = true;
-  await server.stop(reason).catch(() => undefined);
-  try { closeSync(lockFd); } catch {}
-  rmSync(paths.lockFile, { force: true });
-};
+  const server = new ZyraAgentServer({ root, channel: options.channel });
+  let stopping = false;
+  const stop = async (reason) => {
+    if (stopping) return;
+    stopping = true;
+    await server.stop(reason).catch(() => undefined);
+    try { closeSync(lockFd); } catch {}
+    rmSync(paths.lockFile, { force: true });
+  };
 
-process.on("SIGINT", () => void stop("Agent server interrupted.").finally(() => process.exit(0)));
-process.on("SIGTERM", () => void stop("Agent server terminated.").finally(() => process.exit(0)));
-process.on("uncaughtException", (error) => {
-  process.stderr.write(`${error.stack || error.message}\n`);
-  void stop("Agent server crashed.").finally(() => process.exit(1));
-});
-process.on("unhandledRejection", (error) => {
-  const message = error instanceof Error ? error.stack || error.message : String(error);
-  process.stderr.write(`${message}\n`);
-});
+  process.on("SIGINT", () => void stop("Agent server interrupted.").finally(() => process.exit(0)));
+  process.on("SIGTERM", () => void stop("Agent server terminated.").finally(() => process.exit(0)));
+  process.on("uncaughtException", (error) => {
+    process.stderr.write(`${error.stack || error.message}\n`);
+    void stop("Agent server crashed.").finally(() => process.exit(1));
+  });
+  process.on("unhandledRejection", (error) => {
+    const message = error instanceof Error ? error.stack || error.message : String(error);
+    process.stderr.write(`${message}\n`);
+  });
 
-await server.start();
+  await server.start();
+}
+
+if (path.resolve(process.argv[1] || "") === path.resolve(fileURLToPath(import.meta.url))) {
+  await runZyraAgentServer();
+}
 
 function parse(args) {
   let channel = "default";

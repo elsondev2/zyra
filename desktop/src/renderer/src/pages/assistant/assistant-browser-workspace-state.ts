@@ -72,6 +72,7 @@ export type AssistantBrowserTabState = {
     id: string
     sessionMode: BrowserSessionMode
     url: string
+    displayAddress: string | null
     title: string
     status: AssistantBrowserTabStatus
     error: string | null
@@ -109,6 +110,7 @@ export function createAssistantBrowserTab(id: string, url = '', sessionMode: Bro
         id,
         sessionMode,
         url: normalizedUrl,
+        displayAddress: null,
         title: normalizedUrl ? browserTabFallbackTitle(normalizedUrl) : 'New tab',
         status: normalizedUrl ? 'loading' : 'idle',
         error: null,
@@ -302,6 +304,7 @@ export function normalizeAssistantBrowserWorkspaceState(
                 id,
                 sessionMode: 'normal',
                 url,
+                displayAddress: null,
                 title: normalizePersistentBrowserTitle(url, tab.title, isAuthenticationBrowserUrl(rawUrl)),
                 status: 'idle',
                 error: null,
@@ -339,6 +342,7 @@ function workspaceSnapshotForPersistence(state: AssistantBrowserWorkspaceState):
                 ...tab,
                 sessionMode: 'normal' as const,
                 url,
+                displayAddress: null,
                 title: normalizePersistentBrowserTitle(url, tab.title, isAuthenticationBrowserUrl(tab.url)),
                 faviconUrl: normalizeAssistantBrowserFaviconUrl(tab.faviconUrl)
             }

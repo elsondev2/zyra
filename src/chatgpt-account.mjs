@@ -11,6 +11,7 @@ import {
   listCodexUsageWindows,
   normalizeCodexLimitWindow,
 } from "./codex-usage-windows.mjs";
+import { createZyraAuthStorage } from "./pi-runtime.mjs";
 
 const CHATGPT_ACCOUNT_PROVIDER = "openai-codex";
 const CODEX_ACCOUNT_API_BASE = "https://chatgpt.com/backend-api";
@@ -46,30 +47,8 @@ const CHATGPT_REALTIME_VOICES = new Set([
   "vale",
 ]);
 
-let piAuthStoragePromise;
-
-async function loadPiAuthStorage() {
-  if (!piAuthStoragePromise) {
-    const packageEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
-    const authStorageUrl = new URL("./core/auth-storage.js", packageEntry);
-    piAuthStoragePromise = import(authStorageUrl.href)
-      .then((module) => {
-        if (typeof module.AuthStorage !== "function") {
-          throw new Error("Pi auth storage is unavailable.");
-        }
-        return module.AuthStorage;
-      })
-      .catch((error) => {
-        piAuthStoragePromise = undefined;
-        throw error;
-      });
-  }
-  return piAuthStoragePromise;
-}
-
 export async function buildChatGptAccountStatus(provider = CHATGPT_ACCOUNT_PROVIDER, options = {}) {
-  const AuthStorage = await loadPiAuthStorage();
-  const authStorage = AuthStorage.create();
+  const authStorage = options.authStorage ?? await createZyraAuthStorage(options);
   const status = authStorage.getAuthStatus(provider);
   let credential = authStorage.get(provider);
   let claims = extractOpenAiCodexClaims(credential?.access);
@@ -186,8 +165,7 @@ export function formatCodexUsageStats(stats) {
 }
 
 export async function resolveChatGptAccountAuth() {
-  const AuthStorage = await loadPiAuthStorage();
-  const authStorage = AuthStorage.create();
+  const authStorage = await createZyraAuthStorage();
   const accessToken = await authStorage.getApiKey(CHATGPT_ACCOUNT_PROVIDER, { includeFallback: false });
   if (!accessToken) return undefined;
 

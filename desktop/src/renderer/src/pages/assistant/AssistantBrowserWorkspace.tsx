@@ -10,6 +10,7 @@ import {
     Download,
     Ellipsis,
     ExternalLink,
+    FileUp,
     FolderX,
     Globe2,
     House,
@@ -46,7 +47,7 @@ import type { ControlStateSnapshot, ControlWorkspaceSnapshot } from '@shared/age
 import type { BrowserSurfaceOpenRequest } from '@shared/agent-control/protocol'
 import { resolveBrowserShortcut, type BrowserShortcutAction, type BrowserShortcutPlatform } from '@shared/browser-shortcuts'
 import type { BrowserPopupSummary } from '@shared/browser-popup'
-import type { BrowserSessionMode } from '@shared/browser-view'
+import { BROWSER_LOCAL_FILE_SCHEME, type BrowserSessionMode } from '@shared/browser-view'
 import type { BrowserDownloadRecord } from '@shared/browser-downloads'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import { IncognitoIcon } from '@/components/ui/IncognitoIcon'
@@ -111,6 +112,18 @@ function isSpotifyBrowserUrl(value: string): boolean {
     } catch {
         return false
     }
+}
+
+function isBrowserLocalFileUrl(value: string): boolean {
+    try {
+        return new URL(value).protocol === `${BROWSER_LOCAL_FILE_SCHEME}:`
+    } catch {
+        return false
+    }
+}
+
+function browserTabAddress(tab: AssistantBrowserTabState | null | undefined): string {
+    return tab?.displayAddress || tab?.url || ''
 }
 
 function rendererBrowserShortcutPlatform(): BrowserShortcutPlatform {
@@ -305,6 +318,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     onSurfaceRequestHandledRef.current = onSurfaceRequestHandled
     const activeTab = workspaceState.tabs.find((tab) => tab.id === workspaceState.activeTabId)
         || workspaceState.tabs[0]
+    const activeAddress = browserTabAddress(activeTab)
     const browserFullscreen = Boolean(activeTab && fullscreenTabId === activeTab.id)
     const browserChromeReady = Boolean(normalizedProjectPath && config && !configLoading && !configError)
     const spotifyNeedsProductionVmp = Boolean(
@@ -315,7 +329,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     )
     const projectServers = useMemo(() => localServers.filter((server) => server.attachedToProject), [localServers])
     const otherLocalServers = useMemo(() => localServers.filter((server) => !server.attachedToProject), [localServers])
-    const historyQuery = addressFocused && addressValue !== activeTab?.url ? addressValue.trim() : ''
+    const historyQuery = addressFocused && addressValue !== activeAddress ? addressValue.trim() : ''
     const historySuggestionEntries = useMemo(() => historyQuery
         ? historySearch.query === historyQuery
             ? historySearch.entries
@@ -540,11 +554,11 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     }, [active, activeTab?.id, controlState?.targets, controlTargetsByTab, onWorkspaceStateChange, viewportRects, workspaceState.tabs])
 
     useEffect(() => {
-        if (!addressFocusedRef.current) setAddressValue(activeTab?.url || '')
+        if (!addressFocusedRef.current) setAddressValue(activeAddress)
         setAddressError(null)
         const activeAnnotationTabId = annotationTabIdRef.current
         if (activeAnnotationTabId && activeAnnotationTabId !== activeTab?.id) cancelAnnotation()
-    }, [activeTab?.id, activeTab?.url, cancelAnnotation])
+    }, [activeAddress, activeTab?.id, cancelAnnotation])
 
     useEffect(() => {
         if (active) return
@@ -861,12 +875,18 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             || (patch.status === 'loading' && previous?.status !== 'loading')
             || patch.status === 'error'
         )) cancelAnnotation()
-        if (tabId === workspaceStateRef.current.activeTabId && patch.url && !addressFocusedRef.current) {
-            setAddressValue(patch.url)
+        if (tabId === workspaceStateRef.current.activeTabId && !addressFocusedRef.current && (patch.url !== undefined || patch.displayAddress !== undefined)) {
+            const current = workspaceStateRef.current.tabs.find((tab) => tab.id === tabId)
+            setAddressValue(patch.displayAddress || patch.url || browserTabAddress(current))
         }
     }, [cancelAnnotation, mutateWorkspaceState, recordHistory])
 
     const navigateActiveTab = useCallback(async (rawInput: string) => {
+        const active = workspaceStateRef.current.tabs.find((tab) => tab.id === workspaceStateRef.current.activeTabId)
+        if (active?.displayAddress && rawInput.trim() === active.displayAddress) {
+            webviewRefs.current.get(active.id)?.reload()
+            return
+        }
         const target = normalizeAssistantBrowserNavigation(rawInput)
         if (!target.success) {
             setAddressError(target.error)
@@ -880,6 +900,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         if (!handle) {
             mutateWorkspaceState((current) => updateAssistantBrowserTab(current, tabId, {
                 url: target.url,
+                displayAddress: null,
                 title: browserTabFallbackTitle(target.url),
                 status: 'loading',
                 error: null,
@@ -921,6 +942,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             const browserHistoryState = await webviewRefs.current.get(tabId)?.showNewTab()
             mutateWorkspaceState((current) => updateAssistantBrowserTab(current, tabId, {
                 url: '',
+                displayAddress: null,
                 title: 'New tab',
                 status: 'idle',
                 error: null,
@@ -934,6 +956,22 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not return this Browser tab to New Tab.' })
         }
     }, [cancelAnnotation, mutateWorkspaceState, onDeveloperToast])
+
+    const openLocalFileInTab = useCallback(async (tabId: string) => {
+        const handle = webviewRefs.current.get(tabId)
+        if (!handle) {
+            onDeveloperToast({ tone: 'error', message: 'The Browser tab is still starting. Try opening the file again.' })
+            return
+        }
+        try {
+            if (annotationTabIdRef.current === tabId) cancelAnnotation()
+            setAddressError(null)
+            await handle.openLocalFile()
+            setProfileMenuOpen(false)
+        } catch (error) {
+            onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'The local file could not be opened.' })
+        }
+    }, [cancelAnnotation, onDeveloperToast])
 
     const navigateHistorySuggestion = useCallback((url: string) => {
         addressContainerRef.current?.querySelector<HTMLInputElement>('input')?.blur()
@@ -1000,7 +1038,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         setAddressFocused(false)
         setOmniboxPresentationReady(false)
         addressContainerRef.current?.querySelector<HTMLInputElement>('input')?.blur()
-        if (!transferred && closingTab.url && closingTab.sessionMode === 'normal') {
+        if (!transferred && closingTab.url && closingTab.sessionMode === 'normal' && !isBrowserLocalFileUrl(closingTab.url)) {
             closedTabsRef.current = [...closedTabsRef.current.slice(-9), closingTab]
         }
         const closingHandle = webviewRefs.current.get(tabId)
@@ -1045,7 +1083,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             return nextState
         })
         const nextActiveTab = nextState.tabs.find((tab) => tab.id === nextState.activeTabId)
-        setAddressValue(nextActiveTab?.url || '')
+        setAddressValue(browserTabAddress(nextActiveTab))
         return nextState
     }, [cancelAnnotation, mutateWorkspaceState, onDeveloperToast, recordingTabId])
 
@@ -1107,6 +1145,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             if (current.warning.navigationKind === 'current-tab') {
                 mutateWorkspaceState((state) => updateAssistantBrowserTab(state, current.tabId, {
                     url: current.warning.url,
+                    displayAddress: null,
                     title: browserTabFallbackTitle(current.warning.url),
                     status: 'loading',
                     error: null,
@@ -1154,6 +1193,10 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             })
             return
         }
+        if (action.type === 'open-file') {
+            void openLocalFileInTab(sourceTabId)
+            return
+        }
         if (action.type === 'reload') {
             if (!sourceHandle) return
             if (action.bypassCache) {
@@ -1195,7 +1238,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             : Math.min(action.index, state.tabs.length - 1)
         const targetTab = state.tabs[targetIndex]
         if (targetTab) selectBrowserTab(targetTab.id)
-    }, [closeTab, createTab, onDeveloperToast, onRequestTabSelection, selectBrowserTab])
+    }, [closeTab, createTab, onDeveloperToast, onRequestTabSelection, openLocalFileInTab, selectBrowserTab])
 
     const controller = useMemo<AssistantBrowserWorkspaceController>(() => ({
         createTab,
@@ -1644,7 +1687,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     }, [onDeveloperToast, siteSignOutArmed])
 
     const openExternal = useCallback(async () => {
-        if (!activeTab?.url) return
+        if (!activeTab?.url || isBrowserLocalFileUrl(activeTab.url)) return
         const result = await window.devscope.openBrowserPreviewExternal(activeTab.url)
         if (!result.success) setAddressError(result.error || 'Could not open the page externally.')
     }, [activeTab?.url])
@@ -1828,7 +1871,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                             setOmniboxPresentationReady(false)
                             if (!addressError) {
                                 const current = workspaceStateRef.current.tabs.find((tab) => tab.id === workspaceStateRef.current.activeTabId)
-                                setAddressValue(current?.url || '')
+                                setAddressValue(browserTabAddress(current))
                             }
                         }, 0)
                     }}
@@ -1871,7 +1914,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                                         return
                                     }
                                     if (event.key === 'Escape') {
-                                        setAddressValue(activeTab?.url || '')
+                                        setAddressValue(activeAddress)
                                         setAddressError(null)
                                         omniboxPreparationGenerationRef.current += 1
                                         setAddressFocused(false)
@@ -1987,6 +2030,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                     </button>
                     {profileMenuOpen ? (
                         <div className="absolute right-0 top-8 z-[380] w-64 rounded-[7px] border border-[var(--surface-divider)] bg-sparkle-card p-1 text-left shadow-[0_12px_30px_rgba(0,0,0,0.30)]">
+                            <button type="button" onClick={() => activeTab && void openLocalFileInTab(activeTab.id)} disabled={!activeTab} title="Open file (Ctrl+O)" className={BROWSER_MENU_ROW_CLASS}><FileUp size={12} /><span>Open file</span></button>
                             <button type="button" onClick={() => void hardReloadActiveTab()} disabled={!activeTab?.url} className={BROWSER_MENU_ROW_CLASS}><RefreshCw size={12} /><span>Hard reload</span></button>
                             <button type="button" onClick={() => void openActiveDevTools()} disabled={!activeTab?.url} className={BROWSER_MENU_ROW_CLASS}><Code2 size={12} /><span>Open DevTools</span></button>
                             <button type="button" onClick={() => {
@@ -2018,7 +2062,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                             </div>
                             <div className="my-1 h-px bg-[var(--surface-divider)]" />
                             <button type="button" onClick={() => void toggleActiveRecording()} disabled={!activeTab?.url || Boolean(recordingTabId && recordingTabId !== activeTab?.id)} className={cn(BROWSER_MENU_ROW_CLASS, recordingTabId === activeTab?.id && 'text-red-300')}><Circle size={11} fill={recordingTabId === activeTab?.id ? 'currentColor' : 'none'} /><span>{recordingTabId === activeTab?.id ? 'Stop and save recording' : 'Record Browser tab'}</span></button>
-                            <button type="button" onClick={() => void openExternal()} disabled={!activeTab?.url} className={BROWSER_MENU_ROW_CLASS}><ExternalLink size={12} /><span>Open in default browser</span></button>
+                            <button type="button" onClick={() => void openExternal()} disabled={!activeTab?.url || isBrowserLocalFileUrl(activeTab.url)} className={BROWSER_MENU_ROW_CLASS}><ExternalLink size={12} /><span>Open in default browser</span></button>
                             <div className="my-1 h-px bg-[var(--surface-divider)]" />
                             <button type="button" onClick={() => {
                                 setProfileMenuOpen(false)

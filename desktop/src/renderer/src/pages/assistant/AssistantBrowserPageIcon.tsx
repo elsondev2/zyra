@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useState } from 'react'
-import { Globe2 } from 'lucide-react'
+import { FileText, Globe2 } from 'lucide-react'
+import { BROWSER_LOCAL_FILE_SCHEME } from '@shared/browser-view'
 import { cn } from '@/lib/utils'
 
 export function browserPageIconCandidates(faviconUrl: string | null, pageUrl?: string | null): string[] {
@@ -41,6 +42,9 @@ export const AssistantBrowserPageIcon = memo(function AssistantBrowserPageIcon({
     className?: string
 }) {
     const candidates = useMemo(() => browserPageIconCandidates(faviconUrl, pageUrl), [faviconUrl, pageUrl])
+    const localFile = useMemo(() => {
+        try { return new URL(String(pageUrl || '')).protocol === `${BROWSER_LOCAL_FILE_SCHEME}:` } catch { return false }
+    }, [pageUrl])
     const [candidateIndex, setCandidateIndex] = useState(0)
     const [resolvedOriginIcon, setResolvedOriginIcon] = useState<string | null>(null)
     const [originLookupComplete, setOriginLookupComplete] = useState(false)
@@ -52,7 +56,7 @@ export const AssistantBrowserPageIcon = memo(function AssistantBrowserPageIcon({
     }, [candidates])
 
     useEffect(() => {
-        if (candidateIndex < candidates.length || originLookupComplete || !pageUrl) return
+        if (candidateIndex < candidates.length || originLookupComplete || !pageUrl || localFile) return
         const getPageIcon = window.devscope?.getBrowserPageIcon
         if (typeof getPageIcon !== 'function') {
             setOriginLookupComplete(true)
@@ -64,10 +68,13 @@ export const AssistantBrowserPageIcon = memo(function AssistantBrowserPageIcon({
             if (!cancelled && result.success && result.dataUrl) setResolvedOriginIcon(result.dataUrl)
         }).catch(() => undefined)
         return () => { cancelled = true }
-    }, [candidateIndex, candidates.length, originLookupComplete, pageUrl])
+    }, [candidateIndex, candidates.length, localFile, originLookupComplete, pageUrl])
 
     const directCandidate = candidates[candidateIndex] || null
     const candidate = directCandidate || resolvedOriginIcon
+    if (!candidate && localFile) {
+        return <FileText size={size} className={cn('shrink-0 text-sparkle-text-muted/68', className)} />
+    }
     if (!candidate) {
         return <Globe2 size={size} className={cn('shrink-0 text-sparkle-text-muted/60', className)} />
     }

@@ -12,7 +12,8 @@ import { buildTerminalTheme, listTerminalThemes } from "./terminal-theme.mjs";
 import { zyraLogoRows } from "./zyra-logo.mjs";
 
 const ONBOARDING_VERSION = 1;
-const ZYRA_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+const ZYRA_VERSION = process.env.ZYRA_VERSION
+  || JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const ONBOARDING_FILE = "onboarding.json";
 const FIRST_PROMPT = "I just installed Zyra. Can you show me around slowly?";
 

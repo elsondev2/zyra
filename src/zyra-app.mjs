@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { copyFileSync } from "node:fs";
+import { copyFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
@@ -206,29 +206,35 @@ async function runUpdate() {
     return;
   }
   const root = defaults.root;
+  const sourceDirectory = String(process.env.ZYRA_UPDATE_SOURCE_DIRECTORY ?? "").trim();
   if (process.platform === "win32") {
     const script = path.join(root, "install.ps1");
     const tempScript = path.join(os.tmpdir(), `zyra-update-${process.pid}.ps1`);
     copyFileSync(script, tempScript);
     process.chdir(os.tmpdir());
-    const result = spawnSync("powershell.exe", [
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      tempScript,
-      "-InstallDir",
-      root,
-      "-Update",
-      "-Yes",
-    ], { stdio: "inherit", cwd: os.tmpdir() });
+    let result;
+    try {
+      result = spawnSync("powershell.exe", [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        tempScript,
+        ...(sourceDirectory ? ["-SourceDirectory", sourceDirectory] : []),
+      ], { stdio: "inherit", cwd: os.tmpdir() });
+    } finally {
+      rmSync(tempScript, { force: true });
+    }
     if (result.error) throw result.error;
     await shutdownCliAnalytics();
     process.exit(result.status ?? 1);
   }
 
   const script = path.join(root, "install.sh");
-  const result = spawnSync("bash", [script], { stdio: "inherit" });
+  const result = spawnSync("bash", [
+    script,
+    ...(sourceDirectory ? ["--source-dir", sourceDirectory] : []),
+  ], { stdio: "inherit" });
   if (result.error) throw result.error;
   await shutdownCliAnalytics();
   process.exit(result.status ?? 1);
@@ -682,7 +688,9 @@ async function runMain() {
 async function restartZyraProcess(runtime, options = {}) {
   const sessionManager = runtime.session.sessionManager;
   const selector = sessionManager.getSessionId?.() || sessionManager.getSessionFile?.();
-  const args = [path.join(runtime.root, "bin", "zyra.mjs")];
+  const args = process.env.ZYRA_STANDALONE === "1"
+    ? []
+    : [path.join(runtime.root, "bin", "zyra.mjs")];
   if (options.mode === "new") {
     args.push("new");
   } else if (selector) {

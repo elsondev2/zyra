@@ -148,13 +148,33 @@ if (expectedProductionVmp) {
 }
 
 await requireNonempty(path.join(resources, 'LICENSE'), 'Packaged Apache-2.0 license')
+await requireNonempty(path.join(resources, 'NOTICE'), 'Packaged Zyra notice')
+await requireNonempty(path.join(resources, 'THIRD_PARTY_NOTICES.md'), 'Packaged third-party notices')
+await requireNonempty(path.join(resources, 'THIRD_PARTY_LICENSES.txt'), 'Packaged third-party licenses')
+const applicationRoot = path.dirname(resources)
+if (platform === 'macos') {
+    await requireNonempty(path.join(resources, 'ELECTRON-LICENSE.txt'), 'Packaged Electron license')
+    await requireNonempty(path.join(resources, 'CHROMIUM-THIRD-PARTY-LICENSES.html'), 'Packaged Chromium licenses')
+} else {
+    await requireOne([
+        path.join(applicationRoot, 'LICENSE.electron.txt'),
+        path.join(applicationRoot, 'LICENSE')
+    ], 'Packaged Electron license')
+    await requireNonempty(path.join(applicationRoot, 'LICENSES.chromium.html'), 'Packaged Chromium licenses')
+}
 const runtimeRoot = path.join(resources, 'zyra-runtime')
 await validateRuntimeStage(runtimeRoot, { expectedVersion: version, requireDependencies: true })
 await requireNonempty(path.join(resources, 'zyra-browser-control-extension', 'manifest.json'), 'Packaged browser extension')
 
 const sidecar = path.join(resources, 'zyra-computer-use')
 if (platform === 'windows') {
-    for (const fileName of ['Zyra.ComputerUse.exe', 'coreclr.dll', 'hostfxr.dll']) {
+    for (const fileName of [
+        'Zyra.ComputerUse.exe',
+        'coreclr.dll',
+        'hostfxr.dll',
+        'DOTNET-LICENSE.txt',
+        'DOTNET-THIRD-PARTY-NOTICES.txt'
+    ]) {
         await requireNonempty(path.join(sidecar, fileName), 'Self-contained packaged Windows sidecar')
     }
 } else if (await exists(sidecar)) {

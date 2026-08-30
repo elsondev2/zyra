@@ -10,7 +10,7 @@ const forwardedArgs = process.argv.slice(2)
 const inlineArg = (name) => forwardedArgs.find((value) => value.startsWith(`--${name}=`))?.slice(name.length + 3)
 const version = String(inlineArg('version') || packageJson.version || '0.0.0')
 const hasOutput = forwardedArgs.some((value) => value.startsWith('--output='))
-const output = path.join(root, 'dist', `zyra-v${version}.zip`)
+const output = path.join(root, 'dist', 'tui', `v${version}`)
 const builder = path.join(root, 'scripts', 'build-tui-release.mjs')
 
 await run(process.execPath, [
@@ -20,7 +20,7 @@ await run(process.execPath, [
   ...(hasOutput ? [] : [`--output=${output}`]),
 ])
 
-console.log('The final cross-platform SHA256SUMS is generated only after every release asset is assembled and validated.')
+console.log('The final cross-platform SHA256SUMS is generated after every native release asset is assembled.')
 
 function run(command, args) {
   return new Promise((resolve, reject) => {

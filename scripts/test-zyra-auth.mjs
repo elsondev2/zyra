@@ -90,7 +90,7 @@ async function testValidKeyWithoutLunaFallsBack() {
   assert.equal(chooseVerifiedApiModel(verification), "openai/gpt-5.6-terra");
 }
 
-function testStatusAndRemoval() {
+async function testStatusAndRemoval() {
   const auth = new FakeAuthStorage();
   auth.set("openai-codex", { type: "oauth" });
   auth.set("openai", { type: "api_key", key: "hidden" });
@@ -98,7 +98,7 @@ function testStatusAndRemoval() {
   assert.equal(status.active, "api");
   assert.match(formatZyraAuthMethodsStatus(status), /subscription: connected \(stored\)/);
   assert.match(formatZyraAuthMethodsStatus(status), /API:\s+connected \(stored\)/);
-  removeZyraAuthMethod(auth, "api");
+  await removeZyraAuthMethod(auth, "api");
   assert.equal(auth.hasAuth("openai"), false);
   assert.equal(normalizeZyraAuthMethod("chatgpt"), "subscription");
 }
@@ -247,7 +247,7 @@ await testVerificationAndStorage();
 await testInvalidKeyIsNotStored();
 await testUnsupportedApiModelDoesNotReplaceCredential();
 await testValidKeyWithoutLunaFallsBack();
-testStatusAndRemoval();
+await testStatusAndRemoval();
 await testBrowserFirstOAuthContract();
 await testSecretPromptMasksInput();
 await testRuntimeSwitchesToVerifiedApiModel();

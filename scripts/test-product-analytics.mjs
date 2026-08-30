@@ -631,7 +631,7 @@ async function testRendererAndCredentialBoundaries() {
   assert.match(browserPopupManager, /preload: undefined/);
   assert.doesNotMatch(browserViewManager, /executeJavaScript[^\n]*analytics/i);
   assert.match(browserBridgePolicy, /value\[0\] === 'analytics'/);
-  assert.match(tuiReleaseBuilder, /'analytics'/);
+  assert.match(tuiReleaseBuilder, /["']analytics["']/);
   assert.match(runtimeContract, /RUNTIME_SOURCE_DIRECTORIES[^\n]*'analytics'/);
   assert.match(runtimeContract, /analytics\/events\.v1\.json/);
   assert.ok(rootPackage.files.includes("analytics"));

@@ -918,6 +918,52 @@ assert.equal(
 )
 assert.equal(replayGuardContext.activeTurnId, null)
 
+replayGuardEvents.length = 0
+replayGuardContext.completedTurnIds.clear()
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'message_end',
+    message: {
+        id: 'live-retry-error',
+        role: 'assistant',
+        content: [],
+        stopReason: 'error',
+        errorMessage: 'The provider request failed and will be retried.'
+    }
+}, { turnId: 'turn-live-recovered', replay: false })
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'message_start',
+    message: {
+        id: 'live-retry-success',
+        role: 'assistant',
+        content: []
+    }
+}, { turnId: 'turn-live-recovered', replay: false })
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'message_end',
+    message: {
+        id: 'live-retry-success',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Recovered response' }]
+    }
+}, { turnId: 'turn-live-recovered', replay: false })
+assert.equal(
+    replayGuardEvents.some((event) => event.type === 'turn.completed' && event.turnId === 'turn-live-recovered'),
+    false,
+    'an in-turn provider error must not finish the turn while later assistant events are still arriving'
+)
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'agent_end'
+}, { turnId: 'turn-live-recovered', replay: false })
+const recoveredCompletion = replayGuardEvents.find((event) => (
+    event.type === 'turn.completed' && event.turnId === 'turn-live-recovered'
+))
+assert.equal(
+    recoveredCompletion?.type === 'turn.completed' ? recoveredCompletion.payload.outcome : null,
+    'completed',
+    'a successful assistant message after an in-turn error must clear the stale failure outcome'
+)
+assert.equal(replayGuardContext.activeTurnId, null)
+
 const completedToolEvent = runtimeEvents.findLast((event) => event.type === 'activity' && event.itemId === 'tool-search')
 const completedToolData = completedToolEvent?.type === 'activity'
     ? completedToolEvent.payload.data as Record<string, unknown>
@@ -1412,6 +1458,22 @@ const projectedDeps = {
     },
     updateLatestTurnAssistantMessage: () => {}
 }
+const recoveredTurnEvents = replayGuardEvents.filter((event) => event.turnId === 'turn-live-recovered')
+const recoveredTurnCompletionIndex = recoveredTurnEvents.findIndex((event) => event.type === 'turn.completed')
+assert.ok(recoveredTurnCompletionIndex > 0)
+for (const event of recoveredTurnEvents.slice(0, recoveredTurnCompletionIndex)) {
+    handleAssistantRuntimeEvent(event, projectedDeps)
+}
+const recoveringProjectedThread = findProjectedRecord(projectedThread.id)?.thread
+assert.equal(recoveringProjectedThread?.state, 'running')
+assert.equal(recoveringProjectedThread?.latestTurn?.state, 'running')
+assert.equal(recoveringProjectedThread?.lastError, null)
+handleAssistantRuntimeEvent(recoveredTurnEvents[recoveredTurnCompletionIndex]!, projectedDeps)
+const recoveredProjectedThread = findProjectedRecord(projectedThread.id)?.thread
+assert.equal(recoveredProjectedThread?.state, 'ready')
+assert.equal(recoveredProjectedThread?.latestTurn?.state, 'completed')
+assert.equal(recoveredProjectedThread?.lastError, null)
+
 const stalePreviousTurnStartedAt = '2026-07-10T15:00:00.000Z'
 projectedDeps.appendEvent('thread.latest-turn.updated', stalePreviousTurnStartedAt, {
     threadId: projectedThread.id,

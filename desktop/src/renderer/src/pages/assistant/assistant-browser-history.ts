@@ -1,5 +1,5 @@
 import type { DevScopeBrowserHistoryEntry, DevScopeBrowserHistoryRecordInput } from '@shared/contracts/devscope-api'
-import type { AssistantBrowserTabState } from './assistant-browser-workspace-state'
+import { isSafeAssistantBrowserUrl, type AssistantBrowserTabState } from './assistant-browser-workspace-state'
 
 const RENDERER_BROWSER_HISTORY_LIMIT = 50
 
@@ -27,7 +27,7 @@ export function resolveAssistantBrowserHistoryRecord(
     patch: Partial<Omit<AssistantBrowserTabState, 'id'>>
 ): DevScopeBrowserHistoryRecordInput | null {
     const url = patch.url ?? previous?.url ?? ''
-    if (!url) return null
+    if (!url || !isSafeAssistantBrowserUrl(url)) return null
     const title = patch.title ?? previous?.title ?? ''
     const faviconUrl = patch.faviconUrl === undefined ? previous?.faviconUrl || null : patch.faviconUrl
     const completedNavigation = patch.status === 'ready' && previous?.status !== 'ready'

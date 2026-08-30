@@ -18,7 +18,7 @@ export {
   zyraSkillSourceSettingsPath,
 } from './zyra-skill-source-settings.mjs'
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const ROOT = path.resolve(process.env.ZYRA_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'))
 const RESOURCE_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const BUILT_IN_DESKTOP_COMMANDS = [
   { name: 'yolo', description: 'Switch this thread to full access locally.' },

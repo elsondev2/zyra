@@ -132,7 +132,9 @@ function modelToInfo(model, sdk) {
 
 async function loadSdk() {
   if (!sdkPromise) {
-    sdkPromise = import(pathToFileURL(sdkPath).href);
+    sdkPromise = process.env.ZYRA_STANDALONE === "1"
+      ? import("./zyra-sdk.mjs")
+      : import(pathToFileURL(sdkPath).href);
   }
   return sdkPromise;
 }

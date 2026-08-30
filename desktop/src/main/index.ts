@@ -41,6 +41,7 @@ import { BROWSER_POPUP_PRELOAD_ARGUMENT } from '../shared/preload-surfaces'
 import { configureBrowserDownloadAnalytics } from './browser-download-service'
 import { inspectProjectAnalyticsCapabilities } from './analytics/project-capabilities'
 import { buildAssistantFilesShellLaunchRoute } from '../shared/assistant/files-shell-launch-route'
+import { BROWSER_LOCAL_FILE_SCHEME } from '../shared/browser-view'
 
 app.enableSandbox()
 
@@ -149,6 +150,13 @@ protocol.registerSchemesAsPrivileged([
             standard: true,
             secure: true,
             supportFetchAPI: true,
+            stream: true
+        }
+    },
+    {
+        scheme: BROWSER_LOCAL_FILE_SCHEME,
+        privileges: {
+            secure: true,
             stream: true
         }
     }

@@ -16,6 +16,11 @@ const webviewSource = readFileSync(new URL('../src/renderer/src/pages/assistant/
 const browserViewManagerSource = readFileSync(new URL('../src/main/browser-view-manager.ts', import.meta.url), 'utf8')
 const browserViewContractSource = readFileSync(new URL('../src/shared/browser-view.ts', import.meta.url), 'utf8')
 const previewModalLayoutSource = readFileSync(new URL('../src/renderer/src/components/ui/file-preview/PreviewModalLayout.tsx', import.meta.url), 'utf8')
+const fileActionsMenuSource = readFileSync(new URL('../src/renderer/src/components/ui/FileActionsMenu.tsx', import.meta.url), 'utf8')
+const inspectorSidebarSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantInspectorSidebar.tsx', import.meta.url), 'utf8')
+const utilityWindowSource = readFileSync(new URL('../src/renderer/src/pages/assistant/utility/AssistantUtilityWindow.tsx', import.meta.url), 'utf8')
+const diffPanelSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantDiffPanel.tsx', import.meta.url), 'utf8')
+const tabHoverPreviewSource = readFileSync(new URL('../src/renderer/src/pages/assistant/assistant-browser-tab-hover-preview.ts', import.meta.url), 'utf8')
 const nativeOcclusionSource = readFileSync(new URL('../src/renderer/src/pages/assistant/assistant-browser-native-view-occlusion.ts', import.meta.url), 'utf8')
 assert.doesNotMatch(webviewSource, /if \(active\) frame = window\.requestAnimationFrame\(\(\) => report\(\)\)/, 'Browser slot placement has no permanent layout polling loop')
 assert.match(webviewSource, /const observer = active \? new ResizeObserver\(\(\) => report\(true\)\) : null/, 'only the active Browser slot observes actual size changes')
@@ -25,9 +30,24 @@ assert.match(webviewSource, /if \(!shouldPublishOverlay && !controlOverlayPublis
 assert.match(webviewSource, /command\.type !== 'control-overlay' && command\.type !== 'capture'\) applyState/, 'control cursor movement and presentation capture cannot rerender the complete Browser workspace state')
 assert.match(browserViewContractSource, /type: 'capture'/, 'the native Browser contract exposes an in-memory presentation snapshot command')
 assert.match(browserViewManagerSource, /page\.capturePage\(\)/, 'Browser snapshots come from the owned native page')
-assert.match(webviewSource, /useAssistantBrowserNativeViewOcclusion\(slotRef, active\)/, 'app-level overlays occlude the native Browser view')
+assert.match(webviewSource, /useAssistantBrowserNativeViewOcclusion\(slotRef, active, reportNativeViewOcclusion\)/, 'app-level overlays occlude the native Browser view')
 assert.match(webviewSource, /shouldShowAssistantBrowserNativeView\(\{[\s\S]*hasPage: Boolean\(tab\.url\)/, 'native visibility distinguishes a real page from Zyra New Tab')
 assert.match(nativeOcclusionSource, /MutationObserver[\s\S]*attributeFilter: \['aria-hidden', 'aria-modal', 'class', 'data-zyra-native-view-occluder', 'style'\]/, 'native Browser occlusion follows portal mount, visibility, and layout changes')
+assert.match(nativeOcclusionSource, /new MutationObserver\(measure\)/, 'portal occlusion is measured in the mount microtask instead of a later paint frame')
+assert.doesNotMatch(nativeOcclusionSource, /requestAnimationFrame/, 'overlay detection cannot leave a native Browser surface above the first rendered menu frame')
+assert.match(nativeOcclusionSource, /onOcclusionChangeRef\.current\?\.\(next\)[\s\S]*setOccluded\(next\)/, 'the native hide report runs before React publishes the derived occlusion state')
+assert.match(webviewSource, /reportNativeViewOcclusion[\s\S]*nativeViewOccluded: occluded[\s\S]*useAssistantBrowserNativeViewOcclusion\(slotRef, active, reportNativeViewOcclusion\)/, 'an overlay visibility change immediately updates the native view without waiting for a second render')
+assert.match(webviewSource, /nativeViewOccludedRef\.current = occluded/, 'native occlusion is published synchronously for layout observers')
+assert.match(webviewSource, /const liveEffectiveVisible = shouldShowAssistantBrowserNativeView\([\s\S]*nativeViewOccluded: nativeViewOccludedRef\.current/, 'stale resize callbacks cannot republish a native Browser view over an active modal')
+assert.match(nativeOcclusionSource, /const changed = occludedRef\.current \|\| occluderRef\.current !== null[\s\S]*onOcclusionChangeRef\.current\?\.\(false\)/, 'deactivating a Browser slot clears synchronous occlusion state')
+assert.ok((fileActionsMenuSource.match(/data-zyra-native-view-occluder="true"/g) || []).length >= 2, 'portal menus and their submenus explicitly identify themselves as native-view occluders')
+assert.match(inspectorSidebarSource, /\{tabPreview \? \([\s\S]{0,400}data-zyra-native-view-occluder="true"/, 'the docked tab hover preview explicitly occludes native Browser views')
+assert.match(utilityWindowSource, /\{tabPreview \? \([\s\S]{0,400}data-zyra-native-view-occluder="true"/, 'the detached-window tab hover preview explicitly occludes native Browser views')
+assert.match(tabHoverPreviewSource, /browserView\.command\(\{ tabId, type: 'capture' \}\)/, 'Browser tab hover images reuse the bounded native snapshot command')
+assert.match(diffPanelSource, /previewDisabled: tab\.id === activeTabId[\s\S]{0,220}loadPreviewImage: tab\.id !== activeTabId/, 'the docked current Browser tab cannot request its own hover snapshot')
+assert.match(utilityWindowSource, /previewDisabled: browserTab && active[\s\S]{0,220}loadPreviewImage: browserTab && !active/, 'the detached current Browser tab cannot request its own hover snapshot')
+assert.match(inspectorSidebarSource, /if \(activeDragTabId \|\| tab\.previewDisabled\) return/, 'disabled current Browser tabs do not mount a hover card')
+assert.match(inspectorSidebarSource, /tabPreview\.imageRequested[\s\S]{0,500}aspect-video[\s\S]{0,600}tabPreview\.imageUrl/, 'inactive Browser hover cards reserve a stable thumbnail frame while capture resolves')
 assert.match(nativeOcclusionSource, /rectanglesOverlap\(slotBounds, bounds\)/, 'unrelated fixed UI cannot hide a Browser page unless it overlaps the native slot')
 assert.match(webviewSource, /await presentation\.decode\(\)/, 'Browser presentation snapshots are decoded before they can hide the native view')
 assert.match(webviewSource, /window\.requestAnimationFrame\(\(\) => (?:\{|)window\.requestAnimationFrame/, 'the decoded snapshot receives a paint frame before replacing the native page')
@@ -43,7 +63,7 @@ const slot = {
     getBoundingClientRect: () => slotBounds,
     contains: () => false
 } as unknown as HTMLElement
-const candidate = (bounds: typeof slotBounds, style: { position: string; zIndex: string }, attributes: Record<string, string> = {}) => ({
+const candidate = (bounds: typeof slotBounds, style: { position: string; zIndex: string; opacity?: string }, attributes: Record<string, string> = {}) => ({
     isConnected: true,
     getAttribute: (name: string) => attributes[name] || null,
     getBoundingClientRect: () => bounds,
@@ -51,6 +71,7 @@ const candidate = (bounds: typeof slotBounds, style: { position: string; zIndex:
     style
 }) as unknown as HTMLElement
 const modalOverlay = candidate({ left: 0, top: 0, right: 800, bottom: 700, width: 800, height: 700 }, { position: 'fixed', zIndex: '130' }, { 'aria-modal': 'true' })
+const enteringModalOverlay = candidate({ left: 0, top: 0, right: 800, bottom: 700, width: 800, height: 700 }, { position: 'fixed', zIndex: '130', opacity: '0' }, { 'data-zyra-native-view-occluder': 'true' })
 const lowChrome = candidate({ left: 0, top: 0, right: 800, bottom: 700, width: 800, height: 700 }, { position: 'fixed', zIndex: '20' })
 const distantOverlay = candidate({ left: 710, top: 100, right: 900, bottom: 300, width: 190, height: 200 }, { position: 'fixed', zIndex: '130' })
 try {
@@ -58,7 +79,7 @@ try {
         getComputedStyle: (element: HTMLElement) => ({
             display: 'block',
             visibility: 'visible',
-            opacity: '1',
+            opacity: (element as unknown as { style: { opacity?: string } }).style.opacity || '1',
             position: (element as unknown as { style: { position: string } }).style.position,
             zIndex: (element as unknown as { style: { zIndex: string } }).style.zIndex
         })
@@ -67,6 +88,8 @@ try {
         querySelectorAll: () => [modalOverlay]
     } })
     assert.equal(isAssistantBrowserNativeViewOccluded(slot), true, 'an overlapping app modal occludes the native Browser surface')
+    Object.defineProperty(globalThis, 'document', { configurable: true, value: { querySelectorAll: () => [enteringModalOverlay] } })
+    assert.equal(isAssistantBrowserNativeViewOccluded(slot), true, 'an explicitly marked modal hides the native Browser surface from the first entrance frame')
     Object.defineProperty(globalThis, 'document', { configurable: true, value: { querySelectorAll: () => [lowChrome] } })
     assert.equal(isAssistantBrowserNativeViewOccluded(slot), false, 'ordinary low-z app chrome does not blank Browser')
     Object.defineProperty(globalThis, 'document', { configurable: true, value: { querySelectorAll: () => [distantOverlay] } })

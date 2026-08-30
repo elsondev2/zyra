@@ -12,15 +12,23 @@ const rootLock = readJson(path.join(repositoryRoot, 'package-lock.json'))
 const desktopPackage = readJson(path.join(desktopRoot, 'package.json'))
 const desktopLock = readJson(path.join(desktopRoot, 'package-lock.json'))
 const build = desktopPackage.build
-const localReleaseArchiveSource = readFileSync(path.join(repositoryRoot, 'scripts', 'build-release.mjs'), 'utf8')
-const allowlistedTuiArchiveSource = readFileSync(path.join(repositoryRoot, 'scripts', 'build-tui-release.mjs'), 'utf8')
+const localTuiReleaseSource = readFileSync(path.join(repositoryRoot, 'scripts', 'build-release.mjs'), 'utf8')
+const standaloneTuiBuilderSource = readFileSync(path.join(repositoryRoot, 'scripts', 'build-tui-release.mjs'), 'utf8')
 
 assert.equal(rootPackage.version, '0.6.0')
-assert.equal(rootPackage.scripts['release:zip'], 'node scripts/build-release.mjs', 'the local release shortcut stays stable')
-assert.match(localReleaseArchiveSource, /build-tui-release\.mjs/, 'the local release shortcut delegates to the canonical allowlisted TUI archive builder')
-assert.doesNotMatch(localReleaseArchiveSource, /git["', ]+archive|checksums\.txt/, 'the local shortcut cannot archive the whole repository or emit the obsolete checksum format')
-assert.match(allowlistedTuiArchiveSource, /const include = \[[\s\S]*'bin',[\s\S]*'src',[\s\S]*'analytics',[\s\S]*'prompts'/, 'the canonical TUI archive includes the shared analytics catalog beside runtime source')
+assert.equal(rootPackage.scripts['release:tui'], 'node scripts/build-release.mjs', 'the local standalone TUI build shortcut stays stable')
+assert.match(localTuiReleaseSource, /build-tui-release\.mjs/, 'the local release shortcut delegates to the canonical standalone TUI builder')
+assert.doesNotMatch(localTuiReleaseSource, /git["', ]+archive|checksums\.txt/, 'the local shortcut cannot archive source or emit the obsolete checksum format')
+assert.match(standaloneTuiBuilderSource, /TUI_RELEASE_TARGETS/, 'the canonical TUI builder uses the shared platform contract')
+assert.match(standaloneTuiBuilderSource, /BUN_RUNTIME_VERSION[\s\S]*assertBunVersion/, 'standalone TUI builds pin the licensed Bun runtime version')
+assert.match(standaloneTuiBuilderSource, /"--compile"/, 'the canonical TUI builder emits native standalone executables')
+assert.match(standaloneTuiBuilderSource, /collectResources/, 'the canonical TUI builder embeds runtime resources')
+assert.match(standaloneTuiBuilderSource, /path\.join\(root,\s*["']desktop["'],\s*["']resources["'],\s*["']icon\.ico["']\)/, 'the Windows TUI reuses the Desktop release icon')
+assert.match(standaloneTuiBuilderSource, /--windows-icon=/, 'the shared Zyra icon is embedded in the Windows TUI executable')
+assert.match(standaloneTuiBuilderSource, /--windows-title=Zyra/, 'the Windows TUI exposes Zyra product metadata')
+assert.match(standaloneTuiBuilderSource, /--windows-copyright=Copyright 2026 Elson Erick Mgaya/, 'the Windows TUI carries the copyright holder')
 assert(rootPackage.files.includes('analytics'), 'the npm/TUI package allowlist includes the versioned analytics catalog')
+assert.equal(rootPackage.author, 'Elson Erick Mgaya')
 assert.equal(desktopPackage.version, rootPackage.version, 'root and Desktop versions must be lockstep')
 assert(JSON.stringify(build.extraResources || []).includes('.release/zyra-node'), 'desktop packages the pinned Node runtime')
 assert.equal(rootLock.version, rootPackage.version)
@@ -33,6 +41,8 @@ assert.equal(desktopLock.name, 'zyra-desktop')
 assert.equal(desktopLock.packages[''].name, 'zyra-desktop')
 assert.equal(rootPackage.license, 'Apache-2.0')
 assert.equal(desktopPackage.license, 'Apache-2.0')
+assert.equal(desktopPackage.author, 'Elson Erick Mgaya')
+assert.equal(build.copyright, 'Copyright © 2026 Elson Erick Mgaya')
 
 assert.equal(build.appId, 'app.zyra.desktop')
 assert.equal(build.productName, 'Zyra')
@@ -99,8 +109,14 @@ assert(desktopPackage.scripts['test:native-sqlite'].includes('test-native-sqlite
 
 const globalResources = build.extraResources
 assert(globalResources.some((entry: { from: string; to: string }) => entry.from === '../LICENSE' && entry.to === 'LICENSE'))
+assert(globalResources.some((entry: { from: string; to: string }) => entry.from === '../NOTICE' && entry.to === 'NOTICE'))
 assert(globalResources.some((entry: { from: string; to: string }) => entry.from === '../THIRD_PARTY_NOTICES.md' && entry.to === 'THIRD_PARTY_NOTICES.md'))
-assert.match(readFileSync(path.join(repositoryRoot, 'THIRD_PARTY_NOTICES.md'), 'utf8'), /OpenAI and browser logos from SVGL[\s\S]*MIT License/)
+assert(globalResources.some((entry: { from: string; to: string }) => entry.from === '../THIRD_PARTY_LICENSES.txt' && entry.to === 'THIRD_PARTY_LICENSES.txt'))
+const thirdPartyNotices = readFileSync(path.join(repositoryRoot, 'THIRD_PARTY_NOTICES.md'), 'utf8')
+assert.match(thirdPartyNotices, /Product logos from SVGL[\s\S]*MIT License/)
+assert.match(thirdPartyNotices, /Developer-tool logos from Simple Icons[\s\S]*CC0 1\.0 Universal/)
+assert.match(thirdPartyNotices, /Material Icon Theme file icons[\s\S]*MIT license/)
+assert.match(thirdPartyNotices, /Kenney UI Audio voice cues[\s\S]*CC0 1\.0 Universal/)
 assert(globalResources.some((entry: { from: string; to: string }) => entry.from === '.release/zyra-runtime' && entry.to === 'zyra-runtime'))
 assert(
     globalResources.some((entry: { from: string; to: string }) =>
@@ -120,6 +136,8 @@ assert.deepEqual(build.mac.target, [
     { target: 'dmg', arch: ['universal'] },
     { target: 'zip', arch: ['universal'] }
 ])
+assert(build.mac.extraResources.some((entry: { to: string }) => entry.to === 'ELECTRON-LICENSE.txt'))
+assert(build.mac.extraResources.some((entry: { to: string }) => entry.to === 'CHROMIUM-THIRD-PARTY-LICENSES.html'))
 assert.equal(build.mac.artifactName, 'Zyra-Desktop-${version}-macOS-${arch}.${ext}')
 assert.equal(
     build.mac.x64ArchFiles,
@@ -150,12 +168,15 @@ for (const platform of ['windows', 'macos', 'linux'] as const) {
     )
     assert.deepEqual(updaterContract?.requiredAssetNames, contract.assets, `${platform} build and updater asset contracts must match`)
 }
-assert.equal(expectedReleaseAssetNames(rootPackage.version).length, 11)
+assert.equal(expectedReleaseAssetNames(rootPackage.version).length, 14)
 assert(
     expectedReleaseAssetNames(rootPackage.version).includes(`Zyra-Desktop-${rootPackage.version}-Windows-x64.exe`),
     'Desktop artifacts must retain the user-facing product name'
 )
-assert(expectedReleaseAssetNames(rootPackage.version).includes(`zyra-v${rootPackage.version}.zip`), 'unified release must retain the CLI/source archive')
+for (const target of ['windows-x64', 'macos-arm64', 'macos-x64', 'linux-x64']) {
+    const suffix = target === 'windows-x64' ? '.exe' : ''
+    assert(expectedReleaseAssetNames(rootPackage.version).includes(`Zyra-TUI-${rootPackage.version}-${target}${suffix}`), `unified release must include ${target} TUI`)
+}
 
 const electronConfig = readFileSync(path.join(desktopRoot, 'electron.vite.config.ts'), 'utf8')
 const browserConfig = readFileSync(path.join(desktopRoot, 'vite.browser.config.ts'), 'utf8')

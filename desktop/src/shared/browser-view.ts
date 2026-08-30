@@ -7,6 +7,8 @@ export const BROWSER_VIEW_IPC = {
     event: 'devscope:browserView:event'
 } as const
 
+export const BROWSER_LOCAL_FILE_SCHEME = 'zyra-local'
+
 export type BrowserViewStatus = 'idle' | 'loading' | 'ready' | 'error'
 export type BrowserSessionMode = 'normal' | 'incognito'
 
@@ -24,6 +26,7 @@ export type BrowserViewState = {
     sessionMode: BrowserSessionMode
     guestWebContentsId: number
     url: string
+    displayAddress: string | null
     title: string
     status: BrowserViewStatus
     error: string | null
@@ -84,6 +87,7 @@ export type BrowserViewControlOverlay = {
 
 export type BrowserViewCommand =
     | { tabId: string; type: 'navigate'; url: string }
+    | { tabId: string; type: 'open-local-file' }
     | { tabId: string; type: 'back' }
     | { tabId: string; type: 'forward' }
     | { tabId: string; type: 'reload' }

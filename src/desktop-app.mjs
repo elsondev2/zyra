@@ -6,7 +6,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 
 const REGISTRATION_FILE = path.join(".zyra", "desktop-install-v1.json");
-const CURRENT_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+const CURRENT_VERSION = process.env.ZYRA_VERSION
+  || JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const GITHUB_API = "https://api.github.com/repos/justelson/zyra/releases/tags/";
 
 export function desktopRegistrationPath(dataRoot = process.env.ZYRA_DATA_ROOT || os.homedir()) {

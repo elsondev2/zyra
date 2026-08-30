@@ -1,4 +1,4 @@
-import { fork } from "node:child_process";
+import { fork, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { terminateOwnedProcess } from "../agents/runtime/cancellation-tree.mjs";
 import { assertValidWorkflowSource } from "./validator.mjs";
@@ -15,13 +15,16 @@ export class WorkflowSandboxHost {
 
   async execute(input = {}) {
     const validation = assertValidWorkflowSource(input.source, { projectedCalls: input.projectedCalls });
-    const child = fork(workerFile, [], {
+    const childOptions = {
       cwd: input.cwd ?? process.cwd(),
       env: { NODE_ENV: "production", SYSTEMROOT: process.env.SYSTEMROOT, WINDIR: process.env.WINDIR },
       stdio: ["ignore", "ignore", "ignore", "ipc"],
       windowsHide: true,
       execArgv: [],
-    });
+    };
+    const child = process.env.ZYRA_STANDALONE === "1"
+      ? spawn(process.execPath, ["--internal-workflow-sandbox"], childOptions)
+      : fork(workerFile, [], childOptions);
     this.child = child;
     const executionId = 1;
     let timer;

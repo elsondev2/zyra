@@ -67,6 +67,13 @@ assert.match(utilityBridge, /runtime !== targetRuntime/u, "a delayed TUI title c
 const sdkRuntime = read("src/zyra-sdk.mjs");
 assert.match(sdkRuntime, /removeZyraTitleGenerationMessages\(contextMessages\)/u, "legacy title utility turns are removed from resumed model context");
 
+const sharedPiRuntime = read("src/pi-runtime.mjs");
+assert.match(
+  sharedPiRuntime,
+  /options\.refreshOnCreate !== undefined[\s\S]*?refreshOnCreate: options\.refreshOnCreate === true/u,
+  "Pi model discovery must keep its enabled-by-default startup refresh unless a caller explicitly overrides it",
+);
+
 const tuiApp = read("src/zyra-app.mjs");
 assert.match(tuiApp, /activeRun \|\| runtime\.session\.isStreaming/u, "resumed TUI input follows a canonical turn that another surface already owns");
 

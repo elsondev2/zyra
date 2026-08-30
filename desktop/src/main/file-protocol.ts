@@ -8,6 +8,7 @@ export const LOCAL_HTML_CONTENT_SECURITY_POLICY = [
     "sandbox",
     "default-src 'none'",
     "base-uri 'none'",
+    "frame-ancestors 'none'",
     "object-src 'none'",
     "script-src 'none'",
     "connect-src 'none'",
@@ -105,6 +106,7 @@ function createResponseHeaders(filePath: string, fileSize: number): Headers {
         'Content-Length': String(fileSize),
         'Content-Security-Policy': fileContentSecurityPolicy(filePath),
         'Content-Type': resolveFileMimeType(filePath),
+        'Cross-Origin-Resource-Policy': 'same-origin',
         'Permissions-Policy': LOCAL_FILE_PERMISSIONS_POLICY,
         'Referrer-Policy': 'no-referrer',
         'X-Content-Type-Options': 'nosniff'
@@ -192,83 +194,89 @@ function getThumbnail(filePath: string, width: number, height: number, size: num
     return request
 }
 
+export async function serveLocalFileRequest(filePath: string, request: Request): Promise<Response> {
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+        return emptyResponse(405, { Allow: 'GET, HEAD' })
+    }
+
+    // Electron's file loader streams range bodies but omits 206 and range metadata,
+    // so read only file metadata here and normalize the response below.
+    let fileSize = 0
+    let modifiedAt = 0
+    try {
+        const fileStats = await stat(filePath)
+        if (!fileStats.isFile()) return emptyResponse(404)
+        fileSize = fileStats.size
+        modifiedAt = fileStats.mtimeMs
+    } catch (error) {
+        if (!isMissingFileError(error)) {
+            log.error('Failed to read local protocol file:', filePath, error)
+        }
+        return emptyResponse(404)
+    }
+
+    const thumbnailSize = parseThumbnailSize(request.url)
+    if (thumbnailSize && resolveFileMimeType(filePath).startsWith('image/')) {
+        const thumbnail = await getThumbnail(filePath, thumbnailSize.width, thumbnailSize.height, fileSize, modifiedAt)
+        if (thumbnail) {
+            const headers = createResponseHeaders(filePath, thumbnail.byteLength)
+            headers.set('Cache-Control', 'no-store')
+            headers.set('Content-Type', 'image/png')
+            const body = new Uint8Array(thumbnail.byteLength)
+            body.set(thumbnail)
+            return request.method === 'HEAD' ? emptyResponse(200, headers) : new Response(body.buffer, { status: 200, headers })
+        }
+    }
+
+    const rangeHeader = request.method === 'GET' ? request.headers.get('range') : null
+    const byteRange = rangeHeader ? resolveByteRange(rangeHeader, fileSize) : undefined
+    if (rangeHeader && !byteRange) {
+        const headers = createResponseHeaders(filePath, 0)
+        headers.set('Content-Range', `bytes */${fileSize}`)
+        return emptyResponse(416, headers)
+    }
+
+    try {
+        const fileResponse = await net.fetch(pathToFileURL(filePath).href, {
+            method: request.method,
+            headers: request.headers
+        })
+        const headers = new Headers(fileResponse.headers)
+        const safeHeaders = createResponseHeaders(filePath, fileSize)
+        for (const [name, value] of safeHeaders) headers.set(name, value)
+
+        if (byteRange) {
+            headers.set('Content-Length', String(byteRange.end - byteRange.start + 1))
+            headers.set('Content-Range', `bytes ${byteRange.start}-${byteRange.end}/${fileSize}`)
+        } else {
+            headers.set('Content-Length', String(fileSize))
+        }
+
+        return new Response(fileResponse.body, {
+            status: byteRange ? 206 : fileResponse.status,
+            statusText: byteRange ? 'Partial Content' : fileResponse.statusText,
+            headers
+        })
+    } catch (error) {
+        if (!isMissingFileError(error)) {
+            log.error('Failed to read local protocol file:', filePath, error)
+        }
+        return emptyResponse(404)
+    }
+}
+
 export function registerFileProtocol(fileProtocol: string) {
     protocol.handle(fileProtocol, async (request) => {
-        let filePath = ''
-
         if (request.method !== 'GET' && request.method !== 'HEAD') {
             return emptyResponse(405, { Allow: 'GET, HEAD' })
         }
-
+        let filePath = ''
         try {
             filePath = resolveProtocolFilePath(request.url)
         } catch (error) {
             log.error('Failed to resolve protocol URL:', request.url, error)
             return emptyResponse(500)
         }
-
-        // Electron's file loader streams range bodies but omits 206 and range metadata,
-        // so read only file metadata here and normalize the response below.
-        let fileSize = 0
-        let modifiedAt = 0
-        try {
-            const fileStats = await stat(filePath)
-            fileSize = fileStats.size
-            modifiedAt = fileStats.mtimeMs
-        } catch (error) {
-            if (!isMissingFileError(error)) {
-                log.error('Failed to read local protocol file:', filePath, error)
-            }
-            return emptyResponse(404)
-        }
-
-        const thumbnailSize = parseThumbnailSize(request.url)
-        if (thumbnailSize && resolveFileMimeType(filePath).startsWith('image/') && (request.method === 'GET' || request.method === 'HEAD')) {
-            const thumbnail = await getThumbnail(filePath, thumbnailSize.width, thumbnailSize.height, fileSize, modifiedAt)
-            if (thumbnail) {
-                const headers = createResponseHeaders(filePath, thumbnail.byteLength)
-                headers.set('Cache-Control', 'no-store')
-                headers.set('Content-Type', 'image/png')
-                const body = new Uint8Array(thumbnail.byteLength)
-                body.set(thumbnail)
-                return request.method === 'HEAD' ? emptyResponse(200, headers) : new Response(body.buffer, { status: 200, headers })
-            }
-        }
-
-        const rangeHeader = request.method === 'GET' ? request.headers.get('range') : null
-        const byteRange = rangeHeader ? resolveByteRange(rangeHeader, fileSize) : undefined
-        if (rangeHeader && !byteRange) {
-            const headers = createResponseHeaders(filePath, 0)
-            headers.set('Content-Range', `bytes */${fileSize}`)
-            return emptyResponse(416, headers)
-        }
-
-        try {
-            const fileResponse = await net.fetch(pathToFileURL(filePath).href, {
-                method: request.method,
-                headers: request.headers
-            })
-            const headers = new Headers(fileResponse.headers)
-            const safeHeaders = createResponseHeaders(filePath, fileSize)
-            for (const [name, value] of safeHeaders) headers.set(name, value)
-
-            if (byteRange) {
-                headers.set('Content-Length', String(byteRange.end - byteRange.start + 1))
-                headers.set('Content-Range', `bytes ${byteRange.start}-${byteRange.end}/${fileSize}`)
-            } else {
-                headers.set('Content-Length', String(fileSize))
-            }
-
-            return new Response(fileResponse.body, {
-                status: byteRange ? 206 : fileResponse.status,
-                statusText: byteRange ? 'Partial Content' : fileResponse.statusText,
-                headers
-            })
-        } catch (error) {
-            if (!isMissingFileError(error)) {
-                log.error('Failed to read local protocol file:', filePath, error)
-            }
-            return emptyResponse(404)
-        }
+        return serveLocalFileRequest(filePath, request)
     })
 }

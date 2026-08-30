@@ -27,6 +27,7 @@ import { normalizeAnalyticsWorkspaceKind as analyticsWorkspaceKind } from '@shar
 import type { AssistantDiffTarget, AssistantDiffTurn } from './assistant-diff-types'
 import { AssistantBrowserPageIcon } from './AssistantBrowserPageIcon'
 import type { AssistantBrowserWorkspaceController } from './AssistantBrowserWorkspace'
+import { captureAssistantBrowserTabHoverPreview } from './assistant-browser-tab-hover-preview'
 import {
     ASSISTANT_BROWSER_DANGEROUS_TAB_TITLE,
     ASSISTANT_BROWSER_TAB_LIMIT,
@@ -538,7 +539,11 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                 attention: pendingForTab > 0,
                 closable: true,
                 loading: transitionLoadingTabId === tab.id || browserTab?.status === 'loading',
-                preview: browserTab?.url || (projectPath ? `Browser · ${projectPath}` : 'No project attached')
+                preview: browserTab?.url || (projectPath ? `Browser · ${projectPath}` : 'No project attached'),
+                previewDisabled: tab.id === activeTabId,
+                loadPreviewImage: tab.id !== activeTabId && Boolean(browserTab?.url)
+                    ? () => captureAssistantBrowserTabHoverPreview(tab.id)
+                    : undefined
             }]
         }
         if (tab.kind === 'control') {
@@ -585,7 +590,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
             loading: transitionLoadingTabId === tab.id || contentLoadingTabId === tab.id,
             preview: turn.prompt
         }] : []
-    }), [browserTabs, browserWorkspaceState.tabs, contentLoadingTabId, controlState?.pendingGrants, diffTabContext, effectiveFleetSnapshot, explorerViewCapsule?.activePreview, filesTabContext, fleetSnapshotLoading, pendingControlCount, reviewContextDiff?.filePath, settings.appearanceResolvedMode, transitionLoadingTabId, turns, workspaceTabs])
+    }), [activeTabId, browserTabs, browserWorkspaceState.tabs, contentLoadingTabId, controlState?.pendingGrants, diffTabContext, effectiveFleetSnapshot, explorerViewCapsule?.activePreview, filesTabContext, fleetSnapshotLoading, pendingControlCount, reviewContextDiff?.filePath, settings.appearanceResolvedMode, transitionLoadingTabId, turns, workspaceTabs])
 
     const activeWorkspaceTab = workspaceTabs.find((tab) => tab.id === activeTabId) || workspaceTabs[0] || null
     useEffect(() => {

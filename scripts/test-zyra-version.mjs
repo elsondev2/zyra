@@ -43,13 +43,13 @@ try {
     const installSource = readFileSync(path.join(root, "install.ps1"), "utf8");
     assert.match(
       installSource,
-      /if not exist .* goto zyra_cli_fallback[\s\S]*--tui %\*[\s\S]*exit \/b %ERRORLEVEL%[\s\S]*:zyra_cli_fallback/,
-      "the managed Desktop shim must read ERRORLEVEL after Desktop exits, outside a parenthesized CMD block",
+      /zyra-standalone-launcher:v2[\s\S]*\$launcherLine[\s\S]*exit \/b %ERRORLEVEL%/,
+      "the standalone installer must generate a launcher that forwards arguments and the binary exit code",
     );
     assert.doesNotMatch(
       installSource,
-      /if exist .*\(.*--tui %\*.*%ERRORLEVEL%.*\)/,
-      "CMD cannot expand the Desktop exit code before launching Desktop",
+      /zyra-standalone-launcher:v2[\s\S]*\(.*%ERRORLEVEL%.*\)/,
+      "the standalone launcher cannot expand ERRORLEVEL inside a parenthesized CMD block",
     );
 
     const nsisInstallerSource = readFileSync(path.join(root, "desktop", "build", "installer.nsh"), "utf8");
@@ -78,7 +78,7 @@ try {
       "",
     ].join("\r\n"), "ascii");
     const shimFailure = spawnSync(shimPath, [], { encoding: "utf8", shell: true });
-    assert.equal(shimFailure.status, directDesktopFailure.status, "the managed shim must return Desktop's actual TUI exit code");
+    assert.equal(shimFailure.status, directDesktopFailure.status, "the standalone shim must return the TUI binary's actual exit code");
   }
 } finally {
   rmSync(project, { recursive: true, force: true });

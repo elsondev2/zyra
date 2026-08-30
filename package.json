@@ -40,7 +40,9 @@
     "check:syntax": "node scripts/check.mjs syntax",
     "check:help": "node scripts/check.mjs --help",
     "privacy-check": "node scripts/privacy-check.mjs",
-    "release:zip": "node scripts/build-release.mjs",
+    "licenses:generate": "node scripts/generate-third-party-licenses.mjs",
+    "licenses:check": "node scripts/test-legal-release-contract.mjs",
+    "release:tui": "node scripts/build-release.mjs",
     "install:global": "bun link",
     "ui:dev": "bun run --cwd desktop dev",
     "ui:build": "bun run --cwd desktop build",
@@ -62,6 +64,9 @@
   "files": [
     "AGENTS.md",
     "README.md",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md",
+    "THIRD_PARTY_LICENSES.txt",
     "bin",
     "analytics",
     "commands",
@@ -76,6 +81,7 @@
     "zyra.cmd",
     "zyra.ps1"
   ],
+  "author": "Elson Erick Mgaya",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=22.19.0"

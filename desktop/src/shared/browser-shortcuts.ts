@@ -5,6 +5,7 @@ export type BrowserShortcutAction =
     | { type: 'close-tab' }
     | { type: 'reopen-closed-tab' }
     | { type: 'focus-address' }
+    | { type: 'open-file' }
     | { type: 'reload'; bypassCache: boolean }
     | { type: 'next-tab' }
     | { type: 'previous-tab' }
@@ -24,6 +25,7 @@ export function isBrowserShortcutAction(value: unknown): value is BrowserShortcu
         || action.type === 'close-tab'
         || action.type === 'reopen-closed-tab'
         || action.type === 'focus-address'
+        || action.type === 'open-file'
         || action.type === 'next-tab'
         || action.type === 'previous-tab'
         || action.type === 'back'
@@ -73,6 +75,7 @@ export function resolveBrowserShortcut(
     if (!alt && key === 't') return shift ? { type: 'reopen-closed-tab' } : { type: 'new-tab' }
     if (!alt && !shift && key === 'w') return { type: 'close-tab' }
     if (!alt && !shift && key === 'l') return { type: 'focus-address' }
+    if (!alt && !shift && key === 'o') return { type: 'open-file' }
     if (!alt && key === 'r') return { type: 'reload', bypassCache: shift }
     if (platform !== 'darwin' && !alt && key === 'tab') return shift ? { type: 'previous-tab' } : { type: 'next-tab' }
     if (!shift && key === 'page-down') return { type: 'next-tab' }

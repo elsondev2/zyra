@@ -6,6 +6,7 @@ import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { normalizeOpeningTheme, pickOpeningTheme } from "./banner.mjs";
 import { createBrowserOAuthLoginCallbacks } from "./oauth-login-callbacks.mjs";
+import { createZyraAuthStorage, createZyraPiRuntime } from "./pi-runtime.mjs";
 import {
   getProjectDataDir as resolveProjectDataDirectory,
   getProjectSessionsDir as resolveProjectSessionsDirectory,
@@ -97,7 +98,7 @@ import {
   resolveZyraSkillSources,
 } from "./zyra-prompt-resources.mjs";
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT = path.resolve(process.env.ZYRA_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."));
 const ZYRA_THEME_CUSTOM_TYPE = "zyra.theme.v1";
 const ZYRA_EXIT_CUSTOM_TYPE = "zyra.exit.v1";
 const ZYRA_PROJECT_MEMORY_MARKER = "ZYRA_PROJECT_MEMORY";
@@ -240,16 +241,6 @@ async function loadPiSessionManager() {
   return SessionManager;
 }
 
-async function loadPiAuthStorage() {
-  const { AuthStorage } = await loadPiPackage();
-  return AuthStorage;
-}
-
-async function loadPiModelRegistry() {
-  const { AuthStorage, ModelRegistry } = await loadPiPackage();
-  return { AuthStorage, ModelRegistry };
-}
-
 export function registerZyraRuntimeModels(modelRegistry) {
   if (!modelRegistry || typeof modelRegistry.getAll !== "function") {
     return [];
@@ -275,8 +266,32 @@ function registerZyraRuntimeModel(modelRegistry, override) {
     name: override.name ?? override.id,
     cost: override.cost ? { ...override.cost } : template.cost,
   }, override.compatibility);
-  models.push(runtimeModel);
+  if (typeof modelRegistry.registerProvider === "function") {
+    modelRegistry.registerProvider(override.provider, {
+      models: [...providerModels, runtimeModel].map(toProviderModelDefinition),
+    });
+  } else {
+    models.push(runtimeModel);
+  }
   return { ...override, status: "registered" };
+}
+
+function toProviderModelDefinition(model) {
+  return {
+    id: model.id,
+    name: model.name ?? model.id,
+    api: model.api,
+    baseUrl: model.baseUrl,
+    reasoning: Boolean(model.reasoning),
+    thinkingLevelMap: model.thinkingLevelMap,
+    input: Array.isArray(model.input) ? [...model.input] : ["text"],
+    cost: { ...model.cost },
+    contextWindow: Number(model.contextWindow),
+    maxTokens: Number(model.maxTokens),
+    samplingParams: model.samplingParams,
+    headers: model.headers,
+    compat: model.compat,
+  };
 }
 
 async function loadPiStartupResources() {
@@ -688,6 +703,34 @@ export function ensureBrowserControlToolState(session, enabled, applyLoaderOnly,
   return JSON.stringify(before) !== JSON.stringify(session.getActiveToolNames());
 }
 
+function installZyraSessionModelRegistry(session, piRuntime) {
+  const attachAuthStorage = (registry) => {
+    if (!registry) throw new Error("Pi did not expose a model registry for the Zyra session.");
+    if (!registry.authStorage) {
+      Object.defineProperty(registry, "authStorage", {
+        configurable: true,
+        enumerable: false,
+        value: piRuntime.authStorage,
+      });
+    }
+    return registry;
+  };
+
+  if (session.modelRegistry) {
+    attachAuthStorage(session.modelRegistry);
+    return;
+  }
+
+  Object.defineProperty(session, "modelRegistry", {
+    configurable: true,
+    enumerable: false,
+    get() {
+      return attachAuthStorage(session.extensionRunner?.getModelRegistry?.() ?? piRuntime.modelRegistry);
+    },
+  });
+  void session.modelRegistry;
+}
+
 export async function createZyraSession(options = {}) {
   const project = path.resolve(options.project ?? defaults.project);
   const sessions = path.resolve(options.sessions ?? getProjectSessionsDir(project));
@@ -711,10 +754,11 @@ export async function createZyraSession(options = {}) {
 
   mkdirSync(sessions, { recursive: true });
 
-  const [{ createAgentSession, createWriteTool, generateDiffString, generateUnifiedPatch, withFileMutationQueue }, SessionManager, toolModules] = await Promise.all([
+  const [{ createAgentSession, createWriteTool, generateDiffString, generateUnifiedPatch, withFileMutationQueue }, SessionManager, toolModules, piRuntime] = await Promise.all([
     loadPiPackage(),
     loadPiSessionManager(),
     loadZyraToolModules(),
+    createZyraPiRuntime(),
   ]);
   const {
     createManagedBashState,
@@ -764,10 +808,12 @@ export async function createZyraSession(options = {}) {
   const fleetTools = fleetEnabled ? createFleetTools(fleetHolder) : [];
   const browserSessionRef = { current: null };
   const browserTools = createBrowserToolSet({ client: options.controlBridgeClient, sessionRef: browserSessionRef });
+  registerZyraRuntimeModels(piRuntime.modelRegistry);
 
   const result = await createAgentSession({
     cwd,
     sessionManager,
+    modelRuntime: piRuntime.modelRuntime,
     thinkingLevel: toPiThinkingLevel(thinking),
     ...(options.tools ? { tools: options.tools } : {}),
     ...(options.excludeTools ? { excludeTools: options.excludeTools } : {}),
@@ -798,6 +844,8 @@ export async function createZyraSession(options = {}) {
     ],
     ...startupResources,
   });
+
+  installZyraSessionModelRegistry(result.session, piRuntime);
 
   const contextMessages = result.session.state?.messages;
   if (Array.isArray(contextMessages)) {
@@ -960,7 +1008,7 @@ export async function listZyraSessions(options = {}) {
 }
 
 export async function loginZyraAuth(provider = "openai-codex", options = {}) {
-  const authStorage = options.authStorage ?? (await loadPiAuthStorage()).create();
+  const authStorage = options.authStorage ?? await createZyraAuthStorage(options);
   const tell = typeof options.onMessage === "function" ? options.onMessage : console.log;
   const handleAuth = typeof options.onAuth === "function" ? options.onAuth : null;
   const handleProgress = typeof options.onProgress === "function" ? options.onProgress : (message) => tell(message);
@@ -1009,15 +1057,13 @@ export async function loginZyraAuth(provider = "openai-codex", options = {}) {
 }
 
 export async function logoutZyraAuth(provider = "openai-codex") {
-  const AuthStorage = await loadPiAuthStorage();
-  const authStorage = AuthStorage.create();
-  authStorage.logout(provider);
+  const authStorage = await createZyraAuthStorage();
+  await authStorage.logout(provider);
   return { provider, status: authStorage.getAuthStatus(provider) };
 }
 
 export async function getZyraAuthStatus(provider = "openai-codex") {
-  const AuthStorage = await loadPiAuthStorage();
-  const authStorage = AuthStorage.create();
+  const authStorage = await createZyraAuthStorage();
   return { provider, status: authStorage.getAuthStatus(provider) };
 }
 
@@ -1042,12 +1088,10 @@ async function askTerminal(message) {
 }
 
 export async function listAvailableModels(options = {}) {
-  const { AuthStorage, ModelRegistry } = await loadPiModelRegistry();
-  const authStorage = AuthStorage.create();
-  const modelRegistry = ModelRegistry.create(authStorage);
+  const { modelRegistry } = await createZyraPiRuntime(options);
   registerZyraRuntimeModels(modelRegistry);
   if (options.forceRefresh && typeof modelRegistry.refresh === "function") {
-    modelRegistry.refresh();
+    await modelRegistry.refresh({ allowNetwork: true });
     registerZyraRuntimeModels(modelRegistry);
   }
   if (!options.skipAvailability) {
@@ -1067,8 +1111,9 @@ export async function listAvailableModels(options = {}) {
 }
 
 export async function getZyraAuthOverview(runtime, options = {}) {
-  const AuthStorage = await loadPiAuthStorage();
-  const authStorage = options.authStorage ?? runtime?.session?.modelRegistry?.authStorage ?? AuthStorage.create();
+  const authStorage = options.authStorage
+    ?? runtime?.session?.modelRegistry?.authStorage
+    ?? await createZyraAuthStorage(options);
   const preferredSelector = options.project ? readProjectModelPreference(options.project) : undefined;
   const preferredModel = parseModelSelector(preferredSelector);
   return getZyraAuthMethodsStatus(authStorage, runtime?.session?.model ?? preferredModel);
@@ -1077,23 +1122,20 @@ export async function getZyraAuthOverview(runtime, options = {}) {
 export { formatZyraAuthMethodsStatus };
 
 export async function configureZyraOpenAIApiKey(apiKey, options = {}) {
-  const AuthStorage = await loadPiAuthStorage();
-  const authStorage = options.authStorage ?? AuthStorage.create();
+  const authStorage = options.authStorage ?? await createZyraAuthStorage(options);
   return configureOpenAIApiKey(authStorage, apiKey, options);
 }
 
 export async function verifyZyraOpenAIApiAuth(options = {}) {
-  const AuthStorage = await loadPiAuthStorage();
-  const authStorage = options.authStorage ?? AuthStorage.create();
+  const authStorage = options.authStorage ?? await createZyraAuthStorage(options);
   if (!authStorage.hasAuth?.("openai")) throw new Error("OpenAI API is not connected.");
   const key = await authStorage.getApiKey("openai");
   return verifyOpenAIApiKey(key, options);
 }
 
 export async function removeZyraAuth(method, options = {}) {
-  const AuthStorage = await loadPiAuthStorage();
-  const authStorage = options.authStorage ?? AuthStorage.create();
-  return removeZyraAuthMethod(authStorage, method);
+  const authStorage = options.authStorage ?? await createZyraAuthStorage(options);
+  return await removeZyraAuthMethod(authStorage, method);
 }
 
 export async function switchZyraAuthMethod(runtime, method, options = {}) {
@@ -2456,6 +2498,7 @@ export function buildInspectPrompt() {
 }
 
 function canResolvePiPackage() {
+  if (process.env.ZYRA_STANDALONE === "1") return true;
   try {
     import.meta.resolve("@earendil-works/pi-coding-agent");
     return true;

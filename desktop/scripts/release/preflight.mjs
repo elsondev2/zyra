@@ -43,6 +43,10 @@ assert(desktopPackage.name === 'zyra-desktop', `Unexpected Desktop package name:
 assert(rootPackage.private === true && desktopPackage.private === true, 'Root and Desktop packages must remain private')
 assert(desktopLock.name === desktopPackage.name && desktopLock.packages?.['']?.name === desktopPackage.name, 'Desktop package-lock identity is stale')
 assert(rootPackage.license === 'Apache-2.0' && desktopPackage.license === 'Apache-2.0', 'Root and Desktop release metadata must declare the repository Apache-2.0 license')
+execFileSync(process.execPath, [path.join(repositoryRoot, 'scripts', 'test-legal-release-contract.mjs')], {
+    cwd: repositoryRoot,
+    stdio: 'inherit'
+})
 
 const requestedVersion = arg('expected-version')
 if (requestedVersion) assert(requestedVersion === version, `Requested version ${requestedVersion} does not match package version ${version}`)

@@ -90,6 +90,7 @@ assert.equal(
 )
 assert.equal(rangeResponse.headers.get('permissions-policy')?.includes('microphone=()'), true)
 assert.equal(rangeResponse.headers.get('referrer-policy'), 'no-referrer')
+assert.equal(rangeResponse.headers.get('cross-origin-resource-policy'), 'same-origin')
 assert.equal(rangeResponse.headers.get('x-content-type-options'), 'nosniff')
 assert.ok(rangeResponse.body, 'the upstream file body remains a stream')
 const rangeReader = rangeResponse.body.getReader()
@@ -137,6 +138,7 @@ const htmlPolicy = htmlResponse.headers.get('content-security-policy') || ''
 for (const directive of [
     'sandbox',
     "default-src 'none'",
+    "frame-ancestors 'none'",
     "script-src 'none'",
     "connect-src 'none'",
     "frame-src 'none'",

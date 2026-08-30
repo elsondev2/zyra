@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const reset = "\x1b[0m";
 const terminalThemeMarker = Symbol.for("zyra.terminalTheme");
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT = path.resolve(process.env.ZYRA_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."));
 export const DEFAULT_TERMINAL_THEME = "rose-pine";
 
 const localBuiltInThemes = [

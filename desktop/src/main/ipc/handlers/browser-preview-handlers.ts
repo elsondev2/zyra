@@ -15,6 +15,7 @@ import { getBrowserPageIcon } from '../../browser-favicon-service'
 import type { BrowserDownloadAction, BrowserDownloadsFolderAction } from '../../../shared/browser-downloads'
 import { isTrustedBrowserTabId, trustedBrowserGuests } from '../../agent-control/trusted-guest-registry'
 import { getBrowserThreatProtectionService } from '../../browser-threat-protection-service'
+import { ensureBrowserLocalFileProtocol } from '../../browser-local-file-service'
 
 export const ZYRA_BROWSER_PARTITION_PREFIX = 'persist:zyra-browser-'
 export const ZYRA_BROWSER_WEB_PREFERENCES = 'contextIsolation=true,sandbox=true,nodeIntegration=false'
@@ -218,6 +219,7 @@ export function configureBrowserPermissionAnalytics(capture: typeof captureBrows
 
 function configureBrowserSession(browserSession: Session, partition: string): void {
     if (configuredPartitions.has(partition)) return
+    ensureBrowserLocalFileProtocol(browserSession)
     configuredPartitions.add(partition)
 
     const userAgent = browserSession.getUserAgent().replace(/Electron\/[\d.]+\s*/g, '')

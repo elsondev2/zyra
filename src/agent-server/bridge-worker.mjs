@@ -67,7 +67,10 @@ export class AgentBridgeWorker extends EventEmitter {
   ensureStarted() {
     if (this.child) return;
     if (this.disposed) throw new Error("Agent bridge worker is disposed.");
-    this.child = spawn(process.execPath, [this.bridgePath], {
+    const childArgs = process.env.ZYRA_STANDALONE === "1"
+      ? ["--internal-agent-bridge"]
+      : [this.bridgePath];
+    this.child = spawn(process.execPath, childArgs, {
       cwd: this.root,
       env: {
         ...process.env,

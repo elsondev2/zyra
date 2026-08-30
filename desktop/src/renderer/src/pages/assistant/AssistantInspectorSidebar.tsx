@@ -35,6 +35,18 @@ export type AssistantInspectorTab = {
     loading?: boolean
     attention?: boolean
     preview?: string
+    previewDisabled?: boolean
+    loadPreviewImage?: () => Promise<string | null>
+}
+
+export type AssistantInspectorTabPreview = {
+    tabId: string
+    label: string
+    detail: string
+    left: number
+    imageRequested: boolean
+    imageLoading: boolean
+    imageUrl: string | null
 }
 
 type ResizeState = {
@@ -47,6 +59,8 @@ type ResizeState = {
 const MAX_WORKSPACE_TAB_WIDTH = 168
 const MIN_WORKSPACE_TAB_WIDTH = 74
 const TITLE_BAR_RESERVED_WIDTH = 188
+const TEXT_TAB_PREVIEW_WIDTH = 184
+const BROWSER_TAB_PREVIEW_WIDTH = 256
 export const ASSISTANT_INSPECTOR_TAB_KEYBOARD_CODES = {
     start: ['Space'],
     cancel: ['Escape'],
@@ -58,6 +72,10 @@ export function calculateWorkspaceTabWidth(inspectorWidth: number, tabCount: num
         (inspectorWidth - TITLE_BAR_RESERVED_WIDTH - Math.max(0, tabCount - 1) * 4) / Math.max(1, tabCount)
     )
     return Math.max(MIN_WORKSPACE_TAB_WIDTH, Math.min(MAX_WORKSPACE_TAB_WIDTH, availableWidth))
+}
+
+export function assistantInspectorTabPreviewWidth(tab: AssistantInspectorTab): number {
+    return tab.loadPreviewImage ? BROWSER_TAB_PREVIEW_WIDTH : TEXT_TAB_PREVIEW_WIDTH
 }
 
 function clampInspectorWidth(width: number, maxWidth: number): number {
@@ -264,6 +282,7 @@ export function AssistantInspectorSidebar({
     tabTearOffRef.current = tabTearOff
     const previewTimerRef = useRef(0)
     const previewDismissTimerRef = useRef(0)
+    const previewRequestRef = useRef(0)
     const closeTimersRef = useRef(new Map<string, number>())
     const onCloseTabRef = useRef(onCloseTab)
     const tabWidthAnimationsRef = useRef(new Map<string, Animation>())
@@ -273,7 +292,7 @@ export function AssistantInspectorSidebar({
     const [activeDragTabId, setActiveDragTabId] = useState<string | null>(null)
     const [nativeTearOffTabId, setNativeTearOffTabId] = useState<string | null>(null)
     const [closingTabIds, setClosingTabIds] = useState<Set<string>>(() => new Set())
-    const [tabPreview, setTabPreview] = useState<{ label: string; detail: string; left: number } | null>(null)
+    const [tabPreview, setTabPreview] = useState<AssistantInspectorTabPreview | null>(null)
     const resolvedWidth = clampInspectorWidth(width, maxWidth)
     const tabIdentity = tabs.map((tab) => tab.id).join('|')
     const targetWorkspaceTabWidth = calculateWorkspaceTabWidth(resolvedWidth, tabs.length)
@@ -479,6 +498,7 @@ export function AssistantInspectorSidebar({
     }, [maxWidth, onWidthChange, resolvedWidth, synchronizeTabWidths])
 
     const dismissTabPreview = useCallback(() => {
+        previewRequestRef.current += 1
         window.clearTimeout(previewTimerRef.current)
         window.clearTimeout(previewDismissTimerRef.current)
         setTabPreview(null)
@@ -506,13 +526,47 @@ export function AssistantInspectorSidebar({
     }, [dismissTabPreview, reducedMotion])
 
     const handleTabPreviewEnter = useCallback((event: React.PointerEvent<HTMLDivElement>, tab: AssistantInspectorTab) => {
-        if (activeDragTabId) return
+        if (activeDragTabId || tab.previewDisabled) return
         dismissTabPreview()
+        const requestId = ++previewRequestRef.current
         const visibleTabLeft = event.currentTarget.offsetLeft - (event.currentTarget.parentElement?.scrollLeft || 0)
-        const left = Math.max(8, Math.min(visibleTabLeft, resolvedWidth - 190))
+        const previewWidth = assistantInspectorTabPreviewWidth(tab)
+        const left = Math.max(8, Math.min(visibleTabLeft, resolvedWidth - previewWidth - 6))
         previewTimerRef.current = window.setTimeout(() => {
-            setTabPreview({ label: tab.label, detail: tab.preview || 'Inspector workspace', left })
-            previewDismissTimerRef.current = window.setTimeout(() => setTabPreview(null), 1600)
+            let imageRequest: Promise<string | null> | null = null
+            try {
+                imageRequest = tab.loadPreviewImage?.() || null
+            } catch {
+                imageRequest = null
+            }
+            setTabPreview({
+                tabId: tab.id,
+                label: tab.label,
+                detail: tab.preview || 'Inspector workspace',
+                left,
+                imageRequested: Boolean(tab.loadPreviewImage),
+                imageLoading: Boolean(imageRequest),
+                imageUrl: null
+            })
+            if (imageRequest) {
+                void imageRequest.then(
+                    (imageUrl) => {
+                        if (previewRequestRef.current !== requestId) return
+                        setTabPreview((current) => current?.tabId === tab.id
+                            ? { ...current, imageLoading: false, imageUrl }
+                            : current)
+                    },
+                    () => {
+                        if (previewRequestRef.current !== requestId) return
+                        setTabPreview((current) => current?.tabId === tab.id
+                            ? { ...current, imageLoading: false }
+                            : current)
+                    }
+                )
+            }
+            if (!tab.loadPreviewImage) {
+                previewDismissTimerRef.current = window.setTimeout(() => setTabPreview(null), 1600)
+            }
         }, 650)
     }, [activeDragTabId, dismissTabPreview, resolvedWidth])
 
@@ -902,12 +956,29 @@ export function AssistantInspectorSidebar({
             >
                 {tabPreview ? (
                     <div
-                        className="pointer-events-none absolute top-2 z-40 w-[184px] rounded-2xl border border-[color-mix(in_srgb,var(--color-text)_11%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_92%,var(--color-bg))] px-3 py-2.5 shadow-[0_14px_34px_rgba(0,0,0,0.28),inset_0_1px_0_color-mix(in_srgb,var(--color-text)_5%,transparent)] animate-[inspector-tab-in_140ms_ease-out_both]"
+                        data-zyra-native-view-occluder="true"
+                        className={cn(
+                            'pointer-events-none absolute top-2 z-40 overflow-hidden border border-[color-mix(in_srgb,var(--color-text)_11%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_94%,var(--color-bg))] shadow-[0_14px_34px_rgba(0,0,0,0.28),inset_0_1px_0_color-mix(in_srgb,var(--color-text)_5%,transparent)] animate-[inspector-tab-in_140ms_ease-out_both]',
+                            tabPreview.imageRequested ? 'w-64 rounded-xl' : 'w-[184px] rounded-2xl'
+                        )}
                         style={{ left: tabPreview.left }}
                         role="tooltip"
                     >
-                        <div className="truncate text-[10px] font-semibold text-sparkle-text">{tabPreview.label}</div>
-                        <div className="mt-0.5 line-clamp-2 text-[9px] leading-3.5 text-sparkle-text-muted/75">{tabPreview.detail}</div>
+                        <div className="px-3 py-2.5">
+                            <div className="truncate text-[10px] font-semibold text-sparkle-text">{tabPreview.label}</div>
+                            <div className="mt-0.5 line-clamp-2 text-[9px] leading-3.5 text-sparkle-text-muted/75">{tabPreview.detail}</div>
+                        </div>
+                        {tabPreview.imageRequested ? (
+                            <div className="relative aspect-video w-full overflow-hidden border-t border-[color-mix(in_srgb,var(--color-text)_9%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_88%,var(--color-card))]">
+                                {tabPreview.imageUrl ? (
+                                    <img src={tabPreview.imageUrl} alt="" className="h-full w-full object-cover animate-[inspector-tab-in_120ms_ease-out_both]" aria-hidden="true" />
+                                ) : tabPreview.imageLoading ? (
+                                    <div className="flex h-full items-center justify-center text-sparkle-text-muted/45"><LoaderCircle size={14} className="animate-spin" /></div>
+                                ) : (
+                                    <div className="flex h-full items-center justify-center text-[9px] text-sparkle-text-muted/55">Preview unavailable</div>
+                                )}
+                            </div>
+                        ) : null}
                     </div>
                 ) : null}
 

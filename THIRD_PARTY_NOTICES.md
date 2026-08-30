@@ -1,14 +1,21 @@
 # Third-party notices
 
+## Packaged code and runtimes
+
+`THIRD_PARTY_LICENSES.txt` contains the generated production-package inventory and the license texts shipped for Zyra's JavaScript dependencies, Bun 1.3.9, and Node.js 22.22.0. The release check ties that file to both production lockfiles and rejects stale runtime versions.
+
+Desktop packages also retain Electron's license and Chromium's generated license list beside the application. The self-contained Windows computer-use sidecar carries `DOTNET-LICENSE.txt` and `DOTNET-THIRD-PARTY-NOTICES.txt` beside its binaries.
+
 ## PostHog capture service
 
 Zyra can send explicitly enabled, allowlisted product events to a user-configured [PostHog](https://posthog.com/) project through PostHog's documented capture API. Zyra does not bundle the PostHog SDK or enable its browser autocapture, session replay, heatmap, DOM capture, or remote feature-flag features. Use of a configured PostHog service remains subject to the service operator's terms and privacy settings.
 
-## OpenAI and browser logos from SVGL
+## Product logos from SVGL
 
 Zyra includes logo artwork published by the SVGL project:
 
 - OpenAI: https://github.com/pheralb/svgl/blob/main/static/library/openai.svg
+- Bun, Node.js, npm, pnpm, and Yarn: https://github.com/pheralb/svgl/tree/main/static/library
 - Arc, Brave, Chrome, Chromium, Edge, Firefox, Opera, Safari, Vivaldi, and Zen Browser: https://github.com/pheralb/svgl/tree/main/static/library
 - Project: https://github.com/pheralb/svgl
 - OpenAI brand guidance: https://openai.com/brand/
@@ -38,6 +45,20 @@ SVGL is distributed under the MIT License:
 > LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
+
+## Developer-tool logos from Simple Icons
+
+Zyra includes Simple Icons artwork for Android Studio, CLion, GoLand, IntelliJ IDEA, JetBrains, PhpStorm, PyCharm, Rider, Sublime Text, VSCodium, WebStorm, and Zed. The Simple Icons collection is released under [CC0 1.0 Universal](https://github.com/simple-icons/simple-icons/blob/develop/LICENSE.md). Simple Icons also publishes an [icon licensing and trademark disclaimer](https://github.com/simple-icons/simple-icons/blob/develop/DISCLAIMER.md).
+
+Zyra also displays product marks for other detected editors and developer tools. All product names and logos remain the property of their respective owners. They are shown only to identify a detected application or runtime and do not imply sponsorship or endorsement of Zyra.
+
+## Material Icon Theme file icons
+
+Zyra bundles file-type artwork from [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme). The package and its MIT license are recorded in `THIRD_PARTY_LICENSES.txt`.
+
+## Kenney UI Audio voice cues
+
+The `voice-ready.wav` and `voice-ended.wav` cues are adapted from `switch3.wav` and `switch4.wav` in [Kenney UI Audio](https://kenney.nl/assets/ui-audio). Kenney released the audio under [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/). The CC0 text is included in `THIRD_PARTY_LICENSES.txt`.
 
 ## Bootstrap Icons incognito icon
 

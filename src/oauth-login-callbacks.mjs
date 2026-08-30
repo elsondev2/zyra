@@ -18,16 +18,31 @@ export function createBrowserOAuthLoginCallbacks(options = {}) {
         return browser.id;
       };
 
+  const onAuth = typeof options.onAuth === "function" ? options.onAuth : () => undefined;
+  const onDeviceCode = typeof options.onDeviceCode === "function" ? options.onDeviceCode : () => undefined;
+  const onProgress = typeof options.onProgress === "function" ? options.onProgress : () => undefined;
+  const onManualCodeInput = typeof options.onManualCodeInput === "function"
+    ? options.onManualCodeInput
+    : () => onPrompt({
+        message: "Complete login in your browser, or paste the authorization code or redirect URL here.",
+      });
+
   return {
-    onAuth: typeof options.onAuth === "function" ? options.onAuth : () => undefined,
-    onDeviceCode: typeof options.onDeviceCode === "function" ? options.onDeviceCode : () => undefined,
+    prompt: async (prompt) => {
+      if (prompt.type === "select") return onSelect(prompt);
+      if (prompt.type === "manual_code") return onManualCodeInput(prompt);
+      return onPrompt(prompt);
+    },
+    notify: (event) => {
+      if (event.type === "auth_url") onAuth(event);
+      else if (event.type === "device_code") onDeviceCode(event);
+      else if (event.type === "progress" || event.type === "info") onProgress(event.message);
+    },
+    onAuth,
+    onDeviceCode,
     onPrompt,
-    onProgress: typeof options.onProgress === "function" ? options.onProgress : () => undefined,
-    onManualCodeInput: typeof options.onManualCodeInput === "function"
-      ? options.onManualCodeInput
-      : () => onPrompt({
-          message: "Complete login in your browser, or paste the authorization code or redirect URL here.",
-        }),
+    onProgress,
+    onManualCodeInput,
     onSelect,
     signal: options.signal,
   };

@@ -8,6 +8,7 @@ import {
 import { ipcMain } from './ipc/trusted-ipc'
 import log from 'electron-log'
 import {
+    BROWSER_LOCAL_FILE_SCHEME,
     BROWSER_VIEW_IPC,
     type BrowserViewBounds,
     type BrowserViewCommand,
@@ -40,6 +41,12 @@ import {
 import { assertBrowserPreviewDeveloperTransferable, transferBrowserPreviewDeveloperOwner } from './ipc/handlers/browser-preview-developer-handlers'
 import { registerManagedBrowserPresentation, setManagedBrowserPresentationScale } from './browser-view-presentation'
 import { classifyAnalyticsErrorCode as browserAnalyticsErrorCode } from '../shared/analytics/error-code'
+import {
+    chooseBrowserLocalFile,
+    getBrowserLocalFilePresentation,
+    isAuthorizedBrowserLocalFileUrl,
+    revokeBrowserLocalFilesForTab
+} from './browser-local-file-service'
 
 const TRANSFER_TIMEOUT_MS = 8_000
 const RELEASE_GRACE_MS = 750
@@ -397,6 +404,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
 
     private installPageLifecycle(record: BrowserViewRecord): void {
         const page = record.view.webContents
+        const pageSession = page.session
         page.on('focus', () => this.publishEvent(record, {
             type: 'focus',
             tabId: record.tabId,
@@ -494,12 +502,16 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             if (this.records.get(record.tabId) === record) this.records.delete(record.tabId)
             const pending = this.pendingTransfers.get(record.tabId)
             if (pending) this.rejectTransfer(pending, new Error('The live Browser tab closed during transfer.'))
-            if (!wasDisposed) this.releaseIncognitoSession(record.tabId)
+            if (!wasDisposed) {
+                revokeBrowserLocalFilesForTab(pageSession, record.tabId)
+                this.releaseIncognitoSession(record.tabId)
+            }
         })
     }
 
     private guardPageNavigation(record: BrowserViewRecord, event: Electron.Event, url: string): void {
         if (url === 'about:blank') return
+        if (isAuthorizedBrowserLocalFileUrl(record.view.webContents.session, record.tabId, url)) return
         if (!isSafeBrowserNavigationUrl(url)) {
             event.preventDefault()
             return
@@ -536,6 +548,10 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         let snapshotDataUrl: string | undefined
         if (command.type === 'navigate') {
             accepted = await this.navigate(record, String(command.url || ''))
+        } else if (command.type === 'open-local-file') {
+            const selection = await chooseBrowserLocalFile(record.ownerWindow, page.session, record.tabId)
+            accepted = Boolean(selection)
+            if (selection) await this.loadPage(record, selection.url)
         } else if (command.type === 'back') {
             if (page.navigationHistory.canGoBack()) page.navigationHistory.goBack()
         } else if (command.type === 'forward') {
@@ -629,6 +645,14 @@ export class BrowserViewManager implements BrowserViewTransferHost {
 
     private async navigate(record: BrowserViewRecord, rawUrl: string): Promise<boolean> {
         const url = String(rawUrl || '').trim()
+        if (isAuthorizedBrowserLocalFileUrl(record.view.webContents.session, record.tabId, url)) {
+            return this.loadPage(record, url)
+        }
+        let protocol = ''
+        try { protocol = new URL(url).protocol } catch {}
+        if (protocol === `${BROWSER_LOCAL_FILE_SCHEME}:`) {
+            throw new Error('Local file access expired. Choose Open file to grant access again.')
+        }
         if (!isSafeBrowserNavigationUrl(url)) throw new Error('Only HTTP and HTTPS links can open in Browser.')
         const page = record.view.webContents
         const threatProtection = getBrowserThreatProtectionService()
@@ -652,6 +676,11 @@ export class BrowserViewManager implements BrowserViewTransferHost {
                 record.allowedNavigationUrl = url
             }
         }
+        return this.loadPage(record, url)
+    }
+
+    private async loadPage(record: BrowserViewRecord, url: string): Promise<boolean> {
+        const page = record.view.webContents
         const generation = ++record.navigationGeneration
         try {
             await page.loadURL(url)
@@ -792,7 +821,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         const timer = setTimeout(() => {
             this.releaseTimers.delete(record.tabId)
             const current = this.records.get(record.tabId)
-            if (current === record && current.ownerWindow === ownerWindow) this.closeRecord(current)
+            if (current === record && current.ownerWindow === ownerWindow) this.closeRecord(current, false)
         }, RELEASE_GRACE_MS)
         this.releaseTimers.set(record.tabId, timer)
     }
@@ -813,9 +842,10 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         return { closed: true }
     }
 
-    private closeRecord(record: BrowserViewRecord): void {
+    private closeRecord(record: BrowserViewRecord, revokeLocalFiles = true): void {
         if (record.disposed) return
         this.cancelRelease(record.tabId)
+        if (revokeLocalFiles) revokeBrowserLocalFilesForTab(record.view.webContents.session, record.tabId)
         record.disposed = true
         this.records.delete(record.tabId)
         const pending = this.pendingTransfers.get(record.tabId)
@@ -837,9 +867,11 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         const pageUrl = page.isDestroyed() ? '' : page.getURL()
         const rawUrl = record.status === 'loading' && record.url ? record.url : pageUrl || record.url
         const blank = !rawUrl || rawUrl === 'about:blank'
+        const localFile = blank ? null : getBrowserLocalFilePresentation(page.session, record.tabId, rawUrl)
         let title = blank ? 'New tab' : page.getTitle().trim().slice(0, 512)
         if (!title) {
-            try { title = new URL(rawUrl).hostname || 'Browser' } catch { title = 'Browser' }
+            if (localFile) title = localFile.fileName
+            else try { title = new URL(rawUrl).hostname || 'Browser' } catch { title = 'Browser' }
         }
         return {
             version: 1,
@@ -848,6 +880,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             sessionMode: record.sessionMode,
             guestWebContentsId: page.id,
             url: blank ? '' : rawUrl,
+            displayAddress: localFile?.displayAddress || null,
             title,
             status: blank && record.status !== 'error' ? 'idle' : record.status,
             error: record.error,
@@ -932,7 +965,11 @@ function classifyBrowserDestination(value: unknown): 'blank' | 'search' | 'docum
     const raw = String(value || '').trim()
     if (!raw || raw === 'about:blank') return 'blank'
     let host = ''
-    try { host = new URL(raw).hostname.toLowerCase() } catch { return 'unknown' }
+    try {
+        const parsed = new URL(raw)
+        if (parsed.protocol === `${BROWSER_LOCAL_FILE_SCHEME}:`) return 'local'
+        host = parsed.hostname.toLowerCase()
+    } catch { return 'unknown' }
     if (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.local')) return 'local'
     if (/google\.|bing\.|duckduckgo\.|search\./.test(host)) return 'search'
     if (/github\.|gitlab\.|bitbucket\./.test(host)) return 'code_host'

@@ -10,6 +10,7 @@ import { nextAssistantBrowserSlotRevision } from './assistant-browser-slot-revis
 
 export type AssistantBrowserWebviewHandle = {
     navigate: (url: string) => Promise<void>
+    openLocalFile: () => Promise<boolean>
     preparePresentation: () => Promise<boolean>
     showNewTab: () => Promise<Pick<BrowserViewState, 'canGoBack' | 'canGoForward'>>
     goBack: () => void
@@ -29,6 +30,7 @@ function browserStatePatch(state: BrowserViewState): BrowserStatePatch {
     return {
         sessionMode: state.sessionMode,
         url: state.url,
+        displayAddress: state.displayAddress,
         title: state.title,
         status: state.status,
         error: state.error,
@@ -83,8 +85,33 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
     const controlOverlayRequestRef = useRef<BrowserViewCommandInput | null>(null)
     const controlOverlayInFlightRef = useRef(false)
     const controlOverlayPublishedRef = useRef(false)
+    const nativeViewOccludedRef = useRef(false)
     const callbacksRef = useRef({ onStateChange, onControlTargetChange, onFullscreenChange, onViewportRectChange })
-    const nativeViewOccluded = useAssistantBrowserNativeViewOcclusion(slotRef, active)
+    const reportNativeViewOcclusion = useCallback((occluded: boolean) => {
+        nativeViewOccludedRef.current = occluded
+        if (!active) return
+        const slot = slotRef.current
+        if (!slot) return
+        const rect = slot.getBoundingClientRect()
+        const bounds = rect.width >= 1 && rect.height >= 1
+            ? { x: Math.max(0, rect.left), y: Math.max(0, rect.top), width: rect.width, height: rect.height }
+            : null
+        const nativeViewVisible = shouldShowAssistantBrowserNativeView({
+            hasPage: Boolean(tab.url),
+            requestedVisible: visible,
+            nativeViewOccluded: occluded
+        })
+        window.devscope.browserView.reportSlot({
+            tabId: tab.id,
+            revision: nextAssistantBrowserSlotRevision(window),
+            bounds,
+            contentSize: bounds ? { width: Math.max(1, slot.offsetWidth), height: Math.max(1, slot.offsetHeight) } : null,
+            active,
+            visible: nativeViewVisible
+        })
+        callbacksRef.current.onViewportRectChange(tab.id, nativeViewVisible && bounds ? bounds : null)
+    }, [active, tab.id, tab.url, visible])
+    const nativeViewOccluded = useAssistantBrowserNativeViewOcclusion(slotRef, active, reportNativeViewOcclusion)
     const presentationRequested = !visible || nativeViewOccluded
     const effectiveVisible = shouldShowAssistantBrowserNativeView({
         hasPage: Boolean(tab.url),
@@ -305,6 +332,10 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
 
     useImperativeHandle(forwardedRef, () => ({
         navigate,
+        openLocalFile: async () => {
+            const result = await runCommand({ tabId: tab.id, type: 'open-local-file' })
+            return result.accepted
+        },
         preparePresentation: preparePresentationSnapshot,
         showNewTab: async () => {
             const result = await runCommand({ tabId: tab.id, type: 'new-tab' })
@@ -335,7 +366,12 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
             const bounds = rect.width >= 1 && rect.height >= 1
                 ? { x: Math.max(0, rect.left), y: Math.max(0, rect.top), width: rect.width, height: rect.height }
                 : null
-            const key = `${active}:${effectiveVisible}:${bounds?.x || 0}:${bounds?.y || 0}:${bounds?.width || 0}:${bounds?.height || 0}`
+            const liveEffectiveVisible = shouldShowAssistantBrowserNativeView({
+                hasPage: Boolean(tab.url),
+                requestedVisible: visible,
+                nativeViewOccluded: nativeViewOccludedRef.current
+            })
+            const key = `${active}:${liveEffectiveVisible}:${bounds?.x || 0}:${bounds?.y || 0}:${bounds?.width || 0}:${bounds?.height || 0}`
             if (force || key !== lastKey) {
                 lastKey = key
                 window.devscope.browserView.reportSlot({
@@ -344,9 +380,9 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
                     bounds,
                     contentSize: bounds ? { width: Math.max(1, slot.offsetWidth), height: Math.max(1, slot.offsetHeight) } : null,
                     active,
-                    visible: effectiveVisible
+                    visible: liveEffectiveVisible
                 })
-                callbacksRef.current.onViewportRectChange(tab.id, active && effectiveVisible && bounds ? bounds : null)
+                callbacksRef.current.onViewportRectChange(tab.id, active && liveEffectiveVisible && bounds ? bounds : null)
             }
         }
         report(true)
@@ -367,7 +403,7 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
             })
             callbacksRef.current.onViewportRectChange(tab.id, null)
         }
-    }, [active, effectiveVisible, placement, tab.id])
+    }, [active, effectiveVisible, placement, tab.id, tab.url, visible])
 
     return (
         <div
