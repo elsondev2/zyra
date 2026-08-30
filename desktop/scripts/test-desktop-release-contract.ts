@@ -210,6 +210,7 @@ assert(!aboutSource.includes("'v0.5.0'") && !aboutSource.includes('>Windows<') &
 const ciWorkflow = readFileSync(path.join(repositoryRoot, '.github', 'workflows', 'desktop-ci.yml'), 'utf8')
 const releaseWorkflow = readFileSync(path.join(repositoryRoot, '.github', 'workflows', 'desktop-release.yml'), 'utf8')
 assert(ciWorkflow.includes('windows-2025') && ciWorkflow.includes('macos-15') && ciWorkflow.includes('ubuntu-24.04'))
+assert.match(ciWorkflow, /Verify canonical generated branding[\s\S]*if: matrix\.platform == 'linux'[\s\S]*git diff --exit-code -- desktop\/resources/, 'byte-level branding drift must use one canonical Pillow host while every platform keeps structural validation')
 assert(releaseWorkflow.includes('workflow_dispatch:') && releaseWorkflow.includes('tags:'))
 assert(releaseWorkflow.includes('Create or verify the private draft'))
 assert(releaseWorkflow.includes('validate-github-draft.mjs'))

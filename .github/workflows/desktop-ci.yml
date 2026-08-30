@@ -123,8 +123,11 @@ jobs:
         if: matrix.platform == 'linux'
         run: npm run check
 
-      - name: Verify generated branding and patch whitespace
+      - name: Verify canonical generated branding
+        if: matrix.platform == 'linux'
         shell: bash
-        run: |
-          git diff --exit-code -- desktop/resources
-          git diff --check
+        run: git diff --exit-code -- desktop/resources
+
+      - name: Verify patch whitespace
+        shell: bash
+        run: git diff --check
