@@ -88,9 +88,21 @@ const builderArgs = [
 ]
 if (platform === 'macos') builderArgs.push(`--config.mac.notarize=${expectedSigned ? 'true' : 'false'}`)
 
-const builderEnvironment = {
-    ...process.env,
-    ...(expectedSigned ? {} : { CSC_IDENTITY_AUTO_DISCOVERY: 'false' })
+const builderEnvironment = { ...process.env }
+if (!expectedSigned) {
+    for (const name of [
+        'CSC_LINK',
+        'CSC_KEY_PASSWORD',
+        'APPLE_API_KEY',
+        'APPLE_API_KEY_CONTENT',
+        'APPLE_API_KEY_ID',
+        'APPLE_API_ISSUER',
+        'EVS_ACCOUNT_NAME',
+        'EVS_PASSWD'
+    ]) {
+        delete builderEnvironment[name]
+    }
+    builderEnvironment.CSC_IDENTITY_AUTO_DISCOVERY = 'false'
 }
 await run(npx, builderArgs, desktopRoot, builderEnvironment)
 await run(process.execPath, [

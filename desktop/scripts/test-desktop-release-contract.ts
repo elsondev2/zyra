@@ -90,6 +90,7 @@ const releaseWorkflowSource = readFileSync(path.join(repositoryRoot, '.github', 
 const persistenceSource = readFileSync(path.join(desktopRoot, 'src', 'main', 'assistant', 'persistence.ts'), 'utf8')
 const nativeSqliteSource = readFileSync(path.join(desktopRoot, 'src', 'main', 'assistant', 'native-sqlite-adapter.ts'), 'utf8')
 assert(packageScript.includes('validate-packaged-app.mjs'), 'every native package must validate its installed resource layout')
+assert.match(packageScript, /if \(!expectedSigned\)[\s\S]*delete builderEnvironment\[name\][\s\S]*CSC_IDENTITY_AUTO_DISCOVERY = 'false'/, 'unsigned rehearsals must omit empty signing credentials before electron-builder resolves certificate paths')
 assert.match(installerSource, /!ifndef BUILD_UNINSTALLER\s+\$\{StrStr\}\s+!endif/, 'the installer-only PATH helper must not trigger a fatal unused-function warning during NSIS uninstaller compilation')
 assert.match(nodePtyInstallVerifier, /process\.platform === 'darwin'[\s\S]*chmod\(helper, 0o755\)[\s\S]*helperMode & 0o111/, 'macOS installs must restore and verify node-pty spawn-helper execute permissions')
 assert(packageScript.includes('`--version=${version}`'), 'signature verification must receive the exact release version')
