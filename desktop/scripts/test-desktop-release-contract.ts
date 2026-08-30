@@ -62,7 +62,7 @@ assert.deepEqual(build.electronFuses, {
 })
 assert.match(desktopPackage.devDependencies.electron, /castlabs\/electron-releases[\s\S]*v43\.2\.0%2Bwvcus/, 'Widevine-capable Electron must remain deliberately pinned')
 assert.equal(desktopLock.packages['node_modules/electron'].version, '43.2.0+wvcus')
-assert.equal(build.electronDownload?.mirror, 'https://github.com/castlabs/electron-releases/releases/download/v', 'packaging must download the Widevine-capable Electron distribution')
+assert.equal(build.electronDownload?.mirror, 'https://github.com/castlabs/electron-releases/releases/download/', 'packaging must let electron-builder add the CastLabs v-prefixed release tag exactly once')
 assert.equal(build.afterPack, 'scripts/release/widevine-vmp-after-pack.cjs', 'macOS VMP signing must run before code signing')
 assert.equal(build.afterSign, 'scripts/release/widevine-vmp-after-sign.cjs', 'Windows VMP signing must run after code signing')
 assert.equal(desktopPackage.devDependencies['electron-builder'], '26.15.3')

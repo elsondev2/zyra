@@ -17,7 +17,7 @@ const protectedMediaProbeSource = readFileSync(path.join(desktopRoot, 'scripts/m
 
 assert.match(packageJson.devDependencies.electron, /castlabs\/electron-releases[\s\S]*v43\.2\.0%2Bwvcus/, 'Desktop pins the Widevine-capable Electron fork')
 assert.equal(packageLock.packages['node_modules/electron'].version, '43.2.0+wvcus')
-assert.equal(packageJson.build.electronDownload.mirror, 'https://github.com/castlabs/electron-releases/releases/download/v')
+assert.equal(packageJson.build.electronDownload.mirror, 'https://github.com/castlabs/electron-releases/releases/download/')
 assert.match(packageJson.scripts.postinstall, /ensure-electron\.mjs/, 'clean installs materialize the CastLabs runtime before use')
 assert.match(ensureElectronSource, /installedPackageVersion !== expectedVersion/, 'stale npm metadata cannot silently retain stock Electron')
 assert.match(ensureElectronSource, /restoredVersion !== expectedVersion/, 'the downloaded binary must match the integrity-locked package version')
