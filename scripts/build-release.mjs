@@ -1,30 +1,38 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { spawn } from 'node:child_process'
+import { readFile } from 'node:fs/promises'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
-const version = pkg.version ?? "0.0.0";
-const dist = path.join(root, "dist");
-const zipName = `zyra-v${version}.zip`;
-const zipPath = path.join(dist, zipName);
-const checksumPath = path.join(dist, "checksums.txt");
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const packageJson = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
+const forwardedArgs = process.argv.slice(2)
+const inlineArg = (name) => forwardedArgs.find((value) => value.startsWith(`--${name}=`))?.slice(name.length + 3)
+const version = String(inlineArg('version') || packageJson.version || '0.0.0')
+const hasOutput = forwardedArgs.some((value) => value.startsWith('--output='))
+const output = path.join(root, 'dist', 'tui', `v${version}`)
+const builder = path.join(root, 'scripts', 'build-tui-release.mjs')
 
-mkdirSync(dist, { recursive: true });
+await run(process.execPath, [
+  builder,
+  ...forwardedArgs,
+  ...(forwardedArgs.some((value) => value.startsWith('--version=')) ? [] : [`--version=${version}`]),
+  ...(hasOutput ? [] : [`--output=${output}`]),
+])
 
-execFileSync("git", ["archive", "--format", "zip", "--output", zipPath, "HEAD"], {
-  cwd: root,
-  stdio: "inherit",
-});
+console.log('The final cross-platform SHA256SUMS is generated after every native release asset is assembled.')
 
-const hash = createHash("sha256").update(readFileSync(zipPath)).digest("hex");
-writeFileSync(checksumPath, `${hash}  ${zipName}\n`);
-
-console.log(`Built ${path.relative(root, zipPath)}`);
-console.log(`Wrote ${path.relative(root, checksumPath)}`);
-console.log("");
-console.log("Windows one-line install after pushing this commit:");
-console.log("irm https://raw.githubusercontent.com/justelson/zyra/master/install.ps1 | iex");
+function run(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: root,
+      stdio: 'inherit',
+      windowsHide: true,
+    })
+    child.once('error', reject)
+    child.once('exit', (code) => {
+      if (code === 0) resolve()
+      else reject(new Error(`${command} exited with code ${code ?? 'unknown'}`))
+    })
+  })
+}

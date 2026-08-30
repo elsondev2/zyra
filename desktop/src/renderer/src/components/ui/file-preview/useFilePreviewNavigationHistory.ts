@@ -19,7 +19,6 @@ type UseFilePreviewNavigationHistoryInput = {
         ext: string,
         options?: PreviewOpenOptions
     ) => Promise<void>
-    onBeforeNavigate?: (filePath: string) => void
     requestExternalIntent: (intent: () => void | Promise<void>) => void
 }
 
@@ -48,7 +47,8 @@ function buildNavigationOptions(entry: PreviewNavigationEntry): PreviewOpenOptio
         focusLine: entry.file.focusLine || undefined,
         mediaItems: entry.mediaItems,
         targetKind: entry.file.type === 'directory' ? 'directory' : 'file',
-        openNavigator: entry.file.openNavigator === true
+        openNavigator: entry.file.openNavigator === true,
+        revealNavigatorTarget: true
     }
 }
 
@@ -56,7 +56,6 @@ export function useFilePreviewNavigationHistory({
     file,
     mediaItems,
     onNavigate,
-    onBeforeNavigate,
     requestExternalIntent
 }: UseFilePreviewNavigationHistoryInput) {
     const currentEntry = useMemo(
@@ -102,14 +101,13 @@ export function useFilePreviewNavigationHistory({
         requestExternalIntent(() => {
             pendingNavigationRef.current = target
             updateNavigationState((current) => movePreviewNavigationToIndex(current, target.index))
-            onBeforeNavigate?.(target.entry.file.path)
             return onNavigate(
                 { name: target.entry.file.name, path: target.entry.file.path },
                 target.entry.extension,
                 buildNavigationOptions(target.entry)
             )
         })
-    }, [onBeforeNavigate, onNavigate, requestExternalIntent, updateNavigationState])
+    }, [onNavigate, requestExternalIntent, updateNavigationState])
 
     return {
         canNavigateBack: Boolean(onNavigate && navigationState.index > 0),

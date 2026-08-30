@@ -2,8 +2,8 @@ import { X, Plus } from 'lucide-react'
 import { SortableContext, horizontalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { useDroppable } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
-import { useEffect, useRef } from 'react'
-import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
+import { memo, useEffect, useRef } from 'react'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { cn } from '@/lib/utils'
 import type { PreviewTab } from './types'
 
@@ -54,8 +54,8 @@ function SortablePreviewTab({
                 }
             }}
             className={cn(
-                'group/tab relative inline-flex h-full min-w-0 max-w-[220px] items-center gap-1.5 border-r border-white/[0.08] px-2 text-[11px] font-normal transition-[background-color,color,opacity] duration-150',
-                active ? 'bg-sparkle-card text-sparkle-text' : 'bg-sparkle-bg text-sparkle-text-secondary hover:bg-white/[0.03] hover:text-sparkle-text',
+                'group/tab relative inline-flex h-full min-w-0 max-w-[220px] items-center gap-1.5 border-r border-[var(--surface-divider)] px-2 text-[11px] font-normal transition-[background-color,color,opacity] duration-150',
+                active ? 'bg-[var(--surface-active)] text-sparkle-text' : 'bg-transparent text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text',
                 isDragging && 'z-20 opacity-80'
             )}
             style={{
@@ -67,7 +67,7 @@ function SortablePreviewTab({
             title={tab.file.name}
         >
             <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
-                <VscodeEntryIcon
+                <FileEntryIcon
                     pathValue={tab.file.path || tab.file.name}
                     kind={tab.file.type === 'directory' ? 'directory' : 'file'}
                     theme={iconTheme}
@@ -96,7 +96,7 @@ function SortablePreviewTab({
     )
 }
 
-export function PreviewTabStrip({
+export const PreviewTabStrip = memo(function PreviewTabStrip({
     tabs,
     activeTabId,
     activeTabDirty = false,
@@ -183,10 +183,10 @@ export function PreviewTabStrip({
                             type="button"
                             onClick={onCreateSiblingFile}
                             className={cn(
-                                'inline-flex h-full w-7 shrink-0 items-center justify-center border-r border-white/[0.08] bg-sparkle-bg text-sparkle-text-muted transition-colors duration-150',
+                                'inline-flex h-full w-7 shrink-0 items-center justify-center border-r border-[var(--surface-divider)] bg-transparent text-sparkle-text-muted transition-colors duration-150',
                                 isNewTabDropOver
-                                    ? 'bg-white/[0.08] text-sparkle-text'
-                                    : 'hover:bg-white/[0.03] hover:text-sparkle-text focus-visible:bg-white/[0.03] focus-visible:text-sparkle-text'
+                                    ? 'bg-[var(--surface-active)] text-sparkle-text'
+                                    : 'hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus-visible:bg-[var(--surface-hover)] focus-visible:text-sparkle-text'
                             )}
                             title="New file in current directory"
                         >
@@ -197,4 +197,4 @@ export function PreviewTabStrip({
             </div>
         </div>
     )
-}
+})

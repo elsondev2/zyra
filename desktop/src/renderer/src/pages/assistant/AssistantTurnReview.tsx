@@ -1,9 +1,9 @@
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
-import { ArrowLeft, ArrowUpRight, Check, Columns3, Copy, Files, Rows3, TriangleAlert } from 'lucide-react'
+import { ArrowLeft, Check, ChevronDown, ChevronUp, Columns3, Copy, Files, Rows3 } from 'lucide-react'
 import { RawPatchFallback } from '@/components/ui/diff-viewer/RawPatchFallback'
 import PatchDiffViewer from '@/components/ui/diff-viewer/PatchDiffViewer'
 import MarkdownRenderer from '@/components/ui/MarkdownRenderer'
-import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { formatAssistantDateTime } from '@/lib/assistant/selectors'
 import {
     buildSyntheticSingleFilePatch,
@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils'
 import { DiffStats } from '@/pages/project-details/DiffStats'
 import { AssistantFileChangeStatusPill, resolveAssistantFileChangeStatus } from './AssistantFileChangeStatusPill'
 import { AssistantReviewPromptAttachments } from './AssistantReviewPromptAttachments'
+import { AssistantReviewTurnStatusBadge } from './AssistantReviewTurnStatusBadge'
 import type { AssistantDiffTarget, AssistantDiffTurn } from './assistant-diff-types'
 
 const INITIAL_VISIBLE_FILES = 12
@@ -98,16 +99,18 @@ function ReviewExcerpt({
     text,
     primary = false,
     renderMarkdown = false,
+    collapsible = false,
     attachments = []
 }: {
     label: string
     text: string
     primary?: boolean
     renderMarkdown?: boolean
+    collapsible?: boolean
     attachments?: AssistantDiffTurn['promptAttachments']
 }) {
     const [expanded, setExpanded] = useState(false)
-    const canExpand = !renderMarkdown && (text.length > 240 || text.split(/\r?\n/).length > 4)
+    const canExpand = collapsible && (text.length > 240 || text.split(/\r?\n/).length > 4)
     return (
         <div className={cn(
             'w-full min-w-0 max-w-full overflow-hidden border-l-2 py-0.5 pl-2.5 pr-1',
@@ -124,7 +127,10 @@ function ReviewExcerpt({
                     <MarkdownRenderer
                         content={text}
                         lightweight
-                        className="assistant-turn-review__markdown w-full min-w-0 max-w-full overflow-x-hidden text-[11px] leading-[1.55] text-sparkle-text-secondary/72 [&_h1]:border-0 [&_h1]:pb-0 [&_h1]:text-xs [&_h2]:border-0 [&_h2]:pb-0 [&_h2]:text-xs [&_h3]:text-[11px] [&_li]:leading-[1.55] [&_p]:mb-2 [&_p]:leading-[1.55] [&_pre]:text-[9px] [&_code]:text-[9px]"
+                        className={cn(
+                            'assistant-turn-review__markdown w-full min-w-0 max-w-full overflow-x-hidden text-[11px] leading-[1.55] [&_h1]:border-0 [&_h1]:pb-0 [&_h1]:text-xs [&_h2]:border-0 [&_h2]:pb-0 [&_h2]:text-xs [&_h3]:text-[11px] [&_li]:whitespace-pre-wrap [&_li]:leading-[1.55] [&_p]:mb-2 [&_p]:whitespace-pre-wrap [&_p]:leading-[1.55] [&_pre]:text-[9px] [&_code]:text-[9px]',
+                            primary ? '[&_h1]:text-sparkle-text [&_h2]:text-sparkle-text [&_h3]:text-sparkle-text [&_li]:text-sparkle-text [&_p]:text-sparkle-text' : 'text-sparkle-text-secondary/72'
+                        )}
                     />
                 ) : (
                     <p className={cn(
@@ -155,9 +161,7 @@ export const AssistantTurnReview = memo(function AssistantTurnReview({
     selectedDiff,
     focusSelectedDiffRequestId,
     showBack,
-    showOpenInTab,
     onBack,
-    onOpenInTab,
     onSelectDiff,
     onLoadingChange
 }: {
@@ -165,9 +169,7 @@ export const AssistantTurnReview = memo(function AssistantTurnReview({
     selectedDiff: AssistantDiffTarget | null
     focusSelectedDiffRequestId: number | null
     showBack: boolean
-    showOpenInTab: boolean
     onBack: () => void
-    onOpenInTab: () => void
     onSelectDiff: (target: AssistantDiffTarget) => void
     onLoadingChange?: (loading: boolean) => void
 }) {
@@ -187,6 +189,7 @@ export const AssistantTurnReview = memo(function AssistantTurnReview({
     const [narrowSurface, setNarrowSurface] = useState<NarrowReviewSurface>(() => focusSelectedDiffRequestId === null ? 'review' : 'diff')
     const [isNarrowLayout, setIsNarrowLayout] = useState(false)
     const [diffSupportsSplit, setDiffSupportsSplit] = useState(false)
+    const [responseExpanded, setResponseExpanded] = useState(false)
     const [activeSelectedDiff, setActiveSelectedDiff] = useState<AssistantDiffTarget | null>(null)
     const activeSelectionMatches = Boolean(
         activeSelectedDiff
@@ -383,6 +386,7 @@ export const AssistantTurnReview = memo(function AssistantTurnReview({
         const focusSelectedDiff = focusSelectedDiffRequestId !== null
         setVisibleFileCount(INITIAL_VISIBLE_FILES)
         setVisibleRecordedChangeCount(INITIAL_RENDERED_CHANGES)
+        setResponseExpanded(false)
         setShowAllChanges(!focusSelectedDiff && turn.changes.length > 0)
         setNarrowSurface(focusSelectedDiff ? 'diff' : 'review')
     }, [focusSelectedDiffRequestId, turn.id])
@@ -511,14 +515,14 @@ export const AssistantTurnReview = memo(function AssistantTurnReview({
 
     const renderConversation = () => (
         <div className="w-full min-w-0 max-w-full space-y-3 overflow-hidden p-3">
-            {turn.historyUnavailable ? (
-                <div className="flex items-start gap-2 rounded-md border border-amber-400/15 bg-amber-500/[0.07] px-2.5 py-2 text-[9px] leading-4 text-amber-100/65">
-                    <TriangleAlert size={11} className="mt-0.5 shrink-0" />
-                    <span>This turn remains in the persisted ledger, but its stored prompt and response are unavailable.</span>
+            <ReviewExcerpt label="You" text={turn.prompt} primary renderMarkdown collapsible attachments={turn.promptAttachments} />
+            {turn.responseAvailable ? (
+                <ReviewExcerpt label="Agent" text={turn.response} renderMarkdown />
+            ) : (
+                <div className="rounded-md border border-amber-400/15 bg-amber-500/[0.07] px-2.5 py-2 text-[10px] leading-4 text-amber-100/70">
+                    Agent did not respond
                 </div>
-            ) : null}
-            <ReviewExcerpt label="You" text={turn.prompt} primary attachments={turn.promptAttachments} />
-            <ReviewExcerpt label="Agent" text={turn.response || 'No response recorded.'} renderMarkdown />
+            )}
         </div>
     )
 
@@ -592,6 +596,8 @@ export const AssistantTurnReview = memo(function AssistantTurnReview({
             ) : null}
             <span className="min-w-0 flex-1" />
             <DiffStats additions={turn.additions} deletions={turn.deletions} compact className="assistant-turn-review__diff-summary-stats shrink-0 gap-1 [&>div]:w-9" />
+            {turn.reviewStatus ? <span className="text-sparkle-text-muted/25">·</span> : null}
+            <AssistantReviewTurnStatusBadge status={turn.reviewStatus} compact />
             {renderDiffModeToggle()}
         </div>
     ) : null
@@ -633,7 +639,7 @@ export const AssistantTurnReview = memo(function AssistantTurnReview({
                         )}
                     >
                         {active ? <span className="absolute inset-y-1 left-0 w-0.5 rounded-r bg-[var(--accent-primary)]/70" aria-hidden="true" /> : null}
-                        <VscodeEntryIcon pathValue={target.filePath} kind="file" theme={iconTheme} className="assistant-turn-review__file-icon size-3.5 shrink-0" />
+                        <FileEntryIcon pathValue={target.filePath} kind="file" theme={iconTheme} className="assistant-turn-review__file-icon size-3.5 shrink-0" />
                         <span className="min-w-0 flex-1 truncate font-mono text-[10px]">{target.displayPath}</span>
                         {editCount > 1 ? (
                             <span className="assistant-turn-review__file-edit-count shrink-0 whitespace-nowrap rounded bg-white/[0.045] px-1.5 py-0.5 font-mono text-[8px] text-sparkle-text-muted/70">
@@ -658,7 +664,11 @@ export const AssistantTurnReview = memo(function AssistantTurnReview({
                 </button>
             ) : null}
             {reviewFiles.length === 0 ? (
-                <div className="px-3 py-4 text-[10px] leading-4 text-sparkle-text-muted">No files changed in this turn.</div>
+                <div className="inline-flex items-center gap-1 px-3 py-4 text-[10px] leading-4">
+                    <span className="italic text-sparkle-text-muted/45">No diff</span>
+                    {turn.reviewStatus ? <span className="text-sparkle-text-muted/25">·</span> : null}
+                    <AssistantReviewTurnStatusBadge status={turn.reviewStatus} compact />
+                </div>
             ) : null}
         </div>
     )
@@ -668,7 +678,7 @@ export const AssistantTurnReview = memo(function AssistantTurnReview({
             <div className="min-h-0 flex-1">
                 {parsedRecordedChangeEntries.length === renderedRecordedChanges.length && parsedRecordedChangeEntries.length > 0 ? (
                     <PatchDiffViewer
-                        key={`all:${turn.id}:${renderedRecordedChanges.length}`}
+                        key={`all:${turn.id}`}
                         fileDiffs={parsedRecordedChangeEntries.map((entry) => entry.fileDiff)}
                         mode={effectiveRenderMode}
                         flush
@@ -747,15 +757,25 @@ export const AssistantTurnReview = memo(function AssistantTurnReview({
                     headerMetadata={renderDiffHeaderActions()}
                     onRenderingChange={onLoadingChange}
                 />
-            ) : (
+            ) : preparedSelectedDiff.patch.trim() ? (
                 <RawPatchFallback
                     patch={preparedSelectedDiff.patch}
                     flush
                     header={renderFlushDiffHeader()}
                     notice={parsedDiff.error
                         ? 'Falling back to raw diff view because patch parsing failed.'
-                        : 'Unable to isolate this file. Showing the activity patch instead.'}
+                        : 'Unable to isolate this file. Showing the recorded patch instead.'}
                 />
+            ) : (
+                <div className="flex min-h-full flex-col">
+                    {renderFlushDiffHeader()}
+                    <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-10 text-center">
+                        <div className="max-w-[280px]">
+                            <p className="text-[11px] font-medium text-sparkle-text-secondary">Diff unavailable for this recorded edit.</p>
+                            <p className="mt-1 text-[9px] leading-4 text-sparkle-text-muted">The file activity was saved without patch content.</p>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     ) : selectedDiff ? (
@@ -788,11 +808,6 @@ export const AssistantTurnReview = memo(function AssistantTurnReview({
                 ) : null}
                 <span className="shrink-0 font-mono text-[9px] font-bold text-[var(--accent-primary)]">TURN {turn.number}</span>
                 <time className="assistant-turn-review__turn-time ml-auto shrink-0 whitespace-nowrap text-right text-[8px] text-sparkle-text-muted/60" dateTime={turn.updatedAt}>{exactTurnDateTime}</time>
-                {showOpenInTab ? (
-                    <button type="button" onClick={onOpenInTab} className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted hover:bg-white/[0.05]" aria-label={`Open turn ${turn.number} in a new workspace tab`}>
-                        <ArrowUpRight size={12} />
-                    </button>
-                ) : null}
             </div>
 
             <nav className="assistant-turn-review__narrow-nav hidden h-10 shrink-0 items-end gap-1 border-b border-white/[0.06] px-2" aria-label="Turn review sections">
@@ -827,7 +842,10 @@ export const AssistantTurnReview = memo(function AssistantTurnReview({
             </nav>
 
             <div className="assistant-turn-review__body relative min-h-0 flex-1">
-                <aside className="assistant-turn-review__rail min-h-0 overflow-hidden border-r border-white/[0.06] bg-[color-mix(in_srgb,var(--color-card)_34%,var(--color-bg))]">
+                <aside className={cn(
+                    'assistant-turn-review__rail min-h-0 overflow-hidden border-r border-white/[0.06] bg-[color-mix(in_srgb,var(--color-card)_34%,var(--color-bg))]',
+                    responseExpanded && 'assistant-turn-review__rail--response-expanded'
+                )}>
                     <div className="flex h-10 shrink-0 items-center gap-2 border-b border-white/[0.06] bg-[color-mix(in_srgb,var(--color-bg)_95%,black)] px-2.5">
                         {showBack ? (
                             <button type="button" onClick={onBack} className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted hover:bg-white/[0.05] hover:text-sparkle-text" aria-label="Back to chat review">
@@ -837,14 +855,20 @@ export const AssistantTurnReview = memo(function AssistantTurnReview({
                         <span className="shrink-0 font-mono text-[9px] font-bold text-[var(--accent-primary)]">TURN {turn.number}</span>
                         <time className="assistant-turn-review__turn-time ml-auto shrink-0 whitespace-nowrap text-right text-[8px] text-sparkle-text-muted/55" dateTime={turn.updatedAt}>{exactTurnDateTime}</time>
                         <time className="assistant-turn-review__turn-time-compact ml-auto hidden shrink-0 whitespace-nowrap text-right text-[8px] text-sparkle-text-muted/55" dateTime={turn.updatedAt}>{compactTurnDateTime}</time>
-                        {showOpenInTab ? (
-                            <button type="button" onClick={onOpenInTab} className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-sparkle-text-muted hover:bg-white/[0.05] hover:text-sparkle-text" aria-label={`Open turn ${turn.number} in a new workspace tab`}>
-                                <ArrowUpRight size={13} />
-                            </button>
-                        ) : null}
                     </div>
-                    <div className="assistant-turn-review__conversation-pane custom-scrollbar min-h-0 min-w-0 overflow-x-hidden overflow-y-auto border-b border-white/[0.055] [scrollbar-gutter:stable]">
+                    <div data-assistant-capsule-scroll="turn-conversation" className="assistant-turn-review__conversation-pane custom-scrollbar min-h-0 min-w-0 overflow-x-hidden overflow-y-auto border-b border-white/[0.055] [scrollbar-gutter:stable]">
                         {renderConversation()}
+                    </div>
+                    <div className="flex h-7 shrink-0 items-center justify-center border-b border-white/[0.045] bg-[color-mix(in_srgb,var(--color-bg)_90%,black)]">
+                        <button
+                            type="button"
+                            onClick={() => setResponseExpanded((current) => !current)}
+                            className="inline-flex h-6 items-center gap-1 px-2 text-[9px] font-medium text-[var(--accent-primary)]/75 hover:bg-white/[0.03] hover:text-[var(--accent-primary)]"
+                            aria-expanded={responseExpanded}
+                        >
+                            {responseExpanded ? 'Collapse response' : 'Full agent response'}
+                            {responseExpanded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                        </button>
                     </div>
                     <div className="assistant-turn-review__files-pane flex min-h-0 flex-col">
                         <div className="flex h-9 shrink-0 items-center justify-between border-b border-white/[0.045] px-3">
@@ -854,7 +878,7 @@ export const AssistantTurnReview = memo(function AssistantTurnReview({
                             </span>
                             <span className="font-mono text-[9px] text-sparkle-text-muted/50">{reviewFiles.length}</span>
                         </div>
-                        <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">{renderFiles()}</div>
+                        <div data-assistant-capsule-scroll="turn-files" className="custom-scrollbar min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">{renderFiles()}</div>
                     </div>
                 </aside>
 
@@ -871,7 +895,7 @@ export const AssistantTurnReview = memo(function AssistantTurnReview({
                     <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors hover:bg-[var(--accent-primary)]/35" />
                 </button>
 
-                <main ref={diffSurfaceRef} className={cn(
+                <main ref={diffSurfaceRef} data-assistant-capsule-scroll="turn-diff" className={cn(
                     'assistant-turn-review__diff-surface flex min-h-0 min-w-0 flex-1 flex-col bg-[color-mix(in_srgb,var(--color-bg)_82%,black)]',
                     narrowSurface !== 'diff' && 'assistant-turn-review__narrow-hidden'
                 )}>
@@ -881,7 +905,7 @@ export const AssistantTurnReview = memo(function AssistantTurnReview({
 
                 {narrowSurface === 'review' ? (
                     <section className="assistant-turn-review__narrow-panel min-h-0 min-w-0 max-w-full flex-1 overflow-hidden bg-[color-mix(in_srgb,var(--color-card)_26%,var(--color-bg))]">
-                        <div className="custom-scrollbar min-h-0 min-w-0 overflow-x-hidden overflow-y-auto border-b border-white/[0.055] [scrollbar-gutter:stable]">
+                        <div data-assistant-capsule-scroll="turn-review" className="custom-scrollbar min-h-0 min-w-0 overflow-x-hidden overflow-y-auto border-b border-white/[0.055] [scrollbar-gutter:stable]">
                             {renderConversation()}
                         </div>
                         <div className="flex min-h-0 min-w-0 max-w-full flex-col overflow-hidden">
@@ -892,7 +916,7 @@ export const AssistantTurnReview = memo(function AssistantTurnReview({
                                 </span>
                                 <span className="font-mono text-[9px] text-sparkle-text-muted/50">{reviewFiles.length}</span>
                             </div>
-                            <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">{renderFiles()}</div>
+                            <div data-assistant-capsule-scroll="turn-files" className="custom-scrollbar min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">{renderFiles()}</div>
                         </div>
                     </section>
                 ) : null}

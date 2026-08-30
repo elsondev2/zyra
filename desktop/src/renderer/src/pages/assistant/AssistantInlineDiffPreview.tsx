@@ -111,7 +111,7 @@ export const AssistantInlineDiffPreview = memo(function AssistantInlineDiffPrevi
                             event.stopPropagation()
                             onOpenFullDiff()
                         }}
-                        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--accent-primary)] hover:bg-white/[0.08] hover:text-sparkle-text"
+                        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--accent-primary)] hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
                         title={`Open full diff for ${displayPath} in side panel`}
                     >
                         <ArrowUpRight size={12} />
@@ -138,7 +138,7 @@ export const AssistantInlineDiffPreview = memo(function AssistantInlineDiffPrevi
                                 event.stopPropagation()
                                 onOpenFullDiff()
                             }}
-                            className="flex h-8 w-full items-center gap-1.5 border-t border-sparkle-border bg-[color-mix(in_srgb,var(--color-card)_86%,var(--color-bg))] px-2.5 text-left text-[10px] text-[var(--accent-primary)] hover:bg-white/[0.04] hover:text-sparkle-text"
+                            className="flex h-8 w-full items-center gap-1.5 border-t border-sparkle-border bg-[color-mix(in_srgb,var(--color-card)_86%,var(--color-bg))] px-2.5 text-left text-[10px] text-[var(--accent-primary)] hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
                             title={`Open full diff for ${displayPath} in side panel`}
                         >
                             <ArrowUpRight size={11} />

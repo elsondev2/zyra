@@ -18,6 +18,7 @@ export class FakeCanonicalMessageWriter implements CanonicalMessageWriter {
     private readonly conversationSequences = new Map<string, number>()
     private failBeforeWriteMessage: string | null = null
     private failAfterWriteMessage: string | null = null
+    private writeBarrier: { started: () => void; release: Promise<void> } | null = null
 
     constructor(private readonly clock: ForegroundClock = systemForegroundClock) {}
 
@@ -27,6 +28,15 @@ export class FakeCanonicalMessageWriter implements CanonicalMessageWriter {
 
     failNextAfterWrite(message = 'Injected canonical ledger failure after append.'): void {
         this.failAfterWriteMessage = message
+    }
+
+    pauseNextWrite(): { started: Promise<void>; release: () => void } {
+        let markStarted: () => void = () => undefined
+        let releaseWrite: () => void = () => undefined
+        const started = new Promise<void>((resolve) => { markStarted = resolve })
+        const release = new Promise<void>((resolve) => { releaseWrite = resolve })
+        this.writeBarrier = { started: markStarted, release }
+        return { started, release: releaseWrite }
     }
 
     async append(input: CanonicalLedgerAppendInput): Promise<CanonicalMessageCommitReceipt> {
@@ -39,6 +49,12 @@ export class FakeCanonicalMessageWriter implements CanonicalMessageWriter {
         if (existingMessage) {
             assertEquivalent(existingMessage.input, input)
             return existingMessage.receipt
+        }
+        const barrier = this.writeBarrier
+        if (barrier) {
+            this.writeBarrier = null
+            barrier.started()
+            await barrier.release
         }
         if (this.failBeforeWriteMessage) {
             const message = this.failBeforeWriteMessage

@@ -52,7 +52,8 @@ export class OpenAIAuthWorkerClient {
             operation: 'buildChatGptAccountStatus',
             provider,
             options
-        })
+        }),
+        resolveChatGptAccountAuth: () => this.request({ operation: 'resolveChatGptAccountAuth' })
     }
 
     warm(): Promise<void> {
@@ -143,4 +144,11 @@ export class OpenAIAuthWorkerClient {
         }
         this.pending.clear()
     }
+}
+
+let sharedOpenAIAuthWorker: OpenAIAuthWorkerClient | null = null
+
+export function getSharedOpenAIAuthWorkerClient(): OpenAIAuthWorkerClient {
+    if (!sharedOpenAIAuthWorker) sharedOpenAIAuthWorker = new OpenAIAuthWorkerClient()
+    return sharedOpenAIAuthWorker
 }

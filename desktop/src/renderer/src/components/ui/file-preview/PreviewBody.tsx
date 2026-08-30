@@ -1,4 +1,5 @@
-import { FolderOpen, RefreshCw } from 'lucide-react'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
+import { useThemeRevision } from '@/lib/use-theme-revision'
 import { cn } from '@/lib/utils'
 import TextPreviewContent from './TextPreviewContent'
 import MediaPreviewContent from './MediaPreviewContent'
@@ -7,8 +8,12 @@ import { formatPreviewBytes, isMediaPreviewType, isTextLikeFileType } from './ut
 import type { ViewportPreset, ViewportPresetConfig } from './viewport'
 import SyntaxPreview from './SyntaxPreview'
 import type { editor as MonacoEditor } from 'monaco-editor'
+import type { RefObject } from 'react'
 import type { GitLineMarker } from './gitDiff'
 import HtmlRenderedPreview from './HtmlRenderedPreview'
+import PdfPreviewContent from './PdfPreviewContent'
+import OfficePreviewContent from './OfficePreviewContent'
+import { PreviewContentSkeleton } from './PreviewLoadingSkeleton'
 
 interface PreviewBodyProps {
     file: PreviewFile
@@ -27,7 +32,7 @@ interface PreviewBodyProps {
     onEditableContentChange: (value: string) => void
     isEditable: boolean
     loadingEditableContent?: boolean
-    onEditorMount?: (editor: MonacoEditor.IStandaloneCodeEditor) => void
+    onEditorMount?: (editor: MonacoEditor.IStandaloneCodeEditor | null) => void
     editorWordWrap?: 'on' | 'off'
     editorMinimapEnabled?: boolean
     editorFontSize?: number
@@ -41,6 +46,8 @@ interface PreviewBodyProps {
     fullBleed?: boolean
     mediaItems?: PreviewMediaItem[]
     onSelectMedia?: (item: PreviewMediaItem) => Promise<void> | void
+    scrollContainerRef?: RefObject<HTMLElement | null>
+    markdownInitialSourceLine?: number | null
 }
 
 function resolveEditorLanguage(file: PreviewFile): string {
@@ -82,17 +89,17 @@ export default function PreviewBody({
     isExpanded = false,
     fullBleed = false,
     mediaItems,
-    onSelectMedia
+    onSelectMedia,
+    scrollContainerRef,
+    markdownInitialSourceLine
 }: PreviewBodyProps) {
+    useThemeRevision()
+    const iconTheme = typeof document !== 'undefined' && document.body.classList.contains('light') ? 'light' : 'dark'
     const isTextLike = isTextLikeFileType(file.type)
     const useFullBleed = isExpanded || fullBleed
 
     if (loading || loadingEditableContent) {
-        return (
-            <div className="flex items-center justify-center py-24 w-full">
-                <RefreshCw size={32} className="animate-spin text-white/20" />
-            </div>
-        )
+        return <PreviewContentSkeleton />
     }
 
     if (file.type === 'directory') {
@@ -100,7 +107,7 @@ export default function PreviewBody({
             <div className="flex h-full min-h-[16rem] w-full items-center justify-center bg-sparkle-bg px-8 py-12">
                 <div className="flex max-w-sm flex-col items-center text-center">
                     <span className="mb-4 inline-flex size-12 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.035] text-sparkle-text-muted">
-                        <FolderOpen className="size-6" />
+                        <FileEntryIcon pathValue={file.path} kind="directory" expanded theme={iconTheme} size={26} />
                     </span>
                     <h3 className="text-sm font-medium text-sparkle-text">{file.name || 'Folder'}</h3>
                     <p className="mt-1.5 text-xs leading-5 text-sparkle-text-muted">
@@ -144,6 +151,10 @@ export default function PreviewBody({
         )
     }
 
+    if (file.type === 'docx' || file.type === 'xlsx' || file.type === 'pptx') {
+        return <OfficePreviewContent filePath={file.path} fileName={file.name} type={file.type} />
+    }
+
     if (isTextLike) {
         return (
             <div className="w-full h-full min-h-0">
@@ -157,10 +168,17 @@ export default function PreviewBody({
                     gitDiffText={gitDiffText}
                     csvDistinctColorsEnabled={csvDistinctColorsEnabled}
                     focusLine={previewFocusLine}
+                    onEditorMount={onEditorMount}
                     isExpanded={useFullBleed}
+                    scrollContainerRef={scrollContainerRef}
+                    markdownInitialSourceLine={markdownInitialSourceLine}
                 />
             </div>
         )
+    }
+
+    if (file.type === 'pdf') {
+        return <PdfPreviewContent filePath={file.path} fileName={file.name} />
     }
 
     if (isMediaPreviewType(file.type)) {

@@ -1,4 +1,5 @@
 import type { AssistantActivity, AssistantMessage, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
+import { normalizeAssistantMessageReferenceId } from '@shared/assistant/message-identity'
 import {
     getContextCompactionStatus,
     isContextCompactionActivity,
@@ -51,23 +52,22 @@ function getProjectedActivityTerminalOutcome(activity: AssistantActivity): Proje
     return null
 }
 
-function getProjectedTurnTerminalOutcome(rows: TimelineRenderRow[], turnId: string): ProjectedTerminalOutcome | null {
-    for (let rowIndex = rows.length - 1; rowIndex >= 0; rowIndex -= 1) {
-        const row = rows[rowIndex]
-        if (getRowTurnId(row) !== turnId) continue
+function buildProjectedTerminalOutcomeByTurn(rows: TimelineRenderRow[]): Map<string, ProjectedTerminalOutcome> {
+    const outcomes = new Map<string, ProjectedTerminalOutcome>()
+    for (const row of rows) {
+        const turnId = getRowTurnId(row)
+        if (!turnId) continue
         const activities = row.kind === 'activity'
             ? [row.activity]
             : 'activities' in row
                 ? row.activities
                 : []
-        for (let activityIndex = activities.length - 1; activityIndex >= 0; activityIndex -= 1) {
-            const activity = activities[activityIndex]
-            if (!activity) continue
+        for (const activity of activities) {
             const outcome = getProjectedActivityTerminalOutcome(activity)
-            if (outcome) return outcome
+            if (outcome) outcomes.set(turnId, outcome)
         }
     }
-    return null
+    return outcomes
 }
 
 function rowMustStayVisible(row: TimelineRenderRow): boolean {
@@ -113,21 +113,58 @@ function inferLegacyUserTurnId(
     return boundaryRows.map(getRowTurnId).find((turnId) => turnId && turnUsageById?.has(turnId)) || null
 }
 
+function buildAssistantMessageIndexes(messages: AssistantMessage[]): {
+    byId: Map<string, AssistantMessage>
+    resolvedAssistantIdByReference: Map<string, string>
+} {
+    const byId = new Map<string, AssistantMessage>()
+    const resolvedAssistantIdByReference = new Map<string, string>()
+    for (const message of messages) {
+        byId.set(message.id, message)
+        if (message.role !== 'assistant') continue
+        resolvedAssistantIdByReference.set(message.id, message.id)
+        const normalizedId = normalizeAssistantMessageReferenceId(message.id)
+        if (normalizedId) resolvedAssistantIdByReference.set(normalizedId, message.id)
+        if (message.providerItemId) {
+            resolvedAssistantIdByReference.set(message.providerItemId, message.id)
+            const normalizedProviderId = normalizeAssistantMessageReferenceId(message.providerItemId)
+            if (normalizedProviderId) resolvedAssistantIdByReference.set(normalizedProviderId, message.id)
+        }
+    }
+    return { byId, resolvedAssistantIdByReference }
+}
+
+function resolveIndexedAssistantMessageId(
+    index: ReadonlyMap<string, string>,
+    reference: string | null | undefined
+): string | null {
+    const raw = String(reference || '').trim()
+    if (!raw) return null
+    return index.get(raw) || index.get(normalizeAssistantMessageReferenceId(raw) || '') || null
+}
+
 function getFinalAssistantIdByTurn(
     messages: AssistantMessage[],
     turnUsageById: ReadonlyMap<string, AssistantSessionTurnUsageEntry> | undefined,
-    latestAssistantMessageId: string | null
+    latestAssistantMessageId: string | null,
+    messageById: ReadonlyMap<string, AssistantMessage>,
+    resolvedAssistantIdByReference: ReadonlyMap<string, string>
 ): Map<string, string> {
     const finalByTurn = new Map<string, string>()
     for (const message of messages) {
         if (message.role === 'assistant' && message.turnId) finalByTurn.set(message.turnId, message.id)
     }
     for (const [turnId, usage] of turnUsageById || []) {
-        if (usage.assistantMessageId) finalByTurn.set(turnId, usage.assistantMessageId)
+        const resolvedMessageId = resolveIndexedAssistantMessageId(resolvedAssistantIdByReference, usage.assistantMessageId)
+        if (!resolvedMessageId) continue
+        const resolvedMessage = messageById.get(resolvedMessageId)
+        finalByTurn.set(turnId, resolvedMessageId)
+        if (resolvedMessage?.turnId) finalByTurn.set(resolvedMessage.turnId, resolvedMessageId)
     }
-    if (latestAssistantMessageId) {
-        const latest = messages.find((message) => message.id === latestAssistantMessageId)
-        if (latest?.turnId) finalByTurn.set(latest.turnId, latestAssistantMessageId)
+    const resolvedLatestMessageId = resolveIndexedAssistantMessageId(resolvedAssistantIdByReference, latestAssistantMessageId)
+    if (resolvedLatestMessageId) {
+        const latest = messageById.get(resolvedLatestMessageId)
+        if (latest?.turnId) finalByTurn.set(latest.turnId, resolvedLatestMessageId)
     }
     return finalByTurn
 }
@@ -148,7 +185,34 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
         latestTurnStartedAt,
         isWorking
     } = input
-    const finalByTurn = getFinalAssistantIdByTurn(messages, turnUsageById, latestAssistantMessageId)
+    const { byId: messageById, resolvedAssistantIdByReference } = buildAssistantMessageIndexes(messages)
+    const resolvedLatestAssistantMessageId = resolveIndexedAssistantMessageId(resolvedAssistantIdByReference, latestAssistantMessageId)
+    const finalByTurn = getFinalAssistantIdByTurn(
+        messages,
+        turnUsageById,
+        latestAssistantMessageId,
+        messageById,
+        resolvedAssistantIdByReference
+    )
+    const projectedTerminalOutcomeByTurn = buildProjectedTerminalOutcomeByTurn(rows)
+    const messageRowIndexById = new Map<string, number>()
+    const previousUserIndexByRow = new Int32Array(rows.length)
+    const nextUserIndexByRow = new Int32Array(rows.length)
+    let previousUserIndex = -1
+    for (let index = 0; index < rows.length; index += 1) {
+        previousUserIndexByRow[index] = previousUserIndex
+        const row = rows[index]
+        if (row.kind === 'message') {
+            messageRowIndexById.set(row.message.id, index)
+            if (row.message.role === 'user') previousUserIndex = index
+        }
+    }
+    let nextUserIndex = rows.length
+    for (let index = rows.length - 1; index >= 0; index -= 1) {
+        nextUserIndexByRow[index] = nextUserIndex
+        const row = rows[index]
+        if (row.kind === 'message' && row.message.role === 'user') nextUserIndex = index
+    }
     const runningTurnId = [...(turnUsageById?.entries() || [])]
         .reverse()
         .find(([, usage]) => usage.state === 'running')?.[0] || null
@@ -164,27 +228,48 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
     const latestUserTurnId = latestUserRow?.kind === 'message'
         ? latestUserRow.message.turnId
         : null
-    const latestBoundaryTurnId = [...rows.slice(latestUserIndex + 1)].reverse().map(getRowTurnId).find(Boolean) || null
+    let latestBoundaryTurnId: string | null = null
+    for (let index = rows.length - 1; index > latestUserIndex; index -= 1) {
+        const turnId = getRowTurnId(rows[index])
+        if (turnId) {
+            latestBoundaryTurnId = turnId
+            break
+        }
+    }
     const activeTurnId = isWorking
         ? latestUserIndex >= 0
             ? latestUserTurnId || latestBoundaryTurnId
             : latestBoundaryTurnId || runningTurnId
         : null
-    const activeFinalMessageId = activeTurnId ? finalByTurn.get(activeTurnId) || null : null
-    const settledFinalIndex = activeFinalMessageId
-        ? rows.findIndex((row) => (
-            row.kind === 'message'
-            && row.message.id === activeFinalMessageId
-            && !row.message.streaming
-            && Boolean(row.message.text.trim())
-        ))
+    const latestAssistantIndex = resolvedLatestAssistantMessageId
+        ? messageRowIndexById.get(resolvedLatestAssistantMessageId) ?? -1
         : -1
-    const finalPrecedesRunningCompaction = settledFinalIndex >= 0 && rows.slice(settledFinalIndex + 1).some((row) => (
-        row.kind === 'activity'
-        && isContextCompactionActivity(row.activity)
-        && getContextCompactionStatus(row.activity) === 'running'
-        && (!row.activity.turnId || row.activity.turnId === activeTurnId)
-    ))
+    const activeFinalMessageId = activeTurnId
+        ? finalByTurn.get(activeTurnId)
+            || (latestAssistantIndex > latestUserIndex ? resolvedLatestAssistantMessageId : null)
+        : null
+    const activeFinalRowIndex = activeFinalMessageId ? messageRowIndexById.get(activeFinalMessageId) ?? -1 : -1
+    const activeFinalRow = activeFinalRowIndex >= 0 ? rows[activeFinalRowIndex] : null
+    const settledFinalIndex = activeFinalRow?.kind === 'message'
+        && !activeFinalRow.message.streaming
+        && Boolean(activeFinalRow.message.text.trim())
+        ? activeFinalRowIndex
+        : -1
+    let terminalResponseVisible = false
+    if (settledFinalIndex >= 0) {
+        for (let index = settledFinalIndex + 1; index < rows.length; index += 1) {
+            const row = rows[index]
+            if (
+                row.kind === 'activity'
+                && isContextCompactionActivity(row.activity)
+                && getContextCompactionStatus(row.activity) === 'running'
+                && (!row.activity.turnId || row.activity.turnId === activeTurnId)
+            ) {
+                terminalResponseVisible = true
+                break
+            }
+        }
+    }
     const ranges = new Map<number, { endIndex: number; summary: TimelineTurnWorkSummaryRow; visibleRows?: TimelineRenderRow[] }>()
     let activeRange: {
         startIndex: number
@@ -212,41 +297,19 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
             ? activeUserRow.message
             : null
         if (userIndex >= 0 && activeUserMessage && !isVoiceConversationMessage(activeUserMessage)) {
-            let endIndex = rows.length - 1
-            for (let index = userIndex + 1; index < rows.length; index += 1) {
-                const candidate = rows[index]
-                if (candidate.kind === 'message' && candidate.message.role === 'user') {
-                    endIndex = index - 1
-                    break
-                }
-            }
+            const nextBoundaryIndex = nextUserIndexByRow[userIndex] ?? rows.length
+            const endIndex = nextBoundaryIndex < rows.length ? nextBoundaryIndex - 1 : rows.length - 1
 
-            const activeEndIndex = finalPrecedesRunningCompaction
+            const activeEndIndex = terminalResponseVisible
                 ? Math.min(endIndex, settledFinalIndex - 1)
                 : endIndex
             const activeRows = rows.slice(userIndex + 1, activeEndIndex + 1)
-            let latestNarrationIndex = -1
-            for (let index = activeRows.length - 1; index >= 0; index -= 1) {
-                const candidate = activeRows[index]
-                if (
-                    candidate.kind === 'message'
-                    && candidate.message.role === 'assistant'
-                    && candidate.message.text.trim()
-                    && (!activeTurnId || candidate.message.turnId === activeTurnId || !candidate.message.turnId)
-                ) {
-                    latestNarrationIndex = index
-                    break
-                }
-            }
-
-            const liveNarrationRow = latestNarrationIndex >= 0 ? activeRows[latestNarrationIndex] || null : null
             const workRows = activeRows.filter((row) => (
                 row.kind !== 'working'
                 && !rowMustStayVisible(row)
             ))
-            const visibleRows = activeRows.filter((row, index) => (
+            const visibleRows = activeRows.filter((row) => (
                 row.kind !== 'working'
-                && index !== latestNarrationIndex
                 && rowMustStayVisible(row)
             ))
             const startedAt = activeTurnId
@@ -258,15 +321,16 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
                 endIndex: activeEndIndex,
                 summary: {
                     kind: 'turn-work-summary',
-                    id: `turn-work-summary-${activeTurnId || rows[userIndex]?.id || 'active'}`,
+                    id: `turn-work-summary-${rows[userIndex]?.id || activeTurnId || 'active'}`,
                     createdAt: workRows[0]?.createdAt || rows[userIndex]?.createdAt || latestTurnStartedAt || '',
                     turnId: activeTurnId,
                     startedAt: startedAt || latestTurnStartedAt || rows[userIndex]?.createdAt || '',
                     completedAt: null,
                     running: true,
+                    terminalResponseVisible,
                     outcome: null,
                     rows: workRows,
-                    liveNarrationRow
+                    liveNarrationRow: null
                 },
                 visibleRows
             } : null
@@ -280,8 +344,10 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
         if (finalByTurn.get(turnId) !== finalRow.message.id) continue
 
         const usage = turnUsageById?.get(turnId)
-        const projectedTerminalOutcome = getProjectedTurnTerminalOutcome(rows, turnId)
-        const isLatestFinal = finalRow.message.id === latestAssistantMessageId
+        const projectedTerminalOutcome = usage?.state === 'completed'
+            ? null
+            : projectedTerminalOutcomeByTurn.get(turnId) || null
+        const isLatestFinal = finalRow.message.id === resolvedLatestAssistantMessageId
         const turnCompleted = usage?.state === 'completed'
         const safeHistoricalFallback = turnId !== activeTurnId
             && !finalRow.message.streaming
@@ -291,13 +357,9 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
         if (!isLatestFinal && !turnCompleted && !safeHistoricalFallback) continue
         if (usage?.state === 'error' || usage?.state === 'interrupted' || projectedTerminalOutcome) continue
 
-        let userIndex = -1
-        for (let index = finalIndex - 1; index >= 0; index -= 1) {
-            const candidate = rows[index]
-            if (candidate.kind !== 'message' || candidate.message.role !== 'user') continue
-            if (candidate.message.turnId === turnId || !candidate.message.turnId) userIndex = index
-            break
-        }
+        // The optimistic local turn id can differ from the provider turn id until
+        // canonical reconciliation. The nearest user boundary still owns this response.
+        const userIndex = previousUserIndexByRow[finalIndex] ?? -1
         if (userIndex < 0 || finalIndex - userIndex <= 1) continue
         const matchedUserRow = rows[userIndex]
         const userMessage = matchedUserRow?.kind === 'message' ? matchedUserRow.message : null
@@ -320,12 +382,13 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
             endIndex: finalIndex,
             summary: {
                 kind: 'turn-work-summary',
-                id: `turn-work-summary-${turnId}`,
+                id: `turn-work-summary-${rows[userIndex]?.id || turnId}`,
                 createdAt: workRows[0]?.createdAt || finalRow.createdAt,
                 turnId,
                 startedAt,
                 completedAt,
                 running: false,
+                terminalResponseVisible: false,
                 outcome: 'completed',
                 rows: workRows,
                 liveNarrationRow: null
@@ -339,14 +402,7 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
         if (isVoiceConversationMessage(userRow.message)) continue
         if (ranges.has(userIndex + 1)) continue
 
-        let endIndex = rows.length
-        for (let index = userIndex + 1; index < rows.length; index += 1) {
-            const candidate = rows[index]
-            if (candidate.kind === 'message' && candidate.message.role === 'user') {
-                endIndex = index
-                break
-            }
-        }
+        const endIndex = nextUserIndexByRow[userIndex] ?? rows.length
 
         const turnRows = rows.slice(userIndex + 1, endIndex)
         if (turnRows.length === 0) continue
@@ -354,7 +410,9 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
         if (!turnId) continue
 
         const usage = turnUsageById?.get(turnId)
-        const projectedTerminalOutcome = getProjectedTurnTerminalOutcome(turnRows, turnId)
+        const projectedTerminalOutcome = usage?.state === 'completed'
+            ? null
+            : projectedTerminalOutcomeByTurn.get(turnId) || null
         const terminalIncomplete = usage?.state === 'interrupted' || usage?.state === 'error' || Boolean(projectedTerminalOutcome)
         if (finalByTurn.has(turnId) && !terminalIncomplete) continue
         if (usage?.state === 'running' || (isWorking && turnId === activeTurnId)) continue
@@ -382,12 +440,13 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
             endIndex,
             summary: {
                 kind: 'turn-work-summary',
-                id: `turn-work-summary-${turnId}`,
+                id: `turn-work-summary-${userRow.id || turnId}`,
                 createdAt: workRows[0]?.createdAt || userRow.message.createdAt,
                 turnId,
                 startedAt,
                 completedAt,
                 running: false,
+                terminalResponseVisible: false,
                 outcome,
                 rows: workRows,
                 liveNarrationRow: null

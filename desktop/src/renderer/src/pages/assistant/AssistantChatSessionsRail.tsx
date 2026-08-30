@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Bot, ChevronDown, Copy, Folder, FolderOpen, MoreHorizontal, PanelLeftOpen, Pin, Plus, Search, Settings, SquarePen, Trash2, X } from 'lucide-react'
+import { Bot, ChevronDown, Copy, Folder, MoreHorizontal, PanelLeftOpen, Pin, Plus, Search, Settings, SquarePen, Trash2, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import type { AssistantMessage, AssistantSession, AssistantThread } from '@shared/assistant/contracts'
 import { useCommandPalette } from '@/lib/commandPalette'
@@ -11,14 +11,19 @@ import { cn } from '@/lib/utils'
 import { preloadSettingsRoute } from '../settings/settings-route-loaders'
 import type { AssistantToastInput } from './AssistantPageHelpers'
 import { AssistantAgentInboxSidebar } from './AssistantAgentInboxSidebar'
+import { AssistantProjectIcon } from './AssistantProjectIcon'
+import { AssistantSessionTitleText } from './AssistantSessionTitleText'
+import { AssistantTuiPresenceIndicator } from './AssistantTuiPresenceIndicator'
+import { hasAssistantTuiPresence, isAssistantSessionOpenInTui } from './assistant-tui-presence'
 import { RenameSessionModal } from './AssistantSessionsRailDialogs'
 import { ASSISTANT_MAX_LEFT_SIDEBAR_WIDTH, ASSISTANT_MIN_LEFT_SIDEBAR_WIDTH, resolveAssistantLeftSidebarWidth } from './assistant-pane-layout'
 import {
+    ASSISTANT_BUBBLE_SIDEBAR_WIDTH,
     ASSISTANT_SIDEBAR_COLLAPSE_MORPH_MS,
     ASSISTANT_SIDEBAR_PREVIEW_CLOSE_MS
 } from './assistant-sidebar-preview-state'
 import { createSessionActionMenuItems } from './assistant-sessions-rail-menus'
-import { isAssistantDraftSession, resolveAssistantThreadStatusPill, resolveSessionProjectPath } from './assistant-sessions-rail-utils'
+import { isAssistantDraftSession, resolveAssistantProjectPresentation, resolveAssistantThreadStatusPill, resolveSessionProjectPath } from './assistant-sessions-rail-utils'
 import { useAssistantRailContextMenu } from './useAssistantRailContextMenu'
 
 const PINNED_SESSION_IDS_KEY = 'assistant:pinned-session-ids:v1'
@@ -181,6 +186,9 @@ function getProjectLabel(path: string): string {
 type ProjectGroup = {
     path: string
     label: string
+    projectIconPath: string | null
+    projectType: string | null
+    framework: string | null
     sessions: AssistantSession[]
     newestCreatedAt: string
 }
@@ -190,6 +198,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
     width: number
     maxWidth?: number
     previewPinned: boolean
+    hoverPreviewEnabled?: boolean
     agentInboxEnabled: boolean
     projectIconOverrides: Record<string, string>
     sessions: AssistantSession[]
@@ -212,6 +221,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         width,
         maxWidth = ASSISTANT_MAX_LEFT_SIDEBAR_WIDTH,
         previewPinned,
+        hoverPreviewEnabled = true,
         agentInboxEnabled,
         projectIconOverrides,
         sessions,
@@ -281,9 +291,13 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                 }
                 continue
             }
+            const projectPresentation = resolveAssistantProjectPresentation(projectPath, projectIconOverrides)
             groupsByPath.set(projectPath, {
                 path: projectPath,
                 label: getProjectLabel(projectPath),
+                projectIconPath: projectPresentation.projectIconPath,
+                projectType: projectPresentation.projectType,
+                framework: projectPresentation.framework,
                 sessions: [session],
                 newestCreatedAt: session.createdAt
             })
@@ -293,7 +307,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                 getSortableTimestamp(right.newestCreatedAt) - getSortableTimestamp(left.newestCreatedAt)
                 || left.path.localeCompare(right.path)
             ))
-    }, [activeSessions, pinnedSessionIds])
+    }, [activeSessions, pinnedSessionIds, projectIconOverrides])
 
     const resolvedMaxWidth = Math.max(
         ASSISTANT_MIN_LEFT_SIDEBAR_WIDTH,
@@ -316,7 +330,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         } as const
         : collapsed
         ? {
-            width: `${renderedWidth}px`,
+            width: `${ASSISTANT_BUBBLE_SIDEBAR_WIDTH}px`,
             opacity: previewOpen ? 1 : 0,
             pointerEvents: previewOpen ? 'auto' : 'none',
             transform: previewOpen ? 'translate3d(0, 0, 0)' : 'translate3d(-18px, 0, 0)',
@@ -474,12 +488,12 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         setPendingDeleteSession(session)
     }
 
-    const getSessionMenuItems = (session: AssistantSession, showPin = true): FileActionsMenuItem[] => (
+    const getSessionMenuItems = (session: AssistantSession): FileActionsMenuItem[] => (
         createSessionActionMenuItems({
             session,
             pinned: pinnedSessionIds.has(session.id),
             onOpenRename: (target) => { void renameSession(target) },
-            onTogglePinned: showPin ? () => togglePinnedSession(session) : undefined,
+            onTogglePinned: () => togglePinnedSession(session),
             onArchiveSession: () => { void archiveSession(session) },
             onDeleteRequest: (target) => { void deleteSession(target) }
         })
@@ -509,8 +523,12 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
         }
     ]
 
-    const openSessionContextMenu = (event: ReactMouseEvent<HTMLElement>, session: AssistantSession) => {
-        openContextMenu(event, `${getSessionDisplayTitle(session)} actions`, getSessionMenuItems(session, !agentInboxEnabled))
+    const openSessionContextMenu = (
+        event: ReactMouseEvent<HTMLElement>,
+        session: AssistantSession,
+        items = getSessionMenuItems(session)
+    ) => {
+        openContextMenu(event, `${getSessionDisplayTitle(session)} actions`, items)
     }
 
     const openProjectContextMenu = (event: ReactMouseEvent<HTMLElement>, group: ProjectGroup, expanded: boolean) => {
@@ -558,6 +576,15 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
     }, [previewPinned])
 
     useEffect(() => {
+        if (hoverPreviewEnabled || previewPinned) return
+        if (previewCloseTimerRef.current !== null) {
+            window.clearTimeout(previewCloseTimerRef.current)
+            previewCloseTimerRef.current = null
+        }
+        setPreviewOpen(false)
+    }, [hoverPreviewEnabled, previewPinned])
+
+    useEffect(() => {
         const wasCollapsed = wasCollapsedRef.current
         wasCollapsedRef.current = collapsed
 
@@ -571,11 +598,11 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
             return
         }
 
-        if (!wasCollapsed && collapsed && !loadingScreenActive) {
+        if (!wasCollapsed && collapsed && !loadingScreenActive && hoverPreviewEnabled) {
             setPreviewOpen(true)
             schedulePreviewClose(ASSISTANT_SIDEBAR_COLLAPSE_MORPH_MS)
         }
-    }, [collapsed, loadingScreenActive, onPreviewPinnedChange, schedulePreviewClose])
+    }, [collapsed, hoverPreviewEnabled, loadingScreenActive, onPreviewPinnedChange, schedulePreviewClose])
 
     const expandCollapsedSidebar = () => {
         onPreviewPinnedChange(false)
@@ -709,17 +736,17 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
 
     return (
         <>
-            {collapsed && !loadingScreenActive ? (
+            {collapsed && hoverPreviewEnabled && !loadingScreenActive ? (
                 <div
-                    className="pointer-events-auto fixed bottom-0 left-0 top-[34px] z-[59] w-6"
+                    className="group/sidebar-peek pointer-events-auto fixed bottom-0 left-0 top-[34px] z-[59] w-4"
                     onMouseEnter={openPreview}
                     onMouseLeave={() => schedulePreviewClose()}
                     aria-hidden="true"
                 >
                     <div
                         className={cn(
-                            'absolute left-1 top-1/2 h-16 w-1.5 -translate-y-1/2 rounded-full border border-[var(--surface-divider)] bg-[var(--surface-scrollbar)] transition-[opacity,transform,background-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
-                            previewOpen ? '-translate-x-1 opacity-0' : 'translate-x-0 opacity-100 hover:bg-[var(--surface-scrollbar-hover)]'
+                            'absolute inset-y-0 left-0 w-px bg-transparent transition-colors duration-150 group-hover/sidebar-peek:bg-[var(--surface-panel-divider)]',
+                            previewOpen && 'opacity-0'
                         )}
                     />
                 </div>
@@ -737,10 +764,10 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                 <aside
                     ref={sidebarSurfaceRef}
                     onMouseEnter={() => {
-                        if (collapsed) openPreview()
+                        if (collapsed && hoverPreviewEnabled) openPreview()
                     }}
                     onMouseLeave={() => {
-                        if (collapsed) schedulePreviewClose()
+                        if (collapsed && hoverPreviewEnabled) schedulePreviewClose()
                     }}
                     className={cn(
                         collapsed
@@ -763,6 +790,7 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                         onCreateProjectChat={onCreateProjectChat}
                         onSelectSession={onSelectSession}
                         onRename={renameSession}
+                        getSessionMenuItems={getSessionMenuItems}
                         onOpenContextMenu={openSessionContextMenu}
                     />
                 ) : (
@@ -841,11 +869,14 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
                                             <div
                                                 className="flex min-w-0 flex-1 items-center gap-2 text-left text-[13px] leading-none text-sparkle-text-secondary transition-colors group-hover/project-header:text-sparkle-text focus:outline-none"
                                             >
-                                                {expanded ? (
-                                                    <FolderOpen size={14} strokeWidth={1.65} className="shrink-0 text-sparkle-text-muted/75" />
-                                                ) : (
-                                                    <Folder size={14} strokeWidth={1.65} className="shrink-0 text-sparkle-text-muted/75" />
-                                                )}
+                                                <AssistantProjectIcon
+                                                    projectPath={group.path}
+                                                    projectIconPath={group.projectIconPath}
+                                                    projectType={group.projectType}
+                                                    framework={group.framework}
+                                                    size={14}
+                                                    expanded={expanded}
+                                                />
                                                 <span className="flex min-w-0 items-center gap-1.5">
                                                     <span className="block min-w-0 truncate font-medium" title={group.label}>{group.label}</span>
                                                     <ChevronDown size={12} className={cn('shrink-0 text-sparkle-text-muted/55 transition-transform duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] group-hover/project-header:text-sparkle-text-muted/85', !expanded && '-rotate-90')} />
@@ -1062,6 +1093,7 @@ function ChatRow(props: {
     )
     const showStatusPill = Boolean(statusPill && statusPill.showLabel !== false)
     const timeLabel = formatRelativeTime(getSessionLastActivityAt(session))
+    const tuiOpen = isAssistantSessionOpenInTui(session)
 
     return (
         <div>
@@ -1086,9 +1118,11 @@ function ChatRow(props: {
                 )}
                 title={getSessionDisplayTitle(session)}
             >
-                <span className="min-w-0 flex-1 truncate text-[13px] leading-none">
-                    {getSessionDisplayTitle(session)}
-                </span>
+                <AssistantSessionTitleText
+                    title={getSessionDisplayTitle(session)}
+                    generating={session.titleGenerating === true}
+                    className="min-w-0 flex-1 text-[13px] leading-none"
+                />
                 <span className="inline-flex shrink-0 items-center gap-1.5">
                     {showStatusPill && statusPill ? (
                         <span
@@ -1102,25 +1136,38 @@ function ChatRow(props: {
                             <span>{statusPill.label}</span>
                         </span>
                     ) : null}
-                    <span className="mr-0.5 shrink-0 text-right text-[11px] leading-none tabular-nums text-sparkle-text-secondary/60 group-hover:hidden">
-                        {timeLabel}
+                    {tuiOpen ? <AssistantTuiPresenceIndicator focusable={false} compact /> : null}
+                    <span className="shrink-0 transition-opacity duration-150 ease-out group-hover:opacity-0 motion-reduce:transition-none">
+                        <span className="mr-0.5 block whitespace-nowrap text-right text-[11px] leading-none tabular-nums text-sparkle-text-secondary/60">
+                            {timeLabel}
+                        </span>
                     </span>
                 </span>
-                <div className="hidden shrink-0 items-center group-hover:flex focus-within:flex">
-                    <FileActionsMenu
-                        items={menuItems}
-                        title="Chat actions"
-                        triggerIcon={<MoreHorizontal size={13} />}
-                        presentation="portal"
-                        buttonClassName="h-5 w-5 rounded-md border-transparent bg-transparent p-0 text-sparkle-text-muted/55 hover:border-transparent hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
-                        openButtonClassName="rounded-md border-transparent bg-[var(--surface-hover)] p-0 text-sparkle-text"
+                <div className="pointer-events-none absolute right-2.5 top-1/2 z-[1] -translate-y-1/2 opacity-0 transition-opacity duration-150 ease-out group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100 motion-reduce:transition-none">
+                    <span
+                        className={cn(
+                            'pointer-events-none absolute -inset-y-1 -left-4 -right-1 bg-gradient-to-r from-transparent',
+                            isActiveSession ? 'to-[var(--surface-active)]' : 'to-[var(--surface-hover)]'
+                        )}
+                        aria-hidden="true"
                     />
+                    <div className="relative">
+                        <FileActionsMenu
+                            items={menuItems}
+                            title="Chat actions"
+                            triggerIcon={<MoreHorizontal size={13} />}
+                            presentation="portal"
+                            buttonClassName="h-5 w-5 rounded-md border-transparent bg-transparent p-0 text-sparkle-text-muted/55 hover:border-transparent hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
+                            openButtonClassName="rounded-md border-transparent bg-[var(--surface-hover)] p-0 text-sparkle-text"
+                        />
+                    </div>
                 </div>
             </div>
             <AnimatedHeight isOpen={showThreads}>
                 <div className="ml-5 mt-0.5 space-y-0.5">
                     {sessionThreads.map((thread, index) => {
                         const isActiveThread = thread.id === activeThreadId
+                        const tuiOpen = hasAssistantTuiPresence(thread.canonicalPresence)
                         return (
                             <button
                                 key={thread.id}
@@ -1134,7 +1181,8 @@ function ChatRow(props: {
                                 )}
                             >
                                 <Bot size={12} className="shrink-0" />
-                                <span className="truncate">{getThreadDisplayTitle(thread, index)}</span>
+                                <span className="min-w-0 flex-1 truncate">{getThreadDisplayTitle(thread, index)}</span>
+                                {tuiOpen ? <AssistantTuiPresenceIndicator focusable={false} compact /> : null}
                             </button>
                         )
                     })}

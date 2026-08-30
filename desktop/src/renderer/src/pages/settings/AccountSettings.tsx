@@ -86,7 +86,7 @@ async function requestAccountOverview(forceRefresh = false): Promise<AssistantAc
     return request
 }
 
-async function requestConnectionStatus(forceRefresh = false): Promise<OpenAIConnectionsStatus> {
+async function requestConnectionStatus(forceRefresh = false, analyticsAction?: 'retry'): Promise<OpenAIConnectionsStatus> {
     if (!forceRefresh && accountSettingsCache.connections && isAccountCacheFresh(accountSettingsCache.connectionsAt)) {
         return accountSettingsCache.connections
     }
@@ -97,7 +97,7 @@ async function requestConnectionStatus(forceRefresh = false): Promise<OpenAIConn
         if (pendingConnectionStatus === previous) pendingConnectionStatus = null
     }
     const generation = accountCacheGeneration
-    const request = window.devscope.onboarding.getConnectionsStatus().then((result) => {
+    const request = window.devscope.onboarding.getConnectionsStatus(analyticsAction ? { analyticsAction } : undefined).then((result) => {
         if (!result.success) throw new Error(result.error || 'Could not load OpenAI connections.')
         if (generation === accountCacheGeneration) {
             accountSettingsCache.connections = result.status
@@ -176,7 +176,7 @@ export default function AccountSettings() {
         }
     }, [])
 
-    const loadConnectionState = useCallback(async (forceRefresh = false) => {
+    const loadConnectionState = useCallback(async (forceRefresh = false, analyticsAction?: 'retry') => {
         if (!desktopHost) return
         if (!forceRefresh && accountSettingsCache.connections && isAccountCacheFresh(accountSettingsCache.connectionsAt)) {
             setConnections(accountSettingsCache.connections)
@@ -186,7 +186,7 @@ export default function AccountSettings() {
         setConnectionAction((current) => current || 'refresh')
         setConnectionError(null)
         try {
-            setConnections(await requestConnectionStatus(forceRefresh))
+            setConnections(await requestConnectionStatus(forceRefresh, analyticsAction))
         } catch (error) {
             setConnectionError(error instanceof Error ? error.message : 'Could not load OpenAI connections.')
         } finally {
@@ -233,14 +233,14 @@ export default function AccountSettings() {
     }, [desktopHost, loadConnectionState])
 
     const refreshAll = useCallback(async () => {
-        await Promise.all([loadOverview(true), loadConnectionState(true)])
+        await Promise.all([loadOverview(true), loadConnectionState(true, 'retry')])
     }, [loadConnectionState, loadOverview])
 
     const connectChatGpt = useCallback(async () => {
         setConnectionAction('chatgpt')
         setConnectionError(null)
         try {
-            const result = await window.devscope.onboarding.connectChatGpt()
+            const result = await window.devscope.onboarding.connectChatGpt({ analyticsAction: connections?.chatgpt?.configured ? 'replace' : 'connect' })
             if (!result.success || !result.status.verified) throw new Error(result.success ? result.status.detail || 'ChatGPT could not be verified.' : result.error)
             invalidateSettingsModels()
             invalidateAccountRuntimeCache({ clearOverview: true, clearConnections: true })
@@ -253,7 +253,7 @@ export default function AccountSettings() {
         } finally {
             setConnectionAction(null)
         }
-    }, [loadConnectionState, loadOverview])
+    }, [connections?.chatgpt?.configured, loadConnectionState, loadOverview])
 
     const connectApiKey = useCallback(async () => {
         const key = apiKeyDraft.trim()
@@ -262,7 +262,7 @@ export default function AccountSettings() {
         setConnectionError(null)
         setApiKeyDraft('')
         try {
-            const result = await window.devscope.onboarding.connectApiKey(key)
+            const result = await window.devscope.onboarding.connectApiKey(key, { analyticsAction: connections?.apiKey?.configured ? 'replace' : 'connect' })
             if (!result.success || !result.status.verified) throw new Error(result.success ? result.status.detail || 'The API key could not be verified.' : result.error)
             invalidateSettingsModels()
             invalidateAccountRuntimeCache({ overview: false, clearConnections: true })
@@ -274,7 +274,7 @@ export default function AccountSettings() {
         } finally {
             setConnectionAction(null)
         }
-    }, [apiKeyDraft, loadConnectionState])
+    }, [connections?.apiKey?.configured, apiKeyDraft, loadConnectionState])
 
     const switchDefaultConnection = useCallback(async (method: OnboardingAuthMethod) => {
         setConnectionAction('switch')
@@ -284,7 +284,7 @@ export default function AccountSettings() {
             if (!target) throw new Error(method === 'chatgpt'
                 ? 'Pi did not report an available ChatGPT subscription model.'
                 : 'This API key did not report a supported OpenAI API model.')
-            updateSettings({ assistantDefaultModel: target.id })
+            await updateSettings({ assistantDefaultModel: target.id })
         } catch (error) {
             setConnectionError(error instanceof Error ? error.message : 'Could not switch the new-chat connection.')
         } finally {

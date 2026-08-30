@@ -10,7 +10,6 @@ type AssistantComposerConfigurationSettings = Pick<
     Settings,
     | 'assistantDefaultEffort'
     | 'assistantDefaultFastMode'
-    | 'assistantDefaultInteractionMode'
     | 'assistantDefaultModel'
     | 'assistantDefaultRuntimeMode'
 >
@@ -38,7 +37,7 @@ export function resolveAssistantComposerLaunchConfiguration(input: {
             activeEffort: input.settings.assistantDefaultEffort,
             activeFastModeEnabled: input.settings.assistantDefaultFastMode,
             runtimeMode,
-            interactionMode: input.settings.assistantDefaultInteractionMode,
+            interactionMode: 'default',
             activeProfile: runtimeMode === 'full-access' ? 'yolo-fast' : 'safe-dev'
         }
     }
@@ -49,7 +48,7 @@ export function resolveAssistantComposerLaunchConfiguration(input: {
         activeEffort: input.thread?.thinking || input.thread?.latestTurn?.effort || null,
         activeFastModeEnabled: input.thread?.latestTurn?.serviceTier === 'fast',
         runtimeMode,
-        interactionMode: input.interactionModeOverride || input.thread?.interactionMode || 'default',
+        interactionMode: 'default',
         activeProfile: runtimeMode === 'full-access' ? 'yolo-fast' : 'safe-dev'
     }
 }

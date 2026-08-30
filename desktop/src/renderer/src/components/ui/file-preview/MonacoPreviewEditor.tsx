@@ -3,8 +3,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { editor as MonacoEditor } from 'monaco-editor'
 import { getAppearanceCodeFontStack, useSettings } from '@/lib/settings'
 import { monaco } from '@/lib/monaco/runtime'
+import { buildZyraMonacoWidgetColors } from '@/lib/monaco/zyra-widget-theme'
 import { useThemeRevision } from '@/lib/use-theme-revision'
 import { parseUnifiedDiffMarkers, type GitLineMarker } from './gitDiff'
+import { shouldApplyMonacoExternalValue } from './monacoExternalValueSync'
+import { attachPreviewEditorLifecycle } from './monacoPreviewEditorLifecycle'
 
 const MONACO_THEME_ID = 'devscope-preview'
 
@@ -104,7 +107,7 @@ interface MonacoPreviewEditorProps {
     gitDiffText?: string
     readOnly?: boolean
     onChange?: (value: string) => void
-    onEditorMount?: (editor: MonacoEditor.IStandaloneCodeEditor) => void
+    onEditorMount?: (editor: MonacoEditor.IStandaloneCodeEditor | null) => void
     wordWrap?: 'on' | 'off'
     minimapEnabled?: boolean
     fontSize?: number
@@ -171,7 +174,16 @@ function applyMonacoTheme(appearance: 'light' | 'dark') {
             'minimapSlider.activeBackground': `${accent}77`,
             'scrollbarSlider.background': `${accent}33`,
             'scrollbarSlider.hoverBackground': `${accent}55`,
-            'scrollbarSlider.activeBackground': `${accent}77`
+            'scrollbarSlider.activeBackground': `${accent}77`,
+            ...buildZyraMonacoWidgetColors({
+                isLightTheme,
+                text,
+                textSecondary,
+                card,
+                background: bg,
+                border,
+                accent
+            })
         }
     }
 
@@ -212,8 +224,13 @@ export default function MonacoPreviewEditor({
     })
     const [lineMarkers, setLineMarkers] = useState<GitLineMarker[]>([])
     const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null)
+    const editorLifecycleCleanupRef = useRef<(() => void) | null>(null)
+    const onEditorMountRef = useRef(onEditorMount)
+    onEditorMountRef.current = onEditorMount
     const decorationIdsRef = useRef<string[]>([])
     const externalSyncInFlightRef = useRef(false)
+    const lastLocallyEmittedValueRef = useRef<string | null>(null)
+    const lastModelPathRef = useRef(modelPath)
 
     useEffect(() => {
         applyMonacoTheme(settings.appearanceResolvedMode)
@@ -319,6 +336,8 @@ export default function MonacoPreviewEditor({
 
     useEffect(() => {
         return () => {
+            editorLifecycleCleanupRef.current?.()
+            editorLifecycleCleanupRef.current = null
             const editor = editorRef.current
             if (editor) {
                 editor.deltaDecorations(decorationIdsRef.current, [])
@@ -334,7 +353,18 @@ export default function MonacoPreviewEditor({
         if (!editor || !model) return
 
         const currentValue = model.getValue(monaco.editor.EndOfLinePreference.LF, false)
-        if (currentValue === value) return
+        const modelPathChanged = lastModelPathRef.current !== modelPath
+        lastModelPathRef.current = modelPath
+        const lastLocallyEmittedValue = lastLocallyEmittedValueRef.current
+        const shouldApplyExternalValue = shouldApplyMonacoExternalValue({
+            currentValue,
+            incomingValue: value,
+            readOnly,
+            modelPathChanged,
+            lastLocallyEmittedValue
+        })
+        if (value === lastLocallyEmittedValue) lastLocallyEmittedValueRef.current = null
+        if (!shouldApplyExternalValue) return
 
         const selection = editor.getSelection()
         const scrollTop = editor.getScrollTop()
@@ -351,7 +381,8 @@ export default function MonacoPreviewEditor({
         editor.setScrollTop(scrollTop)
         editor.setScrollLeft(scrollLeft)
         externalSyncInFlightRef.current = false
-    }, [value, modelPath])
+        lastLocallyEmittedValueRef.current = null
+    }, [modelPath, readOnly, value])
 
     const editorOptions = useMemo<MonacoEditor.IStandaloneEditorConstructionOptions>(() => {
         const base = isLargeFile ? largeFileOptions : baseOptions
@@ -422,13 +453,19 @@ export default function MonacoPreviewEditor({
             onChange={(nextValue) => {
                 if (typeof onChange !== 'function') return
                 if (externalSyncInFlightRef.current) return
-                onChange(typeof nextValue === 'string' ? nextValue : '')
+                const normalizedValue = typeof nextValue === 'string' ? nextValue : ''
+                lastLocallyEmittedValueRef.current = normalizedValue
+                onChange(normalizedValue)
             }}
             onMount={(editor) => {
+                editorLifecycleCleanupRef.current?.()
                 editorRef.current = editor
                 decorationIdsRef.current = editor.deltaDecorations([], [])
                 focusPreviewEditorLine(editor, focusLine)
-                onEditorMount?.(editor)
+                editorLifecycleCleanupRef.current = attachPreviewEditorLifecycle(
+                    editor,
+                    (nextEditor) => onEditorMountRef.current?.(nextEditor)
+                )
             }}
         />
     )

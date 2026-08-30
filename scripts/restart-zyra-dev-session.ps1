@@ -153,8 +153,15 @@ $channel = if ($env:ZYRA_AGENT_SERVER_CHANNEL) { $env:ZYRA_AGENT_SERVER_CHANNEL 
 if ($channel -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$') {
     throw "Invalid Zyra agent-server channel: $channel"
 }
-$descriptorPath = Join-Path $stateDirectory "agent-server-v2-$channel.json"
-$lockPath = Join-Path $stateDirectory "agent-server-$channel.lock"
+$descriptorPaths = @(
+    Get-ChildItem -LiteralPath $stateDirectory -File -Filter "agent-server-v*-$channel.json" -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty FullName
+)
+$lockPaths = @(
+    (Join-Path $stateDirectory "agent-server-$channel.lock")
+    Get-ChildItem -LiteralPath $stateDirectory -File -Filter "agent-server-v*-$channel.lock" -ErrorAction SilentlyContinue |
+        Select-Object -ExpandProperty FullName
+)
 
 $targets = @(Get-ZyraDevProcessTargets -ComparableRepoRoot $comparableRepo)
 
@@ -211,8 +218,9 @@ if ($remaining.Count -gt 0) {
 }
 
 # These files contain only disposable process-discovery state. Chat JSONL and Desktop databases are untouched.
-Remove-Item -LiteralPath $descriptorPath -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+foreach ($discoveryPath in @($descriptorPaths) + @($lockPaths)) {
+    Remove-Item -LiteralPath $discoveryPath -Force -ErrorAction SilentlyContinue
+}
 
 $escapedRepo = $repo.Replace("'", "''")
 $escapedBun = $bun.Replace("'", "''")

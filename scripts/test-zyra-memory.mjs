@@ -134,6 +134,36 @@ function runMemoryStatePendingTempRecoveryRegression() {
   });
 }
 
+function runMemoryStateLiveTempIsolationRegression() {
+  withTempRoot((root) => {
+    const memoryRoot = path.join(root, ".zyra", "memory");
+    const stateFile = path.join(memoryRoot, "state.json");
+    mkdirSync(memoryRoot, { recursive: true });
+
+    writeMemoryStateFile(stateFile, {
+      createdAt: "2026-05-24T00:00:00.000Z",
+      threadMemoryModes: { current: "disabled" },
+    });
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 12);
+
+    const liveTemp = path.join(memoryRoot, `.state.json.${process.ppid}.live-writer.tmp`);
+    writeFileSync(liveTemp, `${JSON.stringify({
+      version: 1,
+      createdAt: "2026-05-24T00:00:00.000Z",
+      updatedAt: "2026-05-24T00:01:00.000Z",
+      stage1Outputs: {},
+      jobs: {},
+      phase2: { selectedThreadIds: [] },
+      migrations: {},
+      threadMemoryModes: { stolen: "polluted" },
+    }, null, 2)}\n`, "utf8");
+
+    const state = readMemoryStateFile(stateFile);
+    assert.equal(state.threadMemoryModes.current, "disabled", "a reader must keep the committed state while another live process owns a fresh temp file");
+    assert.equal(existsSync(liveTemp), true, "a reader must not rename or delete another live process's temp file");
+  });
+}
+
 function runStageOutputRetrievalRegression() {
   withTempRoot((root) => {
     ensureZyraMemory(root);
@@ -889,6 +919,7 @@ function runPhase2LockAndRetentionRegression() {
 runWorkspaceBootstrapRegression();
 runMemoryStateRuntimeRegression();
 runMemoryStatePendingTempRecoveryRegression();
+runMemoryStateLiveTempIsolationRegression();
 runStageOutputRetrievalRegression();
 runConsolidationPromptRegression();
 runMemoryWorkerJsonRegression();

@@ -1,13 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import type { AssistantVoiceTranscriptionState } from '@shared/assistant/contracts'
-import { DEFAULT_ASSISTANT_TITLE_MODEL, DEFAULT_ASSISTANT_TITLE_MODEL_LABEL } from '@shared/assistant/title-generation'
+import {
+    DEFAULT_ASSISTANT_TITLE_MODEL,
+    DEFAULT_ASSISTANT_TITLE_MODEL_LABEL,
+    MAX_ASSISTANT_AUTO_TITLE_TURNS,
+    MIN_ASSISTANT_AUTO_TITLE_TURNS,
+    normalizeAssistantAutoTitleTurnInterval
+} from '@shared/assistant/title-generation'
+import { ASSISTANT_CONTEXT_COMPACTION_THRESHOLD_OPTIONS } from '@shared/assistant/runtime-policy'
 import { useSettings } from '@/lib/settings'
 import { readFullAccessConfirmSuppressed, writeFullAccessConfirmSuppressed } from '../assistant/assistant-safety-preferences'
 import { loadSettingsModels, readCachedSettingsModels } from './settings-model-catalog-cache'
 import {
     SettingsButton,
     SettingsDialog,
+    SettingsInput,
     SettingsPageContainer,
     SettingsRow,
     SettingsSection,
@@ -18,6 +26,10 @@ import {
 } from './settings-layout'
 
 type ModelOption = { id: string; label: string; description?: string }
+
+function formatContextTokenLimit(value: number): string {
+    return `${Math.round(value / 1_000).toLocaleString()}k`
+}
 
 export default function AssistantSettings() {
     const { settings, updateSettings } = useSettings()
@@ -139,10 +151,36 @@ export default function AssistantSettings() {
                         </SettingsSelect>
                     )}
                 />
+                <SettingsRow
+                    title="Refresh chat titles"
+                    description="Regenerate from recent user prompts and final assistant responses. Each refresh uses one title-model request."
+                    status={settings.assistantTitleAutoRegenerate ? 'On' : 'Off'}
+                    statusTone={settings.assistantTitleAutoRegenerate ? 'ready' : 'muted'}
+                    control={<SettingsSwitch checked={settings.assistantTitleAutoRegenerate} onCheckedChange={(assistantTitleAutoRegenerate) => updateSettings({ assistantTitleAutoRegenerate })} label="Automatically refresh chat titles" />}
+                />
+                {settings.assistantTitleAutoRegenerate ? (
+                    <SettingsRow
+                        title="Title refresh interval"
+                        description={`Run after this many completed turns. Minimum ${MIN_ASSISTANT_AUTO_TITLE_TURNS}.`}
+                        control={(
+                            <div className="flex items-center gap-2">
+                                <SettingsInput
+                                    type="number"
+                                    min={MIN_ASSISTANT_AUTO_TITLE_TURNS}
+                                    max={MAX_ASSISTANT_AUTO_TITLE_TURNS}
+                                    value={settings.assistantTitleAutoRegenerateTurns}
+                                    onChange={(event) => updateSettings({ assistantTitleAutoRegenerateTurns: normalizeAssistantAutoTitleTurnInterval(event.target.value) })}
+                                    className="sm:w-20"
+                                    aria-label="Completed turns between title refreshes"
+                                />
+                                <span className="text-[10px] text-[var(--settings-text-muted)]">turns</span>
+                            </div>
+                        )}
+                    />
+                ) : null}
                 <SettingsRow title="Zyra profile" description="Choose the instruction profile used when Desktop starts or reconnects a chat." control={<SettingsSegmented value={settings.assistantProductProfile} options={[{ value: 'default', label: 'Default' }, { value: 'builder', label: 'Builder' }]} onChange={(assistantProductProfile) => updateSettings({ assistantProductProfile })} label="Zyra profile" />} />
                 <SettingsRow title="Permission mode" description="Supervised asks before commands, file changes, and other side effects." control={<SettingsSelect value={settings.assistantDefaultRuntimeMode} onChange={(event) => setPermissionMode(event.target.value as typeof settings.assistantDefaultRuntimeMode)} aria-label="Default permission mode"><option value="approval-required">Supervised</option><option value="full-access">Full access</option></SettingsSelect>} />
                 <SettingsRow title="Full-access warning" description="Restore the confirmation shown before a chat is switched to Full access." status={fullAccessWarningSuppressed ? 'Suppressed' : 'Active'} statusTone={fullAccessWarningSuppressed ? 'warning' : 'ready'} control={<SettingsButton variant="ghost" disabled={!fullAccessWarningSuppressed} onClick={() => { writeFullAccessConfirmSuppressed(false); setFullAccessWarningSuppressed(false) }}>Restore warning</SettingsButton>} />
-                <SettingsRow title="Interaction mode" description="Start new chats in normal conversation or planning mode." control={<SettingsSegmented value={settings.assistantDefaultInteractionMode} options={[{ value: 'default', label: 'Default' }, { value: 'plan', label: 'Plan' }]} onChange={(assistantDefaultInteractionMode) => updateSettings({ assistantDefaultInteractionMode })} label="Default interaction mode" />} />
                 <SettingsRow title="Reasoning effort" description="Set the default reasoning depth for compatible models." control={<SettingsSelect value={settings.assistantDefaultEffort} onChange={(event) => updateSettings({ assistantDefaultEffort: event.target.value as typeof settings.assistantDefaultEffort })} aria-label="Default reasoning effort">{['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map((effort) => <option key={effort} value={effort}>{effort === 'xhigh' ? 'Extra high' : effort.charAt(0).toUpperCase() + effort.slice(1)}</option>)}</SettingsSelect>} />
                 <SettingsRow title="Fast service tier" description="Request the faster provider service tier for new chats." control={<SettingsSwitch checked={settings.assistantDefaultFastMode} onCheckedChange={(assistantDefaultFastMode) => updateSettings({ assistantDefaultFastMode })} label="Fast service tier" />} />
                 <SettingsRow title="Web access" description="Choose which web tools new chats start with. Existing chats keep their own choice." control={<SettingsSegmented value={webDefaultMode} options={[{ value: 'all', label: 'Search + fetch' }, { value: 'search', label: 'Search' }, { value: 'fetch', label: 'Fetch' }, { value: 'off', label: 'Off' }]} onChange={setWebDefaultMode} label="Default web access" />} />
@@ -156,11 +194,45 @@ export default function AssistantSettings() {
                 />
             </SettingsSection>
 
+            <SettingsSection title="Reasoning and context">
+                <SettingsRow
+                    title="Reasoning summaries"
+                    description="Ask reasoning models for readable progress summaries. Detailed summaries still exclude private chain-of-thought."
+                    control={(
+                        <SettingsSelect
+                            value={settings.assistantReasoningSummary}
+                            onChange={(event) => updateSettings({ assistantReasoningSummary: event.target.value as typeof settings.assistantReasoningSummary })}
+                            aria-label="Reasoning summaries"
+                        >
+                            <option value="auto">Auto</option>
+                            <option value="detailed">Detailed</option>
+                            <option value="concise">Concise</option>
+                        </SettingsSelect>
+                    )}
+                />
+                <SettingsRow
+                    title="Context limit"
+                    description="Automatically summarize older context before a new turn would exceed this size. Smaller model windows use a lower safe limit."
+                    status={formatContextTokenLimit(settings.assistantContextCompactionThresholdTokens)}
+                    statusTone="info"
+                    control={(
+                        <SettingsSelect
+                            value={String(settings.assistantContextCompactionThresholdTokens)}
+                            onChange={(event) => updateSettings({ assistantContextCompactionThresholdTokens: Number(event.target.value) })}
+                            aria-label="Context compaction limit"
+                        >
+                            {ASSISTANT_CONTEXT_COMPACTION_THRESHOLD_OPTIONS.map((tokens) => (
+                                <option key={tokens} value={tokens}>{formatContextTokenLimit(tokens)} tokens</option>
+                            ))}
+                        </SettingsSelect>
+                    )}
+                />
+            </SettingsSection>
+
             <SettingsSection title="Output and history">
                 <SettingsRow title="Assistant output" description="Show token-by-token output or grouped chunks while a response is generated." control={<SettingsSegmented value={settings.assistantTextStreamingMode} options={[{ value: 'stream', label: 'Live stream' }, { value: 'chunks', label: 'Chunks' }]} onChange={(assistantTextStreamingMode) => updateSettings({ assistantTextStreamingMode })} label="Assistant output mode" />} />
                 <SettingsRow title="Open live tool output" description="Automatically expand running tool and command output. Turn this off to keep tool calls closed unless you open them." control={<SettingsSwitch checked={settings.assistantToolOutputDefaultMode === 'expanded'} onCheckedChange={(enabled) => updateSettings({ assistantToolOutputDefaultMode: enabled ? 'expanded' : 'minimized' })} label="Automatically open live tool output" />} />
                 <SettingsRow title="Reconnect on startup" description="Attach the selected chat to its canonical server worker after the cached shell appears." control={<SettingsSwitch checked={settings.assistantAutoReconnect} onCheckedChange={(assistantAutoReconnect) => updateSettings({ assistantAutoReconnect })} label="Reconnect selected chat on startup" />} />
-                <SettingsRow title="Prefetch earlier history" description="Load one older page after the newest page renders, once per selected chat." control={<SettingsSwitch checked={settings.assistantHistoryPrefetch} onCheckedChange={(assistantHistoryPrefetch) => updateSettings({ assistantHistoryPrefetch })} label="Prefetch earlier history" />} />
                 <SettingsRow title="Cross-surface status" description="Show when this canonical chat is open or running in another Zyra surface." control={<SettingsSwitch checked={settings.assistantShowStatusDetails} onCheckedChange={(assistantShowStatusDetails) => updateSettings({ assistantShowStatusDetails })} label="Show cross-surface status" />} />
                 <SettingsRow title="Canonical diagnostics" description="Show canonical worker presence and replay sequence in the chat header." control={<SettingsSwitch checked={settings.assistantShowDiagnostics} onCheckedChange={(assistantShowDiagnostics) => updateSettings({ assistantShowDiagnostics })} label="Show canonical diagnostics" />} />
             </SettingsSection>

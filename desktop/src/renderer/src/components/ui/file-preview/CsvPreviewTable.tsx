@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { MAX_CSV_ROWS } from './constants'
 import { schedulePreviewWork } from './schedule-preview-work'
-import { detectCsvDelimiter, extractColorValues, parseDelimitedContent } from './utils'
+import { detectCsvDelimiter, extractColorValues, parseDelimitedContent, parseDelimitedContentChunked } from './utils'
 
 interface CsvPreviewTableProps {
     content: string
@@ -98,10 +98,14 @@ export default function CsvPreviewTable({ content, language, useDistinctColumnCo
         let cancelled = false
         setIsRendering(true)
 
-        const cancelScheduledWork = schedulePreviewWork(() => {
+        const renderCsvPreview = async () => {
             if (cancelled) return
             const delimiter = language === 'tsv' ? '\t' : detectCsvDelimiter(content)
-            const rows = parseDelimitedContent(content, delimiter).filter(row => row.some(cell => cell.trim().length > 0))
+            const parsedRows = content.length > 100_000
+                ? await parseDelimitedContentChunked(content, delimiter, () => cancelled)
+                : parseDelimitedContent(content, delimiter)
+            if (cancelled) return
+            const rows = parsedRows.filter(row => row.some(cell => cell.trim().length > 0))
 
             if (rows.length === 0) {
                 setCsvPreview({ header: [], body: [], totalRows: 0 })
@@ -118,7 +122,8 @@ export default function CsvPreviewTable({ content, language, useDistinctColumnCo
                 totalRows: bodyRows.length
             })
             setIsRendering(false)
-        }, content.length > 100_000)
+        }
+        const cancelScheduledWork = schedulePreviewWork(() => { void renderCsvPreview() }, content.length > 100_000)
 
         return () => {
             cancelled = true
@@ -154,12 +159,12 @@ export default function CsvPreviewTable({ content, language, useDistinctColumnCo
         <div className="w-full h-full min-h-0 bg-sparkle-card rounded-xl border border-white/5 overflow-hidden flex flex-col">
             <div className="px-4 py-2.5 border-b border-white/5 text-xs text-white/50 bg-black/20">
                 {isRendering
-                    ? 'Rendering CSV preview...'
+                    ? 'Rendering file...'
                     : `${csvPreview.totalRows} rows ${csvPreview.totalRows > 0 ? `(showing ${pageStartLabel}-${pageEndLabel})` : ''}`}
             </div>
             {isRendering ? (
                 <div className="flex flex-1 items-center justify-center text-xs text-white/50">
-                    Rendering CSV preview...
+                    Rendering file...
                 </div>
             ) : csvPreview.header.length > 0 ? (
                 <div className="flex-1 min-h-0 overflow-auto custom-scrollbar">

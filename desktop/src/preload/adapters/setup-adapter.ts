@@ -1,6 +1,8 @@
 import { ipcRenderer } from 'electron'
 import {
     ONBOARDING_IPC,
+    type AccountConnectionAnalyticsInput,
+    type AccountConnectionStatusInput,
     type BeginOnboardingReviewInput,
     type CancelOnboardingReviewInput,
     type CommitOnboardingStepInput,
@@ -17,6 +19,7 @@ import {
 } from '../../shared/preferences/contracts'
 import {
     DEVICE_SECRETS_IPC,
+    type UpdateBrowserIntegrationSecretsInput,
     type UpdateHostedAiSecretsInput
 } from '../../shared/preferences/secrets-contracts'
 
@@ -33,14 +36,15 @@ export function createSetupAdapter() {
         },
         secrets: {
             updateHostedAiKeys: (input: UpdateHostedAiSecretsInput) => ipcRenderer.invoke(DEVICE_SECRETS_IPC.updateHostedAiKeys, input),
-            migrateLegacyHostedAiKeys: (input: UpdateHostedAiSecretsInput) => ipcRenderer.invoke(DEVICE_SECRETS_IPC.migrateLegacyHostedAiKeys, input)
+            migrateLegacyHostedAiKeys: (input: UpdateHostedAiSecretsInput) => ipcRenderer.invoke(DEVICE_SECRETS_IPC.migrateLegacyHostedAiKeys, input),
+            updateBrowserIntegrationSecrets: (input: UpdateBrowserIntegrationSecretsInput) => ipcRenderer.invoke(DEVICE_SECRETS_IPC.updateBrowserIntegrationSecrets, input)
         },
         onboarding: {
             getState: () => ipcRenderer.invoke(ONBOARDING_IPC.getState),
             getAuthStatus: () => ipcRenderer.invoke(ONBOARDING_IPC.getAuthStatus),
-            getConnectionsStatus: () => ipcRenderer.invoke(ONBOARDING_IPC.getConnectionsStatus),
-            connectChatGpt: () => ipcRenderer.invoke(ONBOARDING_IPC.connectChatGpt),
-            connectApiKey: (apiKey: string) => ipcRenderer.invoke(ONBOARDING_IPC.connectApiKey, apiKey),
+            getConnectionsStatus: (input?: AccountConnectionStatusInput) => ipcRenderer.invoke(ONBOARDING_IPC.getConnectionsStatus, input),
+            connectChatGpt: (input?: AccountConnectionAnalyticsInput) => ipcRenderer.invoke(ONBOARDING_IPC.connectChatGpt, input),
+            connectApiKey: (apiKey: string, input?: AccountConnectionAnalyticsInput) => ipcRenderer.invoke(ONBOARDING_IPC.connectApiKey, apiKey, input),
             disconnectOpenAI: (input: DisconnectOpenAIInput) => ipcRenderer.invoke(ONBOARDING_IPC.disconnectOpenAI, input),
             updateAppearance: (input: UpdateOnboardingAppearanceInput) => ipcRenderer.invoke(ONBOARDING_IPC.updateAppearance, input),
             commitStep: (input: CommitOnboardingStepInput) => ipcRenderer.invoke(ONBOARDING_IPC.commitStep, input),

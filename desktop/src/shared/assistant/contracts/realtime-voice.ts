@@ -68,7 +68,6 @@ export type AssistantRealtimeVoiceClientMessage =
         channel: 'speakable' | 'commentary'
         content: [{ type: 'input_text'; text: string }]
     }
-    | { type: 'response.create' }
     | { type: 'session.close' }
 
 export interface AssistantRealtimeVoiceClientCommandEvent {
@@ -78,6 +77,7 @@ export interface AssistantRealtimeVoiceClientCommandEvent {
     threadId: string
     realtimeSessionId: string
     realtimeSessionGeneration: number
+    canonicalMessageId?: string
     messages: AssistantRealtimeVoiceClientMessage[]
 }
 
@@ -109,14 +109,21 @@ export type AssistantRealtimeVoiceEvent =
     | {
         type: 'composer.response.delta'
         threadId?: string
+        adapterSessionId: string
+        realtimeSessionId: string
+        realtimeSessionGeneration: number
         turnId: string
         delta: string
     }
     | {
         type: 'composer.response.done'
         threadId?: string
+        adapterSessionId: string
+        realtimeSessionId: string
+        realtimeSessionGeneration: number
         turnId: string
         text: string
+        canonicalMessageId?: string
         error?: string
     }
     | AssistantRealtimeVoiceClientCommandEvent

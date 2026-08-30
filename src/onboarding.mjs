@@ -12,6 +12,8 @@ import { buildTerminalTheme, listTerminalThemes } from "./terminal-theme.mjs";
 import { zyraLogoRows } from "./zyra-logo.mjs";
 
 const ONBOARDING_VERSION = 1;
+const ZYRA_VERSION = process.env.ZYRA_VERSION
+  || JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const ONBOARDING_FILE = "onboarding.json";
 const FIRST_PROMPT = "I just installed Zyra. Can you show me around slowly?";
 
@@ -128,7 +130,7 @@ export async function runOnboarding(options = {}) {
           input,
           output,
           state,
-          root: options.root,
+          root: options.assetRoot || options.root,
           project: options.project,
           currentTheme: selectedTheme,
           allowBack: true,
@@ -151,6 +153,21 @@ export async function runOnboarding(options = {}) {
           continue;
         }
         webTools = result;
+        step = "desktop";
+        continue;
+      }
+
+      if (step === "desktop") {
+        if (process.env.ZYRA_DISTRIBUTION === "desktop-bundle" || options.offerDesktop === false) {
+          step = "finish";
+          continue;
+        }
+        const result = await offerDesktopApp({ input, output, state, options, allowBack: true });
+        if (result === BACK) {
+          step = "web";
+          continue;
+        }
+        state.desktopInstall = result;
         step = "finish";
         continue;
       }
@@ -158,7 +175,7 @@ export async function runOnboarding(options = {}) {
       if (step === "finish") {
         const result = await renderPersonalFinish({ input, output, state, selectedTheme, webTools, allowBack: true });
         if (result === BACK) {
-          step = "web";
+          step = process.env.ZYRA_DISTRIBUTION === "desktop-bundle" || options.offerDesktop === false ? "web" : "desktop";
           continue;
         }
         step = "done";
@@ -171,6 +188,7 @@ export async function runOnboarding(options = {}) {
       terminalTheme: selectedTheme,
       webSearch: webTools.webSearch,
       webFetch: webTools.webFetch,
+      desktopInstall: state.desktopInstall || "not-offered",
     });
 
     output.write(clearScreen);
@@ -185,6 +203,49 @@ export async function runOnboarding(options = {}) {
     };
   } finally {
     output.write(showCursor);
+  }
+}
+
+async function offerDesktopApp({ input, output, state, options, allowBack = false }) {
+  const choice = await selectScene({
+    input,
+    output,
+    state,
+    title: "Add Zyra Desktop?",
+    subtitle: "Desktop adds Browser and graphical Details, Files, Resources, Agents, Diff, and Terminal windows.",
+    items: [
+      { value: "install", label: "Install Zyra Desktop", description: "download the matching verified Desktop app" },
+      { value: "skip", label: "Not now", description: "the TUI keeps working on its own" },
+    ],
+    prompt: keyFooter([["Up/Down", "move"], ["Enter", "choose"], ...(allowBack ? [["B", "previous"]] : [])]),
+    allowBack,
+  });
+  if (choice === BACK) return BACK;
+  if (choice !== "install") return "not-now";
+  try {
+    renderFrame(output, state, {
+      statusLines: statusLines(state),
+      bodyLines: ["Downloading the matching Zyra Desktop release…", "The installer is verified before it opens."],
+      prompt: "please wait",
+    });
+    const install = options.installDesktop || (async () => {
+      const { installMatchingDesktop } = await import("./desktop-app.mjs");
+      return installMatchingDesktop({ version: options.version || ZYRA_VERSION });
+    });
+    await install();
+    await typeScene(output, state, ["Zyra Desktop installer opened.", "Finish its setup whenever you are ready."], {
+      prompt: keyFooter([["Enter", "continue"]]),
+      statusLines: statusLines(state),
+    });
+    await waitForEnter(input);
+    return "installer-opened";
+  } catch (error) {
+    await typeScene(output, state, ["Desktop installation did not start.", error instanceof Error ? error.message : String(error), "You can continue with the TUI and install Desktop later."], {
+      prompt: keyFooter([["Enter", "continue"]]),
+      statusLines: statusLines(state),
+    });
+    await waitForEnter(input);
+    return "failed";
   }
 }
 

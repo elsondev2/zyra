@@ -54,7 +54,7 @@ export function AssistantWorkflowDetailPage({
                 <AssistantWorkflowActionButtons run={run} onAction={onWorkflowAction} />
             </header>
 
-            <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
+            <div data-assistant-capsule-scroll="workflow-detail" className="custom-scrollbar min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
                 <div className="mx-auto w-full max-w-4xl px-3 py-3">
                     <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(7.5rem, 1fr))' }}>
                         <SummaryMetric label="Progress" value={`${progress.percentage}%`} />

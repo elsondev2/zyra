@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight } from 'lucide-react'
 import { ONBOARDING_STEPS, getPreviousOnboardingStep, type OnboardingStep } from '@shared/onboarding/contracts'
+import type { AnalyticsStatus } from '@shared/analytics/contracts'
+import { getDesktopAnalyticsStatus, onDesktopAnalyticsStatusChange, setDesktopAnalyticsEnabled } from '@/lib/product-analytics'
 import { useSettings } from '@/lib/settings'
 import { useOnboarding } from '@/lib/onboarding'
 import { cn } from '@/lib/utils'
@@ -50,6 +52,9 @@ export function OnboardingFlow() {
     const appearanceSaveQueue = useRef<Promise<void>>(Promise.resolve())
     const [saving, setSaving] = useState(false)
     const [error, setError] = useState<string | null>(null)
+    const [analyticsStatus, setAnalyticsStatus] = useState<AnalyticsStatus | null>(null)
+    const [analyticsLoading, setAnalyticsLoading] = useState(false)
+    const [analyticsError, setAnalyticsError] = useState<string | null>(null)
     const transitionDirection = useRef<StepTransitionDirection>('forward')
     const actionInFlight = useRef(false)
     const stepScrollRef = useRef<HTMLDivElement | null>(null)
@@ -78,6 +83,54 @@ export function OnboardingFlow() {
     useEffect(() => {
         if (stepScrollRef.current) stepScrollRef.current.scrollTop = 0
     }, [record.currentStep])
+
+    useEffect(() => {
+        let cancelled = false
+        const refresh = () => {
+            setAnalyticsLoading(true)
+            setAnalyticsError(null)
+            void getDesktopAnalyticsStatus().then((status) => {
+                if (cancelled) return
+                if (!status) throw new Error('Product analytics is unavailable in this Desktop session.')
+                setAnalyticsStatus(status)
+            }).catch((statusError) => {
+                if (!cancelled) setAnalyticsError(statusError instanceof Error ? statusError.message : 'Could not load the analytics preference.')
+            }).finally(() => {
+                if (!cancelled) setAnalyticsLoading(false)
+            })
+        }
+        const handleVisibility = () => { if (document.visibilityState === 'visible') refresh() }
+        const unsubscribe = onDesktopAnalyticsStatusChange((status) => {
+            if (!cancelled) {
+                setAnalyticsStatus(status)
+                setAnalyticsError(null)
+            }
+        })
+        window.addEventListener('focus', refresh)
+        document.addEventListener('visibilitychange', handleVisibility)
+        refresh()
+        return () => {
+            cancelled = true
+            unsubscribe()
+            window.removeEventListener('focus', refresh)
+            document.removeEventListener('visibilitychange', handleVisibility)
+        }
+    }, [record.startedAt])
+
+    const setAnalyticsChoice = async (enabled: boolean) => {
+        if (analyticsLoading || analyticsStatus?.canChangeEnabled === false) return
+        setAnalyticsLoading(true)
+        setAnalyticsError(null)
+        try {
+            const status = await setDesktopAnalyticsEnabled(enabled)
+            if (!status || !status.preferenceSet) throw new Error('Zyra could not save the analytics preference.')
+            setAnalyticsStatus(status)
+        } catch (choiceError) {
+            setAnalyticsError(choiceError instanceof Error ? choiceError.message : 'Could not save the analytics preference.')
+        } finally {
+            setAnalyticsLoading(false)
+        }
+    }
 
     const runAuth = async (
         activity: 'chatgpt' | 'api-key',
@@ -193,8 +246,10 @@ export function OnboardingFlow() {
         'Could not exit setup review.'
     )
 
+    const analyticsChoice = analyticsStatus?.preferenceSet ? analyticsStatus.requested : null
     const canContinue = record.currentStep !== 'connect-openai' || auth.status?.verified === true
     const projectReady = record.currentStep !== 'projects' || Boolean(projects.projectsFolder.trim())
+    const analyticsReady = record.currentStep !== 'review' || analyticsChoice !== null
     const currentIndex = ONBOARDING_STEPS.indexOf(record.currentStep)
     const stepTitle = record.currentStep === 'review' && !record.reviewActive
         ? 'Ready to open Zyra'
@@ -224,7 +279,17 @@ export function OnboardingFlow() {
                                     Your previous setup checkpoint could not be read, so Zyra started a fresh review.
                                 </p>
                             ) : null}
-                            <WelcomeStep saving={saving} error={error} onStart={() => void continueStep()} />
+                            <WelcomeStep
+                                saving={saving}
+                                error={error}
+                                analyticsChoice={analyticsChoice}
+                                analyticsConfigured={analyticsStatus?.configured === true}
+                                analyticsManagedByEnvironment={analyticsStatus?.canChangeEnabled === false}
+                                analyticsLoading={analyticsLoading}
+                                analyticsError={analyticsError}
+                                onAnalyticsChoice={(enabled) => { void setAnalyticsChoice(enabled) }}
+                                onStart={() => void continueStep()}
+                            />
                         </div>
                     </div>
                 ) : (
@@ -258,7 +323,17 @@ export function OnboardingFlow() {
                                     ) : null}
                                     {record.currentStep === 'appearance' ? <AppearanceStep selection={appearance} onChange={changeAppearance} /> : null}
                                     {record.currentStep === 'projects' ? <ProjectsStep selection={projects} onChange={setProjects} /> : null}
-                                    {record.currentStep === 'review' ? <ReviewStep record={record} /> : null}
+                                    {record.currentStep === 'review' ? (
+                                        <ReviewStep
+                                            record={record}
+                                            analyticsChoice={analyticsChoice}
+                                            analyticsConfigured={analyticsStatus?.configured === true}
+                                            analyticsManagedByEnvironment={analyticsStatus?.canChangeEnabled === false}
+                                            analyticsLoading={analyticsLoading}
+                                            analyticsError={analyticsError}
+                                            onAnalyticsChoice={(enabled) => { void setAnalyticsChoice(enabled) }}
+                                        />
+                                    ) : null}
                                 </div>
                             </section>
                         </div>
@@ -279,7 +354,7 @@ export function OnboardingFlow() {
                                     </div>
                                 </div>
 
-                                <button type="button" disabled={saving || !canContinue || !projectReady} onClick={() => void continueStep()} className="inline-flex h-11 w-[120px] items-center justify-center gap-1.5 rounded-md bg-[var(--accent-primary)] px-4 text-[12px] font-semibold text-[var(--accent-on-primary)] shadow-[0_8px_24px_color-mix(in_srgb,var(--accent-primary)_18%,transparent)] transition-[opacity,transform] hover:-translate-y-px hover:opacity-92 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0">
+                                <button type="button" disabled={saving || analyticsLoading || !canContinue || !projectReady || !analyticsReady} onClick={() => void continueStep()} className="inline-flex h-11 w-[120px] items-center justify-center gap-1.5 rounded-md bg-[var(--accent-primary)] px-4 text-[12px] font-semibold text-[var(--accent-on-primary)] shadow-[0_8px_24px_color-mix(in_srgb,var(--accent-primary)_18%,transparent)] transition-[opacity,transform] hover:-translate-y-px hover:opacity-92 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:translate-y-0">
                                     {continueLabel}{record.currentStep !== 'review' ? <ArrowRight size={13} /> : null}
                                 </button>
                             </div>

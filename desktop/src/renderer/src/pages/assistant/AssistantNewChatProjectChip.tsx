@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronDown, Folder, FolderOpen, Unlink } from 'lucide-react'
+import { Check, ChevronDown, FolderOpen, Unlink } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { AssistantProjectIcon } from './AssistantProjectIcon'
 
 export type AssistantProjectChoice = {
     path: string
@@ -59,7 +60,7 @@ export function AssistantNewChatProjectChip(props: {
                 aria-haspopup="menu"
                 aria-expanded={open}
             >
-                <Folder size={12} strokeWidth={1.8} className="shrink-0 text-sparkle-text-muted" />
+                <AssistantProjectIcon projectPath={props.projectPath} size={12} />
                 <span className="truncate">{projectLabel}</span>
                 <ChevronDown size={11} className={cn('shrink-0 text-sparkle-text-muted transition-transform', open && 'rotate-180')} />
             </button>
@@ -92,7 +93,7 @@ export function AssistantNewChatProjectChip(props: {
                                 className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[12px] text-sparkle-text-secondary transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
                                 title={project.path}
                             >
-                                <Folder size={13} className="shrink-0 text-sparkle-text-muted" />
+                                <AssistantProjectIcon projectPath={project.path} size={13} />
                                 <span className="min-w-0 flex-1 truncate">{project.label}</span>
                                 {project.path === props.projectPath ? <Check size={12} /> : null}
                             </button>

@@ -4,6 +4,8 @@ import {
     loadAssistantInspectorWorkspaceState,
     normalizeAssistantInspectorWorkspaceState,
     persistAssistantInspectorWorkspaceState,
+    reconcileAssistantInspectorBrowserTabs,
+    reorderAssistantInspectorWorkspaceTabs,
     restoreAssistantInspectorWorkspaceState
 } from '../src/renderer/src/pages/assistant/assistant-inspector-workspace-state'
 
@@ -38,6 +40,41 @@ assert.deepEqual(restored.tabs.map((tab) => tab.id), [
     'turn:turn-7'
 ])
 assert.equal(restored.tabs.filter((tab) => tab.kind === 'terminal').length, 1)
+const reorderedForward = reorderAssistantInspectorWorkspaceTabs(restored.tabs, 'terminal', 'review')
+assert.deepEqual(reorderedForward.map((tab) => tab.id), [
+    'explorer',
+    'control',
+    'resources',
+    'agents',
+    'review',
+    'terminal',
+    'browser:kept',
+    'turn:turn-7'
+], 'horizontal drag preview commits the dragged tab at the live collision target')
+const reorderedBackward = reorderAssistantInspectorWorkspaceTabs(reorderedForward, 'turn:turn-7', 'explorer')
+assert.deepEqual(reorderedBackward.slice(0, 2).map((tab) => tab.id), ['turn:turn-7', 'explorer'])
+assert.equal(reorderAssistantInspectorWorkspaceTabs(reorderedBackward, 'missing', 'review'), reorderedBackward, 'stale drag identities cannot rewrite tab order')
+const interleavedBrowserTabs = [
+    { id: 'browser:a', kind: 'browser', browserTabId: 'browser:a' } as const,
+    { id: 'explorer', kind: 'explorer' } as const,
+    { id: 'browser:b', kind: 'browser', browserTabId: 'browser:b' } as const,
+    { id: 'terminal', kind: 'terminal' } as const
+]
+assert.equal(
+    reconcileAssistantInspectorBrowserTabs(interleavedBrowserTabs, ['browser:a', 'browser:b']),
+    interleavedBrowserTabs,
+    'Browser metadata refreshes preserve an interleaved user-defined Inspector order'
+)
+assert.deepEqual(
+    reconcileAssistantInspectorBrowserTabs(interleavedBrowserTabs, ['browser:a', 'browser:new', 'browser:b']).map((tab) => tab.id),
+    ['browser:a', 'browser:new', 'explorer', 'browser:b', 'terminal'],
+    'new Browser identities join the nearest Browser neighbor without regrouping existing tabs'
+)
+assert.deepEqual(
+    reconcileAssistantInspectorBrowserTabs(interleavedBrowserTabs, ['browser:b']).map((tab) => tab.id),
+    ['explorer', 'browser:b', 'terminal'],
+    'stale Browser identities leave without moving surviving non-Browser tabs'
+)
 assert.deepEqual(
     restoreAssistantInspectorWorkspaceState(null, ['browser:migrated']),
     {

@@ -23,6 +23,7 @@ import {
     shouldBroadcastDownloadProgress
 } from './update-state'
 import { resolveGitHubReleaseFeed } from './github-release-feed'
+import { classifyAnalyticsErrorCode as updateAnalyticsErrorCode } from '../../shared/analytics/error-code'
 
 export const UPDATE_STATE_CHANNEL = 'devscope:updates:state'
 export const UPDATE_GET_STATE_CHANNEL = 'devscope:updates:getState'
@@ -66,6 +67,15 @@ let isInstallingUpdate = false
 let updaterConfigured = false
 let updaterInitialized = false
 let configuredFeedTagName: string | null = null
+let captureUpdateAnalytics: ((properties: {
+    action: 'update_check'
+    outcome: 'started' | 'completed' | 'failed' | 'available' | 'current' | 'unknown'
+    error_code?: string
+}) => void) | null = null
+
+export function configureUpdateAnalytics(capture: typeof captureUpdateAnalytics): void {
+    captureUpdateAnalytics = capture
+}
 
 function currentAutoUpdateDisabledReason(): string | null {
     return getAutoUpdateDisabledReason({
@@ -139,6 +149,7 @@ function armUpdateCheckTimeout(reason: string): void {
                 nowIso()
             )
         )
+        captureUpdateAnalytics?.({ action: 'update_check', outcome: 'failed', error_code: 'timeout' })
         log.error(`[updater] update check timed out (${reason})`)
     }, AUTO_UPDATE_CHECK_TIMEOUT_MS)
     updateCheckTimeoutTimer.unref()
@@ -418,17 +429,23 @@ export async function checkForAppUpdates(_reason: string = 'manual'): Promise<De
     }
 
     updateCheckInFlight = true
+    captureUpdateAnalytics?.({ action: 'update_check', outcome: 'started' })
     setUpdateState(reduceUpdateStateOnCheckStart(updateState, nowIso()))
     armUpdateCheckTimeout(_reason)
 
     try {
         await configureAutoUpdaterFeed(autoUpdaterRef)
         await autoUpdaterRef.checkForUpdates()
+        captureUpdateAnalytics?.({
+            action: 'update_check',
+            outcome: updateState.status === 'available' ? 'available' : updateState.status === 'idle' ? 'current' : 'completed'
+        })
         return buildActionResult(true, true)
     } catch (error) {
         clearUpdateCheckTimeoutTimer()
         const message = error instanceof Error ? error.message : String(error)
         setUpdateState(reduceUpdateStateOnCheckFailure(updateState, message, nowIso()))
+        captureUpdateAnalytics?.({ action: 'update_check', outcome: 'failed', error_code: updateAnalyticsErrorCode(error) })
         log.error('[updater] failed to check for updates', error)
         return buildActionResult(true, false)
     } finally {

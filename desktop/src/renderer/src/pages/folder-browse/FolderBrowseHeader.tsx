@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
-import { ArrowLeft, ArrowUp, Check, Code, Copy, FileJson, FilePlus, FileText, Folder, FolderGit2, FolderPlus, Plus, RefreshCw, Settings } from 'lucide-react'
+import { ArrowLeft, ArrowUp, Check, Code, Copy, FileJson, FilePlus, FileText, FolderGit2, FolderPlus, Plus, RefreshCw, Settings } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useThemeRevision } from '@/lib/use-theme-revision'
 import { FileActionsMenu } from '@/components/ui/FileActionsMenu'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { OpenWithProjectButton } from '@/components/ui/OpenWithProjectButton'
 import { buildRootRelativeBreadcrumbSegments } from './folderBrowsePageUtils'
 
@@ -66,6 +68,8 @@ export function FolderBrowseHeader({
     onCreateFolder,
     onCloneRepository
 }: FolderBrowseHeaderProps) {
+    useThemeRevision()
+    const iconTheme = typeof document !== 'undefined' && document.body.classList.contains('light') ? 'light' : 'dark'
     const breadcrumbSegments = useMemo(
         () => buildRootRelativeBreadcrumbSegments(decodedPath, displayRootPath),
         [decodedPath, displayRootPath]
@@ -217,7 +221,7 @@ export function FolderBrowseHeader({
                                             }}
                                             className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-white/65 transition-colors hover:bg-white/[0.06] hover:text-white"
                                         >
-                                            <Folder size={13} className={child.isProject ? 'text-sky-300' : 'text-yellow-300'} />
+                                            <FileEntryIcon pathValue={child.path} kind="directory" theme={iconTheme} size={14} />
                                             <span className="min-w-0 flex-1 truncate">{child.name}</span>
                                             {child.isProject && (
                                                 <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-sky-200">

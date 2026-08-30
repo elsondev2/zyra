@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Check, Columns3, Copy, RefreshCw, Rows3, X } from 'lucide-react'
 import type { FileDiffMetadata } from '@pierre/diffs/react'
 import { RawPatchFallback } from '@/components/ui/diff-viewer/RawPatchFallback'
-import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { useSettings } from '@/lib/settings'
 import { cn } from '@/lib/utils'
 import { DiffStats } from './DiffStats'
@@ -119,7 +119,7 @@ export function FileDiffDetailModal({
                 <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-white/10 bg-white/[0.03]">
                     <div className="min-w-0">
                         <div className="flex items-center gap-2 mb-1">
-                            <VscodeEntryIcon
+                            <FileEntryIcon
                                 pathValue={filePath}
                                 kind="file"
                                 theme={iconTheme}

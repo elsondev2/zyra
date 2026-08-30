@@ -56,7 +56,7 @@ interface AssistantRuntimeEventHandlerDeps {
         threadId?: string
     ) => void
     updateLatestTurnAssistantMessage: (sessionId: string, threadId: string, assistantMessageId: string, occurredAt: string) => void
-    projectFleet: (threadId: string, snapshot: Extract<AssistantRuntimeEvent, { type: 'fleet.snapshot.updated' }>['payload']['snapshot']) => void
+    projectFleet: (threadId: string, snapshot: Extract<AssistantRuntimeEvent, { type: 'fleet.snapshot.updated' }>['payload']['snapshot']) => boolean
 }
 
 type RuntimeActivityPayload = Extract<AssistantRuntimeEvent, { type: 'activity' }>['payload']
@@ -72,6 +72,24 @@ function isOlderMismatchedTurnEvent(
     return Number.isFinite(latestStartedAtMs)
         && Number.isFinite(eventCreatedAtMs)
         && eventCreatedAtMs < latestStartedAtMs
+}
+
+function resolveRuntimeEventTurnId(
+    thread: AssistantThread,
+    eventTurnId: string | undefined,
+    eventCreatedAt: string
+): string | null {
+    if (eventTurnId) return eventTurnId
+    const latestTurn = thread.latestTurn
+    if (!latestTurn) return null
+    const latestStartedAtMs = Date.parse(latestTurn.startedAt || latestTurn.requestedAt)
+    const eventCreatedAtMs = Date.parse(eventCreatedAt)
+    if (
+        Number.isFinite(latestStartedAtMs)
+        && Number.isFinite(eventCreatedAtMs)
+        && eventCreatedAtMs < latestStartedAtMs
+    ) return null
+    return latestTurn.id
 }
 
 function buildCodexItemActivityId(itemId?: string): string | null {
@@ -649,7 +667,7 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
         const eventThreadRecord = deps.findThreadRecord(event.threadId)
         const eventSession = eventThreadRecord?.session || deps.findSessionByThreadId(event.threadId)
         const eventThreadId = eventThreadRecord?.thread.id || event.threadId
-        deps.projectFleet(eventThreadId, event.payload.snapshot)
+        if (!deps.projectFleet(eventThreadId, event.payload.snapshot)) return
         deps.appendEvent('fleet.snapshot.updated', event.createdAt, {
             threadId: eventThreadId,
             eventType: event.payload.eventType,
@@ -752,7 +770,7 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
                 proposedPlanCount: 0,
                 lastSeenCompletedTurnId: null,
                 runtimeMode: parentThread?.runtimeMode || 'approval-required',
-                interactionMode: parentThread?.interactionMode || 'default',
+                interactionMode: 'default',
                 webSearch: parentThread?.webSearch ?? null,
                 webFetch: parentThread?.webFetch ?? null,
                 state: event.payload.state || 'ready',
@@ -824,7 +842,7 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
                 model: event.payload.model || existingThread.model,
                 thinking: event.payload.effort || existingThread.thinking || null,
                 profile: event.payload.profile || existingThread.profile || null,
-                interactionMode: event.payload.interactionMode,
+                interactionMode: 'default',
                 lastError: null,
                 activePlan: null,
                 updatedAt: event.createdAt
@@ -956,7 +974,10 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
         const latestTurn: AssistantLatestTurn = usageMatchesLatestTurn
             ? {
                 ...existingThread.latestTurn!,
-                usage: event.payload.usage
+                usage: {
+                    ...(existingThread.latestTurn!.usage || {}),
+                    ...event.payload.usage
+                }
             }
             : {
                 id: event.turnId || createAssistantId('assistant-turn'),
@@ -975,7 +996,12 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
 
     if (event.type === 'content.delta' && event.payload.streamKind === 'assistant_text') {
         if (!eventSession) return
-        if (deps.isAssistantTextSuppressed(eventThreadId, event.turnId || null)) return
+        const resolvedTurnId = resolveRuntimeEventTurnId(
+            eventThreadRecord?.thread || deps.requireThread(eventThreadId),
+            event.turnId,
+            event.createdAt
+        )
+        if (deps.isAssistantTextSuppressed(eventThreadId, resolvedTurnId)) return
         const messageId = `assistant-message-${event.itemId || event.turnId || event.eventId}`
         const key = assistantTextBufferKey(eventThreadId, messageId)
         deps.assistantTextBuffers.set(key, `${deps.assistantTextBuffers.get(key) || ''}${event.payload.delta}`)
@@ -984,7 +1010,7 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
             threadId: eventThreadId,
             messageId,
             delta: event.payload.delta,
-            turnId: event.turnId || null,
+            turnId: resolvedTurnId,
             occurredAt: event.createdAt
         })
         deps.updateLatestTurnAssistantMessage(eventSession.id, eventThreadId, messageId, event.createdAt)
@@ -993,13 +1019,15 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
 
     if (event.type === 'content.completed' && event.payload.streamKind === 'assistant_text') {
         if (!eventSession) return
-        if (deps.isAssistantTextSuppressed(eventThreadId, event.turnId || null)) return
         const messageId = `assistant-message-${event.itemId || event.turnId || event.eventId}`
+        const thread = eventThreadRecord?.thread || deps.requireThread(eventThreadId)
+        const existing = thread.messages.find((message) => message.id === messageId)
+        const resolvedTurnId = existing?.turnId || resolveRuntimeEventTurnId(thread, event.turnId, event.createdAt)
+        if (deps.isAssistantTextSuppressed(eventThreadId, resolvedTurnId)) return
         deps.flushAssistantTextDelta({ threadId: eventThreadId, messageId })
         const key = assistantTextBufferKey(eventThreadId, messageId)
         const bufferedText = deps.assistantTextBuffers.get(key) || ''
         deps.assistantTextBuffers.delete(key)
-        const existing = deps.requireThread(eventThreadId).messages.find((message) => message.id === messageId)
         const completedText = String(event.payload.text || bufferedText || '')
         const hasAssistantText = Boolean(completedText)
         if (!existing && completedText) {
@@ -1007,14 +1035,15 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
                 threadId: eventThreadId,
                 messageId,
                 delta: completedText,
-                turnId: event.turnId || null
+                turnId: resolvedTurnId
             }, eventSession.id, eventThreadId)
         }
         if (!existing && !hasAssistantText) return
         deps.appendEvent('thread.message.assistant.completed', event.createdAt, {
             threadId: eventThreadId,
             messageId,
-            text: completedText
+            text: completedText,
+            turnId: resolvedTurnId
         }, eventSession.id, eventThreadId)
         deps.updateLatestTurnAssistantMessage(eventSession.id, eventThreadId, messageId, event.createdAt)
 
@@ -1024,7 +1053,7 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
                 threadId: eventThreadId,
                 plan: {
                     id: `assistant-plan-${event.turnId || event.itemId || event.eventId}`,
-                    turnId: event.turnId || null,
+                    turnId: resolvedTurnId,
                     planMarkdown,
                     createdAt: event.createdAt,
                     updatedAt: event.createdAt

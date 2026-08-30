@@ -181,6 +181,7 @@ interface StrandsRuntimeProps {
     refraction: number
     dispersion: number
     glassSize: number
+    maxFps: number
 }
 
 export interface StrandsProps extends Partial<StrandsRuntimeProps> {
@@ -218,6 +219,7 @@ export default function Strands({
     refraction = 1,
     dispersion = 1,
     glassSize = 1,
+    maxFps = 60,
     className = '',
     style
 }: StrandsProps) {
@@ -239,7 +241,8 @@ export default function Strands({
         glass,
         refraction,
         dispersion,
-        glassSize
+        glassSize,
+        maxFps
     })
     propsRef.current = {
         colors,
@@ -259,7 +262,8 @@ export default function Strands({
         glass,
         refraction,
         dispersion,
-        glassSize
+        glassSize,
+        maxFps
     }
 
     const containerRef = useRef<HTMLDivElement | null>(null)
@@ -271,7 +275,10 @@ export default function Strands({
         const renderer = new Renderer({
             alpha: true,
             premultipliedAlpha: true,
-            antialias: true
+            // The shader draws a full-screen triangle and anti-aliases its own
+            // glass edge. Multisampling the offscreen pass adds cost without
+            // improving the visible orb.
+            antialias: false
         })
         const gl = renderer.gl
         gl.clearColor(0, 0, 0, 0)
@@ -394,6 +401,11 @@ export default function Strands({
                 return
             }
             const current = propsRef.current
+            const frameIntervalMs = 1_000 / Math.min(60, Math.max(1, current.maxFps))
+            if (previousTime > 0 && time - previousTime < frameIntervalMs - 1) {
+                animationId = window.requestAnimationFrame(update)
+                return
+            }
             if (shouldSnapRendererPresentation(visibility, visibility.resumeRevision)) {
                 snapPresentationToProps(current)
             }

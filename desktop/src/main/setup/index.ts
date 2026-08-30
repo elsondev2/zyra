@@ -3,14 +3,16 @@ import { join } from 'node:path'
 import { DevicePreferencesService } from './device-preferences-service'
 import { DeviceSecretsService } from './device-secrets-service'
 import { OnboardingService } from './onboarding-service'
-import { OpenAIAuthWorkerClient } from './openai-auth-worker-client'
+import { getSharedOpenAIAuthWorkerClient } from './openai-auth-worker-client'
 import { OpenAIConnectionService } from './openai-connection-service'
+import { DesktopAnalyticsService } from '../analytics/service'
 
 export type DesktopSetupServices = {
     preferences: DevicePreferencesService
     secrets: DeviceSecretsService
     auth: OpenAIConnectionService
     onboarding: OnboardingService
+    analytics: DesktopAnalyticsService
 }
 
 export function createDesktopSetupServices(userDataPath: string): DesktopSetupServices {
@@ -21,18 +23,25 @@ export function createDesktopSetupServices(userDataPath: string): DesktopSetupSe
         encrypt: (value) => safeStorage.encryptString(value),
         decrypt: (value) => safeStorage.decryptString(value)
     })
-    const authWorker = new OpenAIAuthWorkerClient()
+    const authWorker = getSharedOpenAIAuthWorkerClient()
     const auth = new OpenAIConnectionService({
         openExternal: (url) => shell.openExternal(url),
         loadSdk: async () => authWorker.sdk,
         loadAccount: async () => authWorker.account,
         prewarm: () => authWorker.warm(),
-        dispose: () => authWorker.dispose()
+        dispose: () => authWorker.dispose(),
+        getAssistantDefaultModel: async () => String(
+            (await preferences.get({ surface: 'desktop' })).settings.assistantDefaultModel || ''
+        ),
+        setAssistantDefaultModel: async (assistantDefaultModel) => {
+            await preferences.updateSharedFromMain({ assistantDefaultModel })
+        }
     })
     const onboarding = new OnboardingService(
         join(setupDirectory, 'onboarding.json'),
         preferences,
         auth
     )
-    return { preferences, secrets, auth, onboarding }
+    const analytics = new DesktopAnalyticsService(userDataPath)
+    return { preferences, secrets, auth, onboarding, analytics }
 }

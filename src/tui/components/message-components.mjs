@@ -70,11 +70,12 @@ function extractLegacyImageMarkers(value) {
 }
 
 export class AssistantMessageComponent {
-  constructor(key, content = { text: "" }, theme = fallbackTheme) {
+  constructor(key, content = { text: "" }, theme = fallbackTheme, options = {}) {
     this.key = key;
     this.content = content;
     this.theme = theme;
     this.final = false;
+    this.showDivider = options.showDivider === true;
   }
 
   setHost(host) {
@@ -84,6 +85,7 @@ export class AssistantMessageComponent {
   setContent(content, options = {}) {
     this.content = content;
     this.final = Boolean(options.final ?? this.final);
+    if (options.showDivider !== undefined) this.showDivider = options.showDivider === true;
     this.host?.invalidate();
   }
 
@@ -92,7 +94,8 @@ export class AssistantMessageComponent {
     if (!text) return [];
     const contentWidth = Math.max(24, width - assistantPadding.length);
     const rendered = trimOuterBlankLines(renderMarkdown(text, contentWidth, this.theme));
-    return ["", ...rendered.map((line) => line.trim() ? `${assistantPadding}${line}` : "")];
+    const divider = `${assistantPadding}${this.theme.toolRailFg ?? this.theme.dimMuted ?? this.theme.muted}${"─".repeat(Math.max(1, width - assistantPadding.length))}${reset}`;
+    return ["", ...(this.showDivider ? [divider] : []), ...rendered.map((line) => line.trim() ? `${assistantPadding}${line}` : "")];
   }
 }
 
@@ -208,9 +211,9 @@ export function renderToolBlock(toolState, theme = fallbackTheme, width = 100) {
   let outputText = [];
   if (command) {
     outputText = summarizeCommandToolResult(toolState.result ?? toolState.partialResult, commandOutputPreviewRows);
-    rows.push({ kind: "spacer" });
-    for (let index = 0; index < commandOutputPreviewRows; index += 1) {
-      rows.push({ kind: "commandOutput", text: outputText[index] ?? "" });
+    if (outputText.length > 0) {
+      rows.push({ kind: "spacer" });
+      rows.push(...outputText.map((text) => ({ kind: "commandOutput", text })));
     }
   } else {
     const args = summarizeToolArgs(rawArgs, { toolName: title, state, commandAsTitle: false });
@@ -260,41 +263,32 @@ function renderCompactFileReadToolBlock(toolState, surface, theme, width) {
 function renderFileChangeToolBlock(toolState, theme, width) {
   const change = toolState.fileChange ?? {};
   const state = change.status === "failed" ? "error" : change.status === "completed" ? "done" : "running";
-  const stateLabel = state === "error" ? "failed" : state === "done" ? "applied" : "running";
+  const stateLabel = state === "error" ? "failed" : state === "running" ? "running" : "";
   const paths = Array.isArray(change.paths) ? change.paths.filter(Boolean) : [];
   const title = String(change.toolName ?? toolState.toolName ?? "edit");
-  const rows = [{ kind: "title", title, state, stateLabel }];
-  for (const path of paths.slice(0, 4)) rows.push({ kind: "args", text: `path ${path}` });
+  const diffStat = `+${Number(change.additions) || 0}/-${Number(change.deletions) || 0}${change.truncated ? " · truncated" : ""}`;
+  const rows = [{ kind: "fileChangeTitle", title, state, stateLabel, path: paths[0] || "", diffStat }];
+  for (const path of paths.slice(1, 4)) rows.push({ kind: "args", text: path });
   if (paths.length > 4) rows.push({ kind: "hint", text: `… ${paths.length - 4} more files` });
-  const sourceLabel = change.authoritative
-    ? change.snapshotBacked ? "applied · snapshot-backed" : "applied · provider result"
-    : state === "error"
-      ? "failed · preview not applied"
-      : change.source === "provider-live"
-        ? "live provider preview"
-        : "live preview";
-  rows.push({ kind: state === "error" ? "footerError" : "diffMeta", text: sourceLabel });
-  rows.push({ kind: "diffMeta", text: `+${Number(change.additions) || 0}/-${Number(change.deletions) || 0}${change.truncated ? " · truncated" : ""}` });
 
   const displayDiff = String(change.displayDiff ?? change.patch ?? change.previewPatch ?? "");
+  const displayLines = patchDisplayLines(displayDiff);
   const diffRows = renderPatchDiff(displayDiff, 12);
   if (diffRows.length > 0) {
-    rows.push({ kind: "spacer" });
     rows.push(...diffRows);
-    const totalLines = displayDiff.split(/\r?\n/).filter((line) => line.trim()).length;
-    if (totalLines > diffRows.length) rows.push({ kind: "hint", text: `… ${totalLines - diffRows.length} more diff lines` });
+    if (displayLines.length > diffRows.length) rows.push({ kind: "hint", text: `… ${displayLines.length - diffRows.length} more diff lines` });
   } else if (state === "running") {
     rows.push({ kind: "hint", text: "waiting for complete file-change arguments" });
   }
 
   const terminalWidth = Math.max(24, Number(width) || 100);
   const surface = toolSurfaceForState(state, theme);
-  const blank = renderToolBlankRow(terminalWidth, surface);
+  const innerBlank = renderToolBlankRow(terminalWidth, surface);
   return [
     "",
-    blank,
+    innerBlank,
     ...rows.flatMap((row) => renderToolRow(row, theme, terminalWidth, surface)),
-    blank,
+    innerBlank,
     "",
   ];
 }
@@ -427,13 +421,31 @@ function renderAddedTextDiff(text = "", maxLines = 5) {
 }
 
 function renderPatchDiff(patch = "", maxLines = 8) {
-  const lines = String(patch ?? "").split(/\r?\n/).filter((line) => line.trim().length > 0).slice(0, maxLines);
-  return lines.map((line) => {
-    if (line.startsWith("@@") || line.startsWith("+++") || line.startsWith("---")) return { kind: "diffMeta", text: line };
+  return patchDisplayLines(patch).slice(0, maxLines).map((line) => {
     if (line.startsWith("+")) return { kind: "diffAdd", text: line.slice(1) };
     if (line.startsWith("-")) return { kind: "diffRemove", text: line.slice(1) };
     return { kind: "diffContext", text: line.trimStart() };
   });
+}
+
+function patchDisplayLines(patch = "") {
+  return String(patch ?? "")
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+    .filter((line) => !isPatchPlumbingLine(line));
+}
+
+function isPatchPlumbingLine(line) {
+  return line.startsWith("diff --git ")
+    || line.startsWith("index ")
+    || line.startsWith("new file mode ")
+    || line.startsWith("deleted file mode ")
+    || line.startsWith("similarity index ")
+    || line.startsWith("rename from ")
+    || line.startsWith("rename to ")
+    || line.startsWith("@@")
+    || line.startsWith("\\ No newline at end of file")
+    || /^(?:---|\+\+\+)\s+(?:[ab]\/|\/dev\/null|[a-zA-Z]:[\\/])/.test(line);
 }
 
 function previewLines(value = "", maxLines = 4) {
@@ -624,6 +636,9 @@ function renderToolRow(row, theme = fallbackTheme, width = 100, surface = theme.
   const markerColor = toolMarkerColor(row, theme);
   const prefix = toolRowPrefix(row, marker, markerColor);
   const contentWidth = Math.max(1, width - visibleWidth(prefix));
+  if (row.kind === "fileChangeTitle") {
+    return renderFileChangeTitleRow(row, theme, width, surface, prefix);
+  }
   if (row.kind === "command") {
     const rightText = sanitizeToolDisplayText(row.rightText).replace(/\s+/g, " ").trim();
     const maxRightWidth = Math.max(8, Math.floor(contentWidth * 0.48));
@@ -658,6 +673,25 @@ function renderToolRow(row, theme = fallbackTheme, width = 100, surface = theme.
     lines.push(`${surface}${padToVisibleWidth(content, width)}${reset}`);
   }
   return lines;
+}
+
+function renderFileChangeTitleRow(row, theme, width, surface, prefix) {
+  const title = sanitizeToolDisplayText(row.title ?? "edit").replace(/\s+/g, " ").trim() || "edit";
+  const stateLabel = sanitizeToolDisplayText(row.stateLabel).replace(/\s+/g, " ").trim();
+  const diffStat = sanitizeToolDisplayText(row.diffStat).replace(/\s+/g, " ").trim();
+  const rawPath = sanitizeToolDisplayText(row.path).replace(/\s+/g, " ").trim();
+  const titlePlain = `${title}${stateLabel ? ` ${stateLabel}` : ""}`;
+  const fixedWidth = visibleWidth(prefix) + visibleWidth(titlePlain) + (rawPath ? 1 : 0) + (diffStat ? visibleWidth(diffStat) + 1 : 0);
+  const pathWidth = width - fixedWidth;
+  const path = rawPath && pathWidth >= 4 ? truncatePlain(rawPath, pathWidth) : "";
+  const content = [
+    prefix,
+    `${theme.toolNameFg}${title}${normalIntensity}`,
+    stateLabel ? ` ${toolStateColor(row.state, theme)}${stateLabel}${normalIntensity}` : "",
+    path ? ` ${theme.toolArgsFg ?? theme.toolDetailFg ?? theme.toolFg}${path}` : "",
+    diffStat ? ` ${theme.toolDiffMetaFg ?? theme.toolDimFg ?? theme.toolHintFg}${diffStat}` : "",
+  ].join("");
+  return `${surface}${padToVisibleWidth(content, width)}${reset}`;
 }
 
 function wrapCodeRow(text, width = 80) {
@@ -696,8 +730,8 @@ function shouldWordWrapToolRow(kind) {
 }
 
 function toolRowMarker(row) {
-  if (row.kind === "title" && row.state === "error") return "!";
-  if (row.kind === "title") return ">";
+  if ((row.kind === "title" || row.kind === "fileChangeTitle") && row.state === "error") return "!";
+  if (row.kind === "title" || row.kind === "fileChangeTitle") return ">";
   if (row.kind === "command") return "$";
   if (row.kind === "diffAdd") return "+";
   if (row.kind === "diffRemove") return "-";
@@ -709,7 +743,7 @@ function toolRowMarker(row) {
 function toolMarkerColor(row, theme = fallbackTheme) {
   if (row.kind === "diffAdd") return theme.toolDiffAddFg ?? theme.success ?? theme.toolRailFg;
   if (row.kind === "diffRemove") return theme.toolDiffRemoveFg ?? theme.error ?? theme.toolRailFg;
-  if (row.kind === "title" || row.kind === "command") return theme.toolMarkerFg;
+  if (row.kind === "title" || row.kind === "fileChangeTitle" || row.kind === "command") return theme.toolMarkerFg;
   return theme.toolRailFg;
 }
 

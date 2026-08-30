@@ -40,7 +40,7 @@ import { TargetRegistry } from './target-registry'
 import type { AgentControlDriver } from './drivers/driver'
 
 export type BrowserSurfaceController = {
-    openTab(principal: ControlPrincipal, reveal: boolean, signal?: AbortSignal): Promise<Extract<ControlTarget, { kind: 'zyra-browser' }>>
+    openTab(principal: ControlPrincipal, reveal: boolean, sessionMode: 'normal' | 'incognito', signal?: AbortSignal): Promise<Extract<ControlTarget, { kind: 'zyra-browser' }>>
     revealTabs(
         principal: ControlPrincipal,
         primary: Extract<ControlTarget, { kind: 'zyra-browser' }>,
@@ -85,6 +85,7 @@ export class AgentControlBroker extends EventEmitter {
     private disposed = false
     private browserSurface: BrowserSurfaceController | null = null
     private workspace: ControlWorkspaceSnapshot | null = null
+    private readonly workspacesByOwner = new Map<number, ControlWorkspaceSnapshot>()
     private readonly cursors = new Map<string, ControlCursorState>()
     private readonly interactionArbiter = new TargetInteractionArbiter()
     private readonly agentInputDepth = new Map<string, number>()
@@ -98,6 +99,7 @@ export class AgentControlBroker extends EventEmitter {
     }>()
     private readonly cursorPublishTimers = new Map<string, NodeJS.Timeout>()
     private readonly cursorPublishedAt = new Map<string, number>()
+    private readonly userAuthorizedBrowserIntents = new Map<string, { threadId: string; tabId: string; targetId: string; expiresAt: number }>()
     private readonly pendingGrantWaiters = new Map<string, {
         resolve: (grant: ControlGrant) => void
         reject: (error: AgentControlError) => void
@@ -118,11 +120,12 @@ export class AgentControlBroker extends EventEmitter {
         this.browserSurface = controller
     }
 
-    updateWorkspaceState(value: unknown): ControlWorkspaceSnapshot | null {
+    updateWorkspaceState(value: unknown, ownerWebContentsId = 0): ControlWorkspaceSnapshot | null {
         this.assertAlive()
+        const previousWorkspace = this.workspacesByOwner.get(ownerWebContentsId) || null
         if (value === null) {
-            if (this.workspace) {
-                this.workspace = null
+            if (this.workspacesByOwner.delete(ownerWebContentsId)) {
+                this.workspace = [...this.workspacesByOwner.values()].at(-1) || null
                 this.changed()
             }
             return null
@@ -195,6 +198,7 @@ export class AgentControlBroker extends EventEmitter {
                 : null
             return [{
                 tabId,
+                sessionMode: target?.sessionMode || (raw.sessionMode === 'incognito' ? 'incognito' : 'normal'),
                 targetId: target?.targetId || null,
                 trusted: Boolean(target),
                 url,
@@ -233,8 +237,8 @@ export class AgentControlBroker extends EventEmitter {
             updatedAt: new Date().toISOString()
         }
         const comparable = (snapshot: ControlWorkspaceSnapshot | null) => snapshot ? { ...snapshot, updatedAt: '' } : null
-        if (JSON.stringify(comparable(this.workspace)) !== JSON.stringify(comparable(next))) {
-            const previousTabs = new Map((this.workspace?.browser.tabs || []).map((tab) => [tab.targetId, tab]))
+        if (JSON.stringify(comparable(previousWorkspace)) !== JSON.stringify(comparable(next))) {
+            const previousTabs = new Map((previousWorkspace?.browser.tabs || []).map((tab) => [tab.targetId, tab]))
             for (const tab of next.browser.tabs) {
                 if (!tab.targetId) continue
                 const previous = previousTabs.get(tab.targetId)
@@ -242,10 +246,11 @@ export class AgentControlBroker extends EventEmitter {
                     this.observations.invalidate(tab.targetId)
                 }
             }
+            this.workspacesByOwner.set(ownerWebContentsId, next)
             this.workspace = next
             this.changed()
         }
-        return this.workspace
+        return next
     }
 
     registerTarget(input: {
@@ -262,6 +267,12 @@ export class AgentControlBroker extends EventEmitter {
         })
         this.changed()
         return input.target
+    }
+
+    transferTargetOwner(targetId: string, previousOwnerWebContentsId: number, ownerWebContentsId: number): void {
+        this.assertAlive()
+        this.targets.transferOwner(targetId, previousOwnerWebContentsId, ownerWebContentsId)
+        this.changed()
     }
 
     handleTargetNavigation(targetId: string, url: string): void {
@@ -282,11 +293,25 @@ export class AgentControlBroker extends EventEmitter {
         this.changed()
     }
 
+    private workspaceForTarget(targetId: string): ControlWorkspaceSnapshot | null {
+        const registered = this.targets.list().find((entry) => entry.target.targetId === targetId)
+        if (registered?.ownerWebContentsId !== undefined) {
+            const ownedWorkspace = this.workspacesByOwner.get(registered.ownerWebContentsId) || null
+            return ownedWorkspace?.browser.tabs.some((tab) => tab.targetId === targetId) ? ownedWorkspace : null
+        }
+        return [...this.workspacesByOwner.values()].find((workspace) => workspace.browser.tabs.some((tab) => tab.targetId === targetId)) || null
+    }
+
+    private workspaceForThread(threadId: string): ControlWorkspaceSnapshot | null {
+        const candidates = [...this.workspacesByOwner.values()].filter((workspace) => workspace.threadId === threadId)
+        return candidates.find((workspace) => workspace.browser.tabs.some((tab) => tab.visible)) || candidates.at(-1) || null
+    }
+
     recordUserInteraction(targetId: string, category: ControlInteractionCategory, inputType: string, windowPoint?: { x: number; y: number }): void {
         if ((this.agentInputDepth.get(targetId) || 0) > 0) return
         const registered = this.targets.list().find((entry) => entry.target.targetId === targetId)
         if (!registered) return
-        const viewportRect = this.workspace?.browser.tabs.find((tab) => tab.targetId === targetId)?.viewportRect
+        const viewportRect = this.workspaceForTarget(targetId)?.browser.tabs.find((tab) => tab.targetId === targetId)?.viewportRect
         const point = windowPoint && viewportRect
             ? { x: windowPoint.x - viewportRect.x, y: windowPoint.y - viewportRect.y }
             : undefined
@@ -314,6 +339,9 @@ export class AgentControlBroker extends EventEmitter {
         const registered = this.targets.remove(targetId)
         if (!registered) return
         this.grants.revokeByTarget(targetId)
+        for (const [threadId, intent] of this.userAuthorizedBrowserIntents) {
+            if (intent.targetId === targetId) this.userAuthorizedBrowserIntents.delete(threadId)
+        }
         this.observations.remove(targetId)
         this.cursors.delete(targetId)
         this.interactionArbiter.clear(targetId)
@@ -326,15 +354,18 @@ export class AgentControlBroker extends EventEmitter {
         for (const [planId, plan] of this.pausedPlans) {
             if (plan.request.targetId === targetId) this.pausedPlans.delete(planId)
         }
-        if (this.workspace?.browser.tabs.some((tab) => tab.targetId === targetId)) {
-            this.workspace = {
-                ...this.workspace,
+        for (const [ownerId, workspace] of this.workspacesByOwner) {
+            if (!workspace.browser.tabs.some((tab) => tab.targetId === targetId)) continue
+            const next = {
+                ...workspace,
                 browser: {
-                    ...this.workspace.browser,
-                    tabs: this.workspace.browser.tabs.map((tab) => tab.targetId === targetId ? { ...tab, targetId: null } : tab)
+                    ...workspace.browser,
+                    tabs: workspace.browser.tabs.map((tab) => tab.targetId === targetId ? { ...tab, targetId: null } : tab)
                 },
                 updatedAt: new Date().toISOString()
             }
+            this.workspacesByOwner.set(ownerId, next)
+            if (this.workspace === workspace) this.workspace = next
         }
         void registered.driver.release?.(registered)
         this.audit.append({
@@ -342,6 +373,68 @@ export class AgentControlBroker extends EventEmitter {
             outcome: 'cancelled', message: reason, redactions: []
         })
         this.changed()
+    }
+
+    armUserAuthorizedBrowserGrant(input: { threadId: string; tabId: string; turnId?: string | null }): ControlGrant | null {
+        this.assertAlive()
+        const target = this.targets.list('zyra-browser').map((entry) => entry.target).find((candidate) => (
+            candidate.kind === 'zyra-browser' && candidate.ownerThreadId === input.threadId && candidate.tabId === input.tabId
+        ))
+        if (!target || target.kind !== 'zyra-browser') throw new AgentControlError('CONTROL_TARGET_NOT_FOUND', 'The background Browser tab is not ready for agent access.')
+        if (input.turnId) return this.issueUserAuthorizedBrowserGrant({ type: 'root', threadId: input.threadId, turnId: input.turnId }, target)
+        this.userAuthorizedBrowserIntents.set(input.threadId, {
+            threadId: input.threadId,
+            tabId: input.tabId,
+            targetId: target.targetId,
+            expiresAt: Date.now() + 2 * 60 * 1000
+        })
+        return null
+    }
+
+    cancelUserAuthorizedBrowserIntent(threadId: string, tabId: string): void {
+        const intent = this.userAuthorizedBrowserIntents.get(threadId)
+        if (intent?.tabId === tabId) this.userAuthorizedBrowserIntents.delete(threadId)
+        const targetIds = this.targets.list('zyra-browser').map((entry) => entry.target).filter((target) => target.kind === 'zyra-browser' && target.ownerThreadId === threadId && target.tabId === tabId).map((target) => target.targetId)
+        for (const grant of this.grants.list()) {
+            if (targetIds.includes(grant.targetId) && grant.principal.type === 'root' && grant.principal.threadId === threadId) this.revokeGrant(grant.grantId)
+        }
+    }
+
+    materializeUserAuthorizedBrowserGrant(threadId: string, turnId: string): ControlGrant | null {
+        const intent = this.userAuthorizedBrowserIntents.get(threadId)
+        if (!intent) return null
+        this.userAuthorizedBrowserIntents.delete(threadId)
+        if (intent.expiresAt <= Date.now()) return null
+        let target: ControlTarget
+        try { target = this.targets.get(intent.targetId).target }
+        catch { return null }
+        if (target.kind !== 'zyra-browser' || target.ownerThreadId !== threadId || target.tabId !== intent.tabId) return null
+        return this.issueUserAuthorizedBrowserGrant({ type: 'root', threadId, turnId }, target)
+    }
+
+    private issueUserAuthorizedBrowserGrant(principal: Extract<ControlPrincipal, { type: 'root' }>, target: Extract<ControlTarget, { kind: 'zyra-browser' }>): ControlGrant {
+        const origin = target.origin ? normalizedOrigin(target.origin) : null
+        const capabilities: ControlCapability[] = [
+            'observe.structure', 'observe.screenshot', 'pointer.click', 'pointer.move', 'pointer.drag',
+            'keyboard.type', 'keyboard.key', 'scroll', 'form.select',
+            ...(origin ? ['navigate' as const, 'tab.manage' as const] : [])
+        ]
+        const grant = this.grants.issue({
+            principal,
+            targetId: target.targetId,
+            capabilities,
+            expiresAt: new Date(Date.now() + Math.min(CONTROL_BOUNDS.maxGrantDurationMs, 10 * 60 * 1000)).toISOString(),
+            maxActions: Math.min(CONTROL_BOUNDS.maxGrantActions, 128),
+            allowedOrigins: origin ? [origin] : undefined,
+            issuedBy: 'user'
+        })
+        assertGrantSupportsTarget(grant, target)
+        this.audit.append({
+            eventType: 'grant.issued', principal, targetId: target.targetId, targetKind: target.kind,
+            grantId: grant.grantId, outcome: 'allowed', message: 'User-authorized TUI Browser command issued a bounded control grant.', redactions: []
+        })
+        this.changed()
+        return grant
     }
 
     requestGrant(input: {
@@ -752,6 +845,7 @@ export class AgentControlBroker extends EventEmitter {
         this.actions.cancelAll(reason)
         this.browserSurface?.cancelPending(reason)
         this.grants.revokeAll()
+        this.userAuthorizedBrowserIntents.clear()
         for (const pending of this.grants.listPending()) {
             this.grants.removePending(pending.requestId)
             this.pendingGrantWaiters.get(pending.requestId)?.reject(new AgentControlError('CONTROL_CANCELLED', reason))
@@ -799,7 +893,7 @@ export class AgentControlBroker extends EventEmitter {
         return this.registerTarget({ target, driver, trustedIdentity: selected.trustedIdentity })
     }
 
-    state(): ControlStateSnapshot {
+    state(ownerWebContentsId?: number): ControlStateSnapshot {
         const grants = this.grants.list()
         return {
             version: 1,
@@ -813,7 +907,7 @@ export class AgentControlBroker extends EventEmitter {
                 updatedAt: new Date().toISOString()
             })),
             cursors: [...this.cursors.values()],
-            workspace: this.workspace,
+            workspace: ownerWebContentsId === undefined ? this.workspace : this.workspacesByOwner.get(ownerWebContentsId) || null,
             pairing: this.options.pairing?.state() || { state: 'stopped' },
             active: grants.some((grant) => grant.state === 'active'),
             sequence: this.sequence
@@ -833,12 +927,16 @@ export class AgentControlBroker extends EventEmitter {
                 if (operation.reveal !== undefined && typeof operation.reveal !== 'boolean') {
                     throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Browser reveal must be a boolean.')
                 }
+                if (operation.sessionMode !== undefined && operation.sessionMode !== 'normal' && operation.sessionMode !== 'incognito') {
+                    throw new AgentControlError('CONTROL_VALIDATION_ERROR', 'Browser session mode must be normal or incognito.')
+                }
                 if (!this.browserSurface) throw new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', 'The in-app Browser workspace is unavailable.')
                 if (principal.type === 'agent' && operation.reveal) {
                     throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents may create background Browser tabs but cannot reveal or take over the user interface.')
                 }
                 const revealed = principal.type === 'root' && operation.reveal === true
-                const target = await this.browserSurface.openTab(principal, revealed, signal)
+                const sessionMode = operation.sessionMode || 'incognito'
+                const target = await this.browserSurface.openTab(principal, revealed, sessionMode, signal)
                 this.assertBrowserTargetOwnedByPrincipal(principal, target)
                 return { target, revealed }
             }
@@ -849,7 +947,7 @@ export class AgentControlBroker extends EventEmitter {
                 const ownedTargets = this.targets.list(kind).filter((entry) => (
                     entry.target.kind !== 'zyra-browser' || entry.target.ownerThreadId === ownerThreadId
                 ))
-                const workspace = this.workspace?.threadId === ownerThreadId ? this.workspace : null
+                const workspace = this.workspaceForThread(ownerThreadId)
                 if (principal.type === 'root') {
                     return { targets: ownedTargets.map((entry) => entry.target), grants: activeGrants, workspace }
                 }
@@ -864,7 +962,7 @@ export class AgentControlBroker extends EventEmitter {
                 if (!this.browserSurface) throw new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', 'The in-app Browser workspace is unavailable.')
                 const target = this.requireBrowserTarget(operation.targetId, principal)
                 await this.browserSurface.revealTabs(principal, target, null, signal)
-                return { target, workspace: this.workspace }
+                return { target, workspace: this.workspaceForTarget(target.targetId) }
             }
             case 'close_tab': {
                 if (principal.type !== 'root') throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Child agents cannot close Browser tabs.')
@@ -927,7 +1025,7 @@ export class AgentControlBroker extends EventEmitter {
                     layout: secondary ? 'split' : 'single',
                     primaryTargetId: primary.targetId,
                     secondaryTargetId: secondary?.targetId,
-                    workspace: this.workspace
+                    workspace: this.workspaceForTarget(primary.targetId)
                 }
             }
             case 'resize_inspector': {

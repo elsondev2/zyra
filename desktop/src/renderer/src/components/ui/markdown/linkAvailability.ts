@@ -36,6 +36,29 @@ function getParentPath(pathValue: string | undefined): string {
     return separatorIndex > 0 ? value.slice(0, separatorIndex) : ''
 }
 
+function isPortableBroadSearchRoot(pathValue: string): boolean {
+    const normalized = pathValue.trim().replace(/\\/g, '/').replace(/\/+$/, '')
+    return /^[A-Za-z]:$/i.test(normalized)
+        || /^\/(?:Users|home)\/[^/]+$/i.test(normalized)
+        || /^[A-Za-z]:\/Users\/[^/]+$/i.test(normalized)
+        || normalized.toLowerCase() === '/root'
+}
+
+export function resolveMarkdownLinkSearchRoot(filePath?: string, requestedRoot?: string): string {
+    const parentPath = getParentPath(filePath)
+    const normalizedParent = normalizePathKey(parentPath)
+    const root = String(requestedRoot || '').trim()
+    const normalizedRoot = normalizePathKey(root)
+    if (!root || isPortableBroadSearchRoot(root)) return parentPath
+    if (
+        normalizedParent
+        && normalizedRoot
+        && normalizedParent !== normalizedRoot
+        && !normalizedParent.startsWith(`${normalizedRoot}/`)
+    ) return parentPath
+    return root
+}
+
 function isProjectRelativeHref(href: string): boolean {
     const pathname = String(href || '').trim().split('#', 1)[0]?.split('?', 1)[0] || ''
     if (!pathname || /^[a-z][a-z0-9+.-]*:/i.test(pathname)) return false
@@ -73,13 +96,15 @@ async function resolveProjectShorthand(
 export async function inspectMarkdownLinkAvailability(
     href: string,
     filePath?: string,
-    searchRootPath?: string
+    searchRootPath?: string,
+    options: { allowProjectSearch?: boolean } = {}
 ): Promise<MarkdownLinkAvailabilityResult | null> {
     const target = resolveMarkdownLinkTarget(href, filePath)
     if (!target) return null
 
-    const projectRoot = String(searchRootPath || getParentPath(filePath)).trim()
-    const key = `${normalizePathKey(projectRoot)}|${normalizePathKey(target.path)}`
+    const projectRoot = resolveMarkdownLinkSearchRoot(filePath, searchRootPath)
+    const searchMode = options.allowProjectSearch === false ? 'direct' : 'project'
+    const key = `${searchMode}|${normalizePathKey(projectRoot)}|${normalizePathKey(target.path)}`
     const now = Date.now()
     const cached = availabilityCache.get(key)
     if (cached && cached.expiresAt > now) {
@@ -108,7 +133,9 @@ export async function inspectMarkdownLinkAvailability(
                 }
             }
 
-            if (projectRoot && isProjectRelativeHref(href)) {
+            const canSearchProject = Boolean(projectRoot) && isProjectRelativeHref(href)
+            const shouldSearchProject = canSearchProject && options.allowProjectSearch !== false
+            if (shouldSearchProject) {
                 const projectMatch = await resolveProjectShorthand(target.path, projectRoot)
                 if (projectMatch.state === 'found') {
                     return {
@@ -129,7 +156,7 @@ export async function inspectMarkdownLinkAvailability(
             }
 
             return {
-                availability: pathInfo?.success ? 'missing' : 'unknown',
+                availability: pathInfo?.success && (!canSearchProject || shouldSearchProject) ? 'missing' : 'unknown',
                 path: pathInfo?.success ? pathInfo.path : target.path,
                 resolvedBy: 'direct',
                 targetKind: null

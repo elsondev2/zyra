@@ -51,14 +51,40 @@ assert.doesNotMatch(capabilityProbe, /node:child_process|\b(?:spawn|execFile|exe
 assert.match(capabilityProbe, /createChatGptRealtimeCapabilityReport/u, "Voice capability discovery must use the deterministic manifest");
 
 const accountBoundary = read("src/chatgpt-account.mjs");
-assert.match(accountBoundary, /backend-api\/codex\/realtime\/calls\?intent=quicksilver&architecture=avas/u);
-assert.match(accountBoundary, /"openai-alpha": "quicksilver=v2"/u);
+const realtimeContract = read("src/chatgpt-realtime-contract.mjs");
+assert.match(realtimeContract, /backend-api\/codex\/realtime\/calls\?intent=quicksilver&architecture=avas/u);
+assert.match(realtimeContract, /gpt-live-1-codex/u);
+assert.match(realtimeContract, /quicksilver=v2/u);
+assert.match(accountBoundary, /"openai-alpha": CHATGPT_REALTIME_ALPHA_HEADER/u);
 assert.match(accountBoundary, /"ChatGPT-Account-Id"/u);
 assert.match(accountBoundary, /\{ sdp, session \}/u);
 assert.doesNotMatch(accountBoundary, /node:child_process|\b(?:spawn|execFile)\s*\(/u, "ChatGPT account calls must remain direct HTTP requests");
 
 const utilityBridge = read("src/zyra-ui-bridge.mjs");
 assert.match(utilityBridge, /handleGenerateText[\s\S]*?noSession: true,[\s\S]*?noTools: ["']all["'],/u, "utility text generation must be ephemeral and tool-free");
+assert.match(utilityBridge, /buildCompletedTitleTranscript\(targetRuntime\.session\.state\?\.messages\)/u, "TUI titles use the completed canonical user/final-assistant turn");
+assert.match(utilityBridge, /runtime !== targetRuntime/u, "a delayed TUI title cannot overwrite a different Desktop-selected chat");
+assert.match(utilityBridge, /refreshServerAuthProvider[\s\S]*modelRuntime\.refresh\(\{ allowNetwork: false, providers: \[provider\] \}\)/u, "the authoritative server runtime refreshes shared credentials without provider network access");
+assert.match(utilityBridge, /applyChatConfig[\s\S]*await refreshServerAuthProvider\(requestedProvider\)/u, "every server configure and prompt observes external auth-file changes before model resolution");
+const tuiRuntime = read("src/agent-server/tui-runtime.mjs");
+assert.match(tuiRuntime, /async syncAuthProvider\(providerValue\)[\s\S]*modelRegistry\.authStorage\.modelRuntime\.refresh[\s\S]*client\.request\("auth\.refresh"/u, "the TUI refreshes its local snapshot and requests a server-wide auth refresh");
+const agentServer = read("src/agent-server/server.mjs");
+assert.match(agentServer, /refreshAuthProvider[\s\S]*new Set\(this\.sessions\.values\(\)\)[\s\S]*disposable SDK runtimes[\s\S]*session\.request\(client, "auth\.refresh"/u, "auth changes refresh every live server-owned chat runtime while leaving disposable utility runtimes uncached");
+assert.match(tuiRuntime, /async setModel\(nextModel\)[\s\S]*await syncRemoteChatConfig\(\)[\s\S]*currentModel = previousModel/u, "remote model switches wait for server acceptance and roll back on failure");
+const slashHandlers = read("src/slash-command-handlers.mjs");
+assert.match(slashHandlers, /syncAuthProvider\?\.\(provider\)/u, "auth setup waits for server credential refresh before switching models");
+const sdkRuntime = read("src/zyra-sdk.mjs");
+assert.match(sdkRuntime, /removeZyraTitleGenerationMessages\(contextMessages\)/u, "legacy title utility turns are removed from resumed model context");
+
+const sharedPiRuntime = read("src/pi-runtime.mjs");
+assert.match(
+  sharedPiRuntime,
+  /options\.refreshOnCreate !== undefined[\s\S]*?refreshOnCreate: options\.refreshOnCreate === true/u,
+  "Pi model discovery must keep its enabled-by-default startup refresh unless a caller explicitly overrides it",
+);
+
+const tuiApp = read("src/zyra-app.mjs");
+assert.match(tuiApp, /activeRun \|\| runtime\.session\.isStreaming/u, "resumed TUI input follows a canonical turn that another surface already owns");
 
 const piRuntime = read("desktop/src/main/assistant/zyra-pi-runtime.ts");
 assert.match(piRuntime, /async generateText\(/u, "Pi runtime must expose utility text generation");

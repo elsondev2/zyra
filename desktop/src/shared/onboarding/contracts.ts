@@ -96,6 +96,16 @@ export type OpenAIConnectionsStatus = {
     checkedAt: string
 }
 
+export type AccountConnectionAnalyticsAction = 'connect' | 'replace'
+
+export type AccountConnectionAnalyticsInput = {
+    analyticsAction?: AccountConnectionAnalyticsAction
+}
+
+export type AccountConnectionStatusInput = {
+    analyticsAction?: 'retry'
+}
+
 export type DisconnectOpenAIInput = {
     method: OnboardingAuthMethod
     confirmed: true

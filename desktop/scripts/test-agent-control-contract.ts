@@ -14,6 +14,7 @@ import {
 } from '../src/shared/agent-control/validation'
 
 const fixture = JSON.parse(await readFile(path.resolve('scripts/fixtures/agent-control-wire-v1.json'), 'utf8'))
+const windowsDriverSource = await readFile(path.resolve('src/main/agent-control/drivers/windows-desktop-driver.ts'), 'utf8')
 const js = await import(pathToFileURL(path.resolve('../src/agent-control/contracts.mjs')).href)
 assert.equal(CONTROL_PROTOCOL_VERSION, js.CONTROL_PROTOCOL_VERSION)
 assert.deepEqual([...CONTROL_CAPABILITIES], [...js.CONTROL_CAPABILITIES])
@@ -34,4 +35,5 @@ assert.throws(
     () => assertControlActionRequest({ ...fixture.action, action: { type: 'type', x: 320, text: 'partial coordinates' } }),
     /both x and y/
 )
+assert.doesNotMatch(windowsDriverSource, /\bspawnSync\b/, 'closing the Windows sidecar must not block Electron main')
 console.log('Agent control contract equivalence passed.')

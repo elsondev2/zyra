@@ -30,7 +30,9 @@ export function getAgentServerPaths(options = {}) {
     stateDirectory,
     endpoint,
     descriptorFile: path.join(stateDirectory, `agent-server-v${AGENT_SERVER_PROTOCOL_VERSION}-${channel}.json`),
-    lockFile: path.join(stateDirectory, `agent-server-v${AGENT_SERVER_PROTOCOL_VERSION}-${channel}.lock`),
+    // One channel-wide owner lock prevents different protocol generations from
+    // mutating the same canonical chat/catalog state concurrently.
+    lockFile: path.join(stateDirectory, `agent-server-${channel}.lock`),
     desktopAuthorityFile: path.join(stateDirectory, `agent-server-${channel}.desktop-authority`),
     catalogFile: path.join(stateDirectory, "chat-catalog-v1.json"),
     journalDirectory: path.join(stateDirectory, "agent-events"),

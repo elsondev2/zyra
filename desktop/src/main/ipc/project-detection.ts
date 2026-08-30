@@ -92,17 +92,16 @@ export const PROJECT_MARKERS = [
     'ContentView.swift'
 ]
 
+export function projectMarkerMatches(marker: string, entries: readonly string[]): boolean {
+    if (!marker.startsWith('*')) return entries.includes(marker)
+    const suffix = marker.slice(1)
+    return entries.some((entry) => entry.endsWith(suffix))
+}
+
 export function detectProjectTypeFromMarkers(markers: string[]): ProjectTypeDefinition | undefined {
     for (const type of PROJECT_TYPES) {
         if (type.id === 'git') continue
-        for (const marker of type.markers) {
-            if (marker.startsWith('*')) {
-                const ext = marker.slice(1)
-                if (markers.some((item) => item.endsWith(ext))) return type
-            } else if (markers.includes(marker)) {
-                return type
-            }
-        }
+        if (type.markers.some((marker) => projectMarkerMatches(marker, markers))) return type
     }
     if (markers.includes('.git')) return PROJECT_TYPES.find((type) => type.id === 'git')
     return undefined

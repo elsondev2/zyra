@@ -1,5 +1,6 @@
 import { Suspense, lazy } from 'react'
 import { resolveMonacoLanguage } from './monacoLanguage'
+import { PreviewContentSkeleton } from './PreviewLoadingSkeleton'
 
 const MonacoEditorComponent = lazy(() => import('./MonacoPreviewEditor'))
 
@@ -11,7 +12,7 @@ interface SyntaxPreviewProps {
     gitDiffText?: string
     readOnly?: boolean
     onChange?: (value: string) => void
-    onEditorMount?: (editor: import('monaco-editor').editor.IStandaloneCodeEditor) => void
+    onEditorMount?: (editor: import('monaco-editor').editor.IStandaloneCodeEditor | null) => void
     wordWrap?: 'on' | 'off'
     minimapEnabled?: boolean
     fontSize?: number
@@ -82,11 +83,7 @@ export default function SyntaxPreview({
     return (
         <div className="devscope-monaco-preview w-full h-full min-h-0" style={{ height: height || '100%', background: 'var(--color-card)' }}>
             <Suspense
-                fallback={
-                    <div className="h-full w-full grid place-items-center text-sm text-white/60 bg-sparkle-card">
-                        Loading editor preview...
-                    </div>
-                }
+                fallback={<PreviewContentSkeleton label="Rendering file..." />}
             >
                 <MonacoEditorComponent
                     value={safeContent}

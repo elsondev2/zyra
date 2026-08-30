@@ -60,6 +60,7 @@ export function PromptModal({
     return createPortal(
         <div
             className="fixed inset-0 z-[130] flex items-center justify-center bg-black/60 backdrop-blur-md animate-fadeIn"
+            data-zyra-native-view-occluder="true"
             onClick={onCancel}
         >
             {errorMessage && (

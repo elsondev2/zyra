@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react'
-import { FileCode2, FileText, X } from 'lucide-react'
+import { FileText, X } from 'lucide-react'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
+import { useThemeRevision } from '@/lib/use-theme-revision'
 import { cn } from '@/lib/utils'
 
 type AssistantAttachmentCardBaseProps = {
@@ -167,6 +169,8 @@ export function AssistantFileAttachmentCard({
     removing?: boolean
     previewText?: string | null
 }) {
+    useThemeRevision()
+    const iconTheme = typeof document !== 'undefined' && document.body.classList.contains('light') ? 'light' : 'dark'
     return (
         <AttachmentCardBase
             widthClassName={widthClassName}
@@ -177,8 +181,8 @@ export function AssistantFileAttachmentCard({
             title={onClick ? 'Open preview' : undefined}
         >
             <div className="flex items-start gap-2 p-2">
-                <div className={cn('flex h-6 w-6 shrink-0 items-center justify-center rounded-md border', category === 'code' ? 'border-indigo-400/30 bg-indigo-500/10 text-indigo-300' : 'border-white/10 bg-sparkle-bg text-sparkle-text-secondary')}>
-                    {category === 'code' ? <FileCode2 size={13} /> : <FileText size={13} />}
+                <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-[var(--surface-divider)] bg-sparkle-bg">
+                    <FileEntryIcon pathValue={name} kind="file" theme={iconTheme} size={15} />
                 </div>
                 <span className="min-w-0 flex-1">
                     <span className="block truncate text-[9px] font-medium text-sparkle-text">{name}</span>

@@ -39,9 +39,11 @@ export const TimelineCopyButton = memo(({ value, compact = false }: { value: str
             className={cn(
                 'inline-flex items-center justify-center border transition-colors',
                 compact ? 'h-6 w-6 rounded' : 'h-7 w-7 rounded-md',
-                copied ? 'border-emerald-400/20 bg-emerald-500/[0.08] text-emerald-300'
-                    : copyError ? 'border-red-400/20 bg-red-500/[0.08] text-red-100'
-                        : 'border-white/10 bg-white/[0.03] text-sparkle-text-muted hover:border-white/20 hover:text-sparkle-text'
+                copied
+                    ? 'border-[color-mix(in_srgb,var(--status-success)_24%,transparent)] bg-[color-mix(in_srgb,var(--status-success)_9%,transparent)] text-[color-mix(in_srgb,var(--status-success)_70%,var(--color-text))]'
+                    : copyError
+                        ? 'border-[color-mix(in_srgb,var(--status-danger)_24%,transparent)] bg-[color-mix(in_srgb,var(--status-danger)_9%,transparent)] text-[color-mix(in_srgb,var(--status-danger)_70%,var(--color-text))]'
+                        : 'border-[var(--surface-divider)] bg-[var(--surface-hover)] text-sparkle-text-muted hover:border-[color-mix(in_srgb,var(--color-text)_18%,transparent)] hover:text-sparkle-text'
             )}
             title={copyError || (copied ? 'Copied' : 'Copy')}
         >
@@ -64,23 +66,23 @@ export const TimelineFilePathRow = memo(({
     onViewDiff?: () => void
 }) => {
     return (
-        <div className="mt-1.5 rounded-md border border-white/10 bg-[var(--accent-primary)]/10 px-2 py-1">
+        <div className="mt-1.5 rounded-md border border-[color-mix(in_srgb,var(--accent-primary)_22%,var(--surface-divider))] bg-[color-mix(in_srgb,var(--accent-primary)_9%,var(--color-card))] px-2 py-1">
             <div className="flex items-center gap-2">
                 {onOpen ? (
                     <button
                         type="button"
                         onClick={() => void onOpen(fullPath)}
-                        className="min-w-0 flex-1 text-left font-mono text-[12px] leading-6 text-[var(--accent-primary)] transition-colors hover:text-white"
+                        className="min-w-0 flex-1 text-left font-mono text-[12px] leading-6 text-[color-mix(in_srgb,var(--accent-primary)_74%,var(--color-text))] transition-colors hover:text-sparkle-text"
                     >
                         <span className="flex items-center gap-2">
-                            {isNew ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400 shadow-[0_0_10px_rgba(56,189,248,0.75)]" /> : null}
+                            {isNew ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--status-info)]" /> : null}
                             <span className="block min-w-0 whitespace-pre-wrap break-all">{displayPath}</span>
                         </span>
                     </button>
                 ) : (
-                    <div className="min-w-0 flex-1 font-mono text-[12px] leading-6 text-[var(--accent-primary)]">
+                    <div className="min-w-0 flex-1 font-mono text-[12px] leading-6 text-[color-mix(in_srgb,var(--accent-primary)_74%,var(--color-text))]">
                         <span className="flex items-center gap-2">
-                            {isNew ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400 shadow-[0_0_10px_rgba(56,189,248,0.75)]" /> : null}
+                            {isNew ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--status-info)]" /> : null}
                             <span className="block min-w-0 whitespace-pre-wrap break-all">{displayPath}</span>
                         </span>
                     </div>
@@ -90,7 +92,7 @@ export const TimelineFilePathRow = memo(({
                         <button
                             type="button"
                             onClick={onViewDiff}
-                            className="inline-flex h-7 items-center gap-1 rounded-md border border-white/10 bg-white/[0.04] px-2 text-[10px] font-medium text-sparkle-text-secondary transition-colors hover:border-white/20 hover:bg-white/[0.06] hover:text-sparkle-text"
+                            className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--surface-divider)] bg-[var(--surface-hover)] px-2 text-[10px] font-medium text-sparkle-text-secondary transition-colors hover:border-[color-mix(in_srgb,var(--color-text)_18%,transparent)] hover:bg-[var(--surface-active)] hover:text-sparkle-text"
                             title={`View AI runtime diff for ${displayPath}`}
                         >
                             <FileCode2 size={11} />
@@ -142,7 +144,7 @@ export const TimelinePathAwareTextBlock = memo(({
                 }
 
                 return (
-                    <p key={`text-${index}`} className="whitespace-pre-wrap break-all font-mono text-[11px] leading-5 text-white/22">
+                    <p key={`text-${index}`} className="whitespace-pre-wrap break-all font-mono text-[11px] leading-5 text-sparkle-text-muted">
                         {line}
                     </p>
                 )

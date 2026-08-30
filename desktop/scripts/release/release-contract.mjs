@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { copyFile, lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { allTuiReleaseAssetNames } from '../../../scripts/tui-release-contract.mjs'
 
 export const RELEASE_PLATFORM_KEYS = Object.freeze(['windows', 'macos', 'linux'])
 
@@ -57,7 +58,7 @@ export function expectedReleaseAssetNames(version, options = {}) {
         ? [normalizeReleasePlatform(options.platform)]
         : RELEASE_PLATFORM_KEYS
     const assets = platforms.flatMap((platform) => platformReleaseContract(version, platform).assets)
-    if (!options.platform) assets.push(`zyra-v${version}.zip`)
+    if (!options.platform) assets.push(...allTuiReleaseAssetNames(version))
     if (options.includeChecksums) assets.push('SHA256SUMS')
     return [...new Set(assets)].sort((left, right) => left.localeCompare(right))
 }

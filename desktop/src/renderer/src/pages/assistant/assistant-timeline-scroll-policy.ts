@@ -26,9 +26,21 @@ export function resolveAssistantTimelineScrollMode(
     return isAssistantTimelineNearEnd(metrics) ? 'following-end' : 'free-scrolling'
 }
 
-export function shouldArmAssistantOlderHistoryLoad(input: {
-    startupSettled: boolean
-    upwardIntent: boolean
-}): boolean {
-    return input.startupSettled && input.upwardIntent
+export function resolveAssistantTimelineModeAfterScroll(input: {
+    userNavigatedAway: boolean
+    resolvedMode: AssistantTimelineScrollMode
+    movingTowardEnd: boolean
+    disclosureLayoutActive: boolean
+}): { userNavigatedAway: boolean; mode: AssistantTimelineScrollMode } {
+    if (!input.userNavigatedAway) {
+        return { userNavigatedAway: false, mode: 'following-end' }
+    }
+    if (
+        input.resolvedMode === 'following-end'
+        && input.movingTowardEnd
+        && !input.disclosureLayoutActive
+    ) {
+        return { userNavigatedAway: false, mode: 'following-end' }
+    }
+    return { userNavigatedAway: true, mode: 'free-scrolling' }
 }

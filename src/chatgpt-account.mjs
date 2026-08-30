@@ -1,16 +1,25 @@
 import { randomUUID } from "node:crypto";
 import {
+  CHATGPT_REALTIME_ALPHA_HEADER,
+  CHATGPT_REALTIME_CALL_URL,
+  CHATGPT_REALTIME_MODEL,
+} from "./chatgpt-realtime-contract.mjs";
+import {
   extractCodexRateLimitWindows,
   extractCodexUsageLimitWindows,
   formatCodexUsageWindowLabel,
   listCodexUsageWindows,
   normalizeCodexLimitWindow,
 } from "./codex-usage-windows.mjs";
+import { createZyraAuthStorage } from "./pi-runtime.mjs";
 
 const CHATGPT_ACCOUNT_PROVIDER = "openai-codex";
 const CODEX_ACCOUNT_API_BASE = "https://chatgpt.com/backend-api";
-export const CHATGPT_REALTIME_CALL_URL = "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas";
-export const CHATGPT_REALTIME_MODEL = "gpt-live-1-boulder-alpha";
+export {
+  CHATGPT_REALTIME_ALPHA_HEADER,
+  CHATGPT_REALTIME_CALL_URL,
+  CHATGPT_REALTIME_MODEL,
+};
 
 const CHATGPT_REALTIME_MAX_SDP_BYTES = 512 * 1024;
 const CHATGPT_REALTIME_MAX_RESPONSE_BYTES = 512 * 1024;
@@ -38,30 +47,8 @@ const CHATGPT_REALTIME_VOICES = new Set([
   "vale",
 ]);
 
-let piAuthStoragePromise;
-
-async function loadPiAuthStorage() {
-  if (!piAuthStoragePromise) {
-    const packageEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
-    const authStorageUrl = new URL("./core/auth-storage.js", packageEntry);
-    piAuthStoragePromise = import(authStorageUrl.href)
-      .then((module) => {
-        if (typeof module.AuthStorage !== "function") {
-          throw new Error("Pi auth storage is unavailable.");
-        }
-        return module.AuthStorage;
-      })
-      .catch((error) => {
-        piAuthStoragePromise = undefined;
-        throw error;
-      });
-  }
-  return piAuthStoragePromise;
-}
-
 export async function buildChatGptAccountStatus(provider = CHATGPT_ACCOUNT_PROVIDER, options = {}) {
-  const AuthStorage = await loadPiAuthStorage();
-  const authStorage = AuthStorage.create();
+  const authStorage = options.authStorage ?? await createZyraAuthStorage(options);
   const status = authStorage.getAuthStatus(provider);
   let credential = authStorage.get(provider);
   let claims = extractOpenAiCodexClaims(credential?.access);
@@ -178,8 +165,7 @@ export function formatCodexUsageStats(stats) {
 }
 
 export async function resolveChatGptAccountAuth() {
-  const AuthStorage = await loadPiAuthStorage();
-  const authStorage = AuthStorage.create();
+  const authStorage = await createZyraAuthStorage();
   const accessToken = await authStorage.getApiKey(CHATGPT_ACCOUNT_PROVIDER, { includeFallback: false });
   if (!accessToken) return undefined;
 
@@ -211,7 +197,7 @@ export async function getChatGptAccountAuthStatus(dependencies = {}) {
 /**
  * Creates a subscription-backed Frameless Bidi WebRTC call without exposing
  * OAuth credentials outside this narrow account boundary. The request shape
- * mirrors openai/codex rust-v0.147.0's backend realtime call path.
+ * follows the reviewed public openai/codex realtime contract.
  */
 export async function createChatGptRealtimeCall(input = {}, dependencies = {}) {
   const sdp = normalizeRealtimeSdp(input.sdp, "offer");
@@ -266,7 +252,7 @@ export async function createChatGptRealtimeCall(input = {}, dependencies = {}) {
           "ChatGPT-Account-Id": accountId,
           "Content-Type": "application/json",
           "User-Agent": "Zyra Desktop Realtime Voice",
-          "openai-alpha": "quicksilver=v2",
+          "openai-alpha": CHATGPT_REALTIME_ALPHA_HEADER,
           originator: "zyra_desktop",
           "session-id": sessionId,
           "thread-id": threadId,
@@ -278,11 +264,11 @@ export async function createChatGptRealtimeCall(input = {}, dependencies = {}) {
     );
 
     if (!response?.ok) {
-      await runAbortableRealtimeOperation(
-        () => discardBoundedRealtimeResponse(response),
+      const failure = await runAbortableRealtimeOperation(
+        () => readBoundedRealtimeFailure(response),
         controller.signal,
       );
-      throw new ChatGptRealtimeCallError(formatRealtimeCallHttpFailure(response?.status));
+      throw new ChatGptRealtimeCallError(formatRealtimeCallHttpFailure(response?.status, failure));
     }
 
     const answerSdp = normalizeRealtimeSdp(
@@ -458,19 +444,51 @@ async function readBoundedRealtimeResponseText(response) {
   return new TextDecoder().decode(body);
 }
 
-async function discardBoundedRealtimeResponse(response) {
+async function readBoundedRealtimeFailure(response) {
+  let raw;
   try {
-    await readBoundedRealtimeResponseText(response);
+    raw = await readBoundedRealtimeResponseText(response);
   } catch {
     await response?.body?.cancel?.().catch?.(() => undefined);
+    return {};
   }
+  if (!raw || raw.length > CHATGPT_REALTIME_MAX_RESPONSE_BYTES) return {};
+  let body;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    return {};
+  }
+  const candidates = [body?.error?.code, body?.error?.type, body?.code, body?.type];
+  let code;
+  for (const candidate of candidates) {
+    const value = String(candidate ?? "").trim();
+    if (/^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(value)) {
+      code = value;
+      break;
+    }
+  }
+  const rawParam = String(body?.error?.param ?? body?.param ?? "").trim();
+  const param = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,159}$/.test(rawParam)
+    ? rawParam
+    : undefined;
+  return { code, param };
 }
 
-function formatRealtimeCallHttpFailure(status) {
-  if (status === 401 || status === 403) return "ChatGPT Voice authentication expired. Reconnect your account and try again.";
-  if (status === 429) return "ChatGPT Voice is temporarily rate limited. Try again later.";
-  const code = Number.isInteger(status) ? ` (${status})` : "";
-  return `ChatGPT Voice signaling failed${code}.`;
+function formatRealtimeCallHttpFailure(status, failure = {}) {
+  const code = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(String(failure.code || ""))
+    ? String(failure.code)
+    : "";
+  const param = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,159}$/.test(String(failure.param || ""))
+    ? String(failure.param)
+    : "";
+  const safeFailure = code
+    ? ` [${code}${param ? `: ${param}` : ""}]`
+    : "";
+  if (status === 401 || status === 403) return `ChatGPT Voice authentication expired${safeFailure}. Reconnect your account and try again.`;
+  if (status === 429) return `ChatGPT Voice is temporarily rate limited${safeFailure}. Try again later.`;
+  const statusCode = Number.isInteger(status) ? ` (${status})` : "";
+  return `ChatGPT Voice signaling failed${statusCode}${safeFailure}.`;
 }
 
 function nonEmptyString(value) {

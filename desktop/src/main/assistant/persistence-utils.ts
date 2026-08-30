@@ -337,6 +337,10 @@ export function initializeAssistantPersistenceSchema(db: SqlDatabase): void {
         CREATE INDEX IF NOT EXISTS idx_assistant_messages_history ON assistant_messages(thread_id, created_at DESC, timeline_sequence DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_assistant_activities_history ON assistant_activities(thread_id, created_at DESC, timeline_sequence DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_assistant_plans_history ON assistant_proposed_plans(thread_id, created_at DESC, timeline_sequence DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_assistant_messages_history_order_v2 ON assistant_messages(thread_id, created_at DESC, COALESCE(timeline_sequence, -1) DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_assistant_activities_history_order_v2 ON assistant_activities(thread_id, created_at DESC, COALESCE(timeline_sequence, -1) DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_assistant_plans_history_order_v2 ON assistant_proposed_plans(thread_id, created_at DESC, COALESCE(timeline_sequence, -1) DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_assistant_messages_user_history_v2 ON assistant_messages(thread_id, role, created_at DESC, COALESCE(timeline_sequence, -1) DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_assistant_messages_turn ON assistant_messages(thread_id, turn_id, created_at ASC, id ASC);
         CREATE INDEX IF NOT EXISTS idx_assistant_activities_turn ON assistant_activities(thread_id, turn_id, created_at ASC, id ASC);
         CREATE INDEX IF NOT EXISTS idx_assistant_plans_turn ON assistant_proposed_plans(thread_id, turn_id, created_at ASC, id ASC);

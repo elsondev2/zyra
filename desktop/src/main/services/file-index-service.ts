@@ -1,11 +1,11 @@
 import { app } from 'electron'
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
 import type { Dirent } from 'node:fs'
-import { access, readdir, readFile, stat } from 'node:fs/promises'
+import { access, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve } from 'node:path'
-import { writeFile } from 'node:fs/promises'
 import log from 'electron-log'
 import initSqlJs, { type Database as SqlDatabase, type Statement, type SqlValue } from 'sql.js/dist/sql-asm.js'
+import { openNativeSqliteDatabase } from '../assistant/native-sqlite-adapter'
 import {
     detectFrameworksFromPackageJson,
     detectProjectTypeFromMarkers,
@@ -46,10 +46,12 @@ type IndexedDirectoryMetadata = {
 
 const FILE_INDEX_SCHEMA_VERSION = 1
 const FILE_INDEX_FLUSH_DEBOUNCE_MS = 1200
-const FILE_INDEX_YIELD_INTERVAL = 240
+const FILE_INDEX_YIELD_INTERVAL = 64
 const FILE_INDEX_SEARCH_FALLBACK_MULTIPLIER = 6
+const FILE_INDEX_SEARCH_RESULT_CACHE_LIMIT = 120
 const FILE_INDEX_MAX_DEPTH = 32
 const FILE_INDEX_MAX_ENTRIES_PER_ROOT = 300_000
+const FILE_INDEX_REVALIDATE_MS = 30 * 60 * 1000
 const SKIP_RECURSIVE_DIRECTORY_NAMES = new Set([
     '.git',
     'node_modules',
@@ -88,6 +90,10 @@ function normalizePathKey(pathValue: string): string {
     return process.platform === 'win32' ? normalized.toLowerCase() : normalized
 }
 
+function escapeSqlLikeTerm(value: string): string {
+    return value.replace(/[\^%_]/g, (character) => `^${character}`)
+}
+
 function resolveEntryName(pathValue: string): string {
     const trimmed = String(pathValue || '').trim()
     if (!trimmed) return ''
@@ -121,10 +127,6 @@ function parseJsonArray(value: SqlValue): string[] {
 
 function sqlBool(value: boolean): number {
     return value ? 1 : 0
-}
-
-function escapeLikeValue(value: string): string {
-    return value.replace(/[\\%_]/g, '\\$&')
 }
 
 function isPathWithinScope(candidatePath: string, scopePath: string): boolean {
@@ -239,8 +241,12 @@ class FileIndexService {
     private initPromise: Promise<void> | null = null
     private operationQueue: Promise<void> = Promise.resolve()
     private writeTimer: NodeJS.Timeout | null = null
+    private requiresExportFlush = false
     private pendingRefreshPaths = new Set<string>()
     private refreshTimer: NodeJS.Timeout | null = null
+    private scopeIndexPromises = new Map<string, Promise<void>>()
+    private indexedScopeCache = new Map<string, number>()
+    private searchResultCache = new Map<string, DevScopeIndexedPathSearchResult>()
 
     constructor() {
         const indexDir = join(app.getPath('userData'), 'file-index')
@@ -338,14 +344,15 @@ class FileIndexService {
 
     private async initialize(): Promise<void> {
         try {
-            const SQL = await initSqlJs()
-            const dbBytes = existsSync(this.filePath) ? readFileSync(this.filePath) : null
-            this.db = dbBytes ? new SQL.Database(dbBytes) : new SQL.Database()
+            await this.openDatabase()
             initializeFileIndexSchema(this.requireDb())
         } catch (error) {
+            try { this.db?.close() } catch {}
+            this.db = null
             if (existsSync(this.filePath) && isRecoverableSqliteError(error)) {
-                const SQL = await initSqlJs()
-                this.db = new SQL.Database()
+                const corruptBackupPath = `${this.filePath}.corrupt-${Date.now()}.bak`
+                renameSync(this.filePath, corruptBackupPath)
+                await this.openDatabase()
                 initializeFileIndexSchema(this.requireDb())
                 await this.flushNow()
                 return
@@ -354,29 +361,67 @@ class FileIndexService {
         }
     }
 
+    private async openDatabase(): Promise<void> {
+        try {
+            this.db = await openNativeSqliteDatabase(this.filePath)
+            this.requiresExportFlush = false
+            return
+        } catch (error) {
+            const message = error instanceof Error ? error.message.toLowerCase() : String(error || '').toLowerCase()
+            if (!message.includes('node:sqlite') && !message.includes('built-in module')) throw error
+        }
+        const SQL = await initSqlJs()
+        const dbBytes = existsSync(this.filePath) ? readFileSync(this.filePath) : null
+        this.db = dbBytes ? new SQL.Database(dbBytes) : new SQL.Database()
+        this.requiresExportFlush = true
+    }
+
     private async ensureRootsIndexed(roots: string[]): Promise<void> {
         const safeRoots = roots.filter((rootPath) => !isBroadUnsafeIndexRoot(rootPath))
-        const missingRoots = await this.enqueue(async () => {
+        const { missingRoots, staleRoots } = await this.enqueue(async () => {
             const storedRoots = this.readIndexedRoots()
-            return safeRoots.filter((rootPath) => !storedRoots.some((row) => row.normalizedRootPath === normalizePathKey(rootPath)))
+            return {
+                missingRoots: safeRoots.filter((rootPath) => !storedRoots.some((row) => row.normalizedRootPath === normalizePathKey(rootPath))),
+                staleRoots: storedRoots.filter((row) => safeRoots.some((rootPath) => row.normalizedRootPath === normalizePathKey(rootPath)) && Date.now() - row.lastIndexedAt > FILE_INDEX_REVALIDATE_MS)
+            }
         })
 
-        if (missingRoots.length === 0) return
-        await this.indexFolders(missingRoots)
+        for (const root of staleRoots) this.scheduleRefreshPath(root.rootPath)
+        if (missingRoots.length > 0) await this.indexFolders(missingRoots)
     }
 
     private async ensureScopeIndexed(scopePath: string): Promise<void> {
         if (isBroadUnsafeIndexRoot(scopePath)) return
+        const scopeKey = normalizePathKey(scopePath)
+        const indexedAt = this.indexedScopeCache.get(scopeKey)
+        if (indexedAt && Date.now() - indexedAt <= FILE_INDEX_REVALIDATE_MS) return
+        const existing = this.scopeIndexPromises.get(scopeKey)
+        if (existing) return existing
+        const request = this.ensureScopeIndexedOnce(scopePath).finally(() => {
+            if (this.scopeIndexPromises.get(scopeKey) === request) this.scopeIndexPromises.delete(scopeKey)
+        })
+        this.scopeIndexPromises.set(scopeKey, request)
+        return request
+    }
+
+    private async ensureScopeIndexedOnce(scopePath: string): Promise<void> {
         const indexedRoot = await this.enqueue(async () => this.findCoveringRoot(scopePath))
-        if (indexedRoot) return
+        if (indexedRoot) {
+            const isStale = Date.now() - indexedRoot.lastIndexedAt > FILE_INDEX_REVALIDATE_MS
+            this.indexedScopeCache.set(normalizePathKey(scopePath), isStale ? Date.now() : indexedRoot.lastIndexedAt)
+            if (isStale) this.scheduleRefreshPath(indexedRoot.rootPath)
+            return
+        }
         await this.indexFolders([scopePath])
+        this.indexedScopeCache.set(normalizePathKey(scopePath), Date.now())
     }
 
     private async reindexRoot(rootPath: string): Promise<void> {
         const db = this.requireDb()
         const normalizedRootPath = normalizePathKey(rootPath)
         const timestamp = Date.now()
-
+        this.indexedScopeCache.clear()
+        this.searchResultCache.clear()
         db.run('BEGIN')
         try {
             db.run('DELETE FROM file_index_entries WHERE normalized_root_path = ?', [normalizedRootPath])
@@ -428,7 +473,8 @@ class FileIndexService {
         const db = this.requireDb()
         const existingRoot = this.findCoveringRoot(targetPath)
         if (!existingRoot) return
-
+        this.indexedScopeCache.clear()
+        this.searchResultCache.clear()
         const normalizedTargetPath = normalizePathKey(targetPath)
         db.run('BEGIN')
         try {
@@ -504,6 +550,7 @@ class FileIndexService {
     ): Promise<void> {
         const stack: Array<{ path: string; parentPath: string | null; depth: number }> = [{ path: directoryPath, parentPath, depth }]
         let processedEntries = 0
+        let lastYieldAt = 0
 
         while (stack.length > 0 && processedEntries < FILE_INDEX_MAX_ENTRIES_PER_ROOT) {
             const current = stack.pop()
@@ -531,6 +578,7 @@ class FileIndexService {
                 }, insertStatement)
                 processedEntries += 1
 
+                const filePaths: string[] = []
                 for (const entry of entries) {
                     if (entry.isSymbolicLink()) continue
                     const entryPath = join(current.path, entry.name)
@@ -544,23 +592,33 @@ class FileIndexService {
                         })
                         continue
                     }
-                    if (!entry.isFile()) continue
-                    try {
-                        const fileStats = await stat(entryPath)
-                        await this.insertFileEntry(rootPath, current.path, entryPath, fileStats, insertStatement, current.depth + 1)
+                    if (entry.isFile()) filePaths.push(entryPath)
+                }
+
+                const metadataBatchSize = 48
+                for (let offset = 0; offset < filePaths.length && processedEntries < FILE_INDEX_MAX_ENTRIES_PER_ROOT; offset += metadataBatchSize) {
+                    const batch = filePaths.slice(offset, offset + metadataBatchSize)
+                    const fileMetadata = await Promise.all(batch.map(async (entryPath) => {
+                        try {
+                            return { entryPath, stats: await stat(entryPath) }
+                        } catch (error) {
+                            if (!isExpectedTraversalError(error)) log.debug(`[FileIndex] Skipped unreadable file ${entryPath}`, error)
+                            return null
+                        }
+                    }))
+                    for (const metadata of fileMetadata) {
+                        if (!metadata || processedEntries >= FILE_INDEX_MAX_ENTRIES_PER_ROOT) continue
+                        await this.insertFileEntry(rootPath, current.path, metadata.entryPath, metadata.stats, insertStatement, current.depth + 1)
                         processedEntries += 1
-                    } catch (error) {
-                        if (!isExpectedTraversalError(error)) log.debug(`[FileIndex] Skipped unreadable file ${entryPath}`, error)
                     }
-                    if (processedEntries % FILE_INDEX_YIELD_INTERVAL === 0) {
-                        await yieldToEventLoop()
-                    }
+                    await yieldToEventLoop()
                 }
             } catch (error) {
                 if (!isExpectedTraversalError(error)) log.debug(`[FileIndex] Skipped unreadable directory ${current.path}`, error)
             }
 
-            if (processedEntries % FILE_INDEX_YIELD_INTERVAL === 0) {
+            if (processedEntries - lastYieldAt >= FILE_INDEX_YIELD_INTERVAL) {
+                lastYieldAt = processedEntries
                 await yieldToEventLoop()
             }
         }
@@ -777,8 +835,6 @@ class FileIndexService {
                 .filter(Boolean)
         ))
 
-        const scopeFilters: string[] = []
-        const args: Array<string | number> = []
         const scopePath = String(input.scopePath || '').trim()
         const roots = Array.from(new Set(
             (input.roots || [])
@@ -786,10 +842,38 @@ class FileIndexService {
                 .filter(Boolean)
         ))
 
+        const includeFiles = input.includeFiles ?? true
+        const includeDirectories = input.includeDirectories ?? true
+        const showHidden = input.showHidden ?? false
+        const cacheKey = JSON.stringify({
+            scopePath: scopePath ? normalizePathKey(scopePath) : '',
+            roots: roots.map((root) => normalizePathKey(root)).sort(),
+            term,
+            extensionFilters: [...extensionFilters].sort(),
+            limit,
+            includeFiles,
+            includeDirectories,
+            includeAncestors: input.includeAncestors !== false,
+            showHidden
+        })
+        const cachedResult = this.searchResultCache.get(cacheKey)
+        if (cachedResult) {
+            this.searchResultCache.delete(cacheKey)
+            this.searchResultCache.set(cacheKey, cachedResult)
+            return cachedResult
+        }
+        const scopeFilters: string[] = []
+        const args: Array<string | number> = []
         if (scopePath) {
             const normalizedScope = normalizePathKey(scopePath)
-            scopeFilters.push('(normalized_path = ? OR normalized_path LIKE ?)')
-            args.push(normalizedScope, `${normalizedScope}/%`)
+            const coveringRoot = this.findCoveringRoot(scopePath)
+            if (coveringRoot) {
+                scopeFilters.push('(normalized_root_path = ? AND normalized_path LIKE ?)')
+                args.push(coveringRoot.normalizedRootPath, `${normalizedScope}/%`)
+            } else {
+                scopeFilters.push('normalized_path LIKE ?')
+                args.push(`${normalizedScope}/%`)
+            }
         } else if (roots.length > 0) {
             for (const root of roots) {
                 const normalizedRoot = normalizePathKey(root)
@@ -798,9 +882,6 @@ class FileIndexService {
             }
         }
 
-        const includeFiles = input.includeFiles ?? true
-        const includeDirectories = input.includeDirectories ?? true
-        const showHidden = input.showHidden ?? false
         const candidateLimit = Math.max(limit * FILE_INDEX_SEARCH_FALLBACK_MULTIPLIER, limit)
         const baseFilters = [
             scopeFilters.length > 0 ? `(${scopeFilters.join(' OR ')})` : '',
@@ -839,102 +920,109 @@ class FileIndexService {
             FROM file_index_entries
         `
 
-        const prefixMatches = term
-            ? db.exec(`
-                ${selectColumns}
-                WHERE ${[...baseFilters, '(name_lower LIKE ? ESCAPE \'\\\' OR relative_path_lower LIKE ? ESCAPE \'\\\')'].join(' AND ')}
-                ORDER BY CASE WHEN name_lower = ? THEN 0 WHEN name_lower LIKE ? ESCAPE '\\' THEN 1 ELSE 2 END, depth ASC, name ASC
-                LIMIT ?
-            `, [
-                ...args,
-                `${escapeLikeValue(term)}%`,
-                `${escapeLikeValue(term)}%`,
-                term,
-                `${escapeLikeValue(term)}%`,
-                candidateLimit
-            ])[0]?.values || []
-            : []
+        let totalMatched = 0
+        let scoredEntries: Array<{ entry: DevScopeIndexedPathEntry; score: number }>
+        if (term) {
+            const escapedTerm = escapeSqlLikeTerm(term)
+            const containsPattern = `%${escapedTerm}%`
+            const prefixPattern = `${escapedTerm}%`
+            const matchFilter = `(name_lower LIKE ? ESCAPE '^' OR relative_path_lower LIKE ? ESCAPE '^')`
+            const matchArgs = [containsPattern, containsPattern]
+            const whereClause = [...baseFilters, matchFilter].join(' AND ')
+            const countRow = db.exec(`
+                SELECT COUNT(*)
+                FROM file_index_entries
+                WHERE ${whereClause}
+            `, [...args, ...matchArgs])[0]?.values?.[0]
+            totalMatched = typeof countRow?.[0] === 'number' ? countRow[0] : 0
 
-        const seenPaths = new Set(prefixMatches.map((row) => String(row[0] || '')))
-        const containsMatches = term
-            ? db.exec(`
+            const rows = db.exec(`
                 ${selectColumns}
-                WHERE ${[...baseFilters, '(name_lower LIKE ? ESCAPE \'\\\' OR relative_path_lower LIKE ? ESCAPE \'\\\')'].join(' AND ')}
-                ORDER BY depth ASC, name ASC
+                WHERE ${whereClause}
+                ORDER BY
+                    CASE
+                        WHEN name_lower = ? THEN 0
+                        WHEN name_lower LIKE ? ESCAPE '^' THEN 1
+                        WHEN relative_path_lower LIKE ? ESCAPE '^' THEN 2
+                        WHEN name_lower LIKE ? ESCAPE '^' THEN 3
+                        ELSE 4
+                    END ASC,
+                    depth ASC,
+                    name ASC
                 LIMIT ?
             `, [
                 ...args,
-                `%${escapeLikeValue(term)}%`,
-                `%${escapeLikeValue(term)}%`,
+                ...matchArgs,
+                term,
+                prefixPattern,
+                prefixPattern,
+                containsPattern,
                 candidateLimit
             ])[0]?.values || []
-            : db.exec(`
+            scoredEntries = rows
+                .map((row) => {
+                    const entry = mapIndexedEntry(row)
+                    return { entry, score: scoreIndexedEntry(entry, term) }
+                })
+                .sort((left, right) => right.score - left.score || left.entry.depth - right.entry.depth || left.entry.name.localeCompare(right.entry.name))
+                .slice(0, limit)
+        } else {
+            const rows = db.exec(`
                 ${selectColumns}
                 WHERE ${baseFilters.length > 0 ? baseFilters.join(' AND ') : '1 = 1'}
                 ORDER BY depth ASC, name ASC
                 LIMIT ?
             `, [...args, candidateLimit])[0]?.values || []
-
-        const combinedRows = [...prefixMatches]
-        for (const row of containsMatches) {
-            const pathValue = String(row[0] || '')
-            if (!pathValue || seenPaths.has(pathValue)) continue
-            seenPaths.add(pathValue)
-            combinedRows.push(row)
+            scoredEntries = rows
+                .map((row) => ({ entry: mapIndexedEntry(row), score: 0 }))
+                .filter((item) => !scopePath || normalizePathKey(item.entry.path) !== normalizePathKey(scopePath))
+                .slice(0, limit)
+            totalMatched = scoredEntries.length
         }
-
-        const scoredEntries = combinedRows
-            .map((row) => {
-                const entry = mapIndexedEntry(row)
-                if (scopePath && normalizePathKey(entry.path) === normalizePathKey(scopePath)) {
-                    return null
-                }
-                return {
-                    entry,
-                    score: scoreIndexedEntry(entry, term)
-                }
-            })
-            .filter((item): item is { entry: DevScopeIndexedPathEntry; score: number } => Boolean(item))
-            .sort((left, right) => right.score - left.score || left.entry.depth - right.entry.depth || left.entry.name.localeCompare(right.entry.name))
-            .slice(0, limit)
 
         const entries = scoredEntries.map((item) => item.entry)
-        const ancestorPaths = new Set<string>()
-        for (const entry of entries) {
-            let parentPath = entry.parentPath
-            while (parentPath) {
-                if (scopePath && !isPathWithinScope(parentPath, scopePath)) break
-                if (ancestorPaths.has(parentPath)) {
-                    parentPath = null
-                    continue
+        let ancestors: DevScopeIndexedPathEntry[] = []
+        if (input.includeAncestors !== false) {
+            const ancestorPaths = new Map<string, string>()
+            for (const entry of entries) {
+                let parentPath = entry.parentPath
+                while (parentPath) {
+                    if (scopePath && !isPathWithinScope(parentPath, scopePath)) break
+                    const normalizedParent = normalizePathKey(parentPath)
+                    if (ancestorPaths.has(normalizedParent)) break
+                    ancestorPaths.set(normalizedParent, parentPath)
+                    const nextParent = dirname(parentPath)
+                    if (!nextParent || normalizePathKey(nextParent) === normalizedParent) break
+                    parentPath = nextParent
                 }
-                ancestorPaths.add(parentPath)
-                const ancestorRow = db.exec(`
-                    ${selectColumns}
-                    WHERE normalized_path = ?
-                    LIMIT 1
-                `, [normalizePathKey(parentPath)])[0]?.values?.[0]
-                if (!ancestorRow) break
-                parentPath = typeof ancestorRow[2] === 'string' && ancestorRow[2].length > 0 ? ancestorRow[2] : null
             }
+
+            const normalizedAncestors = Array.from(ancestorPaths.keys())
+            const ancestorRows: SqlValue[][] = []
+            const ancestorBatchSize = 500
+            for (let offset = 0; offset < normalizedAncestors.length; offset += ancestorBatchSize) {
+                const batch = normalizedAncestors.slice(offset, offset + ancestorBatchSize)
+                if (batch.length === 0) continue
+                const rows = db.exec(`
+                    ${selectColumns}
+                    WHERE normalized_path IN (${batch.map(() => '?').join(', ')})
+                `, batch)[0]?.values || []
+                ancestorRows.push(...rows)
+            }
+            ancestors = ancestorRows
+                .map((row) => mapIndexedEntry(row))
+                .filter((entry) => !scopePath || normalizePathKey(entry.path) !== normalizePathKey(scopePath))
+                .sort((left, right) => left.depth - right.depth || left.name.localeCompare(right.name))
         }
 
-        const ancestors = Array.from(ancestorPaths)
-            .map((pathValue) => db.exec(`
-                ${selectColumns}
-                WHERE normalized_path = ?
-                LIMIT 1
-            `, [normalizePathKey(pathValue)])[0]?.values?.[0] || null)
-            .filter((row): row is SqlValue[] => Array.isArray(row))
-            .map((row) => mapIndexedEntry(row))
-            .filter((entry) => !scopePath || normalizePathKey(entry.path) !== normalizePathKey(scopePath))
-            .sort((left, right) => left.depth - right.depth || left.name.localeCompare(right.name))
-
-        return {
-            entries,
-            ancestors,
-            totalMatched: scoredEntries.length
+        const result = { entries, ancestors, totalMatched }
+        this.searchResultCache.set(cacheKey, result)
+        while (this.searchResultCache.size > FILE_INDEX_SEARCH_RESULT_CACHE_LIMIT) {
+            const oldestKey = this.searchResultCache.keys().next().value
+            if (typeof oldestKey !== 'string') break
+            this.searchResultCache.delete(oldestKey)
         }
+        return result
     }
 
     private readIndexedRoots(): FileIndexRootRow[] {
@@ -960,21 +1048,18 @@ class FileIndexService {
     }
 
     private scheduleFlush(): void {
-        if (this.writeTimer) {
-            clearTimeout(this.writeTimer)
-        }
+        if (!this.requiresExportFlush) return
+        if (this.writeTimer) clearTimeout(this.writeTimer)
         this.writeTimer = setTimeout(() => {
             this.writeTimer = null
-            void this.enqueue(async () => {
-                await this.flushNow()
-            })
+            void this.enqueue(async () => this.flushNow())
         }, FILE_INDEX_FLUSH_DEBOUNCE_MS)
         this.writeTimer.unref?.()
     }
 
     private async flushNow(): Promise<void> {
-        const db = this.requireDb()
-        const bytes = Buffer.from(db.export())
+        if (!this.requiresExportFlush) return
+        const bytes = Buffer.from(this.requireDb().export())
         await writeFile(this.filePath, bytes)
     }
 
@@ -1025,18 +1110,26 @@ function scoreIndexedEntry(entry: DevScopeIndexedPathEntry, term: string): numbe
     return score
 }
 
-const fileIndexService = new FileIndexService()
+let fileIndexService: FileIndexService | null = null
+
+function getFileIndexService(): FileIndexService {
+    // Runtime identity is applied in main/index.ts before IPC handlers can call
+    // this module. Lazy construction keeps dev, production, and named dev
+    // instances from sharing the pre-identity default Electron user-data path.
+    fileIndexService ??= new FileIndexService()
+    return fileIndexService
+}
 
 export async function indexFilesAcrossFolders(folders: string[]): Promise<FileIndexFoldersResult> {
-    return await fileIndexService.indexFolders(folders)
+    return await getFileIndexService().indexFolders(folders)
 }
 
 export async function searchIndexedPaths(
     input: DevScopeIndexedPathSearchInput
 ): Promise<DevScopeIndexedPathSearchResult> {
-    return await fileIndexService.searchPaths(input)
+    return await getFileIndexService().searchPaths(input)
 }
 
 export function scheduleFileIndexRefresh(pathValue: string): void {
-    fileIndexService.scheduleRefreshPath(pathValue)
+    getFileIndexService().scheduleRefreshPath(pathValue)
 }

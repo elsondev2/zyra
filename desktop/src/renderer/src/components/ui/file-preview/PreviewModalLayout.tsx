@@ -1,4 +1,5 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useCallback, useLayoutEffect, useRef, useState } from 'react'
+import type { editor as MonacoEditor } from 'monaco-editor'
 import { cn } from '@/lib/utils'
 import PreviewBody from './PreviewBody'
 import PreviewErrorBoundary from './PreviewErrorBoundary'
@@ -7,23 +8,39 @@ import { PreviewModalDialogs } from './PreviewModalDialogs'
 import { PreviewExpandedWorkspace } from './PreviewExpandedWorkspace'
 import { PreviewExpandedPreviewArea } from './PreviewExpandedPreviewArea'
 import type { PreviewModalLayoutProps } from './previewModalLayout.types'
+import { PreviewTreeSkeleton } from './PreviewLoadingSkeleton'
+import { resolveMarkdownSourceLineAtViewport } from './markdownPreviewModeLocation'
 
 const PreviewNavigationSidebar = lazy(async () => ({
     default: (await import('./PreviewNavigationSidebar')).PreviewNavigationSidebar
 }))
-const PreviewInspectorSidebar = lazy(async () => ({
-    default: (await import('./PreviewInspectorSidebar')).PreviewInspectorSidebar
+const PreviewContextSidebar = lazy(async () => ({
+    default: (await import('./PreviewContextSidebar')).PreviewContextSidebar
 }))
 
 function PreviewSidebarFallback({ label }: { label: string }) {
     return (
-        <div className="flex h-full min-h-0 items-center justify-center bg-sparkle-bg px-3 text-[10px] text-sparkle-text-muted/60">
-            <span className="animate-pulse">{label}</span>
+        <div className="flex h-full min-h-0 flex-col bg-sparkle-bg" aria-label={label}>
+            <PreviewTreeSkeleton compact />
         </div>
     )
 }
 
 export function PreviewModalLayout(props: PreviewModalLayoutProps) {
+    const markdownScrollContainerRef = useRef<HTMLDivElement | null>(null)
+    const pendingMarkdownModeLocationRef = useRef<{ filePath: string; targetMode: 'preview' | 'edit'; sourceLine: number } | null>(null)
+    const activeFilePathRef = useRef(props.file.path)
+    const [previewEditor, setPreviewEditor] = useState<MonacoEditor.IStandaloneCodeEditor | null>(null)
+    const handlePreviewEditorMount = useCallback((editor: MonacoEditor.IStandaloneCodeEditor | null) => {
+        setPreviewEditor(editor)
+        if (!editor) return
+        const pendingLocation = pendingMarkdownModeLocationRef.current
+        if (pendingLocation?.filePath !== props.file.path || pendingLocation.targetMode !== 'edit') return
+        pendingMarkdownModeLocationRef.current = null
+        const lineNumber = Math.min(Math.max(1, pendingLocation.sourceLine), editor.getModel()?.getLineCount() || pendingLocation.sourceLine)
+        editor.revealLineNearTop(lineNumber)
+        editor.setPosition({ lineNumber, column: 1 })
+    }, [props.file.path])
     const {
         file,
         shellMode = 'modal',
@@ -33,6 +50,7 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
         previewBytes,
         projectPath,
         mediaItems,
+        navigationSidebar: navigationSidebarOverride,
         openMediaItem,
         onInternalLinkClick,
         onLinkNotice,
@@ -42,8 +60,11 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
         onNavigateBack,
         onNavigateForward,
         isExpanded,
-        allowExpanded = true,
-        windowedNavigatorEnabled = false,
+        allowExpanded,
+        showHistoryNavigation,
+        showPreviewTabs,
+        showLeftPanelToggle,
+        windowedNavigatorEnabled,
         canEdit,
         isDirty,
         isSaving,
@@ -83,7 +104,7 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
         onOpenInBrowser,
         gitDiffText,
         gitDiffSummary,
-        handleModeChange,
+        handleModeChange: commitModeChange,
         handleSave,
         handleRevert,
         handleCloseRequest,
@@ -104,7 +125,6 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
         onOpenLinkedPreview,
         onOpenLinkedPreviewInNewTab,
         folderTreeRefreshToken = 0,
-        preserveSidebarContextRequest = null,
         navigatorRevealRequestId = null,
         onNavigatorRevealHandled,
         previewTabs,
@@ -117,7 +137,6 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
         trailingWhitespaceCount,
         jsonDiagnostic,
         isEditorToolsEnabled,
-        getEditorToolButtonClass,
         pythonPanel,
         previewBottomOverlay,
         previewBottomOverlayPadding = 0,
@@ -132,8 +151,55 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
         overwriteConflict
     } = props
 
+    useLayoutEffect(() => {
+        if (activeFilePathRef.current === file.path) return
+        activeFilePathRef.current = file.path
+        pendingMarkdownModeLocationRef.current = null
+        setPreviewEditor(null)
+    }, [file.path])
+
+    const handleModeChange = useCallback(async (nextMode: 'preview' | 'edit') => {
+        if (nextMode !== mode && file.type === 'md') {
+            if (mode === 'preview' && nextMode === 'edit') {
+                const scrollContainer = markdownScrollContainerRef.current
+                const markdownRoot = scrollContainer?.querySelector<HTMLElement>('[data-zyra-diagnostic-surface="markdown-preview"]')
+                if (scrollContainer && markdownRoot) {
+                    const viewportTop = scrollContainer.getBoundingClientRect().top
+                    const sourceLine = resolveMarkdownSourceLineAtViewport({
+                        content: sourceContent,
+                        viewportTop,
+                        documentTop: markdownRoot.getBoundingClientRect().top,
+                        documentBottom: markdownRoot.getBoundingClientRect().bottom,
+                        headingPositions: Array.from(markdownRoot.querySelectorAll<HTMLElement>('h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]')).map((heading) => ({
+                            id: heading.id,
+                            top: heading.getBoundingClientRect().top
+                        }))
+                    })
+                    pendingMarkdownModeLocationRef.current = { filePath: file.path, targetMode: 'edit', sourceLine }
+                }
+            } else if (mode === 'edit' && nextMode === 'preview') {
+                const sourceLine = previewEditor?.getVisibleRanges()[0]?.startLineNumber
+                    || previewEditor?.getPosition()?.lineNumber
+                    || 1
+                pendingMarkdownModeLocationRef.current = { filePath: file.path, targetMode: 'preview', sourceLine }
+            }
+        }
+        await commitModeChange(nextMode)
+    }, [commitModeChange, file.path, file.type, mode, previewEditor, sourceContent])
+
+    const markdownInitialSourceLine = pendingMarkdownModeLocationRef.current?.filePath === file.path
+        && pendingMarkdownModeLocationRef.current.targetMode === 'preview'
+        ? pendingMarkdownModeLocationRef.current.sourceLine
+        : null
+
+    const handleToggleExpanded = useCallback(() => {
+        if (!allowExpanded) return
+        setIsExpanded((current) => !current)
+    }, [allowExpanded, setIsExpanded])
+
     const isDirectory = file.type === 'directory'
-    const isMediaFile = file.type === 'image' || file.type === 'video' || file.type === 'audio'
+    const isOfficeFile = file.type === 'docx' || file.type === 'xlsx' || file.type === 'pptx'
+    const isMediaFile = file.type === 'image' || file.type === 'video' || file.type === 'audio' || file.type === 'pdf' || isOfficeFile
     const previewSurfaceBackgroundClass = file.type === 'md' && mode === 'preview'
         ? 'bg-sparkle-card'
         : 'bg-sparkle-bg'
@@ -171,12 +237,15 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
                     findRequestToken={findRequestToken}
                     replaceRequestToken={replaceRequestToken}
                     focusLine={focusLine}
+                    onEditorMount={handlePreviewEditorMount}
                     fillEditorHeight={fillEditorHeight}
                     lineMarkersOverride={lineMarkersOverride}
                     previewFocusLine={focusLine}
                     isExpanded={isExpanded}
                     mediaItems={mediaItems}
                     onSelectMedia={openMediaItem}
+                    scrollContainerRef={markdownScrollContainerRef}
+                    markdownInitialSourceLine={markdownInitialSourceLine}
                 />
             </PreviewErrorBoundary>
         )
@@ -197,6 +266,9 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
             isSaving={isSaving}
             isExpanded={isExpanded}
             allowExpanded={allowExpanded}
+            showHistoryNavigation={showHistoryNavigation}
+            showPreviewTabs={showPreviewTabs}
+            showLeftPanelToggle={showLeftPanelToggle}
             windowedNavigatorEnabled={windowedNavigatorEnabled}
             leftPanelOpen={leftPanelOpen}
             rightPanelOpen={rightPanelOpen}
@@ -207,10 +279,7 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
             pythonHasOutput={pythonHasOutput}
             pythonRunMode={pythonRunMode}
             onClose={handleCloseRequest}
-            onToggleExpanded={() => {
-                if (!allowExpanded) return
-                setIsExpanded((current) => !current)
-            }}
+            onToggleExpanded={handleToggleExpanded}
             onToggleLeftPanel={() => setLeftPanelOpen((current) => !current)}
             onToggleRightPanel={() => setRightPanelOpen((current) => !current)}
             onModeChange={handleModeChange}
@@ -230,6 +299,15 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
             onClosePreviewTab={onClosePreviewTab}
             canCreateSiblingFile={canCreateSiblingFile}
             onCreateSiblingFile={onCreateSiblingFile}
+            setFindRequestToken={setFindRequestToken}
+            setReplaceRequestToken={setReplaceRequestToken}
+            isEditorToolsEnabled={isEditorToolsEnabled}
+            editorWordWrap={editorWordWrap}
+            setEditorWordWrap={setEditorWordWrap}
+            editorMinimapEnabled={editorMinimapEnabled}
+            setEditorMinimapEnabled={setEditorMinimapEnabled}
+            editorFontSize={editorFontSize}
+            setEditorFontSize={setEditorFontSize}
         />
     )
 
@@ -246,34 +324,29 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
             previewContent={renderPreviewBody(true)}
             bottomOverlay={previewBottomOverlay}
             bottomOverlayPadding={previewBottomOverlayPadding}
+            scrollContainerRef={markdownScrollContainerRef}
         />
     )
 
     const expandedRightInspector = rightPanelOpen ? (
         <Suspense fallback={<PreviewSidebarFallback label="Loading inspector…" />}>
-            <PreviewInspectorSidebar
+            <PreviewContextSidebar
                 filePath={file.path}
+                fileType={file.type}
+                language={file.language}
+                content={mode === 'edit' ? draftContent : sourceContent}
                 gitDiffSummary={gitDiffSummary}
                 mode={mode}
                 isDirty={isDirty}
-                setFindRequestToken={setFindRequestToken}
-                setReplaceRequestToken={setReplaceRequestToken}
-                isEditorToolsEnabled={isEditorToolsEnabled}
-                getEditorToolButtonClass={getEditorToolButtonClass}
-                editorWordWrap={editorWordWrap}
-                setEditorWordWrap={setEditorWordWrap}
-                editorMinimapEnabled={editorMinimapEnabled}
-                setEditorMinimapEnabled={setEditorMinimapEnabled}
-                editorFontSize={editorFontSize}
-                setEditorFontSize={setEditorFontSize}
                 trailingWhitespaceCount={trailingWhitespaceCount}
                 longLineCount={longLineCount}
                 jsonDiagnostic={jsonDiagnostic}
+                editor={previewEditor}
             />
         </Suspense>
     ) : null
 
-    const navigationSidebar = (
+    const fileNavigationSidebar = (
         <Suspense fallback={<PreviewSidebarFallback label="Loading navigator…" />}>
             <PreviewNavigationSidebar
                 file={file}
@@ -281,12 +354,13 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
                 onOpenLinkedPreview={onOpenLinkedPreview}
                 onOpenLinkedPreviewInNewTab={onOpenLinkedPreviewInNewTab}
                 refreshToken={folderTreeRefreshToken}
-                preserveContextRequest={preserveSidebarContextRequest}
                 revealTargetRequestId={navigatorRevealRequestId}
                 onRevealTargetHandled={onNavigatorRevealHandled}
+                variant="sidebar"
             />
         </Suspense>
     )
+    const navigationSidebar = navigationSidebarOverride ?? fileNavigationSidebar
 
     const modalContent = (
         <div
@@ -295,9 +369,11 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
                 isWindowShell
                     ? 'min-h-0 flex-1 items-stretch justify-stretch bg-sparkle-bg'
                     : isExpanded
-                        ? 'fixed left-0 right-0 bottom-0 top-[46px] z-[45] items-stretch justify-stretch bg-sparkle-bg'
+                        ? 'fixed left-0 right-0 bottom-0 top-[34px] z-[45] items-stretch justify-stretch bg-sparkle-bg'
                         : 'fixed inset-0 z-[80] items-center justify-center bg-black/70 backdrop-blur-md'
             )}
+            data-preview-expanded={isExpanded ? 'true' : 'false'}
+            data-zyra-native-view-occluder={isWindowShell ? undefined : 'true'}
             onClick={!isWindowShell && !isExpanded ? handleCloseRequest : undefined}
             style={!isWindowShell && !isExpanded ? { animation: 'fadeIn 0.18s ease-out' } : undefined}
             onWheel={(event) => event.stopPropagation()}
@@ -331,7 +407,7 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
                         rightPanelOpen={rightPanelOpen}
                         rightPanelWidth={rightPanelWidth}
                         isResizingPanels={isResizingPanels}
-                        leftSidebar={leftPanelOpen ? navigationSidebar : null}
+                        leftSidebar={navigationSidebar}
                         previewArea={expandedPreviewArea}
                         rightInspector={expandedRightInspector}
                     />
@@ -348,9 +424,13 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
                                 )}
                                 style={{ width: leftPanelOpen ? `${leftPanelWidth}px` : '0px' }}
                             >
-                                {leftPanelOpen ? navigationSidebar : null}
+                                {navigationSidebar}
                                 <div
                                     data-preview-resize-side="left"
+                                    role="separator"
+                                    aria-orientation="vertical"
+                                    aria-label="Resize file navigator"
+                                    tabIndex={0}
                                     className={cn(
                                         'group absolute -right-1 top-0 z-30 h-full w-3 cursor-col-resize bg-transparent transition-colors',
                                         leftPanelOpen ? 'hover:bg-white/[0.03]' : 'pointer-events-none'
@@ -359,13 +439,14 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
                                 >
                                     <div
                                         data-preview-resize-side="left"
-                                        className="pointer-events-none absolute left-1/2 top-1/2 h-16 w-[2px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/[0.14] opacity-70 transition-all duration-200 group-hover:h-24 group-hover:bg-white/[0.32] group-hover:opacity-100"
+                                        className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors duration-150 group-hover:bg-[var(--accent-primary)]/45"
                                     />
                                 </div>
                             </aside>
                         ) : null}
                         <div ref={previewSurfaceRef} className="group/preview relative min-h-0 min-w-0 flex-1">
                             <div
+                                ref={hasBottomPanel && mode !== 'edit' ? undefined : markdownScrollContainerRef}
                                 className={cn(
                                     'h-full w-full custom-scrollbar flex items-stretch justify-center',
                                     previewSurfaceBackgroundClass,
@@ -384,7 +465,7 @@ export function PreviewModalLayout(props: PreviewModalLayoutProps) {
                                     className={cn('w-full flex flex-col', shouldStretchPreviewBody ? 'h-full min-h-0' : 'min-h-full')}
                                     style={{ paddingBottom: previewBottomOverlay && previewBottomOverlayPadding > 0 ? `${previewBottomOverlayPadding}px` : undefined }}
                                 >
-                                    <div className={cn(shouldStretchPreviewBody && 'min-h-0', hasBottomPanel ? 'flex-1' : (shouldStretchPreviewBody ? 'h-full' : ''), hasBottomPanel && mode !== 'edit' ? 'overflow-auto custom-scrollbar' : '', centerHtmlRenderedPreview ? 'flex items-center justify-center' : '')}>
+                                    <div ref={hasBottomPanel && mode !== 'edit' ? markdownScrollContainerRef : undefined} className={cn(shouldStretchPreviewBody && 'min-h-0', hasBottomPanel ? 'flex-1' : (shouldStretchPreviewBody ? 'h-full' : ''), hasBottomPanel && mode !== 'edit' ? 'overflow-auto custom-scrollbar' : '', centerHtmlRenderedPreview ? 'flex items-center justify-center' : '')}>
                                         {renderPreviewBody(false)}
                                     </div>
                                 </div>

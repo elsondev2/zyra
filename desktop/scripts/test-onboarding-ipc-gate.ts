@@ -33,16 +33,16 @@ assert.equal(gated.readMarker(), 'bound', 'non-handle Electron methods must reta
 
 const registrySource = readFileSync(resolve(import.meta.dirname, '../src/main/ipc/handlers.ts'), 'utf8')
 const setupHandlersSource = readFileSync(resolve(import.meta.dirname, '../src/main/ipc/handlers/setup-handlers.ts'), 'utf8')
-assert.match(registrySource, /ipcMain as electronIpcMain/)
-assert.match(registrySource, /createOnboardingGatedIpcMain\(electronIpcMain/)
+assert.match(registrySource, /ipcMain as trustedIpcMain/, 'the normal registry starts from the trusted-sender IPC boundary')
+assert.match(registrySource, /createOnboardingGatedIpcMain\(trustedIpcMain/, 'onboarding access wraps the trusted IPC boundary')
 assert.match(registrySource, /'devscope:selectFolder',[\s\S]*'window:isMaximized',[\s\S]*'window:getRuntimeInfo'/)
 assert.doesNotMatch(
     registrySource.split('PRE_ONBOARDING_ALLOWED_INVOKE_CHANNELS')[1]?.split('])')[0] || '',
     /assistant|projectDetails|readFile|terminal|Git|agent/i,
     'normal Assistant, filesystem, terminal, Git, and control channels must fail closed'
 )
-assert.match(setupHandlersSource, /ipcMain as electronIpcMain/)
-assert.match(setupHandlersSource, /createOnboardingGatedIpcMain\(electronIpcMain/)
+assert.match(setupHandlersSource, /ipcMain as trustedIpcMain/, 'setup handlers also require a trusted renderer sender')
+assert.match(setupHandlersSource, /createOnboardingGatedIpcMain\(trustedIpcMain/, 'the setup allowlist wraps trusted IPC rather than raw Electron IPC')
 const preOnboardingSetupAllowlist = setupHandlersSource
     .split('PRE_ONBOARDING_SETUP_CHANNELS')[1]
     ?.split('])')[0] || ''
@@ -53,13 +53,15 @@ for (const required of [
     'ONBOARDING_IPC.connectChatGpt',
     'ONBOARDING_IPC.connectApiKey',
     'ONBOARDING_IPC.updateAppearance',
-    'ONBOARDING_IPC.commitStep'
+    'ONBOARDING_IPC.commitStep',
+    'ANALYTICS_IPC.getStatus',
+    'ANALYTICS_IPC.setEnabled'
 ]) {
     assert.ok(preOnboardingSetupAllowlist.includes(required), `${required} must remain available to mandatory setup`)
 }
 assert.doesNotMatch(
     preOnboardingSetupAllowlist,
-    /DEVICE_PREFERENCES_IPC\.update|DEVICE_SECRETS_IPC\.updateHostedAiKeys|ONBOARDING_IPC\.getConnectionsStatus|ONBOARDING_IPC\.disconnectOpenAI/,
+    /DEVICE_PREFERENCES_IPC\.update|DEVICE_SECRETS_IPC\.updateHostedAiKeys|ONBOARDING_IPC\.getConnectionsStatus|ONBOARDING_IPC\.disconnectOpenAI|ANALYTICS_IPC\.capture/,
     'pre-onboarding renderers must not mutate normal preferences, replace secrets, inspect the account, or disconnect credentials'
 )
 assert.match(setupHandlersSource, /input\?\.confirmed !== true/)

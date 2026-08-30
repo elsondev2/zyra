@@ -194,6 +194,7 @@ export function createMarkdownComponents(
     options?: {
         codeBlockMaxLines?: number
         plainCodeBlocks?: boolean
+        deferCodeHighlighting?: boolean
         visualTheme?: 'light' | 'dark'
         onInternalLinkClick?: (href: string) => Promise<boolean | void> | boolean | void
     }
@@ -390,6 +391,7 @@ export function createMarkdownComponents(
                     title={extractFenceTitle(metadata)}
                     theme={options?.visualTheme || 'dark'}
                     maxLines={options?.codeBlockMaxLines}
+                    deferHighlighting={options?.deferCodeHighlighting}
                 >
                     {String(children).replace(/\n$/, '')}
                 </CodeBlock>

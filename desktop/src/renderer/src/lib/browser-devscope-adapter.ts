@@ -155,7 +155,7 @@ function createDevActivity(input: {
     }
 }
 
-const railDevTurnSpecs = [
+const railDevReferenceTurnSpecs = [
     {
         prompt: 'Locate the chat rail code and explain why the checkpoint marker is landing in the message body.',
         response: 'The marker was being measured from the message content, then rendered from inside a translated container. I moved the rail ownership up to the timeline pane so the minimap belongs to the chat surface.'
@@ -189,6 +189,28 @@ const railDevTurnSpecs = [
         response: 'The full-chat dev fixture is now meant to stay available in browser preview. It gives the rail enough user turns to render consistently and gives us a stable URL to retest future fixes.'
     }
 ]
+
+const RAIL_SCROLL_FIXTURE_TURN_COUNT = 180
+
+const railDevTurnSpecs = Array.from({ length: RAIL_SCROLL_FIXTURE_TURN_COUNT }, (_, index) => {
+    const reference = railDevReferenceTurnSpecs[index]
+    if (reference) return reference
+
+    const turnNumber = index + 1
+    const sectionCount = turnNumber % 10 === 0 ? 8 : (turnNumber % 4) + 1
+    const sections = Array.from({ length: sectionCount }, (_section, sectionIndex) => (
+        `Variable-height section ${sectionIndex + 1}/${sectionCount} for turn ${turnNumber}. `
+        + 'This paragraph deliberately wraps across several lines so late Markdown measurements exercise the virtual timeline anchor without moving the reader.'
+    ))
+    const codeBlock = turnNumber % 7 === 0
+        ? `\n\n\`\`\`ts\nexport const fixtureTurn = ${turnNumber}\nexport const preservesViewportAnchor = true\n\`\`\``
+        : ''
+
+    return {
+        prompt: `Scroll fixture turn ${turnNumber}: keep this message stable while nearby rows change height.`,
+        response: `Fixture response ${turnNumber}.\n\n${sections.join('\n\n')}${codeBlock}`
+    }
+})
 
 function createRailDevMessages(): AssistantMessage[] {
     return railDevTurnSpecs.flatMap((turn, index) => {
@@ -701,6 +723,23 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
         completed: true,
         state: browserUpdateState
     })
+    const previewPreferenceSnapshot = (surface: 'desktop' | 'browser') => ({
+        schemaVersion: 1 as const,
+        revision: 1,
+        surface,
+        settings: { settingsSchemaVersion: 4 },
+        desktopLegacyMigrationComplete: true,
+        updatedAt: new Date().toISOString()
+    })
+    const completedPreviewOnboarding = {
+        hydrated: true as const,
+        accessAllowed: true,
+        showOnboarding: false,
+        blockedReason: null,
+        detectedSchemaVersion: null,
+        recovery: null,
+        record: null
+    }
 
     const getBrowserThreadDetail = (threadId: string) => {
         const thread = ensureSnapshot().sessions.flatMap((session) => session.threads).find((entry) => entry.id === threadId)
@@ -715,10 +754,12 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
                 messages: thread.messages,
                 activities: thread.activities,
                 proposedPlans: thread.proposedPlans,
-                pageInfo: { oldestCursor: null, hasOlder: false, turnCount: thread.messages.filter((message) => message.role === 'user').length },
+                pageInfo: { oldestCursor: null, newestCursor: null, hasOlder: false, hasNewer: false, turnCount: thread.messages.filter((message) => message.role === 'user').length },
                 initialLoading: false,
                 loadingOlder: false,
+                loadingNewer: false,
                 loadOlderError: null,
+                loadNewerError: null,
                 fullyLoaded: true
             }
         }
@@ -726,16 +767,23 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
 
     const base = {
         preferences: {
-            get: () => unavailable('Device preferences require Zyra Desktop.'),
-            update: () => unavailable('Device preferences require Zyra Desktop.'),
+            get: (input: { surface: 'desktop' | 'browser' }) => previewMode === 'empty'
+                ? unavailable('Device preferences require Zyra Desktop.')
+                : ok({ snapshot: previewPreferenceSnapshot(input.surface) }),
+            update: (input: { surface: 'desktop' | 'browser' }) => previewMode === 'empty'
+                ? unavailable('Device preferences require Zyra Desktop.')
+                : ok({ snapshot: previewPreferenceSnapshot(input.surface) }),
             onChanged: () => noopUnsubscribe
         },
         secrets: {
             updateHostedAiKeys: () => unavailable('Device secrets are available in Zyra Desktop only.'),
-            migrateLegacyHostedAiKeys: () => unavailable('Device secrets are available in Zyra Desktop only.')
+            migrateLegacyHostedAiKeys: () => unavailable('Device secrets are available in Zyra Desktop only.'),
+            updateBrowserIntegrationSecrets: () => unavailable('Browser integration secrets are available in Zyra Desktop only.')
         },
         onboarding: {
-            getState: () => unavailable('Setup status requires Zyra Desktop.'),
+            getState: () => previewMode === 'empty'
+                ? unavailable('Setup status requires Zyra Desktop.')
+                : ok({ snapshot: completedPreviewOnboarding }),
             getAuthStatus: () => unavailable('OpenAI setup requires Zyra Desktop.'),
             getConnectionsStatus: () => unavailable('OpenAI account changes require Zyra Desktop.'),
             connectChatGpt: () => unavailable('OpenAI setup requires Zyra Desktop.'),
@@ -771,6 +819,26 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
             downloadUpdate: updateAction,
             installUpdate: updateAction,
             onStateChange: () => noopUnsubscribe
+        },
+        assistantUtility: {
+            getState: () => Promise.resolve({ success: false as const, error: 'Utility windows are unavailable in browser preview.' }),
+            selectTab: () => Promise.resolve({ success: true }),
+            closeTab: () => Promise.resolve({ success: true }),
+            reorderTab: () => Promise.resolve({ success: true }),
+            moveTab: () => Promise.resolve({ success: true }),
+            registerDropZone: () => Promise.resolve({ success: true }),
+            tabReady: () => Promise.resolve({ success: true }),
+            updateTab: () => Promise.resolve({ success: true }),
+            updateStateCapsule: () => Promise.resolve({ success: true }),
+            addTab: () => Promise.resolve({ success: true }),
+            detachMainTab: () => Promise.resolve({ success: true }),
+            beginTearOff: () => Promise.resolve({ success: true }),
+            finishTearOff: () => Promise.resolve({ success: true }),
+            cancelTearOff: () => Promise.resolve({ success: true }),
+            completeIncomingMainTab: () => Promise.resolve({ success: true }),
+            onStateChange: () => noopUnsubscribe,
+            onIncomingMainTab: () => noopUnsubscribe,
+            onCancelIncomingMainTab: () => noopUnsubscribe
         },
         assistant: liveAssistant || {
             subscribe: () => ok(),
@@ -856,6 +924,7 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
                 }
                 return ok()
             },
+            regenerateSessionTitle: () => unavailable('Title regeneration requires the Zyra desktop bridge.'),
             archiveSession: () => ok(),
             deleteSession: () => unavailable('Deleting sessions requires the Zyra desktop bridge.'),
             deleteMessage: () => unavailable('Deleting messages requires the Zyra desktop bridge.'),
@@ -928,6 +997,21 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
         openInExplorer: () => unavailable('Explorer actions require the Zyra desktop bridge.'),
         openInTerminal: () => unavailable('Terminal actions require the Zyra desktop bridge.'),
         getBrowserPreviewConfig: () => unavailable('Integrated Browser requires the Zyra desktop bridge.'),
+        getBrowserPageIcon: () => ok({ dataUrl: null }),
+        getBrowserHistory: () => unavailable('Browser history requires the Zyra desktop bridge.'),
+        getBrowserSearchSuggestions: () => unavailable('Browser search suggestions require the Zyra desktop bridge.'),
+        scanExternalBrowserHistoryProfiles: () => unavailable('External Browser history import requires Zyra Desktop.'),
+        importExternalBrowserHistory: () => unavailable('External Browser history import requires Zyra Desktop.'),
+        recordBrowserHistory: () => unavailable('Browser history requires the Zyra desktop bridge.'),
+        clearBrowserHistory: () => unavailable('Browser history requires the Zyra desktop bridge.'),
+        getBrowserAdBlockStatus: () => unavailable('Built-in ad blocking requires Zyra Desktop.'),
+        setBrowserAdBlockEnabled: () => unavailable('Built-in ad blocking requires Zyra Desktop.'),
+        onBrowserAdDetected: () => noopUnsubscribe,
+        getBrowserBackgroundProviderStatus: () => unavailable('Live backgrounds require Zyra Desktop.'),
+        validateBrowserUnsplashAccessKey: () => unavailable('Live backgrounds require Zyra Desktop.'),
+        getBrowserRemoteBackgrounds: () => unavailable('Live backgrounds require Zyra Desktop.'),
+        trackBrowserRemoteBackground: () => unavailable('Live backgrounds require Zyra Desktop.'),
+        getRunningLocalServers: () => unavailable('Local server discovery requires the Zyra desktop bridge.'),
         clearBrowserPreviewData: () => unavailable('Clearing Browser data requires the Zyra desktop bridge.'),
         getBrowserLinkPreview: () => unavailable('Website previews require the Zyra desktop bridge.'),
         openBrowserPreviewExternal: () => unavailable('Opening external links requires the Zyra desktop bridge.'),
@@ -935,6 +1019,7 @@ function createBrowserDevscopeAdapter(): DevScopeApi {
         openProjectInIde: () => unavailable('IDE actions require the Zyra desktop bridge.'),
         installProjectDependencies: () => unavailable('Dependency installation requires the Zyra desktop bridge.'),
         getProjectDetails: () => unavailable('Project details require the Zyra desktop bridge.'),
+        recordProjectOpen: () => unavailable('Project navigation analytics requires the Zyra desktop bridge.'),
         getFileTree: () => ok({ tree: [], files: [], folders: [] }),
         listBranches: () => ok({ branches: [] }),
         getGitStatusDetailed: () => ok({ status: null }),

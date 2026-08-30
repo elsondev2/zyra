@@ -143,16 +143,16 @@ export const TimelineToolCallList = memo(({
             <div className={cn(
                 'overflow-hidden rounded-xl',
                 containsSubagentActivities
-                    ? 'border border-violet-400/12 bg-violet-500/[0.03]'
-                    : 'border border-white/10 bg-white/[0.03]'
+                    ? 'border border-[color-mix(in_srgb,var(--accent-primary)_18%,var(--surface-divider))] bg-[color-mix(in_srgb,var(--accent-primary)_4%,var(--color-card))]'
+                    : 'border border-[var(--surface-divider)] bg-[color-mix(in_srgb,var(--color-card)_58%,transparent)]'
             )}>
                 <div className="flex items-center justify-between gap-2 px-2 pb-0 pt-1.5">
-                    <div className="text-[9px] font-medium uppercase tracking-[0.22em] text-white/20">{header}</div>
+                    <div className="text-[9px] font-medium uppercase tracking-[0.22em] text-sparkle-text-muted">{header}</div>
                     {hasMore ? (
                         <button
                             type="button"
                             onClick={toggleOlderActivities}
-                            className="rounded border border-white/10 bg-white/[0.03] px-1.5 py-0.5 text-[9px] text-white/40 transition-colors hover:border-white/20 hover:bg-white/[0.05] hover:text-white/60"
+                            className="rounded border border-[var(--surface-divider)] bg-[var(--surface-hover)] px-1.5 py-0.5 text-[9px] text-sparkle-text-muted transition-colors hover:border-[color-mix(in_srgb,var(--color-text)_18%,transparent)] hover:bg-[var(--surface-active)] hover:text-sparkle-text-secondary"
                             title={expanded ? `Show last ${COLLAPSED_TOOL_CALL_COUNT}` : 'Show all'}
                         >
                             {expanded ? `Show last ${COLLAPSED_TOOL_CALL_COUNT}` : `Show all ${displayActivities.length}`}

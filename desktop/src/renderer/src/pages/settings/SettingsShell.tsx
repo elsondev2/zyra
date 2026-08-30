@@ -3,7 +3,10 @@ import { ArrowLeft, PanelLeftOpen, Pin, Search, X } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useSettings } from '@/lib/settings'
 import { cn } from '@/lib/utils'
+import { captureProductEventOnce } from '@/lib/product-analytics'
+import type { AnalyticsEventPropertiesMap } from '@shared/analytics/contracts'
 import {
+    ASSISTANT_BUBBLE_SIDEBAR_WIDTH,
     ASSISTANT_SIDEBAR_COLLAPSE_MORPH_MS,
     ASSISTANT_SIDEBAR_PREVIEW_CLOSE_MS,
     readAssistantBubblePreviewPinned,
@@ -42,6 +45,16 @@ function groupSettingsSearchTargets(targets: SettingsSearchTarget[]): Array<{ se
     return [...groups].map(([section, entries]) => ({ section, targets: entries }))
 }
 
+type AnalyticsSettingsSection = NonNullable<AnalyticsEventPropertiesMap['zyra_v1_workspace_ui']['section']>
+const analyticsSettingsSections = new Set(SETTINGS_NAVIGATION_GROUPS.flatMap((group) => (
+    group.items.map((item) => item.id.replaceAll('-', '_'))
+)))
+
+function analyticsSettingsSection(value: string): AnalyticsSettingsSection {
+    const normalized = value.replaceAll('-', '_')
+    return analyticsSettingsSections.has(normalized) ? normalized as AnalyticsSettingsSection : 'unknown'
+}
+
 function SettingsRouteFallback() {
     return (
         <div className="mx-auto w-full max-w-[680px] px-5 pb-16 pt-8 sm:px-10 sm:pt-10" aria-busy="true" aria-label="Opening settings page">
@@ -72,6 +85,13 @@ export default function SettingsShell() {
     const [previewOpen, setPreviewOpen] = useState(previewPinned)
     const normalizedQuery = query.trim().toLowerCase()
     const activeItem = findSettingsNavigationItem(location.pathname)
+    useEffect(() => {
+        captureProductEventOnce(`settings:${activeItem.id}`, {
+            event: 'zyra_v1_workspace_ui',
+            properties: { action: 'settings_section', section: analyticsSettingsSection(activeItem.id) }
+        })
+    }, [activeItem.id])
+
     const requestedSearchTarget = useMemo(() => {
         const value = new URLSearchParams(location.search).get('setting') || ''
         return isSettingsSearchTargetId(value) ? value : null
@@ -185,6 +205,15 @@ export default function SettingsShell() {
     }, [])
 
     useEffect(() => {
+        if (settings.sidebarHoverPreviewEnabled || previewPinned) return
+        if (previewCloseTimerRef.current !== null) {
+            window.clearTimeout(previewCloseTimerRef.current)
+            previewCloseTimerRef.current = null
+        }
+        setPreviewOpen(false)
+    }, [previewPinned, settings.sidebarHoverPreviewEnabled])
+
+    useEffect(() => {
         const wasCollapsed = wasCollapsedRef.current
         wasCollapsedRef.current = settings.sidebarCollapsed
 
@@ -198,11 +227,11 @@ export default function SettingsShell() {
             return
         }
 
-        if (!wasCollapsed) {
+        if (!wasCollapsed && settings.sidebarHoverPreviewEnabled) {
             setPreviewOpen(true)
             schedulePreviewClose(ASSISTANT_SIDEBAR_COLLAPSE_MORPH_MS)
         }
-    }, [schedulePreviewClose, settings.sidebarCollapsed])
+    }, [schedulePreviewClose, settings.sidebarCollapsed, settings.sidebarHoverPreviewEnabled])
 
     const expandCollapsedSidebar = useCallback(() => {
         setPreviewPinned(false)
@@ -261,7 +290,7 @@ export default function SettingsShell() {
     } as const
     const sidebarSurfaceStyle = settings.sidebarCollapsed
         ? {
-            width: `${sidebarWidth}px`,
+            width: `${ASSISTANT_BUBBLE_SIDEBAR_WIDTH}px`,
             opacity: previewOpen ? 1 : 0,
             pointerEvents: previewOpen ? 'auto' : 'none',
             transform: previewOpen ? 'translate3d(0, 0, 0)' : 'translate3d(-18px, 0, 0)',
@@ -277,7 +306,7 @@ export default function SettingsShell() {
 
     return (
         <div className="zyra-settings-shell flex h-full min-h-0 overflow-hidden bg-[var(--settings-bg)] text-[var(--settings-text)]">
-            {settings.sidebarCollapsed ? (
+            {settings.sidebarCollapsed && settings.sidebarHoverPreviewEnabled ? (
                 <div
                     className="pointer-events-auto fixed bottom-0 left-0 top-[34px] z-[59] w-6"
                     onMouseEnter={openPreview}
@@ -304,10 +333,10 @@ export default function SettingsShell() {
             >
                 <aside
                     onMouseEnter={() => {
-                        if (settings.sidebarCollapsed) openPreview()
+                        if (settings.sidebarCollapsed && settings.sidebarHoverPreviewEnabled) openPreview()
                     }}
                     onMouseLeave={() => {
-                        if (settings.sidebarCollapsed) schedulePreviewClose()
+                        if (settings.sidebarCollapsed && settings.sidebarHoverPreviewEnabled) schedulePreviewClose()
                     }}
                     aria-hidden={settings.sidebarCollapsed && !previewOpen}
                     className={cn(

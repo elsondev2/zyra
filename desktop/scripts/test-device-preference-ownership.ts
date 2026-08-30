@@ -24,6 +24,8 @@ try {
         appearanceLightTheme: 'paper-light',
         assistantDefaultWebSearch: false,
         assistantTitleModel: 'openai-codex/gpt-5.6-luna',
+        assistantReasoningSummary: 'detailed',
+        assistantContextCompactionThresholdTokens: 256_000,
         browserViewMode: 'grid',
         startWithWindows: true,
         groqApiKey: 'must-not-migrate',
@@ -34,7 +36,9 @@ try {
         appearanceThemeMode: 'dark',
         appearanceLightTheme: 'paper-light',
         assistantDefaultWebSearch: false,
-        assistantTitleModel: 'openai-codex/gpt-5.6-luna'
+        assistantTitleModel: 'openai-codex/gpt-5.6-luna',
+        assistantReasoningSummary: 'detailed',
+        assistantContextCompactionThresholdTokens: 256_000
     })
     assert.deepEqual(partitioned.surface, { browserViewMode: 'grid' })
     assert.equal(getDevicePreferenceOwnership('startWithWindows'), 'os')
@@ -44,6 +48,9 @@ try {
     assert.equal(sanitizeDevicePreferenceValue('appearanceLightTheme', 'paper-light'), 'paper-light')
     assert.equal(sanitizeDevicePreferenceValue('appearanceDarkTheme', 'forest'), 'forest')
     assert.equal(sanitizeDevicePreferenceValue('assistantTitleModel', 56), undefined, 'the title model rejects malformed non-string values')
+    assert.equal(sanitizeDevicePreferenceValue('assistantReasoningSummary', 'raw'), undefined, 'raw chain-of-thought cannot become a reasoning-summary mode')
+    assert.equal(sanitizeDevicePreferenceValue('assistantReasoningSummary', 'detailed'), 'detailed')
+    assert.equal(sanitizeDevicePreferenceValue('assistantContextCompactionThresholdTokens', 500_000), 372_000, 'context limits clamp below the 400k model ceiling')
 
     const allOwned = new Set([...SHARED_DEVICE_PREFERENCE_KEYS, ...SURFACE_DEVICE_PREFERENCE_KEYS])
     assert.equal(allOwned.size, SHARED_DEVICE_PREFERENCE_KEYS.length + SURFACE_DEVICE_PREFERENCE_KEYS.length, 'shared and surface preference keys must not overlap')
@@ -59,6 +66,11 @@ try {
         await service.getAssistantTitleModel(),
         'openai-codex/gpt-5.6-luna',
         'ordinary new installs use GPT-5.6 Luna for chat titles'
+    )
+    assert.deepEqual(
+        await service.getAssistantRuntimePolicy(),
+        { reasoningSummary: 'detailed', contextCompactionThresholdTokens: 256_000 },
+        'ordinary installs request detailed summaries and compact before a new turn crosses 256k'
     )
     const browserBeforeDesktop = await service.get({
         surface: 'browser',
@@ -114,6 +126,8 @@ try {
             assistantHistoryPrefetch: true,
             assistantDefaultWebSearch: true,
             assistantTitleModel: 'openai-codex/gpt-5.6-terra',
+            assistantReasoningSummary: 'concise',
+            assistantContextCompactionThresholdTokens: 320_000,
             groqApiKey: 'still-secret'
         }
     })
@@ -122,13 +136,45 @@ try {
     assert.equal(updated.settings.assistantDefaultWebSearch, true)
     assert.equal(updated.settings.assistantTitleModel, 'openai-codex/gpt-5.6-terra')
     assert.equal(await service.getAssistantTitleModel(), 'openai-codex/gpt-5.6-terra')
+    assert.deepEqual(
+        await service.getAssistantRuntimePolicy(),
+        { reasoningSummary: 'concise', contextCompactionThresholdTokens: 320_000 },
+        'runtime policy changes remain shared across Desktop and Browser'
+    )
     assert.equal(events.at(-1)?.revision, updated.revision, 'preference writes must publish a typed revision event')
     assert.ok(events.at(-1)?.changedKeys.includes('assistantDefaultWebSearch'))
+
+    const pendingPolicyUpdate = service.update({
+        surface: 'desktop',
+        expectedRevision: updated.revision,
+        patch: {
+            assistantReasoningSummary: 'detailed',
+            assistantContextCompactionThresholdTokens: 200_000,
+            sidebarHoverPreviewEnabled: false
+        }
+    })
+    const policyDuringWrite = service.getAssistantRuntimePolicy()
+    await pendingPolicyUpdate
+    assert.deepEqual(
+        await policyDuringWrite,
+        { reasoningSummary: 'detailed', contextCompactionThresholdTokens: 200_000 },
+        'prompt dispatch waits for an already-queued Settings policy write'
+    )
 
     const desktopAfterBrowser = await service.get({ surface: 'desktop' })
     assert.equal(desktopAfterBrowser.settings.browserViewMode, 'grid', 'browser surface updates must not alter Desktop view')
     assert.equal(desktopAfterBrowser.settings.assistantDefaultWebSearch, true, 'shared updates must sync live across surfaces')
     assert.equal(desktopAfterBrowser.settings.assistantTitleModel, 'openai-codex/gpt-5.6-terra', 'the title-model preference must remain shared across Desktop and Browser')
+    assert.equal(desktopAfterBrowser.settings.sidebarHoverPreviewEnabled, false, 'Desktop retains the disabled minimized-sidebar hover preview preference')
+    assert.equal((await service.get({ surface: 'browser' })).settings.sidebarHoverPreviewEnabled, undefined, 'the Desktop hover preference cannot overwrite another surface')
+    const mainOwnedBlockerUpdate = await service.updateSurfaceFromMain('desktop', {
+        assistantBrowserAdBlockEnabled: true,
+        assistantBrowserAdBlockPromptDismissed: true,
+        assistantDefaultWebSearch: false
+    })
+    assert.equal(mainOwnedBlockerUpdate.settings.assistantBrowserAdBlockEnabled, true, 'main can atomically persist Desktop blocker state')
+    assert.equal(mainOwnedBlockerUpdate.settings.assistantBrowserAdBlockPromptDismissed, true)
+    assert.equal(mainOwnedBlockerUpdate.settings.assistantDefaultWebSearch, true, 'main surface updates cannot mutate shared preferences')
 
     await assert.rejects(
         service.update({ surface: 'desktop', expectedRevision: desktop.revision, patch: { compactMode: true } }),
@@ -160,6 +206,12 @@ try {
     )
     await secrets.updateHostedAiKeys({ groqApiKey: '', confirmClear: true })
     assert.equal((await secrets.getHostedAiKeys()).status.groqConfigured, false)
+    await secrets.updateBrowserIntegrationSecrets({ unsplashAccessKey: 'unsplash-private' })
+    assert.equal(await secrets.getUnsplashAccessKey(), 'unsplash-private')
+    assert.equal((await readFile(encryptedPath, 'utf8')).includes('unsplash-private'), false, 'Unsplash BYOK must remain encrypted')
+    await assert.rejects(secrets.updateBrowserIntegrationSecrets({ unsplashAccessKey: '' }), /Confirm before removing/)
+    await secrets.updateBrowserIntegrationSecrets({ unsplashAccessKey: '', confirmClear: true })
+    assert.equal((await secrets.updateBrowserIntegrationSecrets({})).status.unsplashConfigured, false)
     assert.equal((await secrets.getHostedAiKeys()).status.geminiConfigured, true)
 
     const unavailableSecrets = new DeviceSecretsService(join(root, 'unavailable-secrets.bin'), {

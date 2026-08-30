@@ -1,0 +1,100 @@
+import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import { readFile, readdir, stat } from 'node:fs/promises'
+import path from 'node:path'
+
+const desktopRoot = path.resolve(import.meta.dirname, '..')
+const catalogRoot = path.join(desktopRoot, 'src', 'renderer', 'src', 'assets', 'browser-backgrounds')
+const manifest = JSON.parse(await readFile(path.join(catalogRoot, 'manifest.json'), 'utf8'))
+assert.equal(manifest.schemaVersion, 1)
+assert.equal(manifest.assets.length, 45, 'the bundled New Tab pack contains exactly 45 images')
+assert.equal(Object.keys(manifest.categories).length, 9, 'the pack contains nine named categories')
+assert.equal(new Set(manifest.assets.map((asset) => asset.id)).size, 45)
+assert.equal(new Set(manifest.assets.map((asset) => asset.source.assetId)).size, 45)
+
+const files = (await readdir(catalogRoot)).filter((file) => file.endsWith('.webp')).sort()
+const thumbnailRoot = path.join(catalogRoot, 'thumbs')
+const thumbnailFiles = (await readdir(thumbnailRoot)).filter((file) => file.endsWith('.webp')).sort()
+assert.equal(files.length, 45)
+assert.equal(thumbnailFiles.length, 45)
+let totalBytes = 0
+let totalThumbnailBytes = 0
+for (const [category] of Object.entries(manifest.categories)) {
+    assert.equal(manifest.assets.filter((asset) => asset.category === category).length, 5, `${category} owns five images`)
+}
+for (const asset of manifest.assets) {
+    assert.match(asset.file, /^[a-z0-9-]+-\d{2}\.webp$/)
+    assert.equal(files.includes(asset.file), true)
+    assert.match(asset.source.pageUrl, /^https:\/\/commons\.wikimedia\.org\/wiki\/File:/)
+    assert.match(asset.source.originalUrl, /^https:\/\/upload\.wikimedia\.org\//)
+    assert.match(asset.rights.name.toLowerCase(), /^(?:cc0|cc by|public domain)/)
+    assert.ok(asset.source.creator.name)
+    assert.ok(asset.attributionText)
+    assert.deepEqual(asset.modifications.length, 3)
+    const filePath = path.join(catalogRoot, asset.file)
+    const bytes = await readFile(filePath)
+    const details = await stat(filePath)
+    totalBytes += details.size
+    assert.equal(details.size, asset.output.bytes)
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), asset.output.sha256)
+    assert.ok(details.size <= 650 * 1024, `${asset.file} stays below the per-image budget`)
+    assert.equal(thumbnailFiles.includes(path.basename(asset.thumbnail.file)), true)
+    const thumbnailPath = path.join(catalogRoot, asset.thumbnail.file)
+    const thumbnailBytes = await readFile(thumbnailPath)
+    const thumbnailDetails = await stat(thumbnailPath)
+    totalThumbnailBytes += thumbnailDetails.size
+    assert.equal(thumbnailDetails.size, asset.thumbnail.bytes)
+    assert.equal(createHash('sha256').update(thumbnailBytes).digest('hex'), asset.thumbnail.sha256)
+    assert.ok(asset.thumbnail.width <= 480 && asset.thumbnail.height <= 480)
+    assert.ok(thumbnailDetails.size <= 120 * 1024, `${asset.thumbnail.file} stays below the thumbnail budget`)
+}
+assert.ok(totalBytes <= 15 * 1024 * 1024, `background pack stays below 15 MiB (actual ${totalBytes})`)
+assert.ok(totalThumbnailBytes <= 2 * 1024 * 1024, `thumbnail pack stays below 2 MiB (actual ${totalThumbnailBytes})`)
+
+const notices = await readFile(path.resolve(desktopRoot, '..', 'THIRD_PARTY_NOTICES.md'), 'utf8')
+for (const asset of manifest.assets) {
+    assert.ok(notices.includes(asset.source.pageUrl), `${asset.id} source appears in THIRD_PARTY_NOTICES.md`)
+    assert.ok(notices.includes(`[${asset.rights.name}](${asset.rights.url})`), `${asset.id} license appears in THIRD_PARTY_NOTICES.md`)
+}
+
+const secretService = await readFile(path.join(desktopRoot, 'src', 'main', 'setup', 'device-secrets-service.ts'), 'utf8')
+const remoteService = await readFile(path.join(desktopRoot, 'src', 'main', 'browser-background-service.ts'), 'utf8')
+const pickerSource = await readFile(path.join(desktopRoot, 'src', 'renderer', 'src', 'pages', 'assistant', 'AssistantBrowserBackgroundPicker.tsx'), 'utf8')
+const browserSettingsSource = await readFile(path.join(desktopRoot, 'src', 'renderer', 'src', 'pages', 'settings', 'BrowserControlSettings.tsx'), 'utf8')
+const acquisitionSource = await readFile(path.join(desktopRoot, 'scripts', 'maint', 'curate-browser-backgrounds.py'), 'utf8')
+const newTabSource = await readFile(path.join(desktopRoot, 'src', 'renderer', 'src', 'pages', 'assistant', 'AssistantBrowserNewTab.tsx'), 'utf8')
+const backgroundControllerSource = await readFile(path.join(desktopRoot, 'src', 'renderer', 'src', 'pages', 'assistant', 'useAssistantBrowserNewTabBackground.ts'), 'utf8')
+const backgroundCatalogSource = await readFile(path.join(desktopRoot, 'src', 'renderer', 'src', 'pages', 'assistant', 'assistant-browser-backgrounds.ts'), 'utf8')
+assert.match(acquisitionSource, /\.browser-backgrounds-staging[\s\S]*if BACKUP\.exists\(\):[\s\S]*catalog_complete\(TARGET\)[\s\S]*catalog_complete\(BACKUP\)[\s\S]*TARGET\.rename\(BACKUP\)[\s\S]*except BaseException/, 'catalog acquisition keeps or restores a complete pack across failures and interruptions')
+assert.match(secretService, /getUnsplashAccessKey/, 'Unsplash BYOK stays in main-owned encrypted secrets')
+assert.match(remoteService, /Authorization: `Client-ID \$\{accessKey\}`/, 'Unsplash keys use headers rather than URL parameters')
+assert.doesNotMatch(remoteService, /searchParams\.set\(['"]client_id/, 'Unsplash keys never enter URLs')
+assert.match(backgroundControllerSource, /validateBrowserUnsplashAccessKey[\s\S]*updateBrowserIntegrationSecrets/, 'a replacement key is verified before encrypted persistence')
+assert.match(backgroundControllerSource, /confirmClear: true/, 'the user can explicitly remove an invalid or obsolete key')
+assert.match(backgroundControllerSource, /remoteRequestRef[\s\S]*requestId !== remoteRequestRef\.current/, 'stale remote-category requests cannot replace newer results')
+assert.doesNotMatch(backgroundCatalogSource, /typeof import\.meta\.glob/, 'the Vite-expanded asset map is never hidden behind a runtime-only glob guard')
+assert.match(backgroundCatalogSource, /try \{[\s\S]*import\.meta\.glob[\s\S]*\} catch \{/, 'Node-only imports can fall back without disabling Vite asset expansion')
+assert.match(backgroundControllerSource, /attempt < 3[\s\S]*setTimeout/, 'required Unsplash tracking retries bounded failures')
+assert.match(remoteService, /download_location/, 'Unsplash download tracking metadata is retained')
+assert.match(pickerSource, /role="tablist" aria-label="Background source"[\s\S]*Included[\s\S]*Unsplash[\s\S]*None/, 'the picker exposes all background sources in one control')
+assert.match(pickerSource, /aria-label="Background rotation"[\s\S]*Every new tab[\s\S]*Lock image/, 'the picker names both New Tab background behaviors clearly')
+assert.match(browserSettingsSource, /Background behavior[\s\S]*assistantBrowserNewTabBackgroundRotation[\s\S]*Every tab[\s\S]*Locked/, 'Browser settings exposes the persisted New Tab background behavior')
+assert.match(pickerSource, /max-h-\[470px\][\s\S]*max-w-\[600px\]/, 'the gallery stays compact while shrinking to narrow Browser panes')
+assert.match(pickerSource, /grid-template-columns:repeat\(auto-fill,minmax\(130px,1fr\)\)/, 'the gallery adapts its columns to the available Browser pane width')
+assert.doesNotMatch(pickerSource, /max-w-\[680px\]/, 'the picker is not constrained by the former fixed-width card')
+assert.match(pickerSource, /min-h-0 flex-1 overflow-y-auto/, 'the gallery scrolls independently beneath the stable controls')
+assert.match(pickerSource, /bg-gradient-to-t[\s\S]*\{title\}[\s\S]*\{detail\}/, 'image labels are presented on their thumbnails')
+assert.match(pickerSource, /closing \? 'translate-y-2 scale-\[0\.99\] opacity-0'/, 'the picker animates out before it unmounts')
+assert.match(backgroundControllerSource, /rotation === 'fixed'[\s\S]*selectBackground\(candidates/, 'choose another advances the selected image when rotation is fixed')
+assert.match(backgroundControllerSource, /lastRemoteBackgroundId[\s\S]*background\.id !== lastRemoteBackgroundId[\s\S]*lastRemoteBackgroundId = selected\.id/, 'Unsplash rotation avoids immediately repeating the previous image')
+assert.match(backgroundControllerSource, /if \(query\) setRemoteSearchResults\(result\.backgrounds\)[\s\S]*remoteSearchResults \?\? remoteBackgrounds/, 'Unsplash search results do not replace the active rotation library before selection')
+assert.match(remoteService, /new URL\('\/search\/photos'[\s\S]*content_filter'[\s\S]*'high'/, 'Unsplash keyword searches use the filtered official search endpoint')
+assert.match(remoteService, /photoIdFromUnsplashUrl[\s\S]*new URL\(`\/photos\/\$\{encodeURIComponent\(photoId\)\}`/, 'pasted Unsplash photo links resolve through the official single-photo endpoint')
+assert.match(remoteService, /Only Unsplash photo links can be used here/, 'remote URL input cannot bypass the approved Unsplash origin')
+assert.match(pickerSource, /Search Unsplash or paste a photo link/, 'configured Unsplash libraries expose keyword and photo-link search')
+assert.doesNotMatch(`${pickerSource}${newTabSource}`, /text-\[(?:7|8|9)px\]/, 'background controls and New Tab metadata avoid micro-text')
+assert.match(newTabSource, /activeBackground\.photographerUrl[\s\S]*unsplash\.com\/\?utm_source=zyra&utm_medium=referral/, 'live credits link both the photographer and Unsplash')
+assert.match(pickerSource, /background\.photographerUrl[\s\S]*unsplash\.com\/\?utm_source=zyra&utm_medium=referral/, 'each visible Unsplash picker card links both required attributions')
+assert.doesNotMatch(newTabSource, /attributionText[^\n]*rounded-full/, 'active image attribution remains plain text rather than a pill')
+
+console.log(`Browser background catalog: ok (${(totalBytes / 1024 / 1024).toFixed(1)} MiB + ${(totalThumbnailBytes / 1024 / 1024).toFixed(1)} MiB thumbnails)`)

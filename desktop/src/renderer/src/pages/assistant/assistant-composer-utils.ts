@@ -9,7 +9,50 @@ export const SLASH_COMMANDS = [
     { command: '/yolo', description: 'Switch this thread to full access locally.' },
     { command: '/safe', description: 'Switch this thread back to approval-required mode.' },
     { command: '/include', description: 'Add a file path to the composer context shelf.' }
-]
+] as const
+
+export type AssistantDesktopSlashCommand = {
+    name: 'yolo' | 'safe' | 'include'
+    argument: string
+}
+
+export function listAssistantDesktopSlashCommandResources() {
+    return SLASH_COMMANDS.map((entry) => ({
+        name: entry.command.slice(1),
+        description: entry.description,
+        scope: 'built-in' as const
+    }))
+}
+
+export function parseAssistantDesktopSlashCommand(value: string): AssistantDesktopSlashCommand | null {
+    const match = String(value || '').trim().match(/^\/(yolo|safe|include)(?:\s+([\s\S]*))?$/i)
+    if (!match) return null
+    return {
+        name: match[1].toLowerCase() as AssistantDesktopSlashCommand['name'],
+        argument: String(match[2] || '').trim()
+    }
+}
+
+export type AssistantDesktopSlashCommandAction =
+    | { type: 'runtime-mode'; mode: 'full-access' | 'approval-required' }
+    | { type: 'include'; path: string; name: string; kind: 'image' | 'code' | 'file' }
+    | { type: 'error'; message: string }
+
+export function resolveAssistantDesktopSlashCommandAction(
+    command: AssistantDesktopSlashCommand
+): AssistantDesktopSlashCommandAction {
+    if (command.name === 'yolo') return { type: 'runtime-mode', mode: 'full-access' }
+    if (command.name === 'safe') return { type: 'runtime-mode', mode: 'approval-required' }
+    if (!command.argument) return { type: 'error', message: 'Type a file path after /include.' }
+    const name = command.argument.split(/[\\/]/).filter(Boolean).at(-1) || command.argument
+    const meta = getContextFileMeta({ path: command.argument, name })
+    return {
+        type: 'include',
+        path: command.argument,
+        name,
+        kind: meta.category === 'image' ? 'image' : meta.category === 'code' ? 'code' : 'file'
+    }
+}
 
 export const DRAFT_STORAGE_KEY = 'devscope:assistant:draft:v2'
 export const MAX_COMPOSER_HEIGHT = 180

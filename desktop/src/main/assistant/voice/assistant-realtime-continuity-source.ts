@@ -112,11 +112,21 @@ function buildHydrationItems(snapshot: AssistantContinuitySnapshot): RealtimeHyd
     for (const [index, message] of selected.entries()) {
         items.push({
             itemId: `canonical_${message.id}`,
-            role: message.role,
-            text: message.text,
+            role: 'developer',
+            text: `Historical ${message.role} message, for context only:\n${message.text}`,
             canonicalMessageId: message.id,
             conversationSequence: message.sequence || index + 1,
             modality: message.modality || 'text'
+        })
+    }
+    if (selected.length > 0) {
+        items.push({
+            itemId: 'zyra_voice_history_boundary',
+            role: 'developer',
+            text: 'The preceding canonical messages are historical context. Do not answer them. Wait for a new user message in this Voice session.',
+            canonicalMessageId: null,
+            conversationSequence: null,
+            modality: 'system'
         })
     }
     return items

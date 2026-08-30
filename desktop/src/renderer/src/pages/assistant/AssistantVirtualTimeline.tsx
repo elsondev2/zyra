@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { LegendList, type LegendListRef, type LegendListRenderItemProps } from '@legendapp/list/react'
 import { ChevronUp } from 'lucide-react'
 import {
@@ -13,10 +13,17 @@ import {
     type AssistantTimelineDisclosureToggleDetail
 } from './assistant-timeline-scroll-events'
 import {
+    resolveAssistantTimelineModeAfterScroll,
     resolveAssistantTimelineScrollMode,
-    shouldArmAssistantOlderHistoryLoad,
     type AssistantTimelineScrollMode
 } from './assistant-timeline-scroll-policy'
+import {
+    normalizeAssistantHistoryWheelDelta,
+    resolveAssistantInitialHistoryBackfill,
+    resolveAssistantHistoryStreamPlan,
+    resolveAssistantScrollbarHistoryDemand,
+    updateAssistantHistoryScrollVelocity
+} from './assistant-history-streaming-policy'
 
 const keyExtractor = (row: TimelineDisplayRow) => row.id
 const getItemType = (row: TimelineDisplayRow) => row.kind
@@ -42,10 +49,15 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
     listRef: RefObject<LegendListRef | null>
     scrollContainerRef?: RefObject<HTMLDivElement | null>
     contentInsetEndAdjustment: number
+    isWorking: boolean
     hasOlder: boolean
+    hasNewer: boolean
     loadingOlder: boolean
+    loadingNewer: boolean
     loadOlderError: string | null
-    onLoadOlder?: () => void
+    loadNewerError: string | null
+    onLoadOlder?: (turnLimit?: number) => Promise<boolean> | boolean | void
+    onLoadNewer?: (turnLimit?: number) => Promise<boolean> | boolean | void
     onScrollContainer?: (element: HTMLDivElement) => void
     onInitialLayout?: () => void
     renderRow: (row: TimelineDisplayRow) => ReactNode
@@ -55,9 +67,25 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
     const disclosureTimerRef = useRef(0)
     const completionFollowTimerRef = useRef(0)
     const endAlignmentFrameRef = useRef<number | null>(null)
-    const disclosureAnchorFrameRef = useRef<number | null>(null)
+    const startupAlignmentFrameRef = useRef<number | null>(null)
+    const disclosureAnchorRowIdRef = useRef<string | null>(null)
     const touchStartYRef = useRef<number | null>(null)
+    const scrollbarDragActiveRef = useRef(false)
+    const scrollbarDragDirectionRef = useRef<'older' | 'newer' | null>(null)
+    const scrollbarDragLastYRef = useRef<number | null>(null)
+    const olderLoadRequestPendingRef = useRef(false)
+    const newerLoadRequestPendingRef = useRef(false)
+    const initialHistoryBackfillFrameRef = useRef<number | null>(null)
+    const initialHistoryBackfillWindowKeyRef = useRef(props.windowKey)
+    const initialHistoryBackfillReadyRef = useRef(false)
+    const initialHistoryBackfillActiveRef = useRef(true)
+    const initialHistoryBackfillPagesRef = useRef(0)
     const previousScrollTopRef = useRef(0)
+    const previousScrollSampleAtRef = useRef(0)
+    const previousInputSampleAtRef = useRef(0)
+    const scrollVelocityRef = useRef(0)
+    const lastUpwardIntentAtRef = useRef(Number.NEGATIVE_INFINITY)
+    const lastDownwardIntentAtRef = useRef(Number.NEGATIVE_INFINITY)
     const userNavigationAwayRef = useRef(false)
     const previousRowsRef = useRef(props.rows)
     const previousCompletionWindowKeyRef = useRef(props.windowKey)
@@ -68,9 +96,16 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
     const [scrollMode, setScrollMode] = useState<AssistantTimelineScrollMode>('following-end')
     const [disclosureLayoutActive, setDisclosureLayoutActive] = useState(false)
     const [settledWindowKey, setSettledWindowKey] = useState<string | null>(null)
-    const [olderLoadIntentWindowKey, setOlderLoadIntentWindowKey] = useState<string | null>(null)
+    const activeWindowKeyRef = useRef(props.windowKey)
+    const settledWindowKeyRef = useRef<string | null>(null)
     const startupSettled = settledWindowKey === props.windowKey
-    const olderLoadIntent = olderLoadIntentWindowKey === props.windowKey
+    if (initialHistoryBackfillWindowKeyRef.current !== props.windowKey) {
+        initialHistoryBackfillWindowKeyRef.current = props.windowKey
+        initialHistoryBackfillReadyRef.current = false
+        initialHistoryBackfillActiveRef.current = true
+        initialHistoryBackfillPagesRef.current = 0
+    }
+    activeWindowKeyRef.current = props.windowKey
     renderRowRef.current = props.renderRow
 
     const cancelEndAlignment = useCallback(() => {
@@ -79,10 +114,32 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
         endAlignmentFrameRef.current = null
     }, [])
 
+    const cancelStartupAlignment = useCallback(() => {
+        if (startupAlignmentFrameRef.current === null) return
+        window.cancelAnimationFrame(startupAlignmentFrameRef.current)
+        startupAlignmentFrameRef.current = null
+    }, [])
+
+    const cancelInitialHistoryBackfillCheck = useCallback(() => {
+        if (initialHistoryBackfillFrameRef.current === null) return
+        window.cancelAnimationFrame(initialHistoryBackfillFrameRef.current)
+        initialHistoryBackfillFrameRef.current = null
+    }, [])
+
+    const stopInitialHistoryBackfill = useCallback(() => {
+        cancelInitialHistoryBackfillCheck()
+        initialHistoryBackfillActiveRef.current = false
+    }, [cancelInitialHistoryBackfillCheck])
+
+    const settleInitialPresentation = useCallback((windowKey: string, onInitialLayout?: () => void) => {
+        if (activeWindowKeyRef.current !== windowKey || settledWindowKeyRef.current === windowKey) return
+        settledWindowKeyRef.current = windowKey
+        setSettledWindowKey(windowKey)
+        onInitialLayout?.()
+    }, [])
+
     const cancelDisclosureAnchor = useCallback(() => {
-        if (disclosureAnchorFrameRef.current === null) return
-        window.cancelAnimationFrame(disclosureAnchorFrameRef.current)
-        disclosureAnchorFrameRef.current = null
+        disclosureAnchorRowIdRef.current = null
     }, [])
 
     const requestEndAlignment = useCallback(() => {
@@ -90,18 +147,34 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
         endAlignmentFrameRef.current = window.requestAnimationFrame(() => {
             endAlignmentFrameRef.current = null
             if (scrollModeRef.current !== 'following-end') return
+            const element = props.scrollContainerRef?.current
+            if (element && Math.max(0, element.scrollHeight - element.scrollTop - element.clientHeight) > 1) return
             void props.listRef.current?.scrollToEnd({ animated: false })
         })
-    }, [props.listRef])
+    }, [props.listRef, props.scrollContainerRef])
 
-    const beginDisclosureLayout = useCallback((duration = DEFAULT_DISCLOSURE_SETTLE_MS) => {
+    const beginDisclosureLayout = useCallback((
+        duration = DEFAULT_DISCLOSURE_SETTLE_MS,
+        anchorRowId: string | null = null
+    ) => {
         window.clearTimeout(disclosureTimerRef.current)
+        disclosureAnchorRowIdRef.current = anchorRowId
         setDisclosureLayoutActive(true)
         disclosureTimerRef.current = window.setTimeout(() => {
             disclosureTimerRef.current = 0
+            disclosureAnchorRowIdRef.current = null
             setDisclosureLayoutActive(false)
         }, Math.max(0, duration) + DISCLOSURE_SETTLE_PADDING_MS)
     }, [])
+
+    const maintainVisibleContentPosition = useMemo(() => ({
+        data: true,
+        size: startupSettled && scrollMode === 'free-scrolling',
+        shouldRestorePosition: (row: TimelineDisplayRow) => {
+            const anchorRowId = disclosureAnchorRowIdRef.current
+            return anchorRowId === null || row.id === anchorRowId
+        }
+    }), [scrollMode, startupSettled])
 
     const clearCompletionEndFollow = useCallback(() => {
         completionFollowActiveRef.current = false
@@ -114,12 +187,87 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
         setScrollMode((current) => current === nextMode ? current : nextMode)
     }, [])
 
+    const requestInitialHistoryBackfill = useCallback((targetWindowKey: string) => {
+        if (
+            activeWindowKeyRef.current !== targetWindowKey
+            || initialHistoryBackfillWindowKeyRef.current !== targetWindowKey
+            || !initialHistoryBackfillActiveRef.current
+            || !props.onLoadOlder
+        ) return
+        const state = props.listRef.current?.getState()
+        const element = props.scrollContainerRef?.current
+        const plan = resolveAssistantInitialHistoryBackfill({
+            initialLayoutReady: initialHistoryBackfillReadyRef.current,
+            isWorking: props.isWorking,
+            hasOlder: props.hasOlder,
+            loadingOlder: props.loadingOlder,
+            hasLoadError: Boolean(props.loadOlderError),
+            requestPending: olderLoadRequestPendingRef.current,
+            contentLength: state?.contentLength || 0,
+            viewportSize: state?.scrollLength || element?.clientHeight || 0,
+            pagesRequested: initialHistoryBackfillPagesRef.current
+        })
+        if (!plan.shouldRequest) return
+
+        olderLoadRequestPendingRef.current = true
+        initialHistoryBackfillPagesRef.current += 1
+        void Promise.resolve(props.onLoadOlder(plan.turnLimit)).then((accepted) => {
+            if (activeWindowKeyRef.current !== targetWindowKey) return
+            olderLoadRequestPendingRef.current = false
+            if (accepted === false) initialHistoryBackfillActiveRef.current = false
+        }).catch(() => {
+            if (activeWindowKeyRef.current !== targetWindowKey) return
+            olderLoadRequestPendingRef.current = false
+            initialHistoryBackfillActiveRef.current = false
+        })
+    }, [
+        props.hasOlder,
+        props.isWorking,
+        props.listRef,
+        props.loadOlderError,
+        props.loadingOlder,
+        props.onLoadOlder,
+        props.scrollContainerRef
+    ])
+
+    const scheduleInitialHistoryBackfillCheck = useCallback(() => {
+        if (initialHistoryBackfillFrameRef.current !== null) return
+        const targetWindowKey = props.windowKey
+        initialHistoryBackfillFrameRef.current = window.requestAnimationFrame(() => {
+            initialHistoryBackfillFrameRef.current = null
+            requestInitialHistoryBackfill(targetWindowKey)
+        })
+    }, [props.windowKey, requestInitialHistoryBackfill])
+
+    const scheduleInitialPresentation = useCallback(() => {
+        cancelStartupAlignment()
+        const targetWindowKey = props.windowKey
+        const onInitialLayout = props.onInitialLayout
+        startupAlignmentFrameRef.current = window.requestAnimationFrame(() => {
+            startupAlignmentFrameRef.current = null
+            if (
+                activeWindowKeyRef.current !== targetWindowKey
+                || settledWindowKeyRef.current === targetWindowKey
+            ) return
+            startupAlignmentFrameRef.current = window.requestAnimationFrame(() => {
+                startupAlignmentFrameRef.current = null
+                if (activeWindowKeyRef.current !== targetWindowKey) return
+                initialHistoryBackfillReadyRef.current = true
+                scheduleInitialHistoryBackfillCheck()
+                settleInitialPresentation(targetWindowKey, onInitialLayout)
+            })
+        })
+    }, [cancelStartupAlignment, props.onInitialLayout, props.windowKey, scheduleInitialHistoryBackfillCheck, settleInitialPresentation])
+
     const stopFollowingForUserNavigation = useCallback(() => {
         clearCompletionEndFollow()
         cancelEndAlignment()
+        cancelStartupAlignment()
+        stopInitialHistoryBackfill()
         userNavigationAwayRef.current = true
         updateScrollMode('free-scrolling')
-    }, [cancelEndAlignment, clearCompletionEndFollow, updateScrollMode])
+        settleInitialPresentation(props.windowKey, props.onInitialLayout)
+    }, [cancelEndAlignment, cancelStartupAlignment, clearCompletionEndFollow, props.onInitialLayout, props.windowKey, settleInitialPresentation, stopInitialHistoryBackfill, updateScrollMode])
 
     useLayoutEffect(() => {
         const shouldSnap = shouldSnapRendererPresentation(
@@ -157,39 +305,133 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
     }, [props.scrollContainerRef])
 
     const requestOlderPage = useCallback(() => {
-        setOlderLoadIntentWindowKey(null)
-        props.onLoadOlder?.()
-    }, [props.onLoadOlder])
+        const element = props.scrollContainerRef?.current || scrollElement
+        if (!element || !props.onLoadOlder) return
+        if (olderLoadRequestPendingRef.current || props.loadingOlder) return
+        const plan = resolveAssistantHistoryStreamPlan({
+            startupSettled,
+            upwardIntent: Number.isFinite(lastUpwardIntentAtRef.current),
+            hasOlder: props.hasOlder,
+            loadingOlder: props.loadingOlder,
+            hasLoadError: Boolean(props.loadOlderError),
+            distanceFromStart: element.scrollTop,
+            viewportSize: element.clientHeight,
+            velocityPxPerMs: scrollVelocityRef.current
+        })
+        if (!plan.shouldRequest) return
+        olderLoadRequestPendingRef.current = true
+        void Promise.resolve(props.onLoadOlder(plan.turnLimit)).then((accepted) => {
+            if (accepted === false) olderLoadRequestPendingRef.current = false
+        }).catch(() => {
+            olderLoadRequestPendingRef.current = false
+        }).finally(() => {
+            olderLoadRequestPendingRef.current = false
+        })
+    }, [props.hasOlder, props.loadOlderError, props.loadingOlder, props.onLoadOlder, props.scrollContainerRef, scrollElement, startupSettled])
+
+    const requestNewerPage = useCallback(() => {
+        const element = props.scrollContainerRef?.current || scrollElement
+        if (!element || !props.onLoadNewer) return
+        if (newerLoadRequestPendingRef.current || props.loadingNewer) return
+        const plan = resolveAssistantHistoryStreamPlan({
+            startupSettled,
+            upwardIntent: Number.isFinite(lastDownwardIntentAtRef.current),
+            hasOlder: props.hasNewer,
+            loadingOlder: props.loadingNewer,
+            hasLoadError: Boolean(props.loadNewerError),
+            distanceFromStart: Math.max(0, element.scrollHeight - element.scrollTop - element.clientHeight),
+            viewportSize: element.clientHeight,
+            velocityPxPerMs: scrollVelocityRef.current
+        })
+        if (!plan.shouldRequest) return
+        newerLoadRequestPendingRef.current = true
+        void Promise.resolve(props.onLoadNewer(plan.turnLimit)).then((accepted) => {
+            if (accepted === false) newerLoadRequestPendingRef.current = false
+        }).catch(() => {
+            newerLoadRequestPendingRef.current = false
+        }).finally(() => {
+            newerLoadRequestPendingRef.current = false
+        })
+    }, [props.hasNewer, props.loadNewerError, props.loadingNewer, props.onLoadNewer, props.scrollContainerRef, scrollElement, startupSettled])
+
+    const retryOlderPage = useCallback(() => {
+        if (!props.onLoadOlder || olderLoadRequestPendingRef.current || props.loadingOlder) return
+        olderLoadRequestPendingRef.current = true
+        void Promise.resolve(props.onLoadOlder(1)).then((accepted) => {
+            if (accepted === false) olderLoadRequestPendingRef.current = false
+        }).catch(() => {
+            olderLoadRequestPendingRef.current = false
+        })
+    }, [props.loadingOlder, props.onLoadOlder])
+
+    const requestOrRetryNewerPage = useCallback(() => {
+        if (props.loadNewerError) {
+            if (!props.onLoadNewer || newerLoadRequestPendingRef.current || props.loadingNewer) return
+            newerLoadRequestPendingRef.current = true
+            void Promise.resolve(props.onLoadNewer(1)).then((accepted) => {
+                if (accepted === false) newerLoadRequestPendingRef.current = false
+            }).catch(() => {
+                newerLoadRequestPendingRef.current = false
+            })
+            return
+        }
+        requestNewerPage()
+    }, [props.loadNewerError, props.loadingNewer, props.onLoadNewer, requestNewerPage])
 
     const handleInitialLoad = useCallback(() => {
-        userNavigationAwayRef.current = false
+        const now = performance.now()
         previousScrollTopRef.current = props.scrollContainerRef?.current?.scrollTop || 0
-        updateScrollMode('following-end')
-        setOlderLoadIntentWindowKey(null)
-        setSettledWindowKey(props.windowKey)
-        props.onInitialLayout?.()
-    }, [props.onInitialLayout, props.scrollContainerRef, props.windowKey, updateScrollMode])
+        previousScrollSampleAtRef.current = now
+        previousInputSampleAtRef.current = now
+        scrollVelocityRef.current = 0
+        lastUpwardIntentAtRef.current = Number.NEGATIVE_INFINITY
+        lastDownwardIntentAtRef.current = Number.NEGATIVE_INFINITY
+        olderLoadRequestPendingRef.current = false
+        newerLoadRequestPendingRef.current = false
+        if (!userNavigationAwayRef.current) {
+            updateScrollMode('following-end')
+        }
+        initialHistoryBackfillReadyRef.current = true
+        scheduleInitialHistoryBackfillCheck()
+        scheduleInitialPresentation()
+    }, [props.scrollContainerRef, scheduleInitialHistoryBackfillCheck, scheduleInitialPresentation, updateScrollMode])
+
+    useLayoutEffect(() => {
+        if (settledWindowKeyRef.current === props.windowKey) return
+        cancelInitialHistoryBackfillCheck()
+        scheduleInitialPresentation()
+        return cancelStartupAlignment
+    }, [cancelInitialHistoryBackfillCheck, cancelStartupAlignment, props.windowKey, scheduleInitialPresentation])
+
+    useLayoutEffect(() => {
+        if (
+            !initialHistoryBackfillReadyRef.current
+            || !initialHistoryBackfillActiveRef.current
+            || props.loadingOlder
+            || props.isWorking
+        ) return
+        scheduleInitialHistoryBackfillCheck()
+        return cancelInitialHistoryBackfillCheck
+    }, [
+        cancelInitialHistoryBackfillCheck,
+        props.isWorking,
+        props.loadingOlder,
+        props.rows.length,
+        props.windowKey,
+        scheduleInitialHistoryBackfillCheck
+    ])
 
     useEffect(() => {
         if (!scrollElement) return
+        const previousOverscrollBehaviorY = scrollElement.style.overscrollBehaviorY
+        scrollElement.style.overscrollBehaviorY = 'none'
         const handleDisclosureToggle = (event: Event) => {
             const detail = (event as CustomEvent<AssistantTimelineDisclosureToggleDetail>).detail
             const anchor = detail?.anchor
-            const anchorTop = anchor?.getBoundingClientRect().top ?? null
-            beginDisclosureLayout(detail?.duration)
-            cancelDisclosureAnchor()
-            if (!anchor || anchorTop === null) return
-            const settleUntil = performance.now() + Math.max(0, detail?.duration || 0) + DISCLOSURE_SETTLE_PADDING_MS
-            const preserveAnchor = () => {
-                disclosureAnchorFrameRef.current = null
-                if (!anchor.isConnected || !scrollElement.contains(anchor)) return
-                const delta = anchor.getBoundingClientRect().top - anchorTop
-                if (Math.abs(delta) >= 0.5) scrollElement.scrollBy({ top: delta, behavior: 'auto' })
-                if (performance.now() < settleUntil) {
-                    disclosureAnchorFrameRef.current = window.requestAnimationFrame(preserveAnchor)
-                }
-            }
-            disclosureAnchorFrameRef.current = window.requestAnimationFrame(preserveAnchor)
+            const anchorRowId = anchor
+                ?.closest<HTMLElement>('[data-assistant-timeline-row-id]')
+                ?.dataset.assistantTimelineRowId || null
+            beginDisclosureLayout(detail?.duration, anchorRowId)
         }
         const handleTimelinePointerDown = (event: PointerEvent) => {
             const target = event.target
@@ -200,6 +442,9 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
                 if (event.clientX < bounds.right - scrollbarGutter) return
                 cancelDisclosureAnchor()
                 stopFollowingForUserNavigation()
+                scrollbarDragActiveRef.current = true
+                scrollbarDragDirectionRef.current = null
+                scrollbarDragLastYRef.current = event.clientY
                 return
             }
             const button = target.closest('button[aria-expanded]')
@@ -212,29 +457,83 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
             if (event.detail !== 0) return
             handleTimelinePointerDown(event as unknown as PointerEvent)
         }
-        const armOlderLoading = (upwardIntent: boolean) => {
-            if (!shouldArmAssistantOlderHistoryLoad({ startupSettled, upwardIntent })) return
-            setOlderLoadIntentWindowKey(props.windowKey)
+        const trackScrollbarDragDirection = (event: PointerEvent) => {
+            if (!scrollbarDragActiveRef.current) return
+            const previousY = scrollbarDragLastYRef.current
+            scrollbarDragLastYRef.current = event.clientY
+            if (scrollbarDragDirectionRef.current || previousY === null) return
+            const deltaY = event.clientY - previousY
+            if (Math.abs(deltaY) <= 2) return
+            scrollbarDragDirectionRef.current = deltaY < 0 ? 'older' : 'newer'
+        }
+        const finishScrollbarDrag = () => {
+            scrollbarDragActiveRef.current = false
+            scrollbarDragDirectionRef.current = null
+            scrollbarDragLastYRef.current = null
+        }
+        const recordUpwardIntent = (distancePx: number, now = performance.now()) => {
+            const elapsed = previousInputSampleAtRef.current > 0 ? now - previousInputSampleAtRef.current : 16
+            previousInputSampleAtRef.current = now
+            scrollVelocityRef.current = updateAssistantHistoryScrollVelocity(
+                scrollVelocityRef.current,
+                distancePx,
+                elapsed
+            )
+            lastUpwardIntentAtRef.current = now
         }
         const handleWheel = (event: WheelEvent) => {
+            if (event.ctrlKey || Math.abs(event.deltaY) < Math.abs(event.deltaX)) return
             cancelDisclosureAnchor()
-            if (event.deltaY > 0 && resolveAssistantTimelineScrollMode(scrollElement) === 'following-end') {
+            if (event.deltaY > 0 && !props.hasNewer && resolveAssistantTimelineScrollMode(scrollElement) === 'following-end') {
+                lastUpwardIntentAtRef.current = Number.NEGATIVE_INFINITY
+                lastDownwardIntentAtRef.current = Number.NEGATIVE_INFINITY
                 userNavigationAwayRef.current = false
                 updateScrollMode('following-end')
                 return
             }
             stopFollowingForUserNavigation()
-            armOlderLoading(event.deltaY < 0)
+            const wheelDistance = normalizeAssistantHistoryWheelDelta(
+                event.deltaY,
+                event.deltaMode,
+                scrollElement.clientHeight
+            )
+            if (event.deltaY < 0) {
+                lastDownwardIntentAtRef.current = Number.NEGATIVE_INFINITY
+                recordUpwardIntent(wheelDistance)
+                requestOlderPage()
+            } else if (event.deltaY > 0) {
+                const now = performance.now()
+                const elapsed = previousInputSampleAtRef.current > 0 ? now - previousInputSampleAtRef.current : 16
+                previousInputSampleAtRef.current = now
+                scrollVelocityRef.current = updateAssistantHistoryScrollVelocity(scrollVelocityRef.current, wheelDistance, elapsed)
+                lastUpwardIntentAtRef.current = Number.NEGATIVE_INFINITY
+                lastDownwardIntentAtRef.current = now
+                requestOrRetryNewerPage()
+            }
         }
         const handleKeyDown = (event: KeyboardEvent) => {
+            if (['ArrowDown', 'PageDown', 'End'].includes(event.key)) {
+                const now = performance.now()
+                const distance = event.key === 'ArrowDown' ? 36 : scrollElement.clientHeight
+                const elapsed = previousInputSampleAtRef.current > 0 ? now - previousInputSampleAtRef.current : 16
+                previousInputSampleAtRef.current = now
+                scrollVelocityRef.current = updateAssistantHistoryScrollVelocity(scrollVelocityRef.current, distance, elapsed)
+                lastUpwardIntentAtRef.current = Number.NEGATIVE_INFINITY
+                lastDownwardIntentAtRef.current = now
+                requestOrRetryNewerPage()
+                return
+            }
             const upwardIntent = ['ArrowUp', 'PageUp', 'Home'].includes(event.key)
             if (!upwardIntent) return
             cancelDisclosureAnchor()
             stopFollowingForUserNavigation()
-            armOlderLoading(true)
+            lastDownwardIntentAtRef.current = Number.NEGATIVE_INFINITY
+            recordUpwardIntent(event.key === 'ArrowUp' ? 36 : scrollElement.clientHeight)
+            requestOlderPage()
         }
         const handleTouchStart = (event: TouchEvent) => {
             touchStartYRef.current = event.touches[0]?.clientY ?? null
+            previousInputSampleAtRef.current = performance.now()
         }
         const handleTouchMove = (event: TouchEvent) => {
             const nextY = event.touches[0]?.clientY ?? null
@@ -242,7 +541,20 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
             if (nextY !== null && previousY !== null && Math.abs(nextY - previousY) > 4) {
                 cancelDisclosureAnchor()
                 stopFollowingForUserNavigation()
-                armOlderLoading(nextY > previousY)
+                const upwardIntent = nextY > previousY
+                if (upwardIntent) {
+                    lastDownwardIntentAtRef.current = Number.NEGATIVE_INFINITY
+                    recordUpwardIntent(Math.abs(nextY - previousY))
+                    requestOlderPage()
+                } else {
+                    const now = performance.now()
+                    const elapsed = previousInputSampleAtRef.current > 0 ? now - previousInputSampleAtRef.current : 16
+                    previousInputSampleAtRef.current = now
+                    scrollVelocityRef.current = updateAssistantHistoryScrollVelocity(scrollVelocityRef.current, Math.abs(nextY - previousY), elapsed)
+                    lastUpwardIntentAtRef.current = Number.NEGATIVE_INFINITY
+                    lastDownwardIntentAtRef.current = now
+                    requestOrRetryNewerPage()
+                }
             }
             touchStartYRef.current = nextY
         }
@@ -258,6 +570,9 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
         scrollElement.addEventListener('keydown', handleKeyDown)
         scrollElement.addEventListener('touchstart', handleTouchStart, { passive: true })
         scrollElement.addEventListener('touchmove', handleTouchMove, { passive: true })
+        window.addEventListener('pointermove', trackScrollbarDragDirection, { passive: true })
+        window.addEventListener('pointerup', finishScrollbarDrag, { passive: true })
+        window.addEventListener('pointercancel', finishScrollbarDrag, { passive: true })
         return () => {
             scrollElement.removeEventListener(ASSISTANT_TIMELINE_DISCLOSURE_TOGGLE_EVENT, handleDisclosureToggle)
             scrollElement.removeEventListener(ASSISTANT_TIMELINE_USER_JUMP_EVENT, handleUserJump)
@@ -267,8 +582,28 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
             scrollElement.removeEventListener('keydown', handleKeyDown)
             scrollElement.removeEventListener('touchstart', handleTouchStart)
             scrollElement.removeEventListener('touchmove', handleTouchMove)
+            window.removeEventListener('pointermove', trackScrollbarDragDirection)
+            window.removeEventListener('pointerup', finishScrollbarDrag)
+            window.removeEventListener('pointercancel', finishScrollbarDrag)
+            finishScrollbarDrag()
+            scrollElement.style.overscrollBehaviorY = previousOverscrollBehaviorY
         }
-    }, [beginDisclosureLayout, cancelDisclosureAnchor, props.windowKey, scrollElement, startupSettled, stopFollowingForUserNavigation, updateScrollMode])
+    }, [
+        beginDisclosureLayout,
+        cancelDisclosureAnchor,
+        props.hasNewer,
+        props.hasOlder,
+        props.loadOlderError,
+        props.loadingOlder,
+        props.windowKey,
+        requestNewerPage,
+        requestOlderPage,
+        requestOrRetryNewerPage,
+        scrollElement,
+        startupSettled,
+        stopFollowingForUserNavigation,
+        updateScrollMode
+    ])
 
     useLayoutEffect(() => {
         if (previousCompletionWindowKeyRef.current !== props.windowKey) {
@@ -276,6 +611,7 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
             previousRowsRef.current = props.rows
             clearCompletionEndFollow()
             cancelEndAlignment()
+            cancelStartupAlignment()
             userNavigationAwayRef.current = false
             updateScrollMode('following-end')
             return
@@ -306,6 +642,7 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
     }, [
         beginDisclosureLayout,
         cancelEndAlignment,
+        cancelStartupAlignment,
         clearCompletionEndFollow,
         props.listRef,
         props.rows,
@@ -320,7 +657,9 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
         cancelDisclosureAnchor()
         clearCompletionEndFollow()
         cancelEndAlignment()
-    }, [cancelDisclosureAnchor, cancelEndAlignment, clearCompletionEndFollow])
+        cancelStartupAlignment()
+        cancelInitialHistoryBackfillCheck()
+    }, [cancelDisclosureAnchor, cancelEndAlignment, cancelInitialHistoryBackfillCheck, cancelStartupAlignment, clearCompletionEndFollow])
 
     const renderItem = useCallback(({ item }: LegendListRenderItemProps<TimelineDisplayRow>) => (
         <div
@@ -340,7 +679,7 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
                 <>
                     <button
                         type="button"
-                        onClick={requestOlderPage}
+                        onClick={retryOlderPage}
                         className="assistant-older-messages-loader inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-sparkle-card/95 px-2.5 py-1 text-[10px] font-medium text-sparkle-text-muted shadow-lg shadow-black/20 backdrop-blur-md hover:text-sparkle-text-secondary"
                     >
                         <ChevronUp size={11} aria-hidden="true" />
@@ -351,22 +690,24 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
             ) : props.loadingOlder ? (
                 <span className="sr-only" role="status">Loading earlier messages</span>
             ) : null}
+            {props.loadingNewer ? <span className="sr-only" role="status">Loading newer messages</span> : null}
+            {props.loadNewerError ? <span className="sr-only">Newer messages could not load. Continue downward to retry.</span> : null}
         </div>
     )
 
     return (
         <LegendList
-            key={props.windowKey}
             ref={props.listRef}
             refScrollView={assignScrollViewRef}
             data={props.rows}
+            dataKey={props.windowKey}
             keyExtractor={keyExtractor}
             getItemType={getItemType}
             renderItem={renderItem}
             estimatedItemSize={90}
             initialScrollAtEnd
             onLoad={handleInitialLoad}
-            maintainVisibleContentPosition={{ data: true, size: false }}
+            maintainVisibleContentPosition={maintainVisibleContentPosition}
             maintainScrollAtEnd={scrollMode === 'following-end' ? {
                 animated: false,
                 on: {
@@ -379,28 +720,57 @@ export const AssistantVirtualTimeline = memo(function AssistantVirtualTimeline(p
             contentInsetEndAdjustment={props.contentInsetEndAdjustment}
             ListHeaderComponent={header}
             estimatedHeaderSize={44}
-            onStartReached={startupSettled && olderLoadIntent && props.hasOlder && !props.loadingOlder && !props.loadOlderError ? requestOlderPage : undefined}
-            onStartReachedThreshold={1.25}
             onScroll={() => {
                 const element = props.scrollContainerRef?.current || scrollElement
                 if (!element) return
                 if (!completionFollowActiveRef.current) {
+                    const now = performance.now()
                     const resolvedMode = resolveAssistantTimelineScrollMode(element)
-                    const movingTowardEnd = element.scrollTop >= previousScrollTopRef.current - 0.5
-                    if (
-                        userNavigationAwayRef.current
-                        && resolvedMode === 'following-end'
-                        && movingTowardEnd
-                        && !disclosureLayoutActive
-                    ) {
-                        userNavigationAwayRef.current = false
+                    const previousScrollTop = previousScrollTopRef.current
+                    const scrollDelta = element.scrollTop - previousScrollTop
+                    const movingTowardEnd = scrollDelta > 0.5
+                    const scrollbarDemand = resolveAssistantScrollbarHistoryDemand({
+                        dragActive: scrollbarDragActiveRef.current,
+                        dragDirection: scrollbarDragDirectionRef.current,
+                        scrollDelta
+                    })
+                    scrollbarDragDirectionRef.current = scrollbarDemand.dragDirection
+                    if (scrollbarDemand.requestDirection === 'older' && userNavigationAwayRef.current) {
+                        const elapsed = previousScrollSampleAtRef.current > 0 ? now - previousScrollSampleAtRef.current : 16
+                        scrollVelocityRef.current = updateAssistantHistoryScrollVelocity(
+                            scrollVelocityRef.current,
+                            previousScrollTop - element.scrollTop,
+                            elapsed
+                        )
+                        lastDownwardIntentAtRef.current = Number.NEGATIVE_INFINITY
+                        lastUpwardIntentAtRef.current = now
+                        requestOlderPage()
+                    } else if (scrollbarDemand.requestDirection === 'newer' && userNavigationAwayRef.current && props.hasNewer) {
+                        const elapsed = previousScrollSampleAtRef.current > 0 ? now - previousScrollSampleAtRef.current : 16
+                        scrollVelocityRef.current = updateAssistantHistoryScrollVelocity(
+                            scrollVelocityRef.current,
+                            element.scrollTop - previousScrollTop,
+                            elapsed
+                        )
+                        lastUpwardIntentAtRef.current = Number.NEGATIVE_INFINITY
+                        lastDownwardIntentAtRef.current = now
+                        requestOrRetryNewerPage()
                     }
-                    updateScrollMode(userNavigationAwayRef.current ? 'free-scrolling' : resolvedMode)
+                    const followState = resolveAssistantTimelineModeAfterScroll({
+                        userNavigatedAway: userNavigationAwayRef.current,
+                        resolvedMode,
+                        movingTowardEnd,
+                        disclosureLayoutActive
+                    })
+                    userNavigationAwayRef.current = followState.userNavigatedAway
+                    updateScrollMode(followState.mode)
                     previousScrollTopRef.current = element.scrollTop
+                    previousScrollSampleAtRef.current = now
                 }
                 props.onScrollContainer?.(element)
             }}
-            className="assistant-chat-scrollbar h-full w-full overflow-x-hidden [overflow-anchor:none] [scrollbar-gutter:stable]"
+            aria-busy={!startupSettled}
+            className="assistant-chat-scrollbar h-full w-full overflow-x-hidden [overflow-anchor:none]"
             contentContainerClassName="mx-auto w-full max-w-3xl px-4 pt-0 md:translate-x-[2px]"
         />
     )

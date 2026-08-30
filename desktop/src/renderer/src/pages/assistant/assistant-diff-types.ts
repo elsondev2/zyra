@@ -1,4 +1,4 @@
-import type { AssistantActivity, FileChangeKind } from '@shared/assistant/contracts'
+import type { AssistantActivity, AssistantLatestTurn, FileChangeKind } from '@shared/assistant/contracts'
 import { getActivityPatch, type ParsedUserAttachment } from './assistant-timeline-helpers'
 
 export interface AssistantDiffTarget {
@@ -22,12 +22,18 @@ export interface AssistantDiffTurnFile {
     deletions: number
 }
 
+export type AssistantReviewTurnStatus = 'running' | 'latest' | null
+
 export interface AssistantDiffTurn {
     id: string
     number: number
+    state: AssistantLatestTurn['state']
+    reviewStatus: AssistantReviewTurnStatus
     prompt: string
+    promptAvailable: boolean
     promptAttachments: ParsedUserAttachment[]
     response: string
+    responseAvailable: boolean
     agentLabel?: string
     historyUnavailable: boolean
     detailLoaded?: boolean

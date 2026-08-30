@@ -1,6 +1,9 @@
 import type { DevScopeBrowserColorScheme } from '@shared/contracts/devscope-api'
+import type { BrowserSessionMode } from '@shared/browser-view'
+import { isAuthenticationBrowserUrl, sanitizeBrowserPersistentUrl } from '@shared/browser-url-sanitization'
 
 export type AssistantBrowserTabStatus = 'idle' | 'loading' | 'ready' | 'error'
+export const ASSISTANT_BROWSER_DANGEROUS_TAB_TITLE = 'Dangerous site'
 
 export type AssistantBrowserViewportPresetId =
     | 'iphone-se'
@@ -67,7 +70,9 @@ export const ASSISTANT_BROWSER_VIEWPORT_MAX_AREA = 5_000_000
 
 export type AssistantBrowserTabState = {
     id: string
+    sessionMode: BrowserSessionMode
     url: string
+    displayAddress: string | null
     title: string
     status: AssistantBrowserTabStatus
     error: string | null
@@ -75,6 +80,7 @@ export type AssistantBrowserTabState = {
     canGoForward: boolean
     audible: boolean
     faviconUrl: string | null
+    threatStatus?: 'dangerous'
     viewport: AssistantBrowserViewportSetting
     zoomFactor: number
     colorScheme: DevScopeBrowserColorScheme
@@ -98,11 +104,13 @@ const ASSISTANT_BROWSER_WORKSPACE_LIMIT = 20
 const ASSISTANT_BROWSER_URL_LIMIT = 2048
 const ASSISTANT_BROWSER_FAVICON_URL_LIMIT = 8192
 
-export function createAssistantBrowserTab(id: string, url = ''): AssistantBrowserTabState {
+export function createAssistantBrowserTab(id: string, url = '', sessionMode: BrowserSessionMode = 'normal'): AssistantBrowserTabState {
     const normalizedUrl = url.trim()
     return {
         id,
+        sessionMode,
         url: normalizedUrl,
+        displayAddress: null,
         title: normalizedUrl ? browserTabFallbackTitle(normalizedUrl) : 'New tab',
         status: normalizedUrl ? 'loading' : 'idle',
         error: null,
@@ -117,19 +125,24 @@ export function createAssistantBrowserTab(id: string, url = ''): AssistantBrowse
     }
 }
 
-export function createAssistantBrowserWorkspaceState(tabId = 'browser:0'): AssistantBrowserWorkspaceState {
+export function createAssistantBrowserWorkspaceState(
+    tabId = 'browser:0',
+    sessionMode: BrowserSessionMode = 'normal'
+): AssistantBrowserWorkspaceState {
     return {
         version: 1,
         activeTabId: tabId,
         splitTabId: null,
-        tabs: [createAssistantBrowserTab(tabId)]
+        tabs: [createAssistantBrowserTab(tabId, '', sessionMode)]
     }
 }
 
 export function addAssistantBrowserTab(
     state: AssistantBrowserWorkspaceState,
     tabId: string,
-    url = ''
+    url = '',
+    activate = true,
+    sessionMode: BrowserSessionMode = 'normal'
 ): AssistantBrowserWorkspaceState {
     if (!tabId || state.tabs.some((tab) => tab.id === tabId)) {
         return state.tabs.some((tab) => tab.id === tabId)
@@ -140,9 +153,49 @@ export function addAssistantBrowserTab(
     return {
         ...state,
         version: 1,
-        activeTabId: tabId,
-        tabs: [...state.tabs, createAssistantBrowserTab(tabId, url)]
+        activeTabId: activate ? tabId : state.activeTabId,
+        tabs: [...state.tabs, createAssistantBrowserTab(tabId, url, sessionMode)]
     }
+}
+
+export function ensureAssistantBrowserWorkspaceTab(
+    state: AssistantBrowserWorkspaceState,
+    tabId: string,
+    sessionMode: BrowserSessionMode = 'normal'
+): AssistantBrowserWorkspaceState {
+    if (!tabId) return state
+    if (state.tabs.some((tab) => tab.id === tabId)) return activateAssistantBrowserTab(state, tabId)
+    const onlyTab = state.tabs.length === 1 ? state.tabs[0] : null
+    if (onlyTab && !onlyTab.url && onlyTab.status === 'idle' && !onlyTab.error) {
+        return {
+            ...state,
+            activeTabId: tabId,
+            splitTabId: null,
+            tabs: [{ ...onlyTab, id: tabId, sessionMode, updatedAt: Date.now() }]
+        }
+    }
+    return addAssistantBrowserTab(state, tabId, '', true, sessionMode)
+}
+
+export function ensureAssistantBrowserSurfaceTabs(
+    state: AssistantBrowserWorkspaceState,
+    primaryTabId: string,
+    secondaryTabId: string | null = null,
+    primarySessionMode: BrowserSessionMode = 'normal'
+): AssistantBrowserWorkspaceState {
+    let next = ensureAssistantBrowserWorkspaceTab(state, primaryTabId, primarySessionMode)
+    if (secondaryTabId && secondaryTabId !== primaryTabId && !next.tabs.some((tab) => tab.id === secondaryTabId)) {
+        next = addAssistantBrowserTab(next, secondaryTabId, '', false)
+    }
+    return next.splitTabId ? { ...next, splitTabId: null } : next
+}
+
+export function shouldFocusAssistantBrowserOmnibox(
+    workspaceActive: boolean,
+    chromeReady: boolean,
+    tab: Pick<AssistantBrowserTabState, 'url'> | null | undefined
+): boolean {
+    return Boolean(workspaceActive && chromeReady && tab && !tab.url)
 }
 
 export function activateAssistantBrowserTab(
@@ -185,8 +238,10 @@ export function updateAssistantBrowserTab(
         id: current.id,
         updatedAt: Number.isFinite(patch.updatedAt) ? Number(patch.updatedAt) : Date.now()
     }
+    if (!nextTab.url) nextTab.title = 'New tab'
     if (
         current.url === nextTab.url
+        && current.sessionMode === nextTab.sessionMode
         && current.title === nextTab.title
         && current.status === nextTab.status
         && current.error === nextTab.error
@@ -221,6 +276,13 @@ export function closeAssistantBrowserTab(
     return { ...state, activeTabId: fallback.id, splitTabId: null, tabs }
 }
 
+function normalizePersistentBrowserTitle(url: string, value: unknown, authenticationUrl = isAuthenticationBrowserUrl(url)): string {
+    if (!url) return 'New tab'
+    if (authenticationUrl) return browserTabFallbackTitle(url)
+    const title = String(value || '').trim().slice(0, 256)
+    return title || browserTabFallbackTitle(url)
+}
+
 export function normalizeAssistantBrowserWorkspaceState(
     candidate: unknown,
     fallbackTabId = 'browser:0'
@@ -232,16 +294,18 @@ export function normalizeAssistantBrowserWorkspaceState(
         .flatMap((entry): AssistantBrowserTabState[] => {
             if (!entry || typeof entry !== 'object') return []
             const tab = entry as Partial<AssistantBrowserTabState>
+            if (tab.sessionMode === 'incognito') return []
             const id = String(tab.id || '').trim().slice(0, 128)
             if (!id || seen.has(id)) return []
             seen.add(id)
             const rawUrl = String(tab.url || '').trim().slice(0, ASSISTANT_BROWSER_URL_LIMIT)
-            const url = rawUrl && isSafeAssistantBrowserUrl(rawUrl) ? rawUrl : ''
-            const rawTitle = String(tab.title || '').trim().slice(0, 256)
+            const url = sanitizeBrowserPersistentUrl(rawUrl, ASSISTANT_BROWSER_URL_LIMIT) || ''
             return [{
                 id,
+                sessionMode: 'normal',
                 url,
-                title: rawTitle || (url ? browserTabFallbackTitle(url) : 'New tab'),
+                displayAddress: null,
+                title: normalizePersistentBrowserTitle(url, tab.title, isAuthenticationBrowserUrl(rawUrl)),
                 status: 'idle',
                 error: null,
                 canGoBack: false,
@@ -269,11 +333,50 @@ export function normalizeAssistantBrowserWorkspaceState(
     }
 }
 
+function workspaceSnapshotForPersistence(state: AssistantBrowserWorkspaceState): AssistantBrowserWorkspaceState {
+    const tabs = state.tabs
+        .filter((tab) => tab.sessionMode === 'normal')
+        .map((tab) => {
+            const url = sanitizeBrowserPersistentUrl(tab.url, ASSISTANT_BROWSER_URL_LIMIT) || ''
+            return {
+                ...tab,
+                sessionMode: 'normal' as const,
+                url,
+                displayAddress: null,
+                title: normalizePersistentBrowserTitle(url, tab.title, isAuthenticationBrowserUrl(tab.url)),
+                faviconUrl: normalizeAssistantBrowserFaviconUrl(tab.faviconUrl)
+            }
+        })
+    if (tabs.length === 0) return createAssistantBrowserWorkspaceState()
+    const activeTabId = tabs.some((tab) => tab.id === state.activeTabId) ? state.activeTabId : tabs[0].id
+    return {
+        version: 1,
+        activeTabId,
+        splitTabId: state.splitTabId !== activeTabId && tabs.some((tab) => tab.id === state.splitTabId)
+            ? state.splitTabId
+            : null,
+        tabs
+    }
+}
+
+function sanitizeStoredWorkspaceRecord(stored: Record<string, unknown>): Record<string, AssistantBrowserWorkspaceState> {
+    return Object.fromEntries(Object.entries(stored).flatMap(([key, value], index) => {
+        if (!value || typeof value !== 'object' || !Array.isArray((value as { tabs?: unknown }).tabs)) return []
+        return [[key, workspaceSnapshotForPersistence(normalizeAssistantBrowserWorkspaceState(value, `browser:restored:${index}`))]]
+    }))
+}
+
+function readAndSanitizePersistedWorkspaceRecord(): Record<string, AssistantBrowserWorkspaceState> {
+    const stored = JSON.parse(localStorage.getItem(ASSISTANT_BROWSER_STORAGE_KEY) || '{}') as Record<string, unknown>
+    const sanitized = sanitizeStoredWorkspaceRecord(stored)
+    localStorage.setItem(ASSISTANT_BROWSER_STORAGE_KEY, JSON.stringify(sanitized))
+    return sanitized
+}
+
 export function hasPersistedAssistantBrowserWorkspaceState(workspaceKey: string): boolean {
     if (!workspaceKey || typeof window === 'undefined') return false
     try {
-        const stored = JSON.parse(localStorage.getItem(ASSISTANT_BROWSER_STORAGE_KEY) || '{}') as Record<string, unknown>
-        return Object.prototype.hasOwnProperty.call(stored, workspaceKey)
+        return Object.prototype.hasOwnProperty.call(readAndSanitizePersistedWorkspaceRecord(), workspaceKey)
     } catch {
         return false
     }
@@ -282,8 +385,7 @@ export function hasPersistedAssistantBrowserWorkspaceState(workspaceKey: string)
 export function loadAssistantBrowserWorkspaceState(workspaceKey: string): AssistantBrowserWorkspaceState {
     if (!workspaceKey || typeof window === 'undefined') return createAssistantBrowserWorkspaceState()
     try {
-        const stored = JSON.parse(localStorage.getItem(ASSISTANT_BROWSER_STORAGE_KEY) || '{}') as Record<string, unknown>
-        return normalizeAssistantBrowserWorkspaceState(stored[workspaceKey])
+        return readAndSanitizePersistedWorkspaceRecord()[workspaceKey] || createAssistantBrowserWorkspaceState()
     } catch {
         return createAssistantBrowserWorkspaceState()
     }
@@ -292,8 +394,7 @@ export function loadAssistantBrowserWorkspaceState(workspaceKey: string): Assist
 export function countPersistedAssistantBrowserWorkspaces(): number {
     if (typeof window === 'undefined') return 0
     try {
-        const stored = JSON.parse(localStorage.getItem(ASSISTANT_BROWSER_STORAGE_KEY) || '{}') as Record<string, unknown>
-        return Object.keys(stored).length
+        return Object.keys(readAndSanitizePersistedWorkspaceRecord()).length
     } catch {
         return 0
     }
@@ -310,12 +411,12 @@ export function persistAssistantBrowserWorkspaceState(
 ): void {
     if (!workspaceKey || typeof window === 'undefined') return
     try {
-        const stored = JSON.parse(localStorage.getItem(ASSISTANT_BROWSER_STORAGE_KEY) || '{}') as Record<string, unknown>
+        const stored = readAndSanitizePersistedWorkspaceRecord()
         const entries = Object.entries(stored).filter(([key]) => key !== workspaceKey)
         const bounded = entries.slice(Math.max(0, entries.length - ASSISTANT_BROWSER_WORKSPACE_LIMIT + 1))
         localStorage.setItem(ASSISTANT_BROWSER_STORAGE_KEY, JSON.stringify({
             ...Object.fromEntries(bounded),
-            [workspaceKey]: state
+            [workspaceKey]: workspaceSnapshotForPersistence(state)
         }))
     } catch {
         // Browser state is helpful continuity, never a reason to break navigation.
@@ -376,7 +477,9 @@ export function normalizeAssistantBrowserFaviconUrl(value: unknown): string | nu
     }
     try {
         const parsed = new URL(candidate)
-        return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.toString() : null
+        return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+            ? sanitizeBrowserPersistentUrl(parsed.toString(), ASSISTANT_BROWSER_FAVICON_URL_LIMIT)
+            : null
     } catch {
         return null
     }

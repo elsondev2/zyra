@@ -12,6 +12,7 @@ export type PreviewModalLayoutProps = {
     previewBytes?: number
     projectPath?: string
     mediaItems: PreviewMediaItem[]
+    navigationSidebar?: ReactNode
     openMediaItem: (item: PreviewMediaItem) => Promise<void>
     onInternalLinkClick: (href: string) => Promise<boolean | void> | boolean | void
     onLinkNotice?: (message: string, tone: 'info' | 'error') => void
@@ -21,8 +22,11 @@ export type PreviewModalLayoutProps = {
     onNavigateBack: () => void
     onNavigateForward: () => void
     isExpanded: boolean
-    allowExpanded?: boolean
-    windowedNavigatorEnabled?: boolean
+    allowExpanded: boolean
+    showHistoryNavigation: boolean
+    showPreviewTabs: boolean
+    showLeftPanelToggle: boolean
+    windowedNavigatorEnabled: boolean
     canEdit: boolean
     isDirty: boolean
     isSaving: boolean
@@ -88,7 +92,6 @@ export type PreviewModalLayoutProps = {
     onOpenLinkedPreview?: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
     onOpenLinkedPreviewInNewTab?: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
     folderTreeRefreshToken?: number
-    preserveSidebarContextRequest?: { path: string; nonce: number } | null
     navigatorRevealRequestId?: string | null
     onNavigatorRevealHandled?: (requestId: string) => void
     previewTabs: PreviewTab[]
@@ -101,7 +104,6 @@ export type PreviewModalLayoutProps = {
     trailingWhitespaceCount: number
     jsonDiagnostic: { ok: boolean; message: string } | null
     isEditorToolsEnabled: boolean
-    getEditorToolButtonClass: (isActive?: boolean) => string
     pythonPanel: ReactNode
     previewBottomOverlay?: ReactNode
     previewBottomOverlayPadding?: number

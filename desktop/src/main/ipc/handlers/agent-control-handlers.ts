@@ -10,10 +10,21 @@ import { AgentControlError } from '../../agent-control/control-errors'
 import { bindTrustedBrowserTarget, getAgentControlBroker } from '../../agent-control'
 import { BrowserSurfaceHost } from '../../agent-control/browser-surface-host'
 
+function isTrustedAssistantRenderer(window: BrowserWindow | null, mainWindow: BrowserWindow): boolean {
+    if (!window || window.isDestroyed()) return false
+    if (window.id === mainWindow.id) return true
+    try {
+        const hash = new URL(window.webContents.getURL()).hash
+        return hash.startsWith('#/assistant-utility/') || (!hash.startsWith('#/browser-popup/') && !hash.startsWith('#/quick-open'))
+    } catch {
+        return false
+    }
+}
+
 function assertTrustedRenderer(event: IpcMainInvokeEvent, mainWindow: BrowserWindow): void {
     const senderWindow = BrowserWindow.fromWebContents(event.sender)
-    if (!senderWindow || senderWindow.id !== mainWindow.id || senderWindow.isDestroyed()) {
-        throw new AgentControlError('CONTROL_SCOPE_DENIED', 'Control Center requests must come from the owning Zyra window.')
+    if (!isTrustedAssistantRenderer(senderWindow, mainWindow)) {
+        throw new AgentControlError('CONTROL_SCOPE_DENIED', 'Control Center requests must come from a trusted Zyra Assistant window.')
     }
 }
 
@@ -31,42 +42,57 @@ async function result<T>(operation: () => T | Promise<T>) {
 
 export function createAgentControlHandlers(mainWindow: BrowserWindow) {
     const broker = getAgentControlBroker()
+    const surfaceRequestWindows = new Map<string, BrowserWindow>()
+    const currentMainWindow = () => BrowserWindow.getAllWindows().find((window) => {
+        if (window.isDestroyed()) return false
+        try {
+            const hash = new URL(window.webContents.getURL()).hash
+            return !hash.startsWith('#/assistant-utility/') && !hash.startsWith('#/browser-popup/') && !hash.startsWith('#/quick-open')
+        } catch { return false }
+    }) || (!mainWindow.isDestroyed() ? mainWindow : null)
     const browserSurface = new BrowserSurfaceHost({
         send: (request) => {
-            if (mainWindow.isDestroyed()) throw new Error('The Zyra window is closed.')
-            mainWindow.webContents.send(AGENT_CONTROL_IPC.browserSurfaceRequested, request)
+            const targetOwnerId = request.targetId
+                ? broker.targets.list().find((entry) => entry.target.targetId === request.targetId)?.ownerWebContentsId
+                : undefined
+            const ownerWindow = targetOwnerId
+                ? BrowserWindow.getAllWindows().find((window) => !window.isDestroyed() && window.webContents.id === targetOwnerId) || null
+                : null
+            const destination = ownerWindow || currentMainWindow()
+            if (!destination) throw new Error('The Zyra Browser window is closed.')
+            surfaceRequestWindows.set(request.requestId, destination)
+            destination.webContents.send(AGENT_CONTROL_IPC.browserSurfaceRequested, request)
         },
         cancel: (requestId) => {
-            if (!mainWindow.isDestroyed()) mainWindow.webContents.send(AGENT_CONTROL_IPC.browserSurfaceCancelled, requestId)
+            const destination = surfaceRequestWindows.get(requestId) || currentMainWindow()
+            surfaceRequestWindows.delete(requestId)
+            if (destination && !destination.isDestroyed()) destination.webContents.send(AGENT_CONTROL_IPC.browserSurfaceCancelled, requestId)
         },
         resolveTarget: (targetId) => broker.targets.get(targetId).target
     })
     broker.setBrowserSurfaceController(browserSurface)
+    const trustedWindows = () => BrowserWindow.getAllWindows().filter((window) => isTrustedAssistantRenderer(window, mainWindow) && !window.webContents.isDestroyed())
+    const sendSafely = (window: BrowserWindow, channel: string, payload: unknown) => {
+        try { window.webContents.send(channel, payload) } catch { /* A renderer reload can dispose its frame between enumeration and send. */ }
+    }
     const broadcast = () => {
-        if (!mainWindow.isDestroyed()) mainWindow.webContents.send(AGENT_CONTROL_IPC.stateChanged, broker.state())
+        for (const window of trustedWindows()) sendSafely(window, AGENT_CONTROL_IPC.stateChanged, broker.state(window.webContents.id))
     }
     const broadcastCursor = (cursor: unknown) => {
-        if (!mainWindow.isDestroyed()) mainWindow.webContents.send(AGENT_CONTROL_IPC.cursorChanged, cursor)
+        for (const window of trustedWindows()) sendSafely(window, AGENT_CONTROL_IPC.cursorChanged, cursor)
     }
     broker.on('changed', broadcast)
     broker.on('cursor', broadcastCursor)
-    mainWindow.once('closed', () => {
-        broker.removeListener('changed', broadcast)
-        broker.removeListener('cursor', broadcastCursor)
-        browserSurface.dispose()
-        broker.setBrowserSurfaceController(null)
-    })
-
     return {
         getState: (event: IpcMainInvokeEvent) => result(() => {
             assertTrustedRenderer(event, mainWindow)
-            return { state: broker.state() }
+            return { state: broker.state(event.sender.id) }
         }),
-        bindBrowserTab: (event: IpcMainInvokeEvent, input: { guestWebContentsId?: number; tabId?: string; threadId?: string }) => result(() => {
+        bindBrowserTab: (event: IpcMainInvokeEvent, input: { guestWebContentsId?: number; tabId?: string; threadId?: string; sessionMode?: 'normal' | 'incognito' }) => result(() => {
             assertTrustedRenderer(event, mainWindow)
             const guestWebContentsId = Number(input?.guestWebContentsId)
             if (!Number.isInteger(guestWebContentsId) || guestWebContentsId < 1) throw new Error('Browser guest identity is invalid.')
-            const target = bindTrustedBrowserTarget(event.sender.id, guestWebContentsId, String(input?.tabId || ''), String(input?.threadId || ''))
+            const target = bindTrustedBrowserTarget(event.sender.id, guestWebContentsId, String(input?.tabId || ''), String(input?.threadId || ''), input?.sessionMode === 'incognito' ? 'incognito' : 'normal')
             browserSurface.completeRegisteredTarget(target)
             return { target }
         }),
@@ -84,7 +110,7 @@ export function createAgentControlHandlers(mainWindow: BrowserWindow) {
         }),
         updateWorkspaceState: (event: IpcMainInvokeEvent, input: unknown) => result(() => {
             assertTrustedRenderer(event, mainWindow)
-            return { workspace: broker.updateWorkspaceState(input) }
+            return { workspace: broker.updateWorkspaceState(input, event.sender.id) }
         }),
         approveGrant: (event: IpcMainInvokeEvent, input: RendererControlGrantInput) => result(() => {
             assertTrustedRenderer(event, mainWindow)

@@ -14,6 +14,15 @@ function stringValue(source, keys) {
   return undefined;
 }
 
+function rawStringValue(source, keys) {
+  if (!source) return undefined;
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string") return value;
+  }
+  return undefined;
+}
+
 function normalizeToolName(value) {
   return String(value ?? "tool").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 }
@@ -61,8 +70,10 @@ function argumentPreviewPatch(toolName, args) {
   const path = stringValue(args, ["path", "filePath", "file_path", "targetPath", "target_path"]);
   if (!path) return undefined;
   const normalizedPath = normalizePath(path);
-  const oldText = stringValue(args, ["oldString", "old_string", "oldText", "old_text", "oldStr", "old_str", "from", "before"]);
-  const newText = stringValue(args, ["newString", "new_string", "newText", "new_text", "newStr", "new_str", "to", "after"]);
+  const oldTextKeys = ["oldString", "old_string", "oldText", "old_text", "oldStr", "old_str", "from", "before"];
+  const newTextKeys = ["newString", "new_string", "newText", "new_text", "newStr", "new_str", "to", "after"];
+  const oldText = rawStringValue(args, oldTextKeys);
+  const newText = rawStringValue(args, newTextKeys);
   if (oldText !== undefined && newText !== undefined) {
     const oldLines = oldText.replace(/\r\n/g, "\n").split("\n").length;
     const newLines = newText.replace(/\r\n/g, "\n").split("\n").length;
@@ -73,6 +84,21 @@ function argumentPreviewPatch(toolName, args) {
       prefixLines(oldText, "-"),
       prefixLines(newText, "+"),
     ].join("\n");
+  }
+  const edits = Array.isArray(args?.edits) ? args.edits : Array.isArray(args?.replacements) ? args.replacements : [];
+  const editSections = edits.flatMap((entry, index) => {
+    const edit = record(entry);
+    const before = rawStringValue(edit, oldTextKeys);
+    const after = rawStringValue(edit, newTextKeys);
+    if (before === undefined && after === undefined) return [];
+    return [
+      `@@ replacement ${index + 1} @@`,
+      ...(before !== undefined ? [prefixLines(before, "-")] : []),
+      ...(after !== undefined ? [prefixLines(after, "+")] : []),
+    ];
+  });
+  if (editSections.length > 0) {
+    return [`--- a/${normalizedPath}`, `+++ b/${normalizedPath}`, ...editSections].join("\n");
   }
   const explicit = stringValue(args, ["patch", "diff"]);
   if (explicit) return explicit;

@@ -1,7 +1,11 @@
 export function normalizeTemporaryBrowserOperation(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Browser relay operation is invalid.");
   const operation = String(value.operation || "");
-  if (operation === "open_tab") return { operation, reveal: value.reveal !== false };
+  if (operation === "open_tab") return {
+    operation,
+    reveal: value.reveal !== false,
+    sessionMode: value.sessionMode === "normal" ? "normal" : "incognito",
+  };
   if (operation === "list_targets") return { operation, targetKind: "zyra-browser" };
   if (!["request_grant", "observe", "act", "release"].includes(operation)) {
     throw new Error(`Browser relay operation is not allowed: ${operation || "missing"}.`);

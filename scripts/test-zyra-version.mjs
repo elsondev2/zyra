@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -38,6 +38,48 @@ try {
   assert.equal(direct.stdout.trim(), expected);
   assert.equal(direct.stderr, "");
   assert.equal(existsSync(path.join(project, ".zyra")), false, "direct source version must not create project state");
+
+  if (process.platform === "win32") {
+    const installSource = readFileSync(path.join(root, "install.ps1"), "utf8");
+    assert.match(
+      installSource,
+      /zyra-standalone-launcher:v2[\s\S]*\$launcherLine[\s\S]*exit \/b %ERRORLEVEL%/,
+      "the standalone installer must generate a launcher that forwards arguments and the binary exit code",
+    );
+    assert.doesNotMatch(
+      installSource,
+      /zyra-standalone-launcher:v2[\s\S]*\(.*%ERRORLEVEL%.*\)/,
+      "the standalone launcher cannot expand ERRORLEVEL inside a parenthesized CMD block",
+    );
+
+    const nsisInstallerSource = readFileSync(path.join(root, "desktop", "build", "installer.nsh"), "utf8");
+    assert.match(
+      nsisInstallerSource,
+      /if not exist .*zyra-node\\node\.exe.*goto zyra_cli_fallback[\s\S]*zyra-node\\node\.exe.*zyra-runtime\\bin\\zyra\.mjs.*%\*[\s\S]*exit \/b %ERRORLEVEL%[\s\S]*:zyra_cli_fallback/,
+      "the NSIS-managed launcher must read bundled Node's exit code outside a parenthesized CMD block",
+    );
+    assert.doesNotMatch(
+      nsisInstallerSource,
+      /if exist .*zyra-node\\node\.exe.*\(.*zyra-runtime\\bin\\zyra\.mjs.*%ERRORLEVEL%.*\)/,
+      "the NSIS-managed launcher cannot expand ERRORLEVEL before bundled Node exits",
+    );
+
+    const directDesktopFailure = spawnSync(process.execPath, ["--tui"], { encoding: "utf8" });
+    assert.notEqual(directDesktopFailure.status, 0, "the regression fixture needs a failing executable invocation");
+    const shimPath = path.join(project, "desktop-exit-code.cmd");
+    writeFileSync(shimPath, [
+      "@echo off",
+      "setlocal",
+      `if not exist "${process.execPath}" goto zyra_cli_fallback`,
+      `"${process.execPath}" --tui`,
+      "exit /b %ERRORLEVEL%",
+      ":zyra_cli_fallback",
+      "exit /b 97",
+      "",
+    ].join("\r\n"), "ascii");
+    const shimFailure = spawnSync(shimPath, [], { encoding: "utf8", shell: true });
+    assert.equal(shimFailure.status, directDesktopFailure.status, "the standalone shim must return the TUI binary's actual exit code");
+  }
 } finally {
   rmSync(project, { recursive: true, force: true });
 }

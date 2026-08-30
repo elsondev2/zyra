@@ -13,7 +13,15 @@ import {
     type ManagedDevicePreferenceKey,
     type UpdateDevicePreferencesInput
 } from '../../shared/preferences/contracts'
-import { DEFAULT_ASSISTANT_TITLE_MODEL } from '../../shared/assistant/title-generation'
+import {
+    DEFAULT_ASSISTANT_TITLE_MODEL,
+    normalizeAssistantAutoTitleTurnInterval,
+    type AssistantTitleAutomationPreferences
+} from '../../shared/assistant/title-generation'
+import {
+    normalizeAssistantRuntimePolicy,
+    type AssistantRuntimePolicy
+} from '../../shared/assistant/runtime-policy'
 import { isDarkThemeId, isLightThemeId } from '../../shared/preferences/theme-contract'
 import { FutureSchemaError, RevisionConflictError, writeJsonAtomically } from './atomic-json'
 
@@ -44,10 +52,11 @@ const BOOLEAN_KEYS = new Set<string>([
     'filePreviewOpenInFullscreen', 'fileEditorMinimapEnabled', 'fileCsvDistinctColorsEnabled',
     'terminalCursorBlink', 'gitAutoRefreshOnProjectOpen', 'gitInitCreateGitignore',
     'gitInitCreateInitialCommit', 'gitWarnOnAuthorMismatch', 'gitPullRequestDefaultDraft',
-    'gitAutoCreateBranchWhenTargetMatches', 'assistantDefaultFastMode', 'assistantDefaultWebSearch',
-    'assistantDefaultWebFetch', 'sidebarCollapsed', 'assistantAgentInboxSidebarEnabled',
+    'gitAutoCreateBranchWhenTargetMatches', 'assistantDefaultFastMode', 'assistantTitleAutoRegenerate', 'assistantDefaultWebSearch',
+    'assistantDefaultWebFetch', 'sidebarCollapsed', 'sidebarHoverPreviewEnabled', 'assistantAgentInboxSidebarEnabled',
     'filePreviewFullscreenShowLeftPanel', 'filePreviewFullscreenShowRightPanel',
-    'assistantBrowserRestoreTabs', 'assistantAutoReconnect', 'assistantHistoryPrefetch',
+    'assistantBrowserRestoreTabs', 'assistantBrowserGoogleSuggestions', 'assistantBrowserAdBlockEnabled',
+    'assistantBrowserAdBlockPromptDismissed', 'assistantAutoReconnect', 'assistantHistoryPrefetch',
     'assistantShowStatusDetails', 'assistantShowDiagnostics', 'assistantTranscriptionEnabled'
 ])
 
@@ -62,7 +71,8 @@ const STRING_LIMITS: Record<string, number> = {
     gitPullRequestCodexModel: 256,
     assistantDefaultModel: 256,
     assistantTitleModel: 256,
-    assistantDefaultPromptTemplate: MAX_PROMPT_LENGTH
+    assistantDefaultPromptTemplate: MAX_PROMPT_LENGTH,
+    assistantBrowserNewTabBackgroundId: 128
 }
 
 const ENUMS: Record<string, ReadonlySet<string>> = {
@@ -80,22 +90,27 @@ const ENUMS: Record<string, ReadonlySet<string>> = {
     commitAIProvider: new Set(['groq', 'gemini', 'codex']),
     assistantProductProfile: new Set(['default', 'builder']),
     assistantDefaultRuntimeMode: new Set(['approval-required', 'full-access']),
-    assistantDefaultInteractionMode: new Set(['default', 'plan']),
     assistantDefaultEffort: new Set(['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
+    assistantReasoningSummary: new Set(['auto', 'detailed', 'concise']),
     assistantBusyMessageMode: new Set(['queue', 'force']),
     browserViewMode: new Set(['grid', 'finder']),
     browserContentLayout: new Set(['grouped', 'explorer']),
     assistantUsageDisplayMode: new Set(['remaining', 'used']),
     assistantTextStreamingMode: new Set(['stream', 'chunks']),
     assistantToolOutputDefaultMode: new Set(['expanded', 'minimized']),
-    assistantTranscriptionEngine: new Set(['browser', 'codex'])
+    assistantTranscriptionEngine: new Set(['browser', 'codex']),
+    assistantBrowserNewTabBackgroundMode: new Set(['off', 'built-in', 'unsplash']),
+    assistantBrowserNewTabBackgroundCategory: new Set(['all', 'forest-paths', 'mountain-highs', 'ocean-moods', 'desert-dreams', 'water-in-motion', 'wildflower-party', 'animal-cameos', 'ice-aurora', 'earth-above']),
+    assistantBrowserNewTabBackgroundRotation: new Set(['every-tab', 'fixed'])
 }
 
 const NUMBER_RANGES: Record<string, readonly [number, number]> = {
     fileEditorFontSize: [10, 24],
     terminalFontSize: [10, 24],
     terminalScrollback: [1_000, 50_000],
-    filePreviewTerminalPanelHeight: [140, 720]
+    filePreviewTerminalPanelHeight: [140, 720],
+    assistantContextCompactionThresholdTokens: [64_000, 372_000],
+    assistantTitleAutoRegenerateTurns: [3, 100]
 }
 
 const STRING_LIST_KEYS = new Set(['additionalFolders'])
@@ -255,6 +270,7 @@ export class DevicePreferencesService {
     }
 
     async get(input: GetDevicePreferencesInput): Promise<DevicePreferencesSnapshot> {
+        await this.operationQueue
         const surface = isDevicePreferenceSurface(input?.surface) ? input.surface : 'browser'
         if (surface === 'desktop' && isRecord(input?.legacySettings)) {
             await this.migrateDesktopLegacy(input.legacySettings)
@@ -280,6 +296,24 @@ export class DevicePreferencesService {
                 revision: next.revision,
                 changedKeys: partitioned.changedKeys,
                 sourceSurface: surface
+            })
+            return this.snapshot(next, surface)
+        })
+    }
+
+    async updateSurfaceFromMain(surface: DevicePreferenceSurface, patch: Record<string, unknown>): Promise<DevicePreferencesSnapshot> {
+        return this.enqueue(async () => {
+            const record = await this.requireReadyRecord()
+            const partitioned = partitionDevicePreferencePatch(patch, surface)
+            const changedKeys = partitioned.changedKeys.filter((key) => getDevicePreferenceOwnership(key) === 'surface')
+            if (changedKeys.length === 0) return this.snapshot(record, surface)
+            const next = this.withPatch(record, surface, {}, partitioned.surface)
+            await this.persist(next)
+            this.emit({
+                schemaVersion: DEVICE_PREFERENCES_SCHEMA_VERSION,
+                revision: next.revision,
+                changedKeys,
+                sourceSurface: 'main'
             })
             return this.snapshot(next, surface)
         })
@@ -317,6 +351,23 @@ export class DevicePreferencesService {
             ? record.shared.assistantTitleModel.trim()
             : ''
         return configured || DEFAULT_ASSISTANT_TITLE_MODEL
+    }
+
+    async getAssistantTitleAutomation(): Promise<AssistantTitleAutomationPreferences> {
+        const record = await this.requireReadyRecord()
+        return {
+            enabled: record.shared.assistantTitleAutoRegenerate === true,
+            turnInterval: normalizeAssistantAutoTitleTurnInterval(record.shared.assistantTitleAutoRegenerateTurns)
+        }
+    }
+
+    async getAssistantRuntimePolicy(): Promise<AssistantRuntimePolicy> {
+        await this.operationQueue
+        const record = await this.requireReadyRecord()
+        return normalizeAssistantRuntimePolicy({
+            reasoningSummary: record.shared.assistantReasoningSummary as AssistantRuntimePolicy['reasoningSummary'],
+            contextCompactionThresholdTokens: record.shared.assistantContextCompactionThresholdTokens as number
+        })
     }
 
     private migrateDesktopLegacy(legacySettings: Record<string, unknown>): Promise<void> {

@@ -6,6 +6,7 @@ import { normalizeAgentSurfaceTool } from "./agent-surface.mjs";
 import { AgentControlBridgeClient } from "./agent-control/bridge-client.mjs";
 import { startTemporaryBrowserRelay } from "./agent-control/temporary-browser-relay.mjs";
 import { appendCanonicalMessage, findCanonicalMessageReceipt } from "./agent-server/canonical-message-ledger.mjs";
+import { resolveLiveContextUsage } from "./live-context-usage.mjs";
 
 const root = path.resolve(process.env.ZYRA_ROOT ?? path.resolve(import.meta.dirname, ".."));
 const sdkPath = path.join(root, "src", "zyra-sdk.mjs");
@@ -17,8 +18,11 @@ let unsubscribeManagedBash;
 let unsubscribeFleet;
 let temporaryBrowserRelay;
 let activePermissionMode = "approval-required";
+let liveContextBaselineTokens;
+let lastLiveContextPublishedAt = 0;
 const ZYRA_CHAT_CONFIG_CUSTOM_TYPE = "zyra.chat-config.v1";
 const pendingPermissionRequests = new Map();
+const pendingUserInputRequests = new Map();
 const controlBridgeClient = new AgentControlBridgeClient({ send: (message) => send(message) });
 
 function stringifyProtocol(value) {
@@ -74,6 +78,43 @@ function declinePendingPermissions(reason = "Zyra bridge disconnected.") {
   }
 }
 
+function requestUserInput(request = {}, options = {}) {
+  const requestId = randomUUID();
+  send({ type: "event", event: { type: "user_input_requested", requestId, questions: request.questions || [] } });
+  return new Promise((resolve) => {
+    const finish = (result) => resolveUserInputRequest(requestId, result);
+    const timer = setTimeout(() => finish({ answers: {}, cancelled: true, reason: "User input timed out." }), 30 * 60 * 1000);
+    timer.unref?.();
+    const abort = () => finish({ answers: {}, cancelled: true, reason: "User input was cancelled." });
+    options.signal?.addEventListener?.("abort", abort, { once: true });
+    pendingUserInputRequests.set(requestId, { resolve, timer, signal: options.signal, abort });
+  });
+}
+
+function resolveUserInputRequest(requestId, result = {}) {
+  const id = String(requestId || "");
+  const pending = pendingUserInputRequests.get(id);
+  if (!pending) return false;
+  pendingUserInputRequests.delete(id);
+  clearTimeout(pending.timer);
+  pending.signal?.removeEventListener?.("abort", pending.abort);
+  const rawAnswers = result.answers && typeof result.answers === "object" && !Array.isArray(result.answers) ? result.answers : {};
+  const answers = Object.fromEntries(Object.entries(rawAnswers).map(([questionId, value]) => [
+    questionId,
+    Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : typeof value === "string" ? value : "",
+  ]));
+  const resolved = { answers, cancelled: result.cancelled === true };
+  send({ type: "event", event: { type: "user_input_resolved", requestId: id, ...resolved, reason: result.reason } });
+  pending.resolve(resolved);
+  return true;
+}
+
+function cancelPendingUserInputs(reason = "Zyra bridge disconnected.") {
+  for (const requestId of [...pendingUserInputRequests.keys()]) {
+    resolveUserInputRequest(requestId, { answers: {}, cancelled: true, reason });
+  }
+}
+
 function stopTemporaryBrowserRelay() {
   temporaryBrowserRelay?.stop();
   temporaryBrowserRelay = undefined;
@@ -85,18 +126,22 @@ function modelToInfo(model, sdk) {
     label: model.id,
     description: model.name && model.name !== model.id ? model.name : model.provider,
     supportedEfforts: sdk.getZyraModelThinkingLevels(model),
+    contextWindow: numberValue(model.contextWindow),
   };
 }
 
 async function loadSdk() {
   if (!sdkPromise) {
-    sdkPromise = import(pathToFileURL(sdkPath).href);
+    sdkPromise = process.env.ZYRA_STANDALONE === "1"
+      ? import("./zyra-sdk.mjs")
+      : import(pathToFileURL(sdkPath).href);
   }
   return sdkPromise;
 }
 
 function disposeRuntime() {
   declinePendingPermissions();
+  cancelPendingUserInputs();
   stopTemporaryBrowserRelay();
   if (typeof unsubscribe === "function") {
     unsubscribe();
@@ -114,6 +159,8 @@ function disposeRuntime() {
   void runtime?.fleet?.cancelAll?.("Zyra bridge disposed");
   runtime?.session?.dispose?.();
   runtime = undefined;
+  liveContextBaselineTokens = undefined;
+  lastLiveContextPublishedAt = 0;
 }
 
 function isMissingLocalChatError(error) {
@@ -132,14 +179,18 @@ async function handleConnect(payload) {
     model: payload.model,
     profile: requestedThreadId ? undefined : payload.profile,
     thinking: payload.thinking ?? "medium",
+    reasoningSummary: payload.reasoningSummary ?? (payload.surface === "memory-worker" ? "auto" : undefined),
+    contextCompactionThresholdTokens: payload.contextCompactionThresholdTokens,
     tools: Array.isArray(payload.tools) ? payload.tools : undefined,
     excludeTools: Array.isArray(payload.excludeTools) ? payload.excludeTools : undefined,
     surface: payload.surface === "memory-worker" ? "memory-worker" : "agent-server",
     skipMemoryStartup: true,
     skipModelAvailability: true,
+    persistStartupPreferences: payload.purpose === "voice-primary" ? false : undefined,
     rootThreadId: payload.localThreadId || undefined,
     controlBridgeClient,
     permissionRequest: requestToolPermission,
+    requestUserInput,
     getPermissionMode: () => activePermissionMode,
     ...overrides,
   });
@@ -155,8 +206,33 @@ async function handleConnect(payload) {
   await applyChatConfig(sdk, storedChatConfig || normalizeChatConfig(payload), { emit: false });
   const chatConfig = currentChatConfig(sdk);
   unsubscribe = runtime.session.subscribe((event) => {
-    const normalized = normalizeEvent(event);
-    if (normalized) send({ type: "event", event: normalized });
+    const normalized = normalizeEvent(event, getRuntimeContextWindow(runtime));
+    if (!normalized) return;
+    const isAssistantMessageEvent = (
+      (event?.type === "message_start" || event?.type === "message_update" || event?.type === "message_end")
+      && normalized.message?.role === "assistant"
+    );
+    if (isAssistantMessageEvent) {
+      const now = Date.now();
+      const shouldPublishLiveContext = event.type !== "message_update" || now - lastLiveContextPublishedAt >= 250;
+      if (shouldPublishLiveContext) {
+        const current = sdk.describeRuntime(runtime);
+        if (event.type === "message_start") {
+          liveContextBaselineTokens = Number(current.contextUsage?.tokens) || 0;
+        }
+        normalized.sessionUsage = cloneJsonValue(current.usage);
+        normalized.contextUsage = cloneJsonValue(resolveLiveContextUsage({
+          reported: current.contextUsage,
+          baselineTokens: liveContextBaselineTokens,
+          activeMessage: normalized.message,
+          contextWindow: getRuntimeContextWindow(runtime),
+        }));
+        normalized.autoCompactionEnabled = runtime.session.autoCompactionEnabled !== false;
+        lastLiveContextPublishedAt = now;
+      }
+      if (event.type === "message_end") liveContextBaselineTokens = undefined;
+    }
+    send({ type: "event", event: normalized });
   });
   unsubscribeManagedBash = runtime.managedBash?.subscribe?.((update) => {
     const payload = cloneJsonValue(update);
@@ -195,6 +271,8 @@ async function handleConnect(payload) {
     webFetch: chatConfig.webFetch,
     config: chatConfig,
     usage: described.usage,
+    contextUsage: described.contextUsage,
+    autoCompactionEnabled: runtime.session.autoCompactionEnabled !== false,
     fleet: projectFleetSnapshot(runtime.fleet?.snapshot?.()),
     agentDefinitions: cloneJsonValue(runtime.fleet?.listDefinitions?.()),
     workflowDefinitions: cloneJsonValue(runtime.workflows?.listDefinitions?.()),
@@ -204,19 +282,19 @@ async function handleConnect(payload) {
     messages: Array.isArray(runtime.session.state?.messages)
       ? runtime.session.state.messages.slice(-500)
         .filter((message) => message?.role !== "toolResult")
-        .map(normalizeMessage)
+        .map((message) => normalizeMessage(message, getRuntimeContextWindow(runtime)))
         .filter(Boolean)
       : [],
   };
 }
 
-function normalizeEvent(event) {
+function normalizeEvent(event, modelContextWindow) {
   if (!event || typeof event !== "object") return null;
   const type = typeof event.type === "string" ? event.type : null;
   if (!type) return null;
 
   if (type === "message_update" || type === "message_end" || type === "message_start") {
-    const message = normalizeMessage(event.message);
+    const message = normalizeMessage(event.message, modelContextWindow);
     return {
       type,
       message,
@@ -287,7 +365,7 @@ function normalizeEvent(event) {
   return { type };
 }
 
-function normalizeMessage(message) {
+function normalizeMessage(message, modelContextWindow) {
   if (!message || typeof message !== "object") return null;
   const timestamp = normalizeMessageTimestamp(message.timestamp);
   const role = stringValue(message.role);
@@ -299,7 +377,7 @@ function normalizeMessage(message) {
       || stablePiMessageId(role, timestamp),
     role,
     content: normalizeContent(message.content),
-    usage: normalizeUsage(message.usage),
+    usage: normalizeUsage(message.usage, modelContextWindow),
     stopReason: stringValue(message.stopReason),
     errorMessage: stringValue(message.errorMessage),
     timestamp,
@@ -377,7 +455,14 @@ function normalizeContent(content) {
   });
 }
 
-function normalizeUsage(usage) {
+function getRuntimeContextWindow(runtimeValue) {
+  const modelWindow = Number(runtimeValue?.session?.state?.model?.contextWindow);
+  if (Number.isFinite(modelWindow) && modelWindow > 0) return modelWindow;
+  const contextWindow = Number(runtimeValue?.session?.getContextUsage?.()?.contextWindow);
+  return Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : undefined;
+}
+
+function normalizeUsage(usage, modelContextWindow) {
   if (!usage || typeof usage !== "object") return undefined;
   const totalTokens = numberValue(usage.totalTokens ?? usage.total);
   const cost = usage.cost && typeof usage.cost === "object" ? {
@@ -395,6 +480,7 @@ function normalizeUsage(usage) {
     reasoning: numberValue(usage.reasoning ?? usage.reasoningTokens),
     total: totalTokens,
     totalTokens,
+    modelContextWindow: numberValue(modelContextWindow),
     cost,
   };
 }
@@ -496,6 +582,9 @@ function sameChatConfig(left, right) {
 async function applyChatConfig(sdk, value, options = {}) {
   if (!runtime) throw new Error("Zyra bridge is not connected.");
   const requested = normalizeChatConfig(value);
+  const currentBeforeRefresh = currentChatConfig(sdk);
+  const requestedProvider = String(requested.model || currentBeforeRefresh.model || "").split(/[/:]/, 1)[0];
+  if (requestedProvider) await refreshServerAuthProvider(requestedProvider);
   const current = currentChatConfig(sdk);
   if (requested.model && requested.model !== current.model) {
     await sdk.setModel(runtime, requested.model, { skipAvailabilityCheck: true });
@@ -533,38 +622,62 @@ async function handleConfigure(payload) {
   return { config: await applyChatConfig(sdk, payload) };
 }
 
+async function handleAuthRefresh(payload) {
+  const provider = String(payload?.provider || "").trim();
+  await refreshServerAuthProvider(provider);
+  return { provider, configured: runtime.session.modelRegistry.authStorage.hasAuth(provider) };
+}
+
+async function refreshServerAuthProvider(provider) {
+  if (!runtime) throw new Error("Zyra bridge is not connected.");
+  if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(provider)) throw new Error("Auth refresh provider is invalid.");
+  const modelRuntime = runtime.session?.modelRegistry?.authStorage?.modelRuntime;
+  if (typeof modelRuntime?.refresh !== "function") throw new Error("The server model runtime cannot refresh authentication.");
+  const result = await modelRuntime.refresh({ allowNetwork: false, providers: [provider] });
+  const refreshError = result?.errors?.get?.(provider);
+  if (refreshError) throw refreshError;
+}
+
 async function handlePrompt(payload) {
   if (!runtime) {
     throw new Error("Zyra bridge is not connected.");
   }
   const sdk = await loadSdk();
   await applyChatConfig(sdk, payload);
+  sdk.setZyraReasoningSummary(runtime, payload.reasoningSummary);
   const shouldGenerateTitle = !runtime.session.sessionManager?.getSessionName?.();
   const images = normalizePromptImages(payload.images);
-  await sdk.runZyraPrompt(runtime, payload.prompt, { images });
+  await sdk.runZyraPrompt(runtime, payload.prompt, {
+    images,
+    contextCompactionThresholdTokens: payload.contextCompactionThresholdTokens,
+  });
   if (shouldGenerateTitle && payload.skipTitleGeneration !== true) {
-    void generateAndPersistSessionTitle(String(payload.prompt || ""), payload.cwd || runtime.project).catch((error) => {
+    const titleTargetRuntime = runtime;
+    void generateAndPersistSessionTitle(titleTargetRuntime, payload.cwd || runtime.project).catch((error) => {
       process.stderr.write(`[session-title] ${error instanceof Error ? error.message : String(error)}\n`);
     });
   }
   return {};
 }
 
-async function generateAndPersistSessionTitle(prompt, cwd) {
-  if (!runtime?.session?.sessionManager?.appendSessionInfo) return;
-  if (runtime.session.sessionManager.getSessionName?.()) return;
-  const seed = String(prompt || "").replace(/\s+/g, " ").trim().slice(0, 720);
-  if (!seed) return;
+async function generateAndPersistSessionTitle(targetRuntime, cwd) {
+  const sessionManager = targetRuntime?.session?.sessionManager;
+  if (!sessionManager?.appendSessionInfo || sessionManager.getSessionName?.()) return;
+  const transcript = buildCompletedTitleTranscript(targetRuntime.session.state?.messages);
+  if (!transcript) return;
   const result = await handleGenerateText({
-    cwd: cwd || runtime.project,
+    cwd: cwd || targetRuntime.project,
     model: "openai-codex/gpt-5.6-luna",
     thinking: "low",
     prompt: [
-      "Write a concise title for this coding-assistant chat.",
-      "Return title text only, without quotes or markdown. Maximum 60 characters.",
-      "Prefer the concrete task or topic over greetings.",
+      "You write concise titles for coding assistant chat sessions.",
+      "Return only the title text. Do not use quotes, markdown, JSON, or commentary.",
+      "Keep the title under 60 characters.",
+      "Prefer concrete technical nouns and task intent over generic wording.",
+      "Do not mention tools, implementation steps, or title generation.",
       "",
-      seed
+      "Completed conversation:",
+      transcript
     ].join("\n")
   });
   const title = String(result.text || "")
@@ -574,9 +687,28 @@ async function generateAndPersistSessionTitle(prompt, cwd) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 60);
-  if (!title) return;
-  runtime.session.sessionManager.appendSessionInfo(title);
+  if (!title || runtime !== targetRuntime || sessionManager.getSessionName?.()) return;
+  sessionManager.appendSessionInfo(title);
   send({ type: "event", event: { type: "session_title", title } });
+}
+
+function buildCompletedTitleTranscript(messages = []) {
+  const visible = Array.isArray(messages) ? messages : [];
+  const userMessage = visible.find((message) => message?.role === "user");
+  const assistantMessage = [...visible].reverse().find((message) => message?.role === "assistant" && message.stopReason !== "error" && message.stopReason !== "aborted");
+  const userText = messageTextForTitle(userMessage).replace(/\s+/g, " ").trim().slice(0, 720);
+  const assistantText = messageTextForTitle(assistantMessage).replace(/\s+/g, " ").trim().slice(0, 1_200);
+  if (!userText) return "";
+  return [`User prompt: ${userText}`, assistantText ? `Final assistant response: ${assistantText}` : ""].filter(Boolean).join("\n");
+}
+
+function messageTextForTitle(message) {
+  if (typeof message?.content === "string") return message.content;
+  if (!Array.isArray(message?.content)) return "";
+  return message.content
+    .filter((part) => part?.type === "text")
+    .map((part) => String(part.text || ""))
+    .join("\n");
 }
 
 async function handleGenerateText(payload) {
@@ -590,6 +722,7 @@ async function handleGenerateText(payload) {
     noTools: "all",
     model: payload.model,
     thinking: payload.thinking || 'low',
+    reasoningSummary: 'auto',
     skipGuide: true,
     skipMemoryStartup: true,
     skipMemoryInjection: true,
@@ -632,6 +765,7 @@ async function handleWarmup(payload) {
 }
 
 async function handleAbort() {
+  runtime?.session?.abortCompaction?.();
   await Promise.allSettled([
     runtime?.fleet?.cancelAll?.("root turn aborted"),
     runtime?.session?.abort?.(),
@@ -788,6 +922,10 @@ async function handleMessage(message) {
       sendResponse(id, true, { result: await handleConfigure(message.payload ?? {}) });
       return;
     }
+    if (message?.type === "auth.refresh") {
+      sendResponse(id, true, { result: await handleAuthRefresh(message.payload ?? {}) });
+      return;
+    }
     if (message?.type === "generate_text") {
       sendResponse(id, true, { result: await handleGenerateText(message.payload ?? {}) });
       return;
@@ -808,6 +946,14 @@ async function handleMessage(message) {
       const requestId = String(message.payload?.requestId || "");
       if (!resolvePermissionRequest(requestId, message.payload?.decision)) {
         throw new Error(`Unknown approval request: ${requestId || "missing"}`);
+      }
+      sendResponse(id, true, { result: {} });
+      return;
+    }
+    if (message?.type === "user_input.respond") {
+      const requestId = String(message.payload?.requestId || "");
+      if (!resolveUserInputRequest(requestId, message.payload || {})) {
+        throw new Error(`Unknown user-input request: ${requestId || "missing"}`);
       }
       sendResponse(id, true, { result: {} });
       return;

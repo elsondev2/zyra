@@ -43,6 +43,7 @@ export class BrowserSurfaceHost {
     openTab(
         principal: ControlPrincipal,
         reveal: boolean,
+        sessionMode: 'normal' | 'incognito',
         signal?: AbortSignal
     ): Promise<BrowserTarget> {
         const id = this.options.makeId?.() || randomUUID()
@@ -53,6 +54,7 @@ export class BrowserSurfaceHost {
             threadId,
             mode: 'open',
             tabId: `browser:agent:${id}`,
+            sessionMode,
             reveal,
             requestedBy: principal
         }, signal)
@@ -228,6 +230,7 @@ export class BrowserSurfaceHost {
             (entry.request.mode || 'open') === 'open'
             && entry.request.tabId === target.tabId
             && entry.request.threadId === target.ownerThreadId
+            && (entry.request.sessionMode || 'incognito') === target.sessionMode
         ))
         if (!pending) return false
         const taken = this.takePending(pending.request.requestId)

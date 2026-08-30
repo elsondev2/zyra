@@ -59,12 +59,14 @@ export const ConnectedAssistantSessionsRail = memo(function ConnectedAssistantSe
 
     const handleSelectSession = useCallback((sessionId: string) => {
         const session = railController.snapshot.sessions.find((entry) => entry.id === sessionId) || null
+        void railController.selectSession(sessionId)
         navigate(buildAssistantChatRoute(sessionId, session?.activeThreadId || null))
-    }, [navigate, railController.snapshot.sessions])
+    }, [navigate, railController.selectSession, railController.snapshot.sessions])
 
     const handleSelectThread = useCallback((input: { sessionId: string; threadId: string }) => {
+        void railController.selectThread(input)
         navigate(buildAssistantChatRoute(input.sessionId, input.threadId))
-    }, [navigate])
+    }, [navigate, railController.selectThread])
 
     const handleCreateProjectChat = useCallback(async (projectPath?: string) => {
         if (creatingProjectChatRef.current) return
@@ -98,6 +100,7 @@ export const ConnectedAssistantSessionsRail = memo(function ConnectedAssistantSe
             width={width}
             maxWidth={maxWidth}
             previewPinned={previewPinned}
+            hoverPreviewEnabled={settings.sidebarHoverPreviewEnabled}
             agentInboxEnabled={settings.assistantAgentInboxSidebarEnabled}
             projectIconOverrides={settings.projectIconOverrides}
             sessions={railController.snapshot.sessions}

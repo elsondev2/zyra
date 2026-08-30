@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import initSqlJs from 'sql.js/dist/sql-asm.js'
@@ -35,6 +35,8 @@ import {
 import { ForegroundRouteConflictError } from '../src/main/assistant/foreground/foreground-route-reducer'
 import { CanonicalVoiceSessionController } from '../src/main/assistant/voice/canonical-voice-session-controller'
 import { CanonicalVoiceTranscriptCommitter } from '../src/main/assistant/voice/canonical-voice-transcript-committer'
+import { CanonicalTypedVoiceResponseCommitter } from '../src/main/assistant/voice/canonical-typed-voice-response-committer'
+import { AssistantRealtimeContinuitySource } from '../src/main/assistant/voice/assistant-realtime-continuity-source'
 import {
     CodexRealtimeForegroundAdapter,
     type CodexRealtimeTransport
@@ -59,6 +61,7 @@ class ScriptedCodexTransport extends EventEmitter implements CodexRealtimeTransp
     lastStart: Parameters<CodexRealtimeTransport['start']>[0] | null = null
     appendedContext: Array<{ role: 'developer' | 'user' | 'assistant'; text: string }> = []
     requestedSpeech: string[] = []
+    requestedSpeechCanonicalMessageIds: Array<string | undefined> = []
     presentedComposerResponses: Array<{ turnId: string; text?: string; error?: string }> = []
 
     async start(input: Parameters<CodexRealtimeTransport['start']>[0]) {
@@ -78,7 +81,10 @@ class ScriptedCodexTransport extends EventEmitter implements CodexRealtimeTransp
         this.appendedContext.push(...structuredClone(items))
     }
 
-    async requestSpeech(text: string): Promise<void> { this.requestedSpeech.push(text) }
+    async requestSpeech(text: string, canonicalMessageId?: string): Promise<void> {
+        this.requestedSpeech.push(text)
+        this.requestedSpeechCanonicalMessageIds.push(canonicalMessageId)
+    }
     presentComposerResponse(input: { turnId: string; text?: string; error?: string }): void {
         this.presentedComposerResponses.push(structuredClone(input))
     }
@@ -207,11 +213,32 @@ await assert.rejects(
     (error: unknown) => error instanceof ForegroundRouteConflictError && error.code === 'route_conflict'
 )
 
+const canonicalRecordCountBeforeUserPartials = writer.records('chat_voice_core').length
+realtime.emitTranscript({
+    sessionId: activation.handle.adapterSessionId,
+    role: 'user',
+    providerItemId: 'voice_user_chunk_1',
+    text: 'Hello',
+    completed: false
+})
+realtime.emitTranscript({
+    sessionId: activation.handle.adapterSessionId,
+    role: 'user',
+    providerItemId: 'voice_user_chunk_2',
+    text: 'Hello, respond with',
+    completed: false
+})
+await transcriptCommitter.flush()
+assert.equal(
+    writer.records('chat_voice_core').length,
+    canonicalRecordCountBeforeUserPartials,
+    'partial user transcript chunks must never become standalone canonical messages'
+)
 realtime.emitTranscript({
     sessionId: activation.handle.adapterSessionId,
     role: 'user',
     providerItemId: 'voice_item_user_1',
-    text: 'What is the task doing?',
+    text: 'Hello, respond with exactly I am here',
     completed: true
 })
 realtime.emitTranscript({
@@ -226,12 +253,41 @@ realtime.emitTranscript({
     role: 'assistant',
     providerItemId: 'voice_item_assistant_1',
     text: 'It is still running under the same task authority.',
+    completed: true
+})
+realtime.emitTranscript({
+    sessionId: activation.handle.adapterSessionId,
+    role: 'user',
+    providerItemId: 'voice_user_chunk_3',
+    text: 'Some',
+    completed: false
+})
+realtime.emitTranscript({
+    sessionId: activation.handle.adapterSessionId,
+    role: 'user',
+    providerItemId: 'voice_item_user_2',
+    text: 'Some other random long statement',
     completed: true
 })
 await transcriptCommitter.flush()
-assert.equal(committedVoiceReceipts.length, 3, 'replayed provider completion returns the same receipt to subscribers')
-assert.equal(new Set(committedVoiceReceipts).size, 2)
-assert.equal(writer.records('chat_voice_core').length, 4)
+assert.equal(committedVoiceReceipts.length, 4, 'replayed provider completion returns the same receipt to subscribers')
+assert.equal(new Set(committedVoiceReceipts).size, 3)
+assert.equal(writer.records('chat_voice_core').length, 5)
+const committedSpokenUsers = writer.records('chat_voice_core')
+    .filter((entry) => entry.input.providerItemId.startsWith('voice_item_user_'))
+assert.deepEqual(
+    committedSpokenUsers.map((entry) => [entry.input.providerItemId, entry.input.text]),
+    [
+        ['voice_item_user_1', 'Hello, respond with exactly I am here'],
+        ['voice_item_user_2', 'Some other random long statement']
+    ],
+    'consecutive spoken finals each create one canonical user message'
+)
+assert.equal(
+    writer.records('chat_voice_core').some((entry) => entry.input.providerItemId.startsWith('voice_user_chunk_')),
+    false,
+    'no provisional chunk identity can reach canonical persistence'
+)
 
 realtime.onBeforeConnectReady = null
 const replacement = await voiceSessions.startVoice({
@@ -258,6 +314,58 @@ realtime.emitTranscript({
 await transcriptCommitter.flush()
 assert.equal(writer.records('chat_voice_core').length, beforeStaleEvent)
 
+const typedResponseCommitter = new CanonicalTypedVoiceResponseCommitter(gateway)
+typedResponseCommitter.activate(replacement.handle.adapterSessionId)
+const typedWriteBarrier = writer.pauseNextWrite()
+const typedResponseReceiptPromise = typedResponseCommitter.commit({
+    adapterSessionId: replacement.handle.adapterSessionId,
+    conversationId: 'chat_voice_core',
+    routeClaim: foregroundRouteClaim(replacement.route),
+    messageId: 'voice_assistant_typed_generation_2',
+    providerItemId: 'typed-response:generation-2',
+    text: 'This completed typed response must survive Stop.',
+    completedAt: clock.now()
+})
+await typedWriteBarrier.started
+let stopBarrierSettled = false
+const stopBarrier = typedResponseCommitter.beginStop(replacement.handle.adapterSessionId)
+    .then(() => { stopBarrierSettled = true })
+await Promise.resolve()
+assert.equal(stopBarrierSettled, false, 'Stop waits while a canonical typed response write is in flight')
+typedWriteBarrier.release()
+const typedResponseReceipt = await typedResponseReceiptPromise
+await stopBarrier
+assert.ok(typedResponseReceipt)
+assert.equal(writer.records('chat_voice_core').filter((entry) => entry.input.messageId === 'voice_assistant_typed_generation_2').length, 1)
+assert.equal(await typedResponseCommitter.commit({
+    adapterSessionId: replacement.handle.adapterSessionId,
+    conversationId: 'chat_voice_core',
+    routeClaim: foregroundRouteClaim(replacement.route),
+    messageId: 'voice_assistant_after_stop',
+    providerItemId: 'typed-response:after-stop',
+    text: 'This late response must be rejected.',
+    completedAt: clock.now()
+}), null)
+
+const failingTypedResponseCommitter = new CanonicalTypedVoiceResponseCommitter(gateway)
+failingTypedResponseCommitter.activate(replacement.handle.adapterSessionId)
+writer.failNextBeforeWrite('Injected typed Voice persistence failure.')
+const failedWriteBarrier = writer.pauseNextWrite()
+const failedTypedCommit = failingTypedResponseCommitter.commit({
+    adapterSessionId: replacement.handle.adapterSessionId,
+    conversationId: 'chat_voice_core',
+    routeClaim: foregroundRouteClaim(replacement.route),
+    messageId: 'voice_assistant_failed_before_stop',
+    providerItemId: 'typed-response:failed-before-stop',
+    text: 'This write fails while Stop is draining.',
+    completedAt: clock.now()
+})
+await failedWriteBarrier.started
+const failedStopBarrier = failingTypedResponseCommitter.beginStop(replacement.handle.adapterSessionId)
+failedWriteBarrier.release()
+await assert.rejects(failedTypedCommit, /outcome is unknown/)
+await failedStopBarrier
+
 const returnedChat = await voiceSessions.stopVoice({
     conversationId: 'chat_voice_core',
     contextVersion: 3,
@@ -267,6 +375,76 @@ assert.equal(returnedChat.route_epoch, 4)
 assert.equal(returnedChat.surface_mode, 'chat')
 assert.equal(returnedChat.activation_reason, 'exit_voice')
 assert.deepEqual(returnedChat.attached_task_ids, ['task_active'])
+realtime.emitTranscript({
+    sessionId: replacement.handle.adapterSessionId,
+    role: 'assistant',
+    providerItemId: 'provider_after_stop',
+    text: 'A provider completion after Stop must stay quarantined.',
+    completed: true
+})
+await transcriptCommitter.flush()
+assert.equal(writer.records('chat_voice_core').some((entry) => entry.input.providerItemId === 'provider_after_stop'), false)
+assert.equal(writer.records('chat_voice_core').filter((entry) => entry.input.messageId === 'voice_assistant_typed_generation_2').length, 1)
+
+const hydrationBoundarySource = new AssistantRealtimeContinuitySource(async () => ({
+    contextVersion: 1,
+    routeCount: 4,
+    messages: [{
+        id: 'stopped_voice_user',
+        role: 'user',
+        text: 'A stopped Voice request is history, not a new request.',
+        modality: 'text',
+        sequence: 1
+    }, {
+        id: 'voice_assistant_typed_generation_2',
+        role: 'assistant',
+        text: 'This completed typed response must survive Stop.',
+        modality: 'voice',
+        sequence: 2
+    }],
+    pendingApprovals: [],
+    pendingInputs: [],
+    attachedTaskIds: []
+}), () => clock.now())
+const hydrationBoundarySeed = await hydrationBoundarySource.materialize('chat_voice_core', foregroundRouteClaim(returnedChat))
+assert.equal(hydrationBoundarySeed.items.every((item) => item.role === 'developer'), true, 'provider startup cannot receive executable historical user or assistant turns')
+assert.match(hydrationBoundarySeed.items[0]?.text || '', /Historical user message, for context only/)
+assert.equal(hydrationBoundarySeed.items.filter((item) => item.canonicalMessageId === 'voice_assistant_typed_generation_2').length, 1, 'restart hydration retains the completed typed response exactly once')
+assert.match(hydrationBoundarySeed.items.at(-1)?.text || '', /historical context.*do not answer/iu)
+
+const disposeChat = routes.initializeChat({ conversationId: 'chat_typed_dispose', contextVersion: 0 })
+const disposeVoice = routes.activatePreparedVoice({
+    conversationId: 'chat_typed_dispose',
+    expected: routeExpectation(foregroundRouteClaim(disposeChat)),
+    contextVersion: 0,
+    attachedTaskIds: [],
+    prepared: {
+        realtimeProviderThreadId: 'provider_typed_dispose',
+        realtimeSessionId: 'session_typed_dispose',
+        realtimeSessionGeneration: 1
+    }
+})
+const disposeCommitter = new CanonicalTypedVoiceResponseCommitter(gateway)
+disposeCommitter.activate('adapter_typed_dispose')
+const disposeWriteBarrier = writer.pauseNextWrite()
+const disposeCommit = disposeCommitter.commit({
+    adapterSessionId: 'adapter_typed_dispose',
+    conversationId: 'chat_typed_dispose',
+    routeClaim: foregroundRouteClaim(disposeVoice),
+    messageId: 'voice_assistant_typed_dispose',
+    providerItemId: 'typed-response:dispose',
+    text: 'Dispose must drain this canonical response.',
+    completedAt: clock.now()
+})
+await disposeWriteBarrier.started
+let typedDisposeSettled = false
+const typedDispose = disposeCommitter.dispose().then(() => { typedDisposeSettled = true })
+await Promise.resolve()
+assert.equal(typedDisposeSettled, false, 'disposal cannot clear an in-flight typed canonical write')
+disposeWriteBarrier.release()
+assert.ok(await disposeCommit)
+await typedDispose
+assert.equal(writer.records('chat_typed_dispose').length, 1)
 
 // A connection failure rekeys the unchanged Chat route so every delayed callback is stale.
 const failedChat = routes.initializeChat({ conversationId: 'chat_failed_prepare', contextVersion: 0 })
@@ -494,6 +672,9 @@ assert.deepEqual(
 assert.equal(reopenedStore.canonicalMessageOperationByIdempotencyKey(
     'canonical-message:chat_commit_retry:message_unknown'
 )?.status, 'outcome_unknown')
+assert.equal(reopenedStore.canonicalMessageOperationByIdempotencyKey(
+    `voice-typed-response:chat_voice_core:${replacement.route.foreground_route_id}:typed-response:generation-2`
+)?.status, 'succeeded', 'completed typed Voice responses remain terminal after controller restart')
 
 // The dedicated controller.sqlite owner durably flushes each accepted mutation.
 const controllerDirectory = mkdtempSync(join(tmpdir(), 'zyra-voice-controller-'))
@@ -622,6 +803,33 @@ assert.equal(
     eventCountBeforeHydrationReplay,
     'hydrated startup history must not be emitted as a new canonical Voice message'
 )
+await codexAdapter.deliverComposerResponse(codexHandle.adapterSessionId, {
+    turnId: 'typed-canonical-turn',
+    text: 'Canonical typed answer.',
+    canonicalMessageId: 'voice_assistant_typed_canonical'
+})
+codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
+    type: 'turn.created',
+    turn: { id: 'unrelated-assistant-turn', role: 'assistant', transcript: '' }
+})
+codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
+    type: 'turn.done',
+    turn: { id: 'unrelated-assistant-turn', role: 'assistant', transcript: 'An unrelated response remains canonical.' }
+})
+assert.ok(codexEvents.some((event) => event.type === 'realtime.assistant.transcript.completed'
+    && event.providerItemId === 'unrelated-assistant-turn'))
+const eventCountBeforeCanonicalSpeechReplay = codexEvents.length
+codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
+    type: 'conversation.item.created',
+    item: { id: 'spoken-canonical-turn', role: 'assistant', text: '' }
+})
+codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
+    type: 'turn.done',
+    turn: { id: 'spoken-canonical-turn', role: 'assistant', transcript: '**Canonical typed answer!**' }
+})
+assert.equal(codexEvents.length, eventCountBeforeCanonicalSpeechReplay, 'only the explicitly correlated spoken replay is suppressed when punctuation changes')
+assert.deepEqual(scriptedTransport.requestedSpeech.at(-1), 'Canonical typed answer.')
+assert.equal(scriptedTransport.requestedSpeechCanonicalMessageIds.at(-1), 'voice_assistant_typed_canonical')
 codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
     type: 'turn.created',
     turn: { id: 'webrtc_turn_1', role: 'assistant', transcript: '' }
@@ -644,11 +852,12 @@ await codexAdapter.deliverComposerResponse(codexHandle.adapterSessionId, {
     turnId: 'private_typed_turn_1',
     text: 'Narrate this private read-only result.'
 })
-assert.deepEqual(scriptedTransport.presentedComposerResponses, [{
+assert.deepEqual(scriptedTransport.presentedComposerResponses.at(-1), {
     turnId: 'private_typed_turn_1',
     text: 'Narrate this private read-only result.'
-}])
-assert.deepEqual(scriptedTransport.requestedSpeech, ['Narrate this private read-only result.'])
+})
+assert.equal(scriptedTransport.requestedSpeech.at(-1), 'Narrate this private read-only result.')
+assert.equal(scriptedTransport.requestedSpeechCanonicalMessageIds.at(-1), undefined)
 assert.equal(codexEvents.some((event) => event.type === 'realtime.assistant.transcript.completed'
     && event.providerItemId === 'composer:private_typed_turn_1'), false)
 codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
@@ -659,6 +868,16 @@ assert.ok(codexEvents.some((event) => event.type === 'realtime.session.error'
     && event.category === 'incompatible_protocol'))
 await codexAdapter.close(codexHandle.adapterSessionId, 'test_complete')
 codexAdapter.dispose()
+
+const assistantServiceSource = readFileSync(new URL('../src/main/assistant/service.ts', import.meta.url), 'utf8')
+const canonicalVoiceProjectionSource = assistantServiceSource.match(
+    /private async projectCanonicalVoiceMessage[\s\S]*?\n    private voiceContextVersion/u
+)?.[0] || ''
+assert.match(
+    canonicalVoiceProjectionSource,
+    /queueGeneratedSessionTitle/u,
+    'a committed Voice user transcript must enter the normal model-backed chat-title generation path'
+)
 
 transcriptCommitter.dispose()
 voiceSessions.dispose()

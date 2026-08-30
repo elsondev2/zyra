@@ -20,7 +20,7 @@ import {
 import { TimelineTurnWorkSummary } from '../src/renderer/src/pages/assistant/AssistantTimelineWorkSummary'
 import { TimelineVoiceTaskStatus } from '../src/renderer/src/pages/assistant/AssistantTimelineVoiceTask'
 import { IssueLogRow } from '../src/renderer/src/pages/assistant/AssistantPageHelpers'
-import { sanitizeThoughtContent, TimelineCommandCheckpointGroup, TimelineContextCompactionMarker, TimelineMessage, TimelineThought, TimelineThoughtGroup, TimelineWorkTraceGroup } from '../src/renderer/src/pages/assistant/AssistantTimelineRows'
+import { sanitizeThoughtContent, TimelineCommandCheckpointGroup, TimelineContextCompactionMarker, TimelineMessage, TimelineThought, TimelineThoughtGroup, TimelineWorkingIndicator, TimelineWorkTraceGroup } from '../src/renderer/src/pages/assistant/AssistantTimelineRows'
 import { COLLAPSED_TOOL_CALL_COUNT, TimelineToolCallList } from '../src/renderer/src/pages/assistant/AssistantTimelineToolCalls'
 import { stripProposedPlanBlocks } from '../src/renderer/src/pages/assistant/assistant-proposed-plan'
 import { getTerminalOutputHeightClass } from '../src/renderer/src/pages/assistant/assistant-timeline-layout'
@@ -201,6 +201,11 @@ assert.deepEqual(
     ['message', 'working'],
     'a first send keeps the lightweight working indicator visible until real work exists instead of rendering an empty disclosure'
 )
+const initialWorkingMarkup = renderToStaticMarkup(createElement(TimelineWorkingIndicator, { startedAt: iso(0) }))
+assert.equal(initialWorkingMarkup.includes('data-assistant-work-summary-shell="true"'), true, 'the first working state uses the same compact shell as Worked for')
+assert.equal(initialWorkingMarkup.includes('data-assistant-working-dots="true"'), true, 'the shared shell indicates active work with three dots')
+assert.equal(initialWorkingMarkup.includes('mr-0.5 inline-flex'), true, 'the Working label keeps a quiet two-pixel breath after its activity dots')
+assert.equal(initialWorkingMarkup.includes('animate-spin'), false, 'the first working state does not switch to a separate spinner layout')
 const activeTurnRows = groupTimelineRowsIntoWorkSummaries({
     rows: workingRows,
     messages: messages.slice(0, -1),
@@ -223,11 +228,9 @@ assert.equal(
     'the old standalone working indicator is absorbed by the live disclosure header'
 )
 assert.equal(
-    activeWorkSummary?.kind === 'turn-work-summary' && activeWorkSummary.liveNarrationRow?.kind === 'message'
-        ? activeWorkSummary.liveNarrationRow.message.id
-        : null,
-    'progress-two',
-    'the latest real assistant narration also supplies the collapsed preview'
+    activeWorkSummary?.kind === 'turn-work-summary' ? activeWorkSummary.liveNarrationRow : null,
+    null,
+    'collapsed work never replaces the chronological sequence with one narration at a time'
 )
 const expandedNarrationIndex = activeWorkSummary?.kind === 'turn-work-summary'
     ? activeWorkSummary.rows.findIndex((row) => row.kind === 'message' && row.message.id === 'progress-two')
@@ -239,6 +242,29 @@ assert.equal(
     expandedNarrationIndex >= 0 && laterToolIndex > expandedNarrationIndex,
     true,
     'expanded work keeps narration in arrival order instead of forcing the latest narration to the bottom'
+)
+
+const streamingFinalMessages = messages.map((entry) => entry.id === 'final'
+    ? { ...entry, streaming: true, updatedAt: iso(750) }
+    : entry)
+const streamingFinalRows = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries(streamingFinalMessages, activities), true, iso(0)),
+    messages: streamingFinalMessages,
+    latestAssistantMessageId: 'final',
+    latestTurnStartedAt: iso(0),
+    isWorking: true
+})
+assert.deepEqual(
+    streamingFinalRows.map((row) => row.kind),
+    ['message', 'turn-work-summary'],
+    'assistant narration never guesses that a still-running turn has reached its final response'
+)
+assert.equal(
+    streamingFinalRows[1]?.kind === 'turn-work-summary'
+        ? streamingFinalRows[1].rows.at(-1)?.id
+        : null,
+    'final',
+    'the complete live sequence accumulates inside the remembered work disclosure until terminal completion'
 )
 
 const endCompactionActivity: AssistantActivity = {
@@ -260,9 +286,9 @@ const liveCompactionIndex = compactingAfterFinalRows.findIndex((row) => row.kind
 assert.equal(visibleFinalIndex > 0, true, 'a completed final response becomes a full timeline row before end-of-turn auto-compaction finishes')
 assert.equal(liveCompactionIndex > visibleFinalIndex, true, 'running auto-compaction remains a separate marker after the already-visible final response')
 assert.equal(
-    compactingAfterFinalRows.some((row) => row.kind === 'turn-work-summary' && row.running),
+    compactingAfterFinalRows.some((row) => row.kind === 'turn-work-summary' && row.running && row.terminalResponseVisible),
     true,
-    'the runtime may remain busy compacting without absorbing the settled final response back into Working'
+    'an explicit post-final compaction signal may collapse work without treating ordinary narration as terminal'
 )
 
 const collapsedTurnRows = groupTimelineRowsIntoWorkSummaries({
@@ -279,6 +305,174 @@ assert.deepEqual(
 )
 const workSummary = collapsedTurnRows[1]
 assert.equal(workSummary?.kind === 'turn-work-summary' ? workSummary.rows.length : 0, 5)
+
+const persistedTurnId = 'persisted-local-turn-id'
+const persistedProviderNarrationId = 'pi-message:assistant:100'
+const persistedProviderFinalId = 'pi-message:assistant:200'
+const persistedPrompt = {
+    ...message({ id: 'persisted-user', role: 'user', turnId: persistedTurnId, millisecond: 0, text: 'Inspect the persisted thread.' }),
+    turnId: null
+}
+const persistedNarration = message({
+    id: `assistant-message-${persistedProviderNarrationId}`,
+    role: 'assistant',
+    turnId: persistedTurnId,
+    millisecond: 100,
+    text: 'I am inspecting the persisted thread.'
+})
+const persistedFinal = message({
+    id: `assistant-message-${persistedProviderFinalId}`,
+    role: 'assistant',
+    turnId: persistedTurnId,
+    millisecond: 300,
+    text: 'The persisted thread is correct.'
+})
+const persistedUsage: AssistantSessionTurnUsageEntry = {
+    id: persistedTurnId,
+    sessionId: 'persisted-session',
+    threadId: 'persisted-thread',
+    model: 'test-model',
+    state: 'completed',
+    requestedAt: persistedPrompt.createdAt,
+    startedAt: persistedPrompt.createdAt,
+    completedAt: persistedFinal.updatedAt,
+    assistantMessageId: persistedProviderFinalId,
+    usage: null,
+    updatedAt: persistedFinal.updatedAt
+}
+const persistedReferenceRows = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(
+        getTimelineEntries(
+            [persistedPrompt, persistedNarration, persistedFinal],
+            [activity({ id: 'persisted-tool', turnId: persistedTurnId, millisecond: 200 })]
+        ),
+        false,
+        null
+    ),
+    messages: [persistedPrompt, persistedNarration, persistedFinal],
+    turnUsageById: new Map([[persistedTurnId, persistedUsage]]),
+    latestAssistantMessageId: persistedProviderFinalId,
+    latestTurnStartedAt: persistedPrompt.createdAt,
+    isWorking: false
+})
+assert.deepEqual(
+    persistedReferenceRows.map((row) => row.kind),
+    ['message', 'turn-work-summary', 'message'],
+    'hydrated provider message references resolve to the canonical Desktop message id before final-response classification'
+)
+assert.equal(
+    persistedReferenceRows.at(-1)?.kind === 'message' ? persistedReferenceRows.at(-1)?.message.id : null,
+    persistedFinal.id,
+    'existing chats retain the actual final response outside the collapsed work disclosure'
+)
+
+const recoveredTurnId = 'shared-turn:canonical-chat:recovered-after-transport-error'
+const recoveredUser = message({
+    id: 'recovered-user',
+    role: 'user',
+    turnId: recoveredTurnId,
+    millisecond: 500,
+    text: 'Finish the deployment after reconnecting.'
+})
+const recoveredProgress = message({
+    id: 'recovered-progress',
+    role: 'assistant',
+    turnId: recoveredTurnId,
+    millisecond: 600,
+    text: 'The connection dropped; I am resuming the deployment.'
+})
+const recoveredTransportError: AssistantActivity = {
+    id: 'shared-error:recovered-transport-error',
+    kind: 'error',
+    tone: 'error',
+    summary: 'Assistant error',
+    detail: 'WebSocket closed 1006',
+    turnId: recoveredTurnId,
+    createdAt: iso(700),
+    payload: { stopReason: 'error', status: 'failed', completedAt: iso(700) }
+}
+const recoveredFinal = message({
+    id: 'recovered-final',
+    role: 'assistant',
+    turnId: recoveredTurnId,
+    millisecond: 900,
+    text: 'Deployment completed and verified.'
+})
+const recoveredUsage: AssistantSessionTurnUsageEntry = {
+    id: 'persisted-recovered-turn',
+    sessionId: 'recovered-session',
+    threadId: 'recovered-thread',
+    model: 'test-model',
+    state: 'completed',
+    requestedAt: recoveredUser.createdAt,
+    startedAt: recoveredUser.createdAt,
+    completedAt: recoveredFinal.updatedAt,
+    assistantMessageId: recoveredFinal.id,
+    usage: null,
+    updatedAt: recoveredFinal.updatedAt
+}
+const recoveredRows = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries(
+        [recoveredUser, recoveredProgress, recoveredFinal],
+        [
+            activity({ id: 'recovered-tool-before-error', turnId: recoveredTurnId, millisecond: 650 }),
+            recoveredTransportError,
+            activity({ id: 'recovered-tool-after-error', turnId: recoveredTurnId, millisecond: 800 })
+        ]
+    ), false, null),
+    messages: [recoveredUser, recoveredProgress, recoveredFinal],
+    turnUsageById: new Map([[recoveredTurnId, recoveredUsage]]),
+    latestAssistantMessageId: recoveredFinal.id,
+    latestTurnStartedAt: recoveredUser.createdAt,
+    isWorking: false
+})
+assert.deepEqual(
+    recoveredRows.map((row) => row.kind),
+    ['message', 'turn-work-summary', 'message'],
+    'a recovered turn keeps its completed final answer visible after an earlier transient transport error'
+)
+assert.equal(
+    recoveredRows[1]?.kind === 'turn-work-summary' ? recoveredRows[1].outcome : null,
+    'completed',
+    'authoritative completed usage wins over an earlier transient error activity'
+)
+
+const providerAliasedMessages = messages.map((entry) => entry.role === 'user'
+    ? { ...entry, turnId: 'local-optimistic-turn-id' }
+    : entry)
+const providerAliasedRows = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries(providerAliasedMessages, activities), false, null),
+    messages: providerAliasedMessages,
+    latestAssistantMessageId: 'final',
+    latestTurnStartedAt: iso(0),
+    isWorking: false
+})
+assert.deepEqual(
+    providerAliasedRows.map((row) => row.kind),
+    ['message', 'turn-work-summary', 'message'],
+    'a provider turn alias still collapses live work against the nearest canonical user boundary'
+)
+const providerAliasedActiveRows = groupTimelineRowsIntoWorkSummaries({
+    rows: buildTimelineRows(getTimelineEntries(providerAliasedMessages, activities), true, iso(0)),
+    messages: providerAliasedMessages,
+    latestAssistantMessageId: 'final',
+    latestTurnStartedAt: iso(0),
+    isWorking: true
+})
+const providerAliasedActiveSummary = providerAliasedActiveRows.find((row) => row.kind === 'turn-work-summary')
+const providerAliasedCompletedSummary = providerAliasedRows.find((row) => row.kind === 'turn-work-summary')
+assert.equal(
+    providerAliasedActiveSummary?.id,
+    providerAliasedCompletedSummary?.id,
+    'the work component keeps one identity while a local turn transitions to its provider alias'
+)
+assert.deepEqual(
+    providerAliasedActiveSummary?.kind === 'turn-work-summary'
+        ? providerAliasedActiveSummary.rows.map((row) => row.id)
+        : [],
+    ['progress-one', 'tool-group-tool-location', 'thought-hidden', 'progress-two', 'tool-group-tool-tests', 'final'],
+    'expanded active work accumulates narration, thoughts, tools, and response in chronological order'
+)
 
 const aliasedCompletedCompaction: AssistantActivity = {
     ...completedCompactionActivity,
@@ -389,10 +583,21 @@ assert.equal(workSummaryMarkup.includes('grid-template-rows'), true, 'work discl
 assert.equal(workSummaryMarkup.includes('Collapse work'), false, 'work uses one disclosure control instead of repeating a footer action')
 const workSummarySource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimelineWorkSummary.tsx', import.meta.url), 'utf8')
 assert.equal(workSummarySource.includes("expanded && 'sticky top-0 z-10 bg-sparkle-bg/95 backdrop-blur-md'"), true, 'the expanded work header remains reachable while scrolling through long work')
-assert.equal(workSummarySource.includes('if (!wasRunning || running) return'), true, 'work auto-collapses exactly when a running turn completes')
+assert.equal(workSummarySource.includes('collapseWhenResponseVisible'), false, 'intermediate narration can never masquerade as a terminal collapse signal')
+assert.equal(workSummarySource.includes('collapseForTerminalResponse'), true, 'only an explicit terminal-response state may collapse a still-running work sequence')
 assert.equal(workSummarySource.includes('statusTextRef.current.textContent = formatWorkSummaryStatus'), true, 'the live work timer updates its own text without reconciling the expanded work subtree')
 assert.equal(workSummarySource.includes('<AnimatedHeight isOpen={contentVisible} duration={WORK_SUMMARY_MOTION_MS} crispContent>'), true, 'work disclosures animate both expansion and collapse')
 assert.equal(workSummarySource.includes('window.requestAnimationFrame(() =>'), true, 'the heavier work subtree mounts closed before its expansion frame begins')
+assert.match(
+    workSummarySource,
+    /window\.cancelAnimationFrame\(contentRevealFrameRef\.current\)\s+contentRevealFrameRef\.current = null/,
+    'Strict Mode cleanup releases the cancelled reveal frame so the replayed mount can open on its first frame'
+)
+assert.match(
+    workSummarySource,
+    /window\.clearTimeout\(contentUnmountTimerRef\.current\)\s+contentUnmountTimerRef\.current = null/,
+    'Strict Mode cleanup releases the content timer instead of leaving the disclosure in a stale mounted state'
+)
 assert.equal(workSummarySource.includes('startTransition(() => setContentMounted(true))'), true, 'the heavier work subtree remains interruptible while preparing the animation')
 assert.equal(workSummarySource.includes('setContentVisible(false)'), true, 'collapse keeps the mounted content in a closed animation state')
 assert.equal(workSummarySource.includes('}, WORK_SUMMARY_UNMOUNT_DELAY_MS)'), true, 'collapsed work unmounts only after the animation completes')
@@ -404,8 +609,10 @@ const runningWorkSummaryMarkup = renderToStaticMarkup(createElement(TimelineTurn
     renderChildren: () => createElement('div', null, 'Live implementation work')
 }))
 assert.equal(runningWorkSummaryMarkup.includes('Working for'), true, 'the shared disclosure presents its live elapsed state')
-assert.equal(runningWorkSummaryMarkup.includes('aria-expanded="true"'), true, 'live work starts expanded and remains user-collapsible')
-assert.equal(runningWorkSummaryMarkup.includes('Live implementation work'), true, 'active work still mounts its live details immediately')
+assert.equal(runningWorkSummaryMarkup.includes('data-assistant-working-dots="true"'), true, 'live work adds the compact three-dot activity cue to the finished-state row')
+assert.equal(runningWorkSummaryMarkup.includes('aria-expanded="true"'), true, 'active work restores the remembered expansion preference, defaulting to the chronological sequence')
+assert.equal(runningWorkSummaryMarkup.includes('Live implementation work'), true, 'expanded active work mounts the complete chronological sequence')
+assert.equal(workSummarySource.includes('WORK_SUMMARY_EXPANDED_PREFERENCE_KEY'), true, 'manual active-work expansion is remembered across turns')
 
 const interruptedTurnId = 'turn-interrupted-without-final'
 const interruptedPrompt: AssistantMessage = {
@@ -564,12 +771,18 @@ const orphanRows = groupTimelineRowsIntoWorkSummaries({
 assert.equal(orphanRows[1]?.kind === 'turn-work-summary' ? orphanRows[1].outcome : null, 'no-response', 'historical orphan turns receive a truthful no-response work summary')
 
 const timelineSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimeline.tsx', import.meta.url), 'utf8')
+const conversationWorkingSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantConversationPane.tsx', import.meta.url), 'utf8')
+const queuedComposerTimelineSource = readFileSync(new URL('../src/renderer/src/pages/assistant/useAssistantQueuedComposer.ts', import.meta.url), 'utf8')
 const virtualTimelineSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantVirtualTimeline.tsx', import.meta.url), 'utf8')
 const historyStoreSource = readFileSync(new URL('../src/renderer/src/lib/assistant/assistant-store-core.ts', import.meta.url), 'utf8')
 const historyStateSource = readFileSync(new URL('../src/renderer/src/lib/assistant/assistant-history-state.ts', import.meta.url), 'utf8')
 assert.equal(timelineSource.includes('<AssistantVirtualTimeline'), true, 'the timeline delegates mounting and measurement to the virtual list owner')
+assert.match(conversationWorkingSource, /timelineIsWorking = \(isThreadWorking \|\| optimisticPromptSending\)/u, 'prompt submission enters working state immediately instead of waiting for the runtime turn event')
+assert.match(conversationWorkingSource, /timelinePresentationIsWorking = timelineIsWorking && !optimisticPromptAwaitingUserMessage/u, 'the temporary working row waits for the newly sent user message instead of attaching to the previous prompt')
+assert.match(queuedComposerTimelineSource, /onSendingChange\?\.\(true\)[\s\S]{0,120}await dispatchPrompt/u, 'the optimistic working state starts before the prompt IPC')
 assert.equal(virtualTimelineSource.includes('<LegendList'), true, 'long histories render through LegendList rather than renderer-only slicing')
-assert.equal(virtualTimelineSource.includes('maintainVisibleContentPosition={{ data: true, size: false }}'), true, 'database-page prepends preserve the measured visible anchor without correcting ordinary row resizes under the pointer')
+assert.match(virtualTimelineSource, /const maintainVisibleContentPosition = useMemo\(\(\) => \(\{[\s\S]{0,180}data: true,[\s\S]{0,180}size: startupSettled && scrollMode === 'free-scrolling'/u, 'database-page prepends and settled measured row sizes preserve the visible anchor')
+assert.match(virtualTimelineSource, /maintainVisibleContentPosition=\{maintainVisibleContentPosition\}/u, 'LegendList receives the bounded anchor policy')
 assert.equal(virtualTimelineSource.includes('itemLayout: !disclosureLayoutActive'), true, 'user disclosures suspend item-layout end-follow while their row height animates')
 assert.equal(virtualTimelineSource.includes('layout: !disclosureLayoutActive'), true, 'viewport layout follow cannot compete with an active disclosure anchor')
 assert.equal(virtualTimelineSource.includes("addEventListener('pointerdown', handleTimelinePointerDown"), true, 'timeline controls suspend layout follow before their React click changes row height')
@@ -579,8 +792,8 @@ assert.equal(virtualTimelineSource.includes("scrollModeRef.current !== 'followin
 assert.equal(virtualTimelineSource.includes('COMPLETION_END_FOLLOW_DELAYS_MS'), false, 'turn completion cannot replay a viewport correction ladder')
 assert.equal(historyStoreSource.includes('getHistoryPage({'), true, 'earlier history comes from the main-process SQLite page contract')
 assert.equal(historyStateSource.includes('5 * 60_000'), true, 'recent thread detail is retained for a bounded five-minute idle window')
-assert.equal(timelineSource.includes('compactLiveNarration: true'), true, 'the staged preview remains mounted so it can retain the last settled narration')
-assert.equal(timelineSource.includes("expanded && 'hidden'"), true, 'expanded work hides the compact preview and uses only chronological work rows')
+assert.equal(timelineSource.includes('compactLiveNarration: true'), false, 'collapsed work does not replace the sequence with a one-at-a-time narration preview')
+assert.equal(timelineSource.includes('renderLiveNarration'), false, 'one stable disclosure owns all live work presentation')
 const compactNarrationMarkup = renderToStaticMarkup(createElement(TimelineMessage, {
     message: messages[1],
     compactLiveNarration: true
@@ -597,18 +810,9 @@ const activeWorkMarkup = renderToStaticMarkup(createElement(TimelineTurnWorkSumm
     startedAt: messages[0].createdAt,
     completedAt: null,
     running: true,
-    renderChildren: () => createElement('div', null, 'Active work'),
-    renderLiveNarration: () => createElement(TimelineMessage, {
-        message: messages[1],
-        compactLiveNarration: true
-    })
+    renderChildren: () => createElement('div', null, 'Active work')
 }))
 assert.equal((activeWorkMarkup.match(/aria-expanded=/g) || []).length, 1, 'an active turn exposes exactly one work disclosure')
-const timelineRowsSourceForNarration = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantTimelineRows.tsx', import.meta.url), 'utf8')
-assert.equal(timelineRowsSourceForNarration.includes("message.role !== 'assistant' || message.streaming"), true, 'the settled narration snapshot waits for completion while paced live text remains visible')
-const timelineCssSource = readFileSync(new URL('../src/renderer/src/index.css', import.meta.url), 'utf8')
-assert.equal(timelineCssSource.includes('assistantNarrationShimmer 6.5s ease-in-out infinite'), true, 'collapsed narration uses a deliberately slow shimmer')
-assert.equal(timelineCssSource.includes('assistantNarrationIn 420ms'), true, 'settled narration changes use a measured seamless handoff')
 
 assert.equal(didAssistantTimelineWorkComplete(
     [{ id: 'active-summary', kind: 'turn-work-summary', running: true, turnId: 'turn-live' }],
@@ -1047,7 +1251,7 @@ assert.equal(toolCardSource.includes('commandTimestamp'), false, 'collapsed comm
 assert.equal(toolCardSource.includes('formatAssistantDateTime(activityStartedAt)'), true, 'expanded command details show the real command start timestamp')
 assert.equal(toolCardSource.includes("window.setInterval(() => setNowIso(new Date().toISOString()), 1000)"), true, 'running command cards refresh elapsed time once per second')
 assert.equal(toolCardSource.includes("'w-14 shrink-0 text-right font-mono text-[9px] tabular-nums transition-colors'"), true, 'command durations share a fixed right-aligned numeric column')
-assert.equal(toolCardSource.includes("'text-white/16 group-hover:text-white/24'"), true, 'completed command durations stay visually quiet until row hover')
+assert.equal(toolCardSource.includes("'text-sparkle-text-muted group-hover:text-sparkle-text-secondary'"), true, 'completed command durations stay visually quiet until row hover')
 assert.equal(toolCardSource.includes("{elapsed || ''}"), true, 'commands without timing data still reserve the duration column')
 assert.equal(toolCardSource.includes('inline-flex w-4 shrink-0 items-center justify-center'), true, 'every tool row reserves the same trailing chevron endpoint')
 assert.equal(
@@ -1115,7 +1319,7 @@ assert.equal(timelineRowsSource.includes('statusTextRef.current.textContent = fo
 const conversationTimelinePaneSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantConversationTimelinePane.tsx', import.meta.url), 'utf8')
 const mountedVirtualTimelineSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantVirtualTimeline.tsx', import.meta.url), 'utf8')
 const conversationPaneSource = readFileSync(new URL('../src/renderer/src/pages/assistant/AssistantConversationPane.tsx', import.meta.url), 'utf8')
-assert.equal(mountedVirtualTimelineSource.includes('[scrollbar-gutter:stable]'), true, 'the virtual chat viewport permanently reserves its scrollbar gutter')
+assert.equal(mountedVirtualTimelineSource.includes('className="assistant-chat-scrollbar h-full w-full overflow-x-hidden [overflow-anchor:none]"'), true, 'the virtual chat viewport owns the dedicated thin scrollbar without a detached rail')
 assert.equal(mountedVirtualTimelineSource.includes('AssistantVirtualTimelineMinimap'), false, 'the minimap stays out of the mounted chat path while scrolling is being tuned')
 assert.equal(conversationTimelinePaneSource.includes('timelineRailHostRef'), false, 'the hidden minimap does not leave a portal host or resize observer mounted')
 assert.equal(conversationPaneSource.includes('suppressMinimap='), false, 'the conversation no longer carries dead minimap visibility state')
@@ -1157,7 +1361,8 @@ const thoughtActivity = activity({ id: 'thought-motion', turnId: 'thought-turn',
 thoughtActivity.detail = '**Planning quietly**\n\nA secondary thought body.'
 thoughtActivity.payload = { ...thoughtActivity.payload, output: thoughtActivity.detail }
 const thoughtMarkup = renderToStaticMarkup(createElement(TimelineThought, { activity: thoughtActivity }))
-assert.equal(thoughtMarkup.includes('data-state="closed"'), true, 'thought body remains mounted so collapse motion can run')
+assert.equal(thoughtMarkup.includes('data-state="closed"'), true, 'thought disclosure remains represented while closed')
+assert.equal(thoughtMarkup.includes('A secondary thought body.'), false, 'collapsed thoughts do not mount hidden Markdown bodies')
 
 const titleOnlyThought = activity({ id: 'thought-title-only', turnId: 'thought-title-only-turn', millisecond: 1770, internal: true })
 titleOnlyThought.detail = '**Verifying git status for changes**\n\n<!-- -->\n'
@@ -1183,6 +1388,7 @@ const thoughtGroupMarkup = renderToStaticMarkup(createElement(TimelineThoughtGro
 }))
 assert.equal(thoughtGroupMarkup.includes('Thoughts (2)'), true)
 assert.equal(thoughtGroupMarkup.includes('data-state="closed"'), true)
+assert.equal(thoughtGroupMarkup.includes('One more secondary detail.'), false, 'collapsed thought groups do not render every nested Markdown body')
 
 const mixedTraceCheckpoint: AssistantActivity = {
     ...commandCheckpoint,
@@ -1215,6 +1421,7 @@ const mixedTraceMarkup = renderToStaticMarkup(createElement(TimelineWorkTraceGro
 }))
 assert.equal(mixedTraceMarkup.includes('2 thoughts · 1 check'), true)
 assert.equal(mixedTraceMarkup.includes('data-state="closed"'), true, 'mixed work traces stay collapsed by default')
+assert.equal(mixedTraceMarkup.includes('One more secondary detail.'), false, 'collapsed mixed traces retain summaries without mounting hidden work details')
 
 const traceBoundaryRows = buildTimelineRows(
     getTimelineEntries(

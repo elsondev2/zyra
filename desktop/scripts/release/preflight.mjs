@@ -43,6 +43,10 @@ assert(desktopPackage.name === 'zyra-desktop', `Unexpected Desktop package name:
 assert(rootPackage.private === true && desktopPackage.private === true, 'Root and Desktop packages must remain private')
 assert(desktopLock.name === desktopPackage.name && desktopLock.packages?.['']?.name === desktopPackage.name, 'Desktop package-lock identity is stale')
 assert(rootPackage.license === 'Apache-2.0' && desktopPackage.license === 'Apache-2.0', 'Root and Desktop release metadata must declare the repository Apache-2.0 license')
+execFileSync(process.execPath, [path.join(repositoryRoot, 'scripts', 'test-legal-release-contract.mjs')], {
+    cwd: repositoryRoot,
+    stdio: 'inherit'
+})
 
 const requestedVersion = arg('expected-version')
 if (requestedVersion) assert(requestedVersion === version, `Requested version ${requestedVersion} does not match package version ${version}`)
@@ -69,14 +73,20 @@ if (taggedPublication) {
     const requiredSecrets = [
         'ZYRA_WINDOWS_CERTIFICATE',
         'ZYRA_WINDOWS_CERTIFICATE_PASSWORD',
+        'ZYRA_WINDOWS_CERTIFICATE_THUMBPRINT',
         'ZYRA_MACOS_CERTIFICATE',
         'ZYRA_MACOS_CERTIFICATE_PASSWORD',
+        'ZYRA_MACOS_TEAM_ID',
         'ZYRA_MACOS_NOTARIZATION_API_KEY',
         'ZYRA_MACOS_NOTARIZATION_KEY_ID',
-        'ZYRA_MACOS_NOTARIZATION_ISSUER_ID'
+        'ZYRA_MACOS_NOTARIZATION_ISSUER_ID',
+        'EVS_ACCOUNT_NAME',
+        'EVS_PASSWD',
+        'ZYRA_ACCEPT_ECS_SECURITY_DELTA'
     ]
     const missing = requiredSecrets.filter((name) => !hasSecret(name))
     assert(missing.length === 0, `Tagged publication is blocked; missing signing/notarization secrets: ${missing.join(', ')}`)
+    assert(process.env.ZYRA_ACCEPT_ECS_SECURITY_DELTA === 'true', 'Tagged publication is blocked until the CastLabs Electron 43.2 versus stock Electron 43.4 security delta is explicitly accepted or removed by an upgrade.')
 }
 
 const output = process.env.GITHUB_OUTPUT

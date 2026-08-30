@@ -39,7 +39,7 @@ jobs:
       - name: Set up Node 22
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "22.22.0"
           cache: npm
           cache-dependency-path: |
             package-lock.json
@@ -59,13 +59,18 @@ jobs:
       - name: Enforce tag, version, HEAD, master, and signing gates
         id: release_contract
         env:
-          ZYRA_WINDOWS_CERTIFICATE: ${{ secrets.ZYRA_WINDOWS_CERTIFICATE }}
-          ZYRA_WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.ZYRA_WINDOWS_CERTIFICATE_PASSWORD }}
-          ZYRA_MACOS_CERTIFICATE: ${{ secrets.ZYRA_MACOS_CERTIFICATE }}
-          ZYRA_MACOS_CERTIFICATE_PASSWORD: ${{ secrets.ZYRA_MACOS_CERTIFICATE_PASSWORD }}
-          ZYRA_MACOS_NOTARIZATION_API_KEY: ${{ secrets.ZYRA_MACOS_NOTARIZATION_API_KEY }}
-          ZYRA_MACOS_NOTARIZATION_KEY_ID: ${{ secrets.ZYRA_MACOS_NOTARIZATION_KEY_ID }}
-          ZYRA_MACOS_NOTARIZATION_ISSUER_ID: ${{ secrets.ZYRA_MACOS_NOTARIZATION_ISSUER_ID }}
+          ZYRA_WINDOWS_CERTIFICATE: ${{ github.event_name == 'push' && secrets.ZYRA_WINDOWS_CERTIFICATE || '' }}
+          ZYRA_WINDOWS_CERTIFICATE_PASSWORD: ${{ github.event_name == 'push' && secrets.ZYRA_WINDOWS_CERTIFICATE_PASSWORD || '' }}
+          ZYRA_WINDOWS_CERTIFICATE_THUMBPRINT: ${{ github.event_name == 'push' && secrets.ZYRA_WINDOWS_CERTIFICATE_THUMBPRINT || '' }}
+          ZYRA_MACOS_CERTIFICATE: ${{ github.event_name == 'push' && secrets.ZYRA_MACOS_CERTIFICATE || '' }}
+          ZYRA_MACOS_CERTIFICATE_PASSWORD: ${{ github.event_name == 'push' && secrets.ZYRA_MACOS_CERTIFICATE_PASSWORD || '' }}
+          ZYRA_MACOS_TEAM_ID: ${{ github.event_name == 'push' && secrets.ZYRA_MACOS_TEAM_ID || '' }}
+          ZYRA_MACOS_NOTARIZATION_API_KEY: ${{ github.event_name == 'push' && secrets.ZYRA_MACOS_NOTARIZATION_API_KEY || '' }}
+          ZYRA_MACOS_NOTARIZATION_KEY_ID: ${{ github.event_name == 'push' && secrets.ZYRA_MACOS_NOTARIZATION_KEY_ID || '' }}
+          ZYRA_MACOS_NOTARIZATION_ISSUER_ID: ${{ github.event_name == 'push' && secrets.ZYRA_MACOS_NOTARIZATION_ISSUER_ID || '' }}
+          EVS_ACCOUNT_NAME: ${{ github.event_name == 'push' && secrets.EVS_ACCOUNT_NAME || '' }}
+          EVS_PASSWD: ${{ github.event_name == 'push' && secrets.EVS_PASSWD || '' }}
+          ZYRA_ACCEPT_ECS_SECURITY_DELTA: ${{ github.event_name == 'push' && secrets.ZYRA_ACCEPT_ECS_SECURITY_DELTA || '' }}
           EXPECTED_VERSION: ${{ inputs.version }}
         shell: bash
         run: |
@@ -120,7 +125,7 @@ jobs:
       - name: Set up Node 22
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "22.22.0"
           cache: npm
           cache-dependency-path: |
             package-lock.json
@@ -145,40 +150,15 @@ jobs:
       - name: Install Pillow
         run: python -m pip install --disable-pip-version-check Pillow==11.3.0
 
+      - name: Install Widevine VMP signing client
+        if: needs.preflight.outputs.require_signing == 'true' && matrix.platform != 'linux'
+        run: python -m pip install --disable-pip-version-check castlabs-evs==1.3.2
+
       - name: Install root dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Install Desktop dependencies and validate node-pty
         run: npm --prefix desktop ci --no-audit --no-fund
-
-      - name: Configure Windows signing
-        if: needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'windows'
-        shell: bash
-        env:
-          CERTIFICATE: ${{ secrets.ZYRA_WINDOWS_CERTIFICATE }}
-          CERTIFICATE_PASSWORD: ${{ secrets.ZYRA_WINDOWS_CERTIFICATE_PASSWORD }}
-        run: |
-          echo "CSC_LINK=${CERTIFICATE}" >> "${GITHUB_ENV}"
-          echo "CSC_KEY_PASSWORD=${CERTIFICATE_PASSWORD}" >> "${GITHUB_ENV}"
-
-      - name: Configure macOS signing and notarization
-        if: needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'macos'
-        shell: bash
-        env:
-          CERTIFICATE: ${{ secrets.ZYRA_MACOS_CERTIFICATE }}
-          CERTIFICATE_PASSWORD: ${{ secrets.ZYRA_MACOS_CERTIFICATE_PASSWORD }}
-          API_KEY: ${{ secrets.ZYRA_MACOS_NOTARIZATION_API_KEY }}
-          API_KEY_ID: ${{ secrets.ZYRA_MACOS_NOTARIZATION_KEY_ID }}
-          API_ISSUER: ${{ secrets.ZYRA_MACOS_NOTARIZATION_ISSUER_ID }}
-        run: |
-          key_path="${RUNNER_TEMP}/AuthKey_${API_KEY_ID}.p8"
-          printf '%s' "${API_KEY}" > "${key_path}"
-          chmod 600 "${key_path}"
-          echo "CSC_LINK=${CERTIFICATE}" >> "${GITHUB_ENV}"
-          echo "CSC_KEY_PASSWORD=${CERTIFICATE_PASSWORD}" >> "${GITHUB_ENV}"
-          echo "APPLE_API_KEY=${key_path}" >> "${GITHUB_ENV}"
-          echo "APPLE_API_KEY_ID=${API_KEY_ID}" >> "${GITHUB_ENV}"
-          echo "APPLE_API_ISSUER=${API_ISSUER}" >> "${GITHUB_ENV}"
 
       - name: Generate and validate native icons
         run: npm --prefix desktop run brand:release-assets && npm --prefix desktop run test:branding
@@ -186,8 +166,31 @@ jobs:
       - name: Smoke node-pty under Electron
         run: npm --prefix desktop run test:native-abi
 
+      - name: Smoke Widevine protected media
+        if: matrix.platform != 'linux'
+        run: npm --prefix desktop run smoke:protected-media
+
       - name: Build native package and updater metadata
-        run: npm --prefix desktop run release:package -- --platform=${{ matrix.platform }}
+        shell: bash
+        env:
+          CSC_LINK: ${{ needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'windows' && secrets.ZYRA_WINDOWS_CERTIFICATE || needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'macos' && secrets.ZYRA_MACOS_CERTIFICATE || '' }}
+          CSC_KEY_PASSWORD: ${{ needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'windows' && secrets.ZYRA_WINDOWS_CERTIFICATE_PASSWORD || needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'macos' && secrets.ZYRA_MACOS_CERTIFICATE_PASSWORD || '' }}
+          APPLE_API_KEY_CONTENT: ${{ needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'macos' && secrets.ZYRA_MACOS_NOTARIZATION_API_KEY || '' }}
+          APPLE_API_KEY_ID: ${{ needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'macos' && secrets.ZYRA_MACOS_NOTARIZATION_KEY_ID || '' }}
+          APPLE_API_ISSUER: ${{ needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'macos' && secrets.ZYRA_MACOS_NOTARIZATION_ISSUER_ID || '' }}
+          EVS_ACCOUNT_NAME: ${{ needs.preflight.outputs.publish == 'true' && matrix.platform != 'linux' && secrets.EVS_ACCOUNT_NAME || '' }}
+          EVS_PASSWD: ${{ needs.preflight.outputs.publish == 'true' && matrix.platform != 'linux' && secrets.EVS_PASSWD || '' }}
+        run: |
+          key_path=""
+          cleanup() { if [[ -n "${key_path}" ]]; then rm -f "${key_path}"; fi; }
+          trap cleanup EXIT
+          if [[ "${{ needs.preflight.outputs.require_signing }}" == "true" && "${{ matrix.platform }}" == "macos" ]]; then
+            key_path="${RUNNER_TEMP}/AuthKey_${APPLE_API_KEY_ID}_desktop.p8"
+            printf '%s' "${APPLE_API_KEY_CONTENT}" > "${key_path}"
+            chmod 600 "${key_path}"
+            export APPLE_API_KEY="${key_path}"
+          fi
+          npm --prefix desktop run release:package -- --platform=${{ matrix.platform }}
 
       - name: Revalidate native upload set
         run: >-
@@ -196,6 +199,64 @@ jobs:
           --version=${{ needs.preflight.outputs.version }}
           --dir=desktop/dist/releases/v${{ needs.preflight.outputs.version }}/${{ matrix.platform }}/upload
           --exact=true
+
+      - name: Build standalone TUI binaries
+        shell: bash
+        run: |
+          output="dist/tui/v${{ needs.preflight.outputs.version }}"
+          case "${{ matrix.platform }}" in
+            windows)
+              node scripts/build-tui-release.mjs --target=windows-x64 --version=${{ needs.preflight.outputs.version }} --output="${output}"
+              ;;
+            macos)
+              node scripts/build-tui-release.mjs --target=macos-arm64 --version=${{ needs.preflight.outputs.version }} --output="${output}"
+              node scripts/build-tui-release.mjs --target=macos-x64 --version=${{ needs.preflight.outputs.version }} --output="${output}"
+              ;;
+            linux)
+              node scripts/build-tui-release.mjs --target=linux-x64 --version=${{ needs.preflight.outputs.version }} --output="${output}"
+              ;;
+          esac
+
+      - name: Sign and verify standalone TUI binaries
+        if: needs.preflight.outputs.require_signing == 'true' && matrix.platform != 'linux'
+        shell: bash
+        env:
+          CSC_LINK: ${{ matrix.platform == 'windows' && secrets.ZYRA_WINDOWS_CERTIFICATE || secrets.ZYRA_MACOS_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ matrix.platform == 'windows' && secrets.ZYRA_WINDOWS_CERTIFICATE_PASSWORD || secrets.ZYRA_MACOS_CERTIFICATE_PASSWORD }}
+          ZYRA_WINDOWS_EXPECTED_THUMBPRINT: ${{ matrix.platform == 'windows' && secrets.ZYRA_WINDOWS_CERTIFICATE_THUMBPRINT || '' }}
+          ZYRA_MACOS_EXPECTED_TEAM_ID: ${{ matrix.platform == 'macos' && secrets.ZYRA_MACOS_TEAM_ID || '' }}
+          APPLE_API_KEY_CONTENT: ${{ matrix.platform == 'macos' && secrets.ZYRA_MACOS_NOTARIZATION_API_KEY || '' }}
+          APPLE_API_KEY_ID: ${{ matrix.platform == 'macos' && secrets.ZYRA_MACOS_NOTARIZATION_KEY_ID || '' }}
+          APPLE_API_ISSUER: ${{ matrix.platform == 'macos' && secrets.ZYRA_MACOS_NOTARIZATION_ISSUER_ID || '' }}
+        run: |
+          key_path=""
+          cleanup() { if [[ -n "${key_path}" ]]; then rm -f "${key_path}"; fi; }
+          trap cleanup EXIT
+          if [[ "${{ matrix.platform }}" == "macos" ]]; then
+            key_path="${RUNNER_TEMP}/AuthKey_${APPLE_API_KEY_ID}_tui.p8"
+            printf '%s' "${APPLE_API_KEY_CONTENT}" > "${key_path}"
+            chmod 600 "${key_path}"
+            export APPLE_API_KEY="${key_path}"
+          fi
+          node scripts/sign-standalone-tui.mjs \
+            --platform=${{ matrix.platform }} \
+            --version=${{ needs.preflight.outputs.version }} \
+            --dir=dist/tui/v${{ needs.preflight.outputs.version }} \
+            --marker=desktop/dist/releases/v${{ needs.preflight.outputs.version }}/${{ matrix.platform }}/.verification/${{ matrix.platform }}.json
+
+      - name: Smoke native standalone TUI
+        shell: bash
+        run: |
+          case "${{ matrix.platform }}" in
+            windows) binary="dist/tui/v${{ needs.preflight.outputs.version }}/Zyra-TUI-${{ needs.preflight.outputs.version }}-windows-x64.exe" ;;
+            macos)
+              node scripts/test-standalone-tui-binary.mjs "dist/tui/v${{ needs.preflight.outputs.version }}/Zyra-TUI-${{ needs.preflight.outputs.version }}-macos-arm64" "${{ needs.preflight.outputs.version }}"
+              node scripts/test-standalone-tui-binary.mjs "dist/tui/v${{ needs.preflight.outputs.version }}/Zyra-TUI-${{ needs.preflight.outputs.version }}-macos-x64" "${{ needs.preflight.outputs.version }}"
+              exit 0
+              ;;
+            linux) binary="dist/tui/v${{ needs.preflight.outputs.version }}/Zyra-TUI-${{ needs.preflight.outputs.version }}-linux-x64" ;;
+          esac
+          node scripts/test-standalone-tui-binary.mjs "${binary}" "${{ needs.preflight.outputs.version }}"
 
       - name: Upload isolated native assets
         uses: actions/upload-artifact@v4
@@ -211,6 +272,14 @@ jobs:
           name: zyra-desktop-verification-${{ matrix.platform }}
           path: desktop/dist/releases/v${{ needs.preflight.outputs.version }}/${{ matrix.platform }}/.verification/${{ matrix.platform }}.json
           include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload standalone TUI assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: zyra-tui-assets-${{ matrix.platform }}
+          path: dist/tui/v${{ needs.preflight.outputs.version }}/*
           if-no-files-found: error
           retention-days: 14
 
@@ -232,7 +301,7 @@ jobs:
       - name: Set up Node 22
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "22.22.0"
 
       - name: Download every native asset set
         uses: actions/download-artifact@v4
@@ -248,9 +317,12 @@ jobs:
           path: release-verification
           merge-multiple: true
 
-      - name: Build the lockstep Zyra CLI/source archive
-        shell: bash
-        run: git archive --format=zip --output="release-assets/zyra-v${{ needs.preflight.outputs.version }}.zip" HEAD
+      - name: Download every standalone TUI asset
+        uses: actions/download-artifact@v4
+        with:
+          pattern: zyra-tui-assets-*
+          path: release-assets
+          merge-multiple: true
 
       - name: Validate complete matrix and generate checksums
         run: >-
@@ -265,6 +337,10 @@ jobs:
         run: >-
           node desktop/scripts/release/validate-signature-markers.mjs
           --dir=release-verification
+          --assets-dir=release-assets
+          --version=${{ needs.preflight.outputs.version }}
+          --windows-thumbprint=${{ secrets.ZYRA_WINDOWS_CERTIFICATE_THUMBPRINT }}
+          --macos-team-id=${{ secrets.ZYRA_MACOS_TEAM_ID }}
           --require-signing=${{ needs.preflight.outputs.require_signing }}
 
       - name: Upload verified rehearsal/release bundle
@@ -300,7 +376,7 @@ jobs:
       - name: Set up Node 22
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "22.22.0"
 
       - name: Download verified assembled bundle
         uses: actions/download-artifact@v4

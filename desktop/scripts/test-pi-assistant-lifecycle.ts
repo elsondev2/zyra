@@ -42,8 +42,106 @@ mock.module('electron', () => ({
     webContents: { fromId: () => null },
     safeStorage: { isEncryptionAvailable: () => false }
 }))
-const { ZyraPiRuntime } = await import('../src/main/assistant/zyra-pi-runtime')
+const { ZyraPiRuntime, buildArgumentPreviewPatch, buildLiveAssistantTurnUsage, completeAssistantTurnUsage, mergeAssistantTurnUsage, resolveAssistantUsageMessageIdentity, shouldAccountAssistantMessageUsage } = await import('../src/main/assistant/zyra-pi-runtime')
+const { resolveLiveContextUsage } = await import('../../src/live-context-usage.mjs')
 const { ZyraAccountService } = await import('../src/main/assistant/zyra-account-service')
+
+const mergedTurnUsage = mergeAssistantTurnUsage(
+    mergeAssistantTurnUsage(null, {
+        inputTokens: 1_000,
+        outputTokens: 200,
+        cachedInputTokens: 9_000,
+        reasoningOutputTokens: 80,
+        totalTokens: 10_200,
+        modelContextWindow: 372_000,
+        costUsd: 0.02
+    }),
+    {
+        inputTokens: 2_000,
+        outputTokens: 300,
+        cachedInputTokens: 18_000,
+        reasoningOutputTokens: 120,
+        totalTokens: 20_300,
+        modelContextWindow: 372_000,
+        costUsd: 0.03
+    }
+)
+assert.deepEqual(mergedTurnUsage, {
+    inputTokens: 3_000,
+    outputTokens: 500,
+    cachedInputTokens: 27_000,
+    cacheWriteTokens: null,
+    reasoningOutputTokens: 200,
+    totalTokens: 20_300,
+    modelContextWindow: 372_000,
+    costUsd: 0.05,
+    sessionCostUsd: null,
+    sessionCostComplete: null
+}, 'a Desktop turn preserves the cumulative provider cost while retaining the latest context size')
+assert.equal(
+    completeAssistantTurnUsage(mergedTurnUsage, 95.268916, true)?.sessionCostUsd,
+    95.268916,
+    'turn persistence retains the complete canonical-session cost snapshot for disconnected Thread Details'
+)
+assert.equal(completeAssistantTurnUsage(mergedTurnUsage, 95.268916, true)?.sessionCostComplete, true)
+assert.equal(shouldAccountAssistantMessageUsage({
+    replay: true,
+    turnId: 'turn:historical',
+    activeTurnId: 'turn:current',
+    turnCompleted: true,
+    messageAlreadyAccounted: false
+}), false, 'historical replay cannot contaminate current-turn usage')
+assert.equal(shouldAccountAssistantMessageUsage({
+    replay: true,
+    turnId: 'turn:current',
+    activeTurnId: 'turn:current',
+    turnCompleted: false,
+    messageAlreadyAccounted: false
+}), true, 'replayed usage for the still-active turn can restore its aggregate after reconnect')
+assert.equal(shouldAccountAssistantMessageUsage({
+    replay: false,
+    turnId: 'turn:current',
+    activeTurnId: 'turn:current',
+    turnCompleted: false,
+    messageAlreadyAccounted: true
+}), false, 'duplicate message_end events cannot double-count cost')
+const anonymousUsageMessage = {
+    role: 'assistant',
+    content: [{ type: 'text', text: 'Completed.' }],
+    usage: { input: 100, output: 20, cost: { total: 0.01 } }
+}
+assert.equal(
+    resolveAssistantUsageMessageIdentity(anonymousUsageMessage, 'turn:current', 'generated:item:1'),
+    resolveAssistantUsageMessageIdentity(anonymousUsageMessage, 'turn:current', 'generated:item:2'),
+    'duplicate message_end events without provider ids retain a stable content-and-usage identity'
+)
+assert.notEqual(
+    resolveAssistantUsageMessageIdentity(anonymousUsageMessage, 'turn:current', 'generated:item:1'),
+    resolveAssistantUsageMessageIdentity({ ...anonymousUsageMessage, content: [{ type: 'text', text: 'A distinct response.' }] }, 'turn:current', 'generated:item:2')
+)
+assert.equal(buildLiveAssistantTurnUsage({
+    lastUsage: mergedTurnUsage,
+    sessionUsage: { threadId: 'thread:live', contextTokens: 32_000, modelContextWindow: 372_000 }
+})?.totalTokens, 32_000, 'live context replaces the last completed context size without discarding exact turn usage')
+const liveContext = resolveLiveContextUsage({
+    reported: { tokens: 32_000, contextWindow: 372_000 },
+    baselineTokens: 32_000,
+    activeMessage: { role: 'assistant', content: [{ type: 'text', text: 'Streaming response tokens'.repeat(20) }] },
+    contextWindow: 372_000
+})
+assert.ok((liveContext?.tokens || 0) > 32_000, 'streaming assistant content advances the context estimate before message_end')
+const structuredEditPreview = buildArgumentPreviewPatch('edit', {
+    path: 'desktop/src/example.ts',
+    edits: [
+        { oldText: 'const oldValue = true', newText: 'const newValue = true' },
+        { oldText: 'export { oldValue }', newText: 'export { newValue }' }
+    ]
+})
+assert.match(structuredEditPreview || '', /^--- a\/desktop\/src\/example\.ts/m, 'structured edit calls produce a Review-compatible provisional patch')
+assert.match(structuredEditPreview || '', /-const oldValue = true[\s\S]*\+const newValue = true/)
+assert.match(structuredEditPreview || '', /-export \{ oldValue \}[\s\S]*\+export \{ newValue \}/)
+const zyraRuntimeSource = readFileSync(new URL('../src/main/assistant/zyra-pi-runtime.ts', import.meta.url), 'utf8')
+assert.match(zyraRuntimeSource, /sessionUsage && metadata\?\.replay !== true/, 'historical replay cannot replace the current cumulative session-cost snapshot')
 const { deleteAssistantSessionAction } = await import('../src/main/assistant/service-session-actions')
 const {
     findDuplicateProjectedActivityIds,
@@ -376,6 +474,115 @@ const context = {
     lastUsage: null
 }
 
+const reconnectRuntime = new ZyraPiRuntime()
+let reconnectWorkerAlive = false
+let reconnectRequestCount = 0
+const reconnectWorker = {
+    serverOwnedLifecycle: true,
+    onEvent: () => () => undefined,
+    setControlRequestHandler: () => undefined,
+    isAlive: () => reconnectWorkerAlive,
+    request: async (type: string) => {
+        assert.equal(type, 'connect')
+        reconnectRequestCount += 1
+        reconnectWorkerAlive = true
+        return {
+            threadId: 'provider-reconnect',
+            providerThreadId: 'provider-reconnect',
+            model: 'openai-codex/gpt-5.5',
+            thinking: 'medium',
+            profile: 'default',
+            runtimeMode: 'approval-required',
+            agentServerActiveTurnId: 'turn-reconnect'
+        }
+    },
+    flushReplay: () => undefined,
+    dispose: () => undefined
+}
+const reconnectContext = {
+    ...context,
+    localThreadId: 'thread-reconnect',
+    providerThreadId: 'provider-reconnect',
+    resumeProviderThreadId: 'provider-reconnect',
+    worker: reconnectWorker,
+    connected: true,
+    connectPromise: Promise.resolve(),
+    reconnectPromise: null,
+    cwd: process.cwd(),
+    activeTurnId: 'turn-reconnect',
+    lastUsageTurnId: 'turn-reconnect',
+    sessionUsage: null,
+    fleetSnapshot: null
+}
+const reconnectRuntimeInternals = reconnectRuntime as any
+reconnectRuntimeInternals.sessions.set(reconnectContext.localThreadId, reconnectContext)
+reconnectRuntimeInternals.sessions.set(reconnectContext.providerThreadId, reconnectContext)
+reconnectRuntimeInternals.aliases.set(reconnectContext.localThreadId, reconnectContext.localThreadId)
+reconnectRuntimeInternals.aliases.set(reconnectContext.providerThreadId, reconnectContext.localThreadId)
+reconnectRuntimeInternals.handleZyraEvent(reconnectContext, { type: 'server.transport.detached' })
+const reconnectDeadline = Date.now() + 1_000
+while (!reconnectContext.connected && Date.now() < reconnectDeadline) await new Promise((resolve) => setTimeout(resolve, 5))
+assert.equal(reconnectRequestCount, 1, 'transport detachment reattaches without waiting for another user action')
+assert.equal(reconnectContext.connected, true)
+assert.equal(reconnectContext.connectPromise, null, 'a completed connect promise cannot block the next reconnect cycle')
+
+const cancelledConnectRuntime = new ZyraPiRuntime()
+const cancelledConnectEvents: AssistantRuntimeEvent[] = []
+cancelledConnectRuntime.on('runtime', (event: AssistantRuntimeEvent) => cancelledConnectEvents.push(event))
+let resolveCancelledConnect!: (result: Record<string, unknown>) => void
+const cancelledConnectRequest = new Promise<Record<string, unknown>>((resolve) => {
+    resolveCancelledConnect = resolve
+})
+let cancelledConnectWorkerAlive = true
+const cancelledConnectWorker = {
+    serverOwnedLifecycle: true,
+    onEvent: () => () => undefined,
+    setControlRequestHandler: () => undefined,
+    isAlive: () => cancelledConnectWorkerAlive,
+    request: async (type: string) => {
+        assert.equal(type, 'connect')
+        return cancelledConnectRequest
+    },
+    flushReplay: () => undefined,
+    dispose: () => {
+        cancelledConnectWorkerAlive = false
+    }
+}
+const cancelledConnectContext = {
+    ...reconnectContext,
+    localThreadId: 'thread-cancelled-connect',
+    providerThreadId: 'thread-cancelled-connect',
+    resumeProviderThreadId: null,
+    worker: cancelledConnectWorker,
+    connected: false,
+    connectPromise: null,
+    reconnectPromise: null,
+    activeTurnId: null,
+    lastUsageTurnId: null
+}
+const cancelledConnectInternals = cancelledConnectRuntime as any
+cancelledConnectInternals.sessions.set(cancelledConnectContext.localThreadId, cancelledConnectContext)
+cancelledConnectInternals.aliases.set(cancelledConnectContext.localThreadId, cancelledConnectContext.localThreadId)
+const cancelledConnectPending = cancelledConnectInternals.ensureConnected(cancelledConnectContext)
+cancelledConnectRuntime.disconnect(cancelledConnectContext.localThreadId)
+resolveCancelledConnect({
+    threadId: 'provider-cancelled-connect',
+    providerThreadId: 'provider-cancelled-connect',
+    model: 'openai-codex/gpt-5.5',
+    thinking: 'medium',
+    profile: 'default',
+    runtimeMode: 'approval-required'
+})
+await cancelledConnectPending
+assert.equal(cancelledConnectContext.connected, false, 'an intentionally disconnected warmup cannot revive its old runtime context')
+assert.equal(cancelledConnectInternals.sessions.has(cancelledConnectContext.localThreadId), false)
+assert.equal(cancelledConnectInternals.sessions.has('provider-cancelled-connect'), false)
+assert.equal(
+    cancelledConnectEvents.some((event) => event.type === 'thread.started' && event.payload.state === 'ready'),
+    false,
+    'an intentionally disconnected warmup cannot publish a stale ready state'
+)
+
 const handleEvent = (
     event: unknown,
     metadata?: { turnId?: string; localThreadId?: string; replay?: boolean }
@@ -421,13 +628,24 @@ assert.equal(
     'the server echo for a Desktop-originated prompt must not create a duplicate user bubble'
 )
 
-const emitAssistantMessage = (type: 'message_start' | 'message_update' | 'message_end', text: string, delta = text): void => {
+const emitAssistantMessage = (
+    type: 'message_start' | 'message_update' | 'message_end',
+    text: string,
+    delta = text,
+    telemetry?: { contextTokens: number; input?: number; output?: number }
+): void => {
     handleEvent({
         type,
         message: {
             role: 'assistant',
-            content: text ? [{ type: 'text', text }] : []
+            content: text ? [{ type: 'text', text }] : [],
+            usage: type === 'message_end' && telemetry
+                ? { input: telemetry.input || 0, output: telemetry.output || 0, total: telemetry.contextTokens, modelContextWindow: 372_000 }
+                : undefined
         },
+        sessionUsage: telemetry ? { input: telemetry.input || 0, output: telemetry.output || 0 } : undefined,
+        contextUsage: telemetry ? { tokens: telemetry.contextTokens, contextWindow: 372_000 } : undefined,
+        autoCompactionEnabled: true,
         assistantMessageEvent: type === 'message_update'
             ? {
                 type: 'text_delta',
@@ -438,9 +656,12 @@ const emitAssistantMessage = (type: 'message_start' | 'message_update' | 'messag
     })
 }
 
-emitAssistantMessage('message_start', '')
-emitAssistantMessage('message_update', planningText)
-emitAssistantMessage('message_end', planningText)
+emitAssistantMessage('message_start', '', '', { contextTokens: 20_000 })
+emitAssistantMessage('message_update', planningText, planningText, { contextTokens: 20_600 })
+emitAssistantMessage('message_end', planningText, planningText, { contextTokens: 21_000, input: 19_000, output: 2_000 })
+const liveUsageBeforeTool = runtimeEvents.findLast((event) => event.type === 'thread.token-usage.updated')
+assert.equal(liveUsageBeforeTool?.type === 'thread.token-usage.updated' ? liveUsageBeforeTool.payload.usage.totalTokens : null, 21_000, 'running turns publish the latest context before tool execution and before turn completion')
+assert.equal(context.activeTurnId, turnId, 'publishing live usage does not complete the active turn')
 
 handleEvent({
     type: 'tool_execution_start',
@@ -522,6 +743,8 @@ assert.equal(
     runningCompactionEvent?.type === 'activity' ? runningCompactionEvent.payload.activityId : null,
     'compaction_end must update the same activity emitted by compaction_start'
 )
+const compactedUsageEvent = runtimeEvents.findLast((event) => event.type === 'thread.token-usage.updated')
+assert.equal(compactedUsageEvent?.type === 'thread.token-usage.updated' ? compactedUsageEvent.payload.usage.totalTokens : null, 32_000, 'successful compaction resets the live context meter immediately')
 
 const bridgeSource = readFileSync(new URL('../../src/zyra-ui-bridge.mjs', import.meta.url), 'utf8')
 assert.match(bridgeSource, /type === ["']compaction_end["']/, 'the Pi bridge must forward compaction_end instead of reducing it to a bare event type')
@@ -692,6 +915,52 @@ assert.equal(
     liveAbortedCompletion?.type === 'turn.completed' ? liveAbortedCompletion.payload.outcome : null,
     'interrupted',
     'agent_end must preserve the aborted assistant response as an interrupted TUI turn'
+)
+assert.equal(replayGuardContext.activeTurnId, null)
+
+replayGuardEvents.length = 0
+replayGuardContext.completedTurnIds.clear()
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'message_end',
+    message: {
+        id: 'live-retry-error',
+        role: 'assistant',
+        content: [],
+        stopReason: 'error',
+        errorMessage: 'The provider request failed and will be retried.'
+    }
+}, { turnId: 'turn-live-recovered', replay: false })
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'message_start',
+    message: {
+        id: 'live-retry-success',
+        role: 'assistant',
+        content: []
+    }
+}, { turnId: 'turn-live-recovered', replay: false })
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'message_end',
+    message: {
+        id: 'live-retry-success',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Recovered response' }]
+    }
+}, { turnId: 'turn-live-recovered', replay: false })
+assert.equal(
+    replayGuardEvents.some((event) => event.type === 'turn.completed' && event.turnId === 'turn-live-recovered'),
+    false,
+    'an in-turn provider error must not finish the turn while later assistant events are still arriving'
+)
+replayGuardHandler.handleZyraEvent(replayGuardContext, {
+    type: 'agent_end'
+}, { turnId: 'turn-live-recovered', replay: false })
+const recoveredCompletion = replayGuardEvents.find((event) => (
+    event.type === 'turn.completed' && event.turnId === 'turn-live-recovered'
+))
+assert.equal(
+    recoveredCompletion?.type === 'turn.completed' ? recoveredCompletion.payload.outcome : null,
+    'completed',
+    'a successful assistant message after an in-turn error must clear the stale failure outcome'
 )
 assert.equal(replayGuardContext.activeTurnId, null)
 
@@ -1189,6 +1458,22 @@ const projectedDeps = {
     },
     updateLatestTurnAssistantMessage: () => {}
 }
+const recoveredTurnEvents = replayGuardEvents.filter((event) => event.turnId === 'turn-live-recovered')
+const recoveredTurnCompletionIndex = recoveredTurnEvents.findIndex((event) => event.type === 'turn.completed')
+assert.ok(recoveredTurnCompletionIndex > 0)
+for (const event of recoveredTurnEvents.slice(0, recoveredTurnCompletionIndex)) {
+    handleAssistantRuntimeEvent(event, projectedDeps)
+}
+const recoveringProjectedThread = findProjectedRecord(projectedThread.id)?.thread
+assert.equal(recoveringProjectedThread?.state, 'running')
+assert.equal(recoveringProjectedThread?.latestTurn?.state, 'running')
+assert.equal(recoveringProjectedThread?.lastError, null)
+handleAssistantRuntimeEvent(recoveredTurnEvents[recoveredTurnCompletionIndex]!, projectedDeps)
+const recoveredProjectedThread = findProjectedRecord(projectedThread.id)?.thread
+assert.equal(recoveredProjectedThread?.state, 'ready')
+assert.equal(recoveredProjectedThread?.latestTurn?.state, 'completed')
+assert.equal(recoveredProjectedThread?.lastError, null)
+
 const stalePreviousTurnStartedAt = '2026-07-10T15:00:00.000Z'
 projectedDeps.appendEvent('thread.latest-turn.updated', stalePreviousTurnStartedAt, {
     threadId: projectedThread.id,
@@ -1628,6 +1913,38 @@ assert.equal(
 )
 assert.equal(transportFailureContext.connected, false)
 assert.equal(transportFailureContext.activeTurnId, null)
+
+const serverOwnedDisconnectRuntime = new ZyraPiRuntime()
+const serverOwnedDisconnectEvents: AssistantRuntimeEvent[] = []
+serverOwnedDisconnectRuntime.on('runtime', (event: AssistantRuntimeEvent) => serverOwnedDisconnectEvents.push(event))
+const serverOwnedTurnId = 'turn-server-owned-disconnect'
+const serverOwnedDisconnectContext = {
+    ...transportFailureContext,
+    localThreadId: 'thread-server-owned-disconnect',
+    providerThreadId: 'provider-server-owned-disconnect',
+    resumeProviderThreadId: 'provider-server-owned-disconnect',
+    worker: {
+        serverOwnedLifecycle: true,
+        request: async () => {
+            throw Object.assign(new Error('Zyra agent-server connection closed.'), { code: 'AGENT_SERVER_DISCONNECTED' })
+        },
+        isAlive: () => false
+    },
+    connected: true,
+    connectPromise: null,
+    reconnectPromise: null,
+    activeTurnId: serverOwnedTurnId,
+    completedTurnIds: new Set<string>()
+}
+const serverOwnedDisconnectRunner = serverOwnedDisconnectRuntime as unknown as {
+    runPromptTurn: (targetContext: typeof serverOwnedDisconnectContext, targetTurnId: string, prompt: string) => Promise<void>
+}
+await serverOwnedDisconnectRunner.runPromptTurn(serverOwnedDisconnectContext, serverOwnedTurnId, 'keep working')
+assert.equal(serverOwnedDisconnectEvents.some((event) => event.type === 'turn.completed'), false, 'Desktop socket loss cannot falsely complete a server-owned turn')
+assert.equal(serverOwnedDisconnectEvents.some((event) => event.type === 'session.state.changed'), false, 'transient Desktop detachment cannot overwrite canonical running state')
+assert.equal(serverOwnedDisconnectContext.activeTurnId, serverOwnedTurnId)
+assert.equal(serverOwnedDisconnectContext.completedTurnIds.has(serverOwnedTurnId), false, 'the later canonical completion must remain eligible')
+
 const transportRecoveryIssue = getAssistantRecoveryIssue({ threadLastError: 'fetch failed' })
 assert.equal(transportRecoveryIssue?.key, 'connection-lost')
 assert.equal(transportRecoveryIssue?.recoverable, true)

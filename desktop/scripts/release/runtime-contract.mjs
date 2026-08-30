@@ -2,13 +2,28 @@ import { createHash } from 'node:crypto'
 import { readFile, readdir, lstat } from 'node:fs/promises'
 import path from 'node:path'
 
-export const RUNTIME_SOURCE_DIRECTORIES = Object.freeze(['src', 'prompts', 'agents', 'workflows', 'bin'])
+export const RUNTIME_SOURCE_DIRECTORIES = Object.freeze(['src', 'analytics', 'prompts', 'agents', 'workflows', 'bin'])
 export const RUNTIME_OPTIONAL_DIRECTORIES = Object.freeze(['commands', 'themes'])
-export const RUNTIME_METADATA_FILES = Object.freeze(['package.json', 'package-lock.json', 'LICENSE'])
+export const NODE_RELEASE_RUNTIME_VERSION = '22.22.0'
+export const RUNTIME_METADATA_FILES = Object.freeze([
+    'package.json',
+    'package-lock.json',
+    'LICENSE',
+    'NOTICE',
+    'THIRD_PARTY_NOTICES.md',
+    'THIRD_PARTY_LICENSES.txt'
+])
 export const RUNTIME_MANIFEST_FILE = 'zyra-runtime-manifest.json'
 
 const REQUIRED_RUNTIME_FILES = Object.freeze([
     'LICENSE',
+    'NOTICE',
+    'THIRD_PARTY_NOTICES.md',
+    'THIRD_PARTY_LICENSES.txt',
+    'analytics/events.v1.json',
+    'src/analytics/client.mjs',
+    'src/analytics/contracts.mjs',
+    'src/analytics/cli.mjs',
     'src/zyra-sdk.mjs',
     'src/zyra-ui-bridge.mjs',
     'src/agent-server/main.mjs',

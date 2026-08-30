@@ -419,7 +419,7 @@ export const AssistantTimelineCheckpointRail = memo(function AssistantTimelineCh
     const railNode = (
         <div
             data-assistant-checkpoint-rail="true"
-            className="pointer-events-none absolute z-30 block w-[72px]"
+            className="pointer-events-none absolute z-30 block w-[72px] opacity-0 transition-opacity duration-150 hover:opacity-100 focus-within:opacity-100 motion-reduce:transition-none"
             style={{ left: railGeometry.left, top: railGeometry.top, height: railGeometry.height }}
         >
             <button

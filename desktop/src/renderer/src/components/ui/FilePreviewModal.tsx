@@ -22,6 +22,12 @@ import { useFilePreviewEditSession } from './file-preview/useFilePreviewEditSess
 import { useFilePreviewPython } from './file-preview/useFilePreviewPython'
 import { useFilePreviewTerminal } from './file-preview/useFilePreviewTerminal'
 import { usePreviewSiblingMediaItems } from './file-preview/usePreviewSiblingMediaItems'
+import { readFilePreviewPanelPreferences, writeFilePreviewPanelPreferences } from './file-preview/filePreviewPanelPreferences'
+import { resolveFilePreviewChromePolicy } from './file-preview/filePreviewChromePolicy'
+import {
+    FILE_PREVIEW_TOGGLE_NAVIGATOR_EVENT,
+    publishFilePreviewFocusState
+} from './file-preview/filePreviewFocusMode'
 
 export function FilePreviewModal({
     file,
@@ -35,18 +41,24 @@ export function FilePreviewModal({
     modifiedAt,
     projectPath,
     shellMode = 'modal',
-    disableFullscreen = false,
+    active = true,
+    chromeContext,
+    publishNavigatorToAppTitleBar = false,
+    initialPresentation,
+    onViewStateChange,
     onOpenLinkedPreview,
     onOpenLinkedPreviewInNewTab,
     onSelectPreviewTab,
     onClosePreviewTab,
     onReorderPreviewTabs,
     mediaItems = [],
+    navigationSidebar,
     onSaved,
     onShowToast,
     onClose
 }: FilePreviewModalProps) {
     const { settings, updateSettings } = useSettings()
+    const chromePolicy = resolveFilePreviewChromePolicy(chromeContext)
     const isDirectory = file.type === 'directory'
     const isCsv = file.type === 'csv'
     const isHtml = file.type === 'html'
@@ -55,10 +67,21 @@ export function FilePreviewModal({
     const defaultMode: 'preview' | 'edit' = !previewModeEnabled && canEdit
         ? 'edit'
         : canEdit ? settings.filePreviewDefaultMode : 'preview'
-    const initialMode: 'preview' | 'edit' = (file.startInEditMode && canEdit) || (!previewModeEnabled && canEdit) ? 'edit' : defaultMode
-    const defaultStartExpanded = disableFullscreen ? false : settings.filePreviewOpenInFullscreen
+    const requestedInitialMode = initialPresentation?.mode
+    const initialMode: 'preview' | 'edit' = requestedInitialMode === 'edit' && canEdit
+        ? 'edit'
+        : requestedInitialMode === 'preview' && previewModeEnabled
+            ? 'preview'
+            : (file.startInEditMode && canEdit) || (!previewModeEnabled && canEdit) ? 'edit' : defaultMode
+    const defaultStartExpanded = chromePolicy.allowFullscreen
+        ? initialPresentation?.expanded ?? settings.filePreviewOpenInFullscreen
+        : false
     const navigatorRequested = file.openNavigator === true || isDirectory
-    const [windowedNavigatorEnabled, setWindowedNavigatorEnabled] = useState(navigatorRequested)
+    const hasNavigationSidebarOverride = navigationSidebar != null
+    const navigatorInitiallyAvailable = hasNavigationSidebarOverride
+        || chromePolicy.navigator === 'always'
+        || (chromePolicy.navigator === 'requested' && navigatorRequested)
+    const [windowedNavigatorEnabled, setWindowedNavigatorEnabled] = useState(navigatorInitiallyAvailable)
     const [handledNavigatorRevealRequests, setHandledNavigatorRevealRequests] = useState<ReadonlySet<string>>(() => new Set())
     const navigatorRevealRequestId = file.navigatorRevealRequestId
         && !handledNavigatorRevealRequests.has(file.navigatorRevealRequestId)
@@ -76,8 +99,9 @@ export function FilePreviewModal({
             return nextRequests
         })
     }, [])
-    const defaultLeftPanelOpen = navigatorRequested || settings.filePreviewFullscreenShowLeftPanel
-    const defaultRightPanelOpen = settings.filePreviewFullscreenShowRightPanel
+    const defaultLeftPanelOpen = navigatorInitiallyAvailable
+        && (hasNavigationSidebarOverride || navigatorRequested || settings.filePreviewFullscreenShowLeftPanel)
+    const defaultRightPanelOpen = initialMode === 'edit' && settings.filePreviewFullscreenShowRightPanel
     const canRunPython = file.type === 'code'
         && (file.language === 'python' || /\.py$/i.test(file.name) || /\.py$/i.test(file.path))
     const canUsePreviewTerminal = Boolean(projectPath || file.path)
@@ -96,6 +120,10 @@ export function FilePreviewModal({
         projectPath,
         mediaItems
     })
+    const panelPreferences = useMemo(readFilePreviewPanelPreferences, [])
+    const handlePanelWidthCommit = useCallback((side: 'left' | 'right', width: number) => {
+        writeFilePreviewPanelPreferences(side === 'left' ? { leftWidth: width } : { rightWidth: width })
+    }, [])
     const terminalInitialHeight = Math.max(
         PREVIEW_TERMINAL_MIN_HEIGHT,
         Math.min(720, Math.round(settings.filePreviewTerminalPanelHeight || 220))
@@ -176,21 +204,50 @@ export function FilePreviewModal({
         defaultEditorWordWrap: settings.fileEditorWordWrap,
         defaultEditorMinimapEnabled: settings.fileEditorMinimapEnabled,
         defaultEditorFontSize: settings.fileEditorFontSize,
+        initialLeftPanelWidth: panelPreferences.leftWidth,
+        initialRightPanelWidth: panelPreferences.rightWidth,
+        onPanelWidthCommit: handlePanelWidthCommit,
         initialFocusLine: file.focusLine ?? null,
-        initialFocusLineRequestId: file.focusLineRequestId ?? null
+        initialFocusLineRequestId: file.focusLineRequestId ?? null,
+        active
     })
-    const effectiveIsExpanded = disableFullscreen ? false : isExpanded
+    const effectiveIsExpanded = chromePolicy.allowFullscreen ? isExpanded : false
+    const ownsAppTitleBarNavigator = publishNavigatorToAppTitleBar && active && effectiveIsExpanded
 
     useEffect(() => {
-        if (!navigatorRequested) return
+        if (!ownsAppTitleBarNavigator) return
+        const handleToggleNavigator = () => setLeftPanelOpen((current) => !current)
+        window.addEventListener(FILE_PREVIEW_TOGGLE_NAVIGATOR_EVENT, handleToggleNavigator)
+        return () => {
+            window.removeEventListener(FILE_PREVIEW_TOGGLE_NAVIGATOR_EVENT, handleToggleNavigator)
+            publishFilePreviewFocusState({ active: false, leftPanelOpen: false })
+        }
+    }, [ownsAppTitleBarNavigator, setLeftPanelOpen])
+
+    useEffect(() => {
+        if (!ownsAppTitleBarNavigator) return
+        publishFilePreviewFocusState({ active: true, leftPanelOpen })
+    }, [leftPanelOpen, ownsAppTitleBarNavigator])
+
+    useEffect(() => {
+        if (hasNavigationSidebarOverride) {
+            setWindowedNavigatorEnabled(true)
+            setLeftPanelOpen(true)
+            return
+        }
+        if (chromePolicy.navigator === 'none') {
+            setWindowedNavigatorEnabled(false)
+            return
+        }
+        if (chromePolicy.navigator !== 'always' && !navigatorRequested) return
         setWindowedNavigatorEnabled(true)
-        setLeftPanelOpen(true)
-    }, [navigatorRequested, setLeftPanelOpen])
+        if (navigatorRequested) setLeftPanelOpen(true)
+    }, [chromePolicy.navigator, hasNavigationSidebarOverride, navigatorRequested, setLeftPanelOpen])
 
     useEffect(() => {
-        if (!disableFullscreen || !isExpanded) return
+        if (chromePolicy.allowFullscreen || !isExpanded) return
         setIsExpanded(false)
-    }, [disableFullscreen, isExpanded, setIsExpanded])
+    }, [chromePolicy.allowFullscreen, isExpanded, setIsExpanded])
 
     const {
         setTerminalVisible,
@@ -263,8 +320,6 @@ export function FilePreviewModal({
 
     const {
         folderTreeRefreshToken,
-        preserveSidebarContextRequest,
-        markPreserveSidebarContext,
         dndSensors,
         openMediaItem,
         handleInternalMarkdownLink,
@@ -303,17 +358,29 @@ export function FilePreviewModal({
         file,
         mediaItems: effectiveMediaItems,
         onNavigate: onOpenLinkedPreview,
-        onBeforeNavigate: markPreserveSidebarContext,
         requestExternalIntent
     })
 
     useEffect(() => {
+        if (!active || shellMode !== 'modal') return
         const originalOverflow = document.body.style.overflow
         document.body.style.overflow = 'hidden'
         return () => {
             document.body.style.overflow = originalOverflow
         }
-    }, [])
+    }, [active, shellMode])
+
+    useEffect(() => {
+        const fileName = String(file.name || '')
+        const dotIndex = fileName.lastIndexOf('.')
+        onViewStateChange?.({
+            name: fileName,
+            path: file.path,
+            extension: dotIndex > 0 && dotIndex < fileName.length - 1 ? fileName.slice(dotIndex + 1).toLowerCase() : '',
+            mode,
+            expanded: effectiveIsExpanded
+        })
+    }, [effectiveIsExpanded, file.name, file.path, mode, onViewStateChange])
 
     useEffect(() => {
         if (settings.filePreviewPythonRunMode === pythonRunMode) return
@@ -334,6 +401,7 @@ export function FilePreviewModal({
     }, [canEdit, ensureEditableContentLoaded, mode, previewModeEnabled, requestIntent, setMode])
 
     useEffect(() => {
+        if (!active) return
         const handleKeyDown = (event: KeyboardEvent) => {
             if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'e' && canEdit && previewModeEnabled) {
                 event.preventDefault()
@@ -353,7 +421,7 @@ export function FilePreviewModal({
 
         window.addEventListener('keydown', handleKeyDown)
         return () => window.removeEventListener('keydown', handleKeyDown)
-    }, [canEdit, handleCloseRequest, handleModeChange, handleSave, mode, previewModeEnabled])
+    }, [active, canEdit, handleCloseRequest, handleModeChange, handleSave, mode, previewModeEnabled])
 
 
     const {
@@ -365,8 +433,7 @@ export function FilePreviewModal({
         longLineCount,
         trailingWhitespaceCount,
         jsonDiagnostic,
-        isEditorToolsEnabled,
-        getEditorToolButtonClass
+        isEditorToolsEnabled
     } = useFilePreviewModalAnalysis({
         file,
         mode,
@@ -423,6 +490,7 @@ export function FilePreviewModal({
             previewBytes={previewBytes ?? undefined}
             projectPath={projectPath}
             mediaItems={effectiveMediaItems}
+            navigationSidebar={navigationSidebar}
             openMediaItem={openMediaItem}
             onInternalLinkClick={handleInternalMarkdownLink}
             onLinkNotice={onShowToast}
@@ -432,7 +500,10 @@ export function FilePreviewModal({
             onNavigateBack={navigateBack}
             onNavigateForward={navigateForward}
             isExpanded={effectiveIsExpanded}
-            allowExpanded={!disableFullscreen}
+            allowExpanded={chromePolicy.allowFullscreen}
+            showHistoryNavigation={chromePolicy.history === 'always' || (chromePolicy.history === 'available' && (canNavigateBack || canNavigateForward))}
+            showPreviewTabs={chromePolicy.showTabs}
+            showLeftPanelToggle={!ownsAppTitleBarNavigator}
             windowedNavigatorEnabled={windowedNavigatorEnabled}
             canEdit={canEdit}
             isDirty={isDirty}
@@ -499,7 +570,6 @@ export function FilePreviewModal({
             onOpenLinkedPreview={handleOpenLinkedPreview}
             onOpenLinkedPreviewInNewTab={handleOpenLinkedPreviewInNewTab}
             folderTreeRefreshToken={folderTreeRefreshToken}
-            preserveSidebarContextRequest={preserveSidebarContextRequest}
             navigatorRevealRequestId={navigatorRevealRequestId}
             onNavigatorRevealHandled={handleNavigatorRevealHandled}
             previewTabs={resolvedPreviewTabs}
@@ -512,7 +582,6 @@ export function FilePreviewModal({
             trailingWhitespaceCount={trailingWhitespaceCount}
             jsonDiagnostic={jsonDiagnostic}
             isEditorToolsEnabled={isEditorToolsEnabled}
-            getEditorToolButtonClass={getEditorToolButtonClass}
             pythonPanel={pythonOutputPanel}
             previewBottomOverlay={terminalPanel}
             previewBottomOverlayPadding={previewBottomOverlayPadding}
@@ -546,6 +615,8 @@ export function FilePreviewModal({
             </DragOverlay>
         </DndContext>
     )
+
+    if (!active) return null
 
     if (shellMode === 'window' || typeof document === 'undefined') {
         return (

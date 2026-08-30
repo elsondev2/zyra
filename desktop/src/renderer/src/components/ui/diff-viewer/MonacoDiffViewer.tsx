@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { editor as MonacoEditor } from 'monaco-editor'
 import { getAppearanceCodeFontStack, useSettings } from '@/lib/settings'
 import { monaco } from '@/lib/monaco/runtime'
+import { buildZyraMonacoWidgetColors } from '@/lib/monaco/zyra-widget-theme'
 import { useThemeRevision } from '@/lib/use-theme-revision'
 
 const MONACO_DIFF_THEME_ID = 'devscope-diff'
@@ -69,7 +70,16 @@ function applyMonacoDiffTheme(appearance: 'light' | 'dark') {
             'diffEditorGutter.insertedLineBackground': `${inserted}${isLightTheme ? '25' : '15'}`,
             'diffEditorGutter.removedLineBackground': `${removed}${isLightTheme ? '25' : '15'}`,
             'diffEditorOverview.insertedForeground': inserted,
-            'diffEditorOverview.removedForeground': removed
+            'diffEditorOverview.removedForeground': removed,
+            ...buildZyraMonacoWidgetColors({
+                isLightTheme,
+                text,
+                textSecondary,
+                card,
+                background: bg,
+                border,
+                accent
+            })
         }
     }
 

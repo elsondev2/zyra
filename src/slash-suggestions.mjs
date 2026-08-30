@@ -1,4 +1,4 @@
-import { getZyraAvailableModels, getZyraAvailableThinkingLevels, getZyraThinkingLevel, listCustomCommands, listZyraProfiles, listZyraThemes } from "./zyra-sdk.mjs";
+import { getZyraAvailableModels, getZyraAvailableThinkingLevels, getZyraThinkingLevel, listCustomCommands, listZyraProfiles, listZyraSkills, listZyraThemes } from "./zyra-sdk.mjs";
 import { applyFileMentionSuggestion, getFileMentionSuggestions } from "./file-mentions.mjs";
 import { getModelCompatibilityLabel } from "./model-compatibility.mjs";
 import { CODEX_MODES, getSlashCommand, INTERRUPT_MODES, listSlashCommandSuggestions, NOTIFICATION_MODES, STATUS_LINE_MODES } from "./slash-commands.mjs";
@@ -195,7 +195,14 @@ export function getSlashSuggestions(runtime, text) {
       kind: "command",
       submitOnEnter: false,
     }));
-  return [...listSlashCommandSuggestions(prefix), ...customCommands]
+  const skills = listZyraSkills(runtime).map((skill) => ({
+    value: `/skill:${skill.name}`,
+    label: `/skill:${skill.name}`,
+    description: skill.description,
+    kind: "skill",
+    submitOnEnter: false,
+  }));
+  return [...listSlashCommandSuggestions(prefix), ...customCommands, ...skills]
     .filter((item) => item.label.slice(1).startsWith(prefix));
 }
 
@@ -217,6 +224,8 @@ export function applySlashSuggestion(text, item) {
   if (item.kind === "command") {
     return item.submitOnEnter ? item.value : `${item.value} `;
   }
+
+  if (item.kind === "skill") return `${item.value} `;
 
   if (item.kind === "custom-model") {
     return "/models ";

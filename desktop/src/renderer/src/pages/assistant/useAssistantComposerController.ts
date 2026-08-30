@@ -58,6 +58,7 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         resetStateToken = null,
         placement = 'bottom',
         onSend,
+        onDraftStarted,
         onStop,
         onReconnect,
         onOverflowWheel,
@@ -179,6 +180,7 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
     const latestTextRef = useRef(text)
     const latestInlineMentionTagsRef = useRef(inlineMentionTags)
     const latestContextFilesRef = useRef(contextFiles)
+    const warmedDraftKeyRef = useRef<string | null>(null)
 
     const [selectedModel, setSelectedModel] = useState(normalizeComposerDefaultModel(initialComposerSessionState.model || resolvedModel))
     const [selectedRuntimeMode, setSelectedRuntimeMode] = useState<AssistantRuntimeMode>(initialComposerSessionState.runtimeMode || baseRuntimeMode)
@@ -254,6 +256,17 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
     latestTextRef.current = text
     latestInlineMentionTagsRef.current = inlineMentionTags
     latestContextFilesRef.current = contextFiles
+    const draftWarmKey = normalizedSessionId ? `${normalizedSessionId}:${resetStateToken || ''}` : null
+
+    useEffect(() => {
+        if (!text.trim()) {
+            warmedDraftKeyRef.current = null
+            return
+        }
+        if (!draftWarmKey || warmedDraftKeyRef.current === draftWarmKey) return
+        warmedDraftKeyRef.current = draftWarmKey
+        onDraftStarted?.()
+    }, [draftWarmKey, onDraftStarted, text])
 
     useEffect(() => {
         if (!acceptBrowserAnnotations || !normalizedSessionId) return
@@ -513,6 +526,7 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
     }, [textareaRef])
 
     return buildAssistantComposerControllerResult({
+        loadedSessionId,
         disabled,
         allowEmptySubmit,
         placement,
@@ -599,6 +613,7 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         selectedModel,
         setSelectedModel,
         selectedModelLabel,
+        selectedModelContextWindow: availableModelOptions.find((model) => model.id === selectedModel)?.contextWindow ?? null,
         latestModelId,
         filteredModelOptions,
         setActiveModelIndex,
@@ -623,6 +638,7 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         activeMentionCandidate,
         syncScrollAffordance,
         syncComposerCursor,
+        composerCursor,
         setComposerCursor,
         modelQuery,
         setModelQuery,

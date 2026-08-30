@@ -11,10 +11,13 @@ const workerClient = readFileSync(resolve(desktopRoot, 'src/main/setup/openai-au
 const narrowAuth = readFileSync(resolve(desktopRoot, '../src/desktop-openai-auth.mjs'), 'utf8')
 const authWorker = readFileSync(resolve(desktopRoot, '../src/desktop-openai-auth-worker.mjs'), 'utf8')
 const browser = readFileSync(resolve(desktopRoot, 'src/renderer/src/lib/browser-devscope-adapter.ts'), 'utf8')
+const settings = readFileSync(resolve(desktopRoot, 'src/renderer/src/lib/settings.tsx'), 'utf8')
 
 assert.match(account, /connectChatGpt/)
 assert.match(account, /connectApiKey/)
 assert.match(account, /switchDefaultConnection/)
+assert.match(account, /await updateSettings\(\{ assistantDefaultModel: target\.id \}\)/, 'connection switching waits for main-owned preference persistence before another account mutation')
+assert.match(settings, /updateSettings: \(partial: Partial<Settings>\) => Promise<void>/, 'callers can await main-owned settings writes')
 assert.match(account, /disconnectOpenAI\(\{ method: disconnectMethod, confirmed: true \}\)/)
 assert.match(account, /Use for new chats/)
 assert.match(account, /Existing chats keep their canonical model and connection/)
@@ -28,15 +31,31 @@ assert.doesNotMatch(service, /src\/zyra-sdk\.mjs/, 'Desktop connection checks mu
 assert.match(service, /includeUsage: false, refreshCredential: false/, 'onboarding checks must avoid the account-usage network path')
 assert.match(workerClient, /node:worker_threads/)
 assert.match(workerClient, /OpenAIAuthWorkerClient/)
+assert.match(workerClient, /getSharedOpenAIAuthWorkerClient/, 'account and Voice paths must share one unrefed auth worker')
 assert.match(authWorker, /buildChatGptAccountStatus/)
-assert.match(narrowAuth, /core\/auth-storage\.js/)
+assert.match(authWorker, /case "resolveChatGptAccountAuth"[\s\S]{0,100}resolveChatGptAccountAuth\(\)/, 'Voice credential resolution must stay in the auth worker')
+assert.match(narrowAuth, /createZyraAuthStorage/, 'Desktop auth uses Zyraâ€™s supported Pi ModelRuntime boundary')
 assert.doesNotMatch(narrowAuth, /zyra-sdk/, 'narrow Desktop auth must stay independent from the full runtime')
 assert.match(handlers, /ONBOARDING_IPC\.disconnectOpenAI/)
 assert.match(handlers, /input\?\.confirmed !== true/)
 assert.match(handlers, /CONFIRMATION_REQUIRED/)
 assert.match(browser, /disconnectOpenAI: \(\) => unavailable\('OpenAI account changes require Zyra Desktop\.'/)
 
-const { loginZyraAuth } = await import(pathToFileURL(resolve(desktopRoot, '../src/desktop-openai-auth.mjs')).href)
+const { configureZyraOpenAIApiKey, loginZyraAuth } = await import(pathToFileURL(resolve(desktopRoot, '../src/desktop-openai-auth.mjs')).href)
+const configuredApiProviders: Array<{ provider: string; credential: unknown }> = []
+const apiVerification = await configureZyraOpenAIApiKey('test-openai-key', {
+    authStorage: {
+        set(provider: string, credential: unknown) { configuredApiProviders.push({ provider, credential }) }
+    },
+    fetch: async () => ({
+        ok: true,
+        status: 200,
+        body: { cancel: async () => undefined }
+    })
+})
+assert.equal(apiVerification.model, 'openai/gpt-5.6-luna', 'Desktop API-key verification returns the concrete model that onboarding can persist')
+assert.equal(configuredApiProviders[0]?.provider, 'openai')
+
 let oauthCallbackContractChecked = false
 await loginZyraAuth('openai-codex', {
     authStorage: {

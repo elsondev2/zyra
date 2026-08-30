@@ -18,6 +18,10 @@ import type {
     ProjectGitOverview
 } from './types'
 
+const PROJECT_GIT_OVERVIEW_CACHE_TTL_MS = 2_000
+const PROJECT_GIT_OVERVIEW_CACHE_LIMIT = 128
+const projectGitOverviewCache = new Map<string, { expiresAt: number; promise: Promise<ProjectGitOverview> }>()
+
 export interface GitStatusDetailedOptions {
     includeStats?: boolean
 }
@@ -356,7 +360,7 @@ export async function checkIsGitRepo(projectPath: string): Promise<boolean> {
     }
 }
 
-export async function getProjectGitOverview(projectPath: string): Promise<ProjectGitOverview> {
+async function readProjectGitOverview(projectPath: string): Promise<ProjectGitOverview> {
     try {
         const git = createGit(projectPath)
         const isGitRepo = await git.checkIsRepo()
@@ -394,6 +398,29 @@ export async function getProjectGitOverview(projectPath: string): Promise<Projec
             error: toErrorMessage(err, 'Failed to inspect repository')
         }
     }
+}
+
+export async function getProjectGitOverview(projectPath: string): Promise<ProjectGitOverview> {
+    const normalizedPath = normalizeGitPath(projectPath)
+    const cacheKey = process.platform === 'win32' ? normalizedPath.toLowerCase() : normalizedPath
+    const now = Date.now()
+    const cached = projectGitOverviewCache.get(cacheKey)
+    if (cached && cached.expiresAt > now) {
+        projectGitOverviewCache.delete(cacheKey)
+        projectGitOverviewCache.set(cacheKey, cached)
+        return cached.promise
+    }
+    const entry = {
+        expiresAt: now + PROJECT_GIT_OVERVIEW_CACHE_TTL_MS,
+        promise: readProjectGitOverview(projectPath)
+    }
+    projectGitOverviewCache.set(cacheKey, entry)
+    while (projectGitOverviewCache.size > PROJECT_GIT_OVERVIEW_CACHE_LIMIT) {
+        const oldestKey = projectGitOverviewCache.keys().next().value
+        if (typeof oldestKey !== 'string') break
+        projectGitOverviewCache.delete(oldestKey)
+    }
+    return entry.promise
 }
 
 export async function getProjectsGitOverview(

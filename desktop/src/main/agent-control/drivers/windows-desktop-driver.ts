@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'child_process'
+import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import { randomBytes, randomUUID } from 'crypto'
 import { existsSync } from 'fs'
 import { createConnection, type Socket } from 'net'
@@ -224,8 +224,14 @@ export class WindowsDesktopDriver implements AgentControlDriver {
         this.receiveBuffer = ''
         socket?.destroy()
         if (terminate && child && child.exitCode === null) {
-            if (process.platform === 'win32') spawnSync('taskkill.exe', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true })
-            else child.kill()
+            if (process.platform === 'win32') {
+                const terminator = spawn('taskkill.exe', ['/pid', String(child.pid), '/T', '/F'], {
+                    windowsHide: true,
+                    stdio: 'ignore'
+                })
+                terminator.once('error', () => child.kill())
+                terminator.unref()
+            } else child.kill()
         }
         for (const pending of this.pending.values()) {
             clearTimeout(pending.timer)

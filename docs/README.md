@@ -15,6 +15,8 @@ Status words used below:
 - [Subagents and workflows](guides/subagents-workflows.md) — **Current.** User/developer guide for fleet and workflow behavior.
 - [Model support](guides/model-support.md) — **Current.** Supported providers/models and deferred compatibility work.
 - [Agent-control security and operations](security/agent-control.md) — **Current.** Authority, approval, transport, and incident boundaries.
+- [Product analytics setup](guides/product-analytics-setup.md) — **Current.** Opt-in PostHog credentials, endpoint validation, and local status.
+- [Product analytics security and privacy](security/product-analytics.md) — **Current.** Data prohibition, process boundaries, and incident response.
 - [Parallel agent build runbook](runbooks/parallel-agent-build.md) — **Current.** Procedure still consumed by the autonomous coordinator scripts.
 - [Desktop performance budget](performance/desktop-resource-budget.md) — **Current.** Reproducible startup, chat latency, CPU, memory, and profile-growth budgets with the latest measured baseline.
 
@@ -28,6 +30,7 @@ Status words used below:
 - [Assistant resources](architecture/assistant-resources.md) — **Current.** Resource indexing and presentation ownership.
 - [Desktop theme contract](architecture/desktop-theme-contract.md) — **Current.** Shared shell surfaces, accessible palette resolution, specialized renderers, and validation.
 - [Desktop onboarding and device preferences](architecture/desktop-onboarding-and-device-preferences.md) — **Current.** Mandatory setup gate, checkpoint recovery, preference ownership, migration, and per-chat web defaults.
+- [Product analytics](architecture/product-analytics.md) — **Current.** Main-owned transport, shared event catalog, privacy contract, and validation.
 - [Voice-agent architecture](architecture/voice-agent/README.md) — **Draft specification.** Product Phase One defines direct strong-agent Chat, optional realtime Voice, exclusive foreground routing, deterministic task control, selective speech, and resumable continuity. Optional Product Phase Two adds a relationship-first Zyra Home, scoped work threads, hybrid Inbox, and voice-led focus visits while retaining Phase One. A linked Betum-informed research note explores evidence-owned adaptive coaching beyond these committed phases.
 
 ## Architecture decisions

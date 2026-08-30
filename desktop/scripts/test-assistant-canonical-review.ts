@@ -218,7 +218,112 @@ ZyraPiRuntime.prototype.readCanonicalHistoryEntryBody = async (_session, _projec
     }
 }
 
-const { AssistantService, projectCanonicalTimeline } = await import('../src/main/assistant/service')
+const { AssistantService, projectCanonicalTimeline, reconcileCanonicalFileChangeActivity } = await import('../src/main/assistant/service')
+const reconciledCanonicalActivity = reconcileCanonicalFileChangeActivity({
+    id: 'zyra-tool-review-edit-call',
+    kind: 'file-change',
+    tone: 'tool',
+    summary: 'Edited file',
+    detail: 'C:/fixture/src/review-index.ts',
+    turnId: 'turn:review',
+    createdAt: '2026-08-04T08:00:01.000Z',
+    payload: {
+        provider: 'pi',
+        source: 'provider-result',
+        status: 'completed',
+        authoritative: true,
+        patch,
+        paths: ['C:/fixture/src/review-index.ts']
+    }
+}, {
+    id: 'zyra-tool-review-edit-call',
+    kind: 'file-change',
+    tone: 'tool',
+    summary: 'Edited file',
+    detail: 'C:/fixture/src/review-index.ts',
+    turnId: 'turn:review',
+    createdAt: '2026-08-04T08:00:01.000Z',
+    payload: {
+        provider: 'pi',
+        source: 'args-preview',
+        status: 'completed',
+        authoritative: false,
+        historyBodyRef: (firstTurn[2] as any).historyBodyRef,
+        paths: ['C:/fixture/src/review-index.ts']
+    }
+})
+assert.equal(reconciledCanonicalActivity.payload?.patch, patch, 'canonical text-only replay cannot erase an authoritative live patch')
+assert.equal(reconciledCanonicalActivity.payload?.source, 'provider-result')
+assert.deepEqual(reconciledCanonicalActivity.payload?.historyBodyRef, (firstTurn[2] as any).historyBodyRef, 'canonical lazy-body metadata still joins the authoritative activity')
+const internalTitleProjection = projectCanonicalTimeline([
+    {
+        type: 'message',
+        id: 'entry:title-utility-prompt',
+        timestamp: '2026-08-04T07:59:00.000Z',
+        message: {
+            id: 'message:title-utility-prompt',
+            role: 'user',
+            timestamp: 1_785_830_340_000,
+            content: [{
+                type: 'text',
+                text: [
+                    'You write concise titles for coding assistant chat sessions.',
+                    'Return only the title text. Do not use quotes, markdown, JSON, or commentary.',
+                    '',
+                    'User request to title:',
+                    'Keep this visible turn'
+                ].join('\n')
+            }]
+        }
+    },
+    {
+        type: 'message',
+        id: 'entry:title-utility-response',
+        timestamp: '2026-08-04T07:59:01.000Z',
+        message: {
+            id: 'message:title-utility-response',
+            role: 'assistant',
+            timestamp: 1_785_830_341_000,
+            content: [
+                { type: 'thinking', thinking: 'Select the shortest useful title.' },
+                { type: 'text', text: 'Visible Turn' }
+            ]
+        }
+    },
+    {
+        type: 'message',
+        id: 'entry:real-prompt',
+        timestamp: '2026-08-04T08:00:00.000Z',
+        message: {
+            id: 'message:real-prompt',
+            role: 'user',
+            timestamp: 1_785_830_400_000,
+            content: [{ type: 'text', text: 'Keep this visible turn' }]
+        }
+    },
+    {
+        type: 'message',
+        id: 'entry:real-response',
+        timestamp: '2026-08-04T08:00:01.000Z',
+        message: {
+            id: 'message:real-response',
+            role: 'assistant',
+            timestamp: 1_785_830_401_000,
+            content: [{ type: 'text', text: 'Visible response' }]
+        }
+    }
+], canonicalChatId, 'internal-title', canonicalCreatedAt, 0, 'C:/fixture')
+assert.deepEqual(
+    internalTitleProjection.messages.map((message) => message.text),
+    ['Keep this visible turn', 'Visible response'],
+    'canonical Review projection must omit title-utility prompts and their generated title response'
+)
+assert.equal(
+    internalTitleProjection.activities.some((activity) => activity.kind === 'reasoning'),
+    false,
+    'title-utility reasoning must stay out of the visible Review timeline'
+)
+
 const service = new AssistantService()
 try {
     const snapshot = await service.getSnapshot()
@@ -325,19 +430,22 @@ try {
         removedActivityIds: [deferredActivity!.id, deferredEditActivity.id]
     })
 
+    const session = snapshot.sessions.find((candidate) => candidate.threads.some((entry) => entry.id === thread.id))!
+    await (service as any).ensureCanonicalReviewHistoryIndexed(session, thread)
     const firstReview = await service.getReviewIndex(thread.id)
     assert.equal(firstReview.index.totalTurns, 1)
     assert.equal(firstReview.index.turns[0]?.prompt?.text, 'Review this file')
     assert.equal(firstReview.index.turns[0]?.response?.text, 'Review complete')
     assert.equal(firstReview.index.turns[0]?.changes.length, 1)
     assert.equal(firstReview.index.turns[0]?.changes[0]?.filePath.replace(/\\/g, '/').endsWith('/src/review-index.ts'), true)
-    assert.equal(firstReview.index.turns[0]?.changes[0]?.additions, 0)
-    assert.equal(firstReview.index.turns[0]?.changes[0]?.deletions, 0)
+    assert.equal(firstReview.index.turns[0]?.changes[0]?.additions, 1)
+    assert.equal(firstReview.index.turns[0]?.changes[0]?.deletions, 1)
     assert.equal(historyBodyReads, 2, 'opening the Review index keeps every deferred historical body lazy')
-    assert.deepEqual(historyRequests.map((request) => request.before), [null, '2'], 'Review must read every canonical page on first open')
+    assert.deepEqual(historyRequests.map((request) => request.before), [null, '2'], 'the explicit canonical indexer can still backfill every page')
     const indexedEditActivity = await (service as any).persistence.readActivity(thread.id, 'zyra-tool-review-edit-call')
     assert.equal(indexedEditActivity?.turnId, firstReview.index.turns[0]!.id)
-    assert.equal(indexedEditActivity?.payload?.patch, undefined, 'Review indexing persists metadata without hydrating the patch')
+    assert.equal(indexedEditActivity?.payload?.patch, undefined, 'Review indexing keeps the exact provider patch lazy')
+    assert.match(String(indexedEditActivity?.payload?.previewPatch || ''), /-old review[\s\S]*\+new review/, 'structured edit arguments keep Review useful before exact patch hydration')
     const directMergedSearch = await (service as any).persistence.mergeSearchTurnIds(thread.id, [], ['zyra-tool-review-edit-call'])
     assert.deepEqual(directMergedSearch.turnIds, [firstReview.index.turns[0]!.id])
     const deferredOutputSearch = await service.searchTurns(thread.id, 'provider-only-output')
@@ -357,7 +465,7 @@ try {
     assert.equal(hydratedReviewIndex.turns[0]?.changes[0]?.deletions, 1)
 
     await service.getReviewIndex(thread.id)
-    assert.equal(historyRequests.length, 3, 'an unchanged Review refresh checks only the latest canonical page')
+    assert.equal(historyRequests.length, 2, 'opening or refreshing Review reads the persisted ledger without touching canonical history')
 
     const runtime = (service as any).runtime
     runtime.emit('catalog.changed', { canonicalChatId, presence: true })
@@ -365,11 +473,12 @@ try {
     runtime.emit('catalog.changed', { canonicalChatId })
     assert.equal((service as any).canonicalReviewHistoryState.size, 0, 'cross-surface transcript changes invalidate Review/search history state')
     timelineVersion = 1
+    await (service as any).ensureCanonicalReviewHistoryIndexed(session, thread)
     const updatedReview = await service.getReviewIndex(thread.id)
     assert.equal(updatedReview.index.totalTurns, 2)
     assert.equal(updatedReview.index.turns[0]?.prompt?.text, 'Review the follow-up')
     assert.equal(updatedReview.index.turns[1]?.changes.length, 1, 'incremental canonical refresh retains older indexed changes')
-    assert.equal(historyRequests.length, 4, 'a later TUI turn is indexed from the latest page without rereading older pages')
+    assert.equal(historyRequests.length, 3, 'the explicit indexer adds a later TUI turn from the latest page without rereading older pages')
 } finally {
     await service.dispose()
     rmSync(userDataPath, { recursive: true, force: true })

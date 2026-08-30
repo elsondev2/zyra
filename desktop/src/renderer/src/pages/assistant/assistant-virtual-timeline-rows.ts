@@ -25,6 +25,7 @@ function areRowsEquivalent(left: TimelineDisplayRow, right: TimelineDisplayRow):
             && left.startedAt === right.startedAt
             && left.completedAt === right.completedAt
             && left.running === right.running
+            && left.terminalResponseVisible === right.terminalResponseVisible
             && left.outcome === right.outcome
             && ((!left.liveNarrationRow && !right.liveNarrationRow) || Boolean(left.liveNarrationRow && right.liveNarrationRow && areRowsEquivalent(left.liveNarrationRow, right.liveNarrationRow)))
             && sameRowsEquivalent(left.rows, right.rows)

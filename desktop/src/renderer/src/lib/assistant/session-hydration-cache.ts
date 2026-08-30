@@ -1,7 +1,13 @@
-import type { AssistantSnapshot, AssistantThread } from '@shared/assistant/contracts'
+import type { AssistantActivity, AssistantMessage, AssistantProposedPlan, AssistantSnapshot, AssistantThread } from '@shared/assistant/contracts'
+import { compareAssistantTimelineOrderKeys, getAssistantTimelineOrderKey, type AssistantTimelineRecordKind } from '@shared/assistant/timeline-order'
 import { getAssistantThreadHydrationRevision } from './assistant-thread-hydration-revision'
 
 const HYDRATED_THREAD_CACHE_LIMIT = 12
+// This is the synchronous chat-switch preview, not the history retention limit.
+// Keep only a few recent turns here; older rows remain reachable through the
+// retained history cursor and normal upward pagination.
+export const HYDRATED_THREAD_CACHE_MAX_TIMELINE_RECORDS = 72
+export const HYDRATED_THREAD_CACHE_MAX_TIMELINE_CHARACTERS = 320_000
 
 export type CachedHydratedThreadState = Pick<
     AssistantThread,
@@ -10,6 +16,97 @@ export type CachedHydratedThreadState = Pick<
     sessionId: string
     threadId: string
     revision: string
+}
+
+type CachedTimelineRecord =
+    | { kind: 'message'; record: AssistantMessage }
+    | { kind: 'activity'; record: AssistantActivity }
+    | { kind: 'plan'; record: AssistantProposedPlan }
+
+function estimateUnknownCharacters(value: unknown, remaining: number, seen: Set<object>): number {
+    if (remaining <= 0 || value === null || value === undefined) return 0
+    if (typeof value === 'string') return Math.min(remaining, value.length)
+    if (typeof value !== 'object') return Math.min(remaining, String(value).length)
+    if (seen.has(value)) return 0
+    seen.add(value)
+    let total = 0
+    const entries = Array.isArray(value) ? value : Object.values(value as Record<string, unknown>)
+    for (const entry of entries) {
+        total += estimateUnknownCharacters(entry, remaining - total, seen)
+        if (total >= remaining) break
+    }
+    return total
+}
+
+function estimateTimelineRecordCharacters(entry: CachedTimelineRecord, remaining: number): number {
+    if (entry.kind === 'message') return Math.min(remaining, entry.record.text.length)
+    if (entry.kind === 'plan') return Math.min(remaining, entry.record.planMarkdown.length)
+    const activity = entry.record
+    const base = activity.summary.length + (activity.detail?.length || 0)
+    return Math.min(remaining, base + estimateUnknownCharacters(activity.payload, remaining - base, new Set()))
+}
+
+export function estimateAssistantTimelineCollectionsCharacters(input: {
+    messages: readonly AssistantMessage[]
+    activities: readonly AssistantActivity[]
+    proposedPlans: readonly AssistantProposedPlan[]
+}, limit = Number.POSITIVE_INFINITY): number {
+    let total = 0
+    for (const record of input.messages) {
+        total += Math.min(limit - total, record.text.length)
+        if (total >= limit) return total
+    }
+    for (const record of input.activities) {
+        const base = record.summary.length + (record.detail?.length || 0)
+        total += Math.min(limit - total, base + estimateUnknownCharacters(record.payload, limit - total - base, new Set()))
+        if (total >= limit) return total
+    }
+    for (const record of input.proposedPlans) {
+        total += Math.min(limit - total, record.planMarkdown.length)
+        if (total >= limit) return total
+    }
+    return total
+}
+
+export function boundCachedHydratedThreadState(state: CachedHydratedThreadState): CachedHydratedThreadState {
+    const records: CachedTimelineRecord[] = [
+        ...state.messages.map((record) => ({ kind: 'message' as const, record })),
+        ...state.activities.map((record) => ({ kind: 'activity' as const, record })),
+        ...state.proposedPlans.map((record) => ({ kind: 'plan' as const, record }))
+    ].sort((left, right) => compareAssistantTimelineOrderKeys(
+        getAssistantTimelineOrderKey(left.kind as AssistantTimelineRecordKind, left.record as never),
+        getAssistantTimelineOrderKey(right.kind as AssistantTimelineRecordKind, right.record as never)
+    ))
+    if (records.length <= HYDRATED_THREAD_CACHE_MAX_TIMELINE_RECORDS && estimateAssistantTimelineCollectionsCharacters(state, HYDRATED_THREAD_CACHE_MAX_TIMELINE_CHARACTERS + 1) <= HYDRATED_THREAD_CACHE_MAX_TIMELINE_CHARACTERS) {
+        return state
+    }
+
+    const selected = new Set<string>()
+    let characters = 0
+    for (let index = records.length - 1; index >= 0; index -= 1) {
+        const entry = records[index]!
+        const nextCharacters = estimateTimelineRecordCharacters(entry, HYDRATED_THREAD_CACHE_MAX_TIMELINE_CHARACTERS + 1)
+        if (
+            selected.size > 0
+            && (
+                selected.size >= HYDRATED_THREAD_CACHE_MAX_TIMELINE_RECORDS
+                || characters + nextCharacters > HYDRATED_THREAD_CACHE_MAX_TIMELINE_CHARACTERS
+            )
+        ) break
+        selected.add(`${entry.kind}:${entry.record.id}`)
+        characters += nextCharacters
+    }
+    const latestMessage = state.messages.at(-1)
+    if (latestMessage) selected.add(`message:${latestMessage.id}`)
+    const latestUserMessage = [...state.messages].reverse().find((message) => message.role === 'user')
+    if (latestUserMessage) selected.add(`message:${latestUserMessage.id}`)
+
+    return {
+        ...state,
+        messages: state.messages.filter((record) => selected.has(`message:${record.id}`)),
+        activities: state.activities.filter((record) => selected.has(`activity:${record.id}`)),
+        proposedPlans: state.proposedPlans.filter((record) => selected.has(`plan:${record.id}`))
+    }
 }
 
 function hasHydratedThreadState(thread: AssistantThread): boolean {
@@ -45,6 +142,14 @@ export function cacheHydratedThreads(
     for (const session of snapshot.sessions) {
         for (const thread of session.threads) {
             presentThreadIds.add(thread.id)
+            const remainsMaterialized = (
+                (session.id === snapshot.selectedSessionId && thread.id === session.activeThreadId)
+                || ['starting', 'running', 'waiting', 'background'].includes(thread.state)
+                || thread.hasActivePlan
+                || thread.hasPendingApprovals
+                || thread.hasPendingUserInputs
+            )
+            if (remainsMaterialized) continue
             if (!hasHydratedThreadState(thread)) {
                 const cached = cache.get(thread.id)
                 if (
@@ -61,7 +166,7 @@ export function cacheHydratedThreads(
                 continue
             }
 
-            const nextCachedState: CachedHydratedThreadState = {
+            const nextCachedState = boundCachedHydratedThreadState({
                 sessionId: session.id,
                 threadId: thread.id,
                 revision: getAssistantThreadHydrationRevision(thread),
@@ -71,7 +176,7 @@ export function cacheHydratedThreads(
                 activities: thread.activities,
                 pendingApprovals: thread.pendingApprovals,
                 pendingUserInputs: thread.pendingUserInputs
-            }
+            })
 
             const previousCachedState = cache.get(thread.id)
             if (areCachedThreadStatesReferentiallyEqual(previousCachedState, nextCachedState)) continue
@@ -113,11 +218,13 @@ export function applyCachedSessionSelection(
     const targetThreadId = threadId || session?.activeThreadId || null
     const targetThread = targetThreadId ? session?.threads.find((thread) => thread.id === targetThreadId) || null : null
     const candidate = targetThreadId ? cache.get(targetThreadId) : null
-    const cached = candidate
+    const resolvedCandidate = candidate ? boundCachedHydratedThreadState(candidate) : null
+    if (targetThreadId && candidate && resolvedCandidate && resolvedCandidate !== candidate) cache.set(targetThreadId, resolvedCandidate)
+    const cached = resolvedCandidate
         && targetThread
-        && candidate.sessionId === sessionId
-        && candidate.revision === getAssistantThreadHydrationRevision(targetThread)
-        ? candidate
+        && resolvedCandidate.sessionId === sessionId
+        && resolvedCandidate.revision === getAssistantThreadHydrationRevision(targetThread)
+        ? resolvedCandidate
         : null
     if (targetThreadId && candidate && !cached) cache.delete(targetThreadId)
     if (targetThreadId && cached) {

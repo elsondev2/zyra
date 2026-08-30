@@ -1,5 +1,7 @@
 import { memo } from 'react'
 import type { AssistantTurnUsage } from '@shared/assistant/contracts'
+import { resolveAssistantContextCompactionLimitTokens } from '@shared/assistant/runtime-policy'
+import { useSettings } from '@/lib/settings'
 import { cn } from '@/lib/utils'
 import { formatCompactMetric } from './AssistantPageHelpers'
 
@@ -37,45 +39,50 @@ function getContextTone(percent: number | null): {
 }
 
 export const AssistantComposerContextIndicator = memo(function AssistantComposerContextIndicator({
-    usage
+    usage,
+    modelContextWindow
 }: {
     usage?: AssistantTurnUsage | null
+    modelContextWindow?: number | null
 }) {
+    const { settings } = useSettings()
     const usedTokens = usage?.totalTokens ?? null
-    const contextWindowTokens = usage?.modelContextWindow ?? null
+    const contextWindowTokens = modelContextWindow ?? usage?.modelContextWindow ?? null
     const hasContextWindow = contextWindowTokens != null && Number.isFinite(contextWindowTokens) && contextWindowTokens > 0
-    const rawPercent = hasContextWindow && usedTokens != null && Number.isFinite(usedTokens)
-        ? (usedTokens / contextWindowTokens) * 100
+    const compactionLimitTokens = resolveAssistantContextCompactionLimitTokens(
+        contextWindowTokens,
+        settings.assistantContextCompactionThresholdTokens
+    )
+    const rawPercent = usedTokens != null && Number.isFinite(usedTokens)
+        ? (usedTokens / compactionLimitTokens) * 100
         : null
     const displayPercent = rawPercent != null ? Math.max(0, Math.min(100, Math.round(rawPercent))) : null
     const visualPercent = rawPercent != null ? Math.max(0, Math.min(100, rawPercent)) : 0
     const tone = getContextTone(displayPercent)
     const centerLabel = displayPercent != null ? `${displayPercent}` : '--'
-    const usageLabel = usedTokens != null && contextWindowTokens != null
-        ? `${formatCompactMetric(usedTokens)} / ${formatCompactMetric(contextWindowTokens)} tokens used`
-        : hasContextWindow
-            ? `Window size: ${formatCompactMetric(contextWindowTokens)} tokens`
-            : 'Usage reports after the first completed turn'
+    const usageLabel = usedTokens != null
+        ? `${formatCompactMetric(usedTokens)} / ${formatCompactMetric(compactionLimitTokens)} before compaction`
+        : `Compaction limit: ${formatCompactMetric(compactionLimitTokens)} tokens`
+    const windowLabel = hasContextWindow
+        ? `Model window ${formatCompactMetric(contextWindowTokens)}`
+        : 'Model window not reported'
 
     return (
-        <div className="group/context relative shrink-0">
+        <div className="group/context assistant-composer-footer-context relative w-[32px] shrink-0">
             <button
                 type="button"
-                className={cn(
-                    'inline-flex h-[30px] w-[30px] items-center justify-center rounded-full border border-transparent bg-white/[0.025] text-sparkle-text-secondary transition-colors hover:bg-white/[0.045] hover:text-sparkle-text focus:outline-none focus-visible:bg-white/[0.045]',
-                    tone.glowClass
-                )}
-                title={displayPercent != null ? `Context window ${displayPercent}% full` : 'Context window usage unavailable'}
-                aria-label={displayPercent != null ? `Context window ${displayPercent}% full` : 'Context window usage unavailable'}
+                className="inline-flex size-[32px] items-center justify-center rounded-full bg-transparent p-0 text-sparkle-text-secondary transition-[filter,transform] hover:brightness-110 focus:outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-white/25 active:scale-95"
+                title={displayPercent != null ? `Context before compaction ${displayPercent}% full` : 'Context usage unavailable'}
+                aria-label={displayPercent != null ? `Context before compaction ${displayPercent}% full` : 'Context usage unavailable'}
             >
                 <span
-                    className="relative flex h-[18px] w-[18px] items-center justify-center rounded-full"
+                    className={cn('relative flex size-[32px] items-center justify-center rounded-full', tone.glowClass)}
                     style={{
                         background: `conic-gradient(${tone.ringColor} 0deg ${visualPercent * 3.6}deg, color-mix(in srgb, var(--color-text) 9%, transparent) ${visualPercent * 3.6}deg 360deg)`
                     }}
                 >
-                    <span className="absolute inset-[2.5px] rounded-full bg-sparkle-card shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--color-text)_5%,transparent)]" />
-                    <span className={cn('relative z-10 text-[7px] font-semibold tabular-nums', tone.textClass)}>
+                    <span className="absolute inset-[4px] rounded-full bg-sparkle-card shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--color-text)_5%,transparent)]" />
+                    <span className={cn('relative z-10 text-[8px] font-semibold tabular-nums', tone.textClass)}>
                         {centerLabel}
                     </span>
                 </span>
@@ -90,7 +97,7 @@ export const AssistantComposerContextIndicator = memo(function AssistantComposer
                         <p className="text-[10px] font-medium leading-3.5 text-sparkle-text">{usageLabel}</p>
                     </div>
                     <p className="mt-1.5 text-[9px] font-medium leading-3.5 text-sparkle-text-secondary">
-                        Auto-compacts context
+                        {windowLabel} · auto-compacts at {formatCompactMetric(compactionLimitTokens)}
                     </p>
                 </div>
             </div>

@@ -9,11 +9,21 @@ import { clearProjectViewCaches } from './projectViewCache'
 import { clearRecentProjects } from './recentProjects'
 import { clearSettingsRuntimeCaches } from './settings-cache-registry'
 import type { AssistantReasoningEffort } from '@shared/assistant/contracts'
-import { DEFAULT_ASSISTANT_TITLE_MODEL } from '@shared/assistant/title-generation'
+import {
+    DEFAULT_ASSISTANT_AUTO_TITLE_TURNS,
+    DEFAULT_ASSISTANT_TITLE_MODEL,
+    normalizeAssistantAutoTitleTurnInterval
+} from '@shared/assistant/title-generation'
+import {
+    DEFAULT_ASSISTANT_CONTEXT_COMPACTION_THRESHOLD_TOKENS,
+    DEFAULT_ASSISTANT_REASONING_SUMMARY,
+    normalizeAssistantContextCompactionThresholdTokens,
+    normalizeAssistantReasoningSummaryMode,
+    type AssistantReasoningSummaryMode
+} from '@shared/assistant/runtime-policy'
 import {
     loadLegacyAssistantComposerDefaults,
     sanitizeAssistantDefaultEffort,
-    sanitizeAssistantDefaultInteractionMode,
     sanitizeAssistantDefaultRuntimeMode
 } from './settings-assistant-defaults'
 import {
@@ -37,6 +47,7 @@ import { getDevicePreferenceOwnership, type DevicePreferenceSurface, type Device
 import type { UpdateHostedAiSecretsInput } from '@shared/preferences/secrets-contracts'
 import { isElectronRendererRuntime } from './browser-file-url'
 import { setCanonicalAssistantAutoReconnectPreference } from './assistant/assistant-runtime-preferences'
+import { captureProductEvent } from './product-analytics'
 
 export {
     DARK_THEMES,
@@ -53,7 +64,6 @@ export {
 export {
     getAssistantBusyMessageModeLabel,
     getAssistantDefaultEffortLabel,
-    getAssistantDefaultInteractionModeLabel,
     getAssistantDefaultRuntimeModeLabel,
     getAssistantDefaultSpeedLabel,
     getAssistantDefaultsPreview
@@ -64,6 +74,9 @@ export type Shell = 'powershell' | 'cmd'
 export type CommitAIProvider = 'groq' | 'gemini' | 'codex'
 export type BrowserViewMode = 'grid' | 'finder'
 export type BrowserContentLayout = 'grouped' | 'explorer'
+export type AssistantBrowserBackgroundMode = 'off' | 'built-in' | 'unsplash'
+export type AssistantBrowserBackgroundCategory = 'all' | 'forest-paths' | 'mountain-highs' | 'ocean-moods' | 'desert-dreams' | 'water-in-motion' | 'wildflower-party' | 'animal-cameos' | 'ice-aurora' | 'earth-above'
+export type AssistantBrowserBackgroundRotation = 'every-tab' | 'fixed'
 export type GitBulkActionScope = 'project' | 'repo'
 export type FilePreviewDefaultMode = 'preview' | 'edit'
 export type FilePreviewPythonRunMode = 'terminal' | 'output'
@@ -78,8 +91,8 @@ export type AssistantUsageDisplayMode = 'remaining' | 'used'
 export type AssistantTextStreamingMode = 'stream' | 'chunks'
 export type AssistantToolOutputDefaultMode = 'expanded' | 'minimized'
 export type AssistantDefaultRuntimeMode = 'approval-required' | 'full-access'
-export type AssistantDefaultInteractionMode = 'default' | 'plan'
 export type AssistantDefaultEffort = AssistantReasoningEffort
+export type AssistantReasoningSummary = AssistantReasoningSummaryMode
 export type AssistantTranscriptionEngine = 'browser' | 'codex'
 export type AssistantBusyMessageMode = 'queue' | 'force'
 export type AssistantProductProfile = 'default' | 'builder'
@@ -223,6 +236,7 @@ export interface Settings {
     accentColor: AccentColor
     compactMode: boolean
     sidebarCollapsed: boolean
+    sidebarHoverPreviewEnabled: boolean
     assistantAgentInboxSidebarEnabled: boolean
     explorerTabEnabled: boolean
     explorerHomePath: string
@@ -248,6 +262,13 @@ export interface Settings {
     terminalCursorBlink: boolean
     terminalScrollback: number
     assistantBrowserRestoreTabs: boolean
+    assistantBrowserGoogleSuggestions: boolean
+    assistantBrowserAdBlockEnabled: boolean
+    assistantBrowserAdBlockPromptDismissed: boolean
+    assistantBrowserNewTabBackgroundMode: AssistantBrowserBackgroundMode
+    assistantBrowserNewTabBackgroundCategory: AssistantBrowserBackgroundCategory
+    assistantBrowserNewTabBackgroundRotation: AssistantBrowserBackgroundRotation
+    assistantBrowserNewTabBackgroundId: string
     projectsFolder: string
     additionalFolders: string[]
     gitAutoRefreshOnProjectOpen: boolean
@@ -275,12 +296,15 @@ export interface Settings {
     assistantToolOutputDefaultMode: AssistantToolOutputDefaultMode
     assistantDefaultModel: string
     assistantTitleModel: string
+    assistantTitleAutoRegenerate: boolean
+    assistantTitleAutoRegenerateTurns: number
     assistantDefaultPromptTemplate: string
     assistantProductProfile: AssistantProductProfile
     assistantDefaultRuntimeMode: AssistantDefaultRuntimeMode
-    assistantDefaultInteractionMode: AssistantDefaultInteractionMode
     assistantDefaultEffort: AssistantDefaultEffort
     assistantDefaultFastMode: boolean
+    assistantReasoningSummary: AssistantReasoningSummary
+    assistantContextCompactionThresholdTokens: number
     assistantDefaultWebSearch: boolean
     assistantDefaultWebFetch: boolean
     assistantBusyMessageMode: AssistantBusyMessageMode
@@ -308,6 +332,7 @@ const DEFAULT_SETTINGS: Settings = {
     accentColor: ACCENT_COLORS[0],
     compactMode: false,
     sidebarCollapsed: false,
+    sidebarHoverPreviewEnabled: true,
     assistantAgentInboxSidebarEnabled: false,
     explorerTabEnabled: false,
     explorerHomePath: '',
@@ -333,6 +358,13 @@ const DEFAULT_SETTINGS: Settings = {
     terminalCursorBlink: true,
     terminalScrollback: 5000,
     assistantBrowserRestoreTabs: true,
+    assistantBrowserGoogleSuggestions: true,
+    assistantBrowserAdBlockEnabled: false,
+    assistantBrowserAdBlockPromptDismissed: false,
+    assistantBrowserNewTabBackgroundMode: 'built-in',
+    assistantBrowserNewTabBackgroundCategory: 'all',
+    assistantBrowserNewTabBackgroundRotation: 'every-tab',
+    assistantBrowserNewTabBackgroundId: '',
     projectsFolder: '',
     additionalFolders: [],
     gitAutoRefreshOnProjectOpen: true,
@@ -364,12 +396,15 @@ const DEFAULT_SETTINGS: Settings = {
     assistantToolOutputDefaultMode: 'minimized',
     assistantDefaultModel: '',
     assistantTitleModel: DEFAULT_ASSISTANT_TITLE_MODEL,
+    assistantTitleAutoRegenerate: false,
+    assistantTitleAutoRegenerateTurns: DEFAULT_ASSISTANT_AUTO_TITLE_TURNS,
     assistantDefaultPromptTemplate: '',
     assistantProductProfile: 'default',
     assistantDefaultRuntimeMode: 'approval-required',
-    assistantDefaultInteractionMode: 'default',
     assistantDefaultEffort: 'medium',
     assistantDefaultFastMode: false,
+    assistantReasoningSummary: DEFAULT_ASSISTANT_REASONING_SUMMARY,
+    assistantContextCompactionThresholdTokens: DEFAULT_ASSISTANT_CONTEXT_COMPACTION_THRESHOLD_TOKENS,
     assistantDefaultWebSearch: true,
     assistantDefaultWebFetch: true,
     assistantBusyMessageMode: 'queue',
@@ -630,6 +665,7 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
                 accentColor,
                 compactMode: candidate.compactMode === true,
                 sidebarCollapsed: candidate.sidebarCollapsed === true,
+                sidebarHoverPreviewEnabled: candidate.sidebarHoverPreviewEnabled !== false,
                 assistantAgentInboxSidebarEnabled: candidate.assistantAgentInboxSidebarEnabled === true,
                 explorerTabEnabled: candidate.explorerTabEnabled === true,
                 explorerHomePath: sanitizeString(candidate.explorerHomePath, 2_048),
@@ -672,6 +708,13 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
                     ? Math.max(1_000, Math.min(50_000, Math.round(Number(candidate.terminalScrollback))))
                     : 5_000,
                 assistantBrowserRestoreTabs: candidate.assistantBrowserRestoreTabs !== false,
+                assistantBrowserGoogleSuggestions: candidate.assistantBrowserGoogleSuggestions !== false,
+                assistantBrowserAdBlockEnabled: candidate.assistantBrowserAdBlockEnabled === true,
+                assistantBrowserAdBlockPromptDismissed: candidate.assistantBrowserAdBlockPromptDismissed === true,
+                assistantBrowserNewTabBackgroundMode: candidate.assistantBrowserNewTabBackgroundMode === 'off' || candidate.assistantBrowserNewTabBackgroundMode === 'unsplash' ? candidate.assistantBrowserNewTabBackgroundMode : 'built-in',
+                assistantBrowserNewTabBackgroundCategory: ['all', 'forest-paths', 'mountain-highs', 'ocean-moods', 'desert-dreams', 'water-in-motion', 'wildflower-party', 'animal-cameos', 'ice-aurora', 'earth-above'].includes(String(candidate.assistantBrowserNewTabBackgroundCategory)) ? candidate.assistantBrowserNewTabBackgroundCategory as AssistantBrowserBackgroundCategory : 'all',
+                assistantBrowserNewTabBackgroundRotation: candidate.assistantBrowserNewTabBackgroundRotation === 'fixed' ? 'fixed' : 'every-tab',
+                assistantBrowserNewTabBackgroundId: sanitizeString(candidate.assistantBrowserNewTabBackgroundId, 128),
                 projectsFolder: sanitizeString(candidate.projectsFolder, 2_048),
                 additionalFolders: sanitizeStringList(candidate.additionalFolders),
                 gitAutoRefreshOnProjectOpen: candidate.gitAutoRefreshOnProjectOpen !== false,
@@ -723,6 +766,8 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
                     : 'minimized',
                 assistantDefaultModel: sanitizeString(candidate.assistantDefaultModel, 256),
                 assistantTitleModel: sanitizeString(candidate.assistantTitleModel, 256) || DEFAULT_ASSISTANT_TITLE_MODEL,
+                assistantTitleAutoRegenerate: candidate.assistantTitleAutoRegenerate === true,
+                assistantTitleAutoRegenerateTurns: normalizeAssistantAutoTitleTurnInterval(candidate.assistantTitleAutoRegenerateTurns),
                 assistantDefaultPromptTemplate: sanitizeString(candidate.assistantDefaultPromptTemplate, 32_000, false),
                 assistantProductProfile: parsed.assistantProductProfile === 'builder'
                     || (parsed.assistantProductProfile === undefined && legacyProductProfile === ['e', 'lson'].join(''))
@@ -730,9 +775,12 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
                     ? 'builder'
                     : 'default',
                 assistantDefaultRuntimeMode: sanitizeAssistantDefaultRuntimeMode(candidate.assistantDefaultRuntimeMode),
-                assistantDefaultInteractionMode: sanitizeAssistantDefaultInteractionMode(candidate.assistantDefaultInteractionMode),
                 assistantDefaultEffort: sanitizeAssistantDefaultEffort(candidate.assistantDefaultEffort),
                 assistantDefaultFastMode: !!candidate.assistantDefaultFastMode,
+                assistantReasoningSummary: normalizeAssistantReasoningSummaryMode(candidate.assistantReasoningSummary),
+                assistantContextCompactionThresholdTokens: normalizeAssistantContextCompactionThresholdTokens(
+                    candidate.assistantContextCompactionThresholdTokens
+                ),
                 assistantDefaultWebSearch: candidate.assistantDefaultWebSearch !== false,
                 assistantDefaultWebFetch: candidate.assistantDefaultWebFetch !== false,
                 assistantBusyMessageMode: candidate.assistantBusyMessageMode === 'force' ? 'force' : 'queue',
@@ -791,7 +839,7 @@ interface SettingsContextType {
     settings: Settings
     preferencesHydrated: boolean
     preferencesError: string | null
-    updateSettings: (partial: Partial<Settings>) => void
+    updateSettings: (partial: Partial<Settings>) => Promise<void>
     updateHostedAiSecrets: (partial: UpdateHostedAiSecretsInput) => Promise<void>
     clearCache: () => void
 }
@@ -993,6 +1041,17 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     }, [replaceSettings])
 
     const updateSettings = useCallback((partial: Partial<Settings>) => {
+        const capturePersistedAnalyticsChanges = () => {
+            if (partial.appearanceThemeMode) {
+                captureProductEvent({ event: 'zyra_v1_workspace_ui', properties: { action: 'theme_mode', theme_mode: partial.appearanceThemeMode } })
+            }
+            if (typeof partial.accessibilityReduceMotion === 'boolean') {
+                captureProductEvent({ event: 'zyra_v1_workspace_ui', properties: { action: 'accessibility_toggle', enabled: partial.accessibilityReduceMotion } })
+            }
+            if (typeof partial.assistantAgentInboxSidebarEnabled === 'boolean') {
+                captureProductEvent({ event: 'zyra_v1_workspace_ui', properties: { action: 'agent_inbox_disclosure', enabled: partial.assistantAgentInboxSidebarEnabled } })
+            }
+        }
         const rendererPartial: Partial<Settings> = { ...partial }
         if (Object.prototype.hasOwnProperty.call(partial, 'groqApiKey')) {
             rendererPartial.groqApiKey = ''
@@ -1025,7 +1084,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
                 .catch((error) => console.error('Failed to save OS-owned credentials:', error))
         }
 
-        if (Object.keys(preferencePatch).length === 0) return
+        if (Object.keys(preferencePatch).length === 0) return Promise.resolve()
         writeQueueRef.current = writeQueueRef.current.then(async () => {
             const save = () => window.devscope.preferences.update({
                 surface: bootstrap.surface,
@@ -1039,11 +1098,13 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
             }
             if (!result.success) throw new Error(result.error || 'Could not save device preferences.')
             applyPreferenceSnapshot(result.snapshot)
+            capturePersistedAnalyticsChanges()
         }).catch((error) => {
             console.error('Failed to save main-owned settings:', error)
             setPreferencesError(error instanceof Error ? error.message : 'Could not save device preferences.')
             return refreshPreferences().catch(() => undefined)
         })
+        return writeQueueRef.current
     }, [applyPreferenceSnapshot, bootstrap.surface, refreshPreferences, replaceSettings, updateHostedAiSecrets])
 
     const clearCache = useCallback(() => {

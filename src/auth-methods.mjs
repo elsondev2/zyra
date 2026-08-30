@@ -88,18 +88,23 @@ export async function verifyOpenAIApiKey(apiKey, options = {}) {
 }
 
 export async function configureOpenAIApiKey(authStorage, apiKey, options = {}) {
-  if (!authStorage?.set) throw createAuthError("Pi auth storage is unavailable.", "auth_storage_unavailable");
+  if (!authStorage?.loginApiKey && !authStorage?.set) {
+    throw createAuthError("Pi auth storage is unavailable.", "auth_storage_unavailable");
+  }
   const key = normalizeApiKey(apiKey);
   const verification = await verifyOpenAIApiKey(key, options);
-  authStorage.set(ZYRA_API_PROVIDER, { type: "api_key", key });
-  return verification;
+  const model = chooseVerifiedApiModel(verification);
+  if (!model) throw createAuthError("The API key is valid, but no supported GPT-5.6 API model is available to this account.", "unsupported_api_model");
+  if (authStorage.loginApiKey) await authStorage.loginApiKey(ZYRA_API_PROVIDER, key, options);
+  else await authStorage.set(ZYRA_API_PROVIDER, { type: "api_key", key });
+  return { ...verification, model };
 }
 
-export function removeZyraAuthMethod(authStorage, method) {
+export async function removeZyraAuthMethod(authStorage, method) {
   const normalized = normalizeZyraAuthMethod(method);
   if (!normalized) throw createAuthError("Auth method must be subscription or api.", "invalid_auth_method");
   const provider = providerForZyraAuthMethod(normalized);
-  authStorage?.remove?.(provider);
+  await authStorage?.remove?.(provider);
   return { method: normalized, provider };
 }
 

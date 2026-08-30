@@ -38,7 +38,8 @@ The agent server owns the live worker. Desktop and TUI attach as projections:
 - disconnecting a projection does not kill active server work;
 - the server reports attached surfaces, active turn ID, background-work state, and latest sequence;
 - Desktop shows a remote-surface badge and TUI `/session` shows state plus attached surfaces;
-- replay includes durable metadata, provider events, and turn completion.
+- replay includes durable metadata, provider events, and turn completion;
+- the Desktop replay cursor records the highest server event actually projected locally; catalog presence keeps a separate observed high-water mark and cannot acknowledge unseen events.
 
 Project/title updates are broadcast as canonical metadata. Resume prefers stored canonical project/cwd/title over the launching terminal's folder.
 
@@ -46,7 +47,9 @@ Project/title updates are broadcast as canonical metadata. Resume prefers stored
 
 ### Desktop
 
-Desktop loads shell metadata eagerly. Canonical transcript detail is imported only when a thread is opened, 500 raw entries at a time. Asking for older history imports one earlier page.
+Desktop loads shell metadata eagerly. Canonical transcript detail is imported only when a thread is opened, 500 raw entries at a time. Asking for older history imports one earlier page. The first local page may paint before canonical reconciliation; when reconciliation changes the revision, Desktop rehydrates pagination, preserves any already-loaded older range, and retries one revision-rejected upward request.
+
+Canonical fleet snapshots follow the same recovery rule: a late attachment receives the latest full snapshot, explicit Inspector refresh can query the live fleet, and lower-sequence empty snapshots cannot erase newer persisted agents.
 
 Projection preserves:
 

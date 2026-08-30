@@ -1,12 +1,18 @@
 import { memo, useState } from 'react'
 import { Archive, Bot, Check, Copy, Folder, MoreHorizontal, PanelRightClose, PanelRightOpen, Pencil, Radio, SquarePen, Trash2 } from 'lucide-react'
 import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
+import { copyTextToClipboard } from './AssistantPageHelpers'
+import { AssistantProjectIcon } from './AssistantProjectIcon'
+import { AssistantSessionTitleText } from './AssistantSessionTitleText'
+import { AssistantTuiPresenceIndicator } from './AssistantTuiPresenceIndicator'
+import { hasAssistantTuiPresence } from './assistant-tui-presence'
 
 export const AssistantConversationHeader = memo(function AssistantConversationHeader(props: {
     rightPanelOpen: boolean
     rightPanelMode: 'none' | 'details' | 'plan' | 'review'
     showRightSidebarToggle?: boolean
     selectedSessionTitle: string
+    titleGenerating?: boolean
     canonicalThreadId: string | null
     canonicalPresence?: {
         state: 'detached' | 'ready' | 'running' | 'background'
@@ -29,9 +35,11 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
     onArchiveChat: () => void
     onDeleteChat: () => void
     onToggleRightSidebar: () => void
+    onShowToast?: (message: string, tone?: 'success' | 'error' | 'info') => void
 }) {
     const {
         selectedSessionTitle,
+        titleGenerating = false,
         canonicalThreadId,
         canonicalPresence,
         showPresenceBadge = true,
@@ -52,15 +60,17 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
         onChooseProject,
         onArchiveChat,
         onDeleteChat,
-        onToggleRightSidebar
+        onToggleRightSidebar,
+        onShowToast
     } = props
     const [threadIdCopied, setThreadIdCopied] = useState(false)
     const RightSidebarIcon = rightPanelOpen && rightPanelMode === 'review' ? PanelRightClose : PanelRightOpen
+    const tuiOpen = showPresenceBadge && hasAssistantTuiPresence(canonicalPresence)
     const remoteSurfaces = [...new Set((canonicalPresence?.clients || [])
         .map((client) => client.surface.trim().toLowerCase())
-        .filter((surface) => surface && surface !== 'desktop'))]
+        .filter((surface) => surface && surface !== 'desktop' && surface !== 'tui'))]
     const remotePresenceLabel = showPresenceBadge && remoteSurfaces.length > 0
-        ? `${canonicalPresence?.state === 'running' ? 'Running' : canonicalPresence?.state === 'background' ? 'Background work' : 'Open'} in ${remoteSurfaces.map((surface) => surface === 'tui' ? 'TUI' : surface).join(' + ')}`
+        ? `${canonicalPresence?.state === 'running' ? 'Running' : canonicalPresence?.state === 'background' ? 'Background work' : 'Open'} in ${remoteSurfaces.join(' + ')}`
         : null
     const diagnosticsLabel = showDiagnostics
         ? canonicalPresence
@@ -86,14 +96,20 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
             id: 'copy-thread-id',
             label: threadIdCopied ? 'Thread ID copied' : 'Copy thread ID',
             icon: threadIdCopied ? <Check size={13} /> : <Copy size={13} />,
-            disabled: actionsDisabled || !canonicalThreadId,
+            disabled: !canonicalThreadId,
             onSelect: async () => {
                 if (!canonicalThreadId) return
                 try {
-                    await navigator.clipboard.writeText(canonicalThreadId)
+                    await copyTextToClipboard(canonicalThreadId)
                     setThreadIdCopied(true)
+                    onShowToast?.('Thread ID copied', 'success')
                     window.setTimeout(() => setThreadIdCopied(false), 1600)
-                } catch {}
+                } catch (error) {
+                    const message = error instanceof Error && error.message
+                        ? `Could not copy thread ID: ${error.message}`
+                        : 'Could not copy thread ID'
+                    onShowToast?.(message, 'error')
+                }
             }
         },
         {
@@ -132,14 +148,14 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
                         title={`Start a new chat in ${latestProjectLabel}\n${selectedProjectTooltip}`}
                         aria-label={`Start a new chat in ${latestProjectLabel}`}
                     >
-                        <Folder size={12} strokeWidth={1.7} className="shrink-0" />
+                        <AssistantProjectIcon projectPath={selectedProjectPath} size={12} />
                         <span className="truncate">{latestProjectLabel}</span>
                     </button>
                 ) : null}
                 {selectedProjectPath ? <span className="shrink-0 px-0.5 text-[12px] text-sparkle-text-muted/35" aria-hidden="true">/</span> : null}
                 <div className="flex min-w-0 items-center gap-0.5 overflow-hidden">
-                    <h2 className="min-w-0 max-w-[min(360px,35vw)] truncate text-[12px] font-semibold leading-none text-sparkle-text/90">
-                        {selectedSessionTitle}
+                    <h2 className="min-w-0 max-w-[min(360px,35vw)] text-[12px] font-semibold leading-none text-sparkle-text/90">
+                        <AssistantSessionTitleText title={selectedSessionTitle} generating={titleGenerating} reveal={false} />
                     </h2>
                     <FileActionsMenu
                         items={headerMenuItems}
@@ -149,6 +165,7 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
                         buttonClassName="size-5 rounded-md border-transparent bg-transparent p-0 text-sparkle-text-muted hover:border-transparent hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
                         openButtonClassName="rounded-md border-transparent bg-[var(--surface-hover)] p-0 text-sparkle-text"
                     />
+                    {tuiOpen ? <AssistantTuiPresenceIndicator /> : null}
                 </div>
                 {activeThreadIsSubagent && activeThreadLabel ? (
                     <span

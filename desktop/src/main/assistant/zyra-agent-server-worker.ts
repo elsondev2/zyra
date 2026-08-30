@@ -28,6 +28,10 @@ type AgentServerClient = EventEmitter & {
     detach(sessionKey: string): Promise<Record<string, unknown>>
     request(method: string, params?: Record<string, unknown>, options?: { timeoutMs?: number }): Promise<Record<string, unknown>>
     setControlHandler(handler: (operation: unknown, message: Record<string, unknown>) => Promise<Record<string, unknown>>): void
+    setDesktopWorkspaceHandler(handler: (request: Record<string, unknown>, message: Record<string, unknown>) => Promise<Record<string, unknown>>): void
+    setDesktopWorkspaceCancelHandler(handler: (requestId: string) => void): void
+    setDesktopWorkspaceTurnHandler(handler: (canonicalChatId: string, turnId: string) => void): void
+    setDesktopWorkspaceTurnEndHandler(handler: (canonicalChatId: string, turnId: string) => void): void
     close(): void
 }
 
@@ -42,7 +46,7 @@ export type CanonicalAgentChatPresence = {
     activeTurnId: string | null
     clients: Array<{ clientId: string; surface: string }>
     backgroundWorkActive: boolean
-    attention?: 'approval' | 'input' | null
+    attention?: 'approval' | 'input' | 'user-input' | null
     latestTurn?: {
         id: string
         state: 'running' | 'completed' | 'interrupted' | 'error'
@@ -99,12 +103,18 @@ type DesktopAgentServerConnectionOptions = {
     channel?: string
     autoStart?: boolean
     authorityProof?: string
+    openDesktopWorkspace?: (request: Record<string, unknown>) => Promise<Record<string, unknown>>
+    cancelDesktopWorkspace?: (requestId: string) => void
+    handleDesktopWorkspaceTurn?: (canonicalChatId: string, turnId: string) => void
+    handleDesktopWorkspaceTurnEnded?: (canonicalChatId: string, turnId: string) => void
+    handleDetachedControl?: (input: { canonicalChatId: string; turnId: string | null; operation: unknown; principal?: unknown; signal: AbortSignal }) => Promise<Record<string, unknown>>
 }
 
 export class DesktopAgentServerConnection {
     private clientPromise: Promise<AgentServerClient> | null = null
     private readonly workers = new Map<string, Set<ZyraAgentServerWorker>>()
     private readonly controlWorkers = new Map<string, ZyraAgentServerWorker>()
+    private readonly detachedControlAbortControllers = new Map<string, AbortController>()
     private readonly pendingEvents = new Map<string, ReplayEntry[]>()
     private readonly catalogChangedListeners = new Set<(change: Record<string, unknown> | null) => void>()
     private disposed = false
@@ -113,6 +123,26 @@ export class DesktopAgentServerConnection {
         private readonly root: string,
         private readonly options: DesktopAgentServerConnectionOptions = {}
     ) {}
+
+    setDesktopWorkspaceHandler(handler: (request: Record<string, unknown>) => Promise<Record<string, unknown>>): void {
+        this.options.openDesktopWorkspace = handler
+    }
+
+    setDesktopWorkspaceCancelHandler(handler: (requestId: string) => void): void {
+        this.options.cancelDesktopWorkspace = handler
+    }
+
+    setDesktopWorkspaceTurnHandler(handler: (canonicalChatId: string, turnId: string) => void): void {
+        this.options.handleDesktopWorkspaceTurn = handler
+    }
+
+    setDesktopWorkspaceTurnEndHandler(handler: (canonicalChatId: string, turnId: string) => void): void {
+        this.options.handleDesktopWorkspaceTurnEnded = handler
+    }
+
+    setDetachedControlHandler(handler: DesktopAgentServerConnectionOptions['handleDetachedControl']): void {
+        this.options.handleDetachedControl = handler
+    }
 
     onCatalogChanged(listener: (change: Record<string, unknown> | null) => void): () => void {
         this.catalogChangedListeners.add(listener)
@@ -233,11 +263,20 @@ export class DesktopAgentServerConnection {
         worker.queueReplay(replay)
         const connected = asRecord(result['connected']) || {}
         const activeRequestContext = asRecord(result['activeRequestContext'])
+        const presence = asRecord(result['presence'])
+        const presenceLatestTurn = asRecord(presence?.['latestTurn'])
+        const orphanedTurnId = !activeRequestContext
+            && presence?.['state'] === 'ready'
+            && presenceLatestTurn?.['state'] === 'running'
+            ? String(presenceLatestTurn['id'] || '') || null
+            : null
         return {
             ...connected,
             threadId: String(result['canonicalChatId'] || connected['threadId'] || sessionKey),
             providerThreadId: String(connected['providerThreadId'] || result['canonicalChatId'] || sessionKey),
-            agentServerActiveTurnId: activeRequestContext?.['turnId']
+            agentServerActiveTurnId: activeRequestContext?.['turnId'],
+            agentServerLatestTurnId: presenceLatestTurn?.['id'],
+            agentServerOrphanedTurnId: orphanedTurnId || undefined
         }
     }
 
@@ -288,6 +327,8 @@ export class DesktopAgentServerConnection {
         this.clientPromise = null
         this.workers.clear()
         this.controlWorkers.clear()
+        for (const controller of this.detachedControlAbortControllers.values()) controller.abort(new Error('Desktop control connection closed.'))
+        this.detachedControlAbortControllers.clear()
         this.pendingEvents.clear()
         this.catalogChangedListeners.clear()
     }
@@ -312,6 +353,8 @@ export class DesktopAgentServerConnection {
         }
         this.workers.clear()
         this.controlWorkers.clear()
+        for (const controller of this.detachedControlAbortControllers.values()) controller.abort(new Error('Desktop control connection disconnected.'))
+        this.detachedControlAbortControllers.clear()
     }
 
     private async getClient(): Promise<AgentServerClient> {
@@ -337,17 +380,42 @@ export class DesktopAgentServerConnection {
             root: this.root,
             clientId: `desktop:${process.pid}:${randomUUID()}`,
             surface: 'desktop',
-            authorities: ['desktop-control'],
+            authorities: ['desktop-control', 'desktop-workspace'],
             authorityProof,
             ...this.options
         })
+        client.setDesktopWorkspaceHandler(async (request, message) => {
+            request = { ...request, _requestId: String(message['requestId'] || '') }
+            if (!this.options.openDesktopWorkspace) {
+                throw Object.assign(new Error('Desktop workspace routing is unavailable.'), { code: 'DESKTOP_WORKSPACE_UNAVAILABLE', retryable: true })
+            }
+            return this.options.openDesktopWorkspace(request)
+        })
+        client.setDesktopWorkspaceCancelHandler((requestId) => this.options.cancelDesktopWorkspace?.(requestId))
+        client.setDesktopWorkspaceTurnHandler((canonicalChatId, turnId) => this.options.handleDesktopWorkspaceTurn?.(canonicalChatId, turnId))
+        client.setDesktopWorkspaceTurnEndHandler((canonicalChatId, turnId) => this.options.handleDesktopWorkspaceTurnEnded?.(canonicalChatId, turnId))
         client.setControlHandler(async (operation, message) => {
             const requestId = String(message['requestId'] || '')
             const candidates = [...(this.workers.get(String(message['sessionKey'] || '')) || [])].filter((candidate) => candidate.isAlive())
             const requestLocalThreadId = asRecord(message['requestContext'])?.['localThreadId']
             const worker = candidates.find((candidate) => candidate.localThreadId === requestLocalThreadId)
                 || candidates.at(-1)
-            if (!worker) throw Object.assign(new Error('No desktop runtime is attached to this canonical chat.'), { code: 'CONTROL_DRIVER_UNAVAILABLE', retryable: true })
+            if (!worker) {
+                if (!this.options.handleDetachedControl) throw Object.assign(new Error('No desktop runtime is attached to this canonical chat.'), { code: 'CONTROL_DRIVER_UNAVAILABLE', retryable: true })
+                const controller = new AbortController()
+                this.detachedControlAbortControllers.set(requestId, controller)
+                try {
+                    return await this.options.handleDetachedControl({
+                        canonicalChatId: String(message['sessionKey'] || ''),
+                        turnId: String(asRecord(message['requestContext'])?.['turnId'] || '') || null,
+                        operation,
+                        principal: message['principal'],
+                        signal: controller.signal
+                    })
+                } finally {
+                    this.detachedControlAbortControllers.delete(requestId)
+                }
+            }
             this.controlWorkers.set(requestId, worker)
             try {
                 return await worker.handleControlRequest(requestId, operation, message['principal'])
@@ -356,7 +424,9 @@ export class DesktopAgentServerConnection {
             }
         })
         client.on('control-cancel', (message: Record<string, unknown>) => {
-            this.controlWorkers.get(String(message['requestId'] || ''))?.cancelControlRequest(String(message['requestId'] || ''))
+            const requestId = String(message['requestId'] || '')
+            this.controlWorkers.get(requestId)?.cancelControlRequest(requestId)
+            this.detachedControlAbortControllers.get(requestId)?.abort(new Error('Detached Browser control was cancelled.'))
         })
         client.on('session-event', (message: Record<string, unknown>) => this.handleSessionEvent(message))
         client.on('disconnect', () => this.handleClientDisconnect())
@@ -439,7 +509,12 @@ export class ZyraAgentServerWorker implements ZyraWorkerLike {
     }
 
     markRemoteDetached(): void {
+        const detachedSessionKey = this.sessionKey
         this.sessionKey = null
+        if (!detachedSessionKey || this.disposed) return
+        for (const listener of this.eventListeners) {
+            listener({ type: 'server.transport.detached', sessionKey: detachedSessionKey })
+        }
     }
 
     queueReplay(entries: ReplayEntry[]): void {

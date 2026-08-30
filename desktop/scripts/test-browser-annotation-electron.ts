@@ -10,6 +10,7 @@ import {
 } from '../src/main/ipc/handlers/browser-preview-annotation-script'
 
 const WORLD_ID = 1_004
+const ANNOTATION_SMOKE_TIMEOUT_MS = 60_000
 const userData = mkdtempSync(join(tmpdir(), 'zyra-annotation-test-'))
 app.setPath('userData', userData)
 
@@ -171,10 +172,19 @@ async function run() {
     console.log('Browser annotation Electron smoke test: ok')
 }
 
+const smokeTimeout = setTimeout(() => {
+    console.error(`Browser annotation Electron smoke timed out after ${ANNOTATION_SMOKE_TIMEOUT_MS} ms.`)
+    process.exitCode = 1
+    app.exit(1)
+}, ANNOTATION_SMOKE_TIMEOUT_MS)
+
 void run().catch((error) => {
     console.error(error)
     process.exitCode = 1
-}).finally(() => app.quit())
+}).finally(() => {
+    clearTimeout(smokeTimeout)
+    app.quit()
+})
 
 app.once('quit', () => {
     try {

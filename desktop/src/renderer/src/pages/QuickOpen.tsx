@@ -131,7 +131,7 @@ export default function QuickOpen() {
                         modifiedAt={previewModifiedAt}
                         projectPath={undefined}
                         shellMode="window"
-                        disableFullscreen
+                        chromeContext="quick-view"
                         onOpenLinkedPreview={openPreview}
                         onClose={closeWindow}
                     />

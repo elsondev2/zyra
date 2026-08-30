@@ -55,6 +55,8 @@ Desktop-only controls must be hidden, disabled, or represented by an explicit un
 
 Assistant domain events use the canonical bounded AssistantService replay stream. Realtime Voice uses a dedicated bounded SSE stream because WebRTC control events have different ownership and lifecycle requirements: each tab has an ephemeral session-scoped client ID, only the owning tab receives Voice events, event sequences are deduplicated after reconnect, provider-ingest requests stay ordered, and a short disconnect grace allows transparent SSE recovery before Desktop stops an orphaned Voice session.
 
+The subscription-backed WebRTC call contract is checked into `src/chatgpt-realtime-contract.mjs`. Runtime code never downloads an endpoint or model override because the allowlisted endpoint receives ChatGPT OAuth credentials. Maintainers can detect upstream Codex changes with `npm run voice:check-codex-contract` and explicitly regenerate the reviewed allowlisted contract with `npm run voice:sync-codex-contract`; deterministic parser and allowlist tests run in the normal core lanes without network access.
+
 Non-Assistant Desktop events use a separate supervised event stream with an allowlisted envelope:
 
 - `agentControlCursor`

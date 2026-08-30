@@ -6,6 +6,7 @@ import {
     clipboard,
     nativeImage,
     shell,
+    webContents,
     type IpcMainInvokeEvent,
     type NativeImage,
     type WebContents
@@ -34,6 +35,7 @@ import {
 } from './browser-preview-annotation-script'
 import { session } from 'electron'
 import { stageAssistantClipboardImageFile } from '../../assistant/clipboard-attachments'
+import { getBrowserUserZoomFactor, setManagedBrowserUserZoomFactor } from '../../browser-view-presentation'
 
 const BROWSER_ZOOM_MIN = 0.25
 const BROWSER_ZOOM_MAX = 2
@@ -96,7 +98,9 @@ async function ensureDebugger(guest: WebContents): Promise<void> {
 async function applyColorScheme(guest: WebContents, colorScheme: DevScopeBrowserColorScheme): Promise<void> {
     await ensureDebugger(guest)
     await guest.debugger.sendCommand('Emulation.setEmulatedMedia', {
-        features: [{ name: 'prefers-color-scheme', value: colorScheme === 'system' ? '' : colorScheme }]
+        features: colorScheme === 'system'
+            ? []
+            : [{ name: 'prefers-color-scheme', value: colorScheme }]
     })
 }
 
@@ -116,6 +120,14 @@ function installColorLifecycle(guest: WebContents): void {
         void activeAnnotations.get(guest.id)?.cancel()
         if (activeRecording?.guest.id === guest.id) cleanupRecording(activeRecording)
     })
+}
+
+export async function inheritBrowserPreviewPresentation(source: WebContents, target: WebContents): Promise<void> {
+    const colorScheme = colorSchemeByGuestId.get(source.id) || 'system'
+    colorSchemeByGuestId.set(target.id, colorScheme)
+    installColorLifecycle(target)
+    target.setZoomFactor(getBrowserUserZoomFactor(source))
+    await applyColorScheme(target, colorScheme)
 }
 
 function artifactDirectory(): string {
@@ -328,6 +340,23 @@ function cleanupRecording(recording: ActiveRecording): void {
     if (activeRecording === recording) activeRecording = null
 }
 
+export function assertBrowserPreviewDeveloperTransferable(guestWebContentsId: number): void {
+    if (activeAnnotations.has(guestWebContentsId)) throw new Error('Attach or cancel the active Browser annotation before moving this tab.')
+    if (activeRecording?.guest.id === guestWebContentsId) throw new Error('Stop the active Browser recording before moving this tab.')
+}
+
+export function transferBrowserPreviewDeveloperOwner(
+    guestWebContentsId: number,
+    previousOwnerWebContentsId: number,
+    ownerWebContentsId: number
+): void {
+    const annotation = activeAnnotations.get(guestWebContentsId)
+    if (annotation?.ownerWebContentsId === previousOwnerWebContentsId) annotation.ownerWebContentsId = ownerWebContentsId
+    if (activeRecording?.guest.id === guestWebContentsId && activeRecording.ownerWebContentsId === previousOwnerWebContentsId) {
+        activeRecording.ownerWebContentsId = ownerWebContentsId
+    }
+}
+
 export async function handleHardReloadBrowserPreview(event: IpcMainInvokeEvent, input: DevScopeBrowserGuestTargetInput) {
     try {
         resolveGuest(event, input).reloadIgnoringCache()
@@ -346,7 +375,7 @@ export async function handleSetBrowserPreviewZoom(
         const requested = Number(input?.factor)
         if (!Number.isFinite(requested)) throw new Error('The Browser zoom factor is invalid.')
         const factor = Math.round(Math.min(BROWSER_ZOOM_MAX, Math.max(BROWSER_ZOOM_MIN, requested)) * 100) / 100
-        guest.setZoomFactor(factor)
+        if (!setManagedBrowserUserZoomFactor(guest, factor)) guest.setZoomFactor(factor)
         return { success: true as const, factor }
     } catch (error) {
         return { success: false as const, error: errorMessage(error, 'Could not change Browser zoom.') }
@@ -521,7 +550,7 @@ export async function handleStartBrowserPreviewAnnotation(
             if (!annotation) throw new Error('The annotation did not contain a valid target.')
             const captureRect = normalizeAnnotationRect(raw.captureRect)
             const image = captureRect ? await guest.capturePage(captureRect) : await guest.capturePage()
-            const artifact = storeScreenshotArtifact(event.sender.id, input.tabId, image)
+            const artifact = storeScreenshotArtifact(annotationSession.ownerWebContentsId, input.tabId, image)
             return { success: true as const, annotation, artifact }
         } catch (error) {
             if (cancellationRequested || guest.isDestroyed()) {
@@ -584,7 +613,8 @@ export async function handleStartBrowserPreviewRecording(event: IpcMainInvokeEve
                     void guest.debugger.sendCommand('Page.screencastFrameAck', { sessionId }).catch(() => {})
                 }
                 const data = typeof params.data === 'string' ? params.data : ''
-                if (!data || data.length > RECORDING_FRAME_MAX_BASE64_LENGTH || event.sender.isDestroyed()) return
+                const ownerContents = webContents.fromId(recording.ownerWebContentsId)
+                if (!data || data.length > RECORDING_FRAME_MAX_BASE64_LENGTH || !ownerContents || ownerContents.isDestroyed()) return
                 const metadata = params.metadata && typeof params.metadata === 'object'
                     ? params.metadata as Record<string, unknown>
                     : {}
@@ -595,7 +625,7 @@ export async function handleStartBrowserPreviewRecording(event: IpcMainInvokeEve
                     height: Math.max(0, Math.round(Number(metadata.deviceHeight) || 0)),
                     receivedAt: new Date().toISOString()
                 }
-                event.sender.send(BROWSER_PREVIEW_RECORDING_FRAME_CHANNEL, frame)
+                ownerContents.send(BROWSER_PREVIEW_RECORDING_FRAME_CHANNEL, frame)
             },
             onDestroyed: () => cleanupRecording(recording),
             onDetach: () => cleanupRecording(recording)

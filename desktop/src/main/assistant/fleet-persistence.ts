@@ -1,8 +1,10 @@
 import type { Database as SqlDatabase } from 'sql.js/dist/sql-asm.js'
 import type { FleetSnapshot } from '../../shared/assistant/contracts'
+import { shouldApplyAssistantFleetSnapshot } from './fleet-projection'
 import { jsonStringify, runSqlTransaction } from './persistence-utils'
 
 export function projectFleetSnapshot(db: SqlDatabase, threadId: string, snapshot: FleetSnapshot): void {
+    if (!shouldApplyAssistantFleetSnapshot(readFleetSnapshot(db, threadId), snapshot)) return
     runSqlTransaction(db, () => {
         db.run('DELETE FROM assistant_agent_relationships WHERE root_thread_id = ?', [threadId])
         db.run('DELETE FROM assistant_agent_artifacts WHERE root_thread_id = ?', [threadId])

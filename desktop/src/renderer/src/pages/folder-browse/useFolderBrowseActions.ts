@@ -115,6 +115,7 @@ export function useFolderBrowseActions(input: {
 
     const handleProjectClick = useCallback((project: Project) => {
         primeProjectDetailsCache(project)
+        void window.devscope.recordProjectOpen?.(project.path)
         navigate(`/projects/${encodeURIComponent(project.path)}`)
     }, [navigate])
 
@@ -131,6 +132,7 @@ export function useFolderBrowseActions(input: {
             markers: [],
             frameworks: []
         })
+        void window.devscope.recordProjectOpen?.(decodedPath)
         navigate(`/projects/${encodeURIComponent(decodedPath)}`)
     }, [decodedPath, navigate])
 

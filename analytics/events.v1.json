@@ -1,0 +1,172 @@
+{
+  "schemaVersion": 1,
+  "catalogId": "zyra-product-analytics-v1",
+  "commonProperties": {
+    "schema_version": { "type": "integer", "min": 1, "max": 1 },
+    "source": { "type": "enum", "values": ["desktop_main", "desktop_renderer", "cli"] },
+    "app_version": { "type": "version" },
+    "platform": { "type": "enum", "values": ["win32", "darwin", "linux", "other"] },
+    "architecture": { "type": "enum", "values": ["x64", "arm64", "ia32", "other"] }
+  },
+  "events": {
+    "zyra_v1_app_lifecycle": {
+      "owner": "desktop_main",
+      "trigger": "Desktop launch readiness, shutdown, renderer or child-process loss, hang diagnostics, and update checks.",
+      "privacy": "operational",
+      "retention": "90 days",
+      "properties": {
+        "action": { "type": "enum", "values": ["launch_ready", "shutdown", "crash", "hang", "update_check"] },
+        "outcome": { "type": "enum", "values": ["started", "ready", "completed", "failed", "cancelled", "available", "current", "unknown"] },
+        "launch_bucket": { "type": "enum", "values": ["cold", "warm", "unknown"] },
+        "process_kind": { "type": "enum", "values": ["main", "renderer", "gpu", "utility", "other"] },
+        "duration_ms": { "type": "integer", "min": 0, "max": 600000 },
+        "error_code": { "type": "error_code" }
+      }
+    },
+    "zyra_v1_onboarding": {
+      "owner": "desktop_main",
+      "trigger": "A bounded onboarding step starts, completes, moves backward, or the flow is abandoned.",
+      "privacy": "product_usage",
+      "retention": "90 days",
+      "properties": {
+        "action": { "type": "enum", "values": ["step_started", "step_completed", "step_back", "completed", "abandoned", "review_started", "review_exited"] },
+        "step": { "type": "enum", "values": ["welcome", "connection", "appearance", "projects", "finish", "unknown"] },
+        "outcome": { "type": "enum", "values": ["started", "completed", "failed", "cancelled", "unknown"] },
+        "error_code": { "type": "error_code" }
+      }
+    },
+    "zyra_v1_account_connection": {
+      "owner": "desktop_main",
+      "trigger": "An account connection, replacement, retry, or disconnect attempt settles.",
+      "privacy": "product_usage",
+      "retention": "90 days",
+      "properties": {
+        "action": { "type": "enum", "values": ["connect", "replace", "retry", "disconnect"] },
+        "method": { "type": "enum", "values": ["subscription", "api", "unknown"] },
+        "outcome": { "type": "enum", "values": ["started", "completed", "failed", "cancelled", "unknown"] },
+        "error_code": { "type": "error_code" }
+      }
+    },
+    "zyra_v1_chat": {
+      "owner": "desktop_main",
+      "trigger": "A chat is created, a turn is sent/cancelled/completed/failed/recovered, or context compaction occurs.",
+      "privacy": "product_usage",
+      "retention": "90 days",
+      "properties": {
+        "action": { "type": "enum", "values": ["create", "send", "cancel", "complete", "fail", "recover", "context_compaction"] },
+        "outcome": { "type": "enum", "values": ["started", "completed", "failed", "cancelled", "interrupted", "recovered", "unknown"] },
+        "model_family": { "type": "enum", "values": ["openai", "anthropic", "google", "groq", "local", "other", "unknown"] },
+        "effort": { "type": "enum", "values": ["off", "minimal", "low", "medium", "high", "xhigh", "max", "unknown"] },
+        "runtime_mode": { "type": "enum", "values": ["approval_required", "full_access", "unknown"] },
+        "duration_ms": { "type": "integer", "min": 0, "max": 3600000 },
+        "attachment_count": { "type": "integer", "min": 0, "max": 32 },
+        "error_code": { "type": "error_code" }
+      }
+    },
+    "zyra_v1_voice": {
+      "owner": "desktop_main",
+      "trigger": "Voice starts, connects, produces its first response, is interrupted/stopped, fails, or rejects a duplicate transition.",
+      "privacy": "product_usage",
+      "retention": "30 days",
+      "properties": {
+        "action": { "type": "enum", "values": ["start", "connect", "first_response", "interrupt", "stop", "fail", "duplicate_prevented"] },
+        "outcome": { "type": "enum", "values": ["started", "completed", "failed", "cancelled", "prevented", "unknown"] },
+        "mode": { "type": "enum", "values": ["conversation", "voice_lab", "unknown"] },
+        "duration_ms": { "type": "integer", "min": 0, "max": 600000 },
+        "error_code": { "type": "error_code" }
+      }
+    },
+    "zyra_v1_project": {
+      "owner": "desktop_main",
+      "trigger": "A project is attached or opened and its coarse capabilities are known.",
+      "privacy": "product_usage",
+      "retention": "90 days",
+      "properties": {
+        "action": { "type": "enum", "values": ["attach", "open"] },
+        "outcome": { "type": "enum", "values": ["completed", "failed", "cancelled", "unknown"] },
+        "has_git": { "type": "boolean" },
+        "language_count": { "type": "integer", "min": 0, "max": 64 },
+        "package_manager_count": { "type": "integer", "min": 0, "max": 16 },
+        "error_code": { "type": "error_code" }
+      }
+    },
+    "zyra_v1_files": {
+      "owner": "desktop_renderer",
+      "trigger": "Files mode, preview, edit/save/discard, search, full-screen, tree reveal, and bounded performance outcomes.",
+      "privacy": "product_usage",
+      "retention": "90 days",
+      "properties": {
+        "action": { "type": "enum", "values": ["mode_open", "preview", "edit", "save", "discard", "search", "fullscreen", "tree_reveal"] },
+        "outcome": { "type": "enum", "values": ["started", "completed", "failed", "cancelled", "unknown"] },
+        "preview_kind": { "type": "enum", "values": ["text", "code", "markdown", "image", "pdf", "office", "table", "audio", "video", "binary", "unknown"] },
+        "size_bucket": { "type": "enum", "values": ["tiny", "small", "medium", "large", "very_large", "unknown"] },
+        "duration_ms": { "type": "integer", "min": 0, "max": 600000 },
+        "result_count": { "type": "integer", "min": 0, "max": 10000 },
+        "enabled": { "type": "boolean" },
+        "error_code": { "type": "error_code" }
+      }
+    },
+    "zyra_v1_browser": {
+      "owner": "desktop_main",
+      "trigger": "A Browser tab, coarse navigation, popup, download, history import, blocking, threat, permission, or transfer action settles.",
+      "privacy": "security_and_product_usage",
+      "retention": "30 days",
+      "properties": {
+        "action": { "type": "enum", "values": ["tab_create", "new_tab", "navigation", "popup", "download", "history_import", "ad_block", "threat", "permission", "transfer"] },
+        "outcome": { "type": "enum", "values": ["started", "completed", "failed", "cancelled", "blocked", "allowed", "denied", "unknown"] },
+        "destination": { "type": "enum", "values": ["blank", "search", "documentation", "code_host", "local", "media", "commerce", "social", "other", "unknown"] },
+        "transfer_target": { "type": "enum", "values": ["main", "utility", "external", "unknown"] },
+        "item_count": { "type": "integer", "min": 0, "max": 10000 },
+        "duration_ms": { "type": "integer", "min": 0, "max": 600000 },
+        "error_code": { "type": "error_code" }
+      }
+    },
+    "zyra_v1_utility_window": {
+      "owner": "desktop_main",
+      "trigger": "A utility tab is created, dragged, torn off, merged, closed, or transfers a Terminal.",
+      "privacy": "product_usage",
+      "retention": "90 days",
+      "properties": {
+        "action": { "type": "enum", "values": ["tab_create", "tab_drag", "tear_off", "merge", "close", "terminal_transfer"] },
+        "outcome": { "type": "enum", "values": ["started", "completed", "failed", "cancelled", "prevented", "unknown"] },
+        "tab_kind": { "type": "enum", "values": ["chat", "browser", "files", "terminal", "agents", "resources", "diff", "unknown"] },
+        "tab_count": { "type": "integer", "min": 0, "max": 64 },
+        "error_code": { "type": "error_code" }
+      }
+    },
+    "zyra_v1_workspace_ui": {
+      "owner": "desktop_renderer",
+      "trigger": "Agent Inbox disclosure, workspace selection, Settings section selection, theme mode, or accessibility toggle changes.",
+      "privacy": "product_usage",
+      "retention": "90 days",
+      "properties": {
+        "action": { "type": "enum", "values": ["agent_inbox_disclosure", "workspace_select", "settings_section", "theme_mode", "accessibility_toggle"] },
+        "section": { "type": "enum", "values": ["general", "appearance", "account", "connections", "assistant", "skills", "voice", "browser_control", "files_editor", "terminal_runtime", "providers", "projects", "source_control", "memory", "archived", "diagnostics", "about", "unknown"] },
+        "workspace": { "type": "enum", "values": ["chat", "browser", "files", "terminal", "agents", "resources", "diff", "unknown"] },
+        "theme_mode": { "type": "enum", "values": ["system", "light", "dark", "unknown"] },
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "zyra_v1_cli": {
+      "owner": "cli",
+      "trigger": "CLI/TUI startup, a durable slash command or skill, a Desktop workspace command outcome, or runtime recovery.",
+      "privacy": "product_usage",
+      "retention": "90 days",
+      "properties": {
+        "action": { "type": "enum", "values": ["startup", "slash_command", "skill", "workspace_command", "recovery"] },
+        "command": { "type": "enum", "values": ["chat", "ask", "inspect", "doctor", "threads", "login", "logout", "auth", "account", "codexusage", "update", "version", "onboarding", "help", "commands", "agents", "agent", "subtask", "workflows", "workflow", "start", "session", "profile", "memory", "browser", "details_ui", "explore_files", "resources", "subagents_ui", "diff_ui", "terminal_ui", "web", "websearch", "webfetch", "new", "compact", "consolidate", "older", "thinking", "mode", "themes", "models", "analytics", "statusline", "notifications", "interrupt", "exit", "custom", "unknown"] },
+        "skill": { "type": "safe_name" },
+        "outcome": { "type": "enum", "values": ["started", "completed", "failed", "cancelled", "recovered", "unavailable", "unknown"] },
+        "session_mode": { "type": "enum", "values": ["new", "continue", "resume", "none", "unknown"] },
+        "runtime": { "type": "enum", "values": ["client", "embedded", "unknown"] },
+        "error_code": { "type": "error_code" }
+      }
+    }
+  },
+  "errorCodes": [
+    "aborted", "already_active", "authorization_failed", "config_invalid", "connection_failed",
+    "duplicate", "invalid_input", "network_unavailable", "not_configured", "not_found",
+    "permission_denied", "rate_limited", "renderer_gone", "timeout", "transport_failed",
+    "unavailable", "unknown"
+  ]
+}

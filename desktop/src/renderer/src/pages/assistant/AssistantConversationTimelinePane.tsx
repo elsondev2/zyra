@@ -37,9 +37,13 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
     contentInsetEndAdjustment?: number
     scrollButtonBottomOverride?: number
     hasOlder?: boolean
+    hasNewer?: boolean
     loadingOlder?: boolean
+    loadingNewer?: boolean
     loadOlderError?: string | null
-    onLoadOlder?: () => void
+    loadNewerError?: string | null
+    onLoadOlder?: (turnLimit?: number) => Promise<boolean> | boolean | void
+    onLoadNewer?: (turnLimit?: number) => Promise<boolean> | boolean | void
     showScrollToBottom: boolean
     elevateScrollToBottom?: boolean
     onScrollButtonBoundsChange?: (bounds: AssistantElementBounds | null) => void
@@ -128,9 +132,13 @@ export const AssistantConversationTimelinePane = memo(function AssistantConversa
                         isConnecting={props.isConnecting}
                         contentInsetEndAdjustment={props.contentInsetEndAdjustment || 0}
                         hasOlder={props.hasOlder}
+                        hasNewer={props.hasNewer}
                         loadingOlder={props.loadingOlder}
+                        loadingNewer={props.loadingNewer}
                         loadOlderError={props.loadOlderError}
+                        loadNewerError={props.loadNewerError}
                         onLoadOlder={props.onLoadOlder}
+                        onLoadNewer={props.onLoadNewer}
                         onScrollContainer={props.onScrollTimeline}
                         onRequestDeleteUserMessage={props.onRequestDeleteUserMessage}
                         onImplementProposedPlan={props.onImplementProposedPlan}

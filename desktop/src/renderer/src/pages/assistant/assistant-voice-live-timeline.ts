@@ -46,9 +46,11 @@ export function projectVoiceLiveTimelineMessages(input: {
         input.voiceStartedAt
     ).filter((entry) => {
         if (!entry.text.trim()
+            || entry.canonicalMessageId
             || entry.id.startsWith('local-composer-')
+            || entry.id.startsWith('composer-response-')
             || committedProviderItems.has(entry.id)) return false
-        if (!entry.final) return true
+        if (!entry.final) return entry.role === 'user'
         const role = entry.role === 'user' ? 'user' : 'assistant'
         const signature = transcriptSignature(role, entry.text)
         const remaining = missingIdentityCommitBudget.get(signature) || 0

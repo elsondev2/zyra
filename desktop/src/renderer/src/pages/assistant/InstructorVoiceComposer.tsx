@@ -253,7 +253,10 @@ export function InstructorVoiceComposer({
 
                 <button
                     type="button"
-                    onClick={active || connecting ? onStop : onStart}
+                    onClick={() => {
+                        if (active || connecting) onStop()
+                        else onStart()
+                    }}
                     disabled={stopping || (!active && !connecting && !instructionsAvailable)}
                     className={cn(
                         'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-[transform,opacity,background-color] hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-35',

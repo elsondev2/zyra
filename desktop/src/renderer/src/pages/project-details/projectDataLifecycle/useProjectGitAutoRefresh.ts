@@ -67,7 +67,7 @@ export function useProjectGitAutoRefresh(
             gitView
         }
 
-        if (activeTab !== 'git' || !decodedPath) return
+        if (activeTab !== 'git' || !decodedPath || (!enteringGitTab && !switchingGitView)) return
 
         const mode = getRefreshModeForGitView(gitView)
         const hasFocusedData = hasFocusedGitDataForView(buildGitDataState(params))
@@ -82,6 +82,7 @@ export function useProjectGitAutoRefresh(
     useEffect(() => {
         if (!decodedPath || !autoRefreshGitOnProjectOpen) return
         const intervalId = window.setInterval(() => {
+            if (document.visibilityState !== 'visible') return
             void refreshGitDataRef.current?.(false, { quiet: true, mode: 'working' })
         }, 12000)
         return () => window.clearInterval(intervalId)
@@ -90,6 +91,7 @@ export function useProjectGitAutoRefresh(
     useEffect(() => {
         if (!decodedPath || activeTab !== 'git' || gitView !== 'changes' || autoRefreshGitOnProjectOpen) return
         const intervalId = window.setInterval(() => {
+            if (document.visibilityState !== 'visible') return
             void refreshGitDataRef.current?.(false, { quiet: true, mode: 'working' })
         }, 45000)
         return () => window.clearInterval(intervalId)
@@ -98,6 +100,7 @@ export function useProjectGitAutoRefresh(
     useEffect(() => {
         if (!decodedPath || activeTab !== 'git' || gitView === 'changes') return
         const intervalId = window.setInterval(() => {
+            if (document.visibilityState !== 'visible') return
             void refreshGitDataRef.current?.(false, { quiet: true, mode: getRefreshModeForGitView(gitView) })
         }, 90000)
         return () => window.clearInterval(intervalId)
@@ -109,6 +112,7 @@ export function useProjectGitAutoRefresh(
         let cancelled = false
 
         const pollSyncStatus = async () => {
+            if (document.visibilityState !== 'visible') return
             try {
                 const result = await window.devscope.getGitSyncStatus(decodedPath)
                 if (cancelled || !result?.success || !result.sync) return

@@ -15,7 +15,9 @@ import {
     inferImageExtensionFromMimeType,
     isLargeTextPaste,
     MAX_ATTACHMENT_CONTENT_CHARS,
+    parseAssistantDesktopSlashCommand,
     readFileAsDataUrl,
+    resolveAssistantDesktopSlashCommandAction,
     summarizeTextPreview
 } from './assistant-composer-utils'
 import type { MentionCandidate } from './assistant-composer-mentions'
@@ -267,6 +269,32 @@ export function createAssistantComposerHandlers(args: AssistantComposerHandlersA
 
     const submitPrompt = async (dispatchMode: 'immediate' | 'queue' | 'force') => {
         const prompt = replaceInlineMentionTokensWithLabels(text, inlineMentionTags).trim()
+        const desktopCommand = parseAssistantDesktopSlashCommand(prompt)
+        if (desktopCommand) {
+            const action = resolveAssistantDesktopSlashCommandAction(desktopCommand)
+            if (action.type === 'error') {
+                onBlockedSend?.(action.message)
+                return
+            }
+            if (action.type === 'runtime-mode') setSelectedRuntimeMode(action.mode)
+            if (action.type === 'include') {
+                upsertAttachment({
+                    id: createAttachmentId(),
+                    path: action.path,
+                    name: action.name,
+                    kind: action.kind,
+                    source: 'manual',
+                    animateIn: true
+                })
+            }
+            setText('')
+            setInlineMentionTags([])
+            setHistoryCursor(null)
+            setDraftBeforeHistory('')
+            setComposerCursor(0)
+            restoreComposerFocus()
+            return
+        }
         const inlineMentionFiles: ComposerContextFile[] = inlineMentionTags.map((tag) => {
             const meta = getContextFileMeta({ path: tag.path, name: tag.label })
             return {

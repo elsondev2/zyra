@@ -1,9 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import type { AssistantActivity, AssistantMessage, AssistantSession, AssistantTurnDetail, FleetSnapshot } from '@shared/assistant/contracts'
+import { reconcileAssistantMessageReplays } from '@shared/assistant/message-reconciliation'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
 import { useFilePreview } from '@/components/ui/file-preview/useFilePreview'
 import { useAssistantStoreActions, useAssistantStoreSelector } from '@/lib/assistant/store'
 import { getActiveAssistantThread, getSelectedAssistantSession } from '@/lib/assistant/selectors'
+import { shouldHideAssistantRowsForSelection } from '@/lib/assistant/assistant-history-state'
 import { ConnectedAssistantSessionsRail } from './AssistantConnectedSessionsRail'
 import { AssistantConversationPane } from './AssistantConversationPane'
 import type { AssistantDiffRevealRequest } from './AssistantDiffPanel'
@@ -17,6 +20,7 @@ import { useAssistantBrowserSurfaceRequests } from './useAssistantBrowserSurface
 import { useAssistantPageSidebarState } from './useAssistantPageSidebarState'
 import { useAssistantReviewIndex } from './useAssistantReviewIndex'
 import { useAssistantChatRouting } from './useAssistantChatRouting'
+import { parseAssistantFilesShellLaunchRequest } from '@shared/assistant/files-shell-launch-route'
 
 type AssistantPageShellSelection = {
     bootstrapped: boolean
@@ -38,14 +42,21 @@ function areAssistantPageShellSelectionsEqual(left: AssistantPageShellSelection,
 
 const EMPTY_ASSISTANT_MESSAGES: AssistantMessage[] = []
 const EMPTY_ASSISTANT_ACTIVITIES: AssistantActivity[] = []
-const loadAssistantDiffPanel = async () => ({
+const createAssistantDiffPanelModule = async () => ({
     default: (await import('./AssistantDiffPanel')).AssistantDiffPanel
 })
+let assistantDiffPanelModulePromise: ReturnType<typeof createAssistantDiffPanelModule> | null = null
+const loadAssistantDiffPanel = () => {
+    assistantDiffPanelModulePromise ||= createAssistantDiffPanelModule()
+    return assistantDiffPanelModulePromise
+}
 const AssistantDiffPanel = lazy(loadAssistantDiffPanel)
 const FilePreviewModal = lazy(() => import('@/components/ui/FilePreviewModal'))
 
 type AssistantDiffSourceSelection = {
     threadId: string | null
+    canonicalChatId: string | null
+    chatTitle: string
     messages: AssistantMessage[]
     activities: AssistantActivity[]
     projectRootPath: string | null
@@ -55,6 +66,8 @@ type AssistantDiffSourceSelection = {
 
 function areAssistantDiffSourceSelectionsEqual(left: AssistantDiffSourceSelection, right: AssistantDiffSourceSelection): boolean {
     return left.threadId === right.threadId
+        && left.canonicalChatId === right.canonicalChatId
+        && left.chatTitle === right.chatTitle
         && left.messages === right.messages
         && left.activities === right.activities
         && left.projectRootPath === right.projectRootPath
@@ -65,6 +78,18 @@ function areAssistantDiffSourceSelectionsEqual(left: AssistantDiffSourceSelectio
 export default function AssistantPage() {
     const actions = useAssistantStoreActions()
     const preview = useFilePreview()
+    const location = useLocation()
+    const incomingFilesShellLaunchRequest = useMemo(
+        () => parseAssistantFilesShellLaunchRequest(location.search),
+        [location.search]
+    )
+    const [filesShellLaunchRequest, setFilesShellLaunchRequest] = useState(incomingFilesShellLaunchRequest)
+    useEffect(() => {
+        if (!incomingFilesShellLaunchRequest) return
+        setFilesShellLaunchRequest((current) => current?.id === incomingFilesShellLaunchRequest.id
+            ? current
+            : incomingFilesShellLaunchRequest)
+    }, [incomingFilesShellLaunchRequest])
     const shell = useAssistantStoreSelector<AssistantPageShellSelection>((state) => {
         const selectedSession = getSelectedAssistantSession(state.snapshot)
 
@@ -127,25 +152,40 @@ export default function AssistantPage() {
             && activeThread
             && state.selectionTransitionKey === `${selectedSession.id}:${activeThread.id}`
         )
+        const selectionHydrating = Boolean(
+            selectedSession
+            && activeThread
+            && state.selectionHydrationKey === `${selectedSession.id}:${activeThread.id}`
+        )
+        const hideRowsForSelection = shouldHideAssistantRowsForSelection({
+            selectionTransitioning,
+            selectionHydrating,
+            thread: activeThread
+        })
         return {
             threadId: activeThread?.id || null,
-            messages: selectionTransitioning ? EMPTY_ASSISTANT_MESSAGES : activeThread?.messages || EMPTY_ASSISTANT_MESSAGES,
-            activities: selectionTransitioning ? EMPTY_ASSISTANT_ACTIVITIES : activeThread?.activities || EMPTY_ASSISTANT_ACTIVITIES,
+            canonicalChatId: activeThread?.providerThreadId || activeThread?.id || null,
+            chatTitle: selectedSession?.title || 'Untitled chat',
+            messages: hideRowsForSelection ? EMPTY_ASSISTANT_MESSAGES : activeThread?.messages || EMPTY_ASSISTANT_MESSAGES,
+            activities: hideRowsForSelection ? EMPTY_ASSISTANT_ACTIVITIES : activeThread?.activities || EMPTY_ASSISTANT_ACTIVITIES,
             projectRootPath: selectedSession?.projectPath || activeThread?.cwd || null,
             activeTurnId: activeThread?.latestTurn?.state === 'running' ? activeThread.latestTurn.id : null,
             fleetSnapshot: activeThread ? state.snapshot.fleetByThreadId[activeThread.id] || null : null
         }
     }, areAssistantDiffSourceSelectionsEqual)
     const inspectorOpen = rightPanelMode === 'review'
-    const [inspectorMounted, setInspectorMounted] = useState(inspectorOpen)
-    useEffect(() => {
-        if (inspectorOpen) setInspectorMounted(true)
-    }, [inspectorOpen])
-    const revealBrowserInspector = useCallback(() => setRightPanelMode('review'), [setRightPanelMode])
+    const prepareInspector = useCallback(() => {
+        void loadAssistantDiffPanel().catch(() => undefined)
+    }, [])
+    const revealBrowserInspector = useCallback(() => {
+        prepareInspector()
+        setRightPanelMode('review')
+    }, [prepareInspector, setRightPanelMode])
     const resizeBrowserInspector = useCallback((width: number) => {
+        prepareInspector()
         setRightPanelMode('review')
         setRightSidebarWidth(width)
-    }, [setRightPanelMode, setRightSidebarWidth])
+    }, [prepareInspector, setRightPanelMode, setRightSidebarWidth])
     const {
         request: browserSurfaceRequest,
         handleRequest: handleBrowserSurfaceRequestHandled
@@ -157,7 +197,8 @@ export default function AssistantPage() {
     const { reviewIndex, reviewIndexLoading, reviewIndexError } = useAssistantReviewIndex({
         threadId: diffSource.threadId,
         enabled: inspectorOpen,
-        refreshKey: `${diffSource.activeTurnId || 'idle'}:${diffSource.messages.length}:${diffSource.activities.length}`
+        prefetch: false,
+        refreshKey: diffSource.activeTurnId || 'idle'
     })
     const reviewDiffSource = useMemo(() => {
         const details = Object.values(reviewTurnDetails).filter((detail) => detail.threadId === diffSource.threadId)
@@ -168,21 +209,34 @@ export default function AssistantPage() {
         }
         return {
             ...diffSource,
-            messages: mergeById(diffSource.messages, details.flatMap((detail) => detail.messages)),
+            messages: reconcileAssistantMessageReplays(
+                mergeById(diffSource.messages, details.flatMap((detail) => detail.messages))
+            ),
             activities: mergeById(diffSource.activities, details.flatMap((detail) => detail.activities))
         }
     }, [diffSource, reviewTurnDetails])
     const detailedDiffTurns = useMemo(
-        () => buildAssistantDiffTurns(reviewDiffSource),
-        [reviewDiffSource]
+        () => inspectorOpen ? buildAssistantDiffTurns({
+            ...reviewDiffSource,
+            turns: reviewIndex?.turns
+        }) : [],
+        [inspectorOpen, reviewDiffSource, reviewIndex?.turns]
+    )
+    const hydratedReviewTurnIds = useMemo(
+        () => new Set(Object.entries(reviewTurnDetails)
+            .filter(([, detail]) => detail.threadId === diffSource.threadId)
+            .map(([turnId]) => turnId)),
+        [diffSource.threadId, reviewTurnDetails]
     )
     const diffTurns = useMemo(
-        () => mergeAssistantReviewIndex({
+        () => inspectorOpen ? mergeAssistantReviewIndex({
             index: reviewIndex,
             detailedTurns: detailedDiffTurns,
-            projectRootPath: diffSource.projectRootPath
-        }),
-        [detailedDiffTurns, diffSource.projectRootPath, reviewIndex]
+            hydratedTurnIds: hydratedReviewTurnIds,
+            projectRootPath: diffSource.projectRootPath,
+            activeTurnId: diffSource.activeTurnId
+        }) : [],
+        [detailedDiffTurns, diffSource.activeTurnId, diffSource.projectRootPath, hydratedReviewTurnIds, inspectorOpen, reviewIndex]
     )
     const selectedTargetActivity = selectedDiffTarget
         ? diffSource.activities.find((activity) => activity.id === selectedDiffTarget.activityId) || null
@@ -276,6 +330,13 @@ export default function AssistantPage() {
     }, [diffSource.threadId])
 
     useEffect(() => {
+        if (inspectorOpen) return
+        setReviewTurnDetails({})
+        setReviewTurnDetailErrors({})
+        pendingReviewTurnIdsRef.current.clear()
+    }, [inspectorOpen])
+
+    useEffect(() => {
         if (paneLayout.autoCollapseLeftSidebar && !leftSidebarCollapsed) {
             autoCollapsedLeftSidebarRef.current = true
             setLeftSidebarCollapsed(true)
@@ -311,6 +372,17 @@ export default function AssistantPage() {
         setDiffRevealRequest(null)
         setRightPanelMode('none')
     }, [setRightPanelMode, shell.selectedSessionId])
+
+    useEffect(() => {
+        if (!filesShellLaunchRequest) return
+        diffSessionIdRef.current = shell.selectedSessionId
+        prepareInspector()
+        setRightPanelMode('review')
+    }, [filesShellLaunchRequest?.id, prepareInspector, setRightPanelMode])
+
+    const handleFilesShellLaunchRequestHandled = useCallback((requestId: string) => {
+        setFilesShellLaunchRequest((current) => current?.id === requestId ? null : current)
+    }, [])
 
     const handleStartDetachedPlaygroundChat = useCallback(async () => {
         setRailMode('work')
@@ -399,6 +471,7 @@ export default function AssistantPage() {
     }, [deletingMessageId])
 
     const handleViewDiff = useCallback((target: AssistantDiffTarget) => {
+        prepareInspector()
         diffSessionIdRef.current = shell.selectedSessionId
         setSelectedDiffTarget(target)
         const activity = diffSource.activities.find((entry) => entry.id === target.activityId)
@@ -406,7 +479,7 @@ export default function AssistantPage() {
         setSelectedDiffTurnId(turnId)
         setDiffRevealRequest(turnId ? { id: diffRevealSequenceRef.current++, turnId } : null)
         setRightPanelMode('review')
-    }, [diffSource.activities, setRightPanelMode, shell.selectedSessionId])
+    }, [diffSource.activities, prepareInspector, setRightPanelMode, shell.selectedSessionId])
     const handleSelectDiffTurn = useCallback((turnId: string) => {
         setDiffRevealRequest(null)
         setSelectedDiffTurnId(turnId)
@@ -426,11 +499,12 @@ export default function AssistantPage() {
             setRightPanelMode('none')
             return
         }
+        prepareInspector()
         setSelectedDiffTarget(null)
         setSelectedDiffTurnId(null)
         setDiffRevealRequest(null)
         setRightPanelMode('review')
-    }, [rightPanelMode, setRightPanelMode])
+    }, [prepareInspector, rightPanelMode, setRightPanelMode])
     const handleCloseDiff = useCallback(() => {
         setSelectedDiffTarget(null)
         setSelectedDiffTurnId(null)
@@ -460,7 +534,7 @@ export default function AssistantPage() {
                         onPreviewPinnedChange={setBubblePreviewPinned}
                         onShowToast={showToast}
                     />
-                    <div className="flex min-w-0 flex-1">
+                    <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
                         <AssistantConversationPane
                             rightPanelOpen={inspectorOpen}
                             rightPanelMode={rightPanelMode}
@@ -484,18 +558,20 @@ export default function AssistantPage() {
                             onViewDiff={handleViewDiff}
                             onShowToast={showToast}
                         />
-                        {inspectorMounted || inspectorOpen ? (
-                            <Suspense fallback={inspectorOpen ? (
+                        {inspectorOpen ? (
+                            <Suspense fallback={(
                                 <aside
                                     className="h-full shrink-0 border-l border-[var(--surface-panel-divider)] bg-[var(--surface-panel)]"
                                     style={{ width: paneLayout.inspectorWidth }}
                                     aria-label="Opening inspector"
                                 />
-                            ) : null}>
+                            )}>
                                 <AssistantDiffPanel
-                                    open={inspectorOpen}
+                                    open
                                     sessionId={shell.selectedSessionId}
                                     threadId={diffSource.threadId}
+                                    canonicalChatId={diffSource.canonicalChatId}
+                                    chatTitle={diffSource.chatTitle}
                                     width={paneLayout.inspectorWidth}
                                     maxWidth={paneLayout.maxInspectorWidth}
                                     turns={diffTurns}
@@ -508,6 +584,8 @@ export default function AssistantPage() {
                                     selectedTurnId={effectiveDiffTurnId}
                                     selectedDiff={selectedDiff}
                                     projectPath={diffSource.projectRootPath}
+                                    filesShellLaunchRequest={filesShellLaunchRequest}
+                                    onFilesShellLaunchRequestHandled={handleFilesShellLaunchRequestHandled}
                                     fleetSnapshot={diffSource.fleetSnapshot}
                                     browserSurfaceRequest={browserSurfaceRequest}
                                     onBrowserSurfaceRequestHandled={handleBrowserSurfaceRequestHandled}
@@ -544,7 +622,7 @@ export default function AssistantPage() {
                         previewBytes={preview.previewBytes}
                         modifiedAt={preview.previewModifiedAt}
                         projectPath={diffSource.projectRootPath || undefined}
-                        disableFullscreen
+                        chromeContext="peek"
                         mediaItems={preview.previewMediaItems}
                         onOpenLinkedPreview={preview.openPreview}
                         onOpenLinkedPreviewInNewTab={preview.openPreviewInNewTab}

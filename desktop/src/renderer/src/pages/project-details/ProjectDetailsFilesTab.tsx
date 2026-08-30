@@ -7,7 +7,7 @@ import {
 import { cn } from '@/lib/utils'
 import { buildMediaPreviewSources } from '@/components/ui/file-preview/utils'
 import { formatFileSize } from './fileTreeUtils'
-import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { useSettings } from '@/lib/settings'
 import { FileActionsMenu } from '@/components/ui/FileActionsMenu'
 import { normalizeFileSystemPath, getParentFolderPath } from './projectDetailsPageHelpers'
@@ -60,7 +60,7 @@ export function ProjectDetailsFilesTab(props: ProjectDetailsFilesTabProps) {
     const { settings } = useSettings()
     const iconTheme = settings.appearanceResolvedMode
     const renderEntryIcon = (pathValue: string, kind: 'file' | 'directory') => (
-        <VscodeEntryIcon pathValue={pathValue} kind={kind} theme={iconTheme} className="size-3.5 shrink-0" />
+        <FileEntryIcon pathValue={pathValue} kind={kind} theme={iconTheme} className="size-3.5 shrink-0" />
     )
     const projectRootPath = useMemo(() => normalizeFileSystemPath(project?.path || ''), [project?.path])
     const [draggedNode, setDraggedNode] = useState<any | null>(null)
@@ -305,7 +305,7 @@ export function ProjectDetailsFilesTab(props: ProjectDetailsFilesTabProps) {
                                         ) : (
                                             <span className="w-3" />
                                         )}
-                                        <VscodeEntryIcon
+                                        <FileEntryIcon
                                             pathValue={node.path || node.name}
                                             kind={isFolder ? 'directory' : 'file'}
                                             theme={iconTheme}

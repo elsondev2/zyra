@@ -60,8 +60,10 @@ try {
         await writePlatformFixture(directory, platform)
     }
 
-    await writeFile(path.join(directory, `zyra-v${version}.zip`), 'unified Zyra CLI/source fixture\n', 'utf8')
-    assert.equal(expectedReleaseAssetNames(version).length, 11)
+    for (const assetName of expectedReleaseAssetNames(version).filter((name) => name.startsWith('Zyra-TUI-'))) {
+        await writeFile(path.join(directory, assetName), `standalone fixture:${assetName}\n`, 'utf8')
+    }
+    assert.equal(expectedReleaseAssetNames(version).length, 14)
     await writeSha256Sums(directory, version)
     await validateSha256Sums(directory, version)
 

@@ -1,7 +1,6 @@
 import type {
     AssistantBusyMessageMode,
     AssistantDefaultEffort,
-    AssistantDefaultInteractionMode,
     AssistantDefaultRuntimeMode,
     Settings
 } from './settings'
@@ -12,7 +11,6 @@ type AssistantDefaultsSubset = Pick<
     | 'assistantDefaultModel'
     | 'assistantDefaultPromptTemplate'
     | 'assistantDefaultRuntimeMode'
-    | 'assistantDefaultInteractionMode'
     | 'assistantDefaultEffort'
     | 'assistantDefaultFastMode'
     | 'assistantBusyMessageMode'
@@ -28,14 +26,12 @@ export function loadLegacyAssistantComposerDefaults(
         const parsed = JSON.parse(raw) as {
             model?: unknown
             runtimeMode?: unknown
-            interactionMode?: unknown
             effort?: unknown
             fastModeEnabled?: unknown
         }
         return {
             assistantDefaultModel: typeof parsed.model === 'string' ? parsed.model.trim() : defaults.assistantDefaultModel,
             assistantDefaultRuntimeMode: parsed.runtimeMode === 'full-access' ? 'full-access' : defaults.assistantDefaultRuntimeMode,
-            assistantDefaultInteractionMode: parsed.interactionMode === 'plan' ? 'plan' : defaults.assistantDefaultInteractionMode,
             assistantDefaultEffort:
                 isAssistantReasoningEffort(parsed.effort)
                     ? parsed.effort
@@ -53,20 +49,12 @@ export function sanitizeAssistantDefaultRuntimeMode(value: unknown): AssistantDe
     return value === 'full-access' ? 'full-access' : 'approval-required'
 }
 
-export function sanitizeAssistantDefaultInteractionMode(value: unknown): AssistantDefaultInteractionMode {
-    return value === 'plan' ? 'plan' : 'default'
-}
-
 export function sanitizeAssistantDefaultEffort(value: unknown): AssistantDefaultEffort {
     return isAssistantReasoningEffort(value) ? value : 'medium'
 }
 
 export function getAssistantDefaultRuntimeModeLabel(value: AssistantDefaultRuntimeMode): string {
     return value === 'full-access' ? 'Full access' : 'Supervised'
-}
-
-export function getAssistantDefaultInteractionModeLabel(value: AssistantDefaultInteractionMode): string {
-    return value === 'plan' ? 'Plan' : 'Chat'
 }
 
 export function getAssistantDefaultEffortLabel(value: AssistantDefaultEffort): string {
@@ -103,7 +91,6 @@ export function getAssistantDefaultsPreview(settings: AssistantDefaultsSubset): 
     const modelLabel = settings.assistantDefaultModel.trim() || 'Auto model'
     const parts = [
         modelLabel,
-        getAssistantDefaultInteractionModeLabel(settings.assistantDefaultInteractionMode),
         getAssistantDefaultRuntimeModeLabel(settings.assistantDefaultRuntimeMode),
         getAssistantDefaultEffortLabel(settings.assistantDefaultEffort),
         getAssistantDefaultSpeedLabel(settings.assistantDefaultFastMode),

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { ipcMain, type IpcMainEvent, type WebContents } from 'electron'
+import { type IpcMainEvent, type WebContents } from 'electron'
+import { ipcMain } from './ipc/trusted-ipc'
 import {
     BROWSER_DEVSCOPE_RELAY_EVENT_CHANNEL,
     BROWSER_DEVSCOPE_RELAY_READY_CHANNEL,

@@ -19,6 +19,13 @@ import {
     normalizeFileChangePath,
     normalizeFileChangePayload
 } from '../../shared/assistant/contracts/file-change'
+import { reconcileAssistantMessageReplays } from '../../shared/assistant/message-reconciliation'
+import {
+    findAssistantPersistedTurnAt,
+    reconcileAssistantUserTurnIds,
+    resolveAssistantTurnIdAlias
+} from '../../shared/assistant/turn-reconciliation'
+import { decodeAssistantHistoryCursor, encodeAssistantHistoryCursor } from '../../shared/assistant/history-cursor'
 import {
     ASSISTANT_TIMELINE_KIND_RANK,
     compareAssistantTimelineOrderKeys,
@@ -35,38 +42,13 @@ import {
 } from './persistence-activity-payload'
 import { parseJson, toNullableString, toNumber } from './persistence-utils'
 
-export const INITIAL_ASSISTANT_HISTORY_TURN_LIMIT = 12
-export const OLDER_ASSISTANT_HISTORY_TURN_LIMIT = 15
+export const INITIAL_ASSISTANT_HISTORY_TURN_LIMIT = 3
+export const OLDER_ASSISTANT_HISTORY_TURN_LIMIT = 1
 export const INITIAL_ASSISTANT_HISTORY_PAGE_MAX_RECORDS = 120
-export const ASSISTANT_HISTORY_PAGE_MAX_RECORDS = 320
+export const ASSISTANT_HISTORY_PAGE_MAX_RECORDS = 160
 export const INITIAL_ASSISTANT_HISTORY_PAGE_MAX_CHARACTERS = 900_000
-export const ASSISTANT_HISTORY_PAGE_MAX_CHARACTERS = 1_800_000
+export const ASSISTANT_HISTORY_PAGE_MAX_CHARACTERS = 900_000
 const LEGACY_RECORDS_PER_TURN = 8
-const CURSOR_VERSION = 1
-
-type PersistedCursor = AssistantTimelineOrderKey & { version: number; threadId: string }
-
-function encodeCursor(threadId: string, key: AssistantTimelineOrderKey): string {
-    return Buffer.from(JSON.stringify({ version: CURSOR_VERSION, threadId, ...key }), 'utf8').toString('base64url')
-}
-
-function decodeCursor(threadId: string, value: string | null | undefined): PersistedCursor | null {
-    if (!value) return null
-    try {
-        const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Partial<PersistedCursor>
-        if (
-            parsed.version !== CURSOR_VERSION
-            || parsed.threadId !== threadId
-            || typeof parsed.createdAt !== 'string'
-            || typeof parsed.id !== 'string'
-            || typeof parsed.kindRank !== 'number'
-            || (parsed.timelineSequence !== null && typeof parsed.timelineSequence !== 'number')
-        ) throw new Error('invalid')
-        return parsed as PersistedCursor
-    } catch {
-        throw new Error('Assistant history cursor is malformed or stale. Reload the newest page.')
-    }
-}
 
 function clampTurnLimit(value: number | undefined, fallback: number): number {
     if (!Number.isFinite(value)) return fallback
@@ -137,7 +119,7 @@ function readMessages(db: SqlDatabase, threadId: string, lower: AssistantTimelin
     const descending = typeof limit === 'number'
     const rows = db.exec(`SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at, provider_item_id, modality FROM assistant_messages WHERE thread_id = ?${range.sql} ORDER BY created_at ${descending ? 'DESC' : 'ASC'}, COALESCE(timeline_sequence, -1) ${descending ? 'DESC' : 'ASC'}, id ${descending ? 'DESC' : 'ASC'}${descending ? ' LIMIT ?' : ''}`, [threadId, ...range.params, ...(descending ? [limit!] : [])])[0]?.values || []
     const records = rows.map(mapMessage)
-    return descending ? records.reverse() : records
+    return reconcileAssistantMessageReplays(descending ? records.reverse() : records)
 }
 
 function readActivities(db: SqlDatabase, threadId: string, lower: AssistantTimelineOrderKey | null, upper: AssistantTimelineOrderKey | null, limit?: number): AssistantActivity[] {
@@ -218,9 +200,71 @@ function readLegacyFallbackPage(db: SqlDatabase, threadId: string, upper: Assist
         activities,
         proposedPlans,
         pageInfo: {
-            oldestCursor: oldestKey ? encodeCursor(threadId, oldestKey) : null,
+            oldestCursor: oldestKey ? encodeAssistantHistoryCursor(threadId, oldestKey) : null,
+            newestCursor: upper ? encodeAssistantHistoryCursor(threadId, upper) : null,
             hasOlder: oldestKey ? hasRecordBefore(db, threadId, oldestKey) : false,
+            hasNewer: Boolean(upper),
             turnCount: new Set(messages.map((message) => message.turnId).filter(Boolean)).size
+        }
+    }
+}
+
+function historyBoundaryKey(row: SqlValue[]): AssistantTimelineOrderKey {
+    return {
+        id: String(row[0] || ''),
+        timelineSequence: typeof row[1] === 'number' ? row[1] : null,
+        createdAt: String(row[2] || new Date(0).toISOString()),
+        kindRank: ASSISTANT_TIMELINE_KIND_RANK.message
+    }
+}
+
+function readForwardAssistantHistoryPage(
+    db: SqlDatabase,
+    threadId: string,
+    lower: AssistantTimelineOrderKey,
+    turnLimit: number,
+    maxRecords: number,
+    maxCharacters: number
+): AssistantHistoryPage {
+    const boundaryRows = db.exec(`SELECT id, timeline_sequence, created_at FROM assistant_messages WHERE thread_id = ? AND role = 'user' AND (created_at, COALESCE(timeline_sequence, -1), 0, id) >= (?, ?, ?, ?) ORDER BY created_at ASC, COALESCE(timeline_sequence, -1) ASC, id ASC LIMIT ?`, [threadId, ...tupleValues(lower), turnLimit + 1])[0]?.values || []
+    if (boundaryRows.length === 0) {
+        return {
+            threadId,
+            messages: [],
+            activities: [],
+            proposedPlans: [],
+            pageInfo: {
+                oldestCursor: encodeAssistantHistoryCursor(threadId, lower),
+                newestCursor: null,
+                hasOlder: hasRecordBefore(db, threadId, lower),
+                hasNewer: false,
+                turnCount: 0
+            }
+        }
+    }
+
+    const pageLower = historyBoundaryKey(boundaryRows[0]!)
+    let selectedTurnCount = 1
+    const availableTurns = Math.min(turnLimit, boundaryRows.length)
+    for (let count = 2; count <= availableTurns; count += 1) {
+        const candidateUpper = boundaryRows[count] ? historyBoundaryKey(boundaryRows[count]!) : null
+        const size = readHistoryRangeSize(db, threadId, pageLower, candidateUpper)
+        if (size.records > maxRecords || size.characters > maxCharacters) break
+        selectedTurnCount = count
+    }
+    const upperRow = boundaryRows[selectedTurnCount]
+    const pageUpper = upperRow ? historyBoundaryKey(upperRow) : null
+    return {
+        threadId,
+        messages: readMessages(db, threadId, pageLower, pageUpper),
+        activities: readActivities(db, threadId, pageLower, pageUpper),
+        proposedPlans: readPlans(db, threadId, pageLower, pageUpper),
+        pageInfo: {
+            oldestCursor: encodeAssistantHistoryCursor(threadId, pageLower),
+            newestCursor: pageUpper ? encodeAssistantHistoryCursor(threadId, pageUpper) : null,
+            hasOlder: hasRecordBefore(db, threadId, pageLower),
+            hasNewer: Boolean(pageUpper),
+            turnCount: selectedTurnCount
         }
     }
 }
@@ -232,10 +276,22 @@ export function readAssistantHistoryPage(db: SqlDatabase, input: AssistantGetHis
         throw new Error('Assistant thread not found.')
     }
 
-    const upper = decodeCursor(threadId, input.before)
+    if (input.before && input.after) throw new Error('Assistant history accepts either a before or after cursor, not both.')
+    const upper = decodeAssistantHistoryCursor(threadId, input.before)
+    const forwardLower = decodeAssistantHistoryCursor(threadId, input.after)
     const maxRecords = input.before ? ASSISTANT_HISTORY_PAGE_MAX_RECORDS : INITIAL_ASSISTANT_HISTORY_PAGE_MAX_RECORDS
     const maxCharacters = input.before ? ASSISTANT_HISTORY_PAGE_MAX_CHARACTERS : INITIAL_ASSISTANT_HISTORY_PAGE_MAX_CHARACTERS
-    const turnLimit = clampTurnLimit(input.turnLimit, input.before ? OLDER_ASSISTANT_HISTORY_TURN_LIMIT : INITIAL_ASSISTANT_HISTORY_TURN_LIMIT)
+    const turnLimit = clampTurnLimit(input.turnLimit, input.before || input.after ? OLDER_ASSISTANT_HISTORY_TURN_LIMIT : INITIAL_ASSISTANT_HISTORY_TURN_LIMIT)
+    if (forwardLower) {
+        return readForwardAssistantHistoryPage(
+            db,
+            threadId,
+            forwardLower,
+            turnLimit,
+            ASSISTANT_HISTORY_PAGE_MAX_RECORDS,
+            ASSISTANT_HISTORY_PAGE_MAX_CHARACTERS
+        )
+    }
     const beforeClause = upper
         ? ' AND (created_at, COALESCE(timeline_sequence, -1), 0, id) < (?, ?, ?, ?)'
         : ''
@@ -285,8 +341,10 @@ export function readAssistantHistoryPage(db: SqlDatabase, input: AssistantGetHis
         activities: readActivities(db, threadId, lower, upper),
         proposedPlans: readPlans(db, threadId, lower, upper),
         pageInfo: {
-            oldestCursor: encodeCursor(threadId, lower),
+            oldestCursor: encodeAssistantHistoryCursor(threadId, lower),
+            newestCursor: upper ? encodeAssistantHistoryCursor(threadId, upper) : null,
             hasOlder: hasRecordBefore(db, threadId, lower),
+            hasNewer: Boolean(upper),
             turnCount: selectedTurnCount
         }
     }
@@ -317,9 +375,45 @@ type MutableReviewIndexTurn = {
     state: 'running' | 'completed' | 'interrupted' | 'error'
     requestedAt: string
     updatedAt: string
+    assistantMessageId: string | null
     prompt: AssistantReviewMessagePreview | null
     response: AssistantReviewMessagePreview | null
     changes: AssistantReviewChangeIndexEntry[]
+}
+
+function reconcileDuplicateReviewLedgerTurns(turnsById: Map<string, MutableReviewIndexTurn>): void {
+    const turnsByAssistantMessageId = new Map<string, MutableReviewIndexTurn[]>()
+    for (const turn of turnsById.values()) {
+        if (!turn.assistantMessageId) continue
+        const matches = turnsByAssistantMessageId.get(turn.assistantMessageId) || []
+        matches.push(turn)
+        turnsByAssistantMessageId.set(turn.assistantMessageId, matches)
+    }
+
+    const evidenceScore = (turn: MutableReviewIndexTurn): number => (
+        (turn.prompt ? 4 : 0)
+        + (turn.response ? 2 : 0)
+        + (turn.changes.length > 0 ? 1 : 0)
+    )
+    for (const duplicates of turnsByAssistantMessageId.values()) {
+        if (duplicates.length < 2) continue
+        const ordered = duplicates.slice().sort((left, right) => (
+            evidenceScore(right) - evidenceScore(left)
+            || left.requestedAt.localeCompare(right.requestedAt)
+            || left.id.localeCompare(right.id)
+        ))
+        const keeper = ordered[0]!
+        for (const duplicate of ordered.slice(1)) {
+            if (!keeper.prompt && duplicate.prompt) keeper.prompt = duplicate.prompt
+            if (!keeper.response || (duplicate.response && keeper.response.createdAt < duplicate.response.createdAt)) {
+                keeper.response = duplicate.response || keeper.response
+            }
+            const knownChangeIds = new Set(keeper.changes.map((change) => `${change.activityId}:${change.filePath}`))
+            keeper.changes.push(...duplicate.changes.filter((change) => !knownChangeIds.has(`${change.activityId}:${change.filePath}`)))
+            keeper.updatedAt = laterTimestamp(keeper.updatedAt, duplicate.updatedAt)
+            turnsById.delete(duplicate.id)
+        }
+    }
 }
 
 function buildReviewMessagePreview(message: AssistantMessage): AssistantReviewMessagePreview {
@@ -401,7 +495,7 @@ export function readAssistantReviewIndex(db: SqlDatabase, threadId: string): Ass
         || (String(threadRow[0] || 'root') === 'subagent' ? 'Subagent' : 'Agent')
 
     const persistedTurnRows = db.exec(`
-        SELECT id, state, requested_at, updated_at
+        SELECT id, state, requested_at, updated_at, completed_at, assistant_message_id
         FROM assistant_turns
         WHERE thread_id = ?
         ORDER BY requested_at ASC, id ASC
@@ -415,12 +509,17 @@ export function readAssistantReviewIndex(db: SqlDatabase, threadId: string): Ass
             state: String(row[1] || 'completed') as MutableReviewIndexTurn['state'],
             requestedAt,
             updatedAt: String(row[3] || requestedAt),
+            assistantMessageId: toNullableString(row[5]),
             prompt: null,
             response: null,
             changes: []
         }
         if (id) turnsById.set(id, turn)
-        return turn
+        return {
+            id,
+            requestedAt,
+            completedAt: toNullableString(row[4])
+        }
     }).filter((turn) => Boolean(turn.id))
 
     const ensureTurn = (id: string, createdAt: string): MutableReviewIndexTurn => {
@@ -431,6 +530,7 @@ export function readAssistantReviewIndex(db: SqlDatabase, threadId: string): Ass
             state: 'completed',
             requestedAt: createdAt,
             updatedAt: createdAt,
+            assistantMessageId: null,
             prompt: null,
             response: null,
             changes: []
@@ -439,29 +539,20 @@ export function readAssistantReviewIndex(db: SqlDatabase, threadId: string): Ass
         return turn
     }
 
-    const users = (db.exec(`
+    const users = reconcileAssistantMessageReplays((db.exec(`
         SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at, provider_item_id, modality
         FROM assistant_messages
         WHERE thread_id = ? AND role = 'user'
         ORDER BY created_at ASC, COALESCE(timeline_sequence, -1) ASC, id ASC
-    `, [normalizedThreadId])[0]?.values || []).map(mapMessage)
-    const userTurnIdByMessageId = new Map<string, string>()
+    `, [normalizedThreadId])[0]?.values || []).map(mapMessage))
+    const { resolvedTurnIdByMessageId, turnIdAliases } = reconcileAssistantUserTurnIds(users, persistedTurns)
 
-    users.forEach((user, index) => {
-        const nextUser = users[index + 1]
-        const directTurn = user.turnId ? turnsById.get(user.turnId) : null
-        const exactTurn = directTurn || persistedTurns.find((turn) => !turn.prompt && turn.requestedAt === user.createdAt)
-        const boundedTurn = exactTurn || persistedTurns.find((turn) => (
-            !turn.prompt
-            && turn.requestedAt >= user.createdAt
-            && (!nextUser || turn.requestedAt < nextUser.createdAt)
-        ))
-        const resolvedTurnId = boundedTurn?.id || user.turnId || `message:${user.id}`
+    for (const user of users) {
+        const resolvedTurnId = resolvedTurnIdByMessageId.get(user.id) || user.turnId || `message:${user.id}`
         const turn = ensureTurn(resolvedTurnId, user.createdAt)
         if (!turn.prompt) turn.prompt = buildReviewMessagePreview(user)
         turn.updatedAt = laterTimestamp(turn.updatedAt, user.updatedAt)
-        userTurnIdByMessageId.set(user.id, resolvedTurnId)
-    })
+    }
 
     const responseRows = db.exec(`
         WITH ranked_responses AS (
@@ -486,13 +577,23 @@ export function readAssistantReviewIndex(db: SqlDatabase, threadId: string): Ass
     const resolveTimelineTurnId = (createdAt: string): string | null => {
         for (let index = users.length - 1; index >= 0; index -= 1) {
             const user = users[index]
-            if (user && user.createdAt <= createdAt) return userTurnIdByMessageId.get(user.id) || null
+            if (user && user.createdAt <= createdAt) return resolvedTurnIdByMessageId.get(user.id) || null
         }
         return null
     }
 
-    for (const response of [...responseRows.map(mapMessage), ...nullTurnResponses]) {
-        const resolvedTurnId = response.turnId || resolveTimelineTurnId(response.createdAt)
+    for (const response of reconcileAssistantMessageReplays([...responseRows.map(mapMessage), ...nullTurnResponses])) {
+        const sourceTurnId = resolveAssistantTurnIdAlias(response.turnId, turnIdAliases)
+        const sourceTurnAlreadyKnown = Boolean(sourceTurnId && turnsById.has(sourceTurnId))
+        const persistedTurn = sourceTurnAlreadyKnown
+            ? null
+            : findAssistantPersistedTurnAt(persistedTurns, response.createdAt)
+        const timelineTurnId = resolveTimelineTurnId(response.createdAt)
+        const resolvedTurnId = sourceTurnAlreadyKnown
+            ? sourceTurnId
+            : sourceTurnId
+                ? persistedTurn?.id || timelineTurnId || sourceTurnId
+                : timelineTurnId || persistedTurn?.id
         if (!resolvedTurnId) continue
         const turn = ensureTurn(resolvedTurnId, response.createdAt)
         if (!turn.response || turn.response.createdAt <= response.createdAt) {
@@ -508,13 +609,24 @@ export function readAssistantReviewIndex(db: SqlDatabase, threadId: string): Ass
         ORDER BY created_at ASC, COALESCE(timeline_sequence, -1) ASC, id ASC
     `, [normalizedThreadId])[0]?.values || []).map(mapActivity)
     for (const activity of fileActivities) {
-        const resolvedTurnId = activity.turnId || resolveTimelineTurnId(activity.createdAt)
+        const sourceTurnId = resolveAssistantTurnIdAlias(activity.turnId, turnIdAliases)
+        const sourceTurnAlreadyKnown = Boolean(sourceTurnId && turnsById.has(sourceTurnId))
+        const persistedTurn = sourceTurnAlreadyKnown
+            ? null
+            : findAssistantPersistedTurnAt(persistedTurns, activity.createdAt)
+        const timelineTurnId = resolveTimelineTurnId(activity.createdAt)
+        const resolvedTurnId = sourceTurnAlreadyKnown
+            ? sourceTurnId
+            : sourceTurnId
+                ? persistedTurn?.id || timelineTurnId || sourceTurnId
+                : timelineTurnId || persistedTurn?.id
         if (!resolvedTurnId) continue
         const turn = ensureTurn(resolvedTurnId, activity.createdAt)
         turn.changes.push(...readReviewFileChanges(activity, resolvedTurnId))
         turn.updatedAt = laterTimestamp(turn.updatedAt, activity.createdAt)
     }
 
+    reconcileDuplicateReviewLedgerTurns(turnsById)
     const chronological = [...turnsById.values()]
         .sort((left, right) => left.requestedAt.localeCompare(right.requestedAt) || left.id.localeCompare(right.id))
     const turns = chronological.map((turn, index) => ({
@@ -613,6 +725,35 @@ export function readAssistantTurnDetail(db: SqlDatabase, threadId: string, turnI
         const requestedAt = String(turnRow?.[0] || directMessageRows[0]?.[6] || directActivityRows[0]?.[7] || directPlanRows[0]?.[4] || '')
         const messages = directMessageRows.map(mapMessage)
         if (!messages.some((message) => message.role === 'user')) {
+            const userRows = db.exec(`
+                SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at, provider_item_id, modality
+                FROM assistant_messages
+                WHERE thread_id = ? AND role = 'user'
+                ORDER BY created_at ASC, COALESCE(timeline_sequence, -1) ASC, id ASC
+            `, [threadId])[0]?.values || []
+            const users = reconcileAssistantMessageReplays(userRows.map(mapMessage))
+            const persistedTurnRows = db.exec(`
+                SELECT id, requested_at
+                FROM assistant_turns
+                WHERE thread_id = ?
+                ORDER BY requested_at ASC, id ASC
+            `, [threadId])[0]?.values || []
+            const persistedTurns = persistedTurnRows.map((row) => ({ id: String(row[0] || ''), requestedAt: String(row[1] || '') }))
+            const reconciliation = reconcileAssistantUserTurnIds(users, persistedTurns)
+            const promptIndex = users.findIndex((user) => reconciliation.resolvedTurnIdByMessageId.get(user.id) === turnId)
+            if (promptIndex >= 0) {
+                const prompt = users[promptIndex]!
+                const nextPrompt = users[promptIndex + 1] || null
+                const lower = getAssistantTimelineOrderKey('message', prompt)
+                const upper = nextPrompt ? getAssistantTimelineOrderKey('message', nextPrompt) : null
+                return {
+                    threadId,
+                    turnId,
+                    messages: readMessages(db, threadId, lower, upper),
+                    activities: readActivities(db, threadId, lower, upper),
+                    proposedPlans: readPlans(db, threadId, lower, upper)
+                }
+            }
             const promptRow = db.exec(`SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at, provider_item_id, modality FROM assistant_messages WHERE thread_id = ? AND role = 'user' AND created_at <= ? ORDER BY created_at DESC, COALESCE(timeline_sequence, -1) DESC, id DESC LIMIT 1`, [threadId, requestedAt])[0]?.values?.[0]
             if (promptRow) messages.unshift(mapMessage(promptRow))
         }
@@ -662,8 +803,10 @@ export function readAssistantThreadDetail(db: SqlDatabase, threadId: string): As
             ...page,
             initialLoading: false,
             loadingOlder: false,
+            loadingNewer: false,
             loadOlderError: null,
-            fullyLoaded: !page.pageInfo.hasOlder
+            loadNewerError: null,
+            fullyLoaded: !page.pageInfo.hasOlder && !page.pageInfo.hasNewer
         }
     }
 }

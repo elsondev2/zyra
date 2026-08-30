@@ -7,9 +7,8 @@ import {
     type DragEndEvent,
     type DragStartEvent
 } from '@dnd-kit/core'
-import { useNavigate } from 'react-router-dom'
 import { CreateFileTypeModal } from '@/components/ui/CreateFileTypeModal'
-import { VscodeEntryIcon } from '@/components/ui/VscodeEntryIcon'
+import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { getFileExtensionFromName, validateCreateName } from '@/lib/filesystem/fileSystemPaths'
 import { cn } from '@/lib/utils'
 import type { PreviewFile, PreviewMediaItem, PreviewOpenOptions } from './types'
@@ -57,11 +56,9 @@ export function useFilePreviewModalInteractions(input: {
         requestExternalIntent
     } = input
 
-    const navigate = useNavigate()
     const [createModalOpen, setCreateModalOpen] = useState(false)
     const [createModalError, setCreateModalError] = useState<string | null>(null)
     const [folderTreeRefreshToken, setFolderTreeRefreshToken] = useState(0)
-    const [preserveSidebarContextRequest, setPreserveSidebarContextRequest] = useState<{ path: string; nonce: number } | null>(null)
     const [activeDragOverlay, setActiveDragOverlay] = useState<PreviewDragOverlayState>(null)
     const dndSensors = useSensors(
         useSensor(PointerSensor, {
@@ -74,22 +71,12 @@ export function useFilePreviewModalInteractions(input: {
         setCreateModalError(null)
     }, [file.path])
 
-    const markPreserveSidebarContext = useCallback((targetPath: string) => {
-        const normalizedPath = String(targetPath || '').trim()
-        if (!normalizedPath) return
-        setPreserveSidebarContextRequest((currentRequest) => ({
-            path: normalizedPath,
-            nonce: (currentRequest?.nonce || 0) + 1
-        }))
-    }, [])
-
     const openMediaItem = useCallback(async (item: PreviewMediaItem) => {
         if (!onOpenLinkedPreview) return
-        markPreserveSidebarContext(item.path)
         requestExternalIntent(() => onOpenLinkedPreview({ name: item.name, path: item.path }, item.extension, {
             mediaItems: mediaItems.map(({ name, path, extension }) => ({ name, path, extension }))
         }))
-    }, [markPreserveSidebarContext, mediaItems, onOpenLinkedPreview, requestExternalIntent])
+    }, [mediaItems, onOpenLinkedPreview, requestExternalIntent])
 
     const handleInternalMarkdownLink = useCallback(async (href: string) => {
         const openPreview = async (
@@ -98,16 +85,14 @@ export function useFilePreviewModalInteractions(input: {
             options?: PreviewOpenOptions
         ) => {
             if (!onOpenLinkedPreview) return
-            markPreserveSidebarContext(nextFile.path)
             requestExternalIntent(() => onOpenLinkedPreview(nextFile, ext, options))
         }
         return navigateMarkdownLink({
             href,
             filePath: file.path,
-            navigate,
             openPreview: onOpenLinkedPreview ? openPreview : undefined
         })
-    }, [file.path, markPreserveSidebarContext, navigate, onOpenLinkedPreview, requestExternalIntent])
+    }, [file.path, onOpenLinkedPreview, requestExternalIntent])
 
     const handleSelectPreviewTab = useCallback((tabId: string) => {
         if (!onSelectPreviewTab || tabId === resolvedActivePreviewTabId) return
@@ -129,9 +114,8 @@ export function useFilePreviewModalInteractions(input: {
         options?: PreviewOpenOptions
     ) => {
         if (!onOpenLinkedPreview) return
-        markPreserveSidebarContext(nextFile.path)
         requestExternalIntent(() => onOpenLinkedPreview(nextFile, ext, options))
-    }, [markPreserveSidebarContext, onOpenLinkedPreview, requestExternalIntent])
+    }, [onOpenLinkedPreview, requestExternalIntent])
 
     const handleOpenLinkedPreviewInNewTab = useCallback(async (
         nextFile: { name: string; path: string },
@@ -139,9 +123,8 @@ export function useFilePreviewModalInteractions(input: {
         options?: PreviewOpenOptions
     ) => {
         if (!onOpenLinkedPreviewInNewTab) return
-        markPreserveSidebarContext(nextFile.path)
         requestExternalIntent(() => onOpenLinkedPreviewInNewTab(nextFile, ext, options))
-    }, [markPreserveSidebarContext, onOpenLinkedPreviewInNewTab, requestExternalIntent])
+    }, [onOpenLinkedPreviewInNewTab, requestExternalIntent])
 
     const handleOpenInBrowser = useCallback(async () => {
         try {
@@ -266,7 +249,7 @@ export function useFilePreviewModalInteractions(input: {
                     activeDragOverlay.type === 'tab' ? 'max-w-[220px]' : 'max-w-[280px]'
                 )}
             >
-                <VscodeEntryIcon
+                <FileEntryIcon
                     pathValue={activeDragOverlay.type === 'tab' ? activeDragOverlay.file.path : activeDragOverlay.path}
                     kind="file"
                     theme={settingsTheme === 'light' ? 'light' : 'dark'}
@@ -295,8 +278,6 @@ export function useFilePreviewModalInteractions(input: {
 
     return {
         folderTreeRefreshToken,
-        preserveSidebarContextRequest,
-        markPreserveSidebarContext,
         dndSensors,
         openMediaItem,
         handleInternalMarkdownLink,

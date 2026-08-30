@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { copyFileSync } from "node:fs";
+import { copyFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
@@ -35,10 +35,13 @@ import { createZyraTerminalTitle } from "./terminal-title.mjs";
 import { normalizeWebToolsMode, selectWebTools } from "./web-tools-picker.mjs";
 import { formatZyraVersion, isZyraVersionRequest } from "./version.mjs";
 import { createZyraTuiClientRuntime, listCanonicalZyraChats } from "./agent-server/tui-runtime.mjs";
+import { captureCliEvent, initializeCliAnalytics, shutdownCliAnalytics } from "./analytics/cli.mjs";
+import { classifyErrorCode, normalizeAnalyticsCommandName } from "./analytics/contracts.mjs";
 
 const useEmbeddedRuntime = process.env.ZYRA_EMBEDDED_RUNTIME === "1";
 const createCliRuntime = (options) => useEmbeddedRuntime ? createZyraSession(options) : createZyraTuiClientRuntime(options);
 const listCliSessions = (options) => useEmbeddedRuntime ? listZyraSessions(options) : listCanonicalZyraChats(options);
+let cliStartupCompleted = false;
 
 function parse(argv) {
   const args = [...argv];
@@ -197,31 +200,43 @@ function parse(argv) {
   return { command, project, prompt, sessionMode, session, noSession, pickSession, printMode, model, thinking, serviceTier, profile, terminalTheme, statusLine, notifications, interruptMode, webSearch, webFetch, webMenu, forceOnboarding, skipOnboarding };
 }
 
-function runUpdate() {
+async function runUpdate() {
+  if (process.env.ZYRA_DISTRIBUTION === "desktop-bundle") {
+    console.log("This Zyra TUI is bundled with Zyra Desktop. Install updates from Desktop Settings → About.");
+    return;
+  }
   const root = defaults.root;
+  const sourceDirectory = String(process.env.ZYRA_UPDATE_SOURCE_DIRECTORY ?? "").trim();
   if (process.platform === "win32") {
     const script = path.join(root, "install.ps1");
     const tempScript = path.join(os.tmpdir(), `zyra-update-${process.pid}.ps1`);
     copyFileSync(script, tempScript);
     process.chdir(os.tmpdir());
-    const result = spawnSync("powershell.exe", [
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      tempScript,
-      "-InstallDir",
-      root,
-      "-Update",
-      "-Yes",
-    ], { stdio: "inherit", cwd: os.tmpdir() });
+    let result;
+    try {
+      result = spawnSync("powershell.exe", [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        tempScript,
+        ...(sourceDirectory ? ["-SourceDirectory", sourceDirectory] : []),
+      ], { stdio: "inherit", cwd: os.tmpdir() });
+    } finally {
+      rmSync(tempScript, { force: true });
+    }
     if (result.error) throw result.error;
+    await shutdownCliAnalytics();
     process.exit(result.status ?? 1);
   }
 
   const script = path.join(root, "install.sh");
-  const result = spawnSync("bash", [script], { stdio: "inherit" });
+  const result = spawnSync("bash", [
+    script,
+    ...(sourceDirectory ? ["--source-dir", sourceDirectory] : []),
+  ], { stdio: "inherit" });
   if (result.error) throw result.error;
+  await shutdownCliAnalytics();
   process.exit(result.status ?? 1);
 }
 
@@ -236,21 +251,32 @@ function printDoctor(ui) {
   for (const [key, value] of Object.entries(status)) {
     console.log(`${key}: ${value ? "ok" : "missing"}`);
   }
-  if (Object.values(status).some((value) => !value)) process.exit(1);
+  if (Object.values(status).some((value) => !value)) process.exitCode = 1;
 }
 
 async function printSessions(_ui, _project) {
   console.log("Use `zyra resume` to browse chats, or `/chat` inside Zyra for the current chat.");
 }
 
-async function main() {
+async function runMain() {
   const parsed = parse(process.argv.slice(2));
+  captureCliEvent("zyra_v1_cli", {
+    action: "startup",
+    command: normalizeAnalyticsCommandName(parsed.command),
+    outcome: "started",
+    session_mode: parsed.noSession ? "none" : parsed.session ? "resume" : parsed.sessionMode === "continue" ? "continue" : "new",
+    runtime: useEmbeddedRuntime ? "embedded" : "client",
+  });
   if (parsed.command === "version") {
     process.stdout.write(`${formatZyraVersion()}\n`);
+    cliStartupCompleted = true;
+    captureCliEvent("zyra_v1_cli", { action: "startup", command: "version", outcome: "completed", runtime: useEmbeddedRuntime ? "embedded" : "client" });
     return;
   }
 
   let ui = createZyraUi();
+  cliStartupCompleted = true;
+  captureCliEvent("zyra_v1_cli", { action: "startup", outcome: "completed", runtime: useEmbeddedRuntime ? "embedded" : "client" });
   const terminalTitle = createZyraTerminalTitle({ project: parsed.project, state: "ready" });
   process.once("exit", () => terminalTitle.dispose());
 
@@ -264,6 +290,7 @@ async function main() {
 
   const subscribeRuntimeEvents = (runtime, handler = (event) => ui.event(event)) => {
     runtime.agentServer?.setApprovalHandler?.((request, options) => ui.requestApproval?.(request, options) || "decline");
+    runtime.agentServer?.setUserInputHandler?.((request, options) => ui.requestUserInput?.(request, options) || { answers: {}, cancelled: true });
     const forward = (event) => {
       handler(event);
       terminalTitle.fromEvent(event, runtime);
@@ -293,13 +320,14 @@ async function main() {
     return;
   }
   if (parsed.command === "update") {
-    runUpdate();
+    await runUpdate();
     return;
   }
   let onboardingResult;
   if (parsed.command === "onboarding") {
     onboardingResult = await runOnboarding({
-      root: defaults.root,
+      root: defaults.dataRoot,
+      assetRoot: defaults.root,
       project: parsed.project,
       currentTheme: parsed.terminalTheme,
       webSearch: parsed.webSearch,
@@ -382,12 +410,13 @@ async function main() {
   }
 
   if (shouldShowStartupRecommendations(parsed) && shouldRunOnboarding({
-    root: defaults.root,
+    root: defaults.dataRoot,
     force: parsed.forceOnboarding,
     skip: parsed.skipOnboarding,
   })) {
     onboardingResult = await runOnboarding({
-      root: defaults.root,
+      root: defaults.dataRoot,
+      assetRoot: defaults.root,
       project: parsed.project,
       currentTheme: parsed.terminalTheme,
       webSearch: parsed.webSearch,
@@ -414,6 +443,7 @@ async function main() {
     interruptMode: parsed.interruptMode || undefined,
     webSearch: parsed.webSearch,
     webFetch: parsed.webFetch,
+    requestUserInput: (request, options) => ui.requestUserInput?.(request, options) || { answers: {}, cancelled: true },
   };
 
   if (parsed.printMode || parsed.prompt) {
@@ -424,6 +454,7 @@ async function main() {
 
     if (parsed.printMode) {
       runtime.agentServer?.setApprovalHandler?.((request, options) => ui.requestApproval?.(request, options) || "decline");
+      runtime.agentServer?.setUserInputHandler?.((request, options) => ui.requestUserInput?.(request, options) || { answers: {}, cancelled: true });
       if (runtime.modelFallbackMessage) {
         console.error(runtime.modelFallbackMessage);
       }
@@ -571,7 +602,7 @@ async function main() {
   await ui.interactive(async (submission) => {
     try {
       const text = getSubmissionText(submission);
-      if (activeRun) {
+      if (activeRun || runtime.session.isStreaming) {
         if (isHardInterruptInput(text)) {
           suppressNextAbortError = true;
           setTerminalTitleState("stopped", runtime);
@@ -620,7 +651,7 @@ async function main() {
       }
     },
     statusLine: (width, state) => renderStatusLine(runtime, width, state),
-    isRunActive: () => activeRun,
+    isRunActive: () => activeRun || runtime.session.isStreaming,
     shouldEchoUserMessage: () => !activeRun,
     getQueuedMessages: () => getQueuedMessages(runtime),
     onRestoreQueued: (currentText) => {
@@ -659,7 +690,9 @@ async function main() {
 async function restartZyraProcess(runtime, options = {}) {
   const sessionManager = runtime.session.sessionManager;
   const selector = sessionManager.getSessionId?.() || sessionManager.getSessionFile?.();
-  const args = [path.join(runtime.root, "bin", "zyra.mjs")];
+  const args = process.env.ZYRA_STANDALONE === "1"
+    ? []
+    : [path.join(runtime.root, "bin", "zyra.mjs")];
   if (options.mode === "new") {
     args.push("new");
   } else if (selector) {
@@ -700,8 +733,10 @@ async function restartZyraProcess(runtime, options = {}) {
 
   if (result.error) {
     console.error(result.error.message);
+    await shutdownCliAnalytics();
     process.exit(1);
   }
+  await shutdownCliAnalytics();
   process.exit(result.status ?? 0);
 }
 
@@ -773,8 +808,20 @@ function getSubmissionOptions(submission) {
   };
 }
 
+async function main() {
+  void initializeCliAnalytics();
+  try {
+    await runMain();
+  } catch (error) {
+    if (!cliStartupCompleted) captureCliEvent("zyra_v1_cli", { action: "startup", outcome: "failed", error_code: classifyErrorCode(error) });
+    throw error;
+  } finally {
+    await shutdownCliAnalytics();
+  }
+}
+
 main().catch((error) => {
   const ui = createZyraUi();
   ui.error(error);
-  process.exit(1);
+  process.exitCode = 1;
 });

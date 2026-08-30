@@ -24,6 +24,19 @@ broker.registerTarget({
 assert.throws(() => broker.requestGrant({
     principal, targetId: blankTargetId, capabilities: ['tab.manage'], maxActions: 2
 }), /explicit HTTP\(S\) origin scope/, 'blank tabs cannot become origin-free external browser launchers')
+assert.equal(broker.armUserAuthorizedBrowserGrant({ threadId: 'thread:test', tabId: 'browser:blank' }), null)
+broker.removeTarget(blankTargetId)
+assert.equal(broker.materializeUserAuthorizedBrowserGrant('thread:test', 'turn:after-close'), null, 'closing an armed background tab cannot block the next turn')
+const intentTargetId = broker.targets.createTargetId('zyra-browser')
+broker.registerTarget({
+    target: { kind: 'zyra-browser', targetId: intentTargetId, tabId: 'browser:intent', ownerThreadId: 'thread:test', guestIdentity: 'guest:intent', origin: 'https://intent.example' },
+    driver,
+    trustedIdentity: {}
+})
+assert.equal(broker.armUserAuthorizedBrowserGrant({ threadId: 'thread:test', tabId: 'browser:intent' }), null)
+const intentGrant = broker.materializeUserAuthorizedBrowserGrant('thread:test', 'turn:intent')
+assert.equal(intentGrant?.principal.type, 'root')
+assert.deepEqual(intentGrant?.allowedOrigins, ['https://intent.example'])
 const approvalRaceTargetId = broker.targets.createTargetId('zyra-browser')
 broker.registerTarget({
     target: { kind: 'zyra-browser', targetId: approvalRaceTargetId, tabId: 'browser:approval-race', ownerThreadId: 'thread:test', guestIdentity: 'guest:approval-race', origin: 'https://allowed.example' },
