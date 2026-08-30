@@ -24,7 +24,10 @@ function arg(name, fallback = null) {
 const desktopPackage = JSON.parse(await readFile(path.join(desktopRoot, 'package.json'), 'utf8'))
 const version = arg('version', desktopPackage.version)
 const platformArg = arg('platform', process.platform)
-const directory = path.resolve(desktopRoot, arg('dir', 'dist/release-assets'))
+const directoryArg = arg('dir')
+const directory = directoryArg
+    ? path.resolve(directoryArg)
+    : path.resolve(desktopRoot, 'dist/release-assets')
 const platforms = platformArg === 'all'
     ? RELEASE_PLATFORM_KEYS
     : [normalizeReleasePlatform(platformArg)]

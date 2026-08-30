@@ -980,18 +980,18 @@ app.whenReady().then(async () => {
         }
         return
     }
-    void initializeProtectedMedia()
-    void registerInstalledDesktop().catch((error) => log.warn('[DesktopInstall] could not register this installation', error))
     if (process.env.ZYRA_PACKAGED_SMOKE === '1') {
         try {
             await runPackagedLaunchSmoke()
-            app.quit()
+            app.exit(0)
         } catch (error) {
             log.error('[ReleaseSmoke] packaged launch failed', error)
             app.exit(1)
         }
         return
     }
+    void initializeProtectedMedia()
+    void registerInstalledDesktop().catch((error) => log.warn('[DesktopInstall] could not register this installation', error))
 
     electronApp.setAppUserModelId(runtimeIdentity.appUserModelId)
     await setupServices.analytics.initialize()

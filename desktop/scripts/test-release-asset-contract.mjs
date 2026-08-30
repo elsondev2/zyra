@@ -49,6 +49,18 @@ for (const platform of ['windows', 'macos', 'linux']) {
             0,
             `${platform} isolated asset validation failed:\n${exactValidation.stdout}\n${exactValidation.stderr}`
         )
+        const cwdRelativeValidation = spawnSync(process.execPath, [
+            releaseValidator,
+            `--platform=${platform}`,
+            `--version=${version}`,
+            '--dir=.',
+            '--exact=true'
+        ], { cwd: platformDirectory, encoding: 'utf8' })
+        assert.equal(
+            cwdRelativeValidation.status,
+            0,
+            `${platform} cwd-relative asset validation failed:\n${cwdRelativeValidation.stdout}\n${cwdRelativeValidation.stderr}`
+        )
     } finally {
         await rm(platformDirectory, { recursive: true, force: true })
     }
