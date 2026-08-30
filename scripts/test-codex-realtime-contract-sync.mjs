@@ -20,7 +20,7 @@ const extracted = extractCodexRealtimeContract({
 assert.deepEqual(extracted, expected);
 
 const rendered = renderCodexRealtimeContract(extracted);
-const checkedIn = await readFile(new URL("../src/chatgpt-realtime-contract.mjs", import.meta.url), "utf8");
+const checkedIn = (await readFile(new URL("../src/chatgpt-realtime-contract.mjs", import.meta.url), "utf8")).replace(/\r\n?/g, "\n");
 assert.equal(checkedIn, rendered, "the checked-in contract must match the deterministic generated shape");
 
 assert.throws(

@@ -24,6 +24,11 @@ export async function setDesktopAnalyticsEnabled(enabled: boolean): Promise<Anal
     return result.success ? result.status : null
 }
 
+export function onDesktopAnalyticsStatusChange(callback: (status: AnalyticsStatus) => void): () => void {
+    if (!canUseDesktopAnalytics()) return () => undefined
+    return window.zyraAnalytics!.onStatusChange(callback)
+}
+
 export function captureProductEvent<Name extends AnalyticsEventName>(input: AnalyticsEventInput<Name>): void {
     if (!canUseDesktopAnalytics()) return
     void window.zyraAnalytics!.capture(input).catch(() => undefined)

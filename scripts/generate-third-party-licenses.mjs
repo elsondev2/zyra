@@ -163,6 +163,15 @@ async function checkGeneratedBundle(expectedHash, expectedPackageCount) {
   if (bunVersion !== BUN_RUNTIME_VERSION || nodeVersion !== NODE_RELEASE_RUNTIME_VERSION) {
     throw new Error("THIRD_PARTY_LICENSES.txt does not match the pinned release runtimes. Run npm run licenses:generate.");
   }
+  const bundleHashMarker = current.match(/^Bundle content SHA-256: ([a-f0-9]{64})$/m);
+  if (!bundleHashMarker || bundleHashMarker.index == null) {
+    throw new Error("THIRD_PARTY_LICENSES.txt is missing its content hash. Run npm run licenses:generate.");
+  }
+  const trailingContent = current.slice(bundleHashMarker.index + bundleHashMarker[0].length).trim();
+  const bundleBody = current.slice(0, bundleHashMarker.index).replace(/\r\n?/g, "\n");
+  if (trailingContent || sha256(bundleBody) !== bundleHashMarker[1]) {
+    throw new Error("THIRD_PARTY_LICENSES.txt content was modified. Run npm run licenses:generate.");
+  }
   console.log(`Third-party license bundle is current for ${expectedPackageCount} production packages.`);
 }
 
@@ -259,7 +268,8 @@ function renderBundle({ packages: packageMap, manifestHash: hash, bunLicense: bu
       "",
     );
   }
-  return `${lines.join("\n").trimEnd()}\n`;
+  const body = `${lines.join("\n").trimEnd()}\n`;
+  return `${body}Bundle content SHA-256: ${sha256(body)}\n`;
 }
 
 function usedSpdxIds(packageMap) {

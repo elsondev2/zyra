@@ -25,7 +25,7 @@ const DESKTOP_WORKSPACE_TIMEOUT_MS = 15_000;
 const DESKTOP_WORKSPACE_KINDS = new Set(["browser", "details", "explorer", "resources", "agents", "diff", "terminal"]);
 const DESKTOP_WORKSPACE_OPERATIONS = new Set(["open", "list", "show"]);
 const ACTIVE_FLEET_STATUSES = new Set(["queued", "starting", "running", "waiting", "blocked", "paused", "recovering"]);
-const BRIDGE_REQUEST_PATTERN = /^(?:prompt|configure|abort|steer|follow_up|compact|clear_queue|reload|canonical_message\.(?:append|find)|approval\.respond|user_input\.respond|agents\.[a-zA-Z0-9._-]+|workflows\.[a-zA-Z0-9._-]+)$/;
+const BRIDGE_REQUEST_PATTERN = /^(?:prompt|configure|auth\.refresh|abort|steer|follow_up|compact|clear_queue|reload|canonical_message\.(?:append|find)|approval\.respond|user_input\.respond|agents\.[a-zA-Z0-9._-]+|workflows\.[a-zA-Z0-9._-]+)$/;
 
 function hashAuthorityProof(value) {
   return createHash("sha256").update(String(value || "")).digest("base64url");
@@ -263,6 +263,7 @@ export class ZyraAgentServer extends EventEmitter {
       return this.getUtilityWorker().request("generate_text", params, { timeoutMs });
     }
     if (method === "desktop.workspace.open") return this.openDesktopWorkspace(client, params);
+    if (method === "auth.refresh") return this.refreshAuthProvider(client, params);
     if (method === "catalog.registerProject") {
       return { project: this.catalog.registerProject(params.project) };
     }
@@ -363,6 +364,25 @@ export class ZyraAgentServer extends EventEmitter {
       return { stopped: true, sessionKey: session.sessionKey };
     }
     throw new AgentServerProtocolError(`Unsupported method: ${method}.`);
+  }
+
+  async refreshAuthProvider(client, params) {
+    const provider = String(params.provider || "").trim();
+    if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(provider)) throw new AgentServerProtocolError("Auth refresh provider is invalid.");
+    if (![...this.sessions.values()].some((session) => session.clients.has(client))) {
+      throw new AgentServerProtocolError("Auth refresh requires an attached Zyra session.", "AGENT_SERVER_AUTH_FAILED");
+    }
+    const sessions = [...new Set(this.sessions.values())];
+    // Utility operations create disposable SDK runtimes from the shared auth file, so the
+    // persistent utility bridge owns no credential snapshot. Only connected chat runtimes refresh.
+    const refreshed = await Promise.allSettled(
+      sessions.map((session) => session.request(client, "auth.refresh", { provider })),
+    );
+    const failed = refreshed.filter((result) => result.status === "rejected");
+    if (failed.length > 0) {
+      throw new AgentServerProtocolError(`Authentication refresh failed in ${failed.length} live session${failed.length === 1 ? "" : "s"}.`);
+    }
+    return { provider, refreshedSessions: sessions.length };
   }
 
   async openDesktopWorkspace(client, params) {

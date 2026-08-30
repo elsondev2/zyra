@@ -24,7 +24,7 @@ assert.match(files, /class FilesPreviewBoundary/, 'a preview failure cannot clea
 assert.match(files, /Back to files/, 'a failed preview has an explicit recovery path')
 assert.match(files, /onOpenLinkedPreviewInNewTab=\{preview\.openPreviewInNewTab\}/, 'file subtabs remain real in the centered preview modal')
 assert.doesNotMatch(previewLayout, /shellMode === 'embedded'/, 'the obsolete split-pane preview shell is removed')
-assert.match(panel, /\{filesOpen \? \([\s\S]{0,500}<AssistantFilesWorkspace[\s\S]{0,160}projectPath=\{projectPath\}[\s\S]{0,160}active=\{open && activeWorkspaceTab\?\.kind === 'explorer'\}/, 'the main docked Inspector retains Files and its subtabs while another outer tab is selected')
+assert.match(panel, /\{filesOpen \? \([\s\S]{0,500}<AssistantFilesWorkspace[\s\S]{0,160}projectPath=\{filesProjectPath\}[\s\S]{0,160}active=\{open && activeWorkspaceTab\?\.kind === 'explorer'\}/, 'the main docked Inspector retains Files and its subtabs while another outer tab is selected')
 assert.match(utilityHost, /<AssistantFilesWorkspace projectPath=\{tab\.path \|\| tab\.projectPath \|\| null\} active=\{active\}/, 'independent windows use the same active-aware Files workspace')
 assert.doesNotMatch(previewInteractions, /useNavigate/, 'Router-free workspace windows cannot crash when a file opens')
 assert.match(filesPreviewMount, /<FilePreviewModal[\s\S]*active=\{active\}/, 'hidden Files previews stay mounted and receive inactive presentation state without escaping their outer tab')

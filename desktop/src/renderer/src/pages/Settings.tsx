@@ -3,7 +3,7 @@ import { useSettings } from '@/lib/settings'
 import { useOnboarding } from '@/lib/onboarding'
 import { isElectronRendererRuntime } from '@/lib/browser-file-url'
 import { registerSettingsCacheClearer } from '@/lib/settings-cache-registry'
-import { getDesktopAnalyticsStatus, setDesktopAnalyticsEnabled } from '@/lib/product-analytics'
+import { getDesktopAnalyticsStatus, onDesktopAnalyticsStatusChange, setDesktopAnalyticsEnabled } from '@/lib/product-analytics'
 import type { AnalyticsStatus } from '@shared/analytics/contracts'
 import {
     SettingsButton,
@@ -36,10 +36,22 @@ export default function GeneralSettings() {
     useEffect(() => {
         if (!desktopHost) return
         let mounted = true
-        void getDesktopAnalyticsStatus().then((status) => {
-            if (mounted) setAnalyticsStatus(status)
-        }).catch(() => undefined)
-        return () => { mounted = false }
+        const refresh = () => {
+            void getDesktopAnalyticsStatus().then((status) => {
+                if (mounted) setAnalyticsStatus(status)
+            }).catch(() => undefined)
+        }
+        const handleVisibility = () => { if (document.visibilityState === 'visible') refresh() }
+        const unsubscribe = onDesktopAnalyticsStatusChange((status) => { if (mounted) setAnalyticsStatus(status) })
+        window.addEventListener('focus', refresh)
+        document.addEventListener('visibilitychange', handleVisibility)
+        refresh()
+        return () => {
+            mounted = false
+            unsubscribe()
+            window.removeEventListener('focus', refresh)
+            document.removeEventListener('visibilitychange', handleVisibility)
+        }
     }, [desktopHost])
 
     useEffect(() => {

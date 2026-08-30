@@ -64,6 +64,15 @@ const utilityBridge = read("src/zyra-ui-bridge.mjs");
 assert.match(utilityBridge, /handleGenerateText[\s\S]*?noSession: true,[\s\S]*?noTools: ["']all["'],/u, "utility text generation must be ephemeral and tool-free");
 assert.match(utilityBridge, /buildCompletedTitleTranscript\(targetRuntime\.session\.state\?\.messages\)/u, "TUI titles use the completed canonical user/final-assistant turn");
 assert.match(utilityBridge, /runtime !== targetRuntime/u, "a delayed TUI title cannot overwrite a different Desktop-selected chat");
+assert.match(utilityBridge, /refreshServerAuthProvider[\s\S]*modelRuntime\.refresh\(\{ allowNetwork: false, providers: \[provider\] \}\)/u, "the authoritative server runtime refreshes shared credentials without provider network access");
+assert.match(utilityBridge, /applyChatConfig[\s\S]*await refreshServerAuthProvider\(requestedProvider\)/u, "every server configure and prompt observes external auth-file changes before model resolution");
+const tuiRuntime = read("src/agent-server/tui-runtime.mjs");
+assert.match(tuiRuntime, /async syncAuthProvider\(providerValue\)[\s\S]*modelRegistry\.authStorage\.modelRuntime\.refresh[\s\S]*client\.request\("auth\.refresh"/u, "the TUI refreshes its local snapshot and requests a server-wide auth refresh");
+const agentServer = read("src/agent-server/server.mjs");
+assert.match(agentServer, /refreshAuthProvider[\s\S]*new Set\(this\.sessions\.values\(\)\)[\s\S]*disposable SDK runtimes[\s\S]*session\.request\(client, "auth\.refresh"/u, "auth changes refresh every live server-owned chat runtime while leaving disposable utility runtimes uncached");
+assert.match(tuiRuntime, /async setModel\(nextModel\)[\s\S]*await syncRemoteChatConfig\(\)[\s\S]*currentModel = previousModel/u, "remote model switches wait for server acceptance and roll back on failure");
+const slashHandlers = read("src/slash-command-handlers.mjs");
+assert.match(slashHandlers, /syncAuthProvider\?\.\(provider\)/u, "auth setup waits for server credential refresh before switching models");
 const sdkRuntime = read("src/zyra-sdk.mjs");
 assert.match(sdkRuntime, /removeZyraTitleGenerationMessages\(contextMessages\)/u, "legacy title utility turns are removed from resumed model context");
 

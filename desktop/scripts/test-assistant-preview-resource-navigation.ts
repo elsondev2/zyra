@@ -35,5 +35,11 @@ assert.match(navigatorSource, /aria-label="Show resources as a table"/u, 'the ta
 assert.match(navigatorSource, /usePreviewVirtualWindow/u, 'large chat resource collections remain virtualized')
 assert.match(navigatorSource, /resolveClipboardAttachment/u, 'clipboard images remain navigable')
 assert.match(navigatorSource, /AssistantAttachmentPreviewModal/u, 'inline-only resources retain a real preview path')
+assert.match(navigatorSource, /explicitSelection\.activeFilePath === normalizedActiveFilePath/u, 'explicit URL and inline selections stay scoped to the file that was active when selected')
+assert.match(navigatorSource, /currentResourceId = explicitSelectionIsCurrent[\s\S]*activeFileResource\?\.id \?\? null/u, 'one synchronous current resource owns active styling')
+assert.match(navigatorSource, /current\.activeFilePath !== normalizedActiveFilePath\) return null/u, 'active-file changes clear stale explicit selection')
+assert.equal((navigatorSource.match(/const active = resource\.id === currentResourceId/g) || []).length, 2, 'card and table views expose one current resource')
+assert.match(navigatorSource, /setInlinePreview\(null\); setExplicitSelection\(null\)/u, 'closing an inline preview restores current-resource ownership to the active file')
+assert.match(navigatorSource, /resolveClipboardAttachment[\s\S]*setExplicitSelection\(\{ id: resource\.id, activeFilePath: normalizedPath\(result\.path\) \}\)/u, 'resolved clipboard previews retain current-resource ownership at their real file path')
 
 console.log('Assistant preview resource navigation tests passed.')

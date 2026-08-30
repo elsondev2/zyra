@@ -63,10 +63,12 @@ export interface DesktopAnalyticsApi {
     getStatus: () => Promise<AnalyticsStatusResult>
     setEnabled: (enabled: boolean) => Promise<AnalyticsStatusResult>
     capture: <Name extends AnalyticsEventName>(input: AnalyticsEventInput<Name>) => Promise<AnalyticsCaptureResult>
+    onStatusChange: (callback: (status: AnalyticsStatus) => void) => () => void
 }
 
 export const ANALYTICS_IPC = {
     getStatus: 'zyra:analytics:get-status',
     setEnabled: 'zyra:analytics:set-enabled',
-    capture: 'zyra:analytics:capture'
+    capture: 'zyra:analytics:capture',
+    statusChanged: 'zyra:analytics:status-changed'
 } as const

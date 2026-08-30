@@ -1,4 +1,4 @@
-export const AGENT_SERVER_PROTOCOL_VERSION = 4;
+export const AGENT_SERVER_PROTOCOL_VERSION = 5;
 // Prompt images are already bounded to 12 inputs and roughly 28 MiB of base64 each.
 // The local pipe preserves that existing contract; event writes still fail in isolation below.
 export const MAX_AGENT_SERVER_MESSAGE_BYTES = 384 * 1024 * 1024;
@@ -9,6 +9,7 @@ const METHOD_NAMES = new Set([
   "runtime.models",
   "runtime.generateText",
   "desktop.workspace.open",
+  "auth.refresh",
   "catalog.registerProject",
   "catalog.list",
   "catalog.get",

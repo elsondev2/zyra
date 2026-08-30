@@ -17,7 +17,8 @@ import {
     type AssistantUtilityTab,
     type AssistantUtilityWindowState,
     type AssistantUtilityWorkspaceKind,
-    sanitizeAssistantUtilityStateCapsule
+    sanitizeAssistantUtilityStateCapsule,
+    sanitizeAssistantUtilityTabForPersistence
 } from '../../shared/assistant/utility-window'
 import { writeJsonAtomically } from '../setup/atomic-json'
 import { sanitizeBrowserPersistentUrl } from '../../shared/browser-url-sanitization'
@@ -739,12 +740,13 @@ export class AssistantUtilityWindowManager {
         return { registered: true }
     }
 
-    private async updateTab(windowId: string, tabId: string, patch: { title?: string; url?: string; faviconUrl?: string | null }): Promise<{ updated: true }> {
+    private async updateTab(windowId: string, tabId: string, patch: { title?: string; url?: string; hasLivePage?: boolean; faviconUrl?: string | null }): Promise<{ updated: true }> {
         const state = this.findWindowState(windowId)
         const tab = state.tabs.find((entry) => entry.id === tabId)
         if (!tab) throw new Error('Utility tab was not found.')
         if (typeof patch.title === 'string') tab.title = patch.title.trim().slice(0, 512) || tab.title
         if (tab.workspace === 'browser' && typeof patch.url === 'string') tab.url = sanitizeBrowserPersistentUrl(patch.url) || ''
+        if (tab.workspace === 'browser' && typeof patch.hasLivePage === 'boolean') tab.hasLivePage = patch.hasLivePage
         if (tab.workspace === 'browser' && patch.faviconUrl !== undefined) tab.faviconUrl = sanitizeBrowserPersistentUrl(patch.faviconUrl, 4_096) || undefined
         tab.updatedAt = new Date().toISOString()
         await this.commitAndPublish(windowId)
@@ -1068,6 +1070,7 @@ function normalizeState(value: unknown): AssistantUtilityState {
                 id: nextId,
                 sessionMode: tab.workspace === 'browser' ? 'normal' as const : undefined,
                 url: tab.workspace === 'browser' ? sanitizeBrowserPersistentUrl(tab.url) || '' : undefined,
+                hasLivePage: undefined,
                 faviconUrl: tab.workspace === 'browser' ? sanitizeBrowserPersistentUrl(tab.faviconUrl, 4_096) || undefined : undefined,
                 stateCapsule: sanitizeAssistantUtilityStateCapsule(tab.stateCapsule, tab.workspace)
             }
@@ -1079,7 +1082,9 @@ function normalizeState(value: unknown): AssistantUtilityState {
 
 function persistentAssistantUtilityState(state: AssistantUtilityState): AssistantUtilityState {
     const windows = state.windows.map((windowState) => {
-        const tabs = windowState.tabs.filter((tab) => !(tab.workspace === 'browser' && tab.sessionMode === 'incognito'))
+        const tabs = windowState.tabs
+            .filter((tab) => !(tab.workspace === 'browser' && tab.sessionMode === 'incognito'))
+            .map(sanitizeAssistantUtilityTabForPersistence)
         const activeTabId = tabs.some((tab) => tab.id === windowState.activeTabId)
             ? windowState.activeTabId
             : tabs[0]?.id || null

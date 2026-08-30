@@ -110,4 +110,4 @@ Use the focused validation commands in [fast-validation.md](docs/development/fas
 
 Chats, project memory, local profiles, and credentials stay local by default. Optional product analytics are disabled by default and exclude prompts, responses, files, paths, URLs, terminal content, account identity, and raw errors. See [product analytics](docs/architecture/product-analytics.md).
 
-Copyright 2026 Elson Erick Mgaya. Zyra is licensed under [Apache 2.0](LICENSE). See [NOTICE](NOTICE) and [third-party notices](THIRD_PARTY_NOTICES.md) for packaged dependencies and assets.
+Copyright 2026 justelson. Zyra is licensed under [Apache 2.0](LICENSE). See [NOTICE](NOTICE) and [third-party notices](THIRD_PARTY_NOTICES.md) for packaged dependencies and assets.

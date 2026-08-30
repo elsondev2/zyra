@@ -994,6 +994,7 @@ app.whenReady().then(async () => {
     }
 
     electronApp.setAppUserModelId(runtimeIdentity.appUserModelId)
+    await setupServices.analytics.initialize()
     const initialOnboardingSnapshot = await setupServices.onboarding.initialize().catch((error) => {
         log.error('[Onboarding] failed to hydrate mandatory setup state', error)
         return null

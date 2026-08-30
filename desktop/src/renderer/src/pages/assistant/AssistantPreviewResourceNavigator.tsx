@@ -130,10 +130,18 @@ export function AssistantPreviewResourceNavigator({
     const [width, setWidth] = useState(0)
     const [preferredView, setPreferredView] = useState<ResourceNavigatorView>('cards')
     const [openingResourceId, setOpeningResourceId] = useState<string | null>(null)
-    const [selectedResourceId, setSelectedResourceId] = useState<string | null>(null)
+    const [explicitSelection, setExplicitSelection] = useState<{ id: string; activeFilePath: string } | null>(null)
     const [inlinePreview, setInlinePreview] = useState<ComposerContextFile | null>(null)
     const [error, setError] = useState<string | null>(null)
     const resources = useMemo(() => buildAssistantResourceIndex({ turns, projectPath }).resources, [projectPath, turns])
+    const normalizedActiveFilePath = normalizedPath(activeFilePath)
+    const activeFileResource = resources.find((resource) => resourceMatchesActiveFile(resource, activeFilePath))
+    const explicitSelectionIsCurrent = Boolean(
+        explicitSelection
+        && explicitSelection.activeFilePath === normalizedActiveFilePath
+        && resources.some((resource) => resource.id === explicitSelection.id)
+    )
+    const currentResourceId = explicitSelectionIsCurrent ? explicitSelection?.id ?? null : activeFileResource?.id ?? null
     const narrow = width > 0 && width < NARROW_RESOURCE_NAVIGATOR_WIDTH
     const view = resolvePreviewResourceNavigatorView(width, preferredView)
     const columnCount = view === 'cards' ? 2 : 1
@@ -149,9 +157,12 @@ export function AssistantPreviewResourceNavigator({
     const previewMeta = useMemo(() => inlinePreview ? getContextFileMeta(inlinePreview) : null, [inlinePreview])
 
     useEffect(() => {
-        const activeResource = resources.find((resource) => resourceMatchesActiveFile(resource, activeFilePath))
-        if (activeResource) setSelectedResourceId(activeResource.id)
-    }, [activeFilePath, resources])
+        setExplicitSelection((current) => {
+            if (!current) return current
+            if (current.activeFilePath !== normalizedActiveFilePath) return null
+            return resources.some((resource) => resource.id === current.id) ? current : null
+        })
+    }, [normalizedActiveFilePath, resources])
 
     useEffect(() => {
         const root = rootRef.current
@@ -165,7 +176,7 @@ export function AssistantPreviewResourceNavigator({
 
     const openResource = useCallback(async (resource: AssistantResource) => {
         setOpeningResourceId(resource.id)
-        setSelectedResourceId(resource.id)
+        setExplicitSelection({ id: resource.id, activeFilePath: normalizedActiveFilePath })
         setError(null)
         try {
             if (resource.url) {
@@ -177,7 +188,10 @@ export function AssistantPreviewResourceNavigator({
             const attachmentPath = String(resource.attachment?.path || '').trim()
             if (isClipboardAttachmentReference(attachmentPath)) {
                 const result = await window.devscope.assistant.resolveClipboardAttachment({ reference: attachmentPath })
-                if (result.success && result.path && await openAssistantFileTarget({ target: result.path, projectPath, openPreview: onOpenPreview })) return
+                if (result.success && result.path && await openAssistantFileTarget({ target: result.path, projectPath, openPreview: onOpenPreview })) {
+                    setExplicitSelection({ id: resource.id, activeFilePath: normalizedPath(result.path) })
+                    return
+                }
             } else if (attachmentPath && await openAssistantFileTarget({ target: attachmentPath, projectPath, openPreview: onOpenPreview })) {
                 return
             }
@@ -189,11 +203,12 @@ export function AssistantPreviewResourceNavigator({
             }
             setError('This resource is no longer available.')
         } catch (openError: unknown) {
+            setExplicitSelection((current) => current?.id === resource.id ? null : current)
             setError(openError instanceof Error ? openError.message : 'Could not open this resource.')
         } finally {
             setOpeningResourceId(null)
         }
-    }, [onOpenPreview, onOpenUrl, projectPath])
+    }, [normalizedActiveFilePath, onOpenPreview, onOpenUrl, projectPath])
 
     const firstResourceIndex = range.start * columnCount
     const renderedResources = resources.slice(firstResourceIndex, Math.min(resources.length, range.end * columnCount))
@@ -220,7 +235,7 @@ export function AssistantPreviewResourceNavigator({
                     <div className="relative p-1.5" style={{ height: rowCount * rowHeight }} role="list" aria-label="Resource cards">
                         <div className="absolute inset-x-1.5 grid grid-cols-2 gap-1.5" style={{ transform: `translateY(${range.start * rowHeight}px)` }}>
                             {renderedResources.map((resource) => {
-                                const active = resource.id === selectedResourceId || resourceMatchesActiveFile(resource, activeFilePath)
+                                const active = resource.id === currentResourceId
                                 return (
                                     <button key={resource.id} type="button" role="listitem" aria-current={active ? 'true' : undefined} onClick={() => { void openResource(resource) }} className={cn('group/resource-card relative flex h-[118px] min-w-0 flex-col overflow-hidden border text-left transition-colors', active ? 'border-[var(--accent-primary)]/55 bg-[color-mix(in_srgb,var(--accent-primary)_8%,var(--color-bg))]' : 'border-white/[0.07] bg-black/10 hover:border-white/[0.14] hover:bg-white/[0.025]')} title={`${resource.title}\n${resourceLocation(resource)}`}>
                                         <span className="relative h-[78px] shrink-0 overflow-hidden border-b border-white/[0.055]"><ResourceVisual resource={resource} />{openingResourceId === resource.id ? <span className="absolute inset-0 flex items-center justify-center bg-black/55"><LoaderCircle size={13} className="animate-spin text-white/85" /></span> : null}</span>
@@ -241,7 +256,7 @@ export function AssistantPreviewResourceNavigator({
                             <div className="absolute inset-x-0" style={{ transform: `translateY(${range.start * rowHeight}px)` }}>
                                 {renderedResources.map((resource, index) => {
                                     const host = resource.url ? resolveExternalMarkdownHost(resource.url) : null
-                                    const active = resource.id === selectedResourceId || resourceMatchesActiveFile(resource, activeFilePath)
+                                    const active = resource.id === currentResourceId
                                     return (
                                         <button key={resource.id} type="button" role="row" aria-rowindex={firstResourceIndex + index + 2} aria-current={active ? 'true' : undefined} onClick={() => { void openResource(resource) }} className={cn('grid h-12 w-full grid-cols-[32px_minmax(0,1fr)_38px] items-center gap-2 border-b px-2 text-left transition-colors', active ? 'border-[var(--accent-primary)]/20 bg-[color-mix(in_srgb,var(--accent-primary)_8%,var(--color-bg))]' : 'border-white/[0.055] hover:bg-white/[0.025]')} title={resourceLocation(resource)}>
                                             <span className="relative flex size-7 items-center justify-center overflow-hidden border border-white/[0.07] bg-black/15" role="cell">{resource.kind === 'image' ? <ResourceImage resource={resource} /> : host ? <MarkdownSiteIcon host={host} className="inline-flex size-4" /> : <Globe2 size={14} className="text-sky-200/65" />}{openingResourceId === resource.id ? <span className="absolute inset-0 flex items-center justify-center bg-black/55"><LoaderCircle size={10} className="animate-spin text-white/85" /></span> : null}</span>
@@ -256,7 +271,7 @@ export function AssistantPreviewResourceNavigator({
                 )}
             </div>
 
-            <AssistantAttachmentPreviewModal file={inlinePreview} meta={previewMeta} contentType={inlinePreview ? getContentTypeTag(inlinePreview) : ''} sizeLabel={inlinePreview ? toKbLabel(inlinePreview.sizeBytes) : ''} showFormattingWarning={false} readOnly onClose={() => setInlinePreview(null)} />
+            <AssistantAttachmentPreviewModal file={inlinePreview} meta={previewMeta} contentType={inlinePreview ? getContentTypeTag(inlinePreview) : ''} sizeLabel={inlinePreview ? toKbLabel(inlinePreview.sizeBytes) : ''} showFormattingWarning={false} readOnly onClose={() => { setInlinePreview(null); setExplicitSelection(null) }} />
         </section>
     )
 }

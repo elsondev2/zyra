@@ -1,3 +1,5 @@
+import { sanitizeBrowserPersistentUrl } from '../browser-url-sanitization'
+
 export const ASSISTANT_UTILITY_GROUP_COLORS = ['#5b8cff', '#a879ff', '#35b889', '#e3a23b', '#e36d76', '#41a7c7', '#c97bd7', '#8ba45b'] as const
 
 export const ASSISTANT_UTILITY_IPC = {
@@ -115,6 +117,7 @@ export type AssistantUtilityTab = {
     colorIndex: number
     sessionMode?: 'normal' | 'incognito'
     url?: string
+    hasLivePage?: boolean
     faviconUrl?: string
     terminalRuntimeId?: string
     path?: string
@@ -122,6 +125,16 @@ export type AssistantUtilityTab = {
     stateCapsule?: AssistantUtilityStateCapsule
     createdAt: string
     updatedAt: string
+}
+
+export function sanitizeAssistantUtilityTabForPersistence(tab: AssistantUtilityTab): AssistantUtilityTab {
+    const { hasLivePage: _hasLivePage, ...persistentTab } = tab
+    if (tab.workspace !== 'browser') return persistentTab
+    return {
+        ...persistentTab,
+        url: sanitizeBrowserPersistentUrl(tab.url) || '',
+        faviconUrl: sanitizeBrowserPersistentUrl(tab.faviconUrl, 4_096) || undefined
+    }
 }
 
 export type AssistantUtilityWindowState = {
@@ -196,7 +209,7 @@ export type AssistantUtilityApi = {
     moveTab(input: AssistantUtilityMoveInput): Promise<{ success: boolean; error?: string; targetWindowId?: string }>
     registerDropZone(input: AssistantUtilityDropZoneInput | null): Promise<{ success: boolean; error?: string }>
     tabReady(windowId: string, tabId: string): Promise<{ success: boolean; error?: string }>
-    updateTab(windowId: string, tabId: string, patch: { title?: string; url?: string; faviconUrl?: string | null }): Promise<{ success: boolean; error?: string }>
+    updateTab(windowId: string, tabId: string, patch: { title?: string; url?: string; hasLivePage?: boolean; faviconUrl?: string | null }): Promise<{ success: boolean; error?: string }>
     updateStateCapsule(windowId: string, tabId: string, capsule: AssistantUtilityStateCapsule | null): Promise<{ success: boolean; error?: string }>
     addTab(input: AssistantUtilityAddTabInput): Promise<{ success: boolean; error?: string; tabId?: string }>
     detachMainTab(input: AssistantUtilityMainTabInput): Promise<{ success: boolean; error?: string; targetWindowId?: string }>

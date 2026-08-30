@@ -14,6 +14,8 @@ const desktopLock = readJson(path.join(desktopRoot, 'package-lock.json'))
 const build = desktopPackage.build
 const localTuiReleaseSource = readFileSync(path.join(repositoryRoot, 'scripts', 'build-release.mjs'), 'utf8')
 const standaloneTuiBuilderSource = readFileSync(path.join(repositoryRoot, 'scripts', 'build-tui-release.mjs'), 'utf8')
+const standaloneTuiSignerSource = readFileSync(path.join(repositoryRoot, 'scripts', 'sign-standalone-tui.mjs'), 'utf8')
+const standaloneTuiEntitlements = readFileSync(path.join(desktopRoot, 'build', 'entitlements.tui.plist'), 'utf8')
 
 assert.equal(rootPackage.version, '0.6.0')
 assert.equal(rootPackage.scripts['release:tui'], 'node scripts/build-release.mjs', 'the local standalone TUI build shortcut stays stable')
@@ -26,9 +28,12 @@ assert.match(standaloneTuiBuilderSource, /collectResources/, 'the canonical TUI 
 assert.match(standaloneTuiBuilderSource, /path\.join\(root,\s*["']desktop["'],\s*["']resources["'],\s*["']icon\.ico["']\)/, 'the Windows TUI reuses the Desktop release icon')
 assert.match(standaloneTuiBuilderSource, /--windows-icon=/, 'the shared Zyra icon is embedded in the Windows TUI executable')
 assert.match(standaloneTuiBuilderSource, /--windows-title=Zyra/, 'the Windows TUI exposes Zyra product metadata')
-assert.match(standaloneTuiBuilderSource, /--windows-copyright=Copyright 2026 Elson Erick Mgaya/, 'the Windows TUI carries the copyright holder')
+assert.match(standaloneTuiBuilderSource, /--windows-copyright=Copyright 2026 justelson/, 'the Windows TUI carries the copyright holder')
+assert.match(standaloneTuiSignerSource, /signtool[\s\S]*Get-AuthenticodeSignature/, 'the Windows standalone TUI is signed and verified')
+assert.match(standaloneTuiSignerSource, /codesign[\s\S]*notarytool[\s\S]*spctl/, 'both macOS standalone TUI binaries are signed, notarized, and assessed by Gatekeeper')
+assert.match(standaloneTuiEntitlements, /allow-jit[\s\S]*allow-unsigned-executable-memory[\s\S]*disable-library-validation/, 'Bun standalone binaries retain reviewed JavaScript runtime entitlements')
 assert(rootPackage.files.includes('analytics'), 'the npm/TUI package allowlist includes the versioned analytics catalog')
-assert.equal(rootPackage.author, 'Elson Erick Mgaya')
+assert.equal(rootPackage.author, 'justelson')
 assert.equal(desktopPackage.version, rootPackage.version, 'root and Desktop versions must be lockstep')
 assert(JSON.stringify(build.extraResources || []).includes('.release/zyra-node'), 'desktop packages the pinned Node runtime')
 assert.equal(rootLock.version, rootPackage.version)
@@ -41,8 +46,8 @@ assert.equal(desktopLock.name, 'zyra-desktop')
 assert.equal(desktopLock.packages[''].name, 'zyra-desktop')
 assert.equal(rootPackage.license, 'Apache-2.0')
 assert.equal(desktopPackage.license, 'Apache-2.0')
-assert.equal(desktopPackage.author, 'Elson Erick Mgaya')
-assert.equal(build.copyright, 'Copyright © 2026 Elson Erick Mgaya')
+assert.equal(desktopPackage.author, 'justelson')
+assert.equal(build.copyright, 'Copyright © 2026 justelson')
 
 assert.equal(build.appId, 'app.zyra.desktop')
 assert.equal(build.productName, 'Zyra')
@@ -87,6 +92,8 @@ assert(packageScript.includes('`--version=${version}`'), 'signature verification
 assert(signatureVerifier.includes('platformReleaseContract(version, platform)'), 'signature verification must use the canonical artifact name')
 assert(signatureVerifier.includes("'widevine-vmp'") && signatureVerifier.includes("'verify-pkg'"), 'final packaged applications must verify Widevine VMP signing')
 assert(signatureMarkerValidator.includes("check.name === 'widevine-vmp'") && signatureMarkerValidator.includes("'widevine-vmp', 'codesign'"), 'release assembly requires Widevine VMP evidence on Windows and macOS')
+assert(signatureMarkerValidator.includes("['windows-x64']") && signatureMarkerValidator.includes("['macos-arm64', 'macos-x64']"), 'release assembly requires every standalone TUI signing target')
+assert.match(signatureMarkerValidator, /assetsDirectory[\s\S]*details\.size !== artifact\.size[\s\S]*sha256File\(target\)/, 'release assembly binds TUI signature evidence to the final bytes')
 assert(packagedValidator.includes('runPackagedLaunchSmoke'), 'every native package must execute its installed main process')
 assert(packagedValidator.includes('getCurrentFuseWire'), 'every native package must verify the fuses on its actual executable')
 assert(packagedValidator.includes("platform === 'windows' ? 180_000 : 90_000"), 'cold unsigned package scans need a bounded native-platform launch allowance')
@@ -94,13 +101,17 @@ assert(packagedValidator.includes("ZYRA_PACKAGED_SMOKE: '1'"), 'packaged launch 
 assert(preflightSource.includes("const taggedPublication = mode === 'tag'"), 'every public tag must enter the signing gate')
 assert(preflightSource.includes("require_signing=${taggedPublication ? 'true' : 'false'}"), 'alpha, beta, and stable tags must all require native signing')
 assert(preflightSource.includes("'EVS_ACCOUNT_NAME'") && preflightSource.includes("'EVS_PASSWD'"), 'tagged releases require Widevine VMP credentials')
+assert(preflightSource.includes("'ZYRA_WINDOWS_CERTIFICATE_THUMBPRINT'") && preflightSource.includes("'ZYRA_MACOS_TEAM_ID'"), 'tagged releases pin standalone TUI publisher identities')
 assert(preflightSource.includes("ZYRA_ACCEPT_ECS_SECURITY_DELTA === 'true'"), 'tagged releases require explicit acceptance of the current ECS patch-level delta')
 assert(vmpSignerSource.includes("'before-code-sign'") && vmpSignerSource.includes("platform !== 'darwin'"), 'macOS VMP signing runs before Apple code signing')
 assert(vmpAfterPackSource.includes('Electron Framework.sig') && vmpAfterPackSource.includes('arm64') && vmpAfterPackSource.includes('x64'), 'macOS universal staging removes incompatible per-architecture VMP signatures before merging')
-assert.match(releaseWorkflowSource, /- name: Build native package and updater metadata\s+env:\s+EVS_ACCOUNT_NAME:[\s\S]*EVS_PASSWD:/, 'EVS credentials are scoped to the native packaging step')
+assert.match(releaseWorkflowSource, /- name: Build native package and updater metadata[\s\S]*EVS_ACCOUNT_NAME:[\s\S]*EVS_PASSWD:/, 'EVS credentials are scoped to the native packaging step')
+assert.doesNotMatch(releaseWorkflowSource, /GITHUB_ENV/, 'signing credentials cannot leak into later smoke or upload steps')
 assert.match(releaseWorkflowSource, /EVS_ACCOUNT_NAME: \$\{\{ github\.event_name == 'push' && secrets\.EVS_ACCOUNT_NAME \|\| '' \}\}/, 'manual rehearsals do not receive EVS credentials during preflight')
 assert.match(releaseWorkflowSource, /EVS_ACCOUNT_NAME: \$\{\{ needs\.preflight\.outputs\.publish == 'true' && matrix\.platform != 'linux'/, 'unsigned native rehearsals do not receive EVS credentials during packaging')
 assert.match(releaseWorkflowSource, /- name: Smoke Widevine protected media[\s\S]*npm --prefix desktop run smoke:protected-media/, 'native release runners probe Widevine before packaging')
+assert.match(releaseWorkflowSource, /- name: Sign and verify standalone TUI binaries[\s\S]*sign-standalone-tui\.mjs/, 'tagged publication signs standalone TUI binaries before upload')
+assert.match(releaseWorkflowSource, /macos-arm64[\s\S]*test-standalone-tui-binary\.mjs[\s\S]*macos-x64/, 'both macOS standalone TUI architectures are smoked')
 assert(vmpSignerSource.includes("'after-code-sign'") && vmpSignerSource.includes("platform !== 'win32'"), 'Windows VMP signing runs after Authenticode')
 assert(!preflightSource.includes('stablePublication'), 'prerelease tags must not bypass signing/notarization')
 assert.match(persistenceSource, /Boolean\(process\.versions\.electron\)[\s\S]*openNativeAssistantDatabase/, 'Electron production persistence must use disk-backed native SQLite')
@@ -215,8 +226,10 @@ assert(!releaseWorkflow.includes('origin/main') && !releaseWorkflow.includes('re
 for (const secret of [
     'ZYRA_WINDOWS_CERTIFICATE',
     'ZYRA_WINDOWS_CERTIFICATE_PASSWORD',
+    'ZYRA_WINDOWS_CERTIFICATE_THUMBPRINT',
     'ZYRA_MACOS_CERTIFICATE',
     'ZYRA_MACOS_CERTIFICATE_PASSWORD',
+    'ZYRA_MACOS_TEAM_ID',
     'ZYRA_MACOS_NOTARIZATION_API_KEY',
     'ZYRA_MACOS_NOTARIZATION_KEY_ID',
     'ZYRA_MACOS_NOTARIZATION_ISSUER_ID',

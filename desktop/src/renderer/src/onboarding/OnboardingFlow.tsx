@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight } from 'lucide-react'
 import { ONBOARDING_STEPS, getPreviousOnboardingStep, type OnboardingStep } from '@shared/onboarding/contracts'
 import type { AnalyticsStatus } from '@shared/analytics/contracts'
-import { getDesktopAnalyticsStatus, setDesktopAnalyticsEnabled } from '@/lib/product-analytics'
+import { getDesktopAnalyticsStatus, onDesktopAnalyticsStatusChange, setDesktopAnalyticsEnabled } from '@/lib/product-analytics'
 import { useSettings } from '@/lib/settings'
 import { useOnboarding } from '@/lib/onboarding'
 import { cn } from '@/lib/utils'
@@ -86,18 +86,35 @@ export function OnboardingFlow() {
 
     useEffect(() => {
         let cancelled = false
-        setAnalyticsLoading(true)
-        setAnalyticsError(null)
-        void getDesktopAnalyticsStatus().then((status) => {
-            if (cancelled) return
-            if (!status) throw new Error('Product analytics is unavailable in this Desktop session.')
-            setAnalyticsStatus(status)
-        }).catch((statusError) => {
-            if (!cancelled) setAnalyticsError(statusError instanceof Error ? statusError.message : 'Could not load the analytics preference.')
-        }).finally(() => {
-            if (!cancelled) setAnalyticsLoading(false)
+        const refresh = () => {
+            setAnalyticsLoading(true)
+            setAnalyticsError(null)
+            void getDesktopAnalyticsStatus().then((status) => {
+                if (cancelled) return
+                if (!status) throw new Error('Product analytics is unavailable in this Desktop session.')
+                setAnalyticsStatus(status)
+            }).catch((statusError) => {
+                if (!cancelled) setAnalyticsError(statusError instanceof Error ? statusError.message : 'Could not load the analytics preference.')
+            }).finally(() => {
+                if (!cancelled) setAnalyticsLoading(false)
+            })
+        }
+        const handleVisibility = () => { if (document.visibilityState === 'visible') refresh() }
+        const unsubscribe = onDesktopAnalyticsStatusChange((status) => {
+            if (!cancelled) {
+                setAnalyticsStatus(status)
+                setAnalyticsError(null)
+            }
         })
-        return () => { cancelled = true }
+        window.addEventListener('focus', refresh)
+        document.addEventListener('visibilitychange', handleVisibility)
+        refresh()
+        return () => {
+            cancelled = true
+            unsubscribe()
+            window.removeEventListener('focus', refresh)
+            document.removeEventListener('visibilitychange', handleVisibility)
+        }
     }, [record.startedAt])
 
     const setAnalyticsChoice = async (enabled: boolean) => {

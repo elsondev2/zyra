@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -17,11 +18,13 @@ const releasePreparation = read("desktop/scripts/release/prepare-release-resourc
 const packagedValidator = read("desktop/scripts/release/validate-packaged-app.mjs");
 const releaseWorkflow = read(".github/workflows/desktop-release.yml");
 const standaloneBuilder = read("scripts/build-tui-release.mjs");
+const standaloneDispatcher = read("bin/zyra.mjs");
 const standaloneSmoke = read("scripts/test-standalone-tui-binary.mjs");
 
 assert.match(license, /Apache License\s+Version 2\.0/);
 assert.match(license, /Copyright \[yyyy\] \[name of copyright owner\]/, "the canonical Apache appendix must stay unchanged");
-assert.match(notice, /^Zyra\s+Copyright 2026 Elson Erick Mgaya/m);
+assert.equal(normalizedSha256(license), "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4");
+assert.match(notice, /^Zyra\s+Copyright 2026 justelson/m);
 assert.match(notice, /THIRD_PARTY_NOTICES\.md[\s\S]*THIRD_PARTY_LICENSES\.txt/);
 assert.match(notices, /THIRD_PARTY_LICENSES\.txt/);
 assert.match(notices, /Electron's license[\s\S]*Chromium's generated license list/);
@@ -32,10 +35,14 @@ assert.match(notices, /Material Icon Theme file icons[\s\S]*MIT license/);
 assert.match(notices, /Kenney UI Audio voice cues[\s\S]*CC0 1\.0 Universal/);
 assert.match(licenses, /^Bundled Bun runtime: 1\.3\.9$/m);
 assert.match(licenses, /^Bundled Node\.js runtime: 22\.22\.0$/m);
-assert.equal(rootPackage.author, "Elson Erick Mgaya");
-assert.equal(desktopPackage.author, "Elson Erick Mgaya");
-assert.equal(desktopPackage.build.copyright, "Copyright © 2026 Elson Erick Mgaya");
+assert.equal(rootPackage.author, "justelson");
+assert.equal(desktopPackage.author, "justelson");
+assert.equal(desktopPackage.build.copyright, "Copyright © 2026 justelson");
 assert.match(releaseWorkflow, /node-version: "22\.22\.0"/);
+assert.match(standaloneBuilder, /const output = path\.join\(outputDirectory, assetName\)/);
+assert.doesNotMatch(standaloneBuilder, /path\.extname\(outputRoot\)/);
+assert.doesNotMatch(standaloneDispatcher, /--internal-standalone-oauth-smoke/);
+assert.doesNotMatch(standaloneSmoke, /--internal-standalone-oauth-smoke/);
 assert.match(releasePreparation, /NODE_RELEASE_RUNTIME_VERSION[\s\S]*DOTNET-LICENSE\.txt[\s\S]*DOTNET-THIRD-PARTY-NOTICES\.txt/);
 assert(
   desktopPackage.build.mac.extraResources.some((entry) => entry.from === "node_modules/electron/dist/LICENSE" && entry.to === "ELECTRON-LICENSE.txt"),
@@ -66,3 +73,7 @@ const generatedCheck = spawnSync(process.execPath, [path.join(root, "scripts", "
 assert.equal(generatedCheck.status, 0, `${generatedCheck.stdout}\n${generatedCheck.stderr}`);
 
 console.log("Zyra legal release contract: ok");
+
+function normalizedSha256(value) {
+  return createHash("sha256").update(String(value).replace(/\r\n?/g, "\n")).digest("hex");
+}

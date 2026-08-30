@@ -99,7 +99,7 @@ function redactOpaqueLockIntegrity(file, line) {
 }
 
 function shouldScan(file) {
-  if (file === "scripts/privacy-check.mjs") return false;
+  if (file === "scripts/privacy-check.mjs" || file === "THIRD_PARTY_LICENSES.txt") return false;
   if (file.startsWith("node_modules/") || file.startsWith("dist/")) return false;
   if (/\.(png|jpe?g|gif|webp|ico|zip|sqlite|lockb)$/i.test(file)) return false;
   return true;

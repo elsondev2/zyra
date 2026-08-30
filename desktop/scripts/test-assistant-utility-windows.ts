@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import type { AssistantUtilityTab } from '../src/shared/assistant/utility-window'
+import { sanitizeAssistantUtilityTabForPersistence, type AssistantUtilityTab } from '../src/shared/assistant/utility-window'
 import { buildAssistantUtilityTabGroups, resolveVisibleAssistantUtilityTabs } from '../src/renderer/src/pages/assistant/utility/assistant-utility-tab-groups'
 import { ASSISTANT_TAB_TEAR_OFF_THRESHOLD, isAssistantTabTearOff } from '../src/renderer/src/pages/assistant/assistant-tab-drag-modifier'
 
@@ -38,6 +38,9 @@ assert.match(utilityContract, /addTab: 'devscope:assistantUtility:addTab'/, 'ind
 assert.match(utilityPreload, /ASSISTANT_UTILITY_IPC\.addTab/, 'the new-tab command crosses the narrow preload adapter')
 assert.match(utilityContract, /faviconUrl\?: string/, 'independent Browser tabs retain their page icon metadata')
 assert.match(manager, /sanitizeBrowserPersistentUrl\(patch\.faviconUrl, 4_096\)/, 'persisted utility favicons remain bounded and HTTP-only')
+assert.match(host, /hasLivePage = Boolean\(browserTab\.url\)[\s\S]*hasLivePage, faviconUrl: browserTab\.faviconUrl/, 'local capability pages publish a non-sensitive live-page flag for hover capture')
+assert.match(manager, /map\(sanitizeAssistantUtilityTabForPersistence\)/, 'utility tabs pass through the persistence sanitizer')
+assert.match(windowSource, /Boolean\(tab\.hasLivePage \|\| tab\.url\)[\s\S]*captureAssistantBrowserTabHoverPreview/, 'detached local-file tabs retain hover previews without persisting their capability URL')
 assert.match(host, /faviconUrl: browserTab\.faviconUrl/, 'live Browser favicon changes reach independent-window tab chrome')
 assert.match(windowSource, /<AssistantBrowserPageIcon faviconUrl=\{tab\.faviconUrl \|\| null\} pageUrl=\{tab\.url \|\| null\}/, 'independent Browser tabs render the shared favicon fallback chain')
 assert.match(windowSource, /horizontalListSortingStrategy/)
@@ -127,6 +130,14 @@ const tab = (id: string, canonicalChatId: string, chatTitle: string): AssistantU
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z'
 })
+const localCapabilityTab = sanitizeAssistantUtilityTabForPersistence({
+    ...tab('browser:local', 'chat-a', 'Chat A'),
+    url: 'zyra-local://file/private-capability/document.html',
+    hasLivePage: true
+})
+assert.equal(localCapabilityTab.url, '', 'local-file capability URLs never enter persisted utility state')
+assert.equal(localCapabilityTab.hasLivePage, undefined, 'the transient live-page flag never enters persisted utility state')
+
 const groups = buildAssistantUtilityTabGroups([
     tab('a-1', 'chat-a', 'Testing'),
     tab('a-2', 'chat-a', 'Testing'),

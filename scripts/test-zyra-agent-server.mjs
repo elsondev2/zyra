@@ -49,7 +49,7 @@ class FakeWorker extends EventEmitter {
   request(type, payload = {}) {
     this.requests.push({ type, payload });
     if (type === "connect") return Promise.resolve({
-      threadId: "chat:test",
+      threadId: String(payload.threadId || "").includes("chat-auth-peer") ? "chat:auth-peer" : "chat:test",
       providerThreadId: sessionPath,
       events: [],
       messages: [
@@ -319,6 +319,32 @@ try {
   assert.equal(canonicalAppend.receipt.operationId, canonicalMessage.operationId);
   const canonicalFind = await desktop.request("catalog.message.find", { session: "chat:test", operationId: canonicalMessage.operationId });
   assert.deepEqual(canonicalFind.receipt, canonicalAppend.receipt);
+  const authPeerSessionPath = path.join(project, ".zyra", "sessions", "chat-auth-peer.jsonl");
+  fakeSessions.push({
+    path: authPeerSessionPath,
+    id: "chat:auth-peer",
+    cwd: project,
+    name: "Auth refresh peer",
+    created: new Date("2026-06-01T00:00:00.000Z"),
+    modified: new Date("2026-06-02T00:00:00.000Z"),
+    messageCount: 1,
+    firstMessage: "peer"
+  });
+  const authPeer = client("tui:auth-peer", "tui");
+  await authPeer.connect();
+  await authPeer.attach({ project, cwd: project, session: "chat:auth-peer", localThreadId: "tui:auth-peer" });
+  assert.equal(workers.length, 2, "the auth refresh test owns two independent live session workers");
+  await tui.request("auth.refresh", { provider: "openai-codex" });
+  for (const worker of workers) {
+    assert.deepEqual(worker.requests.at(-1), {
+      type: "auth.refresh",
+      payload: { provider: "openai-codex" }
+    }, "TUI auth changes must refresh every authoritative live session runtime");
+  }
+  await authPeer.request("session.stop", { sessionKey: "chat:auth-peer", reason: "auth refresh test complete" });
+  authPeer.close();
+  fakeSessions.pop();
+  workers.splice(1, 1);
   await assert.rejects(
     tui.request("catalog.message.append", { session: "chat:test", message: canonicalMessage }),
     /verified Desktop authority/
@@ -558,6 +584,16 @@ try {
       noSession: true
     }
   });
+  const allWorkerAuthRefresh = await reconnect.request("auth.refresh", { provider: "openai-codex" });
+  assert.deepEqual(allWorkerAuthRefresh, {
+    provider: "openai-codex",
+    refreshedSessions: 1
+  });
+  assert.deepEqual(workers[0].requests.at(-1), {
+    type: "auth.refresh",
+    payload: { provider: "openai-codex" }
+  }, "server-wide auth refresh includes every canonical chat worker");
+  assert.equal(workers[1].requests.at(-1)?.type, "generate_text", "the utility bridge owns no persistent auth snapshot and must not receive chat-only auth refreshes");
 
   await assert.rejects(
     reconnect.request("session.request", {

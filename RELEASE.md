@@ -75,9 +75,9 @@ npm --prefix desktop run test:packaged-runtime
 
 `resolveZyraRoot()` checks `process.resourcesPath/zyra-runtime` first. Development retains the existing loaded-worktree-first behavior after that packaged check.
 
-Desktop distributions expose that exact runtime through one managed `zyra` terminal launcher. Windows NSIS writes `%LOCALAPPDATA%\\Zyra\\bin\\zyra.cmd`, points it at the packaged Node/runtime pair, and adds the stable directory to the user PATH. macOS/Linux users can install or repair `~/.local/bin/zyra` from **Settings → About → Terminal**; the launcher invokes the native app in `--tui` mode and keeps writable TUI state under the user data root. The standalone TUI archive remains Electron-free and its onboarding offers an explicit, optional, exact-version Desktop download. That download must match the published `v<version>` release and `SHA256SUMS` before the native installer opens.
+Desktop distributions expose that exact runtime through one managed `zyra` terminal launcher. Windows NSIS writes `%LOCALAPPDATA%\\Zyra\\bin\\zyra.cmd`, points it at the packaged Node/runtime pair, and adds the stable directory to the user PATH. macOS/Linux users can install or repair `~/.local/bin/zyra` from **Settings → About → Terminal**; the launcher invokes the native app in `--tui` mode and keeps writable TUI state under the user data root. The standalone TUI executables remain Electron-free, embed the allowlisted TUI/runtime/install resources, and offer an explicit, optional, exact-version Desktop download during onboarding. That download must match the published `v<version>` release and `SHA256SUMS` before the native installer opens.
 
-The lockstep `zyra-v<version>.zip` is built by `scripts/build-tui-release.mjs` from an allowlist of TUI/runtime/install files. It excludes `desktop/`, native sidecars, extensions, generated output, and local state rather than archiving the complete repository.
+`scripts/build-tui-release.mjs` produces one lockstep executable for Windows x64, macOS arm64, macOS x64, and Linux x64 under `dist/tui/v<version>/`. It does not archive the repository or include Desktop, native sidecars, extensions, generated output, or local state.
 
 ## Native package matrix
 
@@ -89,7 +89,7 @@ All artifacts include version, OS, and architecture in noncolliding names.
 | macOS universal | DMG and ZIP | `Zyra-Desktop-0.6.0-macOS-universal.dmg`, `.zip`, and ZIP `.blockmap` | `latest-mac.yml` |
 | Linux x64 | AppImage and deb | `Zyra-Desktop-0.6.0-Linux-x64.AppImage` and `.deb` (the AppImage carries its blockmap internally) | `latest-linux.yml` |
 
-The assembled release also contains the lockstep CLI/source archive `zyra-v0.6.0.zip`, the repository Apache-2.0 license inside every installed app/runtime, and one `SHA256SUMS` file covering the complete upload set.
+The assembled release also contains the four lockstep `Zyra-TUI-0.6.0-*` executables, the repository Apache-2.0 license inside every installed app/runtime, and one `SHA256SUMS` file covering the complete upload set.
 
 Windows retains the assisted NSIS flow, changeable install directory, icons, and Explorer shell integration in `desktop/build/installer.nsh`. The self-contained `win-x64` .NET computer-use sidecar is built and included only on Windows. The browser-control extension is built and packaged on every OS.
 
@@ -178,7 +178,7 @@ The tag path requires all of the following before any public release exists:
 4. signing/notarization secrets pass preflight;
 5. all native matrix jobs finish and upload their isolated artifacts;
 6. updater metadata and every expected platform artifact validate after assembly;
-7. Windows Authenticode and macOS codesign/Gatekeeper/notarization markers validate;
+7. Windows Authenticode and macOS codesign/Gatekeeper/notarization markers validate against the exact standalone TUI bytes and pinned publisher identities;
 8. sorted `SHA256SUMS` validates all release files, including Linux artifacts;
 9. a GitHub **draft** is created, names/sizes are re-read, and its assets are downloaded again for metadata/checksum validation;
 10. only then is that existing draft published.
@@ -193,11 +193,13 @@ The repository contains no signing credentials. Configure these GitHub Actions s
 
 - `ZYRA_WINDOWS_CERTIFICATE` — PFX supplied in a `CSC_LINK`-compatible form (for example base64/data URI).
 - `ZYRA_WINDOWS_CERTIFICATE_PASSWORD` — PFX password.
+- `ZYRA_WINDOWS_CERTIFICATE_THUMBPRINT` — the exact 40-character SHA-1 thumbprint expected on the signed Windows TUI.
 
 ### macOS
 
 - `ZYRA_MACOS_CERTIFICATE` — Developer ID Application certificate supplied in a `CSC_LINK`-compatible form.
 - `ZYRA_MACOS_CERTIFICATE_PASSWORD` — certificate password.
+- `ZYRA_MACOS_TEAM_ID` — the exact 10-character Apple Developer Team ID expected on both signed macOS TUI executables.
 - `ZYRA_MACOS_NOTARIZATION_API_KEY` — raw App Store Connect API `.p8` contents.
 - `ZYRA_MACOS_NOTARIZATION_KEY_ID` — App Store Connect key ID.
 - `ZYRA_MACOS_NOTARIZATION_ISSUER_ID` — App Store Connect issuer UUID.
@@ -210,7 +212,7 @@ The repository contains no signing credentials. Configure these GitHub Actions s
 
 Tagged Windows and macOS packages are VMP-signed in addition to their platform signatures. macOS VMP signing runs before Apple code signing; Windows VMP signing runs after Authenticode. A successful EVS pass writes the runtime production-VMP marker consumed by Browser status. CastLabs development binaries can negotiate Widevine, while repeated Spotify track skipping is consistent with a production-license/VMP rejection. The cause is not certified until the EVS-signed package passes real multi-track playback. Linux does not use VMP and may require one restart after first Widevine installation.
 
-Every publication tag, including alpha and beta tags, fails in preflight if any signing or notarization value is absent. The workflow never substitutes ad-hoc or fake signatures. Windows verifies the produced installer with Authenticode. macOS verifies the app with `codesign`, Gatekeeper, and the stapled notarization ticket. Unsigned artifacts are permitted only in a manual rehearsal and remain unpublished in both the workflow artifact store and a GitHub draft, so the updater cannot see them.
+Every publication tag, including alpha and beta tags, fails in preflight if any signing or notarization value is absent. The workflow never substitutes ad-hoc or fake signatures. Windows verifies the produced installer and standalone TUI with Authenticode. macOS verifies the app and both entitlement-signed standalone TUI architectures with `codesign`, Gatekeeper, and accepted notarization evidence. A raw macOS executable cannot carry a stapled ticket, so its first Gatekeeper assessment requires network access; use the stapled Desktop DMG for offline installation. Signature evidence records each TUI file's final size and SHA-256, and assembly recomputes both before checksums or publication. Unsigned artifacts are permitted only in a manual rehearsal and remain unpublished in both the workflow artifact store and a GitHub draft, so the updater cannot see them.
 
 ## Product analytics gate
 
@@ -254,7 +256,7 @@ Run only the native package command available on the current OS. Cross-platform 
 
 ## Licensing
 
-Zyra is licensed under Apache License 2.0. Keep the canonical `LICENSE` text unchanged. `NOTICE` records `Copyright 2026 Elson Erick Mgaya`, and `THIRD_PARTY_NOTICES.md` explains asset and platform-runtime notices.
+Zyra is licensed under Apache License 2.0. Keep the canonical `LICENSE` text unchanged. `NOTICE` records `Copyright 2026 justelson`, and `THIRD_PARTY_NOTICES.md` explains asset and platform-runtime notices.
 
 Run `npm run licenses:generate` after either production lockfile or a pinned release runtime changes. Commit the generated `THIRD_PARTY_LICENSES.txt`, then run `npm run licenses:check`. Release preflight rejects a stale dependency manifest, a dropped legal file, or a Bun or Node runtime version that no longer matches the generated bundle.
 

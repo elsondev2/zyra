@@ -854,7 +854,7 @@ function toInspectorTab(tab: AssistantUtilityTab, active: boolean): AssistantIns
         closable: true,
         preview: browserTab ? tab.url || tab.chatTitle : tab.chatTitle,
         previewDisabled: browserTab && active,
-        loadPreviewImage: browserTab && !active && Boolean(tab.url)
+        loadPreviewImage: browserTab && !active && Boolean(tab.hasLivePage || tab.url)
             ? () => captureAssistantBrowserTabHoverPreview(tab.id)
             : undefined
     }

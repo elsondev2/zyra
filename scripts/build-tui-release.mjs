@@ -19,7 +19,7 @@ const windowsIcon = path.join(root, "desktop", "resources", "icon.ico");
 if (targets.includes("windows-x64") && !existsSync(windowsIcon)) {
   throw new Error(`The shared Zyra release icon is missing: ${windowsIcon}`);
 }
-const outputRoot = path.resolve(root, String(args.output || path.join("dist", "tui", `v${version}`)));
+const outputDirectory = path.resolve(root, String(args.output || path.join("dist", "tui", `v${version}`)));
 const buildRoot = path.join(root, "dist", ".tui-build");
 const piBunOAuthModule = resolvePiBunOAuthModule();
 const resources = await collectResources();
@@ -31,16 +31,14 @@ const payload = {
 };
 
 await mkdir(buildRoot, { recursive: true });
-if (targets.length > 1 || !path.extname(outputRoot)) await mkdir(outputRoot, { recursive: true });
+await mkdir(outputDirectory, { recursive: true });
 
 const outputs = [];
 try {
   for (const target of targets) {
     const contract = TUI_RELEASE_TARGETS[target];
     const assetName = tuiReleaseAssetName(version, target);
-    const output = targets.length === 1 && args.output && path.extname(outputRoot)
-      ? outputRoot
-      : path.join(outputRoot, assetName);
+    const output = path.join(outputDirectory, assetName);
     const entry = path.join(buildRoot, `entry-${target}.mjs`);
     const standaloneModule = relativeImport(entry, path.join(root, "src", "standalone-entry.mjs"));
     const bunOAuthModule = relativeImport(entry, piBunOAuthModule);
@@ -68,7 +66,7 @@ try {
         "--windows-publisher=Zyra",
         `--windows-version=${windowsReleaseVersion(version)}`,
         "--windows-description=Zyra local coding agent",
-        "--windows-copyright=Copyright 2026 Elson Erick Mgaya",
+        "--windows-copyright=Copyright 2026 justelson",
       );
     }
     compileArgs.push(entry);

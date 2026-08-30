@@ -71,13 +71,18 @@ async function analyticsResult<T>(work: () => Promise<T> | T) {
 
 function broadcast(channel: string, payload: unknown): void {
     for (const window of BrowserWindow.getAllWindows()) {
-        if (!window.isDestroyed()) window.webContents.send(channel, payload)
+        try {
+            if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send(channel, payload)
+        } catch {
+            // A closing window cannot turn a successful persisted update into an IPC failure.
+        }
     }
 }
 
 export function registerSetupIpcHandlers(services: DesktopSetupServices): void {
     services.preferences.subscribe((event) => broadcast(DEVICE_PREFERENCES_IPC.changed, event))
     services.onboarding.subscribe((snapshot) => broadcast(ONBOARDING_IPC.changed, snapshot))
+    services.analytics.subscribeStatus((status) => broadcast(ANALYTICS_IPC.statusChanged, status))
 
     const ipcMain = createOnboardingGatedIpcMain(trustedIpcMain, {
         isAccessAllowed: () => services.onboarding.isAccessAllowed(),

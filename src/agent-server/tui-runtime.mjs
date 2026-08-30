@@ -509,8 +509,14 @@ export async function createZyraTuiClientRuntime(options = {}) {
       queueRemoteChatConfigSync();
     },
     async setModel(nextModel) {
+      const previousModel = currentModel;
       currentModel = nextModel;
-      queueRemoteChatConfigSync();
+      try {
+        await syncRemoteChatConfig();
+      } catch (error) {
+        currentModel = previousModel;
+        throw error;
+      }
     },
     getContextUsage: () => getRemoteContextUsage(state.messages, currentModel),
     dispose() {
@@ -547,6 +553,14 @@ export async function createZyraTuiClientRuntime(options = {}) {
     get permissionMode() { return currentPermissionMode; },
     set permissionMode(value) { currentPermissionMode = normalizeRemoteRuntimeMode(value); queueRemoteChatConfigSync(); },
     surface: "tui-client",
+    async syncAuthProvider(providerValue) {
+      const provider = String(providerValue || "").trim();
+      if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(provider)) throw new Error("Auth refresh provider is invalid.");
+      const result = await modelRegistry.authStorage.modelRuntime.refresh({ allowNetwork: false, providers: [provider] });
+      const refreshError = result?.errors?.get?.(provider);
+      if (refreshError) throw refreshError;
+      return client.request("auth.refresh", { provider });
+    },
     projectMemory: [],
     memoryStartup: null,
     get thinking() { return thinkingLevel; },

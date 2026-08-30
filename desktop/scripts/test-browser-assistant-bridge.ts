@@ -173,7 +173,7 @@ try {
     })
     assert.equal(browserFileResponse.status, 200)
     assert.equal(await browserFileResponse.text(), 'browser-file-content', 'browser clients must be able to render host files through the protected bridge')
-    assert.equal(browserFileResponse.headers.get('content-type'), 'application/octet-stream')
+    assert.equal(browserFileResponse.headers.get('content-type'), 'text/plain', 'browser file responses preserve the allowlisted local MIME type')
     assert.equal(browserFileResponse.headers.get('accept-ranges'), 'bytes')
 
     const browserFileRange = await fetch(`${baseUrl}${BROWSER_FILE_BRIDGE_PATH}?source=${encodeURIComponent(browserFileSource)}`, {

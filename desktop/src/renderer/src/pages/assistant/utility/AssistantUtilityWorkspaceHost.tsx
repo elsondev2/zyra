@@ -300,10 +300,11 @@ function UtilityBrowser({ tab, active, windowId, onOpenPreview }: {
                 const browserTab = state.tabs.find((entry) => entry.id === tab.id)
                 if (!browserTab) return
                 if (!initialNavigationCompleteRef.current && initialUrlRef.current && !browserTab.url) return
-                const key = `${browserTab.title}\u0000${browserTab.url}\u0000${browserTab.faviconUrl || ''}`
+                const hasLivePage = Boolean(browserTab.url)
+                const key = `${browserTab.title}\u0000${browserTab.url}\u0000${hasLivePage}\u0000${browserTab.faviconUrl || ''}`
                 if (publishedMetadataRef.current === key) return
                 publishedMetadataRef.current = key
-                void window.devscope.assistantUtility.updateTab(windowId, tab.id, { title: browserTab.title, url: browserTab.url, faviconUrl: browserTab.faviconUrl })
+                void window.devscope.assistantUtility.updateTab(windowId, tab.id, { title: browserTab.title, url: browserTab.url, hasLivePage, faviconUrl: browserTab.faviconUrl })
             }}
             onRequestTabSelection={(tabId) => controllerRef.current?.activateTab(tabId)}
             onControllerChange={(controller) => { controllerRef.current = controller }}

@@ -32,10 +32,13 @@ try {
   if (version.stdout.trim() !== `zyra ${expectedVersion}`) {
     throw new Error(`Unexpected standalone version output: ${version.stdout.trim()}`);
   }
-  smokeBundledOAuth();
+  writeBundledOAuthFixture();
   assertEmbeddedResources();
   run(["doctor"]);
-  run(["auth"]);
+  const auth = run(["auth"]);
+  if (!/^  subscription: connected/m.test(auth.stdout)) {
+    throw new Error(`Standalone OAuth fixture was not detected:\n${auth.stdout}`);
+  }
   smokeUpdate();
   await smokeBridge();
 
@@ -59,23 +62,16 @@ try {
   rmSync(temporaryRoot, { recursive: true, force: true });
 }
 
-function smokeBundledOAuth() {
-  const accessToken = `zyra-standalone-oauth-smoke-${process.pid}`;
+function writeBundledOAuthFixture() {
   mkdirSync(piAgentDirectory, { recursive: true });
   writeFileSync(path.join(piAgentDirectory, "auth.json"), JSON.stringify({
     "openai-codex": {
       type: "oauth",
-      access: accessToken,
+      access: `zyra-standalone-oauth-smoke-${process.pid}`,
       refresh: "offline-smoke-refresh-token",
       expires: Date.now() + 24 * 60 * 60 * 1000,
     },
   }), { encoding: "utf8", mode: 0o600 });
-  const result = run(["--internal-standalone-oauth-smoke"], {
-    ZYRA_STANDALONE_OAUTH_SMOKE_TOKEN: accessToken,
-  });
-  if (result.stdout.trim() !== "standalone OAuth bundle smoke passed") {
-    throw new Error(`Unexpected standalone OAuth smoke output: ${result.stdout.trim()}`);
-  }
 }
 
 function smokeUpdate() {

@@ -81,7 +81,7 @@
     "zyra.cmd",
     "zyra.ps1"
   ],
-  "author": "Elson Erick Mgaya",
+  "author": "justelson",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=22.19.0"

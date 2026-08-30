@@ -740,7 +740,11 @@ async function testRendererAndCredentialBoundaries() {
   const browserRelay = await source("desktop/src/preload/browser-devscope-relay.ts");
   const rendererAnalytics = await source("desktop/src/renderer/src/lib/product-analytics.ts");
   const desktopAnalyticsService = await source("desktop/src/main/analytics/service.ts");
+  const analyticsPreload = await source("desktop/src/preload/analytics.ts");
   const setupHandlers = await source("desktop/src/main/ipc/handlers/setup-handlers.ts");
+  const mainProcess = await source("desktop/src/main/index.ts");
+  const generalSettings = await source("desktop/src/renderer/src/pages/Settings.tsx");
+  const onboardingFlow = await source("desktop/src/renderer/src/onboarding/OnboardingFlow.tsx");
   const browserViewManager = await source("desktop/src/main/browser-view-manager.ts");
   const browserPopupManager = await source("desktop/src/main/browser-popup-manager.ts");
   const browserBridgePolicy = await source("desktop/src/shared/browser-assistant-bridge.ts");
@@ -762,6 +766,13 @@ async function testRendererAndCredentialBoundaries() {
   assert.match(desktopAnalyticsService, /RENDERER_ANALYTICS_EVENTS = new Set\(\['zyra_v1_files', 'zyra_v1_workspace_ui'\]\)/);
   assert.match(desktopAnalyticsService, /app\.isPackaged[\s\S]*withBundledReleaseAnalyticsConfig/);
   assert.match(desktopAnalyticsService, /preferencePath:[\s\S]*requireExplicitPreference: true/);
+  assert.match(desktopAnalyticsService, /setInterval\([\s\S]*this\.refreshStatus\(\)[\s\S]*2_000/);
+  assert.match(mainProcess, /await setupServices\.analytics\.initialize\(\)[\s\S]*setupServices\.onboarding\.initialize\(\)/);
+  assert.match(setupHandlers, /subscribeStatus\(\(status\) => broadcast\(ANALYTICS_IPC\.statusChanged, status\)\)/);
+  assert.match(analyticsPreload, /onStatusChange:[\s\S]*ANALYTICS_IPC\.statusChanged/);
+  assert.match(rendererAnalytics, /onDesktopAnalyticsStatusChange/);
+  assert.match(generalSettings, /onDesktopAnalyticsStatusChange[\s\S]*window\.addEventListener\('focus', refresh\)/);
+  assert.match(onboardingFlow, /onDesktopAnalyticsStatusChange[\s\S]*window\.addEventListener\('focus', refresh\)/);
   assert.match(cliAnalytics, /existsSync\(path\.join\(repositoryRoot, "\.git"\)\)[\s\S]*withBundledReleaseAnalyticsConfig/);
   assert.match(cliAnalytics, /preferencePath:[\s\S]*requireExplicitPreference: true/);
   assert.match(releaseAnalyticsConfig, /projectToken: "phc_[A-Za-z0-9_-]{40,200}"/);
@@ -782,6 +793,7 @@ async function testRendererAndCredentialBoundaries() {
   for (const packageManifest of [rootPackage, desktopPackage]) {
     assert.equal(Object.keys(packageManifest.dependencies || {}).some((name) => name.startsWith("posthog")), false, "analytics must remain zero-dependency");
   }
+  assert.match(analyticsClient, /refreshGeneration = this\.cancellationGeneration[\s\S]*refreshGeneration !== this\.cancellationGeneration\) return/);
   assert.doesNotMatch(analyticsClient, /console\.|electron-log|Authorization|Bearer/);
   assert.doesNotMatch(cliSessionStore, /analytics\/client|captureCliEvent/);
   assert.doesNotMatch(agentJournal, /analytics\/client|captureCliEvent/);

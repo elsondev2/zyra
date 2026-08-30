@@ -537,8 +537,10 @@ async function runLogout(runtime, ui, arg) {
     return true;
   }
   ui.info(`Disconnecting ${authMethodLabel(method)}...`);
+  await runtime.syncAuthProvider?.(providerForZyraAuthMethod(method));
   const before = await getZyraAuthOverview(runtime);
   await removeZyraAuth(method, { authStorage: runtime.session.modelRegistry.authStorage });
+  await runtime.syncAuthProvider?.(providerForZyraAuthMethod(method));
   const fallback = method === "api" ? "subscription" : "api";
   const after = await getZyraAuthOverview(runtime);
   if (before.active === method && after[fallback]?.configured) {
@@ -558,6 +560,7 @@ async function connectAndSwitchAuth(runtime, ui, method, controls, options = {})
 
   controls?.setTerminalTitleState?.("working");
   try {
+    await runtime.syncAuthProvider?.(provider);
     if (method === "api" && (options.forceSetup || !authStorage.hasAuth(provider))) {
       const key = await ui.promptSecret("OpenAI API key");
       ui.info("Verifying OpenAI API key...");
@@ -571,6 +574,7 @@ async function connectAndSwitchAuth(runtime, ui, method, controls, options = {})
       });
     }
 
+    await runtime.syncAuthProvider?.(provider);
     const result = await switchZyraAuthMethod(runtime, method, { authStorage, verification });
     ui.info(`Using ${authMethodLabel(method)} with ${result.model.provider}/${result.model.id}.`);
     await showAuthOverview(runtime, ui);

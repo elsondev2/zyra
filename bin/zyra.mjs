@@ -47,18 +47,5 @@ async function runStandalone(runtimeArgs) {
     await import("../src/workflows/sandbox-worker.mjs");
     return;
   }
-  if (mode === "--internal-standalone-oauth-smoke") {
-    const expectedToken = String(process.env.ZYRA_STANDALONE_OAUTH_SMOKE_TOKEN ?? "");
-    if (!expectedToken) throw new Error("Standalone OAuth smoke token is missing.");
-    const { createZyraAuthStorage } = await import("../src/pi-runtime.mjs");
-    const authStorage = await createZyraAuthStorage({
-      allowModelNetwork: false,
-      refreshOnCreate: false,
-    });
-    const accessToken = await authStorage.getApiKey("openai-codex");
-    if (accessToken !== expectedToken) throw new Error("Standalone OAuth smoke resolved the wrong credential.");
-    process.stdout.write("standalone OAuth bundle smoke passed\n");
-    return;
-  }
   await import("../src/zyra.mjs");
 }

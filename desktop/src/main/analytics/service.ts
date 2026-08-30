@@ -18,6 +18,9 @@ export class DesktopAnalyticsService {
     private readonly client: ProductAnalyticsClient
     private rendererRateWindowStartedAt = 0
     private rendererRateWindowCount = 0
+    private readonly statusListeners = new Set<(status: AnalyticsStatus) => void>()
+    private statusRefreshTimer: ReturnType<typeof setInterval> | null = null
+    private lastPublishedStatus = ''
 
     constructor(userDataPath: string, options: {
         client?: ProductAnalyticsClient
@@ -41,20 +44,36 @@ export class DesktopAnalyticsService {
         })
     }
 
-    initialize(): Promise<void> {
-        return this.client.initialize()
+    async initialize(): Promise<void> {
+        await this.client.initialize()
+        this.publishStatus(this.client.status())
+        if (!this.statusRefreshTimer) {
+            this.statusRefreshTimer = setInterval(() => {
+                void this.refreshStatus().catch(() => undefined)
+            }, 2_000)
+            this.statusRefreshTimer.unref?.()
+        }
     }
 
     status(): AnalyticsStatus {
         return this.client.status()
     }
 
-    refreshStatus(): Promise<AnalyticsStatus> {
-        return this.client.refreshStatus()
+    async refreshStatus(): Promise<AnalyticsStatus> {
+        const status = await this.client.refreshStatus()
+        this.publishStatus(status)
+        return status
     }
 
-    updateEnabled(enabled: boolean): Promise<AnalyticsStatus> {
-        return this.client.updateEnabled(enabled)
+    async updateEnabled(enabled: boolean): Promise<AnalyticsStatus> {
+        const status = await this.client.updateEnabled(enabled)
+        this.publishStatus(status)
+        return status
+    }
+
+    subscribeStatus(listener: (status: AnalyticsStatus) => void): () => void {
+        this.statusListeners.add(listener)
+        return () => this.statusListeners.delete(listener)
     }
 
     capture<Name extends AnalyticsEventName>(input: AnalyticsEventInput<Name>): void {
@@ -98,8 +117,24 @@ export class DesktopAnalyticsService {
         ])
     }
 
-    shutdown(timeoutMs = 1_500): Promise<void> {
-        return this.client.shutdown({ timeoutMs })
+    async shutdown(timeoutMs = 1_500): Promise<void> {
+        if (this.statusRefreshTimer) clearInterval(this.statusRefreshTimer)
+        this.statusRefreshTimer = null
+        this.statusListeners.clear()
+        await this.client.shutdown({ timeoutMs })
+    }
+
+    private publishStatus(status: AnalyticsStatus): void {
+        const signature = JSON.stringify(status)
+        if (signature === this.lastPublishedStatus) return
+        this.lastPublishedStatus = signature
+        for (const listener of this.statusListeners) {
+            try {
+                listener(status)
+            } catch {
+                // Analytics status delivery cannot change a persisted consent result.
+            }
+        }
     }
 }
 

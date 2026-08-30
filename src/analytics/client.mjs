@@ -291,7 +291,9 @@ export class ProductAnalyticsClient {
     const nowMs = this.now().getTime();
     if (!force && !this.config.active && nowMs - this.lastConfigurationRefreshAtMs < this.inactiveRefreshIntervalMs) return;
     this.lastConfigurationRefreshAtMs = nowMs;
+    const refreshGeneration = this.cancellationGeneration;
     const persistedConfig = await this.readResolvedPersistedConfiguration();
+    if (refreshGeneration !== this.cancellationGeneration) return;
     const next = persistedConfig.invalid
       ? disabledConfig("config_invalid", "persisted")
       : resolveAnalyticsConfig({ env: this.configurationEnvironment(), persisted: persistedConfig.value });

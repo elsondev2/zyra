@@ -582,6 +582,9 @@ function sameChatConfig(left, right) {
 async function applyChatConfig(sdk, value, options = {}) {
   if (!runtime) throw new Error("Zyra bridge is not connected.");
   const requested = normalizeChatConfig(value);
+  const currentBeforeRefresh = currentChatConfig(sdk);
+  const requestedProvider = String(requested.model || currentBeforeRefresh.model || "").split(/[/:]/, 1)[0];
+  if (requestedProvider) await refreshServerAuthProvider(requestedProvider);
   const current = currentChatConfig(sdk);
   if (requested.model && requested.model !== current.model) {
     await sdk.setModel(runtime, requested.model, { skipAvailabilityCheck: true });
@@ -617,6 +620,22 @@ async function applyChatConfig(sdk, value, options = {}) {
 async function handleConfigure(payload) {
   const sdk = await loadSdk();
   return { config: await applyChatConfig(sdk, payload) };
+}
+
+async function handleAuthRefresh(payload) {
+  const provider = String(payload?.provider || "").trim();
+  await refreshServerAuthProvider(provider);
+  return { provider, configured: runtime.session.modelRegistry.authStorage.hasAuth(provider) };
+}
+
+async function refreshServerAuthProvider(provider) {
+  if (!runtime) throw new Error("Zyra bridge is not connected.");
+  if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(provider)) throw new Error("Auth refresh provider is invalid.");
+  const modelRuntime = runtime.session?.modelRegistry?.authStorage?.modelRuntime;
+  if (typeof modelRuntime?.refresh !== "function") throw new Error("The server model runtime cannot refresh authentication.");
+  const result = await modelRuntime.refresh({ allowNetwork: false, providers: [provider] });
+  const refreshError = result?.errors?.get?.(provider);
+  if (refreshError) throw refreshError;
 }
 
 async function handlePrompt(payload) {
@@ -901,6 +920,10 @@ async function handleMessage(message) {
     }
     if (message?.type === "configure") {
       sendResponse(id, true, { result: await handleConfigure(message.payload ?? {}) });
+      return;
+    }
+    if (message?.type === "auth.refresh") {
+      sendResponse(id, true, { result: await handleAuthRefresh(message.payload ?? {}) });
       return;
     }
     if (message?.type === "generate_text") {
