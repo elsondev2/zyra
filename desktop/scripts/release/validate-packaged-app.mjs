@@ -92,7 +92,11 @@ async function runPackagedLaunchSmoke(resources, platform, version) {
     const marker = path.join(smokeDirectory, 'launch.json')
     let output = ''
     try {
-        const child = spawn(executable, ['--headless', '--disable-gpu', '--no-sandbox'], {
+        const applicationArgs = ['--headless', '--disable-gpu', '--no-sandbox']
+        const useVirtualDisplay = platform === 'linux' && Boolean(process.env.CI) && !process.env.DISPLAY
+        const child = spawn(useVirtualDisplay ? 'xvfb-run' : executable, useVirtualDisplay
+            ? ['--auto-servernum', executable, ...applicationArgs]
+            : applicationArgs, {
             env: {
                 ...process.env,
                 ZYRA_PACKAGED_SMOKE: '1',
@@ -104,7 +108,7 @@ async function runPackagedLaunchSmoke(resources, platform, version) {
         })
         child.stdout?.on('data', (chunk) => { if (output.length < 64 * 1024) output += chunk })
         child.stderr?.on('data', (chunk) => { if (output.length < 64 * 1024) output += chunk })
-        const exitCode = await new Promise((resolve, reject) => {
+        const exit = await new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
                 child.kill('SIGKILL')
                 reject(new Error(`Packaged ${platform} launch smoke timed out.\n${output}`))
@@ -113,12 +117,15 @@ async function runPackagedLaunchSmoke(resources, platform, version) {
                 clearTimeout(timeout)
                 reject(error)
             })
-            child.once('exit', (code) => {
+            child.once('exit', (code, signal) => {
                 clearTimeout(timeout)
-                resolve(code)
+                resolve({ code, signal })
             })
         })
-        if (exitCode !== 0) throw new Error(`Packaged ${platform} launch exited with ${exitCode}.\n${output}`)
+        if (exit.code !== 0) {
+            const status = exit.code === null ? `signal ${exit.signal || 'unknown'}` : `code ${exit.code}`
+            throw new Error(`Packaged ${platform} launch exited with ${status}.\n${output}`)
+        }
         const result = JSON.parse(await readFile(marker, 'utf8'))
         if (result.version !== version || result.platform !== (platform === 'windows' ? 'win32' : platform === 'macos' ? 'darwin' : 'linux')) {
             throw new Error(`Packaged launch identity is invalid: ${JSON.stringify(result)}`)

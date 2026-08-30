@@ -105,6 +105,8 @@ assert(packagedValidator.includes("path.join(applicationRoot, 'zyra-desktop')"),
 assert(packagedValidator.includes('getCurrentFuseWire'), 'every native package must verify the fuses on its actual executable')
 assert(packagedValidator.includes("platform === 'windows' ? 180_000 : 90_000"), 'cold unsigned package scans need a bounded native-platform launch allowance')
 assert(packagedValidator.includes("ZYRA_PACKAGED_SMOKE: '1'"), 'packaged launch smoke must use the bounded release probe')
+assert.match(packagedValidator, /platform === 'linux'[\s\S]*process\.env\.CI[\s\S]*!process\.env\.DISPLAY[\s\S]*'xvfb-run'[\s\S]*'--auto-servernum'/, 'packaged Linux launch validation must provide Electron with a virtual display on headless CI')
+assert.match(packagedValidator, /child\.once\('exit', \(code, signal\)[\s\S]*signal \$\{exit\.signal/, 'packaged launch failures must preserve signal diagnostics')
 assert.match(mainSource, /if \(process\.env\.ZYRA_PACKAGED_SMOKE === '1'\)[\s\S]*await runPackagedLaunchSmoke\(\)[\s\S]*app\.exit\(0\)[\s\S]*return[\s\S]*void initializeProtectedMedia\(\)/, 'the packaged release probe must exit deterministically before normal runtime services start')
 assert(preflightSource.includes("const taggedPublication = mode === 'tag'"), 'every public tag must enter the signing gate')
 assert(preflightSource.includes("require_signing=${taggedPublication ? 'true' : 'false'}"), 'alpha, beta, and stable tags must all require native signing')
