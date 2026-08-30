@@ -173,6 +173,7 @@ jobs:
       - name: Build native package and updater metadata
         shell: bash
         env:
+          NODE_OPTIONS: --max-old-space-size=4096
           CSC_LINK: ${{ needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'windows' && secrets.ZYRA_WINDOWS_CERTIFICATE || needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'macos' && secrets.ZYRA_MACOS_CERTIFICATE || '' }}
           CSC_KEY_PASSWORD: ${{ needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'windows' && secrets.ZYRA_WINDOWS_CERTIFICATE_PASSWORD || needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'macos' && secrets.ZYRA_MACOS_CERTIFICATE_PASSWORD || '' }}
           APPLE_API_KEY_CONTENT: ${{ needs.preflight.outputs.require_signing == 'true' && matrix.platform == 'macos' && secrets.ZYRA_MACOS_NOTARIZATION_API_KEY || '' }}

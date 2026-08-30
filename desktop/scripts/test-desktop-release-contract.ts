@@ -108,6 +108,7 @@ assert(preflightSource.includes("ZYRA_ACCEPT_ECS_SECURITY_DELTA === 'true'"), 't
 assert(vmpSignerSource.includes("'before-code-sign'") && vmpSignerSource.includes("platform !== 'darwin'"), 'macOS VMP signing runs before Apple code signing')
 assert(vmpAfterPackSource.includes('Electron Framework.sig') && vmpAfterPackSource.includes('arm64') && vmpAfterPackSource.includes('x64'), 'macOS universal staging removes incompatible per-architecture VMP signatures before merging')
 assert.match(releaseWorkflowSource, /- name: Build native package and updater metadata[\s\S]*EVS_ACCOUNT_NAME:[\s\S]*EVS_PASSWD:/, 'EVS credentials are scoped to the native packaging step')
+assert.match(releaseWorkflowSource, /- name: Build native package and updater metadata[\s\S]*NODE_OPTIONS: --max-old-space-size=4096/, 'native release packaging must have enough heap for the renderer production graph')
 assert.doesNotMatch(releaseWorkflowSource, /GITHUB_ENV/, 'signing credentials cannot leak into later smoke or upload steps')
 assert.match(releaseWorkflowSource, /EVS_ACCOUNT_NAME: \$\{\{ github\.event_name == 'push' && secrets\.EVS_ACCOUNT_NAME \|\| '' \}\}/, 'manual rehearsals do not receive EVS credentials during preflight')
 assert.match(releaseWorkflowSource, /EVS_ACCOUNT_NAME: \$\{\{ needs\.preflight\.outputs\.publish == 'true' && matrix\.platform != 'linux'/, 'unsigned native rehearsals do not receive EVS credentials during packaging')
