@@ -123,7 +123,7 @@ function runMemoryStatePendingTempRecoveryRegression() {
       threadMemoryModes: { recovered: "polluted" },
     };
     writeFileSync(
-      path.join(memoryRoot, ".state.json.999.recovery.tmp"),
+      path.join(memoryRoot, `.state.json.${process.pid}.recovery.tmp`),
       `${JSON.stringify(pendingState, null, 2)}\n`,
       "utf8",
     );
