@@ -500,7 +500,7 @@
                     ]
                 }
             ],
-            "artifactName": "Zyra-Desktop-${version}-Linux-${arch}.${ext}",
+            "artifactName": "Zyra-Desktop-${version}-Linux-x64.${ext}",
             "icon": "resources/icons",
             "category": "Development",
             "maintainer": "Zyra",

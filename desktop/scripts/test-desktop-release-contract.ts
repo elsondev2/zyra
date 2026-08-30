@@ -178,7 +178,7 @@ assert.deepEqual(build.linux.target, [
     { target: 'AppImage', arch: ['x64'] },
     { target: 'deb', arch: ['x64'] }
 ])
-assert.equal(build.linux.artifactName, 'Zyra-Desktop-${version}-Linux-${arch}.${ext}')
+assert.equal(build.linux.artifactName, 'Zyra-Desktop-${version}-Linux-x64.${ext}', 'the x64-only Linux producer must match the public updater and install contract instead of target-specific x86_64/amd64 aliases')
 assert.equal(build.linux.icon, 'resources/icons')
 assert.equal(build.fileAssociations[0].icon, 'resources/icon')
 assert.equal(build.generateUpdatesFilesForAllChannels, true)
