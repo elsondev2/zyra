@@ -11,7 +11,8 @@ const expectedVersion = String(process.argv[3] || "").trim();
 if (!existsSync(binary)) throw new Error(`Standalone TUI binary is missing: ${binary}`);
 if (!expectedVersion) throw new Error("Pass the expected Zyra version as the second argument.");
 
-const temporaryRoot = mkdtempSync(path.join(os.tmpdir(), "zyra-standalone-smoke-"));
+const temporaryParent = process.platform === "darwin" ? "/tmp" : os.tmpdir();
+const temporaryRoot = mkdtempSync(path.join(temporaryParent, "zys-"));
 const stateDirectory = path.join(temporaryRoot, "state");
 const piAgentDirectory = path.join(temporaryRoot, "pi-agent");
 const channel = `smoke-${process.pid}-${Date.now()}`;
@@ -26,6 +27,7 @@ const environment = {
 };
 let server;
 let bridge;
+let serverOutput = "";
 
 try {
   const version = run(["--version"]);
@@ -45,9 +47,11 @@ try {
   server = spawn(binary, ["--internal-agent-server", "--channel", channel], {
     cwd: temporaryRoot,
     env: environment,
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
+  server.stdout?.on("data", captureServerOutput);
+  server.stderr?.on("data", captureServerOutput);
   const descriptor = await waitForDescriptor(stateDirectory, 15_000);
   const payload = JSON.parse(readFileSync(descriptor, "utf8"));
   if (Number(payload.pid) !== server.pid) {
@@ -212,8 +216,15 @@ async function waitForDescriptor(directory, timeoutMs) {
       match = undefined;
     }
     if (match) return path.join(directory, match);
-    if (server?.exitCode !== null) throw new Error(`Standalone server exited before publishing a descriptor (${server.exitCode}).`);
+    if (server && (server.exitCode !== null || server.signalCode !== null)) {
+      const status = server.exitCode === null ? `signal ${server.signalCode || "unknown"}` : `code ${server.exitCode}`;
+      throw new Error(`Standalone server exited before publishing a descriptor (${status}).\n${serverOutput}`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error("Standalone server did not publish a descriptor within 15 seconds.");
+}
+
+function captureServerOutput(chunk) {
+  if (serverOutput.length < 64 * 1024) serverOutput += String(chunk);
 }

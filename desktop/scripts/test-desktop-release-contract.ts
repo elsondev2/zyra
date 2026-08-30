@@ -15,6 +15,7 @@ const build = desktopPackage.build
 const localTuiReleaseSource = readFileSync(path.join(repositoryRoot, 'scripts', 'build-release.mjs'), 'utf8')
 const standaloneTuiBuilderSource = readFileSync(path.join(repositoryRoot, 'scripts', 'build-tui-release.mjs'), 'utf8')
 const standaloneTuiSignerSource = readFileSync(path.join(repositoryRoot, 'scripts', 'sign-standalone-tui.mjs'), 'utf8')
+const standaloneTuiSmokeSource = readFileSync(path.join(repositoryRoot, 'scripts', 'test-standalone-tui-binary.mjs'), 'utf8')
 const standaloneTuiEntitlements = readFileSync(path.join(desktopRoot, 'build', 'entitlements.tui.plist'), 'utf8')
 
 assert.equal(rootPackage.version, '0.6.0')
@@ -31,6 +32,8 @@ assert.match(standaloneTuiBuilderSource, /--windows-title=Zyra/, 'the Windows TU
 assert.match(standaloneTuiBuilderSource, /--windows-copyright=Copyright 2026 justelson/, 'the Windows TUI carries the copyright holder')
 assert.match(standaloneTuiSignerSource, /signtool[\s\S]*Get-AuthenticodeSignature/, 'the Windows standalone TUI is signed and verified')
 assert.match(standaloneTuiSignerSource, /codesign[\s\S]*notarytool[\s\S]*spctl/, 'both macOS standalone TUI binaries are signed, notarized, and assessed by Gatekeeper')
+assert.match(standaloneTuiSmokeSource, /process\.platform === "darwin" \? "\/tmp"[\s\S]*"zys-"/, 'the macOS standalone smoke must keep its Unix socket below the platform path limit')
+assert.match(standaloneTuiSmokeSource, /stdio: \["ignore", "pipe", "pipe"\][\s\S]*server\.signalCode[\s\S]*serverOutput/, 'standalone server smoke failures must retain process diagnostics')
 assert.match(standaloneTuiEntitlements, /allow-jit[\s\S]*allow-unsigned-executable-memory[\s\S]*disable-library-validation/, 'Bun standalone binaries retain reviewed JavaScript runtime entitlements')
 assert(rootPackage.files.includes('analytics'), 'the npm/TUI package allowlist includes the versioned analytics catalog')
 assert.equal(rootPackage.author, 'justelson')
