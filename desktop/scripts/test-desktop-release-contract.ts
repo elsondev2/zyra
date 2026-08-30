@@ -97,6 +97,7 @@ assert(signatureMarkerValidator.includes("check.name === 'widevine-vmp'") && sig
 assert(signatureMarkerValidator.includes("['windows-x64']") && signatureMarkerValidator.includes("['macos-arm64', 'macos-x64']"), 'release assembly requires every standalone TUI signing target')
 assert.match(signatureMarkerValidator, /assetsDirectory[\s\S]*details\.size !== artifact\.size[\s\S]*sha256File\(target\)/, 'release assembly binds TUI signature evidence to the final bytes')
 assert(packagedValidator.includes('runPackagedLaunchSmoke'), 'every native package must execute its installed main process')
+assert(packagedValidator.includes("path.join(applicationRoot, 'zyra-desktop')"), 'Linux package validation must use electron-builder\u2019s executable name for the internal Desktop package')
 assert(packagedValidator.includes('getCurrentFuseWire'), 'every native package must verify the fuses on its actual executable')
 assert(packagedValidator.includes("platform === 'windows' ? 180_000 : 90_000"), 'cold unsigned package scans need a bounded native-platform launch allowance')
 assert(packagedValidator.includes("ZYRA_PACKAGED_SMOKE: '1'"), 'packaged launch smoke must use the bounded release probe')

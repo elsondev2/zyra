@@ -53,7 +53,11 @@ async function findPackagedExecutable(resources, platform) {
         ? [path.join(applicationRoot, 'Zyra.exe')]
         : platform === 'macos'
             ? [path.join(applicationRoot, 'MacOS', 'Zyra')]
-            : [path.join(applicationRoot, 'zyra'), path.join(applicationRoot, 'Zyra')]
+            : [
+                path.join(applicationRoot, 'zyra-desktop'),
+                path.join(applicationRoot, 'zyra'),
+                path.join(applicationRoot, 'Zyra')
+            ]
     for (const candidate of candidates) {
         const stats = await lstat(candidate).catch(() => null)
         if (stats?.isFile() && stats.size > 0) return candidate
