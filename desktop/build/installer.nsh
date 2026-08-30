@@ -1,6 +1,8 @@
 !include "WinMessages.nsh"
 !include "StrFunc.nsh"
-${StrStr}
+!ifndef BUILD_UNINSTALLER
+  ${StrStr}
+!endif
 
 !macro customInstall
   WriteRegStr SHELL_CONTEXT "Software\Classes\*\shell\Zyra" "" "Open with Zyra"
