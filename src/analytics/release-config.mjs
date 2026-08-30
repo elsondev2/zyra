@@ -1,3 +1,4 @@
+// PostHog project capture tokens are public write-only identifiers; no read or admin credential ships.
 export const BUNDLED_RELEASE_ANALYTICS_CONFIG = Object.freeze({
   projectToken: "phc_zrkd7JqXfs6LVvWFV54Z4wPq4JA2qGpYrpUNdUJRmymk",
   host: "https://us.i.posthog.com",
