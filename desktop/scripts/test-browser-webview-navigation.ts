@@ -21,7 +21,7 @@ const tabHoverPreviewSource = readFileSync(new URL('../src/renderer/src/pages/as
 assert.match(webviewSource, /controlOverlayInFlightRef[\s\S]*while \(controlOverlayRequestRef\.current\)/, 'cursor updates stay coalesced')
 assert.match(webviewSource, /if \(!shouldPublishOverlay && !controlOverlayPublishedRef\.current\) return/, 'inactive tabs skip empty cursor IPC')
 assert.match(browserViewContractSource, /type: 'capture'/, 'explicit screenshot and inactive tab-preview capture remains available')
-assert.match(browserViewManagerSource, /captureBrowserPage\(page, undefined, true\)/, 'hover snapshots require the owned native page surface without a window fallback')
+assert.match(browserViewManagerSource, /captureBrowserTabPreview\(page\)/, 'hover snapshots use the lightweight owned-page capture')
 assert.doesNotMatch(webviewSource, /presentation-start|presentation-stop|snapshotDataUrl|liveVideoRef|useAssistantBrowserNativeViewOcclusion/, 'menus cannot replace or hide the native page through the retired mirror')
 assert.match(webviewSource, /shouldShowAssistantBrowserNativeView\(\{[\s\S]*hasPage: Boolean\(tab\.url\)/, 'New Tab remains separate from a loaded native page')
 assert.match(tabHoverPreviewSource, /browserView\.command\(\{ tabId, type: 'capture' \}\)/, 'inactive tab hover images retain native capture')

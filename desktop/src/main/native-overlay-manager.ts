@@ -164,7 +164,8 @@ export class NativeOverlayManager {
                 } else {
                     // A WebContentsView cannot ignore native mouse input.
                     const companion = new BrowserWindow({ ...options, parent: window, show: false,
-                        frame: false, transparent: true, backgroundColor: '#00000000',
+                        // Disable Windows' native show animation; the preview owns its vertical motion.
+                        frame: false, thickFrame: false, transparent: true, backgroundColor: '#00000000',
                         focusable: false, skipTaskbar: true, hasShadow: false, resizable: false,
                         minimizable: false, maximizable: false, fullscreenable: false, title: 'Zyra overlay' })
                     if (companion.webContents !== supplied) {

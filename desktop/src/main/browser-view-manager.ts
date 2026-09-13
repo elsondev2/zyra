@@ -1,4 +1,4 @@
-import { captureBrowserPage } from './browser-page-capture'
+import { captureBrowserTabPreview } from './browser-page-capture'
 import { addNativeWindowView } from './native-view-layers'
 import {
     BrowserWindow,
@@ -54,9 +54,6 @@ import {
 const TRANSFER_TIMEOUT_MS = 8_000
 const RELEASE_GRACE_MS = 750
 const MAX_BROWSER_VIEW_BOUNDS = 32_768
-const MAX_BROWSER_SNAPSHOT_WIDTH = 1_920
-const MAX_BROWSER_SNAPSHOT_HEIGHT = 1_200
-const MAX_BROWSER_SNAPSHOT_BYTES = 2 * 1024 * 1024
 
 type BrowserViewRecord = {
     tabId: string
@@ -616,25 +613,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         } else if (command.type === 'blur') {
             record.ownerWindow.webContents.focus()
         } else if (command.type === 'capture') {
-            const captured = await captureBrowserPage(page, undefined, true)
-            const size = captured.getSize()
-            const scale = Math.min(
-                1,
-                MAX_BROWSER_SNAPSHOT_WIDTH / Math.max(1, size.width),
-                MAX_BROWSER_SNAPSHOT_HEIGHT / Math.max(1, size.height)
-            )
-            const presentation = scale < 1
-                ? captured.resize({
-                    width: Math.max(1, Math.round(size.width * scale)),
-                    height: Math.max(1, Math.round(size.height * scale)),
-                    quality: 'good'
-                })
-                : captured
-            let jpeg = presentation.toJPEG(72)
-            if (jpeg.byteLength > MAX_BROWSER_SNAPSHOT_BYTES) jpeg = presentation.toJPEG(52)
-            if (jpeg.byteLength <= MAX_BROWSER_SNAPSHOT_BYTES) {
-                snapshotDataUrl = `data:image/jpeg;base64,${jpeg.toString('base64')}`
-            }
+            snapshotDataUrl = await captureBrowserTabPreview(page)
         } else if (command.type === 'control-overlay') {
             const phases = new Set(['idle', 'moving', 'pressing', 'dragging', 'typing', 'scrolling'])
             const cursor = command.cursor && command.cursor.visible && Number.isFinite(command.cursor.x) && Number.isFinite(command.cursor.y) && phases.has(command.cursor.phase)

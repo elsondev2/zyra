@@ -1,6 +1,30 @@
 import { nativeImage, type NativeImage, type Rectangle, type WebContents } from 'electron'
 
 const captures = new WeakMap<WebContents, Promise<NativeImage>>()
+const previews = new WeakMap<WebContents, Promise<string>>()
+
+/** Read the owned surface directly; avoid full-size PNG encoding and decoding on hover. */
+export function captureBrowserTabPreview(guest: WebContents): Promise<string> {
+    const pending = previews.get(guest)
+    if (pending) return pending
+    const capture = (async () => {
+        if (guest.isDestroyed()) throw new Error('The Browser tab was closed.')
+        const image = await bounded(guest.capturePage(undefined, { stayHidden: true, stayAwake: true }))
+        if (image.isEmpty()) throw new Error('The Browser preview is unavailable.')
+        const size = image.getSize()
+        // 3x the card's display width preserves crisp text on high-DPI screens.
+        const scale = Math.min(1, 768 / size.width, 480 / size.height)
+        const thumbnail = scale < 1 ? image.resize({
+            width: Math.max(1, Math.round(size.width * scale)),
+            height: Math.max(1, Math.round(size.height * scale)), quality: 'best'
+        }) : image
+        const jpeg = thumbnail.toJPEG(82)
+        return `data:image/jpeg;base64,${jpeg.toString('base64')}`
+    })()
+    previews.set(guest, capture)
+    void capture.finally(() => { if (previews.get(guest) === capture) previews.delete(guest) }).catch(() => undefined)
+    return capture
+}
 
 async function bounded<T>(operation: Promise<T>): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined
