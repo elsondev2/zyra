@@ -31,6 +31,7 @@
         "test:inspector-startup": "bun scripts/test-assistant-inspector-startup.ts",
         "test:timeline-presentation": "node scripts/test-assistant-timeline-presentation.mjs",
         "test:default-chat-folder": "bun scripts/test-assistant-default-folder.ts",
+        "test:file-delete-index": "bun scripts/test-file-delete-index.ts",
         "test:runtime-observability": "bun scripts/test-runtime-observability.ts",
         "test:memory-overview": "bun scripts/test-memory-overview-root.ts",
         "test:work-timeline-v2": "bun scripts/test-assistant-work-timeline-v2.tsx",

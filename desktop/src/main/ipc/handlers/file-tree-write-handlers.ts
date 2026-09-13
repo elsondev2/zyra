@@ -2,7 +2,7 @@ import { shell } from 'electron'
 import { access, cp, lstat, mkdir, open as fsOpen, rename, rm, stat, writeFile } from 'fs/promises'
 import { basename, dirname, join, parse, resolve, sep } from 'path'
 import log from 'electron-log'
-import { scheduleFileIndexRefresh } from '../../services/file-index-service'
+import { scheduleFileIndexDeletion, scheduleFileIndexRefresh } from '../../services/file-index-service'
 import { invalidateScanProjectsCache } from '../../services/project-discovery-service'
 
 const BINARY_DETECTION_BYTES = 4096
@@ -228,7 +228,7 @@ export async function handleDeleteFileSystemItem(_event: Electron.IpcMainInvokeE
 
         invalidateScanProjectsCache(dirname(normalizedTargetPath))
         invalidateScanProjectsCache(normalizedTargetPath, { includeParents: false })
-        scheduleFileIndexRefresh(dirname(normalizedTargetPath))
+        scheduleFileIndexDeletion(normalizedTargetPath)
 
         return { success: true }
     } catch (err: any) {
