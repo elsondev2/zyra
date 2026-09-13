@@ -5,7 +5,7 @@ import { ZYRA_THEME_CHANGED_EVENT } from '@/lib/theme-events'
 import {
     dismissAssistantBrowserRecording, downloadUnsavedAssistantBrowserRecording, pauseAssistantBrowserRecording,
     readAssistantBrowserRecording, resumeAssistantBrowserRecording, setAssistantBrowserRecordingAudioSource,
-    setAssistantBrowserRecordingMicrophone, stopActiveAssistantBrowserRecording, subscribeAssistantBrowserRecording
+    setAssistantBrowserRecordingMicrophone, startPreparedAssistantBrowserRecording, stopActiveAssistantBrowserRecording, subscribeAssistantBrowserRecording
 } from './assistant-browser-recording'
 
 function readTheme(): BrowserRecordingOverlayState['theme'] {
@@ -59,6 +59,7 @@ export function AssistantBrowserRecordingHost() {
     const command = useCallback(async (action: BrowserRecordingOverlayCommand) => {
         try {
             switch (action.kind) {
+                case 'start': await startPreparedAssistantBrowserRecording(); await refreshDevices(); break
                 case 'pause': pauseAssistantBrowserRecording(); break
                 case 'resume': resumeAssistantBrowserRecording(); break
                 case 'stop': await stopActiveAssistantBrowserRecording(); break
@@ -105,6 +106,12 @@ export function AssistantBrowserRecordingHost() {
         return () => { disposed = true }
     }, [native, active, state, devices, theme])
     useEffect(() => { setBridgeError(null); setPresentation(null) }, [state.tabId, state.guestWebContentsId])
+    useEffect(() => {
+        if (state.status === 'ready' && presentation?.targetGone
+            && presentation.target.tabId === state.tabId && presentation.target.guestWebContentsId === state.guestWebContentsId) {
+            dismissAssistantBrowserRecording()
+        }
+    }, [state.status, state.tabId, state.guestWebContentsId, presentation])
 
     // Closed-tab recovery stays reachable in the app. Normal recording consumes no layout space.
     const matchingPresentation = presentation?.target.guestWebContentsId === state.guestWebContentsId
@@ -114,11 +121,12 @@ export function AssistantBrowserRecordingHost() {
     const busy = state.status === 'starting' || state.status === 'stopping'
     const seconds = Math.floor(state.elapsedMs / 1000)
     const duration = `${Math.floor(seconds / 60)}:${(seconds % 60).toString().padStart(2, '0')}`
-    const label = state.status === 'stopping' ? 'Saving recording…' : state.status === 'starting' ? 'Starting recording…' : state.status === 'saved' ? 'Recording saved' : 'Browser recording'
+    const label = state.status === 'ready' ? 'Ready to record' : state.status === 'stopping' ? 'Saving recording…' : state.status === 'starting' ? 'Starting recording…' : state.status === 'saved' ? 'Recording saved' : 'Browser recording'
     const buttonClass = 'inline-flex size-8 items-center justify-center rounded-md hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]'
     return <div data-browser-recording-recovery data-zyra-native-view-occluder="true" className="fixed right-3 top-12 z-[500] max-w-sm rounded-xl border border-[var(--surface-divider)] bg-[var(--color-bg-secondary)] p-3 text-xs text-sparkle-text shadow-lg">
         <div className="flex items-center gap-2" role="toolbar" aria-label="Recording recovery">
-            <span className="mr-auto">{label} <span className="ml-2 tabular-nums">{duration}</span></span>
+            <span className="mr-auto">{label} {state.status !== 'ready' ? <span className="ml-2 tabular-nums">{duration}</span> : null}</span>
+            {state.status === 'ready' ? <button className={buttonClass} title="Start recording" onClick={() => void command({ kind: 'start' })}><Play size={13} /></button> : null}
             {live ? <><button className={buttonClass} title={state.status === 'paused' ? 'Resume recording' : 'Pause recording'} onClick={() => void command({ kind: state.status === 'paused' ? 'resume' : 'pause' })}>{state.status === 'paused' ? <Play size={13} /> : <Pause size={13} />}</button><button className={buttonClass} title="Stop and save recording" onClick={() => void command({ kind: 'stop' })}><Square size={12} /></button></> : null}
             {state.unsaved ? <button className={buttonClass} title="Save video copy" onClick={() => void command({ kind: 'save-copy' })}><Download size={14} /></button> : null}
             {state.artifact ? <button className={buttonClass} title="View recording" onClick={() => void command({ kind: 'show-artifact' })}><Video size={14} /></button> : null}

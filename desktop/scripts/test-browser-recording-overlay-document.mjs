@@ -11,7 +11,7 @@ const userData = await mkdtemp(join(tmpdir(), 'zyra-recorder-document-'))
 try {
     const documentModule = join(userData, 'document.cjs')
     await build({ entryPoints: [join(directory, '../src/main/browser-recording-overlay-document.ts')], outfile: documentModule, bundle: true, platform: 'node', format: 'cjs' })
-    await writeFile(join(userData, 'preload.cjs'), `const{contextBridge,ipcRenderer}=require('electron');contextBridge.exposeInMainWorld('zyraRecordingOverlay',{getState:()=>ipcRenderer.invoke('read'),onState:listener=>{const fn=(_e,state)=>listener(state);ipcRenderer.on('state',fn);return()=>ipcRenderer.removeListener('state',fn)},command:command=>ipcRenderer.send('command',command),resize:height=>ipcRenderer.send('resize',height)});`)
+    await writeFile(join(userData, 'preload.cjs'), `const{contextBridge,ipcRenderer}=require('electron');contextBridge.exposeInMainWorld('zyraRecordingOverlay',{getState:()=>ipcRenderer.invoke('read'),onState:listener=>{const fn=(_e,state)=>listener(state);ipcRenderer.on('state',fn);return()=>ipcRenderer.removeListener('state',fn)},command:command=>ipcRenderer.send('command',command),resize:size=>ipcRenderer.send('resize',size)});`)
     const exitCode = await new Promise((resolve, reject) => {
         const useDisplay = process.platform === 'linux' && process.env.CI && !process.env.DISPLAY
         const args = [...(process.platform === 'linux' && process.env.CI ? ['--no-sandbox'] : []), join(directory, 'browser-recording-overlay-document-smoke.cjs')]

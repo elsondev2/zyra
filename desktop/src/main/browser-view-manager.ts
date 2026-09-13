@@ -1,4 +1,5 @@
 import { captureBrowserPage } from './browser-page-capture'
+import { browserRecordingCapture } from './browser-recording-capture'
 import {
     BrowserWindow,
     WebContentsView,
@@ -614,6 +615,13 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             page.focus()
         } else if (command.type === 'blur') {
             record.ownerWindow.webContents.focus()
+        } else if (command.type === 'presentation-start') {
+            const slot = this.slotsByOwner.get(event.sender.id)?.get(tabId)
+            if (event.senderFrame !== event.sender.mainFrame || !slot?.active || !slot.bounds) throw new Error('The Browser page is not active in this window.')
+            browserRecordingCapture.armPresentation(event.sender, page)
+        } else if (command.type === 'presentation-stop') {
+            if (event.senderFrame !== event.sender.mainFrame) throw new Error('The Browser presentation belongs to the application frame.')
+            browserRecordingCapture.cancelPresentation(event.sender.id, page.id)
         } else if (command.type === 'capture') {
             const captured = await captureBrowserPage(page)
             const size = captured.getSize()

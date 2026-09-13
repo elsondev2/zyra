@@ -71,6 +71,8 @@ The isolated Electron `test:timeline-presentation` target verifies cold chat rev
 
 Fixed locally and checked in the development app; not released. Native browser geometry follows inspector animations without idle polling. Recording uses direct native video capture, with a compact toolbar over the page, real microphone choices, tab audio and Windows system audio. Start/stop failures settle, capture releases before saving, and original encoder ownership survives supported tab transfers. Moving the last tab out of its recording window first requires saving the video.
 
+Follow-up: Record Browser opens compact setup with explicit Start and remembered audio choices. Option panels animate their content-sized bounds. The shared app-overlay boundary uses temporary live video presentation instead of leaving menus above a frozen page image; it releases the feed on close and preserves recording ownership. Delayed menu preparation is cancelled when its target changes.
+
 Focused Electron checks cover moving video with generated tab audio, narrow menus, native layering, transfers and recovery. A live recording saved successfully; its frames exclude the controls, and microphone names, pause/resume, save, panel switching and inspector reopening were verified. Physical microphone and system-loopback recording remain separate device checks. See [browser recording and presentation](development/browser-recording.md).
 
 ## v0.6.3: safer update handling

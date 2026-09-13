@@ -18,13 +18,13 @@ export type BrowserRecordingOverlayPresentation = {
 }
 
 export type BrowserRecordingOverlayCommand =
-    | { kind: 'pause' | 'resume' | 'stop' | 'dismiss' | 'save-copy' | 'show-artifact' | 'show-tab' | 'refresh-devices' }
+    | { kind: 'start' | 'pause' | 'resume' | 'stop' | 'dismiss' | 'save-copy' | 'show-artifact' | 'show-tab' | 'refresh-devices' }
     | { kind: 'microphone'; deviceId: string }
     | { kind: 'audio'; source: 'off' | 'tab' | 'system' }
 
 export type BrowserRecordingOverlayState = {
     target: DevScopeBrowserGuestTargetInput
-    status: 'starting' | 'recording' | 'paused' | 'stopping' | 'saved' | 'error'
+    status: 'ready' | 'starting' | 'recording' | 'paused' | 'stopping' | 'saved' | 'error'
     title: string
     elapsedMs: number
     microphone: string
@@ -44,7 +44,7 @@ export type BrowserRecordingOverlayApi = {
     getState: () => Promise<BrowserRecordingOverlayState | null>
     onState: (listener: (state: BrowserRecordingOverlayState) => void) => () => void
     command: (command: BrowserRecordingOverlayCommand) => void
-    resize: (height: number) => void
+    resize: (size: { width: number; height: number }) => void
 }
 
 export function isBrowserRecordingOverlayCommand(value: unknown): value is BrowserRecordingOverlayCommand {
@@ -52,5 +52,5 @@ export function isBrowserRecordingOverlayCommand(value: unknown): value is Brows
     const command = value as Record<string, unknown>
     if (command.kind === 'microphone') return typeof command.deviceId === 'string' && command.deviceId.length <= 256
     if (command.kind === 'audio') return ['off', 'tab', 'system'].includes(String(command.source))
-    return ['pause', 'resume', 'stop', 'dismiss', 'save-copy', 'show-artifact', 'show-tab', 'refresh-devices'].includes(String(command.kind))
+    return ['start', 'pause', 'resume', 'stop', 'dismiss', 'save-copy', 'show-artifact', 'show-tab', 'refresh-devices'].includes(String(command.kind))
 }

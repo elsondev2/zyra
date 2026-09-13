@@ -12,6 +12,7 @@ type Overlay = {
     contents: WebContents
     host: BrowserWindow | null
     state: BrowserRecordingOverlayState
+    width: number
     height: number
     loaded: boolean
     bounds: Electron.Rectangle | null
@@ -58,16 +59,24 @@ export class BrowserRecordingOverlayManager {
     private readonly onAction = (event: IpcMainEvent, command: unknown) => {
         const overlay = this.fromOverlay(event)
         if (!overlay || !isBrowserRecordingOverlayCommand(command)) return
+        if (command.kind === 'start') {
+            const presentation = this.presentations.get(overlay.state.target.guestWebContentsId)
+            if (overlay.state.status !== 'ready' || presentation?.ownerWindow?.webContents.id !== overlay.owner.id) return
+        }
         if (command.kind === 'audio' && command.source === 'system' && !overlay.state.systemAudioSupported) return
         if (command.kind === 'audio' && command.source === 'tab' && !overlay.state.tabAudioSupported) return
         overlay.owner.send(IPC.command, command)
     }
 
-    private readonly onResize = (event: IpcMainEvent, height: unknown) => {
+    private readonly onResize = (event: IpcMainEvent, size: unknown) => {
         const overlay = this.fromOverlay(event)
-        if (!overlay || typeof height !== 'number' || !Number.isFinite(height)) return
+        if (!overlay || !size || typeof size !== 'object') return
+        const { width, height } = size as Record<string, unknown>
+        if (typeof width !== 'number' || typeof height !== 'number' || !Number.isFinite(width) || !Number.isFinite(height)) return
+        const nextWidth = Math.max(120, Math.min(440, Math.ceil(width)))
         const nextHeight = Math.max(48, Math.min(340, Math.ceil(height)))
-        if (overlay.height === nextHeight) return
+        if (overlay.width === nextWidth && overlay.height === nextHeight) return
+        overlay.width = nextWidth
         overlay.height = nextHeight
         this.present(overlay)
     }
@@ -75,7 +84,7 @@ export class BrowserRecordingOverlayManager {
     private update(owner: WebContents, state: BrowserRecordingOverlayState | null) {
         let overlay = this.overlays.get(owner.id)
         if (!state) { if (overlay) this.destroy(overlay); return }
-        if (!state.target || !['starting', 'recording', 'paused', 'stopping', 'saved', 'error'].includes(state.status)) {
+        if (!state.target || !['ready', 'starting', 'recording', 'paused', 'stopping', 'saved', 'error'].includes(state.status)) {
             throw new Error('Invalid recording controls state.')
         }
         const sameTarget = overlay?.state.target.guestWebContentsId === state.target.guestWebContentsId
@@ -98,7 +107,7 @@ export class BrowserRecordingOverlayManager {
             view.webContents.session.setPermissionCheckHandler(() => false)
             view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
             view.webContents.on('will-navigate', event => event.preventDefault())
-            const current: Overlay = { owner, view, contents: view.webContents, host: null, state, height: 60, loaded: false, bounds: null, visible: false, error: null, lastPresentation: '', disposeOwner: () => {} }
+            const current: Overlay = { owner, view, contents: view.webContents, host: null, state, width: 260, height: 62, loaded: false, bounds: null, visible: false, error: null, lastPresentation: '', disposeOwner: () => {} }
             const onOwnerClosed = () => this.destroy(current)
             owner.once('destroyed', onOwnerClosed)
             owner.once('render-process-gone', onOwnerClosed)
@@ -131,6 +140,7 @@ export class BrowserRecordingOverlayManager {
 
     private present(overlay: Overlay) {
         const presentation = this.presentations.get(overlay.state.target.guestWebContentsId)
+        const setupTransferred = overlay.state.status === 'ready' && presentation?.ownerWindow?.webContents.id !== overlay.owner.id
         const host = presentation?.ownerWindow || null
         const bounds = presentation?.bounds
         if (overlay.host !== host) {
@@ -138,7 +148,7 @@ export class BrowserRecordingOverlayManager {
             overlay.host = host
         }
         const publish = () => {
-            const next = { target: overlay.state.target, visible: overlay.visible, targetGone: !presentation, error: overlay.error }
+            const next = { target: overlay.state.target, visible: overlay.visible, targetGone: !presentation || setupTransferred, error: overlay.error }
             const key = JSON.stringify(next)
             if (key === overlay.lastPresentation || overlay.owner.isDestroyed()) return
             overlay.lastPresentation = key
@@ -149,13 +159,13 @@ export class BrowserRecordingOverlayManager {
             overlay.visible = visible
             if (!overlay.contents.isDestroyed()) overlay.view.setVisible(visible)
         }
-        if (overlay.error || !host || host.isDestroyed() || !bounds || !presentation?.visible || bounds.width < 120 || bounds.height < 48) {
+        if (overlay.error || setupTransferred || !host || host.isDestroyed() || !bounds || !presentation?.visible || bounds.width < 120 || bounds.height < 48) {
             setVisible(false)
             publish()
             return
         }
         const inset = Math.min(12, Math.max(0, (bounds.width - 120) / 2))
-        const width = Math.min(440, Math.floor(bounds.width - inset * 2))
+        const width = Math.min(overlay.width, Math.floor(bounds.width - inset * 2))
         const height = Math.min(overlay.height, Math.floor(bounds.height - 8))
         const nextBounds = { x: Math.round(bounds.x + (bounds.width - width) / 2), y: Math.round(bounds.y + 8), width, height }
         if (!overlay.bounds || Object.keys(nextBounds).some(key => nextBounds[key as keyof typeof nextBounds] !== overlay.bounds?.[key as keyof typeof nextBounds])) {

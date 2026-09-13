@@ -8,7 +8,7 @@ import electronPath from 'electron'
 const desktop=resolve(dirname(fileURLToPath(import.meta.url)),'..')
 const directory=await mkdtemp(join(tmpdir(),'zyra-recording-host-'))
 try {
-    const exports=['readAssistantBrowserRecording','subscribeAssistantBrowserRecording','pauseAssistantBrowserRecording','resumeAssistantBrowserRecording','stopActiveAssistantBrowserRecording','setAssistantBrowserRecordingMicrophone','setAssistantBrowserRecordingAudioSource','dismissAssistantBrowserRecording','downloadUnsavedAssistantBrowserRecording']
+    const exports=['readAssistantBrowserRecording','subscribeAssistantBrowserRecording','pauseAssistantBrowserRecording','resumeAssistantBrowserRecording','stopActiveAssistantBrowserRecording','startPreparedAssistantBrowserRecording','setAssistantBrowserRecordingMicrophone','setAssistantBrowserRecordingAudioSource','dismissAssistantBrowserRecording','downloadUnsavedAssistantBrowserRecording']
     const bundle=await build({entryPoints:[join(desktop,'scripts/fixtures/browser-recording-host.tsx')],bundle:true,write:false,format:'iife',jsx:'automatic',platform:'browser',alias:{'@':join(desktop,'src/renderer/src')},plugins:[{
         name:'recording-store-fixture',setup(build){build.onResolve({filter:/\/assistant-browser-recording$/},()=>({path:'recording-store',namespace:'fixture'}));build.onLoad({filter:/.*/,namespace:'fixture'},()=>({contents:exports.map(name=>`export const ${name}=(...args)=>globalThis.__recordingHostStore.${name}(...args);`).join('\n'),loader:'js'}))}
     }]})

@@ -10,7 +10,11 @@ export function installBrowserRecordingOverlayPreload() {
             return () => { ipcRenderer.removeListener(IPC.state, receive) }
         },
         command: command => { if (isBrowserRecordingOverlayCommand(command)) ipcRenderer.send(IPC.action, command) },
-        resize: height => { if (Number.isFinite(height)) ipcRenderer.send(IPC.resize, height) }
+        resize: size => {
+            if (size && Number.isFinite(size.width) && Number.isFinite(size.height)) {
+                ipcRenderer.send(IPC.resize, { width: size.width, height: size.height })
+            }
+        }
     }
     contextBridge.exposeInMainWorld('zyraRecordingOverlay', api)
 }

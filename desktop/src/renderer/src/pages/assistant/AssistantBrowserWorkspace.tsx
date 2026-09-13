@@ -66,6 +66,7 @@ import { AssistantBrowserPageIcon } from './AssistantBrowserPageIcon'
 import { AssistantBrowserThreatWarning } from './AssistantBrowserThreatWarning'
 import { AssistantBrowserViewportFrame } from './AssistantBrowserViewportFrame'
 import { AssistantBrowserWebview, type AssistantBrowserWebviewHandle } from './AssistantBrowserWebview'
+import { usePreparedBrowserOverlay } from './usePreparedBrowserOverlay'
 import {
     buildAssistantBrowserOmniboxSuggestions,
     filterAssistantBrowserHistory,
@@ -81,7 +82,7 @@ import { publishAssistantBrowserAnnotationAttachment } from './assistant-browser
 import {
     readAssistantBrowserRecording,
     subscribeAssistantBrowserRecording,
-    startAssistantBrowserRecording,
+    prepareAssistantBrowserRecording,
     stopAssistantBrowserRecording
 } from './assistant-browser-recording'
 import {
@@ -356,6 +357,15 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         if (!tab?.url) return true
         return webviewRefs.current.get(tab.id)?.preparePresentation() ?? false
     }, [])
+    const browserOverlayScope = JSON.stringify([workspaceKey, activeTab?.id, activeTab?.url])
+    const profileMenuIntent = usePreparedBrowserOverlay({
+        scopeKey: browserOverlayScope,
+        active,
+        open: profileMenuOpen,
+        prepare: prepareActiveBrowserOverlay,
+        onOpen: () => setProfileMenuOpen(true),
+        onClose: () => setProfileMenuOpen(false)
+    })
     const prepareOmniboxPresentation = useCallback(() => {
         const generation = ++omniboxPreparationGenerationRef.current
         const state = workspaceStateRef.current
@@ -651,9 +661,9 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     }, [settings.assistantBrowserAdBlockEnabled, settings.assistantBrowserAdBlockPromptDismissed])
 
     useEffect(() => {
-        if (!profileMenuOpen) return
+        if (!profileMenuOpen && !profileMenuIntent.pending) return
         const dismissProfileMenu = () => {
-            setProfileMenuOpen(false)
+            profileMenuIntent.close()
             setClearProfileArmed(false)
             setSiteSignOutArmed(false)
             setHistoryClearArmed(false)
@@ -676,7 +686,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             window.removeEventListener('blur', dismissProfileMenu)
             window.removeEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissProfileMenu)
         }
-    }, [profileMenuOpen])
+    }, [profileMenuOpen, profileMenuIntent.pending, profileMenuIntent.close])
 
     const getSearchSuggestions = useCallback(async (query: string): Promise<string[]> => {
         if (!settings.assistantBrowserGoogleSuggestions || typeof window.devscope.getBrowserSearchSuggestions !== 'function') return []
@@ -906,7 +916,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         setAddressError(null)
         setAddressValue('')
         setHistoryActiveIndex(-1)
-        setProfileMenuOpen(false)
+        profileMenuIntent.close()
         setDownloadsOverlayOpen(false)
         setDownloadsPanelOpen(false)
         setHistoryPanelOpen(false)
@@ -929,7 +939,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         } catch (error) {
             onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not return this Browser tab to New Tab.' })
         }
-    }, [cancelAnnotation, mutateWorkspaceState, onDeveloperToast])
+    }, [cancelAnnotation, mutateWorkspaceState, onDeveloperToast, profileMenuIntent.close])
 
     const openLocalFileInTab = useCallback(async (tabId: string) => {
         const handle = webviewRefs.current.get(tabId)
@@ -1589,7 +1599,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                 await stopAssistantBrowserRecording(target)
                 return
             }
-            await startAssistantBrowserRecording(target, handle.getViewportSize())
+            prepareAssistantBrowserRecording(target, handle.getViewportSize())
         } catch (error) {
             if (!readAssistantBrowserRecording().error) {
                 onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not change Browser recording state.' })
@@ -1915,6 +1925,8 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                 </div>
                 <AssistantBrowserDownloadsButton
                     api={browserDownloadsApi}
+                    active={active}
+                    scopeKey={browserOverlayScope}
                     onOpenHere={openDownloadHere}
                     onBeforeOverlayOpen={prepareActiveBrowserOverlay}
                     onOverlayChange={setDownloadsOverlayOpen}
@@ -1940,11 +1952,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                     <button
                         type="button"
                         onClick={() => {
-                            if (profileMenuOpen) {
-                                setProfileMenuOpen(false)
-                            } else {
-                                void prepareActiveBrowserOverlay().then(() => setProfileMenuOpen(true))
-                            }
+                            profileMenuIntent.toggle()
                             setClearProfileArmed(false)
                             setSiteSignOutArmed(false)
                             setHistoryClearArmed(false)

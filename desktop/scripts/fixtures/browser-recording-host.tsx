@@ -30,7 +30,8 @@ function action(name:string){actions.push(name)}
     pauseAssistantBrowserRecording:()=>{action('pause');patch({status:'paused'})},
     resumeAssistantBrowserRecording:()=>{action('resume');patch({status:'recording'})},
     stopActiveAssistantBrowserRecording:async()=>{action('stop');patch({status:'saved'})},
-    setAssistantBrowserRecordingMicrophone:async(deviceId:string)=>{action('microphone:'+deviceId);labels=true;patch({microphone:deviceId})},
+    startPreparedAssistantBrowserRecording:async()=>{action('start');labels=state.microphone!=='off';patch({status:'recording'})},
+    setAssistantBrowserRecordingMicrophone:async(deviceId:string)=>{action('microphone:'+deviceId);if(state.status!=='ready')labels=true;patch({microphone:deviceId})},
     setAssistantBrowserRecordingAudioSource:async(source:'off'|'tab'|'system')=>{action('audio:'+source);patch({audioSource:source})},
     dismissAssistantBrowserRecording:()=>{action('dismiss');state=initial;for(const listener of subscribers)listener()},
     downloadUnsavedAssistantBrowserRecording:()=>action('save-copy')
@@ -62,6 +63,19 @@ const latest=()=>updates.at(-1)
     flushSync(()=>root.render(<StrictMode><AssistantBrowserRecordingHost/></StrictMode>))
     await pause()
     check(commands.size===0&&presentations.size===0&&enumerations===0,'idle must keep native bridge and microphone enumeration cold')
+    patch({status:'ready',tabId:'tab:fixture',guestWebContentsId:7})
+    await waitFor(()=>latest()?.status==='ready'&&latest()?.microphones.length===2,'setup publishes native controls and available devices')
+    check(container.innerHTML===''&&latest()?.elapsedMs===0,'setup remains native and has no elapsed recording')
+    emit({kind:'microphone',deviceId:'mic-a'});emit({kind:'audio',source:'tab'})
+    await waitFor(()=>latest()?.microphone==='mic-a'&&latest()?.audioSource==='tab','setup choices flow through to native state')
+    check(!labels&&!actions.includes('start'),'choosing setup options must not imply media permission or start')
+    emit({kind:'dismiss'});await waitFor(()=>commands.size===0&&latest()===null,'setup closes without a stop or save')
+    check(!actions.includes('stop')&&!actions.includes('start'),'dismissed setup must not invoke capture controls')
+    patch({status:'ready',tabId:'tab:fixture',guestWebContentsId:7,microphone:'mic-a',audioSource:'tab'})
+    await waitFor(()=>latest()?.status==='ready','reopened setup')
+    emit({kind:'start'});await waitFor(()=>latest()?.status==='recording','explicit Start is forwarded')
+    check(actions.filter(item=>item==='start').length===1,'one Start command starts once')
+    results.push('ready setup preserves choices, dismisses harmlessly, and waits for explicit Start')
     patch({status:'recording',tabId:'tab:fixture',guestWebContentsId:7,elapsedMs:1200})
     await waitFor(()=>latest()?.microphones.length===2,'recording must publish native state and real device IDs')
     check(commands.size===1&&presentations.size===1,'one global Host must own one live subscription per channel')
@@ -95,6 +109,12 @@ const latest=()=>updates.at(-1)
     results.push('theme changes propagate; target-close recovery uses current recording/artifact')
     emit({kind:'dismiss'});await waitFor(()=>commands.size===0&&presentations.size===0&&latest()===null,'idle must unsubscribe channels and remove native overlay')
     check(devicesChanged.size===0&&container.innerHTML==='','idle must release device listeners and recovery UI')
+    patch({status:'ready',tabId:'tab:closed-setup',guestWebContentsId:10})
+    await waitFor(()=>latest()?.status==='ready','closed-target setup attached')
+    const stopCount=actions.filter(item=>item==='stop').length
+    present({targetGone:true,visible:false})
+    await waitFor(()=>state.status==='idle'&&latest()===null,'closed or transferred ready target dismisses setup')
+    check(actions.filter(item=>item==='stop').length===stopCount,'closing a prepared target does not stop or save nonexistent media')
     patch({status:'recording',tabId:'tab:next',guestWebContentsId:11})
     await waitFor(()=>commands.size===1&&latest()?.target.guestWebContentsId===11,'new recording must attach once')
     deferDevices=true;emit({kind:'refresh-devices'});await waitFor(()=>Boolean(deferredDevices),'deferred enumeration started')
