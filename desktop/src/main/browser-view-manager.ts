@@ -4,7 +4,8 @@ import {
     WebContentsView,
     type IpcMainEvent,
     type IpcMainInvokeEvent,
-    type Session
+    type Session,
+    type WebContents
 } from 'electron'
 import { ipcMain } from './ipc/trusted-ipc'
 import log from 'electron-log'
@@ -109,6 +110,16 @@ export type BrowserViewTransferHost = {
     closeIfOwned(tabId: string, ownerWindow: BrowserWindow | null): boolean
 }
 
+/** Native shell overlays follow the existing page without taking ownership of it. */
+export type BrowserViewPresentation = {
+    tabId: string
+    guestWebContents: WebContents
+    ownerWindow: BrowserWindow | null
+    bounds: BrowserViewBounds | null
+    visible: boolean
+    disposed: boolean
+}
+
 type BrowserViewManagerOptions = {
     popupManager: Pick<BrowserPopupManager, 'registerGuest' | 'transferGuestOwner'>
     resolveOwnerId: (window: BrowserWindow) => string | null
@@ -162,11 +173,39 @@ export class BrowserViewManager implements BrowserViewTransferHost {
     private readonly pendingTransfers = new Map<string, PendingTransfer>()
     private readonly releaseTimers = new Map<string, NodeJS.Timeout>()
     private readonly observedWindows = new WeakSet<BrowserWindow>()
+    private readonly presentationObservers = new Set<(presentation: BrowserViewPresentation) => void>()
     private incognitoSession: { session: Session; tabIds: Set<string> } | null = null
     private registered = false
     private disposed = false
 
     constructor(private readonly options: BrowserViewManagerOptions) {}
+
+    observePresentation(observer: (presentation: BrowserViewPresentation) => void): () => void {
+        this.presentationObservers.add(observer)
+        for (const record of this.records.values()) observer(this.readPresentation(record))
+        return () => this.presentationObservers.delete(observer)
+    }
+
+    private readPresentation(record: BrowserViewRecord): BrowserViewPresentation {
+        const ownerWindow = record.ownerWindow.isDestroyed() ? null : record.ownerWindow
+        const slot = ownerWindow ? this.slotsByOwner.get(ownerWindow.webContents.id)?.get(record.tabId) : undefined
+        return {
+            tabId: record.tabId,
+            guestWebContents: record.view.webContents,
+            ownerWindow,
+            bounds: record.disposed ? null : slot?.bounds || null,
+            visible: !record.disposed && Boolean(ownerWindow && slot?.active && slot.visible && slot.bounds),
+            disposed: record.disposed
+        }
+    }
+
+    private publishPresentation(record: BrowserViewRecord): void {
+        if (this.presentationObservers.size === 0) return
+        const presentation = this.readPresentation(record)
+        for (const observer of this.presentationObservers) {
+            try { observer(presentation) } catch (error) { log.warn('Browser presentation observer failed', error) }
+        }
+    }
 
     isIncognitoWebContents(webContentsId: number): boolean {
         return [...this.records.values()].some((record) => !record.disposed && record.sessionMode === 'incognito' && record.view.webContents.id === webContentsId)
@@ -270,6 +309,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         this.releaseTimers.clear()
         for (const record of [...this.records.values()]) this.closeRecord(record)
         this.slotsByOwner.clear()
+        this.presentationObservers.clear()
     }
 
     private async ensure(event: IpcMainInvokeEvent, input: BrowserViewEnsureInput): Promise<{ created: boolean; state: BrowserViewState }> {
@@ -788,6 +828,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         const slot = this.slotsByOwner.get(record.ownerWindow.webContents.id)?.get(record.tabId)
         if (!slot) {
             record.view.setVisible(false)
+            this.publishPresentation(record)
             return
         }
         this.applySlot(record, slot)
@@ -803,6 +844,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             setManagedBrowserPresentationScale(record.view.webContents, scale)
         }
         record.view.setVisible(Boolean(slot.active && slot.visible && slot.bounds))
+        this.publishPresentation(record)
     }
 
     private releaseFromRenderer(event: IpcMainEvent, rawTabId: string): void {
@@ -848,6 +890,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         this.cancelRelease(record.tabId)
         if (revokeLocalFiles) revokeBrowserLocalFilesForTab(record.view.webContents.session, record.tabId)
         record.disposed = true
+        this.publishPresentation(record)
         this.records.delete(record.tabId)
         const pending = this.pendingTransfers.get(record.tabId)
         if (pending) this.rejectTransfer(pending, new Error('The Browser tab closed during transfer.'))
@@ -933,6 +976,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             for (const record of this.records.values()) {
                 if (record.ownerWindow !== window) continue
                 record.view.setVisible(false)
+                this.publishPresentation(record)
                 this.scheduleRelease(record, window)
             }
         })

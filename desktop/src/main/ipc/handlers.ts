@@ -196,6 +196,7 @@ import {
     handleStageBrowserPreviewArtifactForAssistant,
     handleStartBrowserPreviewAnnotation,
     handleStartBrowserPreviewRecording,
+    handlePrepareBrowserPreviewRecordingAudio,
     handleStopBrowserPreviewRecording
 } from './handlers/browser-preview-developer-handlers'
 import {
@@ -509,6 +510,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle('devscope:browserPreview:startAnnotation', handleStartBrowserPreviewAnnotation)
     ipcMain.handle('devscope:browserPreview:cancelAnnotation', handleCancelBrowserPreviewAnnotation)
     ipcMain.handle('devscope:browserPreview:startRecording', handleStartBrowserPreviewRecording)
+    ipcMain.handle('devscope:browserPreview:prepareRecordingAudio', handlePrepareBrowserPreviewRecordingAudio)
     ipcMain.handle('devscope:browserPreview:stopRecording', handleStopBrowserPreviewRecording)
     ipcMain.handle('devscope:browserPreview:saveRecording', handleSaveBrowserPreviewRecording)
     ipcMain.handle('devscope:browserPreview:getLinkPreview', handleGetBrowserLinkPreview)

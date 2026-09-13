@@ -1,3 +1,4 @@
+import { browserRecordingCapture } from './browser-recording-capture'
 /**
  * Zyra
  * Main Process Entry Point
@@ -39,6 +40,7 @@ import {
 } from '../shared/contracts/devscope-api'
 import { BrowserPopupManager } from './browser-popup-manager'
 import { BrowserViewManager } from './browser-view-manager'
+import { BrowserRecordingOverlayManager } from './browser-recording-overlay'
 import { disposeBrowserThreatProtectionService, getBrowserThreatProtectionService } from './browser-threat-protection-service'
 import { createDesktopSetupServices } from './setup'
 import { resolveZyraRoot } from './zyra/zyra-root'
@@ -488,6 +490,8 @@ const browserViewManager = new BrowserViewManager({
     captureAnalytics: (properties) => setupServices.analytics.capture({ event: 'zyra_v1_browser', properties })
 })
 browserViewManager.registerIpc()
+const browserRecordingOverlayManager = new BrowserRecordingOverlayManager({ browserViews: browserViewManager, preloadPath: getPreloadPath() })
+browserRecordingOverlayManager.registerIpc()
 isIncognitoBrowserWebContents = (webContentsId) => (
     browserViewManager.isIncognitoWebContents(webContentsId)
     || browserPopupManager.isIncognitoWebContents(webContentsId)
@@ -645,18 +649,26 @@ function configureMainRendererMediaPermissions(): void {
         Boolean(webContents && mainWindow && !mainWindow.isDestroyed() && webContents.id === mainWindow.webContents.id)
     )
 
-    session.defaultSession.setPermissionCheckHandler((webContents, permission, _origin, details) => (
-        permission === 'media'
-        && details.isMainFrame
-        && details.mediaType === 'audio'
-        && isTrustedMainRenderer(webContents)
+    // A recording grant opens only the exact owner frame's display request.
+    // Ordinary microphone access stays audio-only, including detached recorders.
+    const canUseMicrophone = (contents: Electron.WebContents | null) => (
+        isTrustedMainRenderer(contents) || browserRecordingCapture.hasRecording(contents)
+    )
+    session.defaultSession.setPermissionCheckHandler((contents, permission, _origin, details) => (
+        details.isMainFrame && (
+            (permission === 'media' && browserRecordingCapture.hasGrant(contents))
+            || (permission === 'media' && details.mediaType === 'audio' && canUseMicrophone(contents))
+        )
     ))
-    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => {
         const mediaTypes = permission === 'media' && 'mediaTypes' in details && Array.isArray(details.mediaTypes)
             ? details.mediaTypes
             : []
         const audioOnly = mediaTypes.length > 0 && mediaTypes.every((mediaType) => mediaType === 'audio')
-        callback(permission === 'media' && details.isMainFrame && audioOnly && isTrustedMainRenderer(webContents))
+        callback(details.isMainFrame && (
+            ((permission === 'display-capture' || permission === 'media') && browserRecordingCapture.hasGrant(contents))
+            || (permission === 'media' && audioOnly && canUseMicrophone(contents))
+        ))
     })
 }
 
@@ -1237,6 +1249,7 @@ app.on('before-quit', (event) => {
     })
     void flushGlobalBrowserProfileStorage().then(() => {
         globalShortcut.unregisterAll()
+        browserRecordingOverlayManager.dispose()
         browserViewManager.dispose()
         const browserRuntime = browserClientRuntime
         browserClientRuntime = null

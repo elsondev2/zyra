@@ -8,6 +8,7 @@ import type { AssistantBrowserTabState } from './assistant-browser-workspace-sta
 import { useAssistantBrowserNativeViewOcclusion } from './assistant-browser-native-view-occlusion'
 import { shouldShowAssistantBrowserNativeView } from './assistant-browser-native-view-visibility'
 import { nextAssistantBrowserSlotRevision } from './assistant-browser-slot-revision'
+import { observeAssistantBrowserSlotGeometry } from './assistant-browser-slot-geometry'
 
 export type AssistantBrowserWebviewHandle = {
     navigate: (url: string) => Promise<void>
@@ -392,13 +393,10 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
             }
         }
         report(true)
-        const observer = active ? new ResizeObserver(() => report(true)) : null
-        const handleViewportChange = () => report(true)
-        observer?.observe(slot)
-        if (active) window.addEventListener('resize', handleViewportChange)
-        return () => {
-            observer?.disconnect()
-            window.removeEventListener('resize', handleViewportChange)
+        return active ? observeAssistantBrowserSlotGeometry(slot, () => report()) : undefined
+    }, [active, effectiveVisible, placement, tab.id, tab.url, visible])
+
+    useLayoutEffect(() => () => {
             window.devscope.browserView.reportSlot({
                 tabId: tab.id,
                 revision: nextAssistantBrowserSlotRevision(window),
@@ -408,8 +406,7 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
                 visible: false
             })
             callbacksRef.current.onViewportRectChange(tab.id, null)
-        }
-    }, [active, effectiveVisible, placement, tab.id, tab.url, visible])
+    }, [tab.id])
 
     return (
         <div

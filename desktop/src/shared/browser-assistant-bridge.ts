@@ -216,6 +216,7 @@ const FORBIDDEN_BROWSER_DEVSCOPE_METHODS = new Set([
     'startBrowserPreviewAnnotation',
     'cancelBrowserPreviewAnnotation',
     'startBrowserPreviewRecording',
+    'prepareBrowserPreviewRecordingAudio',
     'stopBrowserPreviewRecording',
     'saveBrowserPreviewRecording'
 ])

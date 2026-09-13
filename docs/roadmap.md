@@ -67,6 +67,12 @@ Fixed locally; not released. Queued timeline frames now read current hydration a
 
 The isolated Electron `test:timeline-presentation` target verifies cold chat reveal, reused-list navigation, delayed hydration, initial paging and failed or abandoned requests. Existing history-streaming, pagination and scroll contracts pass. The affected chat was also verified in the running dev app after switching away and back.
 
+### FIX-021: browser presentation and recording
+
+Fixed locally and checked in the development app; not released. Native browser geometry follows inspector animations without idle polling. Recording uses direct native video capture, with a compact toolbar over the page, real microphone choices, tab audio and Windows system audio. Start/stop failures settle, capture releases before saving, and original encoder ownership survives supported tab transfers. Moving the last tab out of its recording window first requires saving the video.
+
+Focused Electron checks cover moving video with generated tab audio, narrow menus, native layering, transfers and recovery. A live recording saved successfully; its frames exclude the controls, and microphone names, pause/resume, save, panel switching and inspector reopening were verified. Physical microphone and system-loopback recording remain separate device checks. See [browser recording and presentation](development/browser-recording.md).
+
 ## v0.6.3: safer update handling
 
 These are proposed changes to the existing update architecture. Review their release-version impact before implementation.

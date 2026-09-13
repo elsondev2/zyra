@@ -1,4 +1,5 @@
 import type { RuntimeActivationStatus } from '../runtime-activation'
+import type { BrowserRecordingOverlayCommand, BrowserRecordingOverlayPresentation, BrowserRecordingOverlayState } from './browser-recording-overlay'
 import type { AgentRoleModels, AgentRoleModelInput } from '../onboarding/contracts'
 import type { ModelProviderInput, ModelProviderConnection } from '../onboarding/contracts'
 import type {
@@ -949,10 +950,14 @@ export interface DevScopeApi {
     copyBrowserPreviewArtifact: (input: { artifactId: string; mode: 'image' | 'path' }) => Promise<DevScopeResult>
     startBrowserPreviewAnnotation: (input: DevScopeBrowserAnnotationInput) => Promise<DevScopeResult<{ annotation: DevScopeBrowserAnnotationPayload | null; artifact: DevScopeBrowserCaptureArtifact | null }>>
     cancelBrowserPreviewAnnotation: (input: DevScopeBrowserGuestTargetInput) => Promise<DevScopeResult>
-    startBrowserPreviewRecording: (input: DevScopeBrowserGuestTargetInput) => Promise<DevScopeResult<{ startedAt: string }>>
+    startBrowserPreviewRecording: (input: DevScopeBrowserGuestTargetInput) => Promise<DevScopeResult<{ startedAt: string; tabAudioSupported: boolean; systemAudioSupported: boolean }>>
+    prepareBrowserPreviewRecordingAudio: (input: DevScopeBrowserGuestTargetInput & { source: 'tab' | 'system' }) => Promise<DevScopeResult>
     stopBrowserPreviewRecording: (input: DevScopeBrowserGuestTargetInput) => Promise<DevScopeResult>
     saveBrowserPreviewRecording: (input: DevScopeBrowserGuestTargetInput & { mimeType: string; data: Uint8Array }) => Promise<DevScopeResult<{ artifact: DevScopeBrowserCaptureArtifact }>>
     onBrowserPreviewRecordingFrame: (callback: (frame: DevScopeBrowserRecordingFrame) => void) => () => void
+    setBrowserRecordingOverlay: (state: BrowserRecordingOverlayState | null) => Promise<DevScopeResult>
+    onBrowserRecordingOverlayCommand: (callback: (command: BrowserRecordingOverlayCommand) => void) => () => void
+    onBrowserRecordingOverlayPresentation: (callback: (presentation: BrowserRecordingOverlayPresentation) => void) => () => void
     getBrowserLinkPreview: (input: { url: string }) => Promise<DevScopeResult<{ preview: DevScopeBrowserLinkPreview | null }>>
     openBrowserPreviewExternal: (url: string) => Promise<DevScopeResult>
     openFile: (filePath: string) => Promise<DevScopeResult>

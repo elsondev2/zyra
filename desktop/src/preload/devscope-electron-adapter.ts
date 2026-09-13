@@ -1,4 +1,5 @@
 import { createRuntimeActivationAdapter } from './adapters/runtime-activation-adapter'
+import { createBrowserRecordingOverlayAdapter } from './adapters/browser-recording-overlay-adapter'
 /**
  * Zyra - Electron Adapter
  */
@@ -30,6 +31,7 @@ export function createDevScopeElectronAdapter(): DevScopeApi {
         ...createAssistantAdapter(),
         ...createAssistantUtilityAdapter(),
         ...createBrowserViewAdapter(),
+        ...createBrowserRecordingOverlayAdapter(),
         agentControl: createAgentControlAdapter(),
         ...createUpdatesAdapter(),
         ...createWindowAdapter(),

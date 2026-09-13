@@ -11,6 +11,9 @@ Run these from the repository root unless the command says otherwise.
 | Work | Command | What it proves |
 | --- | --- | --- |
 | Single-file JavaScript syntax | `node --check src/permission-command-policy.mjs` | Parse just the changed module; substitute the actual changed file |
+| Tab recording lifecycle/audio ownership | `npm --prefix desktop run test:browser-recording` | Start/stop/close races, denied/cancelled audio, microphone release before saving, stable encoder tracks, one-use native capture grants, original-owner transfer control, and detached last-tab protection |
+| Recording controls bridge | `npm --prefix desktop run test:browser-recording-host` | Real React with synthetic IPC/store/device data: one command subscription, native-only normal presentation, microphone labels, theme updates, closed-target recovery and cleanup |
+| Native tab recording output | `npm --prefix desktop run test:browser-recording-native` | Isolated Electron with a temporary synthetic page: video-only save, decoded motion, generated tab audio, late audio switching, finite duration and near-end seeking; no microphone or system audio capture. Add `-- --verify-container` when local ffprobe/ffmpeg are available to compare every encoded packet and fully decode the finalized file. These binaries are not shipped or required by the app. |
 | Chat stuck loading or switching history | `npm --prefix desktop run test:timeline-presentation` | Real React and LegendList in isolated Electron: cold chat reveal, chat switching, hydration, initial paging and failed or abandoned pages |
 | Command classification | `npm run test:permissions:command-policy` | Pure policy cases, including PowerShell formatters and real destructive commands; no SDK, filesystem or provider startup |
 | Approval lifecycle and projection | `npm run test:permissions:lifecycle` and `npm --prefix desktop run test:assistant-approval-projection` | Tool correlation, waiting state, concurrent/late events, denial and compatible storage hydration |
@@ -23,6 +26,9 @@ Run these from the repository root unless the command says otherwise.
 | Windows display scaling | `node native/zyra-computer-use/scripts/smoke-sidecar.mjs --dpi-only` | Requires the Debug helper; isolated window, no input. Checks runtime DPI awareness, native/UIA bounds and capture dimensions on the current display |
 | Permission gate behavior | `npm run test:permissions:gate` | Modes, scope/read-only boundaries, approvals and the installed-app lookup regression |
 | Approval prompt rendering | `npm --prefix desktop run test:assistant-tool-approval` | Isolated React rendering; no Electron, dev server or model session |
+| Browser inspector entrance/geometry | `npm --prefix desktop run test:browser-slot-geometry` | Isolated Electron reproduces fixed-size ancestor motion, interrupted entrance and settled/cleanup behavior without idle polling |
+| Recording controls and menus | `npm --prefix desktop run test:browser-recording-overlay-document` | Isolated trusted toolbar with stub state: real microphone menus, audio choices, keyboard controls, saved/error recovery and narrow layouts |
+| Native recording controls ownership | `npm --prefix desktop run test:browser-recording-overlay` | Real WebContentsView layering, live guest continuity, exact IPC ownership, transfer, renderer failure and cleanup |
 | New Chat/Project picker | `npm --prefix desktop run test:assistant-new-chat` | Focused catalog/picker and new-chat contracts |
 | JavaScript syntax checkpoint | `npm run check:syntax` | Parse-only validation for the maintained JavaScript target list |
 | Multi-area CLI checkpoint | `npm run check:quick` | Syntax plus several core suites; broader than an individual fix |

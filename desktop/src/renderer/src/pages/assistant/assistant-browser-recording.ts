@@ -1,23 +1,33 @@
-import type { DevScopeBrowserCaptureArtifact, DevScopeBrowserGuestTargetInput, DevScopeBrowserRecordingFrame } from '@shared/contracts/devscope-api'
+import type { DevScopeBrowserCaptureArtifact, DevScopeBrowserGuestTargetInput } from '@shared/contracts/devscope-api'
+import { finalizeBrowserRecordingWebm } from '@shared/browser-recording-webm'
 
 export type BrowserRecordingSnapshot = {
     status: 'idle' | 'starting' | 'recording' | 'paused' | 'stopping' | 'saved' | 'error'
     tabId: string | null
+    guestWebContentsId: number | null
     elapsedMs: number
     microphone: string
     microphonePending: boolean
+    audioSource: 'off' | 'tab' | 'system'
+    audioPending: boolean
+    tabAudioSupported: boolean
+    systemAudioSupported: boolean
     error: string | null
     artifact: DevScopeBrowserCaptureArtifact | null
     unsaved: boolean
 }
 type ActiveRecording = {
     target: DevScopeBrowserGuestTargetInput
-    canvas: HTMLCanvasElement
-    context: CanvasRenderingContext2D
-    recorder: MediaRecorder
+    recorder: MediaRecorder | null
     stream: MediaStream
+    captureStream: MediaStream | null
+    mediaAudioStream: MediaStream | null
+    mediaAudioSource: MediaStreamAudioSourceNode | null
+    audioRequest: number
+    captureRequest: number
     audio: AudioContext
     destination: MediaStreamAudioDestinationNode
+    silence: ConstantSourceNode
     microphoneStream: MediaStream | null
     microphoneSource: MediaStreamAudioSourceNode | null
     microphoneRequest: number
@@ -27,13 +37,12 @@ type ActiveRecording = {
     startedAt: string
     elapsedMs: number
     resumedAt: number | null
-    frameSequence: number
-    presentedFrameSequence: number
     unsubscribe: () => void
     timer: ReturnType<typeof setInterval> | null
     stopping: Promise<DevScopeBrowserCaptureArtifact> | null
+    mediaReleased: boolean
 }
-const EMPTY: BrowserRecordingSnapshot = { status: 'idle', tabId: null, elapsedMs: 0, microphone: 'off', microphonePending: false, error: null, artifact: null, unsaved: false }
+const EMPTY: BrowserRecordingSnapshot = { status: 'idle', tabId: null, guestWebContentsId: null, elapsedMs: 0, microphone: 'off', microphonePending: false, audioSource: 'off', audioPending: false, tabAudioSupported: false, systemAudioSupported: false, error: null, artifact: null, unsaved: false }
 let snapshot = EMPTY
 let active: ActiveRecording | null = null
 let unsavedVideo: Blob | null = null
@@ -41,6 +50,7 @@ const listeners = new Set<() => void>()
 export const readAssistantBrowserRecording = () => snapshot
 export const subscribeAssistantBrowserRecording = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } }
 function publish(patch: Partial<BrowserRecordingSnapshot>) { snapshot = { ...snapshot, ...patch }; for (const listener of listeners) listener() }
+export function readActiveAssistantBrowserRecordingTarget(): DevScopeBrowserGuestTargetInput | null { return active?.target || null }
 export function readActiveAssistantBrowserRecordingTabId(): string | null { return active?.target.tabId || null }
 export function dismissAssistantBrowserRecording() { if (!active) { if (unsavedVideo && !window.confirm('Discard the unsaved recording?')) return; unsavedVideo = null; snapshot = EMPTY; for (const listener of listeners) listener() } }
 export function recordingElapsedMs(elapsedMs: number, resumedAt: number | null, now = performance.now()): number { return elapsedMs + (resumedAt === null ? 0 : Math.max(0, now - resumedAt)) }
@@ -57,8 +67,8 @@ async function bounded<T>(promise: Promise<T>, message: string, ms = 15_000): Pr
     try { return await Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms) })]) }
     finally { clearTimeout(timer) }
 }
-function stopMediaRecorder(recorder: MediaRecorder): Promise<void> {
-    if (recorder.state === 'inactive') return Promise.resolve()
+function stopMediaRecorder(recorder: MediaRecorder | null): Promise<void> {
+    if (!recorder || recorder.state === 'inactive') return Promise.resolve()
     return bounded(new Promise((resolve, reject) => {
         recorder.addEventListener('stop', () => resolve(), { once: true })
         recorder.addEventListener('error', () => reject(new Error('The video encoder stopped unexpectedly.')), { once: true })
@@ -71,27 +81,79 @@ function clearMicrophone(recording: ActiveRecording) {
     recording.microphoneStream = null; recording.microphoneSource = null
 }
 function clearRecording(recording: ActiveRecording) {
-    recording.microphoneRequest++
+    recording.microphoneRequest++; recording.audioRequest++; recording.captureRequest++
     recording.unsubscribe(); if (recording.timer) clearInterval(recording.timer)
-    clearMicrophone(recording)
-    recording.stream.getTracks().forEach(track => track.stop())
-    void recording.audio.close().catch(() => {})
+    releaseRecordingMedia(recording)
     if (active === recording) active = null
 }
-function drawFrame(recording: ActiveRecording, frame: DevScopeBrowserRecordingFrame) {
-    if (active !== recording || frame.tabId !== recording.target.tabId) return
-    if (frame.ended) { void stopAssistantBrowserRecording(recording.target).catch(() => {}); return }
-    const sequence = ++recording.frameSequence
-    const image = new Image()
-    image.onload = () => {
-        if (active !== recording || sequence <= recording.presentedFrameSequence) return
-        recording.presentedFrameSequence = sequence
-        const { width, height } = recording.canvas
-        const scale = Math.min(width / image.width, height / image.height)
-        recording.context.fillStyle = '#101010'; recording.context.fillRect(0, 0, width, height)
-        recording.context.drawImage(image, (width-image.width*scale)/2, (height-image.height*scale)/2, image.width*scale, image.height*scale)
+function releaseRecordingMedia(recording: ActiveRecording) {
+    if (recording.mediaReleased) return
+    recording.mediaReleased = true
+    clearMicrophone(recording); clearMediaAudio(recording)
+    recording.silence.stop(); recording.silence.disconnect()
+    recording.captureStream?.getTracks().forEach(track => track.stop())
+    recording.stream.getTracks().forEach(track => track.stop())
+    void recording.audio.close().catch(() => {})
+}
+function clearMediaAudio(recording: ActiveRecording) {
+    recording.mediaAudioSource?.disconnect()
+    recording.mediaAudioStream?.getTracks().forEach(track => track.stop())
+    recording.mediaAudioSource = null; recording.mediaAudioStream = null
+}
+async function captureDisplay(recording: ActiveRecording, withAudio: boolean): Promise<MediaStream> {
+    const request = ++recording.captureRequest
+    const pending = navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 30, max: 30 } },
+        audio: withAudio ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false } : false
+    })
+    void pending.then(stream => {
+        if (active !== recording || recording.stopping || request !== recording.captureRequest) stream.getTracks().forEach(track => track.stop())
+    }).catch(() => {})
+    try { return await bounded(pending, 'The Browser capture did not start. Try recording again.') }
+    catch (error) { if (request === recording.captureRequest) recording.captureRequest++; throw error }
+}
+async function waitForFirstVideoFrame(stream: MediaStream): Promise<void> {
+    const video = document.createElement('video')
+    video.muted = true; video.playsInline = true; video.srcObject = stream
+    try {
+        await bounded(new Promise<void>((resolve, reject) => {
+            video.onloadeddata = () => resolve()
+            video.onerror = () => reject(new Error('The Browser video stream could not be read.'))
+            void video.play().catch(reject)
+        }), 'The Browser did not provide a video frame. Open the tab and try recording again.', 10_000)
+    } finally { video.pause(); video.srcObject = null; video.onloadeddata = null; video.onerror = null }
+}
+export async function setAssistantBrowserRecordingAudioSource(source: 'off' | 'tab' | 'system'): Promise<void> {
+    const recording = active
+    if (!recording || recording.stopping) return
+    const request = ++recording.audioRequest
+    clearMediaAudio(recording)
+    publish({ audioSource: 'off', audioPending: source !== 'off', error: null })
+    if (source === 'off') { recording.captureRequest++; return }
+    try {
+        if (source === 'system' && !snapshot.systemAudioSupported) throw new Error('System audio is unavailable on this device. Choose tab audio.')
+        const ready = await bounded(window.devscope.prepareBrowserPreviewRecordingAudio({ ...recording.target, source }), 'Recording audio did not become ready.')
+        if (!ready.success) throw new Error(ready.error || 'Could not prepare recording audio.')
+        if (active !== recording || recording.stopping || request !== recording.audioRequest) return
+        const stream = await captureDisplay(recording, true)
+        if (active !== recording || recording.stopping || request !== recording.audioRequest) { stream.getTracks().forEach(track => track.stop()); return }
+        // getDisplayMedia requires video; keep only its audio. The original native
+        // video track and stable mixed audio track never change under MediaRecorder.
+        stream.getVideoTracks().forEach(track => { stream.removeTrack(track); track.stop() })
+        if (!stream.getAudioTracks().length) { stream.getTracks().forEach(track => track.stop()); throw new Error('This device did not provide recording audio. Video recording continues.') }
+        recording.mediaAudioStream = stream
+        recording.mediaAudioSource = recording.audio.createMediaStreamSource(stream)
+        recording.mediaAudioSource.connect(recording.destination)
+        stream.getAudioTracks().forEach(track => track.addEventListener('ended', () => {
+            if (active !== recording || recording.mediaAudioStream !== stream) return
+            clearMediaAudio(recording); publish({ audioSource: 'off', audioPending: false, error: 'Recording audio disconnected. Video recording continues.' })
+        }, { once: true }))
+        publish({ audioSource: source, audioPending: false })
+    } catch (error) {
+        if (active !== recording || recording.stopping || request !== recording.audioRequest) return
+        clearMediaAudio(recording)
+        publish({ audioSource: 'off', audioPending: false, error: error instanceof DOMException && error.name === 'NotAllowedError' ? 'Audio access was denied. Video recording continues.' : error instanceof Error ? error.message : 'Could not capture recording audio.' })
     }
-    image.src = `data:image/jpeg;base64,${frame.data}`
 }
 export async function setAssistantBrowserRecordingMicrophone(deviceId: string): Promise<void> {
     const recording = active
@@ -121,56 +183,84 @@ export async function setAssistantBrowserRecordingMicrophone(deviceId: string): 
     }
 }
 export function pauseAssistantBrowserRecording() {
-    if (!active || active.stopping || active.recorder.state !== 'recording') return
+    if (!active || active.stopping || active.recorder?.state !== 'recording') return
     active.recorder.pause(); active.elapsedMs = elapsed(active); active.resumedAt = null
     publish({ status: 'paused', elapsedMs: active.elapsedMs })
 }
 export function resumeAssistantBrowserRecording() {
-    if (!active || active.stopping || active.recorder.state !== 'paused') return
+    if (!active || active.stopping || active.recorder?.state !== 'paused') return
     active.recorder.resume(); active.resumedAt = performance.now(); publish({ status: 'recording' })
 }
-export async function startAssistantBrowserRecording(target: DevScopeBrowserGuestTargetInput, size: { width: number; height: number }): Promise<string> {
+export async function startAssistantBrowserRecording(target: DevScopeBrowserGuestTargetInput, _size: { width: number; height: number }): Promise<string> {
     if (active) {
         if (active.target.tabId === target.tabId && active.target.guestWebContentsId === target.guestWebContentsId) return active.startedAt
         throw new Error('Another Browser tab is already recording.')
     }
     if (unsavedVideo) throw new Error('Save or discard the previous recording before starting another.')
     if (snapshot.status === 'starting') throw new Error('A recording is already starting.')
-    publish({ ...EMPTY, status: 'starting', tabId: target.tabId })
+    publish({ ...EMPTY, status: 'starting', tabId: target.tabId, guestWebContentsId: target.guestWebContentsId })
     let recording: ActiveRecording | null = null
     let audio: AudioContext | null = null
     let stream: MediaStream | null = null
     try {
         if (typeof MediaRecorder === 'undefined') throw new Error('Video recording is unavailable.')
-        const canvas = document.createElement('canvas')
-        const scale = Math.min(1, 1600 / Math.max(1,size.width), 1200 / Math.max(1,size.height))
-        canvas.width = Math.max(1,Math.round(size.width*scale)); canvas.height = Math.max(1,Math.round(size.height*scale))
-        const context = canvas.getContext('2d', { alpha: false })
-        if (!context) throw new Error('Could not create the recording canvas.')
-        context.fillStyle = '#101010'; context.fillRect(0,0,canvas.width,canvas.height)
+        if (!navigator.mediaDevices?.getDisplayMedia) throw new Error('Native tab recording is unavailable in this window.')
         audio = new AudioContext()
         const destination = audio.createMediaStreamDestination()
-        stream = canvas.captureStream(24)
-        // A stable audio track allows microphone changes without invalidating MediaRecorder.
-        destination.stream.getAudioTracks().forEach(track => stream!.addTrack(track))
-        const mimeType = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'].find(type => MediaRecorder.isTypeSupported(type))
+        // Keep the audio clock running even with every audio input off. An
+        // unconnected destination may never emit its first sample, starving muxing.
+        const silence = audio.createConstantSource()
+        silence.offset.value = 0; silence.connect(destination); silence.start()
+        stream = new MediaStream(destination.stream.getAudioTracks())
+        // VP8 avoids the much heavier software VP9 encoder on everyday machines.
+        const mimeType = ['video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'].find(type => MediaRecorder.isTypeSupported(type))
         if (!mimeType) throw new Error('A supported recording encoder is unavailable.')
-        const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 4_000_000 })
-        const current: ActiveRecording = { target,canvas,context,recorder,stream,audio,destination,mimeType,chunks:[],bytes:0,microphoneStream:null,microphoneSource:null,microphoneRequest:0,startedAt:new Date().toISOString(),elapsedMs:0,resumedAt:null,frameSequence:0,presentedFrameSequence:0,unsubscribe:()=>{},timer:null,stopping:null }
+        const current: ActiveRecording = {
+            target, recorder: null, stream, audio, destination, silence, mimeType, chunks: [], bytes: 0,
+            captureStream: null, mediaAudioStream: null, mediaAudioSource: null, audioRequest: 0, captureRequest: 0,
+            microphoneStream: null, microphoneSource: null, microphoneRequest: 0,
+            startedAt: new Date().toISOString(), elapsedMs: 0, resumedAt: null, unsubscribe: () => {}, timer: null, stopping: null, mediaReleased: false
+        }
         recording = current; active = current
-        current.unsubscribe = window.devscope.onBrowserPreviewRecordingFrame(frame => drawFrame(current, frame))
-        recorder.addEventListener('dataavailable', event => {
-            if (!event.data.size) return
-            current.chunks.push(event.data); current.bytes += event.data.size
-            if (current.bytes >= 112*1024*1024 && !current.stopping) void stopAssistantBrowserRecording(target).catch(() => {})
+        current.unsubscribe = window.devscope.onBrowserPreviewRecordingFrame(frame => {
+            if (frame.ended && frame.tabId === target.tabId && active === current) void stopAssistantBrowserRecording(target).catch(() => {})
         })
-        recorder.addEventListener('error', () => { if (active === current) void stopAssistantBrowserRecording(target).catch(() => {}) })
         await bounded(audio.resume(), 'Could not initialize recording audio.')
-        recorder.start(1000)
         const result = await bounded(window.devscope.startBrowserPreviewRecording(target), 'The Browser recorder did not start.')
         if (!result.success) throw new Error(result.error || 'Could not start Browser recording.')
         if (current.stopping || active !== current) throw new Error('The tab closed before recording finished starting.')
+        publish({ tabAudioSupported: result.tabAudioSupported, systemAudioSupported: result.systemAudioSupported })
+        const captured = await captureDisplay(current, false)
+        if (current.stopping || active !== current) { captured.getTracks().forEach(track => track.stop()); throw new Error('The tab closed before recording finished starting.') }
+        current.captureStream = captured
+        const video = captured.getVideoTracks()[0]
+        if (!video) throw new Error('The Browser did not provide a video stream.')
+        await waitForFirstVideoFrame(captured)
+        if (current.stopping || active !== current) throw new Error('The tab closed before recording finished starting.')
+        stream.addTrack(video)
+        video.addEventListener('ended', () => { if (active === current) void stopAssistantBrowserRecording(target).catch(() => {}) }, { once: true })
+        // Native composited frames go directly to the encoder, without JPEG/base64
+        // IPC, main-thread image decoding or duplicate canvas frames.
+        const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 6_000_000 })
+        current.recorder = recorder
+        recorder.addEventListener('dataavailable', event => {
+            if (!event.data.size) return
+            current.chunks.push(event.data); current.bytes += event.data.size
+            if (current.bytes >= 112 * 1024 * 1024 && !current.stopping) void stopAssistantBrowserRecording(target).catch(() => {})
+        })
+        recorder.addEventListener('error', () => { if (active === current) void stopAssistantBrowserRecording(target).catch(() => {}) })
+        const encoding = new Promise<void>((resolve, reject) => {
+            const onData = (event: BlobEvent) => { if (event.data.size > 4) { recorder.removeEventListener('dataavailable', onData); resolve() } }
+            recorder.addEventListener('dataavailable', onData)
+            recorder.addEventListener('error', () => reject(new Error('The Browser video encoder could not start.')), { once: true })
+            recorder.addEventListener('stop', () => reject(new Error('The tab closed before recording finished starting.')), { once: true })
+        })
         current.startedAt = result.startedAt; current.resumedAt = performance.now()
+        recorder.start(250)
+        // Chromium can expose a live stream before its encoder emits video. Keep
+        // starting bounded so an immediate Stop cannot silently discard the clip.
+        await bounded(encoding, 'The Browser video encoder did not produce frames. Try recording again.', 10_000)
+        if (current.stopping || active !== current) throw new Error('The tab closed before recording finished starting.')
         current.timer = setInterval(() => { if (active === current && !current.stopping) publish({ elapsedMs: elapsed(current) }) }, 500)
         publish({ status: 'recording' })
         return current.startedAt
@@ -189,23 +279,28 @@ export function stopAssistantBrowserRecording(target: DevScopeBrowserGuestTarget
     if (!recording || recording.target.tabId !== target.tabId || recording.target.guestWebContentsId !== target.guestWebContentsId) return Promise.reject(new Error('This Browser tab is not recording.'))
     if (recording.stopping) return recording.stopping
     recording.elapsedMs = elapsed(recording); recording.resumedAt = null
-    publish({ status: 'stopping', elapsedMs: recording.elapsedMs, microphonePending: false })
-    clearMicrophone(recording); recording.microphoneRequest++
+    publish({ status: 'stopping', elapsedMs: recording.elapsedMs, microphonePending: false, audioPending: false })
+    clearMicrophone(recording); clearMediaAudio(recording); recording.microphoneRequest++; recording.audioRequest++; recording.captureRequest++
     recording.stopping = (async () => {
         try {
             // A closed/disconnected guest can still have a valid grant to save its captured frames.
-            await bounded(window.devscope.stopBrowserPreviewRecording(target), 'The Browser recorder did not stop.').catch(() => {})
+            const stopped = bounded(window.devscope.stopBrowserPreviewRecording(target), 'The Browser recorder did not stop.').catch(() => {})
             await stopMediaRecorder(recording.recorder)
+            releaseRecordingMedia(recording)
+            await stopped
             const blob = new Blob(recording.chunks, { type: recording.mimeType })
             if (!blob.size) throw new Error('No video frames were recorded.')
             unsavedVideo = blob
-            const result = await bounded(window.devscope.saveBrowserPreviewRecording({ ...target, mimeType:recording.mimeType, data:new Uint8Array(await blob.arrayBuffer()) }), 'Saving the recording timed out.', 30_000)
+            const original = new Uint8Array(await blob.arrayBuffer())
+            const data = recording.mimeType.startsWith('video/webm') ? finalizeBrowserRecordingWebm(original, recording.elapsedMs) : original
+            if (data !== original) unsavedVideo = new Blob([data as Uint8Array<ArrayBuffer>], { type: recording.mimeType })
+            const result = await bounded(window.devscope.saveBrowserPreviewRecording({ ...target, mimeType:recording.mimeType, data }), 'Saving the recording timed out.', 30_000)
             if (!result.success) throw new Error(result.error || 'Could not save Browser recording.')
             unsavedVideo = null
-            publish({ status:'saved', artifact:result.artifact, microphone:'off', error:null, unsaved:false })
+            publish({ status:'saved', artifact:result.artifact, microphone:'off', audioSource:'off', error:null, unsaved:false })
             return result.artifact
         } catch (error) {
-            publish({ status:'error', microphone:'off', unsaved:Boolean(unsavedVideo), error:error instanceof Error ? error.message : 'Could not save recording.' })
+            publish({ status:'error', microphone:'off', audioSource:'off', unsaved:Boolean(unsavedVideo), error:error instanceof Error ? error.message : 'Could not save recording.' })
             throw error
         } finally { await stopMediaRecorder(recording.recorder).catch(() => {}); clearRecording(recording) }
     })()

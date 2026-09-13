@@ -21,6 +21,7 @@ import {
     sanitizeAssistantUtilityTabForPersistence
 } from '../../shared/assistant/utility-window'
 import { writeJsonAtomically } from '../setup/atomic-json'
+import { browserRecordingCapture } from '../browser-recording-capture'
 import { sanitizeBrowserPersistentUrl } from '../../shared/browser-url-sanitization'
 import { getAgentControlBroker } from '../agent-control'
 import type { BrowserViewTransferHost } from '../browser-view-manager'
@@ -398,11 +399,21 @@ export class AssistantUtilityWindowManager {
         return { reordered: true }
     }
 
+    private assertRecordingRendererSurvivesMove(sourceWindowId: string): void {
+        if (sourceWindowId === 'main') return
+        const source = this.findWindowState(sourceWindowId)
+        const contents = this.windows.get(sourceWindowId)?.webContents || null
+        if (source.tabs.length <= 1 && browserRecordingCapture.hasRecording(contents)) {
+            throw new Error('Stop and save the recording before moving the last tab out of this window.')
+        }
+    }
+
     private async beginTearOff(event: IpcMainInvokeEvent, input: AssistantUtilityTearOffBeginInput): Promise<{ sessionId: string; targetWindowId: string }> {
         await this.load()
         this.assertTrusted(event)
         if (input.sourceWindowId === 'main') this.assertMainSender(event)
         else this.assertWindowAccess(event, input.sourceWindowId)
+        this.assertRecordingRendererSurvivesMove(input.sourceWindowId)
         assertFinitePoint(input.screenPoint, 'Tear-off cursor position')
         assertFinitePoint(input.grabOffset, 'Tear-off grab offset')
 
@@ -494,6 +505,7 @@ export class AssistantUtilityWindowManager {
         }
 
         try {
+            this.assertRecordingRendererSurvivesMove(session.sourceWindowId)
             let targetWindowId = session.targetWindowId
             if (dropTarget && dropTarget !== session.targetWindowId) {
                 targetWindowId = (await this.moveTab({
@@ -606,6 +618,8 @@ export class AssistantUtilityWindowManager {
         if (sourceIndex < 0) throw new Error('Utility tab was not found.')
         const tab = source.tabs[sourceIndex]
         const targetId = input.targetWindowId || this.targetAt(input.screenPoint, source.id) || (input.newWindow ? null : null)
+        if (targetId === source.id) return { targetWindowId: source.id }
+        this.assertRecordingRendererSurvivesMove(input.sourceWindowId)
         if (targetId === 'main' && this.dropZones.get('main')?.canonicalChatId !== tab.canonicalChatId) {
             const target = this.createWindowState()
             target.tabs.push(tab)

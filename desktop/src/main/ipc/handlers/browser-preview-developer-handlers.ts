@@ -1,6 +1,8 @@
 import { captureBrowserPage } from '../../browser-page-capture'
+import { browserRecordingCapture, resolveBrowserRecordingController, type BrowserRecordingAudioSource } from '../../browser-recording-capture'
 import { randomUUID } from 'crypto'
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'fs'
+import { mkdir, writeFile } from 'fs/promises'
 import { join } from 'path'
 import {
     app,
@@ -44,7 +46,6 @@ const SCREENSHOT_MAX_BYTES = 25 * 1024 * 1024
 const SCREENSHOT_PREVIEW_MAX_WIDTH = 640
 const SCREENSHOT_PREVIEW_MAX_HEIGHT = 440
 const RECORDING_MAX_BYTES = 128 * 1024 * 1024
-const RECORDING_FRAME_MAX_BASE64_LENGTH = 8 * 1024 * 1024
 const ARTIFACT_LIMIT = 60
 const BROWSER_PREVIEW_ANNOTATION_WORLD_ID = 1_004
 
@@ -57,14 +58,13 @@ type ActiveAnnotation = {
 }
 type ActiveRecording = {
     ownerWebContentsId: number
+    ownerFrame: WebContents['mainFrame']
     guest: WebContents
     tabId: string
     startedAt: string
     started: boolean
-    onMessage: (event: Electron.Event, method: string, params: Record<string, unknown>) => void
     onOwnerDestroyed: () => void
     onDestroyed: () => void
-    onDetach: () => void
 }
 
 const artifacts = new Map<string, StoredArtifact>()
@@ -336,21 +336,18 @@ function grantRecordingSave(recording: ActiveRecording): void {
 
 function cleanupRecording(recording: ActiveRecording): void {
     grantRecordingSave(recording)
-    if (!recording.guest.isDestroyed() && recording.guest.debugger.isAttached()) void recording.guest.debugger.sendCommand('Page.stopScreencast').catch(() => {})
+    browserRecordingCapture.cancel(recording.ownerWebContentsId)
     const owner = webContents.fromId(recording.ownerWebContentsId)
     owner?.removeListener('destroyed', recording.onOwnerDestroyed)
     if (owner && !owner.isDestroyed()) owner.send(BROWSER_PREVIEW_RECORDING_FRAME_CHANNEL, {
         tabId: recording.tabId, data: '', width: 0, height: 0, receivedAt: new Date().toISOString(), ended: true
     } satisfies DevScopeBrowserRecordingFrame)
-    recording.guest.debugger.removeListener('message', recording.onMessage)
     recording.guest.removeListener('destroyed', recording.onDestroyed)
-    recording.guest.debugger.removeListener('detach', recording.onDetach)
     if (activeRecording === recording) activeRecording = null
 }
 
 export function assertBrowserPreviewDeveloperTransferable(guestWebContentsId: number): void {
     if (activeAnnotations.has(guestWebContentsId)) throw new Error('Attach or cancel the active Browser annotation before moving this tab.')
-    if (activeRecording?.guest.id === guestWebContentsId) throw new Error('Stop the active Browser recording before moving this tab.')
 }
 
 export function transferBrowserPreviewDeveloperOwner(
@@ -360,9 +357,8 @@ export function transferBrowserPreviewDeveloperOwner(
 ): void {
     const annotation = activeAnnotations.get(guestWebContentsId)
     if (annotation?.ownerWebContentsId === previousOwnerWebContentsId) annotation.ownerWebContentsId = ownerWebContentsId
-    if (activeRecording?.guest.id === guestWebContentsId && activeRecording.ownerWebContentsId === previousOwnerWebContentsId) {
-        activeRecording.ownerWebContentsId = ownerWebContentsId
-    }
+    // Capture/encoding belongs to its original renderer even when the native
+    // guest moves to another window. The overlay forwards commands to that owner.
 }
 
 export async function handleHardReloadBrowserPreview(event: IpcMainInvokeEvent, input: DevScopeBrowserGuestTargetInput) {
@@ -602,83 +598,48 @@ export async function handleStartBrowserPreviewRecording(event: IpcMainInvokeEve
         if (activeAnnotations.has(guest.id)) throw new Error('Attach or cancel the annotation before recording.')
         if (activeRecording) {
             if (activeRecording.guest.id === guest.id && activeRecording.tabId === input.tabId) {
-                return { success: true as const, startedAt: activeRecording.startedAt }
+                resolveBrowserRecordingController(activeRecording, event.sender.id, event.senderFrame, input)
+                return { success: true as const, startedAt: activeRecording.startedAt, tabAudioSupported: true, systemAudioSupported: process.platform === 'win32' }
             }
             throw new Error('Another Browser tab is already recording.')
         }
-        await ensureDebugger(guest)
+        if (event.senderFrame !== event.sender.mainFrame) throw new Error('Only the Browser owner can start recording.')
         const startedAt = new Date().toISOString()
         const recording: ActiveRecording = {
-            ownerWebContentsId: event.sender.id,
-            guest,
-            tabId: input.tabId,
-            startedAt,
-            started: false,
-            onMessage: (_debuggerEvent, method, params) => {
-                if (method !== 'Page.screencastFrame') return
-                const sessionId = Number(params.sessionId)
-                if (Number.isFinite(sessionId) && guest.debugger.isAttached()) {
-                    void guest.debugger.sendCommand('Page.screencastFrameAck', { sessionId }).catch(() => {})
-                }
-                const data = typeof params.data === 'string' ? params.data : ''
-                const ownerContents = webContents.fromId(recording.ownerWebContentsId)
-                if (!data || data.length > RECORDING_FRAME_MAX_BASE64_LENGTH || !ownerContents || ownerContents.isDestroyed()) return
-                const metadata = params.metadata && typeof params.metadata === 'object'
-                    ? params.metadata as Record<string, unknown>
-                    : {}
-                const frame: DevScopeBrowserRecordingFrame = {
-                    tabId: input.tabId,
-                    data,
-                    width: Math.max(0, Math.round(Number(metadata.deviceWidth) || 0)),
-                    height: Math.max(0, Math.round(Number(metadata.deviceHeight) || 0)),
-                    receivedAt: new Date().toISOString()
-                }
-                ownerContents.send(BROWSER_PREVIEW_RECORDING_FRAME_CHANNEL, frame)
-            },
+            ownerWebContentsId: event.sender.id, ownerFrame: event.sender.mainFrame, guest, tabId: input.tabId,
+            startedAt, started: true,
             onOwnerDestroyed: () => cleanupRecording(recording),
-            onDestroyed: () => cleanupRecording(recording),
-            onDetach: () => cleanupRecording(recording)
+            onDestroyed: () => cleanupRecording(recording)
         }
+        browserRecordingCapture.arm(event.sender, guest, 'off')
         event.sender.once('destroyed', recording.onOwnerDestroyed)
-        guest.debugger.on('message', recording.onMessage)
         guest.once('destroyed', recording.onDestroyed)
-        guest.debugger.once('detach', recording.onDetach)
         activeRecording = recording
-        try {
-            await guest.debugger.sendCommand('Page.enable')
-            if (activeRecording !== recording) throw new Error('The Browser recording was cancelled before it started.')
-            await guest.debugger.sendCommand('Page.startScreencast', {
-                format: 'jpeg',
-                quality: 78,
-                maxWidth: 1600,
-                maxHeight: 1200,
-                everyNthFrame: 1
-            })
-            if (activeRecording !== recording) throw new Error('The Browser recording ended while starting.')
-            recording.started = true
-        } catch (error) {
-            cleanupRecording(recording)
-            throw error
-        }
-        return { success: true as const, startedAt }
+        return { success: true as const, startedAt, tabAudioSupported: true, systemAudioSupported: process.platform === 'win32' }
     } catch (error) {
         return { success: false as const, error: errorMessage(error, 'Could not start Browser recording.') }
     }
 }
 
+export async function handlePrepareBrowserPreviewRecordingAudio(
+    event: IpcMainInvokeEvent,
+    input: DevScopeBrowserGuestTargetInput & { source: Exclude<BrowserRecordingAudioSource, 'off'> }
+) {
+    try {
+        const recording = resolveBrowserRecordingController(activeRecording, event.sender.id, event.senderFrame, input)
+        if (input.source !== 'tab' && input.source !== 'system') throw new Error('Choose tab audio or system audio.')
+        browserRecordingCapture.arm(event.sender, recording.guest, input.source)
+        return { success: true as const }
+    } catch (error) {
+        return { success: false as const, error: errorMessage(error, 'Could not prepare recording audio.') }
+    }
+}
+
 export async function handleStopBrowserPreviewRecording(event: IpcMainInvokeEvent, input: DevScopeBrowserGuestTargetInput) {
     try {
-        const guest = resolveGuest(event, input)
-        const recording = activeRecording
-        if (!recording) return { success: true as const }
-        if (recording.ownerWebContentsId !== event.sender.id || recording.guest.id !== guest.id || recording.tabId !== input.tabId) {
-            throw new Error('That window does not own the active Browser recording.')
-        }
-        try {
-            if (guest.debugger.isAttached()) await guest.debugger.sendCommand('Page.stopScreencast')
-        } finally {
-            cleanupRecording(recording)
-        }
+        if (!activeRecording) return { success: true as const }
+        const recording = resolveBrowserRecordingController(activeRecording, event.sender.id, event.senderFrame, input)
+        cleanupRecording(recording)
         return { success: true as const }
     } catch (error) {
         return { success: false as const, error: errorMessage(error, 'Could not stop Browser recording.') }
@@ -703,12 +664,15 @@ export async function handleSaveBrowserPreviewRecording(
         if (data.byteLength <= 0 || data.byteLength > RECORDING_MAX_BYTES) {
             throw new Error('The Browser recording must be between 1 byte and 128 MB.')
         }
+        // Consume before asynchronous disk I/O so concurrent save requests cannot
+        // reuse a closed tab's grant and create duplicate artifacts.
+        recordingSaveGrants.delete(grantKey)
         const artifactId = `browser-recording:${randomUUID()}`
         const extension = mimeType.startsWith('video/mp4') ? 'mp4' : 'webm'
         const directory = artifactDirectory()
         const path = join(directory, `${artifactId.slice('browser-recording:'.length)}.${extension}`)
-        mkdirSync(directory, { recursive: true })
-        writeFileSync(path, data, { mode: 0o600 })
+        await mkdir(directory, { recursive: true })
+        await writeFile(path, data, { mode: 0o600 })
         const artifact = rememberArtifact({
             artifactId,
             ownerWebContentsId: event.sender.id,
@@ -719,7 +683,6 @@ export async function handleSaveBrowserPreviewRecording(
             sizeBytes: data.byteLength,
             createdAt: new Date().toISOString()
         })
-        recordingSaveGrants.delete(grantKey)
         return { success: true as const, artifact }
     } catch (error) {
         log.error('[BrowserPreview] Recording save failed:', error)

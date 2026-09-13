@@ -1,4 +1,5 @@
 import { RuntimeActivationNotice } from './components/updates/RuntimeActivationNotice'
+import { AssistantBrowserRecordingHost } from './pages/assistant/AssistantBrowserRecordingHost'
 import { createContext, lazy, Suspense, useContext, useEffect, useState, type ReactNode } from 'react'
 import { HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { migrateLegacyExplorerShellLaunchRoute } from '@shared/assistant/files-shell-launch-route'
@@ -303,7 +304,7 @@ function NormalDesktopApp() {
     )
 }
 
-function App() {
+function AppSurface() {
     if (isQuickPreviewRoute(window.location.hash)) return <QuickOpenWindow />
     const assistantUtilityWindow = /^#\/assistant-utility(?:[/?]|$)/.test(window.location.hash)
     if (assistantUtilityWindow) {
@@ -334,6 +335,10 @@ function App() {
             </OnboardingProvider>
         </SettingsProvider>
     )
+}
+
+function App() {
+    return <><AppSurface /><AssistantBrowserRecordingHost /></>
 }
 
 export default App

@@ -3,37 +3,43 @@ import { readFileSync } from 'node:fs'
 import {
     startAssistantBrowserRecording, stopActiveAssistantBrowserRecording, readAssistantBrowserRecording,
     pauseAssistantBrowserRecording, resumeAssistantBrowserRecording, setAssistantBrowserRecordingMicrophone,
-    dismissAssistantBrowserRecording, recordingElapsedMs
+    dismissAssistantBrowserRecording, recordingElapsedMs, setAssistantBrowserRecordingAudioSource
 } from '../src/renderer/src/pages/assistant/assistant-browser-recording'
 
 class Track extends EventTarget { stopped=false; constructor(public kind:string){super()} stop(){this.stopped=true} }
-class Stream { tracks:Track[]; constructor(kind='video'){this.tracks=[new Track(kind)]} addTrack(track:Track){this.tracks.push(track)} getTracks(){return this.tracks} getAudioTracks(){return this.tracks.filter(track=>track.kind==='audio')} }
+class Stream { tracks:Track[]; constructor(kind:string|Track[]='video'){this.tracks=Array.isArray(kind)?[...kind]:[new Track(kind)]} addTrack(track:Track){this.tracks.push(track)} getTracks(){return this.tracks} removeTrack(track:Track){this.tracks=this.tracks.filter(item=>item!==track)} getVideoTracks(){return this.tracks.filter(track=>track.kind==='video')} getAudioTracks(){return this.tracks.filter(track=>track.kind==='audio')} }
 const encoders: Encoder[]=[]
 class Encoder extends EventTarget {
     state='inactive'; static isTypeSupported(){return true}
     constructor(public stream:Stream){super();encoders.push(this)}
-    start(){this.state='recording'} pause(){this.state='paused'} resume(){this.state='recording'}
+    start(){this.state='recording';queueMicrotask(()=>this.dispatchEvent(Object.assign(new Event('dataavailable'),{data:new Blob(['fixture-start'])})))} pause(){this.state='paused'} resume(){this.state='recording'}
     stop(){this.state='inactive';this.dispatchEvent(Object.assign(new Event('dataavailable'),{data:new Blob(['fixture-video'])}));this.dispatchEvent(new Event('stop'))}
 }
-class Audio { state='running'; closed=false; resume(){return Promise.resolve()} close(){this.closed=true;return Promise.resolve()} createMediaStreamDestination(){return {stream:new Stream('audio')}} createMediaStreamSource(){return {connect(){},disconnect(){}}} }
+class Audio { state='running'; closed=false; resume(){return Promise.resolve()} close(){this.closed=true;return Promise.resolve()} createMediaStreamDestination(){return {stream:new Stream('audio')}} createMediaStreamSource(){return {connect(){},disconnect(){}}} createConstantSource(){return {offset:{value:0},connect(){},disconnect(){},start(){},stop(){}}} }
 let receive: (frame:any)=>void=()=>{}
 let failSave=false
+let deferSave=false
+let resolveSave:((value:any)=>void)|null=null
 let resolveStart:((result:any)=>void)|null=null
 let deferStart=false
 let microphone:Stream|null=null
+let denyAudio=false
+let deferAudio=false
+let resolveAudio:((stream:Stream)=>void)|null=null
 let resolveMicrophone:((stream:Stream)=>void)|null=null
 const saved:number[]=[]
 Object.assign(globalThis, {
-    MediaRecorder:Encoder, AudioContext:Audio,
-    document:{createElement:()=>({width:1,height:1,getContext:()=>({fillRect(){},drawImage(){}}),captureStream:()=>new Stream()})},
+    MediaRecorder:Encoder, AudioContext:Audio, MediaStream:Stream,
+    document:{createElement:()=>({onloadeddata:null as (()=>void)|null,play(){this.onloadeddata?.();return Promise.resolve()},pause(){}})},
     window:{devscope:{
         onBrowserPreviewRecordingFrame:(listener:(frame:any)=>void)=>{receive=listener;return()=>{receive=()=>{}}},
-        startBrowserPreviewRecording:()=>deferStart ? new Promise(resolve=>{resolveStart=resolve}) : Promise.resolve({success:true,startedAt:new Date().toISOString()}),
+        startBrowserPreviewRecording:()=>deferStart ? new Promise(resolve=>{resolveStart=resolve}) : Promise.resolve({success:true,startedAt:new Date().toISOString(),tabAudioSupported:true,systemAudioSupported:true}),
+        prepareBrowserPreviewRecordingAudio:async()=>({success:true}),
         stopBrowserPreviewRecording:async()=>({success:true}),
-        saveBrowserPreviewRecording:async(input:{data:Uint8Array})=>{if(failSave)return {success:false,error:'Disk is full'};saved.push(input.data.length);return {success:true,artifact:{artifactId:'recording:fixture',kind:'recording'}}}
+        saveBrowserPreviewRecording:async(input:{data:Uint8Array})=>{if(deferSave)return new Promise(resolve=>{resolveSave=resolve});if(failSave)return {success:false,error:'Disk is full'};saved.push(input.data.length);return {success:true,artifact:{artifactId:'recording:fixture',kind:'recording'}}}
     }}
 })
-Object.defineProperty(globalThis,'navigator',{configurable:true,value:{mediaDevices:{getUserMedia:()=>new Promise<Stream>(resolve=>{resolveMicrophone=resolve})}}})
+Object.defineProperty(globalThis,'navigator',{configurable:true,value:{mediaDevices:{getDisplayMedia:async(options:{audio:boolean})=>{if(options.audio&&denyAudio)throw new DOMException('Denied','NotAllowedError');if(options.audio&&deferAudio)return new Promise<Stream>(resolve=>{resolveAudio=resolve});const stream=new Stream();if(options.audio)stream.addTrack(new Track('audio'));return stream},getUserMedia:()=>new Promise<Stream>(resolve=>{resolveMicrophone=resolve})}}})
 const target={tabId:'tab:recording',guestWebContentsId:7}
 assert.equal(recordingElapsedMs(2000,null,9000),2000,'paused time is excluded')
 assert.equal(recordingElapsedMs(2000,5000,6500),3500,'resumed duration accumulates')
@@ -50,8 +56,22 @@ const lateRequest=setAssistantBrowserRecordingMicrophone('')
 await setAssistantBrowserRecordingMicrophone('off')
 const lateStream=new Stream('audio');resolveMicrophone!(lateStream);await lateRequest
 assert(lateStream.getTracks().every(track=>track.stopped),'a cancelled late permission response cannot reopen the mic')
+denyAudio=true;await setAssistantBrowserRecordingAudioSource('tab')
+assert.equal(readAssistantBrowserRecording().audioPending,false);assert.match(readAssistantBrowserRecording().error!,/denied/);assert.equal(encoders[0]!.state,'recording','denied audio never stops video')
+denyAudio=false;deferAudio=true
+const pendingAudio=setAssistantBrowserRecordingAudioSource('tab')
+for(let i=0;i<20&&!resolveAudio;i++)await Promise.resolve()
+await setAssistantBrowserRecordingAudioSource('off')
+const lateAudio=new Stream('audio');resolveAudio!(lateAudio);await pendingAudio
+assert(lateAudio.getTracks().every(track=>track.stopped),'cancelled audio capture releases every late track')
+assert.equal(readAssistantBrowserRecording().audioSource,'off')
+deferAudio=false
+await setAssistantBrowserRecordingAudioSource('tab');assert.equal(readAssistantBrowserRecording().audioSource,'tab')
+await setAssistantBrowserRecordingAudioSource('system');assert.equal(readAssistantBrowserRecording().audioSource,'system')
+await setAssistantBrowserRecordingAudioSource('off');assert.equal(readAssistantBrowserRecording().audioSource,'off')
+assert.equal(encoders[0]!.stream.getTracks().length,2,'switching audio inputs preserves the encoder track set')
 const firstStop=stopActiveAssistantBrowserRecording();assert.equal(stopActiveAssistantBrowserRecording(),firstStop,'double stop shares one save')
-await firstStop;assert.deepEqual(saved,[13]);assert.equal(readAssistantBrowserRecording().status,'saved')
+await firstStop;assert.deepEqual(saved,[26]);assert.equal(readAssistantBrowserRecording().status,'saved')
 assert(encoders[0]!.stream.getTracks().every(track=>track.stopped),'recording releases every capture track')
 dismissAssistantBrowserRecording();assert.equal(readAssistantBrowserRecording().status,'idle')
 await startAssistantBrowserRecording(target,{width:900,height:600})
@@ -62,10 +82,20 @@ deferStart=true
 const pendingStart=startAssistantBrowserRecording(target,{width:900,height:600})
 for(let index=0;index<20 && !resolveStart;index++) await new Promise(resolve=>setTimeout(resolve,1))
 const closing=stopActiveAssistantBrowserRecording()
-resolveStart!({success:true,startedAt:new Date().toISOString()})
-await assert.rejects(pendingStart,/closed before recording/);await closing
-assert.equal(readAssistantBrowserRecording().status,'saved','a late start reply cannot revive stopped recording controls')
+resolveStart!({success:true,startedAt:new Date().toISOString(),tabAudioSupported:true,systemAudioSupported:true})
+const closedCheck=assert.rejects(closing,/No video frames/)
+await assert.rejects(pendingStart,/closed before recording/);await closedCheck
+assert.equal(readAssistantBrowserRecording().status,'error','a late start reply cannot revive stopped recording controls')
 deferStart=false
+deferSave=true
+await startAssistantBrowserRecording(target,{width:900,height:600})
+const pendingSave=stopActiveAssistantBrowserRecording()
+for(let i=0;i<30&&!resolveSave;i++)await Promise.resolve()
+assert(resolveSave,'saving reached the disk boundary')
+assert.equal(readAssistantBrowserRecording().status,'stopping')
+assert(encoders.at(-1)!.stream.getTracks().every(track=>track.stopped),'video/audio capture is released before slow disk I/O finishes')
+resolveSave!({success:true,artifact:{artifactId:'slow-save',kind:'recording'}})
+await pendingSave;deferSave=false
 failSave=true;await startAssistantBrowserRecording(target,{width:900,height:600})
 await assert.rejects(stopActiveAssistantBrowserRecording(),/Disk is full/)
 assert.equal(readAssistantBrowserRecording().status,'error','save failures settle instead of leaving a spinner')
