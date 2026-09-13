@@ -23,6 +23,7 @@ import { LoaderCircle, Plus, X } from 'lucide-react'
 import { FileActionsMenu, type FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
 import { usePublishAssistantTitleBarEndRegion } from '@/lib/assistant/assistant-title-bar'
 import { cn } from '@/lib/utils'
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
 import { ASSISTANT_MIN_INSPECTOR_WIDTH } from './assistant-pane-layout'
 import { createAssistantTabDragWithTearOff } from './assistant-tab-drag-modifier'
 
@@ -971,9 +972,10 @@ export function AssistantInspectorSidebar({
                 inert={!open ? true : undefined}
             >
                 {tabPreview ? (
+                    <AnchoredNativeOverlay passive>
                     <div
                         className={cn(
-                            'pointer-events-none absolute top-2 z-40 overflow-hidden border border-[color-mix(in_srgb,var(--color-text)_11%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_94%,var(--color-bg))] shadow-[0_14px_34px_rgba(0,0,0,0.28),inset_0_1px_0_color-mix(in_srgb,var(--color-text)_5%,transparent)] animate-[inspector-tab-in_140ms_ease-out_both]',
+                            'pointer-events-none absolute top-2 z-40 overflow-hidden border border-[color-mix(in_srgb,var(--color-text)_11%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_94%,var(--color-bg))] shadow-[0_14px_34px_rgba(0,0,0,0.28),inset_0_1px_0_color-mix(in_srgb,var(--color-text)_5%,transparent)] inspector-tab-preview',
                             tabPreview.imageRequested ? 'w-64 rounded-xl' : 'w-[184px] rounded-2xl'
                         )}
                         style={{ left: tabPreview.left }}
@@ -986,7 +988,7 @@ export function AssistantInspectorSidebar({
                         {tabPreview.imageRequested ? (
                             <div className="relative aspect-video w-full overflow-hidden border-t border-[color-mix(in_srgb,var(--color-text)_9%,transparent)] bg-[color-mix(in_srgb,var(--color-bg)_88%,var(--color-card))]">
                                 {tabPreview.imageUrl ? (
-                                    <img src={tabPreview.imageUrl} alt="" className="h-full w-full object-cover animate-[inspector-tab-in_120ms_ease-out_both]" aria-hidden="true" />
+                                    <img src={tabPreview.imageUrl} alt="" className="h-full w-full object-cover" aria-hidden="true" />
                                 ) : tabPreview.imageLoading ? (
                                     <div className="flex h-full items-center justify-center text-sparkle-text-muted/45"><LoaderCircle size={14} className="animate-spin" /></div>
                                 ) : (
@@ -995,6 +997,7 @@ export function AssistantInspectorSidebar({
                             </div>
                         ) : null}
                     </div>
+                    </AnchoredNativeOverlay>
                 ) : null}
 
                 {children}

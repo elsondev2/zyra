@@ -13,7 +13,7 @@ async function bounded<T>(operation: Promise<T>): Promise<T> {
 
 // Electron capturePage can return the last presented frame for an occluded native view.
 // Ask Chromium for a fresh compositor frame first, including late canvas/app hydration.
-export function captureBrowserPage(guest: WebContents, rect?: Rectangle): Promise<NativeImage> {
+export function captureBrowserPage(guest: WebContents, rect?: Rectangle, surfaceOnly = false): Promise<NativeImage> {
     const previous = captures.get(guest)
     const capture = (previous?.catch(() => undefined) || Promise.resolve()).then(async () => {
         if (guest.isDestroyed()) throw new Error('The Browser tab was closed.')
@@ -23,7 +23,7 @@ export function captureBrowserPage(guest: WebContents, rect?: Rectangle): Promis
             // Detaching a temporary connection can interrupt a concurrent agent attachment.
             if (!guest.debugger.isAttached()) guest.debugger.attach('1.3')
             const viewport = rect ? await bounded(guest.executeJavaScript('({ width: innerWidth, height: innerHeight })')) as { width: number; height: number } : undefined
-            for (const fromSurface of [true, false]) {
+            for (const fromSurface of surfaceOnly ? [true] : [true, false]) {
                 try {
                     const result = await bounded(guest.debugger.sendCommand('Page.captureScreenshot', {
                         format: 'png', fromSurface, captureBeyondViewport: false
@@ -37,6 +37,8 @@ export function captureBrowserPage(guest: WebContents, rect?: Rectangle): Promis
                 } catch (error) { errors.push(error instanceof Error ? error.message : String(error)) }
             }
         } catch (error) { errors.push(error instanceof Error ? error.message : String(error)) }
+        // Inactive previews must never fall back to the containing window's frame.
+        if (surfaceOnly) throw new Error(`Could not capture the Browser tab surface: ${errors.join('; ')}`)
         // DevTools can own the debugger. Preserve ordinary screenshots in that case.
         try {
             const image = await bounded(guest.capturePage(rect))

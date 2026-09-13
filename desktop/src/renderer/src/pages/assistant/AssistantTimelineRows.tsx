@@ -3,7 +3,7 @@ import { Check, ChevronDown, ChevronRight, Copy, Gauge, Loader2, RotateCcw, Tras
 import type { AssistantActivity, AssistantMessage, AssistantPendingUserInput, AssistantProposedPlan, AssistantSessionTurnUsageEntry } from '@shared/assistant/contracts'
 import type { ComposerContextFile } from './assistant-composer-types'
 import type { PreviewOpenOptions } from '@/components/ui/file-preview/types'
-import type { AssistantChatDisplayMode, AssistantTextStreamingMode } from '@/lib/settings'
+import { useSettings, type AssistantChatDisplayMode, type AssistantTextStreamingMode } from '@/lib/settings'
 import MarkdownRenderer from '@/components/ui/MarkdownRenderer'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { getFileUrl } from '@/components/ui/file-preview/utils'
@@ -548,6 +548,7 @@ export const TimelineMessage = memo(({
     onLinkNotice?: (message: string, tone: 'info' | 'error') => void
 }) => {
     const isAssistant = message.role === 'assistant'
+    const { settings } = useSettings()
     const minimal = displayMode === 'minimal'
     const copyValue = message.text || ''
     const parsedUserMessage = useMemo(
@@ -763,7 +764,7 @@ export const TimelineMessage = memo(({
                     data-assistant-message-metadata={displayMode}
                 >
                     <span data-assistant-message-timestamp="true">{formatAssistantDateTime(message.updatedAt)}</span>
-                    {assistantElapsed ? <span className="text-sparkle-text">| {assistantElapsed}</span> : null}
+                    {settings.assistantShowActionStats && assistantElapsed ? <span className="text-sparkle-text">| {assistantElapsed}</span> : null}
                     {isLastAssistantInTurn && assistantCopyValue.trim() ? (
                         <button
                             type="button"

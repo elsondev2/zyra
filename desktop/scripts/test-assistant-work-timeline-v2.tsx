@@ -57,6 +57,28 @@ const narration: AssistantMessage = {
     createdAt,
     updatedAt: createdAt
 }
+const durationResponse = createElement(TimelineMessage, {
+    message: { ...narration, text: 'Hello.', updatedAt: '2026-09-03T12:00:03.000Z' },
+    isLatestAssistant: true,
+    isLastAssistantInTurn: true,
+    latestTurnStartedAt: createdAt
+})
+const defaultDurationMarkup = renderToStaticMarkup(durationResponse)
+assert.doesNotMatch(defaultDurationMarkup, /\| 3s/, 'response duration is hidden by default')
+assert.match(defaultDurationMarkup, /data-assistant-message-timestamp/, 'hiding duration preserves the response timestamp')
+const durationGlobals = ['navigator', 'localStorage'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const)
+try {
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { userAgent: 'Electron/43' } })
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
+        getItem: (key: string) => key === 'devscope-settings' ? JSON.stringify({ settingsSchemaVersion: 4, assistantShowActionStats: true }) : null
+    } })
+    assert.match(renderToStaticMarkup(durationResponse), /\| 3s/, 'enabling Action statistics restores response duration')
+} finally {
+    for (const [key, descriptor] of durationGlobals) {
+        if (descriptor) Object.defineProperty(globalThis, key, descriptor)
+        else Reflect.deleteProperty(globalThis, key)
+    }
+}
 const command = activity({
     id: 'action:command',
     kind: 'command',

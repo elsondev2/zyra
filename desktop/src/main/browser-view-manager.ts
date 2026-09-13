@@ -616,7 +616,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         } else if (command.type === 'blur') {
             record.ownerWindow.webContents.focus()
         } else if (command.type === 'capture') {
-            const captured = await captureBrowserPage(page)
+            const captured = await captureBrowserPage(page, undefined, true)
             const size = captured.getSize()
             const scale = Math.min(
                 1,
