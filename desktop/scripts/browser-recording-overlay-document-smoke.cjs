@@ -14,11 +14,22 @@ app.whenReady().then(async () => {
         error: null, unsaved: false, hasArtifact: false,
         theme: { background: '#252525', foreground: '#eeeeee', muted: '#aaaaaa', accent: '#f5a044', border: '#ffffff1a', dark: true }
     }
-    const commands = [], sizes = []
+    const commands = [], sizes = [], nativeAllocations = []
+    let window, centerX, topY, availableWidth = 440
     ipcMain.handle('read', () => state)
     ipcMain.on('command', (_event, command) => commands.push(command))
-    ipcMain.on('resize', (_event, size) => sizes.push(size))
-    const window = new BrowserWindow({ width: 440, height: 340, useContentSize: true, show: false, alwaysOnTop: true, webPreferences: { preload: join(process.env.ZYRA_RECORDER_DOCUMENT_USER_DATA, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+    ipcMain.on('resize', (_event, size) => {
+        sizes.push(size)
+        if (!window || window.isDestroyed()) return
+        const width = Math.min(availableWidth, size.width)
+        const before = window.getContentBounds()
+        const requested = { x: Math.round(centerX - width / 2), y: topY, width, height: Math.min(340, size.height) }
+        window.setContentBounds(requested)
+        nativeAllocations.push({ at: Date.now(), before, requested, actual: window.getContentBounds() })
+    })
+    window = new BrowserWindow({ width: 440, height: 340, useContentSize: true, frame: false, show: false, alwaysOnTop: true, webPreferences: { preload: join(process.env.ZYRA_RECORDER_DOCUMENT_USER_DATA, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+    const initialBounds = window.getContentBounds()
+    centerX = initialBounds.x + initialBounds.width / 2; topY = initialBounds.y
     const { buildBrowserRecordingOverlayDocument } = require(process.env.ZYRA_RECORDER_DOCUMENT_MODULE)
     const html = buildBrowserRecordingOverlayDocument()
     assert.match(html, /default-src 'none'/)
@@ -30,6 +41,41 @@ app.whenReady().then(async () => {
     const run = code => window.webContents.executeJavaScript(code)
     const update = async patch => { state = { ...state, ...patch }; window.webContents.send('state', state); await delay(40) }
     await delay(100)
+    await run(`Promise.all(document.getElementById('recorder').getAnimations().map(animation=>animation.finished.catch(()=>{})))`)
+    await run(`globalThis.recorderIdentity={root:document.getElementById('recorder'),toolbar:document.getElementById('toolbar'),timeOrigin:performance.timeOrigin,buttons:Object.fromEntries(['start','pause','stop','microphone','audio','dismiss'].map(id=>[id,document.getElementById(id)]))};
+        globalThis.sampleRecorder=()=>{const root=document.getElementById('recorder'),toolbar=document.getElementById('toolbar');const rect=element=>{const b=element.getBoundingClientRect();return{x:screenX+b.x,y:screenY+b.y,width:b.width,height:b.height}};return{at:performance.timeOrigin+performance.now(),viewport:{screenX,screenY,innerWidth,innerHeight,outerWidth,outerHeight,dpr:devicePixelRatio},card:rect(root),toolbar:rect(toolbar),metrics:{cardStyleWidth:root.style.width,cardMaxWidth:getComputedStyle(root).maxWidth,toolbarStyleWidth:getComputedStyle(toolbar).width,toolbarScrollWidth:toolbar.scrollWidth,toolbarClientWidth:toolbar.clientWidth},buttons:Object.fromEntries(Object.entries(recorderIdentity.buttons).filter(([,button])=>!button.hidden).map(([id,button])=>[id,rect(button)])),sameDocument:performance.timeOrigin===recorderIdentity.timeOrigin&&root===recorderIdentity.root&&toolbar===recorderIdentity.toolbar&&Object.entries(recorderIdentity.buttons).every(([id,button])=>button===document.getElementById(id)),scroll:[scrollX,scrollY,document.documentElement.scrollTop,document.body.scrollTop,root.scrollTop,root.scrollLeft]}};void 0`)
+    const transition = async (action, { opening = false, opacity = false } = {}) => {
+        const beforeAllocations = sizes.length
+        const beforeNativeAllocations = nativeAllocations.length
+        const result = await run(`(async()=>{const before=sampleRecorder(),frames=[];${action};let sampledOpacity=null;
+            if(${opacity}){const menu=document.getElementById('menu');const animation=menu.getAnimations().find(value=>value.effect?.getKeyframes().some(frame=>frame.transform));if(!animation)throw Error('Menu entrance animation is missing');animation.pause();animation.currentTime=75;sampledOpacity=Number.parseFloat(getComputedStyle(menu).opacity);animation.play()}
+            const started=performance.now();await new Promise(resolve=>{const sample=now=>{frames.push(sampleRecorder());if(now-started<340)requestAnimationFrame(sample);else resolve()};requestAnimationFrame(sample)});return{before,frames,after:sampleRecorder(),sampledOpacity}})()`)
+        const after = result.after
+        for (const [frameIndex, sample] of [...result.frames, after].entries()) {
+            assert.equal(sample.sameDocument, true, 'opening options retains the document, toolbar and button nodes')
+            assert(sample.scroll.every(value => value === 0), 'focusing menu items must not scroll the recorder or its document')
+            assert(Math.abs(sample.card.y - result.before.card.y) <= 1.1, 'the card grows down from its fixed top edge')
+            for (const [id, before] of Object.entries(result.before.buttons)) {
+                const button = sample.buttons[id]
+                assert(button, `${id} stays visible during options transitions`)
+                for (const key of ['x', 'y', 'width', 'height']) {
+                    if (Math.abs(button[key] - before[key]) <= 1.1) continue
+                    const details = value => ({ at: value.at, viewport: value.viewport, card: value.card, toolbar: value.toolbar, metrics: value.metrics, button: value.buttons[id], scroll: value.scroll })
+                    assert.fail(`${id} ${key} stays anchored: ${JSON.stringify({ frameIndex, frameCount: result.frames.length, before: details(result.before), frame: details(sample), lastFrame: details(result.frames.at(-1)), after: details(after), allocations: nativeAllocations.slice(beforeNativeAllocations) })}`)
+                }
+            }
+        }
+        const allocations = sizes.slice(beforeAllocations)
+        assert(allocations.length <= 2, `native bounds allocate at transition boundaries, not every animation frame: ${JSON.stringify(allocations)}`)
+        for (const axis of ['width', 'height']) {
+            const low = Math.min(result.before.card[axis], after.card[axis]), high = Math.max(result.before.card[axis], after.card[axis])
+            if (high - low > 2) assert(result.frames.some(frame => frame.card[axis] > low + .25 && frame.card[axis] < high - .25), `the actual card animates through intermediate ${axis}`)
+        }
+        if (opening) assert(after.card.height > result.before.card.height, 'options expand below the toolbar')
+        else assert(after.card.height < result.before.card.height, 'closing options returns to the compact toolbar')
+        if (opacity) assert(result.sampledOpacity > 0 && result.sampledOpacity < 1, 'the real entrance animation has intermediate opacity at75ms')
+        return result
+    }
     assert.equal(await run("matchMedia('(prefers-reduced-motion: reduce)').matches"), false)
     const compact = await run(`({width:document.getElementById('recorder').offsetWidth,height:document.getElementById('recorder').offsetHeight,toolbar:document.getElementById('toolbar').scrollWidth})`)
     assert.ok(compact.width < 280 && compact.width <= compact.toolbar + 2, 'ready toolbar fits its controls without a flexible empty stretch')
@@ -37,23 +83,20 @@ app.whenReady().then(async () => {
     assert.equal(await run(`['clock','pause','stop'].every(id=>document.getElementById(id).hidden)`), true, 'setup has no running timer or recording controls')
     assert.deepEqual(commands, [], 'showing setup sends no capture or microphone commands')
     if (process.env.ZYRA_RECORDER_DOCUMENT_SCREENSHOT) writeFileSync(process.env.ZYRA_RECORDER_DOCUMENT_SCREENSHOT.replace(/\.png$/, '-ready.png'), (await window.webContents.capturePage()).toPNG())
-    const beforeExpand = sizes.length
-    await run(`document.getElementById('microphone').click()` )
-    await delay(50)
-    const enteringOpacity = await run(`parseFloat(getComputedStyle(document.getElementById('menu')).opacity)`)
-    assert.ok(enteringOpacity > 0 && enteringOpacity < 1, 'visible menu enters through intermediate opacity')
-    await delay(270)
+    await transition(`document.getElementById('microphone').click()`, { opening: true, opacity: true })
     const expanded = await run(`({width:document.getElementById('recorder').offsetWidth,height:document.getElementById('recorder').offsetHeight})`)
     assert.ok(expanded.width > compact.width && expanded.height > compact.height)
     if (process.env.ZYRA_RECORDER_DOCUMENT_SCREENSHOT) writeFileSync(process.env.ZYRA_RECORDER_DOCUMENT_SCREENSHOT.replace(/\.png$/, '-microphone.png'), (await window.webContents.capturePage()).toPNG())
-    assert.ok(sizes.slice(beforeExpand).some(size => size.width > compact.width + 16 && size.width < expanded.width + 16), 'opening reports intermediate native widths: ' + JSON.stringify({ compact, expanded, sizes: sizes.slice(beforeExpand) }))
-    assert.ok(sizes.slice(beforeExpand).some(size => size.height > compact.height + 16 && size.height < expanded.height + 16), 'opening reports intermediate native heights')
-    await run(`document.querySelector('#choices button[data-value="device-1"]').click()`)
+    await transition(`document.querySelector('#choices button[data-value="device-1"]').click()`)
     await update({ microphone: 'device-1' })
-    const beforeCollapse = sizes.length
-    await delay(320)
-    assert.ok(sizes.slice(beforeCollapse).some(size => size.height > compact.height + 16 && size.height < expanded.height + 16), 'closing animates back to the compact toolbar')
     assert.equal(await run(`document.getElementById('recorder').offsetWidth`), compact.width)
+    await transition(`document.getElementById('audio').click()`, { opening: true })
+    await transition(`document.getElementById('audio').click()`)
+    await update({ microphones: [{ id: 'device-1', label: 'Studio microphone with a long manufacturer and USB interface name' }] })
+    await transition(`document.getElementById('microphone').click()`, { opening: true })
+    assert(window.getContentBounds().width > 360, 'long microphone choices exercise the former toolbar density breakpoint')
+    await transition(`document.getElementById('microphone').click()`)
+    await update({ microphones: [{ id: 'device-1', label: 'Studio microphone' }] })
     await run(`document.getElementById('microphone').click()`)
     await delay(320)
     assert.equal(await run(`document.querySelector('#choices button[data-value="device-1"]').getAttribute('aria-checked')`), 'true', 'reopening keeps the selected microphone')
@@ -115,7 +158,8 @@ app.whenReady().then(async () => {
     await delay(20)
     assert.ok(commands.some(command => command.kind === 'show-artifact'))
     assert.equal(await run(`document.getElementById('dismiss').hidden`), false)
-    window.setContentSize(276, 340)
+    availableWidth = 276
+    window.setContentBounds({ x: Math.round(centerX - availableWidth / 2), y: topY, width: availableWidth, height: 340 })
     await update({ status: 'recording', hasArtifact: false, elapsedMs: 3_661_000 })
     await delay(100)
     assert.equal(await run(`['pause','stop','microphone','audio'].every(id=>{const b=document.getElementById(id).getBoundingClientRect();return b.width>0&&b.left>=0&&b.right<=innerWidth})`), true, 'all controls remain reachable in a narrow inspector, including hour-long recordings')

@@ -21,12 +21,16 @@ export function mountBrowserRecordingOverlay(): void {
     let settleTimer = 0
     let currentSize: { width: number; height: number } | null = null
     let targetSize: { width: number; height: number } | null = null
+    let nativeSize: { width: number; height: number } | null = null
     let reportedSize = ''
     const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
     const paintSize = (size: { width: number; height: number }) => {
         currentSize = size
         root.style.width = `${size.width}px`
         root.style.height = `${size.height}px`
+    }
+    const allocate = (size: { width: number; height: number }) => {
+        nativeSize = size
         const outer = { width: Math.ceil(size.width + 16), height: Math.min(340, Math.ceil(size.height + 16)) }
         const signature = `${outer.width}:${outer.height}`
         if (signature !== reportedSize) { reportedSize = signature; api.resize(outer) }
@@ -55,11 +59,15 @@ export function mountBrowserRecordingOverlay(): void {
         targetSize = next
         cancelAnimationFrame(frame)
         window.clearTimeout(settleTimer)
+        // Reserve the transition's envelope once. Only the card animates; resizing
+        // the native compositor surface on every frame causes visible repainting.
+        allocate({ width: Math.max(nativeSize?.width || 0, next.width), height: Math.max(nativeSize?.height || 0, next.height) })
         const finish = () => {
             cancelAnimationFrame(frame)
             window.clearTimeout(settleTimer)
             frame = 0
             paintSize(next)
+            allocate(next)
             root.dataset.resizing = 'false'
             menu.hidden = !opened
         }
@@ -67,7 +75,7 @@ export function mountBrowserRecordingOverlay(): void {
         root.dataset.resizing = 'true'
         const started = performance.now()
         const step = (now: number) => {
-            const progress = Math.min(1, (now - started) / 210)
+            const progress = Math.max(0, Math.min(1, (now - started) / 210))
             const eased = 1 - Math.pow(1 - progress, 3)
             paintSize({ width: previous.width + (next.width - previous.width) * eased, height: previous.height + (next.height - previous.height) * eased })
             if (progress < 1) frame = requestAnimationFrame(step)
@@ -86,7 +94,7 @@ export function mountBrowserRecordingOverlay(): void {
         microphone.setAttribute('aria-expanded', 'false')
         audio.setAttribute('aria-expanded', 'false')
         resize()
-        if (restoreFocus) trigger.focus()
+        if (restoreFocus) trigger.focus({ preventScroll: true })
     }
     const renderMenu = () => {
         if (!state || !opened) return
@@ -130,7 +138,7 @@ export function mountBrowserRecordingOverlay(): void {
         resize()
         menuAnimation?.cancel()
         if (!reduced()) menuAnimation = menu.animate([{ opacity: 0, transform: 'translateY(-4px)' }, { opacity: 1, transform: 'translateY(0)' }], { duration: 180, easing: 'cubic-bezier(.22,1,.36,1)' })
-        choices.querySelector<HTMLButtonElement>('[aria-checked="true"]:not(:disabled)')?.focus()
+        choices.querySelector<HTMLButtonElement>('[aria-checked="true"]:not(:disabled)')?.focus({ preventScroll: true })
         if (kind === 'microphone') send({ kind: 'refresh-devices' })
     }
     microphone.addEventListener('click', () => openMenu('microphone'))
@@ -157,7 +165,7 @@ export function mountBrowserRecordingOverlay(): void {
         const buttons = [...choices.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
         const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
         const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
-        buttons[next]?.focus()
+        buttons[next]?.focus({ preventScroll: true })
     })
     const render = (next: BrowserRecordingOverlayState) => {
         state = next
