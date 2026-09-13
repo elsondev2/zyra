@@ -1,3 +1,4 @@
+import { NativeOverlayPortal } from '@/components/ui/native-overlay-portal'
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, AlertTriangle, CheckCircle2, Command, ExternalLink, HelpCircle, Loader2, Package, Play, Search, X } from 'lucide-react'
 import { ProjectAuthorMismatchModal } from './ProjectAuthorMismatchModal'
@@ -163,7 +164,7 @@ export function DependenciesModal({
     }, [searchValue, projectPath])
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md animate-fadeIn" onClick={onClose}>
+        <NativeOverlayPortal><div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md animate-fadeIn" onClick={onClose}>
             <div
                 className="bg-sparkle-card border border-white/10 rounded-2xl shadow-2xl w-[min(1120px,96vw)] max-h-[95vh] flex flex-col m-4 overflow-hidden"
                 onClick={e => e.stopPropagation()}
@@ -359,6 +360,6 @@ export function DependenciesModal({
                     </section>
                 </div>
             </div>
-        </div>
+        </div></NativeOverlayPortal>
     )
 }

@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { createPassivePortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { SquareTerminal } from 'lucide-react'
 
 const TOOLTIP_FADE_MS = 140

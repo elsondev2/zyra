@@ -1,5 +1,7 @@
+import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { ArrowRightLeft, Minus, Plus, Save, Search, SlidersHorizontal, Undo2 } from 'lucide-react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { cn } from '@/lib/utils'
 
@@ -59,16 +61,16 @@ export function PreviewEditorSettingsMenu({
         if (!open) return
         const dismiss = (event: Event) => {
             const target = event.target as Node
-            if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false)
+            if (!isOverlayEventInside(event, rootRef.current) && !isOverlayEventInside(event, menuRef.current)) setOpen(false)
         }
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') setOpen(false)
         }
-        document.addEventListener('pointerdown', dismiss, true)
-        window.addEventListener('keydown', handleKeyDown)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', dismiss, true)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', handleKeyDown)
         return () => {
-            document.removeEventListener('pointerdown', dismiss, true)
-            window.removeEventListener('keydown', handleKeyDown)
+            removeOverlayListener1()
+            removeOverlayListener2()
         }
     }, [open])
 

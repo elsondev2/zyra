@@ -1,6 +1,8 @@
+import { getOverlayActiveElement, isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener, addOverlayWindowBlurListener } from '@/components/ui/native-overlay-portal'
 import { ChevronDown } from 'lucide-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { cn } from '@/lib/utils'
 import { VIEWPORT_PRESETS, type ViewportPreset } from './viewport'
@@ -116,20 +118,18 @@ export function PreviewHeaderHtmlControls({
         if (!menuVisible) return
 
         const handlePointerDown = (event: PointerEvent) => {
-            const target = event.target as Node | null
-            if (menuRef.current?.contains(target) || triggerRef.current?.contains(target)) return
+                        if (isOverlayEventInside(event, menuRef.current) || isOverlayEventInside(event, triggerRef.current)) return
             closeMenu()
         }
 
         const handleFocusIn = (event: FocusEvent) => {
-            const target = event.target as Node | null
-            if (menuRef.current?.contains(target) || triggerRef.current?.contains(target)) return
+                        if (isOverlayEventInside(event, menuRef.current) || isOverlayEventInside(event, triggerRef.current)) return
             closeMenu()
         }
 
         const handleWindowBlur = () => {
             window.requestAnimationFrame(() => {
-                const activeElement = document.activeElement
+                const activeElement = getOverlayActiveElement()
                 if (!activeElement) return
                 if (menuRef.current?.contains(activeElement) || triggerRef.current?.contains(activeElement)) return
                 closeMenu()
@@ -143,18 +143,18 @@ export function PreviewHeaderHtmlControls({
             if (event.key === 'Escape') closeMenu()
         }
 
-        document.addEventListener('pointerdown', handlePointerDown, true)
-        document.addEventListener('focusin', handleFocusIn, true)
-        window.addEventListener('blur', handleWindowBlur)
-        window.addEventListener('keydown', handleEscape)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', handlePointerDown, true)
+        const removeOverlayListener2 = addOverlayEventListener('focusin', handleFocusIn, true)
+        const removeOverlayBlurListener4 = addOverlayWindowBlurListener(handleWindowBlur)
+        const removeOverlayListener3 = addOverlayEventListener('keydown', handleEscape)
         iframeElements.forEach((iframeElement) => {
             iframeElement.addEventListener('pointerdown', handleIframePointerDown)
         })
         return () => {
-            document.removeEventListener('pointerdown', handlePointerDown, true)
-            document.removeEventListener('focusin', handleFocusIn, true)
-            window.removeEventListener('blur', handleWindowBlur)
-            window.removeEventListener('keydown', handleEscape)
+            removeOverlayListener1()
+            removeOverlayListener2()
+            removeOverlayBlurListener4()
+            removeOverlayListener3()
             iframeElements.forEach((iframeElement) => {
                 iframeElement.removeEventListener('pointerdown', handleIframePointerDown)
             })

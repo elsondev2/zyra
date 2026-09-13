@@ -1,3 +1,4 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
 import { ArrowDownCircle, Copy, ExternalLink, Link, RefreshCw, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -25,7 +26,7 @@ export function ProjectDetailsRepoInfoModal(props: any) {
     if (!open) return null
 
     return (
-        <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onClick={onClose}>
+        <AnchoredNativeOverlay><div className="absolute inset-0 z-30 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm" onClick={onClose}>
             <div className="w-full max-w-3xl rounded-2xl bg-sparkle-card shadow-2xl" onClick={(event) => event.stopPropagation()}>
                 <div className="flex items-center justify-between border-b border-[color-mix(in_srgb,var(--color-text)_8%,transparent)] bg-[color-mix(in_srgb,var(--color-text)_3%,transparent)] px-5 py-4">
                     <div>
@@ -107,6 +108,6 @@ export function ProjectDetailsRepoInfoModal(props: any) {
                     </div>
                 </div>
             </div>
-        </div>
+        </div></AnchoredNativeOverlay>
     )
 }

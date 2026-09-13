@@ -1,3 +1,6 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
+import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { Check, ChevronDown, SquareTerminal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { Shell } from '@/lib/settings'
@@ -71,8 +74,7 @@ export function PreviewTerminalNewMenu({ value, onChange, onCreate }: PreviewTer
         if (!menuVisible) return
 
         const handlePointerDown = (event: PointerEvent) => {
-            const target = event.target as Node | null
-            if (controlRef.current?.contains(target) || menuRef.current?.contains(target)) return
+                        if (isOverlayEventInside(event, controlRef.current) || isOverlayEventInside(event, menuRef.current)) return
             closeMenu()
         }
 
@@ -80,11 +82,11 @@ export function PreviewTerminalNewMenu({ value, onChange, onCreate }: PreviewTer
             if (event.key === 'Escape') closeMenu()
         }
 
-        document.addEventListener('pointerdown', handlePointerDown, true)
-        window.addEventListener('keydown', handleEscape)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', handlePointerDown, true)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', handleEscape)
         return () => {
-            document.removeEventListener('pointerdown', handlePointerDown, true)
-            window.removeEventListener('keydown', handleEscape)
+            removeOverlayListener1()
+            removeOverlayListener2()
         }
     }, [menuVisible])
 
@@ -133,7 +135,7 @@ export function PreviewTerminalNewMenu({ value, onChange, onCreate }: PreviewTer
             </div>
 
             {menuVisible ? (
-                <div
+                <AnchoredNativeOverlay><div
                     ref={menuRef}
                     className={cn(
                         'absolute left-0 top-full z-[160] -mt-px w-full overflow-hidden',
@@ -169,7 +171,7 @@ export function PreviewTerminalNewMenu({ value, onChange, onCreate }: PreviewTer
                             })}
                         </div>
                     </AnimatedHeight>
-                </div>
+                </div></AnchoredNativeOverlay>
             ) : null}
         </div>
     )

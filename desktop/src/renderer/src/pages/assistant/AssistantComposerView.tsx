@@ -1,3 +1,4 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type WheelEvent as ReactWheelEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useSettings } from '@/lib/settings'
@@ -143,6 +144,7 @@ export function AssistantComposerView({
     const [slashMenuDismissed, setSlashMenuDismissed] = useState(false)
     const [slashMenuPresent, setSlashMenuPresent] = useState(false)
     const [slashMenuAnimatedOpen, setSlashMenuAnimatedOpen] = useState(false)
+    const slashMenuPortalReadyRef = useRef(false)
     const attachmentShelfRef = useRef<HTMLDivElement | null>(null)
     const commandActivationPendingRef = useRef(false)
     const hasFloatingShelf = controller.queuedMessages.length > 0 || controller.contextFiles.length > 0
@@ -258,11 +260,12 @@ export function AssistantComposerView({
     useEffect(() => {
         if (showSlashMenu) {
             setSlashMenuPresent(true)
+            if (!slashMenuPortalReadyRef.current) return
             const frameId = window.requestAnimationFrame(() => setSlashMenuAnimatedOpen(true))
             return () => window.cancelAnimationFrame(frameId)
         }
         setSlashMenuAnimatedOpen(false)
-        const timerId = window.setTimeout(() => setSlashMenuPresent(false), 300)
+        const timerId = window.setTimeout(() => { slashMenuPortalReadyRef.current = false; setSlashMenuPresent(false) }, 300)
         return () => window.clearTimeout(timerId)
     }, [showSlashMenu])
 
@@ -483,7 +486,7 @@ export function AssistantComposerView({
         <>
             <div className="relative flex pointer-events-none flex-col gap-0">
                 {showTopShelf ? (
-                    <div
+                    <AnchoredNativeOverlay enabled={slashMenuPresent} autoFocus={false} onReady={container => { container.getBoundingClientRect(); slashMenuPortalReadyRef.current = true; if (showSlashMenu) setSlashMenuAnimatedOpen(true) }}><div
                         ref={attachmentShelfRef}
                         className={cn(
                             'pointer-events-none absolute inset-x-0 bottom-full',
@@ -687,7 +690,7 @@ export function AssistantComposerView({
                                 </>
                             )}
                         </div>
-                    </div>
+                    </div></AnchoredNativeOverlay>
                 ) : null}
                 <div ref={controller.composerRootRef} className="pointer-events-auto relative z-40">
                     {controller.placement === 'center' && controller.onSelectProject && controller.onCreateProject ? (

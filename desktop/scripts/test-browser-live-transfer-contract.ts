@@ -35,7 +35,7 @@ assert.equal(transferredGuest.guest.id, fakeGuest.id, 'authority transfer must r
 assert.equal(transferredGuest.ownerWebContentsId, 202, 'only shell authority changes')
 assert.match(manager, /input\.sessionMode === 'incognito'[\s\S]*acquireIncognitoSession[\s\S]*getGlobalBrowserSession\(\)[\s\S]*new WebContentsView\(\{[\s\S]*session: browserSession[\s\S]*preload: undefined[\s\S]*sandbox: true[\s\S]*contextIsolation: true[\s\S]*nodeIntegration: false/, 'main must create Browser pages in the requested hardened normal or temporary incognito session')
 assert.match(manager, /existing\.sessionMode !== sessionMode[\s\S]*cannot change between normal and incognito mode/, 'a live Browser tab cannot silently swap its storage identity')
-assert.match(manager, /sourceWindow\.contentView\.removeChildView\(record\.view\)[\s\S]*destinationWindow\.contentView\.addChildView\(record\.view\)/, 'transfer must reparent the existing native view')
+assert.match(manager, /sourceWindow\.contentView\.removeChildView\(record\.view\)[\s\S]*addNativeWindowView\(destinationWindow, record\.view, 'browser'\)/, 'transfer must reparent the existing native view below app overlays')
 assert.doesNotMatch(manager.match(/private performTransfer[\s\S]*?private applyCurrentSlot/)?.[0] || '', /new WebContentsView/, 'transfer cannot replace the page WebContents')
 assert.match(manager, /slot\?\.active[\s\S]*slot\.bounds/, 'destination attachment must wait for a real active renderer slot')
 assert.match(manager, /contentSize[\s\S]*setManagedBrowserPresentationScale/, 'native bounds must retain responsive viewport presentation scale')

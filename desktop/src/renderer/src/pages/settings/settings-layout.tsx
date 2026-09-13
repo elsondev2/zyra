@@ -1,6 +1,7 @@
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { createContext, useContext, useEffect, useRef } from 'react'
 import type { ButtonHTMLAttributes, HTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { ChevronLeft, Undo2, X } from 'lucide-react'
 import { Link, useInRouterContext } from 'react-router-dom'
 import { cn } from '@/lib/utils'
@@ -212,8 +213,8 @@ export function SettingsDialog({ open, title, description, children, footer, cla
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') onClose()
         }
-        window.addEventListener('keydown', handleKeyDown)
-        return () => window.removeEventListener('keydown', handleKeyDown)
+        const removeOverlayListener1 = addOverlayEventListener('keydown', handleKeyDown)
+        return () => removeOverlayListener1()
     }, [onClose, open])
 
     if (!open) return null

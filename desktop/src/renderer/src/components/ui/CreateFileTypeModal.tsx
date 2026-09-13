@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { addOverlayEventListener, createOverlayPortal as createPortal } from './native-overlay-portal'
 import { Search } from 'lucide-react'
 import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { useSettings } from '@/lib/settings'
@@ -100,6 +100,13 @@ export function CreateFileTypeModal({
 
     useEffect(() => {
         if (!isOpen) return
+        return addOverlayEventListener('keydown', event => {
+            if (event.key === 'Escape' && !event.defaultPrevented) onCancel()
+        })
+    }, [isOpen, onCancel])
+
+    useEffect(() => {
+        if (!isOpen) return
         const originalOverflow = document.body.style.overflow
         document.body.style.overflow = 'hidden'
         return () => {
@@ -157,6 +164,9 @@ export function CreateFileTypeModal({
             onClick={onCancel}
         >
             <div
+                role="dialog"
+                aria-modal="true"
+                aria-label="Create new file"
                 className="w-full max-w-3xl max-h-[95vh] rounded-2xl border border-white/10 bg-sparkle-card shadow-2xl overflow-hidden flex flex-col"
                 onClick={(event) => event.stopPropagation()}
             >

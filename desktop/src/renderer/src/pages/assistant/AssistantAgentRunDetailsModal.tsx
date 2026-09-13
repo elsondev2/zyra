@@ -1,5 +1,6 @@
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { useEffect, useId, useRef, type ReactNode } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { Activity, Clock3, Cpu, FolderOpen, ShieldCheck, Wrench, X } from 'lucide-react'
 import type { AgentRunState } from '@shared/assistant/contracts'
 import {
@@ -30,10 +31,10 @@ export function AssistantAgentRunDetailsModal({
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') onClose()
         }
-        window.addEventListener('keydown', handleKeyDown)
+        const removeOverlayListener1 = addOverlayEventListener('keydown', handleKeyDown)
         return () => {
             document.body.style.overflow = previousOverflow
-            window.removeEventListener('keydown', handleKeyDown)
+            removeOverlayListener1()
         }
     }, [onClose, open])
 

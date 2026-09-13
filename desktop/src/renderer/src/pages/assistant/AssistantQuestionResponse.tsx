@@ -1,5 +1,6 @@
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { useEffect, useId, useMemo, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { ChevronRight, MessageSquareReply, X } from 'lucide-react'
 import type { AssistantPendingUserInput } from '@shared/assistant/contracts'
 import { formatAssistantUserInputAnswer } from './assistant-pending-user-input'
@@ -30,8 +31,8 @@ function AssistantQuestionResponseModal(props: {
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') props.onClose()
         }
-        window.addEventListener('keydown', handleKeyDown)
-        return () => window.removeEventListener('keydown', handleKeyDown)
+        const removeOverlayListener1 = addOverlayEventListener('keydown', handleKeyDown)
+        return () => removeOverlayListener1()
     }, [props.onClose])
 
     if (typeof document === 'undefined') return null

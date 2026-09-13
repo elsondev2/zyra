@@ -1,5 +1,7 @@
+import { getOverlayActiveElement, isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener, addOverlayWindowBlurListener } from '@/components/ui/native-overlay-portal'
 import { useEffect, useRef } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import type { FileActionsMenuItem } from '@/components/ui/FileActionsMenu'
 import { cn } from '@/lib/utils'
 
@@ -40,22 +42,22 @@ export function PreviewTreeContextMenu({
             menuRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true })
         })
         const handlePointerDown = (event: PointerEvent) => {
-            if (!menuRef.current?.contains(event.target as Node)) onClose({ restoreFocus: false })
+            if (!isOverlayEventInside(event, menuRef.current)) onClose({ restoreFocus: false })
         }
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') onClose({ restoreFocus: true })
         }
         const handleViewportChange = () => onClose({ restoreFocus: false })
-        document.addEventListener('pointerdown', handlePointerDown)
-        document.addEventListener('keydown', handleKeyDown)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', handlePointerDown)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', handleKeyDown)
         window.addEventListener('resize', handleViewportChange)
-        window.addEventListener('blur', handleViewportChange)
+        const removeOverlayBlurListener3 = addOverlayWindowBlurListener(handleViewportChange)
         return () => {
             window.cancelAnimationFrame(focusFrameId)
-            document.removeEventListener('pointerdown', handlePointerDown)
-            document.removeEventListener('keydown', handleKeyDown)
+            removeOverlayListener1()
+            removeOverlayListener2()
             window.removeEventListener('resize', handleViewportChange)
-            window.removeEventListener('blur', handleViewportChange)
+            removeOverlayBlurListener3()
         }
     }, [onClose])
 
@@ -90,7 +92,7 @@ export function PreviewTreeContextMenu({
                 const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
                 if (buttons.length === 0) return
                 event.preventDefault()
-                const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement)
+                const currentIndex = buttons.indexOf(getOverlayActiveElement() as HTMLButtonElement)
                 const nextIndex = event.key === 'Home'
                     ? 0
                     : event.key === 'End'

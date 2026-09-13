@@ -1,6 +1,8 @@
+import { getOverlayActiveElement, isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { Check, ChevronDown, Moon, Search, Sun } from 'lucide-react'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import {
     DARK_THEMES,
     LIGHT_THEMES,
@@ -112,7 +114,7 @@ function AppearanceThemeSelect({
         positionPopover()
         const closeOnOutsidePointer = (event: PointerEvent) => {
             const target = event.target as Node
-            if (!rootRef.current?.contains(target) && !popoverRef.current?.contains(target)) setOpen(false)
+            if (!isOverlayEventInside(event, rootRef.current) && !isOverlayEventInside(event, popoverRef.current)) setOpen(false)
         }
         const closeOnEscape = (event: globalThis.KeyboardEvent) => {
             if (event.key === 'Escape') {
@@ -121,15 +123,15 @@ function AppearanceThemeSelect({
             }
         }
         const updatePosition = () => positionPopover()
-        document.addEventListener('pointerdown', closeOnOutsidePointer)
-        document.addEventListener('keydown', closeOnEscape)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', closeOnOutsidePointer)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', closeOnEscape)
         window.addEventListener('resize', updatePosition)
         window.addEventListener('scroll', updatePosition, true)
         const focusTimer = window.setTimeout(() => searchRef.current?.focus(), 0)
         return () => {
             window.clearTimeout(focusTimer)
-            document.removeEventListener('pointerdown', closeOnOutsidePointer)
-            document.removeEventListener('keydown', closeOnEscape)
+            removeOverlayListener1()
+            removeOverlayListener2()
             window.removeEventListener('resize', updatePosition)
             window.removeEventListener('scroll', updatePosition, true)
         }
@@ -158,7 +160,7 @@ function AppearanceThemeSelect({
                 if (event.target === searchRef.current && event.key === 'Enter') { event.preventDefault(); options[0]?.click(); return }
                 if (!['ArrowDown', 'ArrowUp'].includes(event.key) || !options.length) return
                 event.preventDefault()
-                const index = options.indexOf(document.activeElement as HTMLButtonElement)
+                const index = options.indexOf(getOverlayActiveElement() as HTMLButtonElement)
                 options[event.key === 'ArrowDown' ? (index + 1) % options.length : index <= 0 ? options.length - 1 : index - 1]?.focus()
             }}
             className="fixed z-[120] overflow-hidden rounded-lg border border-[var(--settings-border-strong)] bg-[var(--settings-popover)] shadow-[0_18px_60px_color-mix(in_srgb,var(--color-bg)_45%,transparent)] backdrop-blur-xl"

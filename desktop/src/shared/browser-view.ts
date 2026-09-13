@@ -96,8 +96,6 @@ export type BrowserViewCommand =
     | { tabId: string; type: 'focus' }
     | { tabId: string; type: 'blur' }
     | { tabId: string; type: 'capture' }
-    | { tabId: string; type: 'presentation-start' }
-    | { tabId: string; type: 'presentation-stop' }
     | ({ tabId: string; type: 'control-overlay' } & BrowserViewControlOverlay)
 
 export type BrowserViewResult<T extends object = Record<string, never>> =

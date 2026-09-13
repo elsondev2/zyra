@@ -1,3 +1,4 @@
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
     ArrowLeft,
@@ -107,8 +108,7 @@ export function AssistantBrowserPopupWindow() {
             event.preventDefault()
             command({ type: 'shortcut', action })
         }
-        window.addEventListener('keydown', handleShortcut, true)
-        return () => window.removeEventListener('keydown', handleShortcut, true)
+        return addOverlayEventListener('keydown', handleShortcut, true)
     }, [command, state.fullscreen])
 
     const submitAddress = () => {

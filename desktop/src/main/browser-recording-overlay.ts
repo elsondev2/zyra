@@ -1,5 +1,6 @@
 import { ipcMain as rawIpcMain, WebContentsView, type BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import { ipcMain as trustedIpcMain } from './ipc/trusted-ipc'
+import { addNativeWindowView } from './native-view-layers'
 import { trustedBrowserGuests } from './agent-control/trusted-guest-registry'
 import type { BrowserViewManager, BrowserViewPresentation } from './browser-view-manager'
 import { buildBrowserRecordingOverlayDocument } from './browser-recording-overlay-document'
@@ -172,8 +173,7 @@ export class BrowserRecordingOverlayManager {
             overlay.bounds = nextBounds
             overlay.view.setBounds(nextBounds)
         }
-        // Re-adding an existing child moves it above a guest that was just reparented.
-        if (host.contentView.children.at(-1) !== overlay.view) host.contentView.addChildView(overlay.view)
+        addNativeWindowView(host, overlay.view, 'recording')
         setVisible(overlay.loaded)
         publish()
     }

@@ -1,3 +1,6 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
+import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener, addOverlayWindowBlurListener } from '@/components/ui/native-overlay-portal'
 import { Check, ChevronDown, Edit3, FileText, PanelRight, Save, Undo2 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
@@ -76,21 +79,20 @@ export function PreviewHeaderEditMenu({
     useEffect(() => {
         if (!menuVisible) return
         const handlePointerDown = (event: PointerEvent) => {
-            const target = event.target as Node | null
-            if (menuRef.current?.contains(target) || controlRef.current?.contains(target)) return
+                        if (isOverlayEventInside(event, menuRef.current) || isOverlayEventInside(event, controlRef.current)) return
             closeMenu()
         }
         const handleEscape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') closeMenu()
         }
         const handleBlur = () => closeMenu()
-        document.addEventListener('pointerdown', handlePointerDown, true)
-        window.addEventListener('keydown', handleEscape)
-        window.addEventListener('blur', handleBlur)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', handlePointerDown, true)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', handleEscape)
+        const removeOverlayBlurListener3 = addOverlayWindowBlurListener(handleBlur)
         return () => {
-            document.removeEventListener('pointerdown', handlePointerDown, true)
-            window.removeEventListener('keydown', handleEscape)
-            window.removeEventListener('blur', handleBlur)
+            removeOverlayListener1()
+            removeOverlayListener2()
+            removeOverlayBlurListener3()
         }
     }, [menuVisible])
 
@@ -157,7 +159,7 @@ export function PreviewHeaderEditMenu({
             </div>
 
             {menuVisible ? (
-                <div
+                <AnchoredNativeOverlay><div
                     ref={menuRef}
                     className="absolute left-0 top-full z-[160] -mt-px w-full overflow-hidden rounded-b-[7px]"
                 >
@@ -278,7 +280,7 @@ export function PreviewHeaderEditMenu({
                             ) : null}
                         </div>
                     </AnimatedHeight>
-                </div>
+                </div></AnchoredNativeOverlay>
             ) : null}
         </div>
     )

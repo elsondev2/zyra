@@ -25,7 +25,7 @@ export type BrowserRecordingAudioSource = 'off' | 'tab' | 'system'
 export function createBrowserRecordingCaptureBroker(platform = process.platform, now = Date.now) {
     const installed = new WeakSet<Session>()
     const recordings = new Map<number, { owner: WebContents; guest: WebContents; frame: WebContents['mainFrame'] }>()
-    const grants = new Map<number, { owner: WebContents; guest: WebContents; frame: WebContents['mainFrame']; audio: BrowserRecordingAudioSource; purpose: 'recording' | 'presentation'; expiresAt: number }>()
+    const grants = new Map<number, { owner: WebContents; guest: WebContents; frame: WebContents['mainFrame']; audio: BrowserRecordingAudioSource; expiresAt: number }>()
     const hasGrant = (owner: WebContents | null) => {
         if (!owner) return false
         const grant = grants.get(owner.id)
@@ -33,7 +33,7 @@ export function createBrowserRecordingCaptureBroker(platform = process.platform,
         if (grant && !valid) grants.delete(owner.id)
         return valid
     }
-    const arm = (owner: WebContents, guest: WebContents, audio: BrowserRecordingAudioSource, purpose: 'recording' | 'presentation') => {
+    const arm = (owner: WebContents, guest: WebContents, audio: BrowserRecordingAudioSource) => {
         if (owner.isDestroyed() || guest.isDestroyed()) throw new Error('The Browser tab was closed.')
         if (hasGrant(owner)) throw new Error('Another Browser capture is starting. Try again in a moment.')
         if (audio === 'system' && platform !== 'win32') throw new Error('System audio recording is supported on Windows. Choose tab audio on this device.')
@@ -49,8 +49,8 @@ export function createBrowserRecordingCaptureBroker(platform = process.platform,
             })
             installed.add(owner.session)
         }
-        if (purpose === 'recording') recordings.set(owner.id, { owner, guest, frame: owner.mainFrame })
-        const grant = { owner, guest, frame: owner.mainFrame, audio, purpose, expiresAt: now() + 10_000 }
+        recordings.set(owner.id, { owner, guest, frame: owner.mainFrame })
+        const grant = { owner, guest, frame: owner.mainFrame, audio, expiresAt: now() + 10_000 }
         grants.set(owner.id, grant)
         setTimeout(() => { if (grants.get(owner.id) === grant) grants.delete(owner.id) }, 10_000).unref?.()
     }
@@ -62,17 +62,10 @@ export function createBrowserRecordingCaptureBroker(platform = process.platform,
             return Boolean(recording && recording.owner === owner && recording.frame === owner.mainFrame && !recording.guest.isDestroyed())
         },
         cancel(ownerId: number) {
-            if (grants.get(ownerId)?.purpose === 'recording') grants.delete(ownerId)
+            grants.delete(ownerId)
             recordings.delete(ownerId)
         },
-        armPresentation(owner: WebContents, guest: WebContents) { arm(owner, guest, 'off', 'presentation') },
-        cancelPresentation(ownerId: number, guestId: number) {
-            const grant = grants.get(ownerId)
-            if (grant?.purpose === 'presentation' && grant.guest.id === guestId) grants.delete(ownerId)
-        },
-        arm(owner: WebContents, guest: WebContents, audio: BrowserRecordingAudioSource) {
-            arm(owner, guest, audio, 'recording')
-        }
+        arm
     }
 }
 

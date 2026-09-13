@@ -1,5 +1,6 @@
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { Check, Copy, X } from 'lucide-react'
 import ImagePreviewContent from '@/components/ui/file-preview/ImagePreviewContent'
 import SyntaxPreview from '@/components/ui/file-preview/SyntaxPreview'
@@ -94,10 +95,10 @@ export default function AssistantAttachmentPreviewModal({
 
         const originalOverflow = document.body.style.overflow
         document.body.style.overflow = 'hidden'
-        window.addEventListener('keydown', onEscape)
+        const removeOverlayListener1 = addOverlayEventListener('keydown', onEscape)
 
         return () => {
-            window.removeEventListener('keydown', onEscape)
+            removeOverlayListener1()
             document.body.style.overflow = originalOverflow
         }
     }, [file, onClose])

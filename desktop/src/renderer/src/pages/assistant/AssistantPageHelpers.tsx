@@ -1,5 +1,6 @@
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { AlertCircle, Check, ChevronDown, Copy, EyeOff, Loader2, Trash2, X } from 'lucide-react'
 import type { AssistantActivity } from '@shared/assistant/contracts'
 import { ConfirmModal } from '@/components/ui/ConfirmModal'
@@ -543,11 +544,11 @@ export function IssueLogDetailsModal({
         const onEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
         const previousOverflow = document.body.style.overflow
         document.body.style.overflow = 'hidden'
-        window.addEventListener('keydown', onEscape)
+        const removeOverlayListener1 = addOverlayEventListener('keydown', onEscape)
         window.requestAnimationFrame(() => dialogRef.current?.focus())
         return () => {
             document.body.style.overflow = previousOverflow
-            window.removeEventListener('keydown', onEscape)
+            removeOverlayListener1()
         }
     }, [onClose, primaryActivity])
 

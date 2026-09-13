@@ -1,3 +1,6 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
+import { getOverlayActiveElement } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, Clock3, Download, LoaderCircle, Plus, Search, Trash2, X } from 'lucide-react'
 import type { DevScopeBrowserHistoryEntry } from '@shared/contracts/devscope-api'
@@ -39,7 +42,7 @@ export function AssistantBrowserHistoryPanel({
     const groups = useMemo(() => groupAssistantBrowserHistoryByDay(entries), [entries])
 
     useLayoutEffect(() => {
-        previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+        previousFocusRef.current = getOverlayActiveElement()
         const frame = window.requestAnimationFrame(() => panelRef.current?.querySelector<HTMLInputElement>('input')?.focus())
         return () => {
             window.cancelAnimationFrame(frame)
@@ -75,22 +78,22 @@ export function AssistantBrowserHistoryPanel({
             if (focusable.length === 0) return
             const first = focusable[0]
             const last = focusable[focusable.length - 1]
-            if (event.shiftKey && document.activeElement === first) {
+            if (event.shiftKey && getOverlayActiveElement() === first) {
                 event.preventDefault()
                 last.focus()
-            } else if (!event.shiftKey && document.activeElement === last) {
+            } else if (!event.shiftKey && getOverlayActiveElement() === last) {
                 event.preventDefault()
                 first.focus()
             }
         }
-        window.addEventListener('keydown', handleEscape)
-        return () => window.removeEventListener('keydown', handleEscape)
+        const removeOverlayListener1 = addOverlayEventListener('keydown', handleEscape)
+        return () => removeOverlayListener1()
     }, [exitWith, onClose])
 
     useEffect(() => () => window.clearTimeout(closeTimerRef.current), [])
 
     return (
-        <div className="absolute inset-0 z-[80]" onPointerDown={(event) => {
+        <AnchoredNativeOverlay><div className="absolute inset-0 z-[80]" onPointerDown={(event) => {
             if (event.target === event.currentTarget) exitWith(onClose)
         }}>
             <section ref={panelRef} tabIndex={-1} className={cn('absolute bottom-3 right-3 top-3 flex w-[min(440px,calc(100%-24px))] flex-col overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--color-text)_12%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_97%,var(--color-bg))] shadow-[0_24px_70px_rgba(0,0,0,0.38)] transition-transform duration-[220ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none', closing ? 'translate-x-[calc(100%+16px)]' : 'translate-x-0 animate-[assistant-browser-history-panel-in_180ms_cubic-bezier(0.22,1,0.36,1)_both] motion-reduce:animate-none')} aria-label="Browser history" role="dialog" aria-modal="true">
@@ -108,7 +111,7 @@ export function AssistantBrowserHistoryPanel({
                 <div className="shrink-0 p-2.5">
                     <label className="flex h-8 items-center gap-2 rounded-md border border-[var(--surface-divider)] bg-[color-mix(in_srgb,var(--color-text)_3%,transparent)] px-2.5 focus-within:border-[var(--accent-primary)]/35">
                         <Search size={12} className="text-sparkle-text-muted/45" />
-                        <input value={query} onChange={(event) => onQueryChange(event.target.value)} aria-label="Search Browser history" className="min-w-0 flex-1 bg-transparent text-[10px] text-[var(--color-text)] outline-none placeholder:text-[color-mix(in_srgb,var(--color-text)_42%,transparent)]" placeholder="Search history" />
+                        <input data-native-overlay-autofocus value={query} onChange={(event) => onQueryChange(event.target.value)} aria-label="Search Browser history" className="min-w-0 flex-1 bg-transparent text-[10px] text-[var(--color-text)] outline-none placeholder:text-[color-mix(in_srgb,var(--color-text)_42%,transparent)]" placeholder="Search history" />
                         {loading ? <LoaderCircle size={11} className="animate-spin text-sparkle-text-muted/50" /> : null}
                     </label>
                 </div>
@@ -165,6 +168,6 @@ export function AssistantBrowserHistoryPanel({
                     ))}
                 </div>
             </section>
-        </div>
+        </div></AnchoredNativeOverlay>
     )
 }

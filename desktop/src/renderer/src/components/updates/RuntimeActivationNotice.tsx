@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { RuntimeActivationStatus } from '@shared/runtime-activation'
+import { NativeOverlayPortal } from '@/components/ui/native-overlay-portal'
 const messages = {
     checking: 'Checking the updated runtime…',
     waiting: 'Runtime update waiting. Finish active chats, then try again.',
@@ -18,5 +19,5 @@ export function RuntimeActivationNotice() {
     }, [])
     const message = messages[state.phase as keyof typeof messages]
     if (!message) return null
-    return <div role="status" className="fixed bottom-5 left-1/2 z-[200] max-w-[90vw] -translate-x-1/2 rounded-xl border border-[var(--surface-border)] bg-[var(--color-card)] px-4 py-3 text-[12px] text-sparkle-text shadow-lg">{message}</div>
+    return <NativeOverlayPortal passive><div role="status" className="fixed bottom-5 left-1/2 z-[200] max-w-[90vw] -translate-x-1/2 rounded-xl border border-[var(--surface-border)] bg-[var(--color-card)] px-4 py-3 text-[12px] text-sparkle-text shadow-lg">{message}</div></NativeOverlayPortal>
 }

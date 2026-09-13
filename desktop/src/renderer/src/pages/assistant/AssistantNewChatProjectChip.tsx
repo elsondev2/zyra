@@ -1,3 +1,6 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
+import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, Plus, Unlink } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -27,16 +30,16 @@ export function AssistantNewChatProjectChip(props: {
     useEffect(() => {
         if (!open) return
         const dismiss = (event: PointerEvent) => {
-            if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+            if (!isOverlayEventInside(event, rootRef.current)) setOpen(false)
         }
         const escape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') setOpen(false)
         }
-        document.addEventListener('pointerdown', dismiss, true)
-        window.addEventListener('keydown', escape)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', dismiss, true)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', escape)
         return () => {
-            document.removeEventListener('pointerdown', dismiss, true)
-            window.removeEventListener('keydown', escape)
+            removeOverlayListener1()
+            removeOverlayListener2()
         }
     }, [open])
 
@@ -70,7 +73,7 @@ export function AssistantNewChatProjectChip(props: {
             </button>
 
             {open ? (
-                <div
+                <AnchoredNativeOverlay><div
                     role="menu"
                     className="assistant-menu-in-down absolute right-0 top-full mt-1.5 w-60 overflow-hidden rounded-xl border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1.5 shadow-[0_18px_48px_rgba(0,0,0,0.34)] backdrop-blur-xl"
                 >
@@ -116,7 +119,7 @@ export function AssistantNewChatProjectChip(props: {
                         <Plus size={13} className="shrink-0 text-sparkle-text-muted" />
                         <span>New project…</span>
                     </button>
-                </div>
+                </div></AnchoredNativeOverlay>
             ) : null}
         </div>
     )

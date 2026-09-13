@@ -1,3 +1,6 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
+import { getOverlayActiveElement, isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener, addOverlayWindowBlurListener } from '@/components/ui/native-overlay-portal'
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
     ArrowLeft,
@@ -66,7 +69,6 @@ import { AssistantBrowserPageIcon } from './AssistantBrowserPageIcon'
 import { AssistantBrowserThreatWarning } from './AssistantBrowserThreatWarning'
 import { AssistantBrowserViewportFrame } from './AssistantBrowserViewportFrame'
 import { AssistantBrowserWebview, type AssistantBrowserWebviewHandle } from './AssistantBrowserWebview'
-import { usePreparedBrowserOverlay } from './usePreparedBrowserOverlay'
 import {
     buildAssistantBrowserOmniboxSuggestions,
     filterAssistantBrowserHistory,
@@ -251,7 +253,6 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const [addressValue, setAddressValue] = useState('')
     const [addressError, setAddressError] = useState<string | null>(null)
     const [profileMenuOpen, setProfileMenuOpen] = useState(false)
-    const [downloadsOverlayOpen, setDownloadsOverlayOpen] = useState(false)
     const [downloadsPanelOpen, setDownloadsPanelOpen] = useState(false)
     const [popupWindows, setPopupWindows] = useState<BrowserPopupSummary[]>([])
     const [clearProfileArmed, setClearProfileArmed] = useState(false)
@@ -274,7 +275,6 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const [historyPanelLoading, setHistoryPanelLoading] = useState(false)
     const [historyActiveIndex, setHistoryActiveIndex] = useState(-1)
     const [addressFocused, setAddressFocused] = useState(false)
-    const [omniboxPresentationReady, setOmniboxPresentationReady] = useState(false)
     const [historyClearArmed, setHistoryClearArmed] = useState(false)
     const [adBlockPrompt, setAdBlockPrompt] = useState<{ tabId: string; origin: string } | null>(null)
     const [adBlockEnabling, setAdBlockEnabling] = useState(false)
@@ -302,7 +302,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const onSurfaceRequestHandledRef = useRef(onSurfaceRequestHandled)
     const tabSequenceRef = useRef(tabSequenceSeed(workspaceState))
     const addressFocusedRef = useRef(false)
-    const omniboxPreparationGenerationRef = useRef(0)
+    const omniboxMenuRef = useRef<HTMLDivElement | null>(null)
     const addressContainerRef = useRef<HTMLDivElement | null>(null)
     const suppressHistoryUntilRef = useRef(0)
     const profileReloadHistorySuppressionRef = useRef(new Map<string, AssistantBrowserProfileReloadHistoryPhase>())
@@ -342,7 +342,6 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         historySuggestionEntries,
         8
     ), [activeGoogleSearchSuggestions, historySuggestionEntries])
-    const omniboxOpen = Boolean(addressFocused && historyQuery && omniboxPresentationReady)
     const historyPanelEntries = historyPanelQuery && historyPanelSearch.query === historyPanelQuery
         ? historyPanelSearch.entries
         : historyPanelQuery
@@ -351,35 +350,18 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const historyPanelSearching = Boolean(historyPanelQuery.trim() && historyPanelSearch.query !== historyPanelQuery.trim()) || historyPanelLoading
     const activeControlTargetId = activeTab ? controlTargetsByTab[activeTab.id] : undefined
     const activePendingGrant = controlState?.pendingGrants.find((grant) => grant.targetId === activeControlTargetId) || null
-    const prepareActiveBrowserOverlay = useCallback(async (): Promise<boolean> => {
-        const state = workspaceStateRef.current
-        const tab = state.tabs.find((candidate) => candidate.id === state.activeTabId)
-        if (!tab?.url) return true
-        return webviewRefs.current.get(tab.id)?.preparePresentation() ?? false
-    }, [])
     const browserOverlayScope = JSON.stringify([workspaceKey, activeTab?.id, activeTab?.url])
-    const profileMenuIntent = usePreparedBrowserOverlay({
-        scopeKey: browserOverlayScope,
-        active,
-        open: profileMenuOpen,
-        prepare: prepareActiveBrowserOverlay,
-        onOpen: () => setProfileMenuOpen(true),
-        onClose: () => setProfileMenuOpen(false)
-    })
-    const prepareOmniboxPresentation = useCallback(() => {
-        const generation = ++omniboxPreparationGenerationRef.current
-        const state = workspaceStateRef.current
-        const tab = state.tabs.find((candidate) => candidate.id === state.activeTabId)
-        if (!tab?.url) {
-            setOmniboxPresentationReady(true)
-            return
-        }
-        setOmniboxPresentationReady(false)
-        void prepareActiveBrowserOverlay().finally(() => {
-            if (generation !== omniboxPreparationGenerationRef.current || !addressFocusedRef.current) return
-            setOmniboxPresentationReady(true)
-        })
-    }, [prepareActiveBrowserOverlay])
+    const omniboxOpen = active && addressFocused && Boolean(historyQuery)
+    useEffect(() => {
+        if (!omniboxOpen) return
+        return addOverlayEventListener('pointerdown', event => {
+            if (isOverlayEventInside(event, addressContainerRef.current, omniboxMenuRef.current)) return
+            setAddressFocused(false)
+            addressFocusedRef.current = false
+            addressContainerRef.current?.querySelector<HTMLInputElement>('input')?.blur()
+        }, true)
+    }, [omniboxOpen])
+    useEffect(() => { setProfileMenuOpen(false) }, [active, browserOverlayScope])
     useEffect(() => {
         if (!shouldFocusAssistantBrowserOmnibox(active, browserChromeReady, activeTab)) return
         const animationFrame = window.requestAnimationFrame(() => {
@@ -411,9 +393,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             window.devscope.window.setFullScreen(false)
         }
         addressFocusedRef.current = false
-        omniboxPreparationGenerationRef.current += 1
         setAddressFocused(false)
-        setOmniboxPresentationReady(false)
         addressContainerRef.current?.querySelector<HTMLInputElement>('input')?.blur()
         mutateWorkspaceState((current) => activateAssistantBrowserTab(current, tabId))
     }, [mutateWorkspaceState])
@@ -547,9 +527,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     useEffect(() => {
         if (active) return
         addressFocusedRef.current = false
-        omniboxPreparationGenerationRef.current += 1
         setAddressFocused(false)
-        setOmniboxPresentationReady(false)
         addressContainerRef.current?.querySelector<HTMLInputElement>('input')?.blur()
         cancelAnnotation()
     }, [active, cancelAnnotation])
@@ -661,32 +639,31 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     }, [settings.assistantBrowserAdBlockEnabled, settings.assistantBrowserAdBlockPromptDismissed])
 
     useEffect(() => {
-        if (!profileMenuOpen && !profileMenuIntent.pending) return
+        if (!profileMenuOpen) return
         const dismissProfileMenu = () => {
-            profileMenuIntent.close()
+            setProfileMenuOpen(false)
             setClearProfileArmed(false)
             setSiteSignOutArmed(false)
             setHistoryClearArmed(false)
         }
         const handlePointerDown = (event: PointerEvent) => {
-            const target = event.target
-            if (target instanceof Node && profileMenuRef.current?.contains(target)) return
+                        if (isOverlayEventInside(event, profileMenuRef.current)) return
             dismissProfileMenu()
         }
         const handleEscape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') dismissProfileMenu()
         }
-        document.addEventListener('pointerdown', handlePointerDown, true)
-        window.addEventListener('keydown', handleEscape)
-        window.addEventListener('blur', dismissProfileMenu)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', handlePointerDown, true)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', handleEscape)
+        const removeOverlayBlurListener4 = addOverlayWindowBlurListener(dismissProfileMenu)
         window.addEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissProfileMenu)
         return () => {
-            document.removeEventListener('pointerdown', handlePointerDown, true)
-            window.removeEventListener('keydown', handleEscape)
-            window.removeEventListener('blur', dismissProfileMenu)
+            removeOverlayListener1()
+            removeOverlayListener2()
+            removeOverlayBlurListener4()
             window.removeEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissProfileMenu)
         }
-    }, [profileMenuOpen, profileMenuIntent.pending, profileMenuIntent.close])
+    }, [profileMenuOpen])
 
     const getSearchSuggestions = useCallback(async (query: string): Promise<string[]> => {
         if (!settings.assistantBrowserGoogleSuggestions || typeof window.devscope.getBrowserSearchSuggestions !== 'function') return []
@@ -910,14 +887,11 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         if (annotationTabIdRef.current === tabId) cancelAnnotation()
         addressContainerRef.current?.querySelector<HTMLInputElement>('input')?.blur()
         addressFocusedRef.current = false
-        omniboxPreparationGenerationRef.current += 1
         setAddressFocused(false)
-        setOmniboxPresentationReady(false)
         setAddressError(null)
         setAddressValue('')
         setHistoryActiveIndex(-1)
-        profileMenuIntent.close()
-        setDownloadsOverlayOpen(false)
+        setProfileMenuOpen(false)
         setDownloadsPanelOpen(false)
         setHistoryPanelOpen(false)
         setHistoryImportOpen(false)
@@ -939,7 +913,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         } catch (error) {
             onDeveloperToast({ tone: 'error', message: error instanceof Error ? error.message : 'Could not return this Browser tab to New Tab.' })
         }
-    }, [cancelAnnotation, mutateWorkspaceState, onDeveloperToast, profileMenuIntent.close])
+    }, [cancelAnnotation, mutateWorkspaceState, onDeveloperToast])
 
     const openLocalFileInTab = useCallback(async (tabId: string) => {
         const handle = webviewRefs.current.get(tabId)
@@ -960,9 +934,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const navigateHistorySuggestion = useCallback((url: string) => {
         addressContainerRef.current?.querySelector<HTMLInputElement>('input')?.blur()
         addressFocusedRef.current = false
-        omniboxPreparationGenerationRef.current += 1
         setAddressFocused(false)
-        setOmniboxPresentationReady(false)
         setHistoryActiveIndex(-1)
         void navigateActiveTab(url)
     }, [navigateActiveTab])
@@ -1018,9 +990,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         const closingTab = workspaceStateRef.current.tabs.find((tab) => tab.id === tabId)
         if (!closingTab) return workspaceStateRef.current
         addressFocusedRef.current = false
-        omniboxPreparationGenerationRef.current += 1
         setAddressFocused(false)
-        setOmniboxPresentationReady(false)
         addressContainerRef.current?.querySelector<HTMLInputElement>('input')?.blur()
         if (!transferred && closingTab.url && closingTab.sessionMode === 'normal' && !isBrowserLocalFileUrl(closingTab.url)) {
             closedTabsRef.current = [...closedTabsRef.current.slice(-9), closingTab]
@@ -1319,8 +1289,8 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             event.stopPropagation()
             executeBrowserShortcut(action, workspaceStateRef.current.activeTabId)
         }
-        window.addEventListener('keydown', handleBrowserShortcut, true)
-        return () => window.removeEventListener('keydown', handleBrowserShortcut, true)
+        const removeOverlayListener3 = addOverlayEventListener('keydown', handleBrowserShortcut, true)
+        return () => removeOverlayListener3()
     }, [active, browserFullscreen, executeBrowserShortcut])
 
     const getWebviewRefCallback = useCallback((tabId: string) => {
@@ -1789,9 +1759,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                     event.preventDefault()
                     addressContainerRef.current?.querySelector<HTMLInputElement>('input')?.blur()
                     addressFocusedRef.current = false
-                    omniboxPreparationGenerationRef.current += 1
                     setAddressFocused(false)
-                    setOmniboxPresentationReady(false)
                     const selectedSuggestion = historyActiveIndex >= 0 ? omniboxSuggestions[historyActiveIndex] : null
                     void navigateActiveTab(selectedSuggestion?.value || addressValue)
                 }}
@@ -1817,11 +1785,9 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                     ref={addressContainerRef}
                     onBlurCapture={() => {
                         window.setTimeout(() => {
-                            if (addressContainerRef.current?.contains(document.activeElement)) return
+                            if (addressContainerRef.current?.contains(getOverlayActiveElement()) || omniboxMenuRef.current?.contains(getOverlayActiveElement())) return
                             addressFocusedRef.current = false
-                            omniboxPreparationGenerationRef.current += 1
                             setAddressFocused(false)
-                            setOmniboxPresentationReady(false)
                             if (!addressError) {
                                 const current = workspaceStateRef.current.tabs.find((tab) => tab.id === workspaceStateRef.current.activeTabId)
                                 setAddressValue(browserTabAddress(current))
@@ -1835,6 +1801,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                         addressFocused
                             ? 'border-[color-mix(in_srgb,var(--color-text)_12%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_96%,var(--color-bg))] shadow-[0_18px_38px_rgba(0,0,0,0.34)]'
                             : 'border-transparent bg-transparent hover:bg-[var(--surface-hover)]',
+                        omniboxOpen && 'rounded-b-none border-b-transparent',
                         addressError && 'border-red-400/35'
                     )}>
                         <div className="group/address flex h-7 items-center gap-1.5 px-2">
@@ -1855,7 +1822,6 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                                 onFocus={(event) => {
                                     addressFocusedRef.current = true
                                     setAddressFocused(true)
-                                    prepareOmniboxPresentation()
                                     event.currentTarget.select()
                                 }}
                                 onKeyDown={(event) => {
@@ -1869,9 +1835,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                                     if (event.key === 'Escape') {
                                         setAddressValue(activeAddress)
                                         setAddressError(null)
-                                        omniboxPreparationGenerationRef.current += 1
                                         setAddressFocused(false)
-                                        setOmniboxPresentationReady(false)
                                         event.currentTarget.blur()
                                     }
                                 }}
@@ -1887,7 +1851,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                             />
                         </div>
                         {omniboxOpen ? (
-                            <div id={BROWSER_HISTORY_LISTBOX_ID} role="listbox" className="max-h-72 overflow-y-auto border-t border-[color-mix(in_srgb,var(--color-text)_10%,transparent)] p-1" aria-label="Address and search suggestions">
+                            <AnchoredNativeOverlay anchorRef={addressContainerRef} autoFocus={false}><div ref={omniboxMenuRef} onPointerDown={(event) => event.preventDefault()} id={BROWSER_HISTORY_LISTBOX_ID} role="listbox" className="absolute inset-x-0 top-7 max-h-72 overflow-y-auto rounded-b-[13px] border border-[color-mix(in_srgb,var(--color-text)_12%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_96%,var(--color-bg))] p-1 shadow-[0_18px_38px_rgba(0,0,0,0.34)]" aria-label="Address and search suggestions">
                                 {omniboxSuggestions.length > 0 ? omniboxSuggestions.map((suggestion, index) => (
                                     <button
                                         key={suggestion.id}
@@ -1916,10 +1880,10 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                                 )) : (
                                     <div role="status" className="flex h-10 items-center gap-2 px-2 text-[10px] text-[color-mix(in_srgb,var(--color-text)_52%,transparent)]">
                                         <Search size={12} />
-                                        <span>{omniboxLoading ? 'Finding suggestionsâ€¦' : 'Press Enter to search'}</span>
+                                        <span>{omniboxLoading ? 'Finding suggestions…' : 'Press Enter to search'}</span>
                                     </div>
                                 )}
-                            </div>
+                            </div></AnchoredNativeOverlay>
                         ) : null}
                     </div>
                 </div>
@@ -1928,8 +1892,6 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                     active={active}
                     scopeKey={browserOverlayScope}
                     onOpenHere={openDownloadHere}
-                    onBeforeOverlayOpen={prepareActiveBrowserOverlay}
-                    onOverlayChange={setDownloadsOverlayOpen}
                 />
                 <button
                     type="button"
@@ -1952,7 +1914,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                     <button
                         type="button"
                         onClick={() => {
-                            profileMenuIntent.toggle()
+                            setProfileMenuOpen(current => !current)
                             setClearProfileArmed(false)
                             setSiteSignOutArmed(false)
                             setHistoryClearArmed(false)
@@ -1971,7 +1933,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                         {popupWindows.length > 0 ? <span className="absolute -right-0.5 -top-0.5 inline-flex min-w-3.5 items-center justify-center rounded-full bg-[var(--accent-primary)] px-0.5 text-[7px] font-semibold leading-3.5 text-white">{popupWindows.length}</span> : null}
                     </button>
                     {profileMenuOpen ? (
-                        <div className="absolute right-0 top-8 z-[380] w-64 rounded-[7px] border border-[var(--surface-divider)] bg-sparkle-card p-1 text-left shadow-[0_12px_30px_rgba(0,0,0,0.30)]">
+                        <AnchoredNativeOverlay><div className="absolute right-0 top-8 z-[380] w-64 rounded-[7px] border border-[var(--surface-divider)] bg-sparkle-card p-1 text-left shadow-[0_12px_30px_rgba(0,0,0,0.30)]">
                             <button type="button" onClick={() => activeTab && void openLocalFileInTab(activeTab.id)} disabled={!activeTab} title="Open file (Ctrl+O)" className={BROWSER_MENU_ROW_CLASS}><FileUp size={12} /><span>Open file</span></button>
                             <button type="button" onClick={() => void hardReloadActiveTab()} disabled={!activeTab?.url} className={BROWSER_MENU_ROW_CLASS}><RefreshCw size={12} /><span>Hard reload</span></button>
                             <button type="button" onClick={() => void openActiveDevTools()} disabled={!activeTab?.url} className={BROWSER_MENU_ROW_CLASS}><Code2 size={12} /><span>Open DevTools</span></button>
@@ -2051,7 +2013,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                             {profileNotice ? <p className="px-2 py-1 text-[9px] leading-3.5 text-[color-mix(in_srgb,var(--color-text)_58%,transparent)]">{profileNotice.message}</p> : null}
                                 </div>
                             </details>
-                        </div>
+                        </div></AnchoredNativeOverlay>
                     ) : null}
                 </div>
             </form>
@@ -2070,18 +2032,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             <div className="relative isolate min-h-0 flex-1 overflow-hidden bg-white">
                 {workspaceState.tabs.map((tab) => {
                     const visible = active && tab.id === activeTab?.id
-                    const shellOverlayOpen = visible && (
-                        (!tab.url && tab.status === 'idle')
-                        || tab.status === 'error'
-                        || omniboxOpen
-                        || profileMenuOpen
-                        || downloadsOverlayOpen
-                        || downloadsPanelOpen
-                        || historyPanelOpen
-                        || historyImportOpen
-                        || threatWarning?.tabId === tab.id
-                        || adBlockPrompt?.tabId === tab.id
-                    )
+                    const pageReplaced = (!tab.url && tab.status === 'idle') || tab.status === 'error'
                     const targetId = controlTargetsByTab[tab.id]
                     const grant = targetId ? controlState?.grants.find((entry) => entry.targetId === targetId && entry.state === 'active') : null
                     const cursor = targetId ? controlState?.cursors.find((entry) => entry.targetId === targetId) || null : null
@@ -2104,7 +2055,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                                 threadId={threadId}
                                 config={config}
                                 active={visible}
-                                visible={visible && !shellOverlayOpen}
+                                visible={visible && !pageReplaced}
                                 placement="full"
                                 controlled={Boolean(grant)}
                                 cursor={cursor}
@@ -2196,12 +2147,12 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                 ) : null}
 
                 {activeTab?.status === 'error' && activeTab.error ? (
-                    <div className="pointer-events-none absolute inset-x-0 top-0 z-20 border-b border-red-500/15 bg-sparkle-bg px-2 py-1 text-[9px] text-red-300 shadow-sm">
+                    <AnchoredNativeOverlay passive><div className="pointer-events-none absolute inset-x-0 top-0 z-20 border-b border-red-500/15 bg-sparkle-bg px-2 py-1 text-[9px] text-red-300 shadow-sm">
                         {activeTab.error}
-                    </div>
+                    </div></AnchoredNativeOverlay>
                 ) : null}
 
-                {activeTab?.status === 'loading' ? <div className="pointer-events-none absolute inset-x-0 top-0 z-30 h-px overflow-hidden bg-[var(--accent-primary)]/15 after:block after:h-full after:w-1/3 after:animate-[browser-loading-slide_1.1s_ease-in-out_infinite] after:bg-[var(--accent-primary)]" /> : null}
+                {activeTab?.status === 'loading' ? <AnchoredNativeOverlay passive><div className="pointer-events-none absolute inset-x-0 top-0 z-30 h-px overflow-hidden bg-[var(--accent-primary)]/15 after:block after:h-full after:w-1/3 after:animate-[browser-loading-slide_1.1s_ease-in-out_infinite] after:bg-[var(--accent-primary)]" /></AnchoredNativeOverlay> : null}
             </div>
         </section>
     )

@@ -27,11 +27,13 @@ Run these from the repository root unless the command says otherwise.
 | Permission gate behavior | `npm run test:permissions:gate` | Modes, scope/read-only boundaries, approvals and the installed-app lookup regression |
 | Approval prompt rendering | `npm --prefix desktop run test:assistant-tool-approval` | Isolated React rendering; no Electron, dev server or model session |
 | Browser inspector entrance/geometry | `npm --prefix desktop run test:browser-slot-geometry` | Isolated Electron reproduces fixed-size ancestor motion, interrupted entrance and settled/cleanup behavior without idle polling |
-| Live Browser page behind menus | `npm --prefix desktop run test:browser-live-presentation` | Native compositor frames without a gesture while guest is hidden; menu close, rapid tab switch, recorder coexistence and late-stream cleanup |
-| Browser menu preparation/navigation | `npm --prefix desktop run test:browser-overlay-intent` | Deferred React preparation cannot reopen profile/Downloads after second click, tab/workspace switch, hide or unmount; current failures remain reachable |
-| Webview presentation lifecycle | `npm --prefix desktop run test:browser-webview-presentation` | Actual React Webview/occlusion hooks with a controlled media seam: automatic and pre-open cancellation, no post-hide capture, no stale fallback revival, live video readiness and cleanup |
+| Native app overlays | `npm --prefix desktop run test:native-overlay` | Adopted same-origin native surfaces, trusted owner/frame checks, page continuity, layer order, resize and lifetime |
+| Native React portal lifecycle | `npm --prefix desktop run test:native-overlay-renderer` | Shared React state, delayed/cancelled startup, nested leases, document/theme synchronization, focus and recovery |
+| Native overlay callers | `npm --prefix desktop run test:native-overlay-callers` | Actual menus, nested options, rapid toggles, keyboard input and scope changes across portal documents |
+| Webview presentation lifecycle | `npm --prefix desktop run test:browser-webview-presentation` | Actual React Webview: zero menu capture/replacement, continuous guest visibility, inactive slots, New Tab, navigation and cleanup |
 | Recording controls and menus | `npm --prefix desktop run test:browser-recording-overlay-document` | Isolated trusted toolbar with stub state: real microphone menus, audio choices, keyboard controls, saved/error recovery and narrow layouts |
 | Native recording controls ownership | `npm --prefix desktop run test:browser-recording-overlay` | Real WebContentsView layering, live guest continuity, exact IPC ownership, transfer, renderer failure and cleanup |
+| Explorer deletion index updates | `npm --prefix desktop run test:file-delete-index` | Actual delete handler and index queue remove only the deleted subtree, preserve deep siblings, and update parent project metadata |
 | New Chat/Project picker | `npm --prefix desktop run test:assistant-new-chat` | Focused catalog/picker and new-chat contracts |
 | JavaScript syntax checkpoint | `npm run check:syntax` | Parse-only validation for the maintained JavaScript target list |
 | Multi-area CLI checkpoint | `npm run check:quick` | Syntax plus several core suites; broader than an individual fix |

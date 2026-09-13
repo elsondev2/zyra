@@ -1,3 +1,4 @@
+import { NativeOverlayPortal } from '@/components/ui/native-overlay-portal'
 import { useEffect, useMemo, useState } from 'react'
 import { Check, Columns3, Copy, RefreshCw, Rows3, X } from 'lucide-react'
 import type { FileDiffMetadata } from '@pierre/diffs/react'
@@ -111,7 +112,7 @@ export function FileDiffDetailModal({
     }
 
     return (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm animate-fadeIn p-4" onClick={onClose}>
+        <NativeOverlayPortal><div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm animate-fadeIn p-4" onClick={onClose}>
             <div
                 className="flex h-[92vh] max-h-[95vh] min-h-[420px] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-sparkle-card shadow-2xl"
                 onClick={(e) => e.stopPropagation()}
@@ -209,6 +210,6 @@ export function FileDiffDetailModal({
                     )}
                 </div>
             </div>
-        </div>
+        </div></NativeOverlayPortal>
     )
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { createPortal } from 'react-dom'
+import { addOverlayEventListener, NativeOverlayPortal } from './native-overlay-portal'
 import { cn } from '@/lib/utils'
 
 interface PromptModalProps {
@@ -37,6 +37,13 @@ export function PromptModal({
 
     useEffect(() => {
         if (!isOpen) return
+        return addOverlayEventListener('keydown', event => {
+            if (event.key === 'Escape' && !event.defaultPrevented) onCancel()
+        })
+    }, [isOpen, onCancel])
+
+    useEffect(() => {
+        if (!isOpen) return
         const originalOverflow = document.body.style.overflow
         document.body.style.overflow = 'hidden'
         return () => {
@@ -44,23 +51,13 @@ export function PromptModal({
         }
     }, [isOpen])
 
-    useEffect(() => {
-        if (!isOpen) return
-        const id = window.setTimeout(() => {
-            inputRef.current?.focus()
-            inputRef.current?.select()
-        }, 0)
-        return () => window.clearTimeout(id)
-    }, [isOpen])
-
     if (!isOpen || typeof document === 'undefined') return null
 
     const canConfirm = value.trim().length > 0
 
-    return createPortal(
+    return <NativeOverlayPortal onReady={() => { inputRef.current?.focus(); inputRef.current?.select() }}>
         <div
             className="fixed inset-0 z-[130] flex items-center justify-center bg-black/60 backdrop-blur-md animate-fadeIn"
-            data-zyra-native-view-occluder="true"
             onClick={onCancel}
         >
             {errorMessage && (
@@ -69,6 +66,9 @@ export function PromptModal({
                 </div>
             )}
             <div
+                role="dialog"
+                aria-modal="true"
+                aria-label={title}
                 className="w-full max-w-md rounded-2xl border border-white/10 bg-sparkle-card p-6 shadow-2xl m-4"
                 onClick={(event) => event.stopPropagation()}
             >
@@ -79,6 +79,7 @@ export function PromptModal({
                 <div className="relative mt-4">
                     <input
                         ref={inputRef}
+                        data-native-overlay-autofocus
                         value={value}
                         onChange={(event) => onChange(event.target.value)}
                         onKeyDown={(event) => {
@@ -127,7 +128,6 @@ export function PromptModal({
                     </button>
                 </div>
             </div>
-        </div>,
-        document.body
-    )
+        </div>
+    </NativeOverlayPortal>
 }

@@ -40,6 +40,7 @@ for (const item of children(output, seek)) {
     locations.set(Buffer.from(output.subarray(id.data, id.end)).toString('hex'), value(output, fields.find(field => field.id === '53ac')!))
 }
 const finalizedInfo = read(output, segment.data + locations.get('1549a966')!)
+assert.equal(children(output, segment).at(-1)!.end, segment.end, 'finite Segment children must all have finite exact sizes')
 const duration = children(output, finalizedInfo).find(item => item.id === '4489')!
 assert.equal(new DataView(output.buffer, output.byteOffset + duration.data, 8).getFloat64(0), 1600)
 assert.equal(read(output, segment.data + locations.get('1654ae6b')!).id, '1654ae6b')
@@ -53,8 +54,9 @@ for (const [index, point] of points.entries()) {
     const positions = children(output, fields.find(item => item.id === 'b7')!)
     const clusterOffset = segment.data + value(output, positions.find(item => item.id === 'f1')!)
     const originalCluster = [first, second][index]
-    assert.deepEqual(output.subarray(clusterOffset, clusterOffset + originalCluster.length), originalCluster, 'encoded cluster payloads remain identical')
     const cluster = read(output, clusterOffset)
+    assert(cluster.end <= cues.start, 'finalized Clusters have finite sizes inside the finite Segment')
+    assert.deepEqual(output.subarray(cluster.data, cluster.end), originalCluster.subarray(4 + unknown.length), 'encoded cluster payloads remain identical')
     const frame = read(output, cluster.data + value(output, positions.find(item => item.id === 'f0')!))
     assert.equal(frame.id, 'a3', 'seek relative offsets point to actual keyframe blocks')
     assert.equal(output[frame.data + 3] & 0x80, 0x80)
@@ -65,6 +67,13 @@ const truncated = source.subarray(0, source.length - 1)
 assert.equal(finalizeBrowserRecordingWebm(truncated, 1600), truncated, 'truncated input stays available for recovery')
 const foreign = new TextEncoder().encode('some other media')
 assert.equal(finalizeBrowserRecordingWebm(foreign, 1600), foreign)
+const shortHeaderCluster = concat(Buffer.from('1f43b675ff', 'hex'), first.subarray(4 + unknown.length), block(false, 66, Array.from({ length: 180 }, (_, i) => i)))
+const shortHeaderSource = concat(tag('1a45dfa3', tag('4282', new TextEncoder().encode('webm'))), Buffer.from('18538067', 'hex'), unknown, info, tracks, shortHeaderCluster)
+const shortHeaderOutput = finalizeBrowserRecordingWebm(shortHeaderSource, 1600)
+const shortHeaderSegment = read(shortHeaderOutput, read(shortHeaderOutput, 0).end)
+const resizedCluster = children(shortHeaderOutput, shortHeaderSegment).find(item => item.id === '1f43b675')!
+assert.equal(resizedCluster.data - resizedCluster.start, 6, 'one-byte unknown length grows when its finite payload needs two bytes')
+assert.deepEqual(shortHeaderOutput.subarray(resizedCluster.data, resizedCluster.end), shortHeaderCluster.subarray(5))
 const scaledInfo = tag('1549a966', tag('2ad7b1', uint(100_000, 3)))
 const scaled = concat(source.subarray(0, header.end), Buffer.from('18538067', 'hex'), unknown, scaledInfo, tracks, first, second)
 const scaledOutput = finalizeBrowserRecordingWebm(scaled, 1600)

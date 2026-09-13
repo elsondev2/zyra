@@ -1,4 +1,6 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type Dispatch, type RefObject, type SetStateAction, type WheelEvent as ReactWheelEvent } from 'react'
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
+import { addOverlayEventListener, isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type Dispatch, type RefObject, type SetStateAction, type WheelEvent as ReactWheelEvent } from 'react'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { cn } from '@/lib/utils'
@@ -235,9 +237,26 @@ export const ComposerMentionMenu = memo(({
     iconTheme: 'light' | 'dark'
     onScroll: (element: HTMLDivElement) => void
     onApplyMention: (candidate: MentionCandidate) => void
-}) => (
-    <div className={cn('pointer-events-none absolute inset-x-0 bottom-full z-[170] mb-1 overflow-hidden', isOpen ? 'pointer-events-auto' : 'pointer-events-none')}>
-        <AnimatedHeight isOpen={isOpen} duration={220}>
+}) => {
+    const [present, setPresent] = useState(isOpen)
+    const [animatedOpen, setAnimatedOpen] = useState(false)
+    const ready = useRef(false)
+    useEffect(() => {
+        if (isOpen) {
+            setPresent(true)
+            if (ready.current) setAnimatedOpen(true)
+            return
+        }
+        setAnimatedOpen(false)
+        const timer = window.setTimeout(() => { ready.current = false; setPresent(false) }, 220)
+        return () => window.clearTimeout(timer)
+    }, [isOpen])
+    return <AnchoredNativeOverlay enabled={present} autoFocus={false} onReady={container => {
+        container.getBoundingClientRect()
+        ready.current = true
+        if (isOpen) setAnimatedOpen(true)
+    }}><div className={cn('pointer-events-none absolute inset-x-0 bottom-full z-[170] mb-1 overflow-hidden', isOpen ? 'pointer-events-auto' : 'pointer-events-none')}>
+        <AnimatedHeight isOpen={animatedOpen} duration={220}>
             <div className="overflow-hidden rounded-xl border border-white/10 bg-sparkle-card shadow-2xl shadow-black/70 backdrop-blur-xl">
                 <div className="relative">
                     {mentionCanScrollUp ? <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex h-6 items-start justify-center before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-[150%] before:rounded-t-[10px] before:bg-gradient-to-b before:from-sparkle-card before:from-40% before:to-transparent"><ChevronUp size={11} className="relative mt-0.5 text-sparkle-text-muted/70" /></div> : null}
@@ -257,8 +276,8 @@ export const ComposerMentionMenu = memo(({
                 </div>
             </div>
         </AnimatedHeight>
-    </div>
-))
+    </div></AnchoredNativeOverlay>
+})
 
 export { ComposerSendButton } from './ComposerSendButton'
 
@@ -476,24 +495,26 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
     useEffect(() => {
         if (!showAccessMenu) return
         const closeOnPointerDown = (event: PointerEvent) => {
-            if (!accessMenuRef.current?.contains(event.target as Node)) setShowAccessMenu(false)
+            if (!isOverlayEventInside(event, accessMenuRef.current)) setShowAccessMenu(false)
         }
         const closeOnEscape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') setShowAccessMenu(false)
         }
-        window.addEventListener('pointerdown', closeOnPointerDown)
-        window.addEventListener('keydown', closeOnEscape)
+        const removePointer = addOverlayEventListener('pointerdown', closeOnPointerDown)
+        const removeKey = addOverlayEventListener('keydown', closeOnEscape)
         return () => {
-            window.removeEventListener('pointerdown', closeOnPointerDown)
-            window.removeEventListener('keydown', closeOnEscape)
+            removePointer()
+            removeKey()
         }
     }, [showAccessMenu])
 
+    const [menuReadyRevision, setMenuReadyRevision] = useState(0)
+    const handleTraitsMenuReady = useCallback(() => setMenuReadyRevision(current => current + 1), [])
     useLayoutEffect(() => {
         if (!showTraitsDropdown) return
         const container = submenuContainerRef.current
         if (!container) return
-        const boundary = container.closest('.assistant-conversation-pane')
+        const boundary = traitsDropdownRef.current?.closest('.assistant-conversation-pane')
 
         const updateSubmenuPlacement = () => {
             const containerRect = container.getBoundingClientRect()
@@ -524,7 +545,7 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
             window.removeEventListener('resize', updateSubmenuPlacement)
             resizeObserver?.disconnect()
         }
-    }, [showTraitsDropdown])
+    }, [showTraitsDropdown, menuReadyRevision, traitsDropdownRef])
 
     useEffect(() => () => {
         cancelSubmenuClose()
@@ -533,7 +554,7 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
     return (
         <div className={cn('flex min-w-0 flex-1 flex-nowrap items-center justify-start text-[14px]', forceSingleRow ? 'gap-1' : 'gap-1.5 max-[520px]:gap-1', isCompactFooter ? 'overflow-visible' : 'overflow-visible')}>
             <div className="relative min-w-0 flex-[1_1_0%] max-w-full" ref={traitsDropdownRef}>
-                <div
+                <AnchoredNativeOverlay enabled={showTraitsDropdown} onReady={handleTraitsMenuReady}><div
                     className={cn(
                         traitsMenuOpensDown ? 'absolute left-0 top-[36px] z-[170]' : 'absolute bottom-[36px] left-0 z-[170]',
                         'transition-opacity duration-[120ms] ease-out',
@@ -670,7 +691,7 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                             </div>
                         </div>
                     ) : null}
-                </div>
+                </div></AnchoredNativeOverlay>
                 <button
                     type="button"
                     disabled={controlsLocked}
@@ -704,7 +725,7 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
             </div>
             <div ref={accessMenuRef} className="relative shrink-0">
                 {showAccessMenu ? (
-                    <div
+                    <AnchoredNativeOverlay enabled={true}><div
                         role="menu"
                         aria-label="Permission mode"
                         className={cn(
@@ -739,7 +760,7 @@ export const ComposerFooterControls = memo(function ComposerFooterControls({
                                 </button>
                             )
                         })}
-                    </div>
+                    </div></AnchoredNativeOverlay>
                 ) : null}
                 <button
                     type="button"

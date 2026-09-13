@@ -1,3 +1,4 @@
+import { NativeOverlayPortal } from '@/components/ui/native-overlay-portal'
 import { useEffect, useState, useRef } from 'react'
 import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -78,7 +79,7 @@ export function ScrollPreviewModal({
     }, [])
 
     return (
-        <div className="fixed inset-0 z-50 flex animate-fadeIn items-center justify-center bg-black/60 backdrop-blur-sm">
+        <NativeOverlayPortal><div className="fixed inset-0 z-50 flex animate-fadeIn items-center justify-center bg-black/60 backdrop-blur-sm">
             <div className="relative mx-4 flex max-h-[95vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-white/10 bg-sparkle-bg shadow-2xl">
                 <div className="flex shrink-0 items-center justify-between border-b border-white/10 p-4">
                     <div>
@@ -209,6 +210,6 @@ export function ScrollPreviewModal({
                     </button>
                 </div>
             </div>
-        </div>
+        </div></NativeOverlayPortal>
     )
 }

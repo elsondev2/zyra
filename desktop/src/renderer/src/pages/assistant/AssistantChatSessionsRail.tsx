@@ -1,5 +1,6 @@
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { Bot, ChevronDown, Copy, Folder, MoreHorizontal, PanelLeftOpen, Pin, Plug, Plus, Search, SquarePen, Trash2, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import type { AssistantMessage, AssistantProject, AssistantSession, AssistantThread } from '@shared/assistant/contracts'
@@ -374,8 +375,8 @@ export const AssistantChatSessionsRail = memo(function AssistantChatSessionsRail
             void onCreateChat()
         }
 
-        window.addEventListener('keydown', handleKeyDown)
-        return () => window.removeEventListener('keydown', handleKeyDown)
+        const removeOverlayListener1 = addOverlayEventListener('keydown', handleKeyDown)
+        return () => removeOverlayListener1()
     }, [commandPending, onCreateChat, onCreateProjectChat])
 
     const publishLiveSidebarWidth = useCallback((nextWidth: number) => {

@@ -41,6 +41,7 @@ import {
 import { BrowserPopupManager } from './browser-popup-manager'
 import { BrowserViewManager } from './browser-view-manager'
 import { BrowserRecordingOverlayManager } from './browser-recording-overlay'
+import { NativeOverlayManager } from './native-overlay-manager'
 import { disposeBrowserThreatProtectionService, getBrowserThreatProtectionService } from './browser-threat-protection-service'
 import { createDesktopSetupServices } from './setup'
 import { resolveZyraRoot } from './zyra/zyra-root'
@@ -492,6 +493,8 @@ const browserViewManager = new BrowserViewManager({
 browserViewManager.registerIpc()
 const browserRecordingOverlayManager = new BrowserRecordingOverlayManager({ browserViews: browserViewManager, preloadPath: getPreloadPath() })
 browserRecordingOverlayManager.registerIpc()
+const nativeOverlayManager = new NativeOverlayManager()
+nativeOverlayManager.registerIpc()
 isIncognitoBrowserWebContents = (webContentsId) => (
     browserViewManager.isIncognitoWebContents(webContentsId)
     || browserPopupManager.isIncognitoWebContents(webContentsId)
@@ -635,6 +638,7 @@ function isTrustedRendererLocation(value: string): boolean {
 
 function configureTrustedRendererWindow(window: BrowserWindow): void {
     registerTrustedIpcSender(window.webContents, isTrustedRendererLocation)
+    nativeOverlayManager.registerOwner(window)
     window.webContents.on('will-navigate', (event, url) => {
         if (!isTrustedRendererLocation(url)) event.preventDefault()
     })
@@ -708,6 +712,8 @@ function createWindow(showOnReady = true, initialRoute = '/'): BrowserWindow {
     })
 
     window.webContents.setWindowOpenHandler((details) => {
+        const overlay = nativeOverlayManager.handleWindowOpen(window, details)
+        if (overlay) return overlay
         shell.openExternal(details.url)
         return { action: 'deny' }
     })
@@ -774,7 +780,7 @@ function createAssistantUtilityShellWindow(windowId: string, creationOptions: Ut
     window.webContents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
         if (isMainFrame) log.error('[AssistantUtilityRenderer] load failed', { code, description, url })
     })
-    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    window.webContents.setWindowOpenHandler(details => nativeOverlayManager.handleWindowOpen(window, details) || { action: 'deny' })
     registerEditableContextMenu(window)
     attachWindowStateEvents(window)
     lockWindowZoom(window)
@@ -843,7 +849,7 @@ function createBrowserPopupShellWindow(input: {
         popupWindow.on('focus', () => popupWindow && lockWindowZoom(popupWindow))
         popupWindow.webContents.on('did-finish-load', () => popupWindow && lockWindowZoom(popupWindow))
         popupWindow.webContents.on('will-navigate', (event) => event.preventDefault())
-        popupWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+        popupWindow.webContents.setWindowOpenHandler(details => popupWindow ? nativeOverlayManager.handleWindowOpen(popupWindow, details) || { action: 'deny' } : { action: 'deny' })
         registerEditableContextMenu(popupWindow)
         attachWindowStateEvents(popupWindow)
         lockWindowZoom(popupWindow)
@@ -902,6 +908,8 @@ function createQuickPreviewWindow(filePath: string): BrowserWindow {
         lockWindowZoom(window)
     })
     window.webContents.setWindowOpenHandler((details) => {
+        const overlay = nativeOverlayManager.handleWindowOpen(window, details)
+        if (overlay) return overlay
         shell.openExternal(details.url)
         return { action: 'deny' }
     })
@@ -1250,6 +1258,7 @@ app.on('before-quit', (event) => {
     void flushGlobalBrowserProfileStorage().then(() => {
         globalShortcut.unregisterAll()
         browserRecordingOverlayManager.dispose()
+        nativeOverlayManager.dispose()
         browserViewManager.dispose()
         const browserRuntime = browserClientRuntime
         browserClientRuntime = null

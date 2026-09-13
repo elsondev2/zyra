@@ -6,7 +6,7 @@ Zyra’s Assistant Browser is an Inspector workspace for the selected chat proje
 
 Browser tools honor the requested in-app Browser or paired Chrome surface. Desktop sessions suppress automatic activation of the personal `ego-browser` skill when the native app bridge is available. Agent-created in-app tabs use the normal saved profile by default; incognito is opt-in. Chrome setup is available in Settings → Device connections, backed by the bundled extension and the main-process broker.
 
-Inspector mode and width are remembered per chat alongside the existing workspace tabs. The mounted panel animates open/closed and snaps shut when resized below its close threshold. Browser overlays request a fresh presentation capture on every entry, since document readiness may precede application hydration; screenshots and access popovers are explicit native-view occluders. Dismissing them restores the retained live view. Terminal views buffer output while the lazy xterm runtime loads.
+Inspector mode and width are remembered per chat alongside the existing workspace tabs. The mounted panel animates open/closed and snaps shut when resized below its close threshold. App UI renders in [trusted native overlay layers](native-overlays.md) above the page. Menu entry and dismissal do not capture, replace, hide or restore the guest; its native surface stays present throughout. Terminal views buffer output while the lazy xterm runtime loads.
 
 Consecutive browser/computer observations and input collapse into their recorded purpose. Activity counts and timing are opt-in through Action statistics; expanded individual actions retain timing and captured output. A cursor button in main and detached windows opens access details and Emergency stop.
 
@@ -151,7 +151,7 @@ The active Browser page supports:
 - one finite in-page annotation session with Select, Region, Draw, Erase, Clear, Cancel, a change comment, Attach, and Escape;
 - viewport screenshots shown at their natural aspect ratio from a bounded 640×440 high-density preview, with compact opaque copy image, open, reveal, copy path, annotation, and close buttons;
 - thumbnail arrival, staggered action entry, right-drag dismissal, and animated click/timeout closure, all disabled when reduced motion is requested;
-- one-at-a-time CDP screencast recording, renderer-side bounded video encoding, and reveal/copy-path actions.
+- direct native tab recording with optional microphone/tab/system audio, bounded renderer encoding, and reveal/copy-path actions.
 
 The shell receives the main-owned page’s opaque `webContents.id` through the Browser-view state contract and pairs it with Zyra’s stable Browser tab ID. Main accepts a developer request only when `TrustedGuestRegistry.resolveOwned()` proves the requesting shell currently owns that page and it is bound to that exact tab. No API accepts an arbitrary Electron `webContents` ID by itself.
 
@@ -159,7 +159,7 @@ Screenshots and recordings are written only below the app-owned Browser artifact
 
 Annotation does not use CDP inspect mode. Main injects one self-contained script into a dedicated Chromium isolated world after owner/window/tab validation. The page can neither access that world nor keep its controls alive: Attach, Cancel, Escape, navigation, tab changes, Inspector closure, recording, DevTools, guest destruction, and capture completion all tear it down. The resulting marks are captured before teardown and returned with the bounded annotation payload. Attach then copies the owner-scoped artifact into Assistant attachment storage without exposing its path, adds the crop to the current composer, and appends a bounded `<preview_annotation>` context block when the message is sent.
 
-Recording still uses allowlisted CDP operations against the trusted guest. Opening guest DevTools deliberately releases that guest’s CDP session, and the supervised Browser driver reattaches on its next operation. Color emulation is restored after DevTools closes. Annotation and recording cannot be active together.
+Recording uses the owner-bound native capture broker and Chromium MediaRecorder; screenshots, annotation and other developer operations retain their bounded guest authority. Opening guest DevTools deliberately releases that guest’s CDP session, and the supervised Browser driver reattaches on its next operation. Color emulation is restored after DevTools closes. Annotation and recording cannot be active together.
 
 ## Security Defaults
 

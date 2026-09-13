@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, ReactNode, useCallback } from 'react'
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 
 interface CommandPaletteContextValue {
     isOpen: boolean
@@ -34,12 +35,11 @@ export function CommandPaletteProvider({ children }: ProviderProps) {
                 e.preventDefault()
                 toggle()
             }
-            if (e.key === 'Escape') {
+            if (e.key === 'Escape' && !e.defaultPrevented) {
                 close()
             }
         }
-        window.addEventListener('keydown', handler)
-        return () => window.removeEventListener('keydown', handler)
+        return addOverlayEventListener('keydown', handler)
     }, [toggle, close])
 
     // Lock body scroll while open

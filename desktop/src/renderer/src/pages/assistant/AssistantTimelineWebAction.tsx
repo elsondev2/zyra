@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { createPassivePortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { ExternalLink, Search } from 'lucide-react'
 import type { AssistantActivity } from '@shared/assistant/contracts'
 import { AssistantBrowserPageIcon } from './AssistantBrowserPageIcon'

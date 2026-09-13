@@ -130,12 +130,20 @@ export function finalizeBrowserRecordingWebm(bytes: Uint8Array, durationMs: numb
         const seekLength = seekHead(0, 0, 0).length
         let offset = seekLength + finalizedInfo.length + raw(tracks).length
         const media = entries.filter(item => item.id === ID.cluster || item.id === 0xec)
+        // A finite Segment cannot contain unknown-sized Clusters. Keep encoded
+        // payloads as slices; only replace each live Cluster's size header.
+        const mediaParts = media.map(item => item.unknown
+            ? [integer(ID.cluster), size(item.end - item.data), bytes.subarray(item.data, item.end)]
+            : [raw(item)])
         const clusterOffsets = new Map<Element, number>()
-        for (const item of media) { clusterOffsets.set(item, offset); offset += item.end - item.start }
+        for (const [index, item] of media.entries()) {
+            clusterOffsets.set(item, offset)
+            offset += mediaParts[index].reduce((total, part) => total + part.length, 0)
+        }
         const cues = element(ID.cues, ...cuePoints.sort((left, right) => left.time - right.time).map(cue => element(0xbb,
             element(0xb3, integer(cue.time)), element(0xb7, element(0xf7, integer(cue.track)),
                 element(0xf1, integer(clusterOffsets.get(cue.cluster)!, 8)), element(0xf0, integer(cue.relative))))))
-        const payload = [seekHead(seekLength, seekLength + finalizedInfo.length, offset), finalizedInfo, raw(tracks), ...media.map(raw), cues]
+        const payload = [seekHead(seekLength, seekLength + finalizedInfo.length, offset), finalizedInfo, raw(tracks), ...mediaParts.flat(), cues]
         // One final allocation; frame payloads remain byte-for-byte unchanged.
         const length = payload.reduce((total, part) => total + part.length, 0)
         return join([raw(header), integer(ID.segment), size(length), ...payload])

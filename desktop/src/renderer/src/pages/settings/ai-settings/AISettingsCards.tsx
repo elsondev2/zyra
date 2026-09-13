@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { AlertCircle, Check, ExternalLink, Eye, EyeOff, X, Zap } from 'lucide-react'
 import { Select } from '@/components/ui/FormControls'
 import { cn } from '@/lib/utils'

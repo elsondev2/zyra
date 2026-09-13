@@ -1,21 +1,17 @@
 import { useBrowserTargetCursor } from './useBrowserTargetCursor'
-import { forwardRef, memo, useCallback, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
+import { forwardRef, memo, useCallback, useImperativeHandle, useLayoutEffect, useRef } from 'react'
 import type { DevScopeBrowserGuestTargetInput, DevScopeBrowserPreviewConfig } from '@shared/contracts/devscope-api'
 import type { ControlCursorState } from '@shared/agent-control/contracts'
 import type { BrowserViewEvent, BrowserViewState } from '@shared/browser-view'
 import { dismissTransientMenus } from '@/lib/transient-menu'
 import type { AssistantBrowserTabState } from './assistant-browser-workspace-state'
-import { useAssistantBrowserNativeViewOcclusion } from './assistant-browser-native-view-occlusion'
 import { shouldShowAssistantBrowserNativeView } from './assistant-browser-native-view-visibility'
 import { nextAssistantBrowserSlotRevision } from './assistant-browser-slot-revision'
 import { observeAssistantBrowserSlotGeometry } from './assistant-browser-slot-geometry'
-import { createAssistantBrowserLivePresentation } from './assistant-browser-live-presentation'
-import { requestAssistantBrowserDisplayCapture } from './assistant-browser-display-capture'
 
 export type AssistantBrowserWebviewHandle = {
     navigate: (url: string) => Promise<void>
     openLocalFile: () => Promise<boolean>
-    preparePresentation: () => Promise<boolean>
     showNewTab: () => Promise<Pick<BrowserViewState, 'canGoBack' | 'canGoForward'>>
     goBack: () => void
     goForward: () => void
@@ -76,18 +72,6 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
 }, forwardedRef) {
     const cursor = useBrowserTargetCursor(controlled ? cursorTargetId : undefined, active, initialCursor)
     const slotRef = useRef<HTMLDivElement | null>(null)
-    const liveVideoRef = useRef<HTMLVideoElement | null>(null)
-    const livePresentationRef = useRef<ReturnType<typeof createAssistantBrowserLivePresentation> | null>(null)
-    const activeRef = useRef(active)
-    activeRef.current = active
-    const presentationAttemptRef = useRef(0)
-    const [livePresentationReady, setLivePresentationReady] = useState(false)
-    const preparationExpiryRef = useRef(0)
-    const [snapshotDataUrl, setSnapshotDataUrl] = useState<string | null>(null)
-    const snapshotDataUrlRef = useRef<string | null>(null)
-    const snapshotReadyRef = useRef(false)
-    const snapshotGenerationRef = useRef(0)
-    const presentationPreparationRef = useRef<Promise<boolean> | null>(null)
     const stateRef = useRef<BrowserViewState | null>(null)
     const ensurePromiseRef = useRef<Promise<BrowserViewState> | null>(null)
     const controlTargetIdRef = useRef<string | null>(null)
@@ -99,40 +83,12 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
     const controlOverlayRequestRef = useRef<BrowserViewCommandInput | null>(null)
     const controlOverlayInFlightRef = useRef(false)
     const controlOverlayPublishedRef = useRef(false)
-    const nativeViewOccludedRef = useRef(false)
     const callbacksRef = useRef({ onStateChange, onControlTargetChange, onFullscreenChange, onViewportRectChange })
-    const reportNativeViewOcclusion = useCallback((occluded: boolean) => {
-        nativeViewOccludedRef.current = occluded
-        if (!active) return
-        const slot = slotRef.current
-        if (!slot) return
-        const rect = slot.getBoundingClientRect()
-        const bounds = rect.width >= 1 && rect.height >= 1
-            ? { x: Math.max(0, rect.left), y: Math.max(0, rect.top), width: rect.width, height: rect.height }
-            : null
-        const nativeViewVisible = shouldShowAssistantBrowserNativeView({
-            hasPage: Boolean(tab.url),
-            requestedVisible: visible,
-            nativeViewOccluded: occluded
-        })
-        window.devscope.browserView.reportSlot({
-            tabId: tab.id,
-            revision: nextAssistantBrowserSlotRevision(window),
-            bounds,
-            contentSize: bounds ? { width: Math.max(1, slot.offsetWidth), height: Math.max(1, slot.offsetHeight) } : null,
-            active,
-            visible: nativeViewVisible
-        })
-        callbacksRef.current.onViewportRectChange(tab.id, nativeViewVisible && bounds ? bounds : null)
-    }, [active, tab.id, tab.url, visible])
-    const nativeViewOccluded = useAssistantBrowserNativeViewOcclusion(slotRef, active, reportNativeViewOcclusion)
-    const presentationRequested = !visible || nativeViewOccluded
-    const presentationRequestedRef = useRef(presentationRequested)
-    presentationRequestedRef.current = presentationRequested
+    // App UI is composited in its own native overlay host. A menu never
+    // changes the guest's visibility, capture resolution, or page identity.
     const effectiveVisible = shouldShowAssistantBrowserNativeView({
         hasPage: Boolean(tab.url),
-        requestedVisible: visible,
-        nativeViewOccluded
+        requestedVisible: visible
     })
     callbacksRef.current = { onStateChange, onControlTargetChange, onFullscreenChange, onViewportRectChange }
 
@@ -238,113 +194,6 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
         return result
     }, [applyState])
 
-    useLayoutEffect(() => {
-        const video = liveVideoRef.current
-        if (!video) return
-        let disposed = false
-        setLivePresentationReady(false)
-        const release = () => { void window.devscope.browserView.command({ tabId: tab.id, type: 'presentation-stop' }).catch(() => undefined) }
-        const presentation = createAssistantBrowserLivePresentation({
-            video,
-            acquire: isCurrent => requestAssistantBrowserDisplayCapture(async () => {
-                await ensurePromiseRef.current
-                if (!isCurrent()) throw new Error('Browser presentation was cancelled.')
-                const result = await window.devscope.browserView.command({ tabId: tab.id, type: 'presentation-start' })
-                if (!result.success) throw new Error(result.error)
-                if (!isCurrent()) { release(); throw new Error('Browser presentation was cancelled.') }
-            }, { video: { frameRate: { ideal: 30, max: 30 } }, audio: false }),
-            release,
-            onReady: ready => { if (!disposed) setLivePresentationReady(ready) }
-        })
-        livePresentationRef.current = presentation
-        return () => {
-            disposed = true
-            window.clearTimeout(preparationExpiryRef.current)
-            presentation.stop()
-            if (livePresentationRef.current === presentation) livePresentationRef.current = null
-        }
-    }, [tab.id])
-
-    const refreshPresentationSnapshot = useCallback(async (): Promise<boolean> => {
-        if (!activeRef.current || disposedRef.current) return false
-        const generation = ++snapshotGenerationRef.current
-        await ensurePromiseRef.current
-        if (!activeRef.current || disposedRef.current || generation !== snapshotGenerationRef.current) return false
-        const result = await window.devscope.browserView.command({ tabId: tab.id, type: 'capture' })
-        if (!result.success || !result.snapshotDataUrl || disposedRef.current || generation !== snapshotGenerationRef.current) return false
-        const presentation = new Image()
-        presentation.src = result.snapshotDataUrl
-        await presentation.decode()
-        if (disposedRef.current || generation !== snapshotGenerationRef.current) return false
-        snapshotReadyRef.current = false
-        snapshotDataUrlRef.current = result.snapshotDataUrl
-        setSnapshotDataUrl(result.snapshotDataUrl)
-        await new Promise<void>((resolve) => {
-            window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()))
-        })
-        if (disposedRef.current || generation !== snapshotGenerationRef.current) return false
-        snapshotReadyRef.current = true
-        return true
-    }, [tab.id])
-
-    const preparePresentationSnapshot = useCallback((): Promise<boolean> => {
-        if (!activeRef.current || disposedRef.current) return Promise.resolve(false)
-        if (!tab.url) return Promise.resolve(true)
-        if (presentationPreparationRef.current) return presentationPreparationRef.current
-        const attempt = ++presentationAttemptRef.current
-        const isCurrent = () => activeRef.current && !disposedRef.current && attempt === presentationAttemptRef.current
-        // Menus that announce their intent can prepare the first decoded frame
-        // before opening. Automatic overlays use the same feed with image fallback.
-        window.clearTimeout(preparationExpiryRef.current)
-        preparationExpiryRef.current = window.setTimeout(() => {
-            if (!presentationRequestedRef.current) livePresentationRef.current?.stop()
-        }, 2_500)
-        const preparation = (livePresentationRef.current?.start() ?? Promise.resolve(false))
-            .then(live => isCurrent() ? live || refreshPresentationSnapshot() : false)
-            .then((refreshed) => isCurrent() && (refreshed || snapshotReadyRef.current))
-            .catch(() => isCurrent() && snapshotReadyRef.current)
-            .finally(() => {
-                if (presentationPreparationRef.current === preparation) presentationPreparationRef.current = null
-            })
-        presentationPreparationRef.current = preparation
-        return preparation
-    }, [refreshPresentationSnapshot, tab.url])
-
-    useLayoutEffect(() => {
-        snapshotGenerationRef.current += 1
-        snapshotDataUrlRef.current = null
-        snapshotReadyRef.current = false
-        setSnapshotDataUrl(null)
-    }, [tab.url])
-
-    useLayoutEffect(() => {
-        if (!active) {
-            presentationAttemptRef.current++
-            window.clearTimeout(preparationExpiryRef.current)
-            livePresentationRef.current?.stop()
-            snapshotGenerationRef.current += 1
-            snapshotDataUrlRef.current = null
-            snapshotReadyRef.current = false
-            setSnapshotDataUrl(null)
-            return
-        }
-        if (presentationRequested) {
-            window.clearTimeout(preparationExpiryRef.current)
-            const attempt = presentationAttemptRef.current
-            if (tab.url) void livePresentationRef.current?.start().then(live => {
-                if (!live && activeRef.current && !disposedRef.current && attempt === presentationAttemptRef.current && presentationRequestedRef.current) void refreshPresentationSnapshot().catch(() => undefined)
-            })
-            return
-        }
-        presentationAttemptRef.current++
-        livePresentationRef.current?.stop()
-        if (tab.status !== 'ready') return
-        const timerId = window.setTimeout(() => {
-            void refreshPresentationSnapshot().catch(() => undefined)
-        }, 160)
-        return () => window.clearTimeout(timerId)
-    }, [active, presentationRequested, refreshPresentationSnapshot, tab.status, tab.url])
-
     const flushControlOverlay = useCallback(async () => {
         if (controlOverlayInFlightRef.current) return
         controlOverlayInFlightRef.current = true
@@ -400,7 +249,6 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
             const result = await runCommand({ tabId: tab.id, type: 'open-local-file' })
             return result.accepted
         },
-        preparePresentation: preparePresentationSnapshot,
         showNewTab: async () => {
             const result = await runCommand({ tabId: tab.id, type: 'new-tab' })
             return { canGoBack: result.state.canGoBack, canGoForward: result.state.canGoForward }
@@ -419,7 +267,7 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
             const rect = slotRef.current?.getBoundingClientRect()
             return { width: Math.max(1, Math.round(rect?.width || 1)), height: Math.max(1, Math.round(rect?.height || 1)) }
         }
-    }), [navigate, preparePresentationSnapshot, runCommand, tab.id])
+    }), [navigate, runCommand, tab.id])
 
     useLayoutEffect(() => {
         const slot = slotRef.current
@@ -432,8 +280,7 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
                 : null
             const liveEffectiveVisible = shouldShowAssistantBrowserNativeView({
                 hasPage: Boolean(tab.url),
-                requestedVisible: visible,
-                nativeViewOccluded: nativeViewOccludedRef.current
+                requestedVisible: visible
             })
             const key = `${active}:${liveEffectiveVisible}:${bounds?.x || 0}:${bounds?.y || 0}:${bounds?.width || 0}:${bounds?.height || 0}`
             if (force || key !== lastKey) {
@@ -471,25 +318,6 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
             className="absolute inset-0 h-full w-full overflow-hidden bg-white"
             aria-hidden={active ? undefined : true}
             data-assistant-browser-view-slot={tab.id}
-        >
-            {active && snapshotDataUrl ? (
-                <img
-                    src={snapshotDataUrl}
-                    alt=""
-                    className="pointer-events-none absolute inset-0 h-full w-full object-fill"
-                    aria-hidden="true"
-                    data-assistant-browser-view-snapshot
-                />
-            ) : null}
-            <video
-                ref={liveVideoRef}
-                muted
-                playsInline
-                aria-hidden="true"
-                data-assistant-browser-view-live
-                className="pointer-events-none absolute inset-0 h-full w-full object-fill"
-                style={{ opacity: active && livePresentationReady ? 1 : 0 }}
-            />
-        </div>
+        />
     )
 }))

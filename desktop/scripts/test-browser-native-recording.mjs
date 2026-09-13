@@ -8,6 +8,16 @@ import { fileURLToPath } from 'node:url'
 import electronPath from 'electron'
 const here = dirname(fileURLToPath(import.meta.url))
 const directory = await mkdtemp(join(tmpdir(), 'zyra-native-recording-'))
+const diagnostics = value => value.split(/\r?\n/).map(line => line.replace(/ @ [0-9a-fx]+/gi, ' @ address').trim()).filter(Boolean)
+const assertContainerClean = stderr => assert.doesNotMatch(stderr, /^\[(?:matroska|webm)(?:,|\s)/m, 'WebM parsing must not report container errors')
+const assertNoIntroducedDiagnostics = (actual, original) => {
+    const remaining = [...original]
+    for (const line of actual) {
+        const index = remaining.indexOf(line)
+        assert(index >= 0, `Finalization introduced a diagnostic: ${line}`)
+        remaining.splice(index, 1)
+    }
+}
 try {
     await build({ entryPoints: [join(here, '../src/main/browser-recording-capture.ts')], outfile: join(directory, 'capture.cjs'), bundle: true, platform: 'node', format: 'cjs', external: ['electron'] })
     await build({ entryPoints: [join(here, '../src/renderer/src/pages/assistant/assistant-browser-recording.ts')], outfile: join(directory, 'recorder.js'), bundle: true, platform: 'browser', format: 'iife', globalName: 'BrowserRecording' })
@@ -24,15 +34,22 @@ try {
         const probe = name => {
             const result = spawnSync('ffprobe', ['-v','error','-show_entries','format=duration:packet=stream_index,pts,data_hash','-show_packets','-show_data_hash','sha256','-of','json',join(directory,name)], { encoding:'utf8', windowsHide:true })
             assert.equal(result.status,0,result.error?.message || result.stderr)
-            return JSON.parse(result.stdout)
+            assertContainerClean(result.stderr)
+            return { ...JSON.parse(result.stdout), diagnostics: diagnostics(result.stderr) }
         }
         const original=probe('synthetic-original.webm'),finalized=probe('synthetic-finalized.webm')
+        assertNoIntroducedDiagnostics(finalized.diagnostics, original.diagnostics)
         assert.equal(original.format.duration,undefined,'fixture must reproduce live WebM missing duration')
         assert(Number(finalized.format.duration)>7,'ffprobe must read finalized duration')
         const encoded=recording=>recording.packets.map(({stream_index,pts,data_hash})=>({stream_index,pts,data_hash}))
         assert.deepEqual(encoded(finalized),encoded(original),'every encoded packet/timestamp remains unchanged')
+        const originalDecoded=spawnSync('ffmpeg',['-v','error','-i',join(directory,'synthetic-original.webm'),'-f','null','-'],{encoding:'utf8',windowsHide:true})
+        assert.equal(originalDecoded.status,0,originalDecoded.error?.message || originalDecoded.stderr)
+        assertContainerClean(originalDecoded.stderr)
         const decoded=spawnSync('ffmpeg',['-v','error','-i',join(directory,'synthetic-finalized.webm'),'-f','null','-'],{encoding:'utf8',windowsHide:true})
         assert.equal(decoded.status,0,decoded.error?.message || decoded.stderr)
-        console.log(JSON.stringify({test:'webm-container-finalization',duration:finalized.format.duration,identicalEncodedPackets:finalized.packets.length,fullDecode:true}))
+        assertContainerClean(decoded.stderr)
+        assertNoIntroducedDiagnostics(diagnostics(decoded.stderr), diagnostics(originalDecoded.stderr))
+        console.log(JSON.stringify({test:'webm-container-finalization',duration:finalized.format.duration,identicalEncodedPackets:finalized.packets.length,fullDecode:true,upstreamDiagnostics:[...new Set([...original.diagnostics,...diagnostics(originalDecoded.stderr)])]}))
     }
 } finally { await rm(directory, { recursive: true, force: true }).catch(() => {}) }

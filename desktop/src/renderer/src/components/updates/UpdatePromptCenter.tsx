@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { createPortal } from 'react-dom'
+import { addOverlayEventListener, createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import {
     AlertTriangle,
     CheckCircle2,
@@ -281,6 +281,14 @@ export function UpdatePromptCenter() {
         dismissUpdateSuccessToast,
         statusTone
     } = useAppUpdates()
+
+    useEffect(() => {
+        if (!isModalOpen) return
+        return addOverlayEventListener('keydown', event => {
+            if ((event.target as Node | null)?.ownerDocument?.querySelector('dialog[open]')) return
+            if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); closeModal() }
+        })
+    }, [isModalOpen, closeModal])
 
     useEffect(() => {
         if (!isModalOpen) return

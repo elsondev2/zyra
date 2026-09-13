@@ -1,5 +1,6 @@
 import type { RuntimeActivationStatus } from '../runtime-activation'
 import type { BrowserRecordingOverlayCommand, BrowserRecordingOverlayPresentation, BrowserRecordingOverlayState } from './browser-recording-overlay'
+import type { NativeOverlayApi } from './native-overlay'
 import type { AgentRoleModels, AgentRoleModelInput } from '../onboarding/contracts'
 import type { ModelProviderInput, ModelProviderConnection } from '../onboarding/contracts'
 import type {
@@ -956,6 +957,10 @@ export interface DevScopeApi {
     saveBrowserPreviewRecording: (input: DevScopeBrowserGuestTargetInput & { mimeType: string; data: Uint8Array }) => Promise<DevScopeResult<{ artifact: DevScopeBrowserCaptureArtifact }>>
     onBrowserPreviewRecordingFrame: (callback: (frame: DevScopeBrowserRecordingFrame) => void) => () => void
     setBrowserRecordingOverlay: (state: BrowserRecordingOverlayState | null) => Promise<DevScopeResult>
+    prepareNativeOverlay: NativeOverlayApi['prepareNativeOverlay']
+    recoverNativeOverlay: NativeOverlayApi['recoverNativeOverlay']
+    setNativeOverlayVisible: NativeOverlayApi['setNativeOverlayVisible']
+    onNativeOverlayDismiss: NativeOverlayApi['onNativeOverlayDismiss']
     onBrowserRecordingOverlayCommand: (callback: (command: BrowserRecordingOverlayCommand) => void) => () => void
     onBrowserRecordingOverlayPresentation: (callback: (presentation: BrowserRecordingOverlayPresentation) => void) => () => void
     getBrowserLinkPreview: (input: { url: string }) => Promise<DevScopeResult<{ preview: DevScopeBrowserLinkPreview | null }>>

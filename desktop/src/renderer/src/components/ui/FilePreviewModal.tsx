@@ -5,7 +5,7 @@ import {
     closestCenter,
     pointerWithin,
 } from '@dnd-kit/core'
-import { createPortal } from 'react-dom'
+import { addOverlayEventListener, createOverlayPortal as createPortal } from './native-overlay-portal'
 import { getParentFolderPath } from '@/lib/filesystem/fileSystemPaths'
 import { getAppearanceCodeFontStack, useSettings } from '@/lib/settings'
 import { isEditableFileType, PREVIEW_TERMINAL_MIN_HEIGHT } from './file-preview/modalShared'
@@ -425,8 +425,7 @@ export function FilePreviewModal({
             }
         }
 
-        window.addEventListener('keydown', handleKeyDown)
-        return () => window.removeEventListener('keydown', handleKeyDown)
+        return addOverlayEventListener('keydown', handleKeyDown)
     }, [active, canEdit, handleCloseRequest, handleModeChange, handleSave, mode, previewModeEnabled])
 
 

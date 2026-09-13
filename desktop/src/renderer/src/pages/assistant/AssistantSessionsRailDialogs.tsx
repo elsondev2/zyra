@@ -1,4 +1,4 @@
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { Edit2, Loader2 } from 'lucide-react'
 import type { AssistantPlaygroundState, AssistantSession } from '@shared/assistant/contracts'
 import type { DevScopeFolderItem } from '@shared/contracts/devscope-api'

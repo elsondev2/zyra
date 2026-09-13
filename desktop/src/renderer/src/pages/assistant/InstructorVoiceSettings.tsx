@@ -1,5 +1,6 @@
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { useEffect, useRef, type CSSProperties } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { ChevronLeft, ChevronRight, LoaderCircle, Pause, Play, X } from 'lucide-react'
 import {
     INSTRUCTOR_REALTIME_VOICES,
@@ -64,10 +65,10 @@ export function InstructorVoiceSettings({
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') onClose()
         }
-        document.addEventListener('keydown', onKeyDown)
+        const removeOverlayListener1 = addOverlayEventListener('keydown', onKeyDown)
         return () => {
             document.body.style.overflow = originalOverflow
-            document.removeEventListener('keydown', onKeyDown)
+            removeOverlayListener1()
         }
     }, [onClose, open])
 

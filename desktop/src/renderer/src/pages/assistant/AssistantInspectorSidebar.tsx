@@ -972,7 +972,6 @@ export function AssistantInspectorSidebar({
             >
                 {tabPreview ? (
                     <div
-                        data-zyra-native-view-occluder="true"
                         className={cn(
                             'pointer-events-none absolute top-2 z-40 overflow-hidden border border-[color-mix(in_srgb,var(--color-text)_11%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_94%,var(--color-bg))] shadow-[0_14px_34px_rgba(0,0,0,0.28),inset_0_1px_0_color-mix(in_srgb,var(--color-text)_5%,transparent)] animate-[inspector-tab-in_140ms_ease-out_both]',
                             tabPreview.imageRequested ? 'w-64 rounded-xl' : 'w-[184px] rounded-2xl'

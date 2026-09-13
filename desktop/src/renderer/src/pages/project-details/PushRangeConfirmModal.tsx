@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { ArrowDownCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { PushRangeGraph, PushRangePreview } from './push-range/PushRangeGraph'

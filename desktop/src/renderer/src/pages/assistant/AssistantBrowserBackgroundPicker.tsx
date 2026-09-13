@@ -1,3 +1,6 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
+import { getOverlayActiveElement } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Check, Image, ImageOff, LoaderCircle, LockKeyhole, RefreshCw, Search, Shuffle, SlidersHorizontal, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -33,7 +36,7 @@ export function AssistantBrowserBackgroundPicker({
     }, [onClose])
 
     useEffect(() => {
-        const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+        const previous = getOverlayActiveElement()
         dialogRef.current?.focus()
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
@@ -46,17 +49,17 @@ export function AssistantBrowserBackgroundPicker({
             if (focusable.length === 0) return
             const first = focusable[0]
             const last = focusable[focusable.length - 1]
-            if (event.shiftKey && document.activeElement === first) {
+            if (event.shiftKey && getOverlayActiveElement() === first) {
                 event.preventDefault()
                 last.focus()
-            } else if (!event.shiftKey && document.activeElement === last) {
+            } else if (!event.shiftKey && getOverlayActiveElement() === last) {
                 event.preventDefault()
                 first.focus()
             }
         }
-        window.addEventListener('keydown', handleKeyDown)
+        const removeOverlayListener1 = addOverlayEventListener('keydown', handleKeyDown)
         return () => {
-            window.removeEventListener('keydown', handleKeyDown)
+            removeOverlayListener1()
             window.requestAnimationFrame(() => previous?.focus())
         }
     }, [exit])
@@ -110,10 +113,10 @@ export function AssistantBrowserBackgroundPicker({
         && (!unsplashConfigured || unsplashSettingsOpen)
 
     return (
-        <div className={cn('absolute inset-0 z-[90] flex items-center justify-center bg-slate-950/[0.58] p-[clamp(8px,1.8vw,18px)] backdrop-blur-[3px] transition-opacity duration-150 motion-reduce:transition-none', closing ? 'opacity-0' : 'animate-modal-backdrop opacity-100')} onPointerDown={(event) => {
+        <AnchoredNativeOverlay><div className={cn('absolute inset-0 z-[90] flex items-center justify-center bg-slate-950/[0.58] p-[clamp(8px,1.8vw,18px)] backdrop-blur-[3px] transition-opacity duration-150 motion-reduce:transition-none', closing ? 'opacity-0' : 'animate-modal-backdrop opacity-100')} onPointerDown={(event) => {
             if (event.target === event.currentTarget) exit()
         }}>
-            <section ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="New Tab backgrounds" className={cn('flex h-full max-h-[470px] w-full max-w-[600px] flex-col overflow-hidden rounded-[10px] border border-[color-mix(in_srgb,var(--color-text)_13%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_98%,var(--color-bg))] shadow-[0_28px_90px_rgba(0,0,0,0.48)] outline-none transition-[opacity,transform] duration-[180ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none', closing ? 'translate-y-2 scale-[0.99] opacity-0' : 'animate-modal-in translate-y-0 scale-100 opacity-100')}>
+            <section ref={dialogRef} data-native-overlay-autofocus tabIndex={-1} role="dialog" aria-modal="true" aria-label="New Tab backgrounds" className={cn('flex h-full max-h-[470px] w-full max-w-[600px] flex-col overflow-hidden rounded-[10px] border border-[color-mix(in_srgb,var(--color-text)_13%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_98%,var(--color-bg))] shadow-[0_28px_90px_rgba(0,0,0,0.48)] outline-none transition-[opacity,transform] duration-[180ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none', closing ? 'translate-y-2 scale-[0.99] opacity-0' : 'animate-modal-in translate-y-0 scale-100 opacity-100')}>
                 <header className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--surface-divider)] px-3">
                     <Image size={14} className="text-[var(--accent-primary)]/85" />
                     <h3 className="text-[12px] font-semibold text-sparkle-text">Backgrounds</h3>
@@ -213,6 +216,6 @@ export function AssistantBrowserBackgroundPicker({
                     )}
                 </div>
             </section>
-        </div>
+        </div></AnchoredNativeOverlay>
     )
 }

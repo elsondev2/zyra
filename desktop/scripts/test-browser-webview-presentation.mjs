@@ -12,17 +12,7 @@ try {
     const bundle = await build({
         entryPoints: [join(desktop, 'scripts/fixtures/browser-webview-presentation.tsx')],
         bundle: true, write: false, format: 'iife', jsx: 'automatic', platform: 'browser',
-        alias: { '@': join(desktop, 'src/renderer/src') },
-        plugins: [{
-            name: 'browser-live-presentation-fixture',
-            setup(build) {
-                build.onResolve({ filter: /\/assistant-browser-live-presentation$/ }, () => ({ path: 'browser-live-presentation', namespace: 'fixture' }))
-                build.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({
-                    contents: 'export const createAssistantBrowserLivePresentation=(...args)=>globalThis.__webviewPresentationController(...args);',
-                    loader: 'js'
-                }))
-            }
-        }]
+        alias: { '@': join(desktop, 'src/renderer/src') }
     })
     const html = join(directory, 'index.html')
     await writeFile(html, `<!doctype html><div id="root"></div><script>${bundle.outputFiles[0].text}</script>`)

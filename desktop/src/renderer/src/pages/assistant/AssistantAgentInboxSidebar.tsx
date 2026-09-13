@@ -1,3 +1,6 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
+import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { Check, CheckCircle2, ChevronDown, CircleDashed, Folder, FolderPlus, MessageSquare, MoreHorizontal, Search, Undo2, X } from 'lucide-react'
 import type { AssistantSession, AssistantThread } from '@shared/assistant/contracts'
@@ -295,16 +298,16 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
             setProjectSearch('')
             return
         }
-        const close = (event: PointerEvent) => { if (!menuRef.current?.contains(event.target as Node)) setProjectMenuOpen(false) }
+        const close = (event: PointerEvent) => { if (!isOverlayEventInside(event, menuRef.current)) setProjectMenuOpen(false) }
         const escape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
                 setProjectMenuOpen(false)
                 projectTriggerRef.current?.focus()
             }
         }
-        document.addEventListener('pointerdown', close)
-        window.addEventListener('keydown', escape)
-        return () => { document.removeEventListener('pointerdown', close); window.removeEventListener('keydown', escape) }
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', close)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', escape)
+        return () => { removeOverlayListener1(); removeOverlayListener2() }
     }, [projectMenuOpen])
 
     const items = useMemo(() => visibleSessions
@@ -469,7 +472,7 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
                 <div ref={menuRef} className="relative mx-0.5">
                     <button ref={projectTriggerRef} type="button" aria-label="Filter chats by project" aria-expanded={projectMenuOpen} onClick={() => setProjectMenuOpen((open) => !open)} className="flex h-7 w-full min-w-0 items-center gap-2 rounded-[9px] px-2.5 text-left text-[13px] leading-none text-sparkle-text-secondary outline-none hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]/35">{scopedProject ? <ProjectMark group={scopedProject} /> : <Folder size={16} className="shrink-0 text-sparkle-text-muted/80" />}<span className="min-w-0 flex-1 truncate">{scopedProject?.label || 'All projects'}</span><ChevronDown size={16} className="shrink-0 text-sparkle-text-muted/70" /></button>
                     {projectMenuOpen ? (
-                        <div className="absolute left-0 right-0 top-[34px] z-50 flex max-h-72 flex-col overflow-hidden rounded-lg border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1 shadow-[0_16px_48px_rgba(0,0,0,0.34)]">
+                        <AnchoredNativeOverlay><div className="absolute left-0 right-0 top-[34px] z-50 flex max-h-72 flex-col overflow-hidden rounded-lg border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1 shadow-[0_16px_48px_rgba(0,0,0,0.34)]">
                             <div className="mb-1 flex h-9 shrink-0 items-center gap-2 border-b border-[var(--surface-divider)] px-2 text-sparkle-text-muted">
                                 <Search size={14} className="shrink-0 opacity-70" aria-hidden="true" />
                                 <input
@@ -494,7 +497,7 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
                                 {filteredProjectGroups.map((group) => <button key={group.key} type="button" onClick={() => { setScope(group.path); setProjectMenuOpen(false) }} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium text-sparkle-text-secondary hover:bg-[var(--surface-hover)] hover:text-sparkle-text"><ProjectMark group={group} /><span className="min-w-0 flex-1 truncate">{group.label}</span>{scope === group.path ? <Check size={13} /> : null}</button>)}
                                 {filteredProjectGroups.length === 0 ? <p role="status" className="px-2 py-3 text-center text-xs text-sparkle-text-muted/70">No projects found</p> : null}
                             </div>
-                        </div>
+                        </div></AnchoredNativeOverlay>
                     ) : null}
                 </div>
             ) : null}

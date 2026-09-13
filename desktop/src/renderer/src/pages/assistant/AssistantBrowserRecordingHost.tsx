@@ -1,3 +1,4 @@
+import { NativeOverlayPortal } from '@/components/ui/native-overlay-portal'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Download, Pause, Play, Square, Video, X } from 'lucide-react'
 import type { BrowserRecordingOverlayCommand, BrowserRecordingOverlayPresentation, BrowserRecordingOverlayState } from '@shared/contracts/browser-recording-overlay'
@@ -123,7 +124,7 @@ export function AssistantBrowserRecordingHost() {
     const duration = `${Math.floor(seconds / 60)}:${(seconds % 60).toString().padStart(2, '0')}`
     const label = state.status === 'ready' ? 'Ready to record' : state.status === 'stopping' ? 'Saving recording…' : state.status === 'starting' ? 'Starting recording…' : state.status === 'saved' ? 'Recording saved' : 'Browser recording'
     const buttonClass = 'inline-flex size-8 items-center justify-center rounded-md hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]'
-    return <div data-browser-recording-recovery data-zyra-native-view-occluder="true" className="fixed right-3 top-12 z-[500] max-w-sm rounded-xl border border-[var(--surface-divider)] bg-[var(--color-bg-secondary)] p-3 text-xs text-sparkle-text shadow-lg">
+    return <NativeOverlayPortal><div data-browser-recording-recovery className="fixed right-3 top-12 z-[500] max-w-sm rounded-xl border border-[var(--surface-divider)] bg-[var(--color-bg-secondary)] p-3 text-xs text-sparkle-text shadow-lg">
         <div className="flex items-center gap-2" role="toolbar" aria-label="Recording recovery">
             <span className="mr-auto">{label} {state.status !== 'ready' ? <span className="ml-2 tabular-nums">{duration}</span> : null}</span>
             {state.status === 'ready' ? <button className={buttonClass} title="Start recording" onClick={() => void command({ kind: 'start' })}><Play size={13} /></button> : null}
@@ -133,5 +134,5 @@ export function AssistantBrowserRecordingHost() {
             {!busy && !live ? <button className={buttonClass} title="Dismiss recording controls" onClick={() => void command({ kind: 'dismiss' })}><X size={14} /></button> : null}
         </div>
         {state.error || bridgeError || matchingPresentation?.error ? <p role="alert" className="mt-2 text-sparkle-text-secondary">{state.error || bridgeError || matchingPresentation?.error}</p> : null}
-    </div>
+    </div></NativeOverlayPortal>
 }

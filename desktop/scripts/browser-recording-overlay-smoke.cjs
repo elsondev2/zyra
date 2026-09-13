@@ -4,7 +4,15 @@ const { app, BrowserWindow, WebContentsView, ipcMain } = require('electron')
 const directory = process.env.ZYRA_RECORDING_OVERLAY_USER_DATA
 app.setPath('userData', directory)
 let phase = 'starting'
-const deadline = setTimeout(() => { console.error('Native recording overlay fixture timed out: ' + phase); app.exit(1) }, 25_000)
+const startedAt = Date.now(), lifecycle = []
+app.on('web-contents-created', (_event, contents) => {
+    for (const name of ['did-start-loading', 'dom-ready', 'did-finish-load', 'did-stop-loading', 'render-process-gone', 'preload-error']) {
+        contents.on(name, () => lifecycle.push([Date.now() - startedAt, contents.id, name]))
+    }
+    contents.on('did-fail-load', (_event, code) => lifecycle.push([Date.now() - startedAt, contents.id, 'did-fail-load', code]))
+})
+let inspectNativeState = () => ({})
+const deadline = setTimeout(() => { console.error('Native recording overlay fixture timed out: ' + phase, inspectNativeState(), lifecycle); app.exit(1) }, 25_000)
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
 const waitFor = async predicate => { for (let i = 0; i < 100; i++) { if (await predicate()) return; await delay(20) } throw new Error('Fixture condition did not become ready') }
 app.whenReady().then(async () => {
@@ -12,6 +20,7 @@ app.whenReady().then(async () => {
     const preferences = { preload: join(directory, 'test-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false }
     const source = new BrowserWindow({ width: 900, height: 650, useContentSize: true, show: false, webPreferences: preferences })
     const destination = new BrowserWindow({ width: 900, height: 650, useContentSize: true, show: false, webPreferences: preferences })
+    inspectNativeState = () => ({ visible: !source.isDestroyed() && source.isVisible(), views: source.isDestroyed() ? [] : source.contentView.children.map(view => ({ visible: view.getVisible(), loading: view.webContents?.isLoadingMainFrame(), url: view.webContents?.getURL().split(',')[0] })) })
     const shellUrl = 'data:text/html,<html><body>Owned fixture shell</body></html>'
     phase = "loading fixture shells"
     await source.loadURL(shellUrl); await destination.loadURL(shellUrl)
@@ -41,15 +50,19 @@ app.whenReady().then(async () => {
     const update = (contents, value) => contents.executeJavaScript(`fixture.invoke(${JSON.stringify(IPC.update)},${JSON.stringify(value)})`)
     phase = "opening ready controls"
     assert.equal((await update(source.webContents, state)).success, true)
+    phase = 'waiting for ready controls view'
     await waitFor(() => source.contentView.children.length === 2)
     const overlay = source.contentView.children.find(view => view !== guest)
     const overlayContents = overlay.webContents
+    phase = 'loading ready controls document'
     if (overlayContents.isLoadingMainFrame()) await new Promise((resolve, reject) => {
         overlayContents.once('did-finish-load', resolve)
         overlayContents.once('did-fail-load', (_event, code, description) => reject(new Error(`Overlay load failed: ${code} ${description}`)))
     })
     assert.equal(overlay.getVisible(), true)
+    phase = 'evaluating ready controls preload'
     assert.equal(await overlayContents.executeJavaScript('Boolean(window.zyraRecordingOverlay)'), true)
+    phase = 'enabling ready controls Start'
     await waitFor(async () => await overlay.webContents.executeJavaScript('!document.getElementById("start").disabled'))
     assert.deepEqual(await overlay.webContents.executeJavaScript('Object.keys(window.zyraRecordingOverlay).sort()'), ['command', 'getState', 'onState', 'resize'])
     assert.equal(await overlay.webContents.executeJavaScript('typeof window.devscope'), 'undefined')

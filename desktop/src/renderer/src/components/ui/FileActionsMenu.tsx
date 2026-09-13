@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import { createPortal } from 'react-dom'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
+import { addOverlayEventListener, addOverlayWindowBlurListener, createOverlayPortal as createPortal, isOverlayEventInside } from './native-overlay-portal'
+import { supportsNativeOverlay } from './native-overlay-host'
 import { Check, ChevronRight, MoreVertical, Plus } from 'lucide-react'
 import { dismissTransientMenus, TRANSIENT_MENU_DISMISS_EVENT } from '@/lib/transient-menu'
 import { cn } from '@/lib/utils'
@@ -56,6 +57,8 @@ export function FileActionsMenu({
     accentColor
 }: FileActionsMenuProps) {
     const [open, setOpen] = useState(false)
+    const focusAfterOpen = useRef(false)
+    const effectivePresentation = supportsNativeOverlay() ? 'portal' : presentation
     const [expandedItemId, setExpandedItemId] = useState<string | null>(null)
     const rootRef = useRef<HTMLDivElement | null>(null)
     const buttonRef = useRef<HTMLButtonElement | null>(null)
@@ -76,6 +79,29 @@ export function FileActionsMenu({
     } | null>(null)
     const compact = density === 'compact'
     const resolvedMenuWidth = menuWidth || (compact ? 176 : 180)
+    const closeMenu = useCallback(() => {
+        focusAfterOpen.current = false
+        setOpen(false)
+    }, [])
+    const requestOpen = useCallback((focus = false) => {
+        if (disabled || open) return
+        dismissTransientMenus()
+        setMenuPosition(null)
+        focusAfterOpen.current = focus
+        setOpen(true)
+    }, [disabled, open])
+    useLayoutEffect(() => {
+        closeMenu()
+    }, [closeMenu, disabled])
+    const setMenuElement = useCallback((element: HTMLDivElement | null) => {
+        menuRef.current = element
+        if (element && focusAfterOpen.current) {
+            focusAfterOpen.current = false
+            const first = element.querySelector<HTMLButtonElement>('button:not(:disabled)')
+            first?.setAttribute('data-native-overlay-autofocus', '')
+            first?.focus()
+        }
+    }, [])
     const accentedMenuStyle = accentColor ? ({
         '--file-actions-menu-accent': accentColor,
         borderColor: `color-mix(in srgb, ${accentColor} 30%, var(--surface-divider))`,
@@ -99,7 +125,7 @@ export function FileActionsMenu({
         if (direction === 'down' && spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow) direction = 'up'
         if (direction === 'up' && spaceAbove < estimatedMenuHeight && spaceBelow > spaceAbove) direction = 'down'
 
-        if (presentation === 'inline') {
+        if (effectivePresentation === 'inline') {
             setInlineDirection(direction)
             setMenuPosition(null)
             return
@@ -122,8 +148,6 @@ export function FileActionsMenu({
             })
     }
 
-    useEffect(() => { if (disabled) setOpen(false) }, [disabled])
-
     useEffect(() => {
         if (!open) return
 
@@ -139,7 +163,7 @@ export function FileActionsMenu({
             window.cancelAnimationFrame(rafId)
             window.removeEventListener('resize', handleResize)
         }
-    }, [compact, items, menuLabel, open, preferredDirection, presentation, resolvedMenuWidth])
+    }, [compact, items, menuLabel, open, preferredDirection, effectivePresentation, resolvedMenuWidth])
 
     useEffect(() => {
         if (!open) {
@@ -149,33 +173,23 @@ export function FileActionsMenu({
     }, [open])
 
     useEffect(() => {
-        if (!open || presentation !== 'portal') return
+        if (!open || effectivePresentation !== 'portal') return
 
         const handleScroll = () => setOpen(false)
 
         window.addEventListener('scroll', handleScroll, true)
         return () => window.removeEventListener('scroll', handleScroll, true)
-    }, [open, presentation])
+    }, [open, effectivePresentation])
 
     useEffect(() => {
         if (!open) return
 
-        const dismiss = () => setOpen(false)
+        const dismiss = closeMenu
         const handlePointerDown = (event: PointerEvent) => {
-            const target = event.target
-            if (!(target instanceof Node)) {
-                dismiss()
-                return
-            }
-            const isInsideButton = Boolean(rootRef.current?.contains(target))
-            const isInsideMenu = Boolean(menuRef.current?.contains(target))
-            const isInsideSubmenu = Boolean(submenuRef.current?.contains(target))
-            if (!isInsideButton && !isInsideMenu && !isInsideSubmenu) dismiss()
+            if (!isOverlayEventInside(event, rootRef.current, menuRef.current, submenuRef.current)) dismiss()
         }
         const handleFocusIn = (event: FocusEvent) => {
-            const target = event.target
-            if (!(target instanceof Node)) return
-            if (rootRef.current?.contains(target) || menuRef.current?.contains(target) || submenuRef.current?.contains(target)) return
+            if (isOverlayEventInside(event, rootRef.current, menuRef.current, submenuRef.current)) return
             dismiss()
         }
         const handleEscape = (event: KeyboardEvent) => {
@@ -189,23 +203,23 @@ export function FileActionsMenu({
             dismiss()
         }
 
-        document.addEventListener('pointerdown', handlePointerDown, true)
-        document.addEventListener('focusin', handleFocusIn)
-        document.addEventListener('keydown', handleEscape)
-        window.addEventListener('blur', dismiss)
+        const removePointer = addOverlayEventListener('pointerdown', handlePointerDown, true)
+        const removeFocus = addOverlayEventListener('focusin', handleFocusIn)
+        const removeEscape = addOverlayEventListener('keydown', handleEscape)
+        const removeBlur = addOverlayWindowBlurListener(dismiss)
         window.addEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismiss)
         return () => {
-            document.removeEventListener('pointerdown', handlePointerDown, true)
-            document.removeEventListener('focusin', handleFocusIn)
-            document.removeEventListener('keydown', handleEscape)
-            window.removeEventListener('blur', dismiss)
+            removePointer()
+            removeFocus()
+            removeEscape()
+            removeBlur()
             window.removeEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismiss)
         }
-    }, [expandedItemId, open])
+    }, [closeMenu, expandedItemId, open])
 
     if (items.length === 0) return null
 
-    const menuDirection = presentation === 'inline' ? inlineDirection : menuPosition?.direction
+    const menuDirection = effectivePresentation === 'inline' ? inlineDirection : menuPosition?.direction
     const menuBody = (
         <div
             role="menu"
@@ -226,7 +240,7 @@ export function FileActionsMenu({
                 const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
                 if (buttons.length === 0) return
                 event.preventDefault()
-                const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement)
+                const currentIndex = buttons.indexOf(event.currentTarget.ownerDocument.activeElement as HTMLButtonElement)
                 const nextIndex = event.key === 'Home'
                     ? 0
                     : event.key === 'End'
@@ -350,23 +364,14 @@ export function FileActionsMenu({
                 disabled={disabled}
                 onClick={(event) => {
                     event.stopPropagation()
-                    if (!open) {
-                        dismissTransientMenus()
-                        setMenuPosition(null)
-                    }
-                    setOpen(!open)
+                    if (open) closeMenu()
+                    else requestOpen()
                 }}
                 onKeyDown={(event) => {
                     if (event.key !== 'ArrowDown') return
                     event.preventDefault()
-                    if (!open) {
-                        dismissTransientMenus()
-                        setMenuPosition(null)
-                        setOpen(true)
-                    }
-                    window.requestAnimationFrame(() => {
-                        window.requestAnimationFrame(() => menuRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus())
-                    })
+                    if (!open) requestOpen(true)
+                    else menuRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
                 }}
                 className={cn(
                     'group/file-menu h-7 w-7 inline-flex items-center justify-center rounded-md border-0 text-white/45 transition-colors hover:bg-white/10 hover:text-white',
@@ -382,9 +387,9 @@ export function FileActionsMenu({
                 {triggerIcon || <MoreVertical size={15} className="mx-auto" />}
             </button>
 
-            {open && presentation === 'inline' ? (
+            {open && effectivePresentation === 'inline' ? (
                 <div
-                    ref={menuRef}
+                    ref={setMenuElement}
                     className={cn(
                         'absolute right-0 z-[140]',
                         compact ? 'w-44' : 'min-w-[180px]',
@@ -398,10 +403,9 @@ export function FileActionsMenu({
                 </div>
             ) : null}
 
-            {open && presentation === 'portal' && menuPosition && typeof document !== 'undefined' && createPortal(
+            {open && effectivePresentation === 'portal' && menuPosition && typeof document !== 'undefined' && createPortal(
                 <div
-                    ref={menuRef}
-                    data-zyra-native-view-occluder="true"
+                    ref={setMenuElement}
                     className={cn(
                         'fixed z-[340]',
                         compact ? 'w-44' : 'min-w-[180px]',
@@ -425,7 +429,6 @@ export function FileActionsMenu({
                     ref={submenuRef}
                     role="menu"
                     aria-label={items.find((item) => item.id === expandedItemId)?.choicesLabel || 'Choose tab type'}
-                    data-zyra-native-view-occluder="true"
                     className="assistant-menu-in-right fixed z-[350] w-[168px] rounded-[7px] border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1 shadow-[0_18px_48px_rgba(0,0,0,0.38)] backdrop-blur-xl"
                     style={{ top: `${submenuPosition.top}px`, left: `${submenuPosition.left}px` }}
                     onClick={(event) => event.stopPropagation()}
@@ -434,7 +437,7 @@ export function FileActionsMenu({
                         const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
                         if (buttons.length === 0) return
                         event.preventDefault()
-                        const currentIndex = buttons.indexOf(document.activeElement as HTMLButtonElement)
+                        const currentIndex = buttons.indexOf(event.currentTarget.ownerDocument.activeElement as HTMLButtonElement)
                         const nextIndex = event.key === 'Home'
                             ? 0
                             : event.key === 'End'

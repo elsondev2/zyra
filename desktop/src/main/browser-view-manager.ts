@@ -1,5 +1,5 @@
 import { captureBrowserPage } from './browser-page-capture'
-import { browserRecordingCapture } from './browser-recording-capture'
+import { addNativeWindowView } from './native-view-layers'
 import {
     BrowserWindow,
     WebContentsView,
@@ -407,7 +407,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         try {
             this.records.set(record.tabId, record)
             this.observeWindow(record.ownerWindow)
-            record.ownerWindow.contentView.addChildView(view)
+            addNativeWindowView(record.ownerWindow, view, 'browser')
             view.setBackgroundColor('#ffffff')
             view.setBounds({ x: 0, y: 0, width: 1, height: 1 })
             view.setVisible(false)
@@ -615,13 +615,6 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             page.focus()
         } else if (command.type === 'blur') {
             record.ownerWindow.webContents.focus()
-        } else if (command.type === 'presentation-start') {
-            const slot = this.slotsByOwner.get(event.sender.id)?.get(tabId)
-            if (event.senderFrame !== event.sender.mainFrame || !slot?.active || !slot.bounds) throw new Error('The Browser page is not active in this window.')
-            browserRecordingCapture.armPresentation(event.sender, page)
-        } else if (command.type === 'presentation-stop') {
-            if (event.senderFrame !== event.sender.mainFrame) throw new Error('The Browser presentation belongs to the application frame.')
-            browserRecordingCapture.cancelPresentation(event.sender.id, page.id)
         } else if (command.type === 'capture') {
             const captured = await captureBrowserPage(page)
             const size = captured.getSize()
@@ -806,7 +799,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
 
         record.view.setVisible(false)
         sourceWindow.contentView.removeChildView(record.view)
-        destinationWindow.contentView.addChildView(record.view)
+        addNativeWindowView(destinationWindow, record.view, 'browser')
         record.ownerWindow = destinationWindow
         record.ownerId = destinationOwnerId
         try {
@@ -819,7 +812,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             record.ownerWindow = sourceWindow
             record.ownerId = sourceOwnerId
             destinationWindow.contentView.removeChildView(record.view)
-            sourceWindow.contentView.addChildView(record.view)
+            addNativeWindowView(sourceWindow, record.view, 'browser')
             this.applyCurrentSlot(record)
             throw error
         }

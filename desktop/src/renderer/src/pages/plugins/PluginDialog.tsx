@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react'
-import { createPortal } from 'react-dom'
+import { NativeOverlayPortal, addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { X } from 'lucide-react'
 
 export function PluginDialog({ title, subtitle, children, footer, busy = false, onClose }: {
@@ -13,18 +13,15 @@ export function PluginDialog({ title, subtitle, children, footer, busy = false, 
     const ref = useRef<HTMLDialogElement>(null)
     const titleId = useId()
     const subtitleId = useId()
-    useEffect(() => {
-        const dialog = ref.current
-        const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
-        dialog?.showModal()
-        return () => {
-            dialog?.close()
-            if (previous?.isConnected) previous.focus()
-        }
-    }, [])
+    const readyDialogRef = useRef<HTMLDialogElement | null>(null)
+    useEffect(() => () => { readyDialogRef.current?.close() }, [])
+    useEffect(() => addOverlayEventListener('keydown', event => {
+        if (event.key !== 'Escape' || event.defaultPrevented || busy || ref.current?.open) return
+        event.preventDefault()
+        onClose()
+    }, true), [busy, onClose])
 
-    return createPortal(
-        <dialog
+    return <NativeOverlayPortal autoFocus={false} onReady={() => { readyDialogRef.current = ref.current; if (ref.current && !ref.current.open) ref.current.showModal() }}><dialog
             ref={ref}
             className="plugin-dialog"
             aria-labelledby={titleId}
@@ -45,6 +42,5 @@ export function PluginDialog({ title, subtitle, children, footer, busy = false, 
             </header>
             <div className="plugin-dialog-body custom-scrollbar">{children}</div>
             {footer ? <footer className="plugin-dialog-footer">{footer}</footer> : null}
-        </dialog>, document.body
-    )
+        </dialog></NativeOverlayPortal>
 }

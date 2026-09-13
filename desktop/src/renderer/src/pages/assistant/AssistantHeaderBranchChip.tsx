@@ -1,3 +1,6 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
+import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener, addOverlayWindowBlurListener } from '@/components/ui/native-overlay-portal'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, GitBranch } from 'lucide-react'
 import type { DevScopeGitBranchSummary } from '@shared/contracts/devscope-api'
@@ -47,20 +50,20 @@ export function AssistantHeaderBranchChip(props: {
         if (!open) return
         const dismissMenu = () => setOpen(false)
         const handlePointerDown = (event: PointerEvent) => {
-            if (rootRef.current?.contains(event.target as Node)) return
+            if (isOverlayEventInside(event, rootRef.current)) return
             dismissMenu()
         }
         const handleEscape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') dismissMenu()
         }
-        window.addEventListener('pointerdown', handlePointerDown, true)
-        window.addEventListener('keydown', handleEscape)
-        window.addEventListener('blur', dismissMenu)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', handlePointerDown, true)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', handleEscape)
+        const removeOverlayBlurListener3 = addOverlayWindowBlurListener(dismissMenu)
         window.addEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissMenu)
         return () => {
-            window.removeEventListener('pointerdown', handlePointerDown, true)
-            window.removeEventListener('keydown', handleEscape)
-            window.removeEventListener('blur', dismissMenu)
+            removeOverlayListener1()
+            removeOverlayListener2()
+            removeOverlayBlurListener3()
             window.removeEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissMenu)
         }
     }, [open])
@@ -114,7 +117,7 @@ export function AssistantHeaderBranchChip(props: {
             </button>
 
             {open ? (
-                <div className="absolute right-0 top-full z-[180] mt-2 w-72 overflow-hidden rounded-[10px] border border-sparkle-border bg-sparkle-card p-1 text-[12px] text-sparkle-text shadow-[0_18px_48px_rgba(0,0,0,0.38)]">
+                <AnchoredNativeOverlay><div className="absolute right-0 top-full z-[180] mt-2 w-72 overflow-hidden rounded-[10px] border border-sparkle-border bg-sparkle-card p-1 text-[12px] text-sparkle-text shadow-[0_18px_48px_rgba(0,0,0,0.38)]">
                     <div className="px-2.5 py-1.5 text-[12px] text-sparkle-text-muted">
                         Branch
                     </div>
@@ -144,7 +147,7 @@ export function AssistantHeaderBranchChip(props: {
                         })}
                     </div>
                     {error ? <div className="px-2.5 py-1.5 text-[11px] font-medium text-rose-300">{error}</div> : null}
-                </div>
+                </div></AnchoredNativeOverlay>
             ) : null}
         </div>
     )

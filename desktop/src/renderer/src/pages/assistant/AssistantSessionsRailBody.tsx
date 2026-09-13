@@ -1,3 +1,6 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
+import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener, addOverlayWindowBlurListener } from '@/components/ui/native-overlay-portal'
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { DndContext, type DragCancelEvent, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
@@ -30,20 +33,20 @@ function RailSectionHeader(props: {
     useEffect(() => {
         if (!menuOpen) return
         const handlePointerDown = (event: MouseEvent) => {
-            if (!rootRef.current?.contains(event.target as Node)) setMenuOpen(false)
+            if (!isOverlayEventInside(event, rootRef.current)) setMenuOpen(false)
         }
         const handleEscape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') setMenuOpen(false)
         }
         const dismissMenu = () => setMenuOpen(false)
-        document.addEventListener('pointerdown', handlePointerDown, true)
-        window.addEventListener('keydown', handleEscape)
-        window.addEventListener('blur', dismissMenu)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', handlePointerDown, true)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', handleEscape)
+        const removeOverlayBlurListener3 = addOverlayWindowBlurListener(dismissMenu)
         window.addEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissMenu)
         return () => {
-            document.removeEventListener('pointerdown', handlePointerDown, true)
-            window.removeEventListener('keydown', handleEscape)
-            window.removeEventListener('blur', dismissMenu)
+            removeOverlayListener1()
+            removeOverlayListener2()
+            removeOverlayBlurListener3()
             window.removeEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissMenu)
         }
     }, [menuOpen])
@@ -88,7 +91,7 @@ function RailSectionHeader(props: {
                 ) : null}
             </div>
             {menuOpen && menuItems.length > 0 ? (
-                <div className="absolute right-1 top-full z-40 mt-1 w-36 rounded-lg border border-white/10 bg-sparkle-card p-1 shadow-2xl">
+                <AnchoredNativeOverlay><div className="absolute right-1 top-full z-40 mt-1 w-36 rounded-lg border border-white/10 bg-sparkle-card p-1 shadow-2xl">
                     {menuItems.map((item) => (
                         <button
                             key={item.label}
@@ -102,7 +105,7 @@ function RailSectionHeader(props: {
                             {item.label}
                         </button>
                     ))}
-                </div>
+                </div></AnchoredNativeOverlay>
             ) : null}
         </div>
     )

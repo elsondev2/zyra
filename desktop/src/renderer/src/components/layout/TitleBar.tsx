@@ -1,3 +1,6 @@
+import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
+import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener, addOverlayWindowBlurListener } from '@/components/ui/native-overlay-portal'
 /**
  * Zyra - contextual desktop title bar
  */
@@ -170,20 +173,20 @@ export default function TitleBar() {
 
         const dismissAppMenu = () => setAppMenuOpen(false)
         const handlePointerDown = (event: PointerEvent) => {
-            if (!appMenuRootRef.current?.contains(event.target as Node)) dismissAppMenu()
+            if (!isOverlayEventInside(event, appMenuRootRef.current)) dismissAppMenu()
         }
         const handleEscape = (event: KeyboardEvent) => {
             if (event.key === 'Escape') dismissAppMenu()
         }
 
-        document.addEventListener('pointerdown', handlePointerDown, true)
-        window.addEventListener('keydown', handleEscape)
-        window.addEventListener('blur', dismissAppMenu)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', handlePointerDown, true)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', handleEscape)
+        const removeOverlayBlurListener4 = addOverlayWindowBlurListener(dismissAppMenu)
         window.addEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissAppMenu)
         return () => {
-            document.removeEventListener('pointerdown', handlePointerDown, true)
-            window.removeEventListener('keydown', handleEscape)
-            window.removeEventListener('blur', dismissAppMenu)
+            removeOverlayListener1()
+            removeOverlayListener2()
+            removeOverlayBlurListener4()
             window.removeEventListener(TRANSIENT_MENU_DISMISS_EVENT, dismissAppMenu)
         }
     }, [appMenuOpen])
@@ -248,8 +251,8 @@ export default function TitleBar() {
                 navigateHistory(1)
             }
         }
-        window.addEventListener('keydown', handleHistoryShortcut)
-        return () => window.removeEventListener('keydown', handleHistoryShortcut)
+        const removeOverlayListener3 = addOverlayEventListener('keydown', handleHistoryShortcut)
+        return () => removeOverlayListener3()
     })
 
     const handleNewChat = useCallback(() => {
@@ -356,7 +359,7 @@ export default function TitleBar() {
                         <ChevronDown size={11} className={cn('text-sparkle-text-muted transition-[color,transform] group-hover:text-sparkle-text-secondary', appMenuOpen && 'rotate-180 text-sparkle-text-secondary')} />
                     </button>
                     {appMenuOpen ? (
-                        <div className="absolute left-0 top-full z-[190] mt-1 w-[208px] overflow-hidden rounded-xl border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1 text-[13px] shadow-[0_18px_48px_rgba(0,0,0,0.28)] backdrop-blur-xl" role="menu">
+                        <AnchoredNativeOverlay><div className="absolute left-0 top-full z-[190] mt-1 w-[208px] overflow-hidden rounded-xl border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1 text-[13px] shadow-[0_18px_48px_rgba(0,0,0,0.28)] backdrop-blur-xl" role="menu">
                             {appMenuGroups.map((group, groupIndex) => (
                                 <div key={group[0]?.id || groupIndex} className={cn(groupIndex > 0 && 'mt-1 border-t border-[var(--surface-divider)] pt-1')}>
                                     {group.map((item) => (
@@ -376,7 +379,7 @@ export default function TitleBar() {
                                     ))}
                                 </div>
                             ))}
-                        </div>
+                        </div></AnchoredNativeOverlay>
                     ) : null}
                 </div>
             </div>

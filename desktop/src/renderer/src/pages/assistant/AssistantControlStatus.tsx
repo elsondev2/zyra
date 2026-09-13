@@ -1,5 +1,7 @@
+import { isOverlayEventInside } from '@/components/ui/native-overlay-portal'
+import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
 import { MousePointer2, Square, X } from 'lucide-react'
 import type { ControlStateSnapshot } from '@shared/agent-control/contracts'
 
@@ -26,17 +28,17 @@ export function AssistantControlStatus({ state }: { state: ControlStateSnapshot 
     useEffect(() => {
         if (!open) return
         const dismiss = (event: PointerEvent) => {
-            if (!panel.current?.contains(event.target as Node) && !trigger.current?.contains(event.target as Node)) setOpen(false)
+            if (!isOverlayEventInside(event, panel.current) && !isOverlayEventInside(event, trigger.current)) setOpen(false)
         }
         const key = (event: KeyboardEvent) => {
             if (event.key === 'Escape') { event.stopPropagation(); setOpen(false); trigger.current?.focus() }
         }
-        document.addEventListener('pointerdown', dismiss, true)
-        document.addEventListener('keydown', key, true)
+        const removeOverlayListener1 = addOverlayEventListener('pointerdown', dismiss, true)
+        const removeOverlayListener2 = addOverlayEventListener('keydown', key, true)
         panel.current?.focus()
         return () => {
-            document.removeEventListener('pointerdown', dismiss, true)
-            document.removeEventListener('keydown', key, true)
+            removeOverlayListener1()
+            removeOverlayListener2()
         }
     }, [open])
     if (!state) return null
@@ -54,7 +56,7 @@ export function AssistantControlStatus({ state }: { state: ControlStateSnapshot 
             className="mr-1 inline-flex size-7 items-center justify-center rounded-md text-[var(--color-text-muted)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--color-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent-primary)]">
             <MousePointer2 size={17} strokeWidth={1.8} className={grants.length ? 'text-[var(--accent-secondary)]' : ''} />
         </button>
-        {open && createPortal(<div ref={panel} tabIndex={-1} role="dialog" aria-label="Browser and computer access" data-zyra-native-view-occluder="true"
+        {open && createPortal(<div ref={panel} tabIndex={-1} role="dialog" aria-label="Browser and computer access"
             className="fixed z-[1200] w-72 max-w-[calc(100vw-16px)] rounded-xl border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-3 text-[var(--color-text)] shadow-xl outline-none animate-[inspector-tab-in_180ms_ease-out_both] motion-reduce:animate-none" style={position}>
             <div className="mb-2 flex items-center justify-between text-xs font-medium"><span>Browser and computer access</span><button type="button" aria-label="Close access details" onClick={() => { setOpen(false); trigger.current?.focus() }} className="rounded p-1 hover:bg-[var(--surface-hover)]"><X size={13} /></button></div>
             <p className="text-[11px] leading-5 text-[var(--color-text-muted)]">{grants.length ? 'Zyra has access to the surfaces below.' : pending ? 'An access request is waiting in chat.' : 'No surfaces are under control.'}</p>
