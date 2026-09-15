@@ -21,6 +21,10 @@ export default defineConfig({
         ],
         build: {
             ...(fastBuild ? { minify: false, reportCompressedSize: false } : {}),
+            // ws catches missing native accelerators and uses its JS fallback.
+            // Keep these requires inside that try/catch: the dev resolver would
+            // otherwise hoist missing optional peers into throwing ESM imports.
+            commonjsOptions: { ignore: ['bufferutil', 'utf-8-validate'] },
             rollupOptions: {
                 input: {
                     index: resolve(__dirname, 'src/main/index.ts')

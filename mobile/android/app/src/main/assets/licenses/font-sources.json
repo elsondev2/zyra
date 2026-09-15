@@ -1,0 +1,28 @@
+[
+  {
+    "family": "bricolage",
+    "url": "https://github.com/google/fonts/tree/main/ofl/bricolagegrotesque",
+    "file": "BricolageGrotesque[opsz,wdth,wght].ttf",
+    "sha256": "413e7357809ddd12fd80a96a8a396de0e401638d4acd3cb3e37532f0472ac682",
+    "weights": [
+      400,
+      500,
+      600,
+      700
+    ],
+    "opticalSize": 14
+  },
+  {
+    "family": "hanken",
+    "url": "https://github.com/google/fonts/tree/main/ofl/hankengrotesk",
+    "file": "HankenGrotesk[wght].ttf",
+    "sha256": "813b3f8fa0965405669a89b38e51bbefd95eef6b8e20d1cb2d8c10cce062662f",
+    "weights": [
+      400,
+      500,
+      600,
+      700
+    ],
+    "opticalSize": null
+  }
+]

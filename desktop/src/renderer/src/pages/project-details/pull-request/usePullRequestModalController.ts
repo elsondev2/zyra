@@ -1,3 +1,4 @@
+import { openDesktopLink } from '@/lib/desktop-links'
 import { useEffect, useMemo, useState } from 'react'
 import type { DevScopePullRequestSummary } from '@shared/contracts/devscope-api'
 import {
@@ -198,7 +199,7 @@ export function usePullRequestModalController(props: PullRequestModalProps) {
     async function openOrCreatePullRequest() {
         if (existingPullRequest?.state === 'open') {
             persistProjectConfig()
-            window.open(existingPullRequest.url, '_blank', 'noopener,noreferrer')
+            void openDesktopLink(existingPullRequest.url)
             showToast(`Opened PR #${existingPullRequest.number}.`)
             props.onClose()
             return
@@ -241,7 +242,7 @@ export function usePullRequestModalController(props: PullRequestModalProps) {
                         : `Created PR${prNumberLabel}.`
 
             setStatusMessage({ tone: 'success', text: statusText })
-            window.open(result.pullRequest.url, '_blank', 'noopener,noreferrer')
+            void openDesktopLink(result.pullRequest.url)
             showToast(statusText)
             props.onClose()
         } catch (err: any) {

@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { normalizePromptImages } from '../src/prompt-images.mjs';
+const jpeg = { type: 'image', mimeType: 'image/jpeg', data: Buffer.from([255,216,255,0,1,2]).toString('base64') };
+assert.deepEqual(normalizePromptImages([jpeg]), [jpeg]);
+assert.equal(normalizePromptImages([]), undefined);
+assert.throws(() => normalizePromptImages([{ ...jpeg, data: jpeg.data + '\n!' }]), /invalid base64/);
+assert.throws(() => normalizePromptImages([{ ...jpeg, mimeType: 'image/png' }]), /supported visual/);
+assert.throws(() => normalizePromptImages([jpeg, jpeg], { totalBytes: 10 }), /total/);
+assert.throws(() => normalizePromptImages([jpeg], { imageBytes: 5 }), /larger/);
+assert.throws(() => normalizePromptImages(Array(13).fill(jpeg)), /at most 12/);
+console.log('Shared image validation, signatures, count and aggregate budget: passed');

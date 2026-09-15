@@ -1,0 +1,22 @@
+{
+  "artifact": "com.caverock:androidsvg-aar:1.4",
+  "url": "https://repo.maven.apache.org/maven2/com/caverock/androidsvg-aar/1.4/androidsvg-aar-1.4-sources.jar",
+  "sha256": "b11595da341bb23c04a5fed0157babd630a44618f8e11c4f2b400167b0e0ce56",
+  "files": {
+    "com/caverock/androidsvg/CanvasLegacy.java": "5651ab5f3f382f8d314d4e2eac1908fb25bf3ba159067597748679e0cd1c41e1",
+    "com/caverock/androidsvg/CSSParseException.java": "602613edc466cf084350fe92459698c379fccf576c0a7353867b53f2c3ccc176",
+    "com/caverock/androidsvg/CSSParser.java": "27e0eea9a8cc3a1ed3d22eec41c7f70b1a1d7076b9201815caeb1444b0668a9e",
+    "com/caverock/androidsvg/IntegerParser.java": "0d070d0f24706fb2da69339dba8f4e9cb1a8e356327070b3b3aef3d05a7adf8e",
+    "com/caverock/androidsvg/LibConfig.java": "42754cb3eaa61777d39257c97ae3290e5eabc2a9dc430435ba5b45d2a64b16f1",
+    "com/caverock/androidsvg/NumberParser.java": "de5173de4db7eddd9273ed51d4e44ef4bcfe58e68cd8d2296ad82161a749a561",
+    "com/caverock/androidsvg/PreserveAspectRatio.java": "ae517bf4034bee76a85db52dab9d1b8bd2c4c27c0c198dce658e7b9d5bf13845",
+    "com/caverock/androidsvg/RenderOptions.java": "6ae6464503ba1925030c20dc06d7fa39d27a670f32b7f8f6b278d6e7840adf41",
+    "com/caverock/androidsvg/SimpleAssetResolver.java": "0a8a6db0a5234b206d4738fe38722b61af03b5c6a17b095c268915904d4d627f",
+    "com/caverock/androidsvg/SVG.java": "40ce10aa6d08e251bb72b20983fda8662c5875c4e355383c5df7e27d90940362",
+    "com/caverock/androidsvg/SVGAndroidRenderer.java": "cdae98880b7331cf7202381cd791545ecee3794771f4b1a319c8ae8b9aa201c8",
+    "com/caverock/androidsvg/SVGExternalFileResolver.java": "06cb3346cc24efeeb6b273e9909c1bde1dba8f006426b93cc494b283b491dc2a",
+    "com/caverock/androidsvg/SVGImageView.java": "4bf05c7bc3d61e6d78747cfdc915dc3cdec607dfb2c25b92ee445aa4fd6be740",
+    "com/caverock/androidsvg/SVGParseException.java": "6543d188b1c4ec1c83f5822603bd161085832a4600760145e108742df466f259",
+    "com/caverock/androidsvg/SVGParser.java": "d977213737341882ad384c19cd91409c815c41a68d732ae890613450c99a73b7"
+  }
+}

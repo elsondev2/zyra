@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, unlinkSync } from 'node:fs'
 import { mock } from 'bun:test'
 import type {
     AssistantDomainEvent,
@@ -23,6 +23,14 @@ import {
 } from '../src/shared/assistant/reasoning-efforts'
 
 const electronNoop = (): undefined => undefined
+// Lifecycle fixtures exercise projection, not real logging, browser pairing or
+// computer-control drivers. Keep those services and user-profile writes cold.
+mock.module('electron-log', () => ({ default: { info: electronNoop, warn: electronNoop, error: electronNoop, debug: electronNoop } }))
+mock.module('../src/main/agent-control', () => ({ getAgentControlBroker: () => ({
+    materializeUserAuthorizedBrowserGrant: electronNoop,
+    revokePrincipal: electronNoop,
+    grants: { list: () => [], listPending: () => [] }
+}) }))
 mock.module('electron', () => ({
     app: {
         getPath: () => process.env.TEMP || process.cwd(),
@@ -706,6 +714,19 @@ assert.equal(
     externalUserEventCount,
     'the server echo for a Desktop-originated prompt must not create a duplicate user bubble'
 )
+
+const remoteImageBytes = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jHh0AAAAASUVORK5CYII='
+const remoteImageId = `remote-image-${process.pid}`
+handleEvent({ type: 'message_start', message: { id: remoteImageId, role: 'user', content: [
+    { type: 'text', text: 'Look at this image.' }, { type: 'image', mimeType: 'image/png', data: remoteImageBytes }
+] } }, { turnId, localThreadId: 'mobile-device:fixture' })
+const externalImageEvent = runtimeEvents.findLast(event => event.type === 'user.message.received')
+assert.match(externalImageEvent?.type === 'user.message.received' ? externalImageEvent.payload.text : '', /\[IMAGE\]/, 'live phone images must reach the same attachment renderer before history reload')
+handleEvent({ type: 'message_start', message: { id: remoteImageId + '-only', role: 'user', content: [
+    { type: 'image', mimeType: 'image/png', data: remoteImageBytes }
+] } }, { turnId, localThreadId: 'mobile-device:fixture' })
+const externalImageOnlyEvent = runtimeEvents.findLast(event => event.type === 'user.message.received')
+assert.equal(externalImageOnlyEvent?.type === 'user.message.received' ? externalImageOnlyEvent.payload.messageId : '', 'assistant-message-user-' + remoteImageId + '-only', 'image-only user turns must not disappear')
 
 const emitAssistantMessage = (
     type: 'message_start' | 'message_update' | 'message_end',
@@ -1639,6 +1660,19 @@ const projectedExternalUserMessages = findProjectedRecord(context.localThreadId)
 assert.equal(projectedExternalUserMessages.length, 1, 'external user-message replay must remain idempotent')
 assert.equal(projectedExternalUserMessages[0]?.text, externalPrompt)
 assert.equal(projectedExternalUserMessages[0]?.turnId, turnId)
+const { parseSerializedAssistantMessage } = await import('../src/shared/assistant/message-attachments')
+for (const event of [externalImageEvent, externalImageOnlyEvent]) {
+    if (event?.type !== 'user.message.received') throw new Error('Expected an image user event')
+    handleAssistantRuntimeEvent(event, projectedDeps)
+    handleAssistantRuntimeEvent(event, projectedDeps)
+    const rows = findProjectedRecord(context.localThreadId)?.thread.messages.filter(message => message.id === event.payload.messageId) || []
+    assert.equal(rows.length, 1, 'live image event replay must produce one bubble')
+    const attachments = parseSerializedAssistantMessage(rows[0].text).attachments
+    assert.equal(attachments.length, 1, 'the actual renderer parser must see the image immediately')
+    assert.equal(readFileSync(attachments[0].path!).toString('base64'), remoteImageBytes)
+    unlinkSync(attachments[0].path!) // Only this synthetic test's newly materialized image.
+}
+
 
 if (runningCompactionEvent?.type === 'activity' && completedCompactionEvent?.type === 'activity') {
     handleAssistantRuntimeEvent(runningCompactionEvent, projectedDeps)
@@ -2172,5 +2206,49 @@ assert.equal(
 const transportRecoveryIssue = getAssistantRecoveryIssue({ threadLastError: 'fetch failed' })
 assert.equal(transportRecoveryIssue?.key, 'connection-lost')
 assert.equal(transportRecoveryIssue?.recoverable, true)
+
+// Feed the actual mobile gateway envelope through runtime -> domain projector.
+// This catches a missing user-turn boundary even when assistant streaming works.
+const { HostRouter } = await import('../../mobile/gateway/src/router.mjs')
+const { BodyCache } = await import('../../mobile/gateway/src/projection.mjs')
+const phoneRuntime = new ZyraPiRuntime()
+const phoneContext = {
+    ...context, activeTurnId: null, completedTurnIds: new Set<string>(),
+    assistantMessageSequence: 0, activeAssistantItemId: null, lastAssistantItemId: null,
+    toolArgsByCallId: new Map(), toolStartedAtByCallId: new Map(),
+    assistantTextByItemId: new Map(), assistantCompletedItemIds: new Set(),
+    internalTextByItemId: new Map(), internalCompletedItemIds: new Set()
+}
+phoneRuntime.on('runtime', (event: AssistantRuntimeEvent) => handleAssistantRuntimeEvent(event, projectedDeps))
+const previousMessageIds = findProjectedRecord(projectedThread.id)!.thread.messages.map(message => message.id)
+let phoneTurn = 0
+const phoneRouter = new HostRouter({ owner: 'paired-phone', projects: ['/shared'], cache: new BodyCache(), client: {
+    request: async (method: string, params: any) => {
+        assert.equal(method, 'session.request')
+        const metadata = params.requestContext
+        const text = params.payload.prompt
+        const emit = (event: Record<string, unknown>) => (phoneRuntime as any).handleZyraEvent(phoneContext, event, metadata)
+        const user = { type: 'message_start', message: { id: `phone-user-${phoneTurn}`, role: 'user', content: [{ type: 'text', text }] } }
+        emit(user)
+        assert.equal(findProjectedRecord(projectedThread.id)!.thread.messages.filter(message => message.text === text).length, 1,
+            'a phone prompt must append its user bubble before the assistant starts')
+        const reply = { id: `phone-reply-${phoneTurn}`, role: 'assistant', content: [{ type: 'text', text: `Reply to ${text}` }] }
+        emit({ type: 'message_start', message: { ...reply, content: [] } })
+        emit({ type: 'message_end', message: reply })
+        emit({ type: 'agent_end' })
+        ;(phoneRuntime as any).handleZyraEvent(phoneContext, user, { ...metadata, replay: true })
+        return {}
+    }
+} })
+phoneRouter.attached.add('shared-chat')
+for (const prompt of ['First phone turn', 'Second phone turn']) {
+    phoneTurn++
+    await phoneRouter.dispatch('session.request', { sessionKey: 'shared-chat', type: 'prompt', payload: { prompt } }, `review-${phoneTurn}`)
+}
+const phoneMessages = findProjectedRecord(projectedThread.id)!.thread.messages
+assert.ok(previousMessageIds.every(id => phoneMessages.some(message => message.id === id)), 'phone turns preserve the existing conversation')
+for (const text of ['First phone turn', 'Reply to First phone turn', 'Second phone turn', 'Reply to Second phone turn']) {
+    assert.equal(phoneMessages.filter(message => message.text === text).length, 1, 'successive phone turns remain visible and replay-idempotent without refresh')
+}
 
 console.log('Pi assistant lifecycle capture: ok')

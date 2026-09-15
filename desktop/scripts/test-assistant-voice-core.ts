@@ -837,16 +837,38 @@ scriptedTransport.emit('event', {
     text: 'Missing identity.'
 } satisfies AssistantRealtimeVoiceEvent)
 assert.equal(codexEvents.length, eventCountBeforeIdentitylessFlatNotification)
+codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
+    type: 'zyra.input_audio_transcription.completed', item_id: 'mobile-recovered-input', role: 'user', transcript: 'Recovered native speech.'
+})
+codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
+    type: 'conversation.item.input_audio_transcription.completed', item_id: 'mobile-recovered-input', transcript: 'Late original.'
+})
+const recoveredMobileInput = codexEvents.filter(event => event.type === 'realtime.user.transcript.completed' && event.providerItemId === 'mobile-recovered-input')
+assert.equal(recoveredMobileInput.length, 1, 'recovery and the late original converge on one canonical input')
+assert.equal((recoveredMobileInput[0] as any).text, 'Recovered native speech.')
 const eventCountBeforeHydrationReplay = codexEvents.length
+codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
+    type: 'input_transcript.added', item: { id: 'mobile-word', text: 'Hello' }
+})
+const mobileChunk = codexEvents.at(-1) as any
+assert.equal(mobileChunk.transcriptSource, 'chunk', 'mobile transport identifies physical transcript chunks')
+codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
+    type: 'turn.created', turn: { id: 'mobile-logical-turn', role: 'user', transcript: 'Hello' }
+})
+const mobileTurn = codexEvents.at(-1) as any
+assert.equal(mobileTurn.transcriptSource, 'turn', 'logical turns promote provisional chunks before completion')
+assert.equal(mobileTurn.providerItemId, 'mobile-logical-turn')
 codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
     type: 'turn.done',
     turn: { id: 'hydrated_assistant_item', role: 'assistant', transcript: 'Earlier canonical answer.' }
 })
 assert.equal(
     codexEvents.length,
-    eventCountBeforeHydrationReplay,
-    'hydrated startup history must not be emitted as a new canonical Voice message'
+    eventCountBeforeHydrationReplay + 3,
+    'hydrated startup history emits only a presentation suppression notice'
 )
+assert.equal(codexEvents.at(-1)?.type, 'realtime.transcript.suppressed')
+assert.ok(!codexEvents.some(event => event.type === 'realtime.assistant.transcript.completed' && event.providerItemId === 'hydrated_assistant_item'))
 await codexAdapter.deliverComposerResponse(codexHandle.adapterSessionId, {
     turnId: 'typed-canonical-turn',
     text: 'Canonical typed answer.',
@@ -871,7 +893,9 @@ codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {
     type: 'turn.done',
     turn: { id: 'spoken-canonical-turn', role: 'assistant', transcript: '**Canonical typed answer!**' }
 })
-assert.equal(codexEvents.length, eventCountBeforeCanonicalSpeechReplay, 'only the explicitly correlated spoken replay is suppressed when punctuation changes')
+assert.equal(codexEvents.length, eventCountBeforeCanonicalSpeechReplay + 1, 'only the explicitly correlated spoken replay is suppressed when punctuation changes')
+assert.equal(codexEvents.at(-1)?.type, 'realtime.transcript.suppressed')
+assert.ok(!codexEvents.some(event => event.type === 'realtime.assistant.transcript.completed' && event.providerItemId === 'spoken-canonical-turn'))
 assert.deepEqual(scriptedTransport.requestedSpeech.at(-1), 'Canonical typed answer.')
 assert.equal(scriptedTransport.requestedSpeechCanonicalMessageIds.at(-1), 'voice_assistant_typed_canonical')
 codexAdapter.ingestWebRtcEvent(codexHandle.adapterSessionId, {

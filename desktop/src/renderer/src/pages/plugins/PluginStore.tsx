@@ -1,3 +1,4 @@
+import { openDesktopLink } from '@/lib/desktop-links'
 import { useMemo, useState } from 'react'
 import { ChevronRight, ExternalLink, Info, MessageSquarePlus, Plug, Search } from 'lucide-react'
 import type { AssistantPluginCatalog } from '@shared/assistant/contracts'
@@ -47,8 +48,9 @@ export function PluginStore({ canInstall, busy, installedCatalog, loading, onMan
     const openSource = async (url: string) => {
         setError(null)
         try {
-            const result = await window.devscope.openBrowserPreviewExternal(url)
+            const result = await openDesktopLink(url)
             if (!result.success) throw new Error(result.error || 'Could not open the source.')
+            if (!result.cancelled) setCatalogInfoOpen(false)
         } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not open the source.') }
     }
     return <>

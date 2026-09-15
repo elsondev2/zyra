@@ -1,3 +1,4 @@
+import { projectHistoryMedia } from './history-media.mjs';
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, openSync, readSync } from "node:fs";
 import { open as openFile } from "node:fs/promises";
@@ -7,7 +8,7 @@ export const EAGER_HISTORY_TOOL_RESULTS = 15;
 export const MAX_EAGER_HISTORY_TOOL_RESULT_BYTES = 8 * 1024 * 1024;
 
 export function normalizeHistoryBodyOptions(options = {}) {
-  return { deferToolResults: options.toolResultBodies === HISTORY_TOOL_RESULT_BODY_POLICY };
+  return { deferToolResults: [HISTORY_TOOL_RESULT_BODY_POLICY, "lazy-mobile-v1"].includes(options.toolResultBodies), mobile: options.toolResultBodies === "lazy-mobile-v1" };
 }
 
 export function inspectToolResultEntry(entry, entryIndex, byteLength, identity = {}) {
@@ -87,19 +88,23 @@ export function readIndexedHistoryRecord(file, offset) {
 
 export function projectIndexedHistoryEntries(input = {}) {
   const options = normalizeHistoryBodyOptions(input.options);
-  if (!options.deferToolResults) return readSelectedEntries(input.file, input.selected);
+  if (!options.deferToolResults) return readSelectedEntries(input.file, input.selected, null, input.options?.entryLocators === true, input.options?.mediaBodies === "lazy-v1");
   const deferredRecords = input.deferredToolResults || [];
-  const eagerIndexes = eagerToolResultIndexSet(input.toolResultEntryIndexes, deferredRecords);
+  const eagerIndexes = eagerToolResultIndexSet(input.toolResultEntryIndexes, deferredRecords, options.mobile);
   return readSelectedEntries(input.file, input.selected, (selection) => {
     if (eagerIndexes.has(selection.entryIndex)) return null;
     const record = findRecordByEntryIndex(deferredRecords, selection.entryIndex);
     return record ? createDeferredEntry(record) : null;
-  });
+  }, input.options?.entryLocators === true, input.options?.mediaBodies === "lazy-v1");
 }
 
 export function projectLoadedHistoryEntries(entries, startIndex, options = {}) {
   const normalized = normalizeHistoryBodyOptions(options);
-  if (!normalized.deferToolResults) return cloneJson(entries);
+  const located = values => values.map((original, index) => {
+    const entry = options.mediaBodies === "lazy-v1" ? projectHistoryMedia(original, startIndex + index) : original;
+    return options.entryLocators === true ? { ...entry, historyEntryIndex: startIndex + index } : entry;
+  });
+  if (!normalized.deferToolResults) return located(cloneJson(entries));
   const records = entries.map((entry, localIndex) => {
     const rawLine = JSON.stringify(entry);
     return inspectToolResultEntry(entry, startIndex + localIndex, Buffer.byteLength(rawLine, "utf8"), {
@@ -110,13 +115,13 @@ export function projectLoadedHistoryEntries(entries, startIndex, options = {}) {
   const toolResultIndexes = Array.isArray(options.toolResultEntryIndexes)
     ? options.toolResultEntryIndexes
     : records.filter(Boolean).map((record) => record.entryIndex);
-  const eagerIndexes = eagerToolResultIndexSet(toolResultIndexes, records.filter(isDeferrableHistoryRecord));
-  return entries.map((entry, localIndex) => {
+  const eagerIndexes = eagerToolResultIndexSet(toolResultIndexes, records.filter(isDeferrableHistoryRecord), normalized.mobile);
+  return located(entries.map((entry, localIndex) => {
     const record = records[localIndex];
     return isDeferrableHistoryRecord(record) && !eagerIndexes.has(record.entryIndex)
       ? createDeferredEntry(record)
       : cloneJson(entry);
-  });
+  }));
 }
 
 export function isDeferrableHistoryRecord(record) {
@@ -149,8 +154,9 @@ export function createHistoryBodyRef(record) {
   };
 }
 
-function eagerToolResultIndexSet(indexes = [], records = []) {
+function eagerToolResultIndexSet(indexes = [], records = [], mobile = false) {
   const eager = new Set();
+  if (mobile) return eager;
   let eagerBytes = 0;
   for (let index = indexes.length - 1; index >= 0 && eager.size < EAGER_HISTORY_TOOL_RESULTS; index -= 1) {
     const entryIndex = indexes[index];
@@ -201,7 +207,7 @@ function createEnvelope(entry, message) {
   };
 }
 
-function readSelectedEntries(file, selected, replacement) {
+function readSelectedEntries(file, selected, replacement, locators = false, media = false) {
   const entries = [];
   if (!Array.isArray(selected) || selected.length === 0 || !existsSync(file)) return entries;
   const fd = openSync(file, "r");
@@ -209,7 +215,7 @@ function readSelectedEntries(file, selected, replacement) {
     for (const selection of selected) {
       const projected = replacement?.(selection);
       if (projected) {
-        entries.push(projected);
+        entries.push(locators ? { ...projected, historyEntryIndex: selection.entryIndex } : projected);
         continue;
       }
       const offset = Number(selection.offset?.[0]);
@@ -217,7 +223,7 @@ function readSelectedEntries(file, selected, replacement) {
       if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || length <= 0) continue;
       const buffer = Buffer.allocUnsafe(length);
       if (readSync(fd, buffer, 0, length, offset) !== length) continue;
-      try { entries.push(JSON.parse(buffer.toString("utf8"))); }
+      try { const raw = JSON.parse(buffer.toString("utf8")); const entry = media ? projectHistoryMedia(raw, selection.entryIndex) : raw; entries.push(locators ? { ...entry, historyEntryIndex: selection.entryIndex } : entry); }
       catch {}
     }
   } finally {

@@ -1,3 +1,4 @@
+import { DEFAULT_DARK_THEME_TOKENS as fallbackTheme, defaultThemeTokens } from '../../shared/preferences/default-theme-tokens'
 import { BrowserWindow, globalShortcut, screen } from 'electron'
 import type { ControlCursorState, ControlStateSnapshot, ControlTarget } from '../../shared/agent-control/contracts'
 import type { AgentControlBroker } from './agent-control-broker'
@@ -6,15 +7,15 @@ import { WINDOWS_CONTROL_CURSOR_HTML, WINDOWS_CONTROL_SAFETY_HTML } from './wind
 
 const DISPLAY_REFRESH_MS = 750
 const DEFAULT_APPEARANCE: ResolvedWindowsControlOverlayAppearance = {
-    accentPrimary: '#3b82f6',
-    accentSecondary: '#60a5fa',
-    accentPrimaryRgb: '59 130 246',
-    accentSecondaryRgb: '96 165 250',
-    themeBackground: '#0c121f',
-    themeSurface: '#131c2c',
-    themeText: '#f0f4f8',
-    themeTextSecondary: '#aab4c3',
-    themeBorder: '#2c394c',
+    accentPrimary: fallbackTheme.primary,
+    accentSecondary: fallbackTheme.secondary,
+    accentPrimaryRgb: hexToRgbChannels(fallbackTheme.primary),
+    accentSecondaryRgb: hexToRgbChannels(fallbackTheme.secondary),
+    themeBackground: fallbackTheme.bg,
+    themeSurface: fallbackTheme.card,
+    themeText: fallbackTheme.text,
+    themeTextSecondary: fallbackTheme.textSecondary,
+    themeBorder: fallbackTheme.borderSecondary,
     themeAppearance: 'dark',
     uiFont: '"Bricolage Grotesque", "Hanken Grotesk", "Segoe UI", system-ui, sans-serif',
     reduceMotion: false,
@@ -322,18 +323,19 @@ function windowsApplicationLabel(target: Extract<ControlTarget, { kind: 'windows
 }
 
 function resolveAppearance(input: WindowsControlOverlayAppearance): ResolvedWindowsControlOverlayAppearance {
-    const accentPrimary = validHexColor(input.accentPrimary) || DEFAULT_APPEARANCE.accentPrimary
+    const fallback = defaultThemeTokens(input.themeAppearance === 'light' ? 'light' : 'dark')
+    const accentPrimary = validHexColor(input.accentPrimary) || fallback.primary
     const accentSecondary = validHexColor(input.accentSecondary) || accentPrimary
     return {
         accentPrimary,
         accentSecondary,
         accentPrimaryRgb: hexToRgbChannels(accentPrimary),
         accentSecondaryRgb: hexToRgbChannels(accentSecondary),
-        themeBackground: validHexColor(input.themeBackground) || DEFAULT_APPEARANCE.themeBackground,
-        themeSurface: validHexColor(input.themeSurface) || DEFAULT_APPEARANCE.themeSurface,
-        themeText: validHexColor(input.themeText) || DEFAULT_APPEARANCE.themeText,
-        themeTextSecondary: validHexColor(input.themeTextSecondary) || DEFAULT_APPEARANCE.themeTextSecondary,
-        themeBorder: validHexColor(input.themeBorder) || DEFAULT_APPEARANCE.themeBorder,
+        themeBackground: validHexColor(input.themeBackground) || fallback.bg,
+        themeSurface: validHexColor(input.themeSurface) || fallback.card,
+        themeText: validHexColor(input.themeText) || fallback.text,
+        themeTextSecondary: validHexColor(input.themeTextSecondary) || fallback.textSecondary,
+        themeBorder: validHexColor(input.themeBorder) || fallback.borderSecondary,
         themeAppearance: input.themeAppearance === 'light' ? 'light' : 'dark',
         uiFont: validFontStack(input.uiFont) || DEFAULT_APPEARANCE.uiFont,
         reduceMotion: input.reduceMotion === true,

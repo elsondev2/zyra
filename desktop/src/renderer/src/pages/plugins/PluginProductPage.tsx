@@ -1,3 +1,4 @@
+import { openDesktopLink } from '@/lib/desktop-links'
 import { useState } from 'react'
 import { ChevronRight, ExternalLink, MessageSquarePlus, Plus, Settings2 } from 'lucide-react'
 import type { AssistantPluginCatalog, AssistantPluginInstallation } from '@shared/assistant/contracts'
@@ -36,7 +37,7 @@ export function PluginProductPage({ entry, installation, catalog, busy, canInsta
     const license = manifest ? manifest.license : entry?.license
     const openLink = async (url: string) => {
         setError(null)
-        try { const result = await window.devscope.openBrowserPreviewExternal(url); if (!result.success) throw Error(result.error || 'Could not open this link.') }
+        try { const result = await openDesktopLink(url); if (!result.success) throw Error(result.error || 'Could not open this link.') }
         catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not open this link.') }
     }
     if (!name) return <DirectoryEmpty title="Plugin not found" action={<button className="plugin-button" onClick={onBack}>Back to Plugins</button>} />

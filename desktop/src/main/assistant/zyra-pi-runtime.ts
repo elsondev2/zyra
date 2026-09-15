@@ -1,3 +1,5 @@
+import { canonicalImageAttachmentSection } from './canonical-media-cache'
+import { replaceSerializedAssistantImageAttachments } from '../../shared/assistant/message-attachments'
 import { assistantTextUpdate } from '../../shared/assistant/stream-text-update'
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
@@ -2902,8 +2904,17 @@ export class ZyraPiRuntime extends EventEmitter {
                 )
                 if (type !== 'message_start' || !turnId || !originatedOutsideThisDesktopThread) return
                 const content = extractAssistantEventContentParts(event, emptyAssistantContentParts(), type)
-                if (!content.text.trim()) return
                 const sourceMessageId = asString(message?.['id'])
+                const messageId = `assistant-message-user-${sourceMessageId || turnId}`
+                const parts = Array.isArray(message?.['content']) ? message['content'] : []
+                const imageSections = parts.flatMap((part, index) => {
+                    const image = asRecord(part)
+                    if (image?.['type'] !== 'image') return []
+                    try { const section = canonicalImageAttachmentSection(context.providerThreadId, messageId, index, image); return section ? [section] : [] }
+                    catch { log.warn('[ZyraPiRuntime] Could not cache a remote user image'); return [] }
+                })
+                const text = imageSections.length ? replaceSerializedAssistantImageAttachments(content.text, imageSections) : content.text
+                if (!text.trim()) return
                 this.emitRuntime({
                     eventId: randomUUID(),
                     type: 'user.message.received',
@@ -2913,8 +2924,8 @@ export class ZyraPiRuntime extends EventEmitter {
                     turnId,
                     itemId: sourceMessageId || undefined,
                     payload: {
-                        messageId: `assistant-message-user-${sourceMessageId || turnId}`,
-                        text: content.text
+                        messageId,
+                        text
                     }
                 })
                 return

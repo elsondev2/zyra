@@ -120,13 +120,16 @@ export type RealtimeDomainEvent =
     | (RealtimeEventBase & {
         type: 'realtime.user.transcript.delta' | 'realtime.assistant.transcript.delta'
         providerItemId: string
+        transcriptSource?: 'turn' | 'chunk'
         delta: string
     })
     | (RealtimeEventBase & {
         type: 'realtime.user.transcript.completed' | 'realtime.assistant.transcript.completed'
         providerItemId: string
+        transcriptSource?: 'turn' | 'chunk'
         text: string
     })
+    | (RealtimeEventBase & { type: 'realtime.transcript.suppressed'; providerItemId: string; role: 'user' | 'assistant' })
     | (RealtimeEventBase & {
         type: 'realtime.delegation.requested'
         providerItemId: string

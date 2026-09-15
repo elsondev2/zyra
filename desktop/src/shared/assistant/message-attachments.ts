@@ -15,7 +15,7 @@ export type SerializedAssistantMessage = {
     attachments: SerializedAssistantAttachment[]
 }
 
-const ATTACHMENT_BLOCK_MARKER = /\n\nAttached files \((\d+)\):\n/
+const ATTACHMENT_BLOCK_MARKER = /(?:^|\n\n)Attached files \((\d+)\):\n/
 const ATTACHMENT_HEADER_PATTERN = /^\d+\.\s+(.+?)\s+\[([A-Z]+)\]$/
 const ATTACHMENT_DETAIL_KEYS = new Set(['path', 'ref', 'mime', 'size', 'preview', 'note', 'origin'])
 

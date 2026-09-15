@@ -17,7 +17,7 @@ const now = () => new Date(tick += 1_000)
 const appearanceSelection = {
     appearanceThemeMode: 'system' as const,
     appearanceLightTheme: 'light',
-    appearanceDarkTheme: 'dark',
+    appearanceDarkTheme: 'vercel',
     appearanceUiFont: 'hanken',
     appearanceCodeFont: 'system-mono',
     accessibilityReduceMotion: false

@@ -700,6 +700,7 @@ export interface DevScopeAssistantApi {
 }
 
 export interface DevScopeApi {
+    mobileAccess?: import('../mobile-access').MobileAccessApi
     runtimeActivation: { getState: () => Promise<RuntimeActivationStatus>; onStateChange: (listener: (state: RuntimeActivationStatus) => void) => () => void }
     // Settings + AI
     setStartupSettings: (settings: { openAtLogin: boolean; openAsHidden: boolean }) => Promise<DevScopeResult>

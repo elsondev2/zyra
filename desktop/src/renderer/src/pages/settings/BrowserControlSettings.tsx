@@ -1,3 +1,5 @@
+import type { DesktopLinkPreference } from '@shared/desktop-link-policy'
+import { useDesktopLinkPreference, setDesktopLinkPreference } from '@/lib/desktop-links'
 import { useEffect, useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import { isElectronRendererRuntime } from '@/lib/browser-file-url'
@@ -18,6 +20,7 @@ import {
 
 export default function BrowserControlSettings() {
     const { settings, updateSettings } = useSettings()
+    const linkPreference = useDesktopLinkPreference()
     const [retainedWorkspaceCount, setRetainedWorkspaceCount] = useState(() => countPersistedAssistantBrowserWorkspaces())
     const [browserHistoryState, setBrowserHistoryState] = useState<'checking' | 'present' | 'empty' | 'unavailable'>('checking')
     const [adBlockBusy, setAdBlockBusy] = useState(false)
@@ -86,6 +89,7 @@ export default function BrowserControlSettings() {
         <SettingsPageContainer title="Browser" backTo="/settings/workspace" backLabel="Workspace">
             {integratedBrowserAvailable ? <>
                 <SettingsSection title="Browsing" searchSection="Browser workspace">
+                    <SettingsRow title="Open links in" description="Choose where links from chats, files, and the Plugin store open." info="Remembered on this device. Sign-in flows and explicitly named browser actions keep their own destination." control={<SettingsSegmented<DesktopLinkPreference> value={linkPreference} options={[{ value: 'ask', label: 'Ask me' }, { value: 'zyra', label: 'Zyra Browser' }, { value: 'system', label: 'Default browser' }]} onChange={value => { try { setDesktopLinkPreference(value) } catch { setStatus({ tone: 'error', message: 'Could not save the link preference.' }) } }} label="Open links in" />} />
                     <SettingsRow title="Restore Browser tabs" description="Reopen saved tabs when you return to a chat workspace." control={<SettingsSwitch checked={settings.assistantBrowserRestoreTabs} onCheckedChange={(assistantBrowserRestoreTabs) => updateSettings({ assistantBrowserRestoreTabs })} label="Restore Browser tabs" />} />
                     <SettingsRow title="New Tab backgrounds" description="Choose a background source for new tabs." info="Built-in uses an attributed nature pack; configure your Unsplash key in the New Tab background picker." control={<SettingsSegmented value={settings.assistantBrowserNewTabBackgroundMode} options={[{ value: 'off', label: 'Off' }, { value: 'built-in', label: 'Built-in' }, { value: 'unsplash', label: 'Unsplash' }]} onChange={(assistantBrowserNewTabBackgroundMode) => updateSettings({ assistantBrowserNewTabBackgroundMode })} label="New Tab background source" />} />
                     <SettingsRow title="Background behavior" description="Change the image per tab or keep your selected image." control={<SettingsSegmented value={settings.assistantBrowserNewTabBackgroundRotation} options={[{ value: 'every-tab', label: 'Every tab' }, { value: 'fixed', label: 'Locked' }]} onChange={(assistantBrowserNewTabBackgroundRotation) => updateSettings({ assistantBrowserNewTabBackgroundRotation })} label="New Tab background behavior" disabled={settings.assistantBrowserNewTabBackgroundMode === 'off'} />} />

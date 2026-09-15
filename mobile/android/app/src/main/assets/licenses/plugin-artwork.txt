@@ -1,0 +1,175 @@
+Plugin artwork
+
+Brand marks belong to their respective owners. Zyra’s code license does not grant rights to those marks.
+
+Artwork is reproduced from official publisher assets and the commit-pinned OpenAI Plugin catalog:
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57
+
+Included publishers and Plugins:
+Linear — Linear Orbit, Inc
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/linear
+
+Atlassian Rovo — Atlassian
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/atlassian-rovo
+
+Google Calendar — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/google-calendar
+
+Gmail — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/gmail
+
+Slack — Slack
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/slack
+
+Teams — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/teams
+
+SharePoint — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/sharepoint
+
+Outlook Email — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/outlook-email
+
+Outlook Calendar — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/outlook-calendar
+
+Canva — Canva Pty Ltd.
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/canva
+
+Figma — Figma
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/figma
+
+Stripe — Stripe
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/stripe
+
+Vercel — Vercel Labs
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/vercel
+
+Game Studio — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/game-studio
+
+Superpowers — Jesse Vincent
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/superpowers
+
+GitHub — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/github
+
+CircleCI — CircleCI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/circleci
+
+Google Drive — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/google-drive
+
+Notion — Notion
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/notion
+
+Cloudflare — Cloudflare
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/cloudflare
+
+Sentry — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/sentry
+
+Build iOS Apps — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/build-ios-apps
+
+Build macOS Apps — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/build-macos-apps
+
+Build Web Apps — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/build-web-apps
+
+Test Android Apps — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/test-android-apps
+
+Life Science Research — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/life-science-research
+
+Zotero — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/zotero
+
+Expo — Expo
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/expo
+
+CodeRabbit — CodeRabbit
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/coderabbit
+
+Remotion — Remotion
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/remotion
+
+Granola — Granola
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/granola
+
+monday.com — monday.com
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/monday-com
+
+HyperFrames by HeyGen — HeyGen
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/hyperframes
+
+Supabase — Supabase
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/supabase
+
+Codex Security — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/codex-security
+
+OpenAI Developers — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/openai-developers
+
+Datadog (Preview) — Datadog
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/datadog
+
+Zoom — Zoom
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/zoom
+
+Mixpanel Headless — Mixpanel
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/mixpanel-headless
+
+Airtable — Airtable
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/airtable
+
+NVIDIA — NVIDIA
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/nvidia
+
+PostHog — PostHog Inc.
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/posthog
+
+Life Sciences NGS Analysis — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/ngs-analysis
+
+Shopify — Shopify
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/shopify
+
+MagicPath — MagicPathAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/magicpath
+
+Boltz — Boltz
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/boltz-api-cli
+
+Dropbox — Dropbox
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/dropbox
+
+Product Design — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/product-design
+
+Data Analytics — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/data-analytics
+
+Creative Production — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/creative-production
+
+Public Equity Investing — OpenAI
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/public-equity-investing
+
+Lovable — Lovable Labs
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/lovable
+
+ClickUp — ClickUp
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/clickup
+
+Consensus — Consensus
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/consensus
+
+ChatCut — ChatCut
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/chatcut
+
+Higgsfield — Higgsfield AI, Inc.
+https://github.com/openai/plugins/tree/1e285826e604f66f7208f7ac4dba0fe8341d1f57/plugins/higgsfield

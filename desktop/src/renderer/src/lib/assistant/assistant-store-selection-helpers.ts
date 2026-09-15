@@ -107,6 +107,7 @@ function areAssistantThreadsEqual(
         && left.hasActivePlan === right.hasActivePlan
         && left.hasPendingApprovals === right.hasPendingApprovals
         && left.hasPendingUserInputs === right.hasPendingUserInputs
+        && left.mobileVoice?.deviceName === right.mobileVoice?.deviceName
         && left.canonicalPresence?.state === right.canonicalPresence?.state
         && left.canonicalPresence?.activeTurnId === right.canonicalPresence?.activeTurnId
         && left.canonicalPresence?.latestSequence === right.canonicalPresence?.latestSequence
@@ -291,7 +292,7 @@ function getRailThreadSignature(thread: AssistantSnapshot['sessions'][number]['t
         presence?.backgroundWorkActive ? '1' : '0',
         presence?.latestSequence ?? '',
         (presence?.clients || [])
-            .map((client) => `${client.clientId}:${client.surface}`)
+            .map((client) => JSON.stringify([client.clientId, client.surface, client.displayName || '']))
             .sort()
             .join(',')
     ].join(':')

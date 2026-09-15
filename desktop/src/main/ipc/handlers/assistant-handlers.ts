@@ -199,14 +199,14 @@ export function handleAssistantSetPluginState(
     _event: Electron.IpcMainInvokeEvent,
     input: AssistantSetPluginStateInput
 ) {
-    return withAssistantResult(() => getAssistantService().setPluginState(input.pluginId, input.state))
+    return withAssistantResult(() => getAssistantService().setPluginState(input.pluginId, input.state, input.expectedCatalogRevision))
 }
 
 export function handleAssistantRollbackPlugin(
     _event: Electron.IpcMainInvokeEvent,
     input: AssistantRollbackPluginInput
 ) {
-    return withAssistantResult(() => getAssistantService().rollbackPlugin(input.pluginId, input.releaseId, input.confirmed))
+    return withAssistantResult(() => getAssistantService().rollbackPlugin(input.pluginId, input.releaseId, input.confirmed, input.expectedCatalogRevision))
 }
 
 export function handleAssistantCreateProject(

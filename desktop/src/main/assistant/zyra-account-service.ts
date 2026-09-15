@@ -68,6 +68,7 @@ async function loadChatGptAccountModule(): Promise<ChatGptAccountModule> {
 export class ZyraAccountService {
     private overviewPromise: Promise<AssistantAccountOverview> | null = null
     private redemptionInFlight = false
+    private limitsPromise: Promise<AssistantAccountOverview> | null = null
 
     constructor(private readonly loadAccountModule: ChatGptAccountModuleLoader = loadChatGptAccountModule) {}
 
@@ -84,6 +85,16 @@ export class ZyraAccountService {
             if (this.overviewPromise === request) this.overviewPromise = null
         }
         void request.then(clearRequest, clearRequest)
+        return request
+    }
+
+    /** Mobile limits never wait for unrelated banked-reset inventory. */
+    async getLimitsOverview(): Promise<AssistantAccountOverview> {
+        if (this.limitsPromise) return this.limitsPromise
+        const request = this.loadOverview(false)
+        this.limitsPromise = request
+        const clear = () => { if (this.limitsPromise === request) this.limitsPromise = null }
+        void request.then(clear, clear)
         return request
     }
 
@@ -138,14 +149,14 @@ export class ZyraAccountService {
         }
     }
 
-    private async loadOverview(): Promise<AssistantAccountOverview> {
+    private async loadOverview(includeResetCredits = true): Promise<AssistantAccountOverview> {
         const accountModule = await this.loadAccountModule()
         const accountStatus = await accountModule.buildChatGptAccountStatus(CHATGPT_ACCOUNT_PROVIDER)
         const configured = asRecord(asRecord(accountStatus)?.['status'])?.['configured'] === true
         let resetCredits: unknown = null
         let resetCreditsError: string | null = null
 
-        if (configured) {
+        if (configured && includeResetCredits) {
             try {
                 resetCredits = await accountModule.fetchCodexResetCredits()
             } catch (error) {

@@ -194,6 +194,23 @@ try {
     changedAuthorityWorker.dispose()
     changedAuthorityConnection.close()
 
+    workers[1].emit('event', { type: 'approval_requested', requestId: 'approval:journal-gap', command: 'synthetic command' })
+    workers[1].emit('event', { type: 'tool_execution_start', toolCallId: 'tool:journal-gap', toolName: 'read' })
+    for (let index = 0; index < 520; index++) workers[1].emit('event', { type: 'status', index })
+    const gapConnection = new DesktopAgentServerConnection(root, { stateDirectory, channel, autoStart: false, authorityProof: 'desktop-test-authority' })
+    const gapWorker = gapConnection.createWorker(project, 0)
+    const recoveredEvents: any[] = []
+    gapWorker.onEvent(event => recoveredEvents.push(event))
+    try {
+        await gapWorker.request('connect', {
+            cwd: project, localThreadId: 'assistant-thread:desktop-test', threadId: 'chat:desktop-test', providerThreadId: 'chat:desktop-test',
+            pluginSkillSources: workers[1].connectPayloads[0]?.pluginSkillSources
+        })
+        gapWorker.flushReplay()
+        assert.equal(recoveredEvents.filter(event => event.type === 'approval_requested' && event.requestId === 'approval:journal-gap').length, 1, 'Desktop must recover attention whose opening event was evicted')
+        assert.equal(recoveredEvents.filter(event => event.type === 'tool_execution_start' && event.toolCallId === 'tool:journal-gap').length, 1, 'Desktop must recover pending tools after a journal gap')
+    } finally { gapWorker.dispose(); gapConnection.close() }
+
     const retryProbe = new DesktopAgentServerConnection(root, { autoStart: false })
     const recoveredClient = { close: () => undefined }
     let clientCreationAttempts = 0

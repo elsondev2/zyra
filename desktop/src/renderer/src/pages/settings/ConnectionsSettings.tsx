@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ChromeBrowserConnectionSettings } from './ChromeBrowserConnectionSettings'
+import { MobileConnectionSettings } from './MobileConnectionSettings'
 import { Copy, ExternalLink } from 'lucide-react'
 import { BROWSER_CLIENT_HOST_ORIGIN } from '@shared/browser-assistant-bridge'
 import { isElectronRendererRuntime } from '@/lib/browser-file-url'
@@ -81,14 +82,7 @@ export default function ConnectionsSettings() {
 
             {desktopHost ? <ChromeBrowserConnectionSettings /> : null}
 
-            <SettingsSection title="Trusted devices">
-                <SettingsRow
-                    title="Other devices"
-                    description="Connections from phones and other computers are currently disabled."
-                    status="Not enabled"
-                    statusTone="muted"
-                />
-            </SettingsSection>
+            {desktopHost ? <MobileConnectionSettings /> : null}
         </SettingsPageContainer>
     )
 }

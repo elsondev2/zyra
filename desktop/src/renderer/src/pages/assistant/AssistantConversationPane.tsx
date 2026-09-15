@@ -1018,6 +1018,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
             titleGenerating={controller.selectedSession?.titleGenerating === true}
             canonicalThreadId={controller.activeThread?.providerThreadId || controller.activeThread?.id || null}
             canonicalPresence={settings.assistantShowStatusDetails || settings.assistantShowDiagnostics ? controller.activeThread?.canonicalPresence : null}
+            mobileVoice={controller.activeThread?.mobileVoice}
             showPresenceBadge={settings.assistantShowStatusDetails}
             showDiagnostics={settings.assistantShowDiagnostics}
             activeThreadIsSubagent={activeThreadIsSubagent}
@@ -1040,6 +1041,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         activeThreadLabel,
         composerIsCentered,
         controller.activeThread?.canonicalPresence,
+        controller.activeThread?.mobileVoice,
         controller.activeThread?.id,
         controller.activeThread?.providerThreadId,
         controller.commandPending,

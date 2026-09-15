@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { hasAssistantTuiPresence, isAssistantSessionOpenInTui } from '../src/renderer/src/pages/assistant/assistant-tui-presence'
+import { assistantMobileDevices, assistantSessionMobileDevices, hasAssistantTuiPresence, isAssistantSessionOpenInTui } from '../src/renderer/src/pages/assistant/assistant-tui-presence'
 import { resolveAssistantAgentInboxSettledInitialCount } from '../src/renderer/src/pages/assistant/assistant-agent-inbox-settled-window'
+import { mergeCanonicalPresenceObservation } from '../src/main/assistant/service-canonical-presence'
+import { areAssistantSessionsRailSelectionsEqual } from '../src/renderer/src/lib/assistant/assistant-store-selection-helpers'
 
 const tuiPresence = {
     state: 'ready',
@@ -15,6 +17,29 @@ const desktopPresence = {
 assert.equal(hasAssistantTuiPresence(tuiPresence), true)
 assert.equal(hasAssistantTuiPresence(desktopPresence), false)
 assert.equal(hasAssistantTuiPresence(null), false)
+const mixedPresence = { clients: [...tuiPresence.clients,
+    { clientId: 'mobile:one', surface: 'mobile', displayName: 'My phone' },
+    { clientId: 'mobile:two', surface: ' MOBILE ', displayName: 'Travel phone' }] }
+assert.equal(hasAssistantTuiPresence(mixedPresence), true, 'terminal and phone can both be present')
+assert.deepEqual(assistantMobileDevices(mixedPresence), ['My phone', 'Travel phone'])
+assert.deepEqual(assistantMobileDevices(null), [])
+assert.deepEqual(assistantMobileDevices(desktopPresence), [])
+assert.deepEqual(assistantMobileDevices({ clients: [{ surface: 'mobile' }] }), ['Android phone'], 'legacy clients have a friendly fallback')
+assert.deepEqual(assistantSessionMobileDevices({ threads: [{ canonicalPresence: mixedPresence }, { canonicalPresence: mixedPresence }] } as any), ['My phone', 'Travel phone'], 'same phone attached to two threads appears once')
+assert.deepEqual(assistantMobileDevices({ clients: [{ surface: 'mobile', displayName: '\u202ePhone\n' }] }), ['Phone'])
+const observed = mergeCanonicalPresenceObservation(undefined, {
+    ...mixedPresence, state: 'ready', activeTurnId: null, backgroundWorkActive: false, latestSequence: 7
+})
+assert.deepEqual(assistantMobileDevices(observed), ['My phone', 'Travel phone'], 'Desktop canonical observation preserves device metadata')
+const selection = (presence: typeof observed) => ({ playground: { rootPath: '', labs: [] }, sessions: [{
+    id: 'chat', title: 'Chat', activeThreadId: 'thread', createdAt: '2026-09-14T00:00:00Z',
+    threads: [{ id: 'thread', createdAt: '2026-09-14T00:00:00Z', canonicalPresence: presence }]
+}] } as any)
+const renamed = { ...observed, clients: observed.clients.map(client => client.clientId === 'mobile:one' ? { ...client, displayName: 'Renamed phone' } : client) }
+assert.equal(areAssistantSessionsRailSelectionsEqual(selection(observed), selection(renamed)), false, 'device label changes redraw the rail without requiring a new turn')
+const departed = { ...observed, clients: observed.clients.filter(client => client.surface.trim().toLowerCase() !== 'mobile') }
+assert.equal(areAssistantSessionsRailSelectionsEqual(selection(observed), selection(departed)), false, 'detach redraws both sidebar layouts')
+assert.deepEqual(assistantMobileDevices(departed), [])
 assert.equal(isAssistantSessionOpenInTui({
     threads: [
         { canonicalPresence: desktopPresence },
@@ -46,13 +71,17 @@ assert.match(railSource, /isAssistantSessionOpenInTui\(session\)[\s\S]*<Assistan
 assert.match(railSource, /hasAssistantTuiPresence\(thread\.canonicalPresence\)[\s\S]*<AssistantTuiPresenceIndicator focusable=\{false\} compact/, 'visible nested thread rows preserve thread-specific TUI presence')
 assert.match(selectionSource, /presence\?\.clients[\s\S]*client\.clientId[\s\S]*client\.surface/, 'rail equality invalidates when TUI clients attach or detach without changing turn state')
 assert.match(inboxSource, /tuiOpen: isAssistantSessionOpenInTui\(session\)/, 'Inbox items derive TUI presence from their own canonical chat')
-assert.equal((inboxSource.match(/<AssistantTuiPresenceIndicator focusable=\{false\}/g) || []).length, 2, 'both Inbox card and slim-row presentations show the TUI icon')
+assert.equal((inboxSource.match(/<AssistantTuiPresenceIndicator focusable=\{false\} \/>/g) || []).length, 2, 'both Inbox card and slim-row presentations show the TUI icon')
+assert.equal((inboxSource.match(/mobileDevices=\{item\.mobileDevices\}/g) || []).length, 2, 'both Inbox layouts show the phone icon beside TUI presence')
+assert.match(headerSource, /mobileDevices=\{mobileDevices\}/)
+assert.equal((railSource.match(/mobileDevices=\{mobileDevices\}/g) || []).length, 2, 'chat and nested thread rows use their own attached phones')
+assert.match(selectionSource, /client\.displayName/, 'device renames invalidate memoized rail metadata')
 assert.doesNotMatch(inboxSource, /AssistantTuiPresenceIndicator focusable=\{false\} compact/, 'Inbox uses the slightly larger terminal icon')
 assert.match(inboxSource, /absolute bottom-1\.5 right-2[\s\S]*<AssistantTuiPresenceIndicator focusable=\{false\}/, 'Inbox cards place TUI presence at the bottom-right corner')
 assert.match(inboxSource, /function AgentInboxSlimRow[\s\S]*<AssistantTuiPresenceIndicator focusable=\{false\}[\s\S]*formatAssistantSidebarRelativeTime\(item\.activityAt\)/, 'Inbox slim rows align TUI presence before relative time')
 assert.match(railSource, /\{tuiOpen \? <AssistantTuiPresenceIndicator[\s\S]*\{timeLabel\}/, 'standard chat rows align TUI presence before relative time')
 assert.match(inboxSource, /function InboxRowActions[\s\S]*pointer-events-none absolute right-0 top-1\/2[\s\S]*showLabel \? 'w-\[4\.75rem\]' : 'w-\[3\.25rem\]'/, 'Inbox actions overlay a fixed trailing slot without changing the row width')
-assert.match(inboxSource, /group-hover\/agent-inbox-row:-translate-x-9[\s\S]*<AssistantTuiPresenceIndicator focusable=\{false\}/, 'the terminal presence icon still slides left to clear the fixed action slot')
+assert.match(inboxSource, /group-hover\/agent-inbox-row:-translate-x-6[\s\S]*<AssistantTuiPresenceIndicator focusable=\{false\}/, 'the terminal presence icon still slides left to clear the fixed action slot')
 assert.match(inboxSource, /translate-x-1 -translate-y-1\/2[\s\S]*group-hover\/agent-inbox-row:translate-x-0/, 'Inbox actions retain their restrained slide-in motion without layout reflow')
 assert.doesNotMatch(inboxSource, /group-hover\/agent-inbox-row:grid-cols-\[0fr\]/, 'Inbox hover actions cannot reflow or newly trim the row title')
 assert.match(inboxSource, /data-agent-inbox-layout-id[\s\S]*useLayoutEffect[\s\S]*cubic-bezier\(0\.22, 1, 0\.36, 1\)/, 'Inbox rows animate smoothly between Settled, Recent, and Active work')

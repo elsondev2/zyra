@@ -97,7 +97,7 @@ function parseRecord(value: unknown): OnboardingRecord | null {
     const appearance: OnboardingRecord['data']['appearance'] = isRecord(data.appearance)
         && (data.appearance.appearanceThemeMode === 'system' || data.appearance.appearanceThemeMode === 'light' || data.appearance.appearanceThemeMode === 'dark')
         && (data.appearance.appearanceLightTheme === undefined || isLightThemeId(data.appearance.appearanceLightTheme))
-        && isDarkThemeId(data.appearance.appearanceDarkTheme)
+        && (data.appearance.appearanceDarkTheme === 'dark' || isDarkThemeId(data.appearance.appearanceDarkTheme))
         && typeof data.appearance.appearanceUiFont === 'string'
         && typeof data.appearance.appearanceCodeFont === 'string'
         && typeof data.appearance.accessibilityReduceMotion === 'boolean'
@@ -106,7 +106,7 @@ function parseRecord(value: unknown): OnboardingRecord | null {
             appearanceLightTheme: data.appearance.appearanceLightTheme === undefined
                 ? 'light'
                 : data.appearance.appearanceLightTheme,
-            appearanceDarkTheme: data.appearance.appearanceDarkTheme,
+            appearanceDarkTheme: data.appearance.appearanceDarkTheme === 'dark' ? 'vercel' : data.appearance.appearanceDarkTheme,
             appearanceUiFont: data.appearance.appearanceUiFont.slice(0, 128),
             appearanceCodeFont: data.appearance.appearanceCodeFont.slice(0, 128),
             accessibilityReduceMotion: data.appearance.accessibilityReduceMotion

@@ -1,3 +1,4 @@
+import { createMobileAccessAdapter } from './adapters/mobile-access-adapter'
 import { createRuntimeActivationAdapter } from './adapters/runtime-activation-adapter'
 import { createBrowserRecordingOverlayAdapter } from './adapters/browser-recording-overlay-adapter'
 import { createNativeOverlayAdapter } from './adapters/native-overlay-adapter'
@@ -23,6 +24,7 @@ import { createWindowAdapter } from './adapters/window-adapter'
 export function createDevScopeElectronAdapter(): DevScopeApi {
     const api: DevScopeApi = {
         runtimeActivation: createRuntimeActivationAdapter(),
+        mobileAccess: createMobileAccessAdapter(),
         ...createSettingsAndAiAdapter(),
         ...createSetupAdapter(),
         ...createMemoryAdapter(),

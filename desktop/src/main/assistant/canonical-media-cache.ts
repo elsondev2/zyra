@@ -57,3 +57,10 @@ function extensionForMime(mime: string): string {
     const extension = extname(`file.${mime.split('/')[1] || ''}`)
     return /^\.[a-z0-9]{1,8}$/i.test(extension) ? extension : '.png'
 }
+
+/** Same attachment envelope for live user events and durable transcript hydration. */
+export function canonicalImageAttachmentSection(canonicalChatId: string, messageId: string, partIndex: number, part: CanonicalImagePart): string | null {
+    const image = materializeCanonicalImage(canonicalChatId, messageId, partIndex, part)
+    if (!image) return null
+    return [`${partIndex + 1}. Image ${partIndex + 1} [IMAGE]`, `path: ${image.path}`, `mime: ${image.mime}`, `size: ${image.size}`, 'origin: Canonical Zyra transcript'].join('\n')
+}

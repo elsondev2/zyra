@@ -1,3 +1,4 @@
+import { clearRestoredMobileVoice } from './mobile-voice-presence'
 import type { AssistantSnapshot } from '../../shared/assistant/contracts'
 import { applyAssistantDomainEvent, createDefaultAssistantSnapshot } from '../../shared/assistant/projector'
 import {
@@ -24,6 +25,7 @@ export const applyDomainEvent = applyAssistantDomainEvent
 export function recoverPersistedSnapshot(snapshot: AssistantSnapshot): AssistantSnapshot {
     const recovered = cloneSnapshot(snapshot)
     const recoveredAt = nowIso()
+    clearRestoredMobileVoice(recovered)
 
     recovered.fleetByThreadId = recovered.fleetByThreadId && typeof recovered.fleetByThreadId === 'object'
         ? recovered.fleetByThreadId

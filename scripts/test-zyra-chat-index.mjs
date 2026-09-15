@@ -127,6 +127,14 @@ try {
   assert.equal(afterUpdate.project, path.resolve(reassignedProject));
   assert.equal(afterUpdate.sessionPath, path.resolve(sessionPath), "metadata changes must not move transcript storage");
 
+  const liveMessage = { type: "message", id: "entry:live-voice", message: { id: "message:live-voice", role: "assistant", content: [{ type: "text", text: "Saved on the running PC" }] } };
+  appendFileSync(sessionPath, `${JSON.stringify(liveMessage)}\n`);
+  const historyAfterCommit = await catalog.history("canonical:test", { limit: 1, entryLocators: true });
+  assert.deepEqual(historyAfterCommit.entries[0].message, liveMessage.message, "history must see a runtime append without a catalog listing first");
+  assert.equal(historyAfterCommit.entries[0].historyEntryIndex, 4);
+  assert.equal(historyAfterCommit.chat.title, "Canonical parity", "refreshing the file preserves catalog overrides");
+  assert.equal(historyAfterCommit.chat.project, path.resolve(reassignedProject));
+
   const historicalToolEntries = [];
   for (let indexValue = 0; indexValue < 20; indexValue += 1) {
     const toolCallId = `tool:bulk:${indexValue}`;

@@ -1221,10 +1221,8 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         if (typeof window.devscope.onBrowserThreatBlocked !== 'function') return
         return window.devscope.onBrowserThreatBlocked((warning) => {
             const tabId = findTabIdByGuestWebContentsId(warning.sourceGuestWebContentsId)
-            if (!tabId) {
-                void window.devscope.dismissBrowserThreatWarning(warning.decisionId).catch(() => undefined)
-                return
-            }
+            // Other Browser surfaces in this shell own their own warnings.
+            if (!tabId) return
             setThreatWarning((current) => {
                 if (current && current.warning.decisionId !== warning.decisionId) {
                     void window.devscope.dismissBrowserThreatWarning(current.warning.decisionId).catch(() => undefined)

@@ -15,7 +15,7 @@ import { AssistantAgentInboxSidebar } from './AssistantAgentInboxSidebar'
 import { AssistantProjectIcon } from './AssistantProjectIcon'
 import { AssistantSessionTitleText } from './AssistantSessionTitleText'
 import { AssistantTuiPresenceIndicator } from './AssistantTuiPresenceIndicator'
-import { hasAssistantTuiPresence, isAssistantSessionOpenInTui } from './assistant-tui-presence'
+import { assistantMobileDevices, assistantSessionMobileDevices, hasAssistantTuiPresence, isAssistantSessionOpenInTui } from './assistant-tui-presence'
 import { RenameSessionModal } from './AssistantSessionsRailDialogs'
 import { ASSISTANT_MAX_LEFT_SIDEBAR_WIDTH, ASSISTANT_MIN_LEFT_SIDEBAR_WIDTH, resolveAssistantLeftSidebarWidth } from './assistant-pane-layout'
 import {
@@ -1102,6 +1102,7 @@ function ChatRow(props: {
     const showStatusPill = Boolean(!hasPendingControlApproval && statusPill && statusPill.showLabel !== false)
     const timeLabel = formatRelativeTime(getSessionLastActivityAt(session))
     const tuiOpen = isAssistantSessionOpenInTui(session)
+    const mobileDevices = assistantSessionMobileDevices(session)
 
     return (
         <div>
@@ -1151,6 +1152,7 @@ function ChatRow(props: {
                         </span>
                     ) : null}
                     {tuiOpen ? <AssistantTuiPresenceIndicator focusable={false} compact /> : null}
+                    {mobileDevices.length > 0 ? <AssistantTuiPresenceIndicator focusable={false} compact mobileDevices={mobileDevices} /> : null}
                     <span className="shrink-0 transition-opacity duration-150 ease-out group-hover:opacity-0 motion-reduce:transition-none">
                         <span className="mr-0.5 block whitespace-nowrap text-right text-[11px] leading-none tabular-nums text-sparkle-text-secondary/60">
                             {timeLabel}
@@ -1181,7 +1183,8 @@ function ChatRow(props: {
                 <div className="ml-5 mt-0.5 space-y-0.5">
                     {sessionThreads.map((thread, index) => {
                         const isActiveThread = thread.id === activeThreadId
-                        const tuiOpen = hasAssistantTuiPresence(thread.canonicalPresence)
+                const tuiOpen = hasAssistantTuiPresence(thread.canonicalPresence)
+                const mobileDevices = assistantMobileDevices(thread.canonicalPresence)
                         return (
                             <button
                                 key={thread.id}
@@ -1197,6 +1200,7 @@ function ChatRow(props: {
                                 <Bot size={12} className="shrink-0" />
                                 <span className="min-w-0 flex-1 truncate">{getThreadDisplayTitle(thread, index)}</span>
                                 {tuiOpen ? <AssistantTuiPresenceIndicator focusable={false} compact /> : null}
+                                {mobileDevices.length > 0 ? <AssistantTuiPresenceIndicator focusable={false} compact mobileDevices={mobileDevices} /> : null}
                             </button>
                         )
                     })}

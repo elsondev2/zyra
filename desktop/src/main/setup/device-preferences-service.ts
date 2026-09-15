@@ -179,7 +179,7 @@ function sanitizeJson(value: unknown, depth = 0): unknown {
 
 export function sanitizeDevicePreferenceValue(key: string, value: unknown): unknown {
     if (key === 'appearanceLightTheme') return isLightThemeId(value) ? value : undefined
-    if (key === 'appearanceDarkTheme') return isDarkThemeId(value) ? value : undefined
+    if (key === 'appearanceDarkTheme') return value === 'dark' ? 'vercel' : isDarkThemeId(value) ? value : undefined
     if (BOOLEAN_KEYS.has(key)) return typeof value === 'boolean' ? value : undefined
     if (Object.prototype.hasOwnProperty.call(STRING_LIMITS, key)) {
         return sanitizeString(value, STRING_LIMITS[key]!, key === 'assistantDefaultPromptTemplate')

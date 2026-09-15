@@ -26,6 +26,7 @@ export class ZyraAgentServerClient extends EventEmitter {
     this.dataRoot = path.resolve(options.dataRoot || process.env.ZYRA_DATA_ROOT || os.homedir());
     this.clientId = String(options.clientId || `agent-client:${process.pid}`);
     this.surface = String(options.surface || "unknown");
+    this.displayName = typeof options.displayName === 'string' ? options.displayName.slice(0, 96) : '';
     this.authorities = Array.isArray(options.authorities) ? [...new Set(options.authorities)] : [];
     this.authorityProof = String(options.authorityProof || "");
     this.autoStart = options.autoStart !== false;
@@ -169,6 +170,7 @@ export class ZyraAgentServerClient extends EventEmitter {
           token: descriptor.token,
           clientId: this.clientId,
           surface: this.surface,
+          ...(this.displayName ? { displayName: this.displayName } : {}),
           authorities: this.authorities,
           ...(this.authorityProof ? { authorityProof: this.authorityProof } : {})
         });

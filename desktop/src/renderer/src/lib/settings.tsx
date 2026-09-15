@@ -500,10 +500,11 @@ function sanitizeThemeTokens(value: unknown, fallback: ThemeTokens): ThemeTokens
 function sanitizeAppearanceCustomTheme(value: unknown): AppearanceCustomTheme | null {
     if (!value || typeof value !== 'object') return null
     const candidate = value as Partial<AppearanceCustomTheme>
-    if (!isThemeId(candidate.baseTheme)) return null
-    const baseTheme = getThemeDefinition(candidate.baseTheme)
+    const baseId = String(candidate.baseTheme) === 'dark' ? DEFAULT_APPEARANCE_DARK_THEME : candidate.baseTheme
+    if (!isThemeId(baseId)) return null
+    const baseTheme = getThemeDefinition(baseId)
     return {
-        baseTheme: candidate.baseTheme,
+        baseTheme: baseId,
         tokens: sanitizeThemeTokens(candidate.tokens, baseTheme.tokens),
         accentColor: sanitizeAccentColor(candidate.accentColor),
         uiFont: sanitizeAppearanceUiFont(candidate.uiFont),
@@ -1122,7 +1123,7 @@ function applyTheme(theme: Theme, accent: AccentColor, customTokens?: ThemeToken
         target.classList.remove(...THEME_CLASS_IDS)
         target.classList.toggle('dark', appearance === 'dark')
         target.classList.toggle('light', appearance === 'light')
-        if (theme !== 'dark' && theme !== 'light') target.classList.add(theme)
+        if (theme !== 'light') target.classList.add(theme)
     }
     document.body.classList.add('theme-adaptive')
 

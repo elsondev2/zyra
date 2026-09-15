@@ -1,3 +1,7 @@
+import { normalizeChatModel } from './chat-model.mjs';
+import { ReplayWindow } from './replay-window.mjs';
+import { ApprovalResponses } from "./approval-responses.mjs";
+import { UserInputResponses } from "./user-input-responses.mjs";
 import { RUNTIME_ACTIVATION_VERSION, readRuntimeRevision } from "./runtime-revision.mjs";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -30,7 +34,7 @@ const DESKTOP_WORKSPACE_TIMEOUT_MS = 15_000;
 const DESKTOP_WORKSPACE_KINDS = new Set(["browser", "details", "explorer", "resources", "agents", "diff", "terminal"]);
 const DESKTOP_WORKSPACE_OPERATIONS = new Set(["open", "list", "show"]);
 const ACTIVE_FLEET_STATUSES = new Set(["queued", "starting", "running", "waiting", "blocked", "paused", "recovering"]);
-const BRIDGE_REQUEST_PATTERN = /^(?:prompt|configure|auth\.refresh|abort|steer|follow_up|compact|clear_queue|reload|canonical_message\.(?:append|find)|approval\.respond|user_input\.respond|agents\.[a-zA-Z0-9._-]+|workflows\.[a-zA-Z0-9._-]+)$/;
+const BRIDGE_REQUEST_PATTERN = /^(?:prompt|configure|preferences\.get|memory\.configure|auth\.refresh|abort|steer|follow_up|compact|clear_queue|reload|canonical_message\.(?:append|find)|approval\.respond|user_input\.respond|agents\.[a-zA-Z0-9._-]+|workflows\.[a-zA-Z0-9._-]+)$/;
 
 function hashAuthorityProof(value) {
   return createHash("sha256").update(String(value || "")).digest("base64url");
@@ -63,6 +67,7 @@ export class ZyraAgentServer extends EventEmitter {
     this.idleTimeoutMs = Math.max(1_000, Number(options.idleTimeoutMs) || DEFAULT_IDLE_TIMEOUT_MS);
     this.createWorker = options.createWorker || ((input) => new AgentBridgeWorker(input));
     this.catalog = options.catalog || new CanonicalChatCatalog(options);
+    this.catalog.index?.on?.("modelsChanged", change => this.broadcastCatalogChanged(change));
     this.clients = new Map();
     this.sessions = new Map();
     this.pluginAuthority = new ServerPluginAuthority();
@@ -120,6 +125,7 @@ export class ZyraAgentServer extends EventEmitter {
 
   async stop(reason = "Agent server stopped.") {
     this.memoryQueue.dispose();
+    await this.catalog.index?.closeModelBackfill?.();
     for (const session of new Set(this.sessions.values())) session.dispose(reason);
     this.sessions.clear();
     this.utilityWorker?.dispose(reason);
@@ -259,6 +265,9 @@ export class ZyraAgentServer extends EventEmitter {
     }
     client.clientId = assertAgentServerIdentifier(message.clientId, "client id");
     client.surface = String(message.surface || "unknown").slice(0, 64);
+    // Presentation only: never grants an authority or changes client identity.
+    client.displayName = typeof message.displayName === 'string'
+      ? message.displayName.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '').trim().slice(0, 96) : '';
     const expectedAuthorityHash = this.getDesktopAuthorityHash();
     const verifiedDesktop = client.surface === "desktop"
       && Boolean(expectedAuthorityHash)
@@ -319,13 +328,14 @@ export class ZyraAgentServer extends EventEmitter {
     if (method === "catalog.registerProject") {
       return { project: this.catalog.registerProject(params.project) };
     }
+    if (method === "catalog.projects") return { projects: this.catalog.projectPaths() };
     if (method === "catalog.list") {
       const chats = await this.catalog.list(params);
-      return { chats: chats.map((chat) => ({ ...chat, presence: this.sessionPresence(chat.canonicalChatId) })) };
+      return { chats: chats.map((chat) => this.projectCatalogChat(chat)) };
     }
     if (method === "catalog.get") {
       const chat = await this.catalog.find(params.session, params);
-      return { chat: chat ? { ...chat, presence: this.sessionPresence(chat.canonicalChatId) } : null };
+      return { chat: chat ? this.projectCatalogChat(chat) : null };
     }
     if (method === "catalog.history") {
       return { history: await this.catalog.history(params.session, params) };
@@ -395,7 +405,7 @@ export class ZyraAgentServer extends EventEmitter {
         });
       }
       this.broadcastCatalogChanged({ canonicalChatId: chat.canonicalChatId, metadata: true });
-      return { chat: { ...chat, presence: this.sessionPresence(chat.canonicalChatId) } };
+      return { chat: this.projectCatalogChat(chat) };
     }
     if (method === "session.pluginAuthority") {
       if (!client.canControl) throw new AgentServerProtocolError('Plugin revocation requires verified Desktop authority.', 'AGENT_SERVER_AUTH_FAILED');
@@ -409,6 +419,16 @@ export class ZyraAgentServer extends EventEmitter {
       return { revoked: affected.map((session) => session.sessionKey) };
     }
     if (method === "session.attach") return this.attachSession(client, params);
+    if (method === "session.join") {
+      const chat = await this.catalog.find(params.session, { allProjects: true });
+      if (!chat || chat.deleted) throw new AgentServerProtocolError("Chat is unavailable.", "AGENT_SERVER_SESSION_NOT_FOUND");
+      const session = this.requireSession(chat.canonicalChatId);
+      this.pluginAuthority.assertAllowed(session.sessionKey, session.pluginSkillSources);
+      if (session.connectPromise) await session.connectPromise;
+      if (session.disposed) throw new AgentServerProtocolError("Chat is no longer active.", "AGENT_SERVER_SESSION_NOT_FOUND");
+      session.attach(client);
+      return this.attachmentSnapshot(session, params.lastSequence);
+    }
     const session = this.requireSession(params.sessionKey);
     if (!session.clients.has(client)) {
       throw new AgentServerProtocolError("Client is not attached to this canonical chat.", "AGENT_SERVER_AUTH_FAILED");
@@ -552,6 +572,12 @@ export class ZyraAgentServer extends EventEmitter {
     }
   }
 
+  projectCatalogChat(chat) {
+    const connected = this.sessions.get(chat.canonicalChatId)?.connectedResult;
+    if (!connected && chat.model == null) this.catalog.index?.queueModelPresentations?.([chat.canonicalChatId]);
+    return { ...chat, model: normalizeChatModel(connected?.config?.model || connected?.model) || normalizeChatModel(chat.model),
+      presence: this.sessionPresence(chat.canonicalChatId) };
+  }
   sessionPresence(sessionKeyValue) {
     const sessionKey = String(sessionKeyValue || "").trim();
     const session = this.sessions.get(sessionKey);
@@ -568,7 +594,7 @@ export class ZyraAgentServer extends EventEmitter {
     return {
       state: turnRunning ? "running" : session.hasBackgroundWork() ? "background" : "ready",
       activeTurnId: turnRunning ? activeTurnId : null,
-      clients: [...session.clients].map((client) => ({ clientId: client.clientId, surface: client.surface })),
+      clients: [...session.clients].map((client) => ({ clientId: client.clientId, surface: client.surface, ...(client.displayName ? { displayName: client.displayName } : {}) })),
       backgroundWorkActive: session.hasBackgroundWork(),
       attention: session.pendingUserInputRequestIds.size > 0 ? "user-input" : session.pendingApprovalRequestIds.size > 0 ? "approval" : null,
       latestTurn: session.latestTurn ? { ...session.latestTurn } : null,
@@ -587,8 +613,12 @@ export class ZyraAgentServer extends EventEmitter {
 
   async attachSession(client, params) {
     const project = this.catalog.registerProject(params.project || params.cwd);
-    const requestedCandidate = params.session
-      ? await this.catalog.find(params.session, { project, includeDeleted: true })
+    // A retry of an acknowledged-or-lost creation resolves its durable alias,
+    // including after this canonical server has restarted.
+    const creationAlias = client.surface === 'mobile' && !params.session && params.localThreadId
+      && this.catalog.resolveAlias(params.localThreadId) !== params.localThreadId ? params.localThreadId : null;
+    const requestedCandidate = params.session || creationAlias
+      ? await this.catalog.find(params.session || creationAlias, { project, includeDeleted: true })
       : null;
     if (requestedCandidate?.deleted) {
       throw new AgentServerProtocolError("Canonical chat was deleted and cannot be reattached.", "AGENT_SERVER_SESSION_NOT_FOUND");
@@ -629,6 +659,7 @@ export class ZyraAgentServer extends EventEmitter {
     try {
       const connected = await session.connect({
         ...params,
+        ...(client.surface === 'mobile' && !params.session ? { persistNewSession: true } : {}),
         cwd: sessionCwd,
         project: sessionProject,
         threadId: requested?.sessionPath || params.session,
@@ -666,12 +697,19 @@ export class ZyraAgentServer extends EventEmitter {
       throw error;
     }
     session.attach(client);
-    const lastSequence = Math.max(0, Number(params.lastSequence) || 0);
+    return this.attachmentSnapshot(session, params.lastSequence);
+  }
+
+  attachmentSnapshot(session, afterSequence) {
+    const lastSequence = Math.max(0, Number(afterSequence) || 0);
     return {
       sessionKey: session.sessionKey,
       canonicalChatId: session.sessionKey,
       connected: session.connectedResult,
       replay: session.replay(lastSequence),
+      pendingAttention: [...session.pendingAttentionEvents.values()],
+      liveMessage: session.liveMessage,
+      pendingTools: [...session.pendingToolEvents.values()],
       latestSequence: session.sequence,
       activeRequestContext: session.latestTurn?.state === "running" ? session.activeRequestContext : null,
       presence: this.sessionPresence(session.sessionKey)
@@ -836,6 +874,7 @@ function canonicalConnectionAuthorityKey(payload) {
 }
 
 class ServerOwnedSession {
+  get events() { return this.eventWindow.entries; }
   constructor(options) {
     this.server = options.server;
     this.sessionKey = options.sessionKey;
@@ -844,16 +883,24 @@ class ServerOwnedSession {
     this.clients = new Set();
     this.foregroundTuiClient = null;
     this.controlOwners = new Map();
-    this.events = [];
+    this.eventWindow = new ReplayWindow();
     this.sequence = 0;
     this.journalDirectory = options.journalDirectory;
     this.journal = null;
     this.activeRequests = 0;
+    this.foregroundPromptRequests = 0;
     this.activeRequestContext = null;
     this.latestTurn = null;
+    this.pendingAttentionEvents = new Map();
+    this.liveMessage = null;
+    this.pendingToolEvents = new Map();
     this.pendingApprovalRequestIds = new Set();
+    this.approvalResponses = new ApprovalResponses(this.pendingApprovalRequestIds);
     this.pendingUserInputRequestIds = new Set();
-    this.userInputResponseStates = new Map();
+    this.userInputContinuationWaiters = new Set();
+    this.userInputContinuationEpoch = 0;
+    this.userInputResponses = new UserInputResponses(this.pendingUserInputRequestIds, (prompt, context) => this.continueUserInput(prompt, context));
+    this.userInputResponseStates = this.userInputResponses.states;
     this.backgroundFleetActive = false;
     this.managedJobIds = new Set();
     this.connectPromise = null;
@@ -915,15 +962,12 @@ class ServerOwnedSession {
     const pendingEvents = this.events;
     const journal = new AgentEventJournal(this.journalDirectory, canonicalChatId);
     this.journal = journal;
-    this.events = journal.replay(0);
+    this.eventWindow.reset(journal.replay(0));
     this.sequence = journal.latestSequence();
     for (const pending of pendingEvents) {
       const entry = { ...pending, sequence: ++this.sequence };
-      this.events.push(entry);
+      this.eventWindow.append(entry);
       this.journal.append(entry);
-    }
-    if (this.events.length > MAX_AGENT_SERVER_REPLAY_EVENTS) {
-      this.events.splice(0, this.events.length - MAX_AGENT_SERVER_REPLAY_EVENTS);
     }
     this.rebuildLatestTurnSummary();
     for (const entry of this.events) {
@@ -981,39 +1025,12 @@ class ServerOwnedSession {
     this.server.pluginAuthority.assertAllowed(this.sessionKey, this.pluginSkillSources);
     const type = String(typeValue || "");
     if (!BRIDGE_REQUEST_PATTERN.test(type)) throw new AgentServerProtocolError(`Bridge request type is not allowed: ${type || "missing"}.`);
-    let userInputResponsePromise = null;
-    if (type === "user_input.respond") {
-      const requestId = String(payload?.requestId || "").trim();
-      if (!requestId) throw new AgentServerProtocolError("User-input responses require a request id.", "AGENT_SERVER_USER_INPUT_INVALID");
-      const ownerClientId = String(client?.clientId || "unknown");
-      const existing = this.userInputResponseStates.get(requestId);
-      if (existing) {
-        if (existing.ownerClientId !== ownerClientId) {
-          throw new AgentServerProtocolError("This user-input request was already answered by another attached surface.", "AGENT_SERVER_USER_INPUT_ALREADY_ANSWERED");
-        }
-        userInputResponsePromise = existing.promise;
-      } else {
-        if (!this.pendingUserInputRequestIds.has(requestId)) {
-          throw new AgentServerProtocolError(`Unknown user-input request: ${requestId}`, "AGENT_SERVER_USER_INPUT_UNKNOWN");
-        }
-        const state = { ownerClientId, promise: null, settled: false };
-        state.promise = Promise.resolve().then(() => this.worker.request(type, payload)).then((result) => {
-          state.settled = true;
-          while (this.userInputResponseStates.size > 128) {
-            const removable = [...this.userInputResponseStates].find(([, candidate]) => candidate.settled);
-            if (!removable) break;
-            this.userInputResponseStates.delete(removable[0]);
-          }
-          return result;
-        }, (error) => {
-          if (this.userInputResponseStates.get(requestId) === state) this.userInputResponseStates.delete(requestId);
-          throw error;
-        });
-        this.userInputResponseStates.set(requestId, state);
-        userInputResponsePromise = state.promise;
-      }
-    }
     const requestContext = normalizeRequestContext(requestContextValue);
+    const approvalResponsePromise = type === "approval.respond" ? this.approvalResponses.respond(client.clientId, payload, () => this.worker.request(type, payload)) : null;
+    const continuationEpoch = this.userInputContinuationEpoch;
+    const userInputResponsePromise = type === "user_input.respond"
+      ? this.userInputResponses.respond(String(client?.clientId || "unknown"), payload, requestContext, () => this.worker.request(type, payload), (prompt, context) => this.continueUserInput(prompt, context, continuationEpoch)) : null;
+    if (type === "abort") { this.userInputContinuationEpoch++; this.releaseUserInputContinuations(new Error('The queued question continuation was stopped.')); }
     if (type === "prompt" && !requestContext?.turnId) {
       throw new AgentServerProtocolError("Prompt requests require a durable turn id.");
     }
@@ -1025,6 +1042,7 @@ class ServerOwnedSession {
     this.activeRequests += 1;
     this.syncMemoryQueue();
     if (type === "prompt") {
+      this.foregroundPromptRequests++;
       this.activeRequestContext = requestContext;
       const startedAt = new Date().toISOString();
       this.latestTurn = {
@@ -1039,7 +1057,7 @@ class ServerOwnedSession {
       this.server.notifyDesktopWorkspaceTurn(this.sessionKey, requestContext.turnId);
     }
     try {
-      const result = await (userInputResponsePromise || this.worker.request(type, payload));
+      const result = await (approvalResponsePromise || userInputResponsePromise || this.worker.request(type, payload));
       if (type === "prompt" && !this.isTurnTerminal(requestContext.turnId)) {
         this.publish({ type: "zyra_server_turn_completed", outcome: "completed" });
       }
@@ -1058,14 +1076,35 @@ class ServerOwnedSession {
       throw error;
     } finally {
       this.activeRequests = Math.max(0, this.activeRequests - 1);
+      if (type === "prompt") this.foregroundPromptRequests = Math.max(0, this.foregroundPromptRequests - 1);
       this.syncMemoryQueue();
       if (type === "prompt") this.server.notifyDesktopWorkspaceTurnEnded(this.sessionKey, requestContext.turnId);
       if (type === "prompt" && this.activeRequestContext === requestContext) {
         this.activeRequestContext = null;
         this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey });
       }
+      if (!this.activeRequestContext) this.releaseUserInputContinuations();
       this.scheduleIdleStop();
     }
+  }
+
+  async continueUserInput(prompt, requestContext, epoch = this.userInputContinuationEpoch) {
+    if (epoch !== this.userInputContinuationEpoch) throw new Error('The queued question continuation was stopped.');
+    while (this.activeRequestContext || this.foregroundPromptRequests > 0) {
+      await new Promise((resolve, reject) => this.userInputContinuationWaiters.add({ resolve, reject }));
+      if (epoch !== this.userInputContinuationEpoch) throw new Error('The queued question continuation was stopped.');
+    }
+    if (this.disposed || this.revocationPromise) throw new AgentServerProtocolError('The session ended before its question continuation could start.', 'AGENT_SERVER_SESSION_NOT_FOUND');
+    // No connection-owned task: this server-owned request survives a phone
+    // disconnect and follows the normal canonical prompt/event/history path.
+    return this.request({ clientId: requestContext.localThreadId }, 'prompt', { prompt, turnId: requestContext.turnId }, requestContext);
+  }
+
+  releaseUserInputContinuations(error) {
+    if (!error && (this.activeRequestContext || this.foregroundPromptRequests > 0)) return;
+    const pending = [...this.userInputContinuationWaiters];
+    this.userInputContinuationWaiters.clear();
+    for (const waiter of pending) { if (error) waiter.reject(error); else waiter.resolve(); }
   }
 
   publish(event) {
@@ -1086,14 +1125,16 @@ class ServerOwnedSession {
     this.updateRuntimeSummary(event, publishedRequestContext, occurredAt);
     if (event?.type === "session_config") {
       const config = {
-        model: event.model,
+        model: event.model ?? this.connectedResult?.config?.model ?? this.connectedResult?.model,
         thinking: event.thinking,
         profile: event.profile,
         runtimeMode: event.runtimeMode,
         webSearch: event.webSearch,
         webFetch: event.webFetch
       };
+      const previousModel = normalizeChatModel(this.connectedResult?.config?.model || this.connectedResult?.model);
       this.connectedResult = { ...(this.connectedResult || {}), ...config, config };
+      if (normalizeChatModel(config.model) !== previousModel) this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, model: true });
     }
     const fleetSnapshot = event?.fleet || event?.fleetSnapshot;
     if (fleetSnapshot && typeof fleetSnapshot === "object" && !Array.isArray(fleetSnapshot)) {
@@ -1111,13 +1152,12 @@ class ServerOwnedSession {
       event,
       ...(publishedRequestContext ? { requestContext: publishedRequestContext } : {})
     };
-    this.events.push(entry);
+    this.eventWindow.append(entry);
     try {
       this.journal?.append(entry);
     } catch (error) {
       this.server.emit("journal-error", { sessionKey: this.sessionKey, error });
     }
-    if (this.events.length > MAX_AGENT_SERVER_REPLAY_EVENTS) this.events.splice(0, this.events.length - MAX_AGENT_SERVER_REPLAY_EVENTS);
     for (const client of this.clients) {
       this.server.send(client, { type: "session.event", sessionKey: this.sessionKey, ...entry });
     }
@@ -1128,6 +1168,7 @@ class ServerOwnedSession {
     ) {
       this.activeRequestContext = null;
       this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, presence: true });
+      this.releaseUserInputContinuations();
     }
     if (
       previousAttention !== (this.pendingApprovalRequestIds.size > 0 || this.pendingUserInputRequestIds.size > 0)
@@ -1160,26 +1201,39 @@ class ServerOwnedSession {
   }
 
   updateRuntimeSummary(event, requestContext, occurredAt) {
+    if (event?.canonicalCommit === true) return;
+    if ((event?.type === 'message_start' || event?.type === 'message_update') && event.message?.role === 'assistant') this.liveMessage = event.message;
+    if (event?.type === 'message_end' && event.message?.role === 'assistant') this.liveMessage = null;
+    if (event?.type === 'tool_execution_start' && event.toolCallId) this.pendingToolEvents.set(String(event.toolCallId), event);
+    if (event?.type === 'tool_execution_end' && event.toolCallId) this.pendingToolEvents.delete(String(event.toolCallId));
     if (event?.type === "approval_requested" && event.requestId) {
       this.pendingApprovalRequestIds.add(String(event.requestId));
+      this.pendingAttentionEvents.set(String(event.requestId), event);
     }
     if (event?.type === "approval_resolved" && event.requestId) {
       this.pendingApprovalRequestIds.delete(String(event.requestId));
+      this.pendingAttentionEvents.delete(String(event.requestId));
     }
     if (event?.type === "user_input_requested" && event.requestId) {
       this.pendingUserInputRequestIds.add(String(event.requestId));
+      this.pendingAttentionEvents.set(String(event.requestId), event);
     }
     if (event?.type === "user_input_resolved" && event.requestId) {
       this.pendingUserInputRequestIds.delete(String(event.requestId));
+      this.pendingAttentionEvents.delete(String(event.requestId));
     }
     this.updateLatestTurnSummary(event, requestContext, occurredAt);
     if (event?.type === "zyra_server_turn_completed") {
+      this.liveMessage = null;
+      this.pendingToolEvents.clear();
+      this.pendingAttentionEvents.clear();
       this.pendingApprovalRequestIds.clear();
       this.pendingUserInputRequestIds.clear();
     }
   }
 
   updateLatestTurnSummary(event, requestContext, occurredAt) {
+    if (event?.canonicalCommit === true) return;
     const turnId = String(requestContext?.turnId || event?.turnId || "").trim();
     if (turnId && this.latestTurn?.id !== turnId) {
       this.latestTurn = {
@@ -1253,7 +1307,7 @@ class ServerOwnedSession {
   summary() {
     return {
       sessionKey: this.sessionKey,
-      clients: [...this.clients].map((client) => ({ clientId: client.clientId, surface: client.surface })),
+      clients: [...this.clients].map((client) => ({ clientId: client.clientId, surface: client.surface, ...(client.displayName ? { displayName: client.displayName } : {}) })),
       activeRequests: this.activeRequests,
       activeRequestContext: this.activeRequestContext,
       latestTurn: this.latestTurn ? { ...this.latestTurn } : null,
@@ -1299,6 +1353,7 @@ class ServerOwnedSession {
   dispose(reason) {
     if (this.disposed) return;
     this.disposed = true;
+    this.releaseUserInputContinuations(new Error(reason || 'The session ended.'));
     clearTimeout(this.idleTimer);
     this.worker.dispose(reason);
     for (const client of this.clients) client.attachedSessionIds.delete(this.sessionKey);

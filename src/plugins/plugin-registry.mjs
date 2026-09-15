@@ -26,6 +26,16 @@ function fail(code, message, details) {
   throw new ZyraPluginValidationError(code, message, details)
 }
 
+function assertReviewedCatalog(catalog, expectedRevision) {
+  if (expectedRevision === undefined) return
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+    fail('PLUGIN_CATALOG_REVISION_REQUIRED', 'Review the current Plugins before making this change.')
+  }
+  if (expectedRevision !== catalog.revision) {
+    fail('PLUGIN_CATALOG_REVISION_CHANGED', 'Plugins changed after this review. Refresh and review them again.')
+  }
+}
+
 function bounded(value, limit = 256) {
   return typeof value === 'string' ? value.replace(/\s+/gu, ' ').trim().slice(0, limit) : ''
 }
@@ -127,6 +137,7 @@ export class ZyraPluginRegistry {
     this.releasesRoot = path.join(this.rootPath, PLUGIN_RELEASES_DIRECTORY)
     this.stagingRoot = path.join(this.rootPath, PLUGIN_STAGING_DIRECTORY)
     this.now = typeof options.now === 'function' ? options.now : () => new Date()
+    this.onChange = typeof options.onChange === 'function' ? options.onChange : null
     this.state = createEmptyZyraPluginState()
     this.initialized = false
     this.initializing = null
@@ -199,6 +210,9 @@ export class ZyraPluginRegistry {
         const result = await work(this.state)
         this.state.revision += 1
         await this.#writeState()
+        // Notifications are advisory and follow persistence. A failed observer
+        // must never roll back an already committed catalog in memory.
+        try { Promise.resolve(this.onChange?.(this.state.revision)).catch(() => {}) } catch {}
         return clone(result)
       } catch (error) {
         this.state = before
@@ -487,6 +501,9 @@ export class ZyraPluginRegistry {
     const sessionId = bounded(input.sessionId, 192)
     if (!sessionId) fail('PLUGIN_SCOPE_INVALID', 'Chat Plugin scope requires a session ID.')
     return this.#mutate((state) => {
+      // Check inside the registry queue: Desktop changes can arrive while a
+      // remote client is reviewing the current release identities.
+      assertReviewedCatalog(state, input.expectedCatalogRevision)
       const index = state.chatScopes.findIndex((entry) => entry.sessionId === sessionId)
       const previous = index >= 0 ? state.chatScopes[index] : null
       if (!previous && state.chatScopes.length >= ZYRA_PLUGIN_LIMITS.maxChatScopes) {
@@ -567,10 +584,12 @@ export class ZyraPluginRegistry {
     return run
   }
 
-  async setPluginState(pluginIdValue, stateValue) {
+  async setPluginState(pluginIdValue, stateValue, expectedCatalogRevision) {
     const pluginId = bounded(pluginIdValue, 128)
-    const state = stateValue === 'disabled' ? 'disabled' : 'active'
+    if (stateValue !== 'disabled' && stateValue !== 'active') fail('PLUGIN_STATE_INVALID', 'Choose a valid Plugin state.')
+    const state = stateValue
     return this.#mutate((catalog) => {
+      assertReviewedCatalog(catalog, expectedCatalogRevision)
       const plugin = catalog.plugins.find((entry) => entry.id === pluginId)
       if (!plugin || !plugin.activeReleaseId) fail('PLUGIN_NOT_FOUND', 'Plugin installation was not found.')
       plugin.state = state
@@ -592,6 +611,7 @@ export class ZyraPluginRegistry {
     const releaseId = bounded(input.releaseId, 128)
     if (input.approved !== true) fail('PLUGIN_ROLLBACK_APPROVAL_REQUIRED', 'Plugin rollback requires trusted approval.')
     return this.#mutate(async (state) => {
+      assertReviewedCatalog(state, input.expectedCatalogRevision)
       const plugin = state.plugins.find((entry) => entry.id === pluginId)
       const release = state.releases.find((entry) => entry.id === releaseId && entry.pluginId === pluginId)
       if (!plugin || !release || !plugin.releaseIds.includes(releaseId)) fail('PLUGIN_RELEASE_NOT_FOUND', 'Rollback release was not found.')

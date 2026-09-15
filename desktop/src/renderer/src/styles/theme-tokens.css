@@ -1,25 +1,25 @@
 /* ============================================================================
-   Sparkle Design System - Theme Tokens
+   Zyra Design System - Theme Tokens
    Runtime theme selection now hydrates these variables from the theme catalog.
-   The values here are the fallback/default dark palette.
+   The values here are the fallback Desktop Vercel palette.
    ============================================================================ */
 :root {
-  --color-bg: #0c121f;
-  --color-text: #f0f4f8;
-  --theme-background-rgb: 12 18 31;
-  --theme-foreground-rgb: 240 244 248;
-  --color-text-dark: #d3dbe4;
-  --color-text-darker: #aab4c3;
-  --color-text-secondary: #7e92a9;
-  --color-text-muted: #3b4658;
-  --color-card: #131c2c;
-  --color-border: #1f2a3d;
-  --color-border-secondary: #212f44;
-  --color-primary: #4f90e6;
+  --color-bg: #000000;
+  --color-text: #ededed;
+  --theme-background-rgb: 0 0 0;
+  --theme-foreground-rgb: 237 237 237;
+  --color-text-dark: #838383;
+  --color-text-darker: #757575;
+  --color-text-secondary: #757575;
+  --color-text-muted: #5a5a5a;
+  --color-card: #0d0d0d;
+  --color-border: #242424;
+  --color-border-secondary: #333333;
+  --color-primary: #006efe;
   --color-primary-on: #000000;
-  --color-secondary: #3db58a;
-  --color-accent: #243144;
-  --color-theme-accent: #7e92a9;
+  --color-secondary: #9d4ed8;
+  --color-accent: #121212;
+  --color-theme-accent: #757575;
   --accent-primary: #3b82f6;
   --accent-secondary: #60a5fa;
   --accent-primary-rgb: 59 130 246;

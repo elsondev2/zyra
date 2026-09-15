@@ -1,3 +1,4 @@
+import { recoverAttachmentReplay } from './agent-server-attachment-recovery'
 import { publishRuntimeActivation } from './runtime-activation'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
@@ -51,7 +52,7 @@ type ReplayEntry = {
 export type CanonicalAgentChatPresence = {
     state: 'detached' | 'ready' | 'running' | 'background'
     activeTurnId: string | null
-    clients: Array<{ clientId: string; surface: string }>
+    clients: Array<{ clientId: string; surface: string; displayName?: string }>
     backgroundWorkActive: boolean
     attention?: 'approval' | 'input' | 'user-input' | null
     latestTurn?: {
@@ -270,9 +271,11 @@ export class DesktopAgentServerConnection {
         const attachedWorkers = this.workers.get(sessionKey) || new Set<ZyraAgentServerWorker>()
         attachedWorkers.add(worker)
         this.workers.set(sessionKey, attachedWorkers)
+        const recovery = recoverAttachmentReplay(result, worker.latestSequence)
+        if (recovery.resetWatermark) worker.latestSequence = 0
         const replay = [
             ...this.takePendingEvents(sessionKey),
-            ...(Array.isArray(result['replay']) ? result['replay'] as ReplayEntry[] : [])
+            ...recovery.entries
         ]
         worker.queueReplay(replay)
         const connected = asRecord(result['connected']) || {}
@@ -539,7 +542,7 @@ export class ZyraAgentServerWorker implements ZyraWorkerLike {
 
     queueReplay(entries: ReplayEntry[]): void {
         this.replay.push(...entries)
-        this.replay.sort((left, right) => (Number(left.sequence) || 0) - (Number(right.sequence) || 0))
+        this.replay.sort((left, right) => (Number(left.sequence) || Number.MAX_SAFE_INTEGER) - (Number(right.sequence) || Number.MAX_SAFE_INTEGER))
     }
 
     flushReplay(): void {
