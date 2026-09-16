@@ -1,3 +1,4 @@
+import { isAssistantSessionProjectLocked } from '../../shared/assistant/session-project'
 import { validateAssistantSessionConfiguration } from '../../shared/assistant/session-configuration'
 import { MobileVoicePresence, clearRestoredMobileVoice } from './mobile-voice-presence'
 import { settleActivityAtTurnEnd } from '../../shared/assistant/activity-settlement'
@@ -1430,6 +1431,10 @@ export class AssistantService {
         chatScope: import('../../shared/assistant/contracts').AssistantChatScope | null
     ) {
         const session = this.state.snapshot.sessions.find((entry) => entry.id === sessionId) || null
+        const scopeChanged = JSON.stringify(session?.chatScope || null) !== JSON.stringify(chatScope || null)
+        if (scopeChanged && isAssistantSessionProjectLocked(session)) {
+            throw new Error('Finish or stop the active chat work before applying folder changes.')
+        }
         const pendingVoiceBelongsToSession = Boolean(
             this.pendingCanonicalVoiceStart
             && session?.threads.some((thread) => thread.id === this.pendingCanonicalVoiceStart?.conversationId)
@@ -1440,7 +1445,6 @@ export class AssistantService {
             this.invalidateVoicePrimaryWorkerPreparation()
         }
         const projectPath = chatScope?.workingRoot || null
-        const scopeChanged = JSON.stringify(session?.chatScope || null) !== JSON.stringify(chatScope || null)
         try {
             const result = await setAssistantSessionProjectPathAction(this.actionDeps, sessionId, projectPath)
             if (scopeChanged && projectPath === session?.projectPath) {

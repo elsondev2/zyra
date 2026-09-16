@@ -158,13 +158,14 @@ function createStartupProbe(fixture) {
       assert.equal(defaultReloadCount - previousReloadCount, enabled ? 1 : 0);
       assert.equal(skillLoadCount - previousSkillCount, 1);
     },
-    gate(loader, enabled) {
+    gate(loader, enabled, expectRecovery = true) {
       const loaded = loader.getExtensions();
       assert.equal(loaded.runtime, extensionRuntime);
       assert.equal(loaded.errors.length, 0);
       assert.equal(loaded.extensions.includes(externalExtension), enabled);
       const gates = loaded.extensions.filter((entry) => entry.path === '<zyra:permission-gate>');
       assert.equal(gates.length, 1, 'Startup must install exactly one real built-in gate');
+      assert.equal(gates[0].tools.has('filesystem_access'), expectRecovery, 'SDK startup exposes recovery only for an explicit chat scope');
       return gates[0].handlers.get('tool_call')[0];
     },
   };
@@ -378,7 +379,7 @@ Instructions`);
       });
       for (const phase of ['startup', 'reload']) {
         if (phase === 'reload') await probe.reload(loader, enabled);
-        const handler = probe.gate(loader, enabled);
+        const handler = probe.gate(loader, enabled, false);
         mode = 'edits-only';
         const before = requests;
         assert.equal(await handler({ toolName: 'read', input: { path: 'notes.md' } }), undefined);
