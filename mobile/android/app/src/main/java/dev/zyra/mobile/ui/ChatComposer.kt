@@ -21,6 +21,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -109,6 +110,7 @@ data class ComposerActions(val draft: (String) -> Unit, val send: (String) -> Un
     var menu by remember { mutableStateOf(false) }
     var mode by remember { mutableStateOf("steer") }
     val connected = state.connection == ConnectionState.Connected
+    val controlsReady = connected && !state.busy
     val reduced = LocalReduceMotion.current
     var inputFocused by remember { mutableStateOf(false) }
     val inputFocus = remember { FocusRequester() }
@@ -148,17 +150,16 @@ data class ComposerActions(val draft: (String) -> Unit, val send: (String) -> Un
                     }, input = { BasicTextField(value = state.draft, onValueChange = actions.draft, minLines = 1, maxLines = if (expandedInput) 5 else 2,
                         textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface), cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                         modifier = Modifier.focusRequester(inputFocus).onFocusChanged { inputFocused = it.isFocused }.heightIn(min = 44.dp).padding(vertical = 11.dp, horizontal = 2.dp),
-                        decorationBox = { inner -> Box(contentAlignment = Alignment.CenterStart) { if (state.draft.isEmpty()) Text(if (!connected) "Write a draft…" else if (state.session.running && mode == "follow_up") "Queue a message…" else "Message…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant); inner() } })
-                    }, trailing = { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    IconButton(onClick = actions.models, enabled = connected && !state.busy && !dictation.active && (state.session.id.isNotBlank() || allowUnboundControls), modifier = Modifier.size(44.dp)) { ThinkingGaugeIcon(state.session.config.thinking, Modifier.size(22.dp)) }
-                    if (dictationEnabled && !voice.inCall) IconButton(actions.dictate, enabled = connected && !state.busy && !dictation.active, modifier = Modifier.size(44.dp)) { AppIcon(R.drawable.ic_mic, "Dictate a message", Modifier.size(22.dp)) }
+                        decorationBox = { inner -> Box(contentAlignment = Alignment.CenterStart) { if (state.draft.isEmpty()) Text(if (!controlsReady) "Write a draft…" else if (state.session.running && mode == "follow_up") "Queue a message…" else "Message…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant); inner() } })
+                    }, trailing = { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(0.dp)) {
+                    IconButton(onClick = actions.models, enabled = controlsReady && !dictation.active && (state.session.id.isNotBlank() || allowUnboundControls), modifier = Modifier.size(44.dp)) { ThinkingGaugeIcon(state.session.config.thinking, Modifier.size(28.dp).alpha(if (controlsReady) 1f else .38f)) }
+                    if (dictationEnabled && !voice.inCall) IconButton(actions.dictate, enabled = controlsReady && !dictation.active, modifier = Modifier.size(44.dp)) { AppIcon(R.drawable.ic_mic, "Dictate a message", Modifier.size(22.dp)) }
                     val hasMessage = state.draft.isNotBlank() || attachments.items.isNotEmpty()
-                    // The filled circle is 22dp wider than the line icons. Reserve half
-                    // that difference so the visible gaps match, while targets stay 44dp.
-                    Box(Modifier.padding(start = 11.dp)) { FilledIconButton(onClick = {
+                    // Keep full touch targets while placing the three controls together.
+                    Box { FilledIconButton(onClick = {
                         if (hasMessage) actions.send(if (state.session.running) mode else "prompt")
                         else if (state.session.running && !voice.inCall) actions.stop() else actions.voice()
-                    }, enabled = connected && !state.busy && !dictation.active && !voice.sending &&
+                    }, enabled = controlsReady && !dictation.active && !voice.sending &&
                         if (hasMessage) (!voice.inCall || voice.phase == "active") && attachments.readyToSend
                         else !voice.inCall,
                         shape = androidx.compose.foundation.shape.CircleShape, modifier = Modifier.size(44.dp)) {

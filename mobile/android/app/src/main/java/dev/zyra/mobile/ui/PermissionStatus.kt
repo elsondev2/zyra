@@ -19,7 +19,7 @@ import dev.zyra.mobile.data.permissionLabel
     val color = when (mode) { "full-access" -> MaterialTheme.colorScheme.error; "auto-review", "edits-only" -> MaterialTheme.colorScheme.primary; else -> MaterialTheme.colorScheme.onSurfaceVariant }
     Row(Modifier.clip(MaterialTheme.shapes.small).clickable(role = Role.Button, onClick = open)
         .semantics(mergeDescendants = true) { contentDescription = "Permissions: ${permissionLabel(mode)}" }
-        .padding(horizontal = 5.dp).heightIn(min = 28.dp), verticalAlignment = Alignment.CenterVertically,
+        .padding(horizontal = 5.dp).heightIn(min = 20.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         CompositionLocalProvider(LocalContentColor provides color) {
             AppIcon(R.drawable.ic_shield_check, modifier = Modifier.size(12.dp))

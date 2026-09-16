@@ -174,3 +174,13 @@ Artwork uses bounded shared caches, negative-result caching and suspended backgr
 Verification: fresh main and unit compilation from exact Gradle-exported inputs; 358 Android tests across 69 classes; APK assembly; lint (zero errors, 61 warnings); all Desktop main/preload/renderer typechecks; 31 Desktop configuration assertions; terminal propagation/rejection/race regressions; privacy check; and all 42 native renders pass. Composer, camera, permissions, Appearance and light/dark About renders were visually reviewed. Physical phone gesture, keyboard, camera, cross-device convergence and frame-rate checks remain acceptance gates.
 
 The signed APK is 54,764,182 bytes, version code 16, SHA-256 `6b98caa69c9c277c53de9d2c99c0dfdb8a9715b24cc7e84fb2f8c06775c40076`. Existing review signing identity, APK signature, 16 KiB ZIP/native-library alignment, LAN page, HEAD, range, stale-range fallback and full download hash verify. Desktop development was restored. The Desktop and terminal synchronization fixes require the updated host code; existing terminal processes must be reopened.
+
+## Review package: 0.1.16-dev
+
+Version code 17 keeps generated attachment envelopes out of displayed user prompts received from other clients. Terminal and Android preserve the authored prompt, show attachments separately, and retain the full underlying agent context and saved history. Existing structured images are not duplicated; missing image payloads retain a reference card. Malformed or literal attachment examples remain unchanged.
+
+The mobile composer brings the effort, dictation and primary controls closer while retaining their touch targets. The effort dial is larger, the chat subtitle sits closer to its title, and loading shows an editable draft with unavailable controls disabled. Draft hydration preserves text entered during loading; sending becomes available when the chat is ready.
+
+Verification: fresh main and unit compilation from exact Gradle-exported inputs, 367 Android tests across 70 classes with no failures or skips, APK assembly, lint (zero errors, 54 warnings), terminal live/history attachment regressions, privacy check and a native composer/attachment fixture pass. The ready, loading, typed-draft and send-ready states were visually inspected. Physical-phone keyboard and touch interaction remain acceptance checks.
+
+The signed APK is 54,600,361 bytes, version code 17, SHA-256 `628905cc465f56a9e9f86465c948cf7c4d495591305f02146c1cf2d9c44ff7e5`. The existing review signing identity, APK signature, 16 KiB ZIP/native-library alignment and full LAN download hash verify. Landing page, HEAD, range and stale-range fallback checks also pass. This is a review APK; physical phone acceptance remains open.
