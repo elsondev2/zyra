@@ -28,6 +28,7 @@ type CodexVoiceRequest = {
     accountId: string
     endpoint?: string
     fetchImpl?: typeof fetch
+    signal?: AbortSignal
 }
 
 type CodexVoiceDependencies = {
@@ -253,9 +254,12 @@ async function fetchCodexVoiceFromDesktopSession(input: string | URL | Request, 
 }
 
 export async function requestCodexVoiceTranscription(request: CodexVoiceRequest): Promise<Response> {
+    request.signal?.throwIfAborted()
     const endpoint = assertAllowedTranscriptionUrl(request.endpoint || CODEX_VOICE_TRANSCRIPTION_URL)
     const multipart = encodeMultipartWav(request.audio)
     const controller = new AbortController()
+    const cancel = () => controller.abort(request.signal?.reason)
+    request.signal?.addEventListener('abort', cancel, { once: true })
     const requestBody = Uint8Array.from(multipart.body).buffer
     const timeout = setTimeout(() => controller.abort(), CODEX_VOICE_REQUEST_TIMEOUT_MS)
     const fetchImpl = request.fetchImpl || fetchCodexVoiceFromDesktopSession
@@ -276,16 +280,22 @@ export async function requestCodexVoiceTranscription(request: CodexVoiceRequest)
             body: requestBody
         })
     } catch (error) {
+        request.signal?.throwIfAborted()
         if (controller.signal.aborted) {
             throw new Error('Voice transcription timed out. Try again.')
         }
         throw new Error('Could not reach ChatGPT transcription. Check your connection and try again.')
     } finally {
+        request.signal?.removeEventListener('abort', cancel)
         clearTimeout(timeout)
     }
 }
 
-async function readBoundedResponseText(response: Response): Promise<string> {
+async function readBoundedResponseText(response: Response, signal?: AbortSignal): Promise<string> {
+    if (signal?.aborted) {
+        await response.body?.cancel().catch(() => undefined)
+        signal.throwIfAborted()
+    }
     const declaredLength = Number(response.headers.get('content-length') || 0)
     if (Number.isFinite(declaredLength) && declaredLength > CODEX_VOICE_MAX_RESPONSE_BYTES) {
         throw new Error('ChatGPT returned an invalid transcription response.')
@@ -293,11 +303,14 @@ async function readBoundedResponseText(response: Response): Promise<string> {
     if (!response.body) return ''
 
     const reader = response.body.getReader()
+    const cancel = () => { void reader.cancel().catch(() => undefined) }
+    signal?.addEventListener('abort', cancel, { once: true })
     const readBody = async () => {
         const chunks: Uint8Array[] = []
         let totalBytes = 0
         while (true) {
             const { done, value } = await reader.read()
+            signal?.throwIfAborted()
             if (done) break
             if (!value) continue
             totalBytes += value.byteLength
@@ -329,6 +342,7 @@ async function readBoundedResponseText(response: Response): Promise<string> {
             })
         ])
     } finally {
+        signal?.removeEventListener('abort', cancel)
         if (timeout) clearTimeout(timeout)
     }
 }
@@ -352,23 +366,29 @@ function readStatusError(response: Response): string {
 
 export async function transcribeCodexVoiceWithDependencies(
     input: AssistantTranscribeVoiceInput,
-    dependencies: CodexVoiceDependencies
+    dependencies: CodexVoiceDependencies,
+    signal?: AbortSignal
 ): Promise<string> {
+    signal?.throwIfAborted()
     const audio = decodeCodexVoiceInput(input)
     let credentials = await dependencies.resolveCredentials(false)
+    signal?.throwIfAborted()
     let response = await dependencies.requestTranscription({
         audio,
         accessToken: credentials.accessToken,
-        accountId: credentials.accountId
+        accountId: credentials.accountId,
+        ...(signal ? { signal } : {})
     })
 
     if (response.status === 401) {
         await response.body?.cancel().catch(() => undefined)
         credentials = await dependencies.resolveCredentials(true)
+        signal?.throwIfAborted()
         response = await dependencies.requestTranscription({
             audio,
             accessToken: credentials.accessToken,
-            accountId: credentials.accountId
+            accountId: credentials.accountId,
+            ...(signal ? { signal } : {})
         })
     }
 
@@ -377,7 +397,7 @@ export async function transcribeCodexVoiceWithDependencies(
         throw new Error(readStatusError(response))
     }
 
-    const raw = await readBoundedResponseText(response)
+    const raw = await readBoundedResponseText(response, signal)
     let payload: Record<string, unknown> | null = null
     try {
         payload = asRecord(JSON.parse(raw))
@@ -391,7 +411,7 @@ export async function transcribeCodexVoiceWithDependencies(
     return text
 }
 
-export async function transcribeVoiceWithCodex(input: AssistantTranscribeVoiceInput): Promise<string> {
+export async function transcribeVoiceWithCodex(input: AssistantTranscribeVoiceInput, signal?: AbortSignal): Promise<string> {
     if (activeTranscriptionRequests >= CODEX_VOICE_MAX_CONCURRENT_REQUESTS) {
         throw new Error('Too many voice transcriptions are already running. Try again shortly.')
     }
@@ -400,7 +420,7 @@ export async function transcribeVoiceWithCodex(input: AssistantTranscribeVoiceIn
         return await transcribeCodexVoiceWithDependencies(input, {
             resolveCredentials: (refresh) => refresh ? refreshCodexVoiceCredentials() : readCodexVoiceCredentials(),
             requestTranscription: requestCodexVoiceTranscription
-        })
+        }, signal)
     } finally {
         activeTranscriptionRequests -= 1
     }

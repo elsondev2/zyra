@@ -21,6 +21,11 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const syntaxTargets = [
+  "src/agent-server/approval-responses.mjs",
+  "src/agent-server/replay-window.mjs",
+  "src/agent-server/history-bodies.mjs",
+  "src/agent-server/history-media.mjs",
+  "scripts/test-agent-server-replay-budget.mjs",
   "desktop/scripts/test-runtime-source-imports.mjs",
   "src/permission-paths.mjs",
   "scripts/test-zyra-permission-paths.mjs",
@@ -62,6 +67,8 @@ const syntaxTargets = [
   "src/codex-reset-format.mjs",
   "src/codex-reset-picker.mjs",
   "src/onboarding.mjs",
+  "src/prompt-images.mjs",
+  "scripts/test-prompt-images.mjs",
   "src/clipboard-image.mjs",
   "src/slash-commands.mjs",
   "src/slash-command-handlers.mjs",
@@ -154,6 +161,8 @@ const syntaxTargets = [
 ];
 
 const coreTests = [
+  "scripts/test-agent-server-approval-responses.mjs",
+  "scripts/test-agent-server-mobile-sync.mjs",
   "scripts/test-control-bridge-deadline.mjs",
   "scripts/test-computer-tool-errors.mjs",
   "scripts/test-zyra-computer-control-tool.mjs",

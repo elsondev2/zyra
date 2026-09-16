@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AssistantInteractionMode, AssistantRuntimeMode } from '@shared/assistant/contracts'
+import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from 'react'
+import type { AssistantInteractionMode, AssistantRuntimeMode, AssistantUpdateSessionConfigurationInput } from '@shared/assistant/contracts'
 import type { DevScopeGitBranchSummary } from '@shared/contracts/devscope-api'
 import { useSettings } from '@/lib/settings'
 import type { MentionCandidate } from './assistant-composer-mentions'
@@ -35,9 +35,10 @@ import {
 } from './assistant-browser-annotation-composer'
 import { coerceAssistantReasoningEffortForModel, getAssistantModelReasoningEfforts } from '@shared/assistant/reasoning-efforts'
 import {
-    readAssistantComposerSessionOverrides,
     type AssistantComposerSessionState
 } from './assistant-composer-session-state'
+import { createAssistantComposerConfigurationPublisher } from './assistant-composer-configuration-publisher'
+import { reconcileAssistantComposerCanonicalConfiguration, retainAssistantComposerCanonicalConfiguration, type AssistantComposerCanonicalConfiguration } from './assistant-composer-canonical-sync'
 import type { AssistantComposerProps, AssistantQueuedComposerMessage, ComposerContextFile } from './assistant-composer-types'
 
 function isLegacyFallbackModel(model: string | null | undefined): boolean {
@@ -54,6 +55,7 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
     const { settings } = useSettings()
     const {
         sessionId,
+        configurationThreadId,
         useSettingsDefaults = false,
         resetStateToken = null,
         placement = 'bottom',
@@ -188,6 +190,41 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
     const [selectedModel, setSelectedModel] = useState(normalizeComposerDefaultModel(initialComposerSessionState.model || resolvedModel))
     const [selectedRuntimeMode, setSelectedRuntimeMode] = useState<AssistantRuntimeMode>(initialComposerSessionState.runtimeMode || baseRuntimeMode)
     const [selectedInteractionMode, setSelectedInteractionMode] = useState<AssistantInteractionMode>(initialComposerSessionState.interactionMode || baseInteractionMode)
+    const canonicalConfigurationRef = useRef<{ sessionId: string | null; threadId?: string | null; configuration: AssistantComposerCanonicalConfiguration } | null>(null)
+    const configurationPublisher = useMemo(() => createAssistantComposerConfigurationPublisher(
+        input => window.devscope.assistant.updateSessionConfiguration(input)
+    ), [])
+    const publishConfiguration = useCallback((patch: Pick<AssistantUpdateSessionConfigurationInput, 'model' | 'runtimeMode' | 'effort'>) => {
+        // New/unconnected chats retain their local launch choices until Send.
+        if (useSettingsDefaults || !normalizedSessionId || !configurationThreadId || !isConnected) return
+        void configurationPublisher({ sessionId: normalizedSessionId, threadId: configurationThreadId, ...patch })
+            .catch(error => {
+                const canonical = canonicalConfigurationRef.current
+                if (canonical?.sessionId === normalizedSessionId && canonical.threadId === configurationThreadId) {
+                    const pending = configurationPublisher.pending(normalizedSessionId, configurationThreadId)
+                    const actual = canonical.configuration
+                    if (patch.model !== undefined && pending.model === undefined && actual.model !== undefined) setSelectedModel(current => current === patch.model ? actual.model! : current)
+                    if (patch.runtimeMode !== undefined && pending.runtimeMode === undefined && actual.runtimeMode !== undefined) setSelectedRuntimeMode(current => current === patch.runtimeMode ? actual.runtimeMode! : current)
+                    if (patch.effort !== undefined && pending.effort === undefined && actual.effort !== undefined) setSelectedEffort(current => current === patch.effort ? actual.effort! : current)
+                }
+                onBlockedSend?.(error instanceof Error ? error.message : 'Could not update this chat.')
+            })
+    }, [configurationPublisher, configurationThreadId, isConnected, normalizedSessionId, onBlockedSend, useSettingsDefaults])
+    const chooseModel = useCallback((value: SetStateAction<string>) => {
+        const next = typeof value === 'function' ? value(selectedModel) : value
+        setSelectedModel(next)
+        if (next !== selectedModel) publishConfiguration({ model: next })
+    }, [publishConfiguration, selectedModel])
+    const chooseRuntimeMode = useCallback((value: SetStateAction<AssistantRuntimeMode>) => {
+        const next = typeof value === 'function' ? value(selectedRuntimeMode) : value
+        setSelectedRuntimeMode(next)
+        if (next !== selectedRuntimeMode) publishConfiguration({ runtimeMode: next })
+    }, [publishConfiguration, selectedRuntimeMode])
+    const chooseEffort = useCallback((value: SetStateAction<AssistantComposerPreferenceEffort>) => {
+        const next = typeof value === 'function' ? value(selectedEffort) : value
+        setSelectedEffort(next)
+        if (next !== selectedEffort) publishConfiguration({ effort: next })
+    }, [publishConfiguration, selectedEffort])
     const {
         activeBranchCandidate,
         activeMentionCandidate,
@@ -220,26 +257,34 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
     )
     const effortOptionsSignature = effortOptions.join('\n')
     useEffect(() => {
-        const canonicalModel = normalizeComposerDefaultModel(activeModel)
-        if (!canonicalModel || readAssistantComposerSessionOverrides(normalizedSessionId).model) return
-        setSelectedModel(canonicalModel)
-    }, [activeModel, normalizedSessionId])
-    useEffect(() => {
-        if (!runtimeMode || readAssistantComposerSessionOverrides(normalizedSessionId).runtimeMode) return
-        setSelectedRuntimeMode(runtimeMode)
-    }, [normalizedSessionId, runtimeMode])
-    useEffect(() => {
-        if (!interactionMode || readAssistantComposerSessionOverrides(normalizedSessionId).interactionMode) return
-        setSelectedInteractionMode(interactionMode)
-    }, [interactionMode, normalizedSessionId])
-    useEffect(() => {
-        if (!activeEffort || readAssistantComposerSessionOverrides(normalizedSessionId).effort) return
-        setSelectedEffort(coerceAssistantReasoningEffortForModel(activeEffort, activeModel || selectedModel))
-    }, [activeEffort, activeModel, normalizedSessionId])
-    useEffect(() => {
-        if (typeof activeFastModeEnabled !== 'boolean' || readAssistantComposerSessionOverrides(normalizedSessionId).fastModeEnabled !== undefined) return
-        setFastModeEnabled(activeFastModeEnabled)
-    }, [activeFastModeEnabled, normalizedSessionId])
+        // New/offline composers own a local draft. Existing connected chats hydrate
+        // canonical values, including when old last-used values exist in storage.
+        if (useSettingsDefaults || !isConnected) {
+            canonicalConfigurationRef.current = null
+            return
+        }
+        const configuration: AssistantComposerCanonicalConfiguration = {
+            model: normalizeComposerDefaultModel(activeModel) || undefined,
+            runtimeMode,
+            interactionMode,
+            effort: activeEffort || undefined,
+            fastModeEnabled: activeFastModeEnabled
+        }
+        const previous = canonicalConfigurationRef.current
+        const baseline = previous?.sessionId === normalizedSessionId && previous.threadId === configurationThreadId ? previous.configuration : undefined
+        const patch = reconcileAssistantComposerCanonicalConfiguration(
+            baseline,
+            configuration,
+            {},
+            normalizedSessionId && configurationThreadId ? configurationPublisher.pending(normalizedSessionId, configurationThreadId) : {}
+        )
+        canonicalConfigurationRef.current = { sessionId: normalizedSessionId, threadId: configurationThreadId, configuration: retainAssistantComposerCanonicalConfiguration(baseline, configuration) }
+        if (patch.model !== undefined) setSelectedModel(patch.model)
+        if (patch.runtimeMode !== undefined) setSelectedRuntimeMode(patch.runtimeMode)
+        if (patch.interactionMode !== undefined) setSelectedInteractionMode(patch.interactionMode)
+        if (patch.effort !== undefined) setSelectedEffort(coerceAssistantReasoningEffortForModel(patch.effort, activeModel || selectedModel))
+        if (patch.fastModeEnabled !== undefined) setFastModeEnabled(patch.fastModeEnabled)
+    }, [activeModel, runtimeMode, interactionMode, activeEffort, activeFastModeEnabled, normalizedSessionId, configurationThreadId, configurationPublisher, isConnected, useSettingsDefaults])
     useEffect(() => {
         setSelectedEffort((current) => coerceAssistantReasoningEffortForModel(current, selectedModelOption))
     }, [effortOptionsSignature, selectedModel])
@@ -424,9 +469,9 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         setActiveBranchIndex,
         onSwitchBranch: handleBranchSwitch,
         selectedModel,
-        setSelectedModel,
+        setSelectedModel: chooseModel,
         selectedRuntimeMode,
-        setSelectedRuntimeMode,
+        setSelectedRuntimeMode: chooseRuntimeMode,
         selectedInteractionMode,
         selectedEffort,
         fastModeEnabled,
@@ -600,7 +645,7 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         setMentionCanScrollUp,
         setMentionCanScrollDown,
         selectedEffort,
-        setSelectedEffort,
+        setSelectedEffort: chooseEffort,
         effortOptions,
         fastModeEnabled,
         setFastModeEnabled,
@@ -616,7 +661,7 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         traitsDropdownRef,
         mentionCandidates,
         selectedModel,
-        setSelectedModel,
+        setSelectedModel: chooseModel,
         selectedModelLabel,
         selectedModelContextWindow: availableModelOptions.find((model) => model.id === selectedModel)?.contextWindow ?? null,
         latestModelId,
@@ -634,7 +679,7 @@ export function useAssistantComposerController(props: AssistantComposerProps) {
         selectedInteractionMode,
         setSelectedInteractionMode,
         selectedRuntimeMode,
-        setSelectedRuntimeMode,
+        setSelectedRuntimeMode: chooseRuntimeMode,
         displayedProfile,
         zyraProfile,
         onZyraProfileChange,

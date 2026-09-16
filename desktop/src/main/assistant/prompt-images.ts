@@ -1,3 +1,5 @@
+import { detectPromptImageMimeType as detectAssistantPromptImageMimeType } from '../../../../src/prompt-images.mjs'
+export { detectAssistantPromptImageMimeType }
 import { readFile, stat } from 'node:fs/promises'
 import { basename, isAbsolute } from 'node:path'
 import type { AssistantPromptImageInput } from '../../shared/assistant/contracts'
@@ -14,26 +16,6 @@ export type PreparedAssistantPromptImage = {
 
 type PrepareAssistantPromptImagesOptions = {
     resolveClipboardAttachment?: (reference: string) => Promise<string | null>
-}
-
-function startsWith(bytes: Uint8Array, signature: number[]): boolean {
-    return bytes.length >= signature.length && signature.every((byte, index) => bytes[index] === byte)
-}
-
-function startsWithAscii(bytes: Uint8Array, offset: number, value: string): boolean {
-    if (bytes.length < offset + value.length) return false
-    for (let index = 0; index < value.length; index += 1) {
-        if (bytes[offset + index] !== value.charCodeAt(index)) return false
-    }
-    return true
-}
-
-export function detectAssistantPromptImageMimeType(bytes: Uint8Array): PreparedAssistantPromptImage['mimeType'] | null {
-    if (startsWith(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'image/png'
-    if (startsWith(bytes, [0xff, 0xd8, 0xff])) return 'image/jpeg'
-    if (startsWithAscii(bytes, 0, 'GIF87a') || startsWithAscii(bytes, 0, 'GIF89a')) return 'image/gif'
-    if (startsWithAscii(bytes, 0, 'RIFF') && startsWithAscii(bytes, 8, 'WEBP')) return 'image/webp'
-    return null
 }
 
 function isClipboardReference(value: string): boolean {

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { realpathSync, statSync } from "node:fs";
 import { canonicalPermissionPath, resolvePermissionPath } from "./permission-paths.mjs";
+import { createFilesystemAccessController, FILESYSTEM_ACCESS_TOOL } from "./filesystem-access-tool.mjs";
 import { isDefinitelyCriticalZyraToolPermission, isPotentiallyCriticalZyraToolPermission } from "./permission-command-policy.mjs";
 export { isDefinitelyCriticalZyraToolPermission, isPotentiallyCriticalZyraToolPermission } from "./permission-command-policy.mjs";
 
@@ -133,7 +134,11 @@ function commandHasUnboundedPathExpansion(command) {
 }
 
 function isConservativelyReadOnlyCommand(command) {
-  const normalized = String(command || "").trim().toLowerCase();
+  // Git's uppercase -C selects a working directory; lowercase -c changes
+  // configuration and must not inherit this read-only classification.
+  const normalized = String(command || "").trim()
+    .replace(/^git\s+(?:-C\s+(?:"[^"]*"|'[^']*'|[^\s"']+)\s+)+/, "git ")
+    .toLowerCase();
   if (!normalized || /(?:^|[^<])>(?:>|&)?/.test(normalized) || /[;&|\r\n]|\$\(|`/.test(normalized)) return false;
   return /^(?:git\s+(?:status|diff|log|show|branch(?:\s+--show-current)?|rev-parse|ls-files)\b|(?:rg|grep|find|ls|dir|cat|type|more|head|tail|where|which|pwd|echo)\b|(?:get-content|get-childitem|get-item|select-string|test-path)\b)/i.test(normalized);
 }
@@ -144,7 +149,7 @@ export function describeZyraToolPermission(event, options = {}) {
 
 function describeToolPermission(event, options, scopedRoots) {
   const toolName = normalizeToolName(event?.toolName || event?.name);
-  if (!toolName || isSeparatelySupervisedControlTool(toolName)) return null;
+  if (!toolName || toolName === FILESYSTEM_ACCESS_TOOL || isSeparatelySupervisedControlTool(toolName)) return null;
 
   const input = asRecord(event?.input);
   const project = path.resolve(options.project || process.cwd());
@@ -224,15 +229,24 @@ export function createZyraPermissionGateExtension(options = {}) {
   const getPermissionMode = typeof options.getPermissionMode === "function"
     ? options.getPermissionMode
     : () => "approval-required";
+  const access = scopedRoots && requestPermission ? createFilesystemAccessController({
+    project: path.resolve(options.project || process.cwd()), roots: scopedRoots,
+    requestPermission, getPermissionMode,
+  }) : null;
+  const consumeAccess = (event) => {
+    const input = asRecord(event?.input);
+    access?.consume([...collectPaths(input, true), ...collectCommandPathHints(input.command || input.cmd || input.script)], normalizeToolName(event?.toolName || event?.name));
+  };
   const handleToolCall = async (event) => {
     const permissionMode = getPermissionMode();
     if (isLoadedSkillRead(event, options)) return undefined;
-    const request = describeToolPermission(event, options, scopedRoots);
-    if (!request) return undefined;
+    const effectiveRoots = access?.currentRoots() || scopedRoots;
+    const request = describeToolPermission(event, options, effectiveRoots);
+    if (!request) { consumeAccess(event); return undefined; }
     if (request.scopeViolation) {
       return {
         block: true,
-        reason: `${request.toolName || "This tool"} requested a path outside this chat's filesystem scope. Full access controls approvals; it does not add folders. In Settings > Projects, associate the needed folder with this Project, then open Thread Details > Folder access and apply folder changes to this chat. Allowed folders: ${scopedRoots?.map((root) => `${root.path} (${root.access})`).join("; ") || "project folder only"}.`,
+        reason: `${request.toolName || "This tool"} requested a path outside this chat's filesystem scope. Full access controls approvals; it does not add folders. ${access ? 'Call filesystem_access with operation inspect to see scope, then request the needed folder through approval and retry this same tool. Do not bypass a denial with Bash. ' : ''}For permanent access, associate the folder in Settings > Projects, then open Thread Details > Folder access and apply folder changes. Allowed folders: ${effectiveRoots?.map((root) => `${root.path} (${root.access})`).join("; ") || "project folder only"}.`,
       };
     }
     if (request.readOnlyViolation) {
@@ -241,6 +255,7 @@ export function createZyraPermissionGateExtension(options = {}) {
         reason: `${request.toolName || "This tool"} requested a write inside a read-only Project folder.`,
       };
     }
+    consumeAccess(event);
     if (sessionGrants.has(request.grantKey)) return undefined;
 
     if (permissionMode === "full-access") {
@@ -289,7 +304,7 @@ export function createZyraPermissionGateExtension(options = {}) {
     resolvedPath: "<zyra:permission-gate>",
     sourceInfo: { source: "builtin", scope: "temporary", label: "Zyra permission gate" },
     handlers: new Map([["tool_call", [handleToolCall]]]),
-    tools: new Map(),
+    tools: access ? new Map([[FILESYSTEM_ACCESS_TOOL, { definition: access.tool, sourceInfo: { source: "builtin", scope: "temporary", label: "Folder access" } }]]) : new Map(),
     messageRenderers: new Map(),
     commands: new Map(),
     flags: new Map(),

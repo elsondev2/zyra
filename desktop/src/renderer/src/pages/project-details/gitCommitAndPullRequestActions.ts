@@ -1,3 +1,4 @@
+import { openDesktopLink } from '@/lib/desktop-links'
 import { resolvePreferredGitTextProvider } from '@/lib/gitAi'
 import { invalidateProjectGitOverview } from '@/lib/projectGitOverview'
 import {
@@ -126,7 +127,7 @@ export function createGitCommitAndPullRequestActions(params: GitActionParams) {
 
             params.setCommitMessage('')
             invalidateProjectGitOverview(params.decodedPath)
-            window.open(result.pullRequest.url, '_blank', 'noopener,noreferrer')
+            void openDesktopLink(result.pullRequest.url)
             const prNumberLabel = result.pullRequest.number > 0 ? ` #${result.pullRequest.number}` : ''
             params.showToast(
                 autoStageAll

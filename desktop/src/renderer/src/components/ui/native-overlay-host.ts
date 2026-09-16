@@ -39,6 +39,8 @@ class NativeOverlayHost {
     private restoreFocus: HTMLElement | null = null
     private leases = new Set<symbol>()
     private presented = new Set<symbol>()
+    private suspended = new Set<symbol>()
+    private hasPresented = () => [...this.presented].some(id => !this.suspended.has(id))
     private changes = new Set<() => void>()
     private generation = 0
     private disposed = false
@@ -153,6 +155,7 @@ class NativeOverlayHost {
                 if (!this.leases.has(id) || !this.surface) return false
                 const presentingFrameName = this.surface.frameName
                 this.presented.add(id)
+                if (this.suspended.has(id)) return true
                 cancelAnimationFrame(this.hideFrame)
                 try { await this.setVisible(true); return true }
                 catch (error) {
@@ -169,19 +172,36 @@ class NativeOverlayHost {
             release: () => {
                 if (!this.leases.delete(id)) return
                 this.presented.delete(id)
-                if (this.presented.size) return
+                if (this.hasPresented()) return
                 cancelAnimationFrame(this.hideFrame)
                 this.hideFrame = requestAnimationFrame(() => {
-                    if (this.presented.size) return
+                    if (this.hasPresented()) return
                     const ownedFocus = this.surface?.window.document.hasFocus() === true
                     void this.setVisible(false).then(() => {
-                        if (this.presented.size || this.kind !== 'interactive') return
+                        if (this.hasPresented() || this.kind !== 'interactive') return
                         const active = document.activeElement
                         if (ownedFocus && document.hasFocus() && (active === document.body || active === this.restoreFocus) && this.restoreFocus?.isConnected) this.restoreFocus.focus({ preventScroll: true })
                         this.restoreFocus = null
                     }).catch(error => console.error('Native overlay dismissal failed', error))
                 })
             }
+        }
+    }
+
+    /** Temporarily move existing modal surfaces behind an owned Browser view.
+     * New leases (such as a link chooser) can still present normally.
+     */
+    suspendCurrentPresentation(): () => void {
+        const ids = [...this.leases].filter(id => !this.suspended.has(id))
+        for (const id of ids) this.suspended.add(id)
+        cancelAnimationFrame(this.hideFrame)
+        if (!this.hasPresented()) void this.setVisible(false).catch(error => console.error('Overlay suspension failed', error))
+        let restored = false
+        return () => {
+            if (restored) return
+            restored = true
+            for (const id of ids) this.suspended.delete(id)
+            if (!this.disposed && this.hasPresented()) void this.setVisible(true).catch(error => console.error('Overlay restoration failed', error))
         }
     }
 

@@ -1,3 +1,4 @@
+import { openDesktopLink } from '@/lib/desktop-links'
 import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
 import { ArrowDownCircle, Copy, ExternalLink, Link, RefreshCw, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -46,7 +47,7 @@ export function ProjectDetailsRepoInfoModal(props: any) {
                             <div className="mt-3 flex flex-wrap gap-2">
                                 {originRemoteUrl ? (
                                     <>
-                                        <button onClick={() => window.open(originRemoteUrl.replace(/\.git$/i, ''), '_blank', 'noopener,noreferrer')} className={actionButtonClass}>
+                                        <button onClick={() => void openDesktopLink(originRemoteUrl.replace(/\.git$/i, ''))} className={actionButtonClass}>
                                             <ExternalLink size={12} />
                                             Open
                                         </button>
@@ -66,7 +67,7 @@ export function ProjectDetailsRepoInfoModal(props: any) {
                             </p>
                             <div className="mt-3 flex flex-wrap gap-2">
                                 {githubPublishContext?.upstream?.htmlUrl ? (
-                                    <button onClick={() => window.open(githubPublishContext.upstream.htmlUrl, '_blank', 'noopener,noreferrer')} className={actionButtonClass}>
+                                    <button onClick={() => void openDesktopLink(githubPublishContext.upstream.htmlUrl)} className={actionButtonClass}>
                                         <ExternalLink size={12} />
                                         Open
                                     </button>

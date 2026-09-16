@@ -1,3 +1,4 @@
+import { openDesktopLink } from '@/lib/desktop-links'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, ChevronDown, Clock3, Image as ImageIcon, LoaderCircle, Plus, RefreshCw, Search, Server } from 'lucide-react'
 import type { DevScopeLocalServer } from '@shared/contracts/devscope-api'
@@ -301,9 +302,9 @@ export function AssistantBrowserNewTab({
             </main>
 
             {activeBackground?.provider === 'built-in' ? (
-                <button type="button" onClick={() => void window.devscope.openBrowserPreviewExternal(activeBackground.sourceUrl)} className="absolute bottom-3 left-3 z-20 max-w-[min(520px,calc(100%-24px))] truncate text-[10px] opacity-80 transition-opacity hover:opacity-100" style={{ color: attributionForegroundColor, textShadow: attributionTextShadow }} title={activeBackground.attributionText}>{activeBackground.attributionText}</button>
+                <button type="button" onClick={() => void openDesktopLink(activeBackground.sourceUrl)} className="absolute bottom-3 left-3 z-20 max-w-[min(520px,calc(100%-24px))] truncate text-[10px] opacity-80 transition-opacity hover:opacity-100" style={{ color: attributionForegroundColor, textShadow: attributionTextShadow }} title={activeBackground.attributionText}>{activeBackground.attributionText}</button>
             ) : activeBackground ? (
-                <span className="absolute bottom-3 left-3 z-20 max-w-[min(520px,calc(100%-24px))] truncate text-[10px] opacity-80" style={{ color: attributionForegroundColor, textShadow: attributionTextShadow }}>Photo by <button type="button" onClick={() => void window.devscope.openBrowserPreviewExternal(activeBackground.photographerUrl)} className="hover:underline hover:opacity-100">{activeBackground.photographer}</button> on <button type="button" onClick={() => void window.devscope.openBrowserPreviewExternal('https://unsplash.com/?utm_source=zyra&utm_medium=referral')} className="hover:underline hover:opacity-100">Unsplash</button></span>
+                <span className="absolute bottom-3 left-3 z-20 max-w-[min(520px,calc(100%-24px))] truncate text-[10px] opacity-80" style={{ color: attributionForegroundColor, textShadow: attributionTextShadow }}>Photo by <button type="button" onClick={() => void openDesktopLink(activeBackground.photographerUrl)} className="hover:underline hover:opacity-100">{activeBackground.photographer}</button> on <button type="button" onClick={() => void openDesktopLink('https://unsplash.com/?utm_source=zyra&utm_medium=referral')} className="hover:underline hover:opacity-100">Unsplash</button></span>
             ) : null}
             {backgroundPickerOpen ? <AssistantBrowserBackgroundPicker controller={background} onClose={() => setBackgroundPickerOpen(false)} /> : null}
         </div>

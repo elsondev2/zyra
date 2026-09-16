@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils'
 import { AssistantProjectIcon } from './AssistantProjectIcon'
 import { AssistantSessionTitleText } from './AssistantSessionTitleText'
 import { AssistantTuiPresenceIndicator } from './AssistantTuiPresenceIndicator'
-import { isAssistantSessionOpenInTui } from './assistant-tui-presence'
+import { assistantSessionMobileDevices, isAssistantSessionOpenInTui } from './assistant-tui-presence'
 import { resolveAssistantAgentInboxSettledInitialCount } from './assistant-agent-inbox-settled-window'
 import {
     formatAssistantSidebarRelativeTime,
@@ -42,6 +42,7 @@ type SidebarItem = {
     active: boolean
     settled: boolean
     tuiOpen: boolean
+    mobileDevices: string[]
 }
 
 type Props = {
@@ -226,12 +227,13 @@ function AgentInboxCard({ item, onSettle, props }: { item: SidebarItem; onSettle
                             <InboxRowActions item={item} action="settle" onAction={onSettle} props={props} showLabel />
                         </div>
                     </div>
-                    <div className={cn('mt-1 flex min-w-0', item.tuiOpen && 'pr-6')}>
+                    <div className={cn('mt-1 flex min-w-0', item.tuiOpen && item.mobileDevices.length > 0 ? 'pr-12' : (item.tuiOpen || item.mobileDevices.length > 0) && 'pr-6')}>
                         <AssistantSessionTitleText title={title} generating={item.session.titleGenerating === true} className={cn('min-w-0 flex-1 text-sm', receded ? 'font-normal text-sparkle-text-secondary/80' : 'font-medium text-sparkle-text')} />
                     </div>
-                    {item.tuiOpen ? (
+                    {item.tuiOpen || item.mobileDevices.length > 0 ? (
                         <span className="absolute bottom-1.5 right-2 inline-flex">
-                            <AssistantTuiPresenceIndicator focusable={false} />
+                            {item.tuiOpen ? <AssistantTuiPresenceIndicator focusable={false} /> : null}
+                            {item.mobileDevices.length > 0 ? <AssistantTuiPresenceIndicator focusable={false} mobileDevices={item.mobileDevices} /> : null}
                         </span>
                     ) : null}
                     <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-sparkle-text-muted/75">
@@ -253,9 +255,10 @@ function AgentInboxSlimRow({ item, action, onAction, props }: { item: SidebarIte
                 <ProjectMark group={item.project} dimmed={!item.active} />
                 <AssistantSessionTitleText title={title} generating={item.session.titleGenerating === true} className={cn('min-w-0 flex-1 text-sm group-hover/agent-inbox-row:text-sparkle-text', item.active ? 'text-sparkle-text' : 'text-sparkle-text-muted/70')} />
                 <div className="relative ml-auto flex h-6 min-w-[4.5rem] shrink-0 items-center justify-end gap-1.5">
-                    {item.tuiOpen ? (
+                    {item.tuiOpen || item.mobileDevices.length > 0 ? (
                         <span className="inline-flex shrink-0 transition-transform duration-150 ease-out group-hover/agent-inbox-row:-translate-x-9 group-focus-within/agent-inbox-row:-translate-x-9 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:-translate-x-9 motion-reduce:transition-none">
-                            <AssistantTuiPresenceIndicator focusable={false} />
+                            {item.tuiOpen ? <AssistantTuiPresenceIndicator focusable={false} /> : null}
+                            {item.mobileDevices.length > 0 ? <AssistantTuiPresenceIndicator focusable={false} mobileDevices={item.mobileDevices} /> : null}
                         </span>
                     ) : null}
                     <span className="shrink-0 transition-[opacity,transform] duration-150 ease-out group-hover/agent-inbox-row:translate-x-1 group-focus-within/agent-inbox-row:translate-x-1 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:translate-x-1 group-hover/agent-inbox-row:opacity-0 group-focus-within/agent-inbox-row:opacity-0 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:opacity-0 motion-reduce:transition-none">
@@ -322,6 +325,7 @@ export const AssistantAgentInboxSidebar = memo(function AssistantAgentInboxSideb
                 active,
                 activityAt,
                 tuiOpen: isAssistantSessionOpenInTui(session),
+                mobileDevices: assistantSessionMobileDevices(session),
                 projectPath: resolveSessionProjectPath(session),
                 project: projectByPath.get(resolveSessionProjectPath(session))!
             }

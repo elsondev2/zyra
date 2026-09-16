@@ -5,6 +5,7 @@
   "description": "Local Zyra coding assistant CLI.",
   "type": "module",
   "scripts": {
+    "test:session-preferences": "node --test scripts/test-session-preferences.mjs",
     "test:provider-connections": "node scripts/test-model-provider-connections.mjs && node scripts/test-provider-transactions.mjs",
     "test:runtime-architecture": "node scripts/test-server-memory-queue.mjs && node scripts/test-agent-role-models.mjs && node scripts/test-runtime-activation.mjs",
     "test:memory-idle": "node scripts/test-idle-memory-scheduler.mjs",
@@ -31,7 +32,8 @@
     "test:permissions:command-policy": "node scripts/test-permission-command-policy.mjs",
     "test:permissions:lifecycle": "node scripts/test-permission-approval-lifecycle.mjs",
     "test:permissions:gate": "node scripts/test-zyra-permission-gate.mjs",
-    "test:permissions": "node scripts/test-permission-approval-lifecycle.mjs && node scripts/test-permission-command-policy.mjs && node scripts/test-zyra-permission-paths.mjs && node scripts/test-zyra-filesystem-scope-runtime.mjs && node scripts/test-zyra-permission-gate.mjs && node scripts/test-zyra-permission-reviewer.mjs && node scripts/test-zyra-cli-permissions.mjs",
+    "test:permissions:access": "node scripts/test-zyra-filesystem-access.mjs",
+    "test:permissions": "node scripts/test-permission-approval-lifecycle.mjs && node scripts/test-permission-command-policy.mjs && node scripts/test-zyra-permission-paths.mjs && node scripts/test-zyra-filesystem-scope-runtime.mjs && node scripts/test-zyra-filesystem-access.mjs && node scripts/test-zyra-permission-gate.mjs && node scripts/test-zyra-permission-reviewer.mjs && node scripts/test-zyra-cli-permissions.mjs",
     "test:plugins": "node scripts/test-zyra-plugin-system.mjs && node scripts/test-zyra-plugin-availability.mjs && node scripts/test-zyra-plugin-download.mjs && node scripts/test-zyra-plugin-logos.mjs && node scripts/test-zyra-plugin-runtime.mjs && node scripts/test-zyra-plugin-revocation-runtime.mjs && node scripts/test-zyra-plugin-revocation-bridge.mjs && node scripts/test-zyra-prompt-resources.mjs && bun run --cwd desktop test:assistant-plugins",
     "test:voice-agent-contracts": "node scripts/validate-voice-agent-contracts.mjs",
     "test:provider-runtime": "node scripts/test-chatgpt-realtime-call.mjs && node scripts/test-codex-realtime-contract-sync.mjs && node scripts/test-provider-runtime-migration.mjs",
@@ -69,7 +71,8 @@
     "ui:typecheck:renderer": "bun run --cwd desktop typecheck:renderer",
     "ui:typecheck:watch:renderer": "bun run --cwd desktop typecheck:watch:renderer",
     "ui:typecheck:shared": "bun run --cwd desktop typecheck:shared",
-    "ui:typecheck:watch:shared": "bun run --cwd desktop typecheck:watch:shared"
+    "ui:typecheck:watch:shared": "bun run --cwd desktop typecheck:watch:shared",
+    "test:mobile-host": "node scripts/test-prompt-images.mjs && node scripts/test-agent-server-approval-responses.mjs && node scripts/test-agent-server-mobile-sync.mjs && node scripts/test-agent-server-replay-budget.mjs && npm --prefix mobile/gateway test"
   },
   "bin": {
     "zyra": "bin/zyra.mjs"
@@ -102,6 +105,7 @@
     "@earendil-works/pi-tui": "^0.80.6",
     "proper-lockfile": "4.1.2",
     "quickjs-emscripten": "^0.32.0",
+    "stream-json": "3.6.0",
     "typebox": "^1.1.24"
   },
   "devDependencies": {

@@ -66,6 +66,7 @@ export const BROWSER_ASSISTANT_BRIDGE_METHODS = [
     'deleteSession',
     'deleteMessage',
     'clearLogs',
+    'updateSessionConfiguration',
     'setSessionProject',
     'setSessionProjectPath',
     'setPlaygroundRoot',

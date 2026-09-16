@@ -36,6 +36,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
     onDeleteQueuedMessage?: (messageId: string) => Promise<void> | void
     onMoveQueuedMessage?: (messageId: string, targetMessageId: string) => Promise<void> | void
     selectedSessionId: string | null
+    configurationThreadId?: string | null
     useSettingsDefaults: boolean
     resetComposerStateToken?: string | null
     selectedSessionMode: 'work' | 'playground'
@@ -202,6 +203,7 @@ export const AssistantConversationComposerPane = memo(function AssistantConversa
                     ) : null}
                     <AssistantComposer
                         sessionId={props.selectedSessionId}
+                        configurationThreadId={props.configurationThreadId}
                         useSettingsDefaults={props.useSettingsDefaults}
                         resetStateToken={props.resetComposerStateToken}
                         placement={placement}

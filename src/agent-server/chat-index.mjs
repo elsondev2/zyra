@@ -1,3 +1,7 @@
+import { mobileHistoryStart } from './mobile-history-window.mjs';
+import { EventEmitter } from 'node:events';
+import { ChatModelBackfill } from './chat-model-backfill.mjs';
+import { applyEntryModel, newModelPresentation } from './chat-model.mjs';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -18,14 +22,38 @@ const INDEX_VERSION = 3;
 const READ_BUFFER_SIZE = 1024 * 1024;
 const MAX_TITLE_SOURCE_CHARS = 2_000;
 
-export class CanonicalChatIndex {
+export class CanonicalChatIndex extends EventEmitter {
   constructor(options = {}) {
+    super();
     this.paths = getAgentServerPaths(options);
     this.file = path.join(this.paths.stateDirectory, "chat-index-v3.json");
     this.record = readIndex(this.file);
     this.projectScans = new Map();
+    const modelChanges = new Map();
+    this.modelBackfill = new ChatModelBackfill({
+      get: id => this.record.chats[id],
+      commit: (id, presentation) => {
+        const previous = this.record.chats[id];
+        if (!previous) return;
+        const updated = { ...previous, ...presentation };
+        this.record.chats[id] = updated;
+        modelChanges.set(id, { previous, updated });
+      },
+      flush: () => {
+        if (!modelChanges.size) return;
+        try {
+          this.persist();
+          this.emit('modelsChanged', { model: true });
+        } catch {
+          // Metadata is a cache. A failed write must not clobber a newer history scan.
+          for (const [id, { previous, updated }] of modelChanges) if (this.record.chats[id] === updated) this.record.chats[id] = previous;
+        } finally { modelChanges.clear(); }
+      }
+    });
   }
 
+  queueModelPresentations(ids) { this.modelBackfill.enqueue(ids); }
+  async closeModelBackfill() { this.modelBackfill.close(); await this.modelBackfill.idle(); }
   async listProjects(projects = []) {
     const normalized = [...new Set(projects.map(normalizePath).filter(Boolean))];
     await Promise.all(normalized.map((project) => this.refreshProject(project)));
@@ -101,7 +129,7 @@ export class CanonicalChatIndex {
   }
 
   history(canonicalChatId, options = {}) {
-    const chat = this.record.chats[String(canonicalChatId || "").trim()];
+    const chat = this.refreshChat(canonicalChatId);
     if (!chat) return null;
     const offsets = Array.isArray(chat.entryOffsets) ? chat.entryOffsets : [];
     const limit = Math.max(1, Math.min(2_000, Number(options.limit) || 500));
@@ -111,6 +139,12 @@ export class CanonicalChatIndex {
     let start = Math.max(0, requestedEnd - limit);
     if (options.toolResultBodies === HISTORY_TOOL_RESULT_BODY_POLICY) {
       while (start > 0 && includesSortedNumber(chat.toolResultEntryIndexes || [], start)) start -= 1;
+    }
+    if (options.toolResultBodies === "lazy-mobile-v1" && (options.before == null || options.before === "")) {
+      start = mobileHistoryStart({ start, end: requestedEnd,
+        bytesAt: index => Number(offsets[index]?.[1]),
+        isDeferredTool: index => Boolean(findRecordByEntryIndex(chat.deferredToolResults || [], index)),
+        readEntry: index => readIndexedHistoryRecord(chat.sessionPath, offsets[index])?.entry });
     }
     const selected = offsets.slice(start, requestedEnd).map((offset, localIndex) => ({
       entryIndex: start + localIndex,
@@ -134,6 +168,33 @@ export class CanonicalChatIndex {
         totalEntries: offsets.length
       }
     };
+  }
+
+  refreshChat(canonicalChatId) {
+    const id = String(canonicalChatId || "").trim();
+    const current = this.record.chats[id];
+    if (!current) return null;
+    let stats;
+    try { stats = statSync(current.sessionPath); }
+    catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      delete this.record.chats[id];
+      this.persist();
+      return null;
+    }
+    if (current.fileSize === stats.size && current.fileMtimeMs === stats.mtimeMs) return current;
+    // A runtime can append without a catalog list between successive history reads.
+    // Reuse the incremental scanner for this file only, including rewrite detection.
+    const next = scanSessionFile(current.sessionPath, current.storageProject, current, stats);
+    if (next?.canonicalChatId !== id) {
+      delete this.record.chats[id];
+      if (next?.canonicalChatId) this.record.chats[next.canonicalChatId] = next;
+      this.persist();
+      return null;
+    }
+    this.record.chats[id] = next;
+    this.persist();
+    return next;
   }
 
   async searchToolResults(canonicalChatId, query, limit) {
@@ -187,6 +248,7 @@ function scanSessionFile(file, storageProject, current, stats) {
     ? structuredClone(current)
     : {
         version: INDEX_VERSION,
+        ...newModelPresentation(),
         canonicalChatId: "",
         sessionPath: path.resolve(file),
         storageProject: normalizePath(storageProject),
@@ -262,6 +324,7 @@ function consumeLine(record, line, offset, byteLength) {
   try { entry = JSON.parse(trimmed); }
   catch { return false; }
 
+  applyEntryModel(record, entry);
   collectPathEvidence(record, entry);
   if (entry.type === "session") {
     if (entry.id) record.canonicalChatId = String(entry.id);
@@ -393,6 +456,10 @@ function cloneChat(chat) {
     firstMessage,
     titleCandidates,
     pathEvidence,
+    modelPresentationVersion,
+    modelNames,
+    modelLineage,
+    modelLeaf,
     ...publicChat
   } = chat;
   return structuredClone(publicChat);

@@ -42,16 +42,16 @@ type CorePluginRegistry = {
     setEnabledPlugins(input: AssistantSetPluginSetInput): Promise<unknown>
     createChatScope(input: { sessionId: string; projectId?: string | null; inherit?: boolean; selection?: AssistantCreatePluginChatInput }): Promise<AssistantChatPluginScope>
     ensureLegacyChatScopes(entries: Array<{ sessionId: string; projectId?: string | null }>): Promise<{ created: number }>
-    refreshChatScope(input: { sessionId: string; projectId?: string | null; inherit?: boolean }): Promise<{ scope: AssistantChatPluginScope; diff: AssistantPluginScopeDiff }>
+    refreshChatScope(input: { sessionId: string; projectId?: string | null; inherit?: boolean; expectedCatalogRevision?: number }): Promise<{ scope: AssistantChatPluginScope; diff: AssistantPluginScopeDiff }>
     removeChatScope(sessionId: string): Promise<boolean>
     getChatScope(sessionId: string): Promise<AssistantChatPluginScope | null>
     getChatSkillSources(sessionId: string, options?: { verify?: boolean }): Promise<AssistantPluginSkillSource[]>
-    setPluginState(pluginId: string, state: 'active' | 'disabled'): Promise<unknown>
-    rollbackPlugin(input: { pluginId: string; releaseId: string; approved: true }): Promise<unknown>
+    setPluginState(pluginId: string, state: 'active' | 'disabled', expectedCatalogRevision?: number): Promise<unknown>
+    rollbackPlugin(input: { pluginId: string; releaseId: string; approved: true; expectedCatalogRevision?: number }): Promise<unknown>
 }
 
 type CorePluginModule = {
-    ZyraPluginRegistry: new (options: { rootPath: string }) => CorePluginRegistry
+    ZyraPluginRegistry: new (options: { rootPath: string; onChange?: (revision: number) => void }) => CorePluginRegistry
 }
 
 type PendingPluginReview = {
@@ -96,6 +96,7 @@ export class AssistantPluginRegistry {
     private readonly reviewTtlMs: number
     private registryPromise: Promise<CorePluginRegistry> | null = null
     private readonly pendingReviews = new Map<string, PendingPluginReview>()
+    private readonly changeListeners = new Set<() => void>()
     readonly acquisitions: AssistantPluginAcquisitions
 
     constructor(options: { rootPath: string; now?: () => number; reviewTtlMs?: number; download?: PluginDownloader }) {
@@ -121,6 +122,11 @@ export class AssistantPluginRegistry {
 
     async getCatalog(): Promise<AssistantPluginCatalog> {
         return this.registry().then((registry) => registry.getCatalog())
+    }
+
+    onChange(listener: () => void): () => void {
+        this.changeListeners.add(listener)
+        return () => { this.changeListeners.delete(listener) }
     }
 
     async inspectLocalPlugin(input: AssistantInspectLocalPluginInput, ownerId?: number, sourceLocator?: string): Promise<AssistantPluginInspection> {
@@ -208,7 +214,8 @@ export class AssistantPluginRegistry {
     }> {
         const result = await (await this.registry()).refreshChatScope({
             sessionId: bounded(input.sessionId, 192),
-            projectId
+            projectId,
+            expectedCatalogRevision: input.expectedCatalogRevision
         })
         return { success: true, ...result }
     }
@@ -230,27 +237,32 @@ export class AssistantPluginRegistry {
         return this.registry().then((registry) => registry.getChatSkillSources(sessionId))
     }
 
-    async setPluginState(pluginId: string, state: 'active' | 'disabled'): Promise<{ success: true; catalog: AssistantPluginCatalog }> {
+    async setPluginState(pluginId: string, state: 'active' | 'disabled', expectedCatalogRevision?: number): Promise<{ success: true; catalog: AssistantPluginCatalog }> {
         const registry = await this.registry()
-        await registry.setPluginState(pluginId, state)
+        await registry.setPluginState(pluginId, state, expectedCatalogRevision)
         return { success: true, catalog: await registry.getCatalog() }
     }
 
-    async rollbackPlugin(pluginId: string, releaseId: string, confirmed: boolean): Promise<{ success: true; catalog: AssistantPluginCatalog }> {
+    async rollbackPlugin(pluginId: string, releaseId: string, confirmed: boolean, expectedCatalogRevision?: number): Promise<{ success: true; catalog: AssistantPluginCatalog }> {
         if (!confirmed) throw new Error('Plugin rollback requires confirmation.')
         const registry = await this.registry()
-        await registry.rollbackPlugin({ pluginId, releaseId, approved: true })
+        await registry.rollbackPlugin({ pluginId, releaseId, approved: true, expectedCatalogRevision })
         return { success: true, catalog: await registry.getCatalog() }
     }
 
     async dispose(): Promise<void> {
+        this.changeListeners.clear()
         await this.acquisitions.dispose()
         this.pendingReviews.clear()
     }
 
     private async registry(): Promise<CorePluginRegistry> {
         this.registryPromise ??= loadCorePluginModule().then(async ({ ZyraPluginRegistry }) => {
-            const registry = new ZyraPluginRegistry({ rootPath: this.rootPath })
+            const registry = new ZyraPluginRegistry({ rootPath: this.rootPath, onChange: () => {
+                for (const listener of this.changeListeners) {
+                    try { Promise.resolve(listener()).catch(() => {}) } catch { /* A view cannot invalidate a saved mutation. */ }
+                }
+            } })
             await registry.initialize()
             return registry
         })

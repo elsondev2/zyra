@@ -1,3 +1,4 @@
+import { openDesktopLink } from '@/lib/desktop-links'
 import { useCallback, useState } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { useSettings } from '@/lib/settings'
@@ -192,7 +193,7 @@ export function ProjectDetailsGitTab(props: ProjectDetailsGitTabProps) {
     })()
     const handlePrimaryPullRequestAction = useCallback(() => {
         if (currentBranchPullRequest?.state === 'open' && currentBranchPullRequest.url) {
-            window.open(currentBranchPullRequest.url, '_blank', 'noopener,noreferrer')
+            void openDesktopLink(currentBranchPullRequest.url)
             showToast(`Opened PR #${currentBranchPullRequest.number}.`)
             return
         }

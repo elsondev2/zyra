@@ -1,3 +1,4 @@
+import { openDesktopLink } from '@/lib/desktop-links'
 import { useAssistantReviewNavigation } from './useAssistantReviewNavigation'
 import { InspectorWorkspaceSurface, useInspectorWorkspaceLoading } from './InspectorWorkspaceSurface'
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from 'react'
@@ -750,12 +751,10 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
     }, [threadId])
 
     const handleOpenResourceUrl = useCallback((url: string) => {
-        if (!isElectronRendererRuntime() || !projectPath) {
-            void window.devscope.openBrowserPreviewExternal(url)
-            return
-        }
-        openBrowserSurface(url)
-    }, [openBrowserSurface, projectPath])
+        void openDesktopLink(url).then(result => {
+            if (!result.success) showDeveloperToast({ tone: 'error', message: result.error || 'Could not open this link.' })
+        })
+    }, [showDeveloperToast])
 
     const handleBrowserNavigationRequestHandled = useCallback((requestId: number) => {
         setBrowserNavigationRequest((current) => current?.id === requestId ? null : current)

@@ -11,6 +11,7 @@ import { SettingsProvider, useSettings } from './lib/settings'
 import { CommandPaletteProvider } from './lib/commandPalette'
 import CommandPalette from './components/CommandPalette'
 import LinkHoverStatus from './components/ui/LinkHoverStatus'
+import { DesktopLinkHost } from './components/ui/DesktopLinkHost'
 import { UpdatePromptCenter } from './components/updates/UpdatePromptCenter'
 import { AppUpdatesProvider } from './lib/app-updates'
 import { ProjectCreationProvider } from './lib/projects/project-creation'
@@ -338,7 +339,7 @@ function AppSurface() {
 }
 
 function App() {
-    return <><AppSurface /><AssistantBrowserRecordingHost /></>
+    return <><AppSurface /><AssistantBrowserRecordingHost /><DesktopLinkHost /></>
 }
 
 export default App

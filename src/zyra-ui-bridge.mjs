@@ -1,3 +1,6 @@
+import { normalizePromptImages } from './prompt-images.mjs';
+import { ensureSessionDurable } from './agent-server/session-durability.mjs';
+import { sessionPreferences } from './session-preferences.mjs';
 import { registerSavedProviders } from "./provider-connections.mjs";
 import { createIdleMemoryScheduler } from "./memory/idle-memory-scheduler.mjs";
 import { randomUUID } from "node:crypto";
@@ -265,6 +268,7 @@ async function handleConnect(payload) {
   const storedChatConfig = readStoredChatConfig(runtime.session.sessionManager);
   await applyChatConfig(sdk, storedChatConfig || normalizeChatConfig(payload), { emit: false });
   const chatConfig = currentChatConfig(sdk);
+  if (payload.persistNewSession === true) ensureSessionDurable(runtime.session.sessionManager);
   activeActionBatchIntent = undefined;
   if (payload.memoryQueueOwner !== "server" && payload.surface !== "memory-worker" && !payload.noSession && process.env.ZYRA_MEMORY_BACKGROUND !== "0") {
     const ownedRuntime = runtime;
@@ -622,28 +626,6 @@ function numberValue(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-const supportedPromptImageMimeTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
-const maxPromptImageBase64Chars = 28 * 1024 * 1024;
-
-function normalizePromptImages(value) {
-  if (value == null) return undefined;
-  if (!Array.isArray(value)) throw new Error("Invalid prompt image payload.");
-  if (value.length > 12) throw new Error("Attach at most 12 images per message.");
-
-  const images = value.map((image, index) => {
-    if (!image || typeof image !== "object") throw new Error(`Image ${index + 1} is invalid.`);
-    const data = stringValue(image.data);
-    const mimeType = stringValue(image.mimeType)?.toLowerCase();
-    if (image.type !== "image" || !data || !mimeType || !supportedPromptImageMimeTypes.has(mimeType)) {
-      throw new Error(`Image ${index + 1} is not a supported visual input.`);
-    }
-    if (data.length > maxPromptImageBase64Chars) throw new Error(`Image ${index + 1} is larger than 20 MB.`);
-    return { type: "image", data, mimeType };
-  });
-
-  return images.length > 0 ? images : undefined;
-}
-
 const VALID_THINKING_LEVELS = new Set(["off", "none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 function normalizeRuntimeMode(value) {
@@ -902,7 +884,15 @@ async function handleCanonicalMessageOperation(type, payload = {}) {
   const sessionManager = runtime?.session?.sessionManager;
   if (!sessionManager) throw new Error("Zyra canonical session is not connected.");
   if (type === "canonical_message.append") {
-    return { receipt: appendCanonicalMessage(sessionManager, payload) };
+    const receipt = appendCanonicalMessage(sessionManager, payload);
+    const entries = sessionManager.getEntries();
+    const index = entries.findIndex(entry => `pi_entry_${entry.id}` === receipt.receiptId);
+    const entry = entries[index];
+    if (!entry?.message) throw new Error("The committed canonical message could not be read back.");
+    // Publish only after the ledger has durably flushed the exact entry. Every
+    // attached client receives the same message identity as a later history read.
+    send({ type: "event", event: { type: "message_end", canonicalCommit: true, historyEntryIndex: index, message: entry.message } });
+    return { receipt };
   }
   if (type === "canonical_message.find") {
     return { receipt: findCanonicalMessageReceipt(sessionManager, payload.operationId) };
@@ -913,11 +903,11 @@ async function handleCanonicalMessageOperation(type, payload = {}) {
 async function handleSessionOperation(type, payload = {}) {
   if (!runtime?.session) throw new Error("Zyra bridge is not connected.");
   if (type === "steer") {
-    await runtime.session.steer(String(payload.prompt || ""), payload.images);
+    await runtime.session.steer(String(payload.prompt || ""), normalizePromptImages(payload.images));
     return {};
   }
   if (type === "follow_up") {
-    await runtime.session.followUp(String(payload.prompt || ""), payload.images);
+    await runtime.session.followUp(String(payload.prompt || ""), normalizePromptImages(payload.images));
     return {};
   }
   if (type === "compact") return runtime.session.compact(String(payload.instructions || "").trim() || undefined);
@@ -1078,6 +1068,12 @@ async function handleMessage(message) {
     }
     if (message?.type === "configure") {
       sendResponse(id, true, { result: await handleConfigure(message.payload ?? {}) });
+      return;
+    }
+    if (message?.type === 'preferences.get' || message?.type === 'memory.configure') {
+      const result = sessionPreferences(runtime, await loadSdk(), message.type, message.payload ?? {});
+      if (message.type === 'memory.configure') send({ type: 'event', event: { type: 'session_memory', memoryMode: result.memoryMode } });
+      sendResponse(id, true, { result });
       return;
     }
     if (message?.type === "auth.refresh") {

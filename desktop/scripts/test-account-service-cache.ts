@@ -30,3 +30,16 @@ await Promise.all([sharedA, sharedB])
 assert.equal(statusCalls, 3, 'ordinary concurrent account reads still share one request')
 
 console.log('Account service cache contract: ok')
+let limitsCalls = 0, creditsCalls = 0
+const limitsService = new ZyraAccountService(async () => ({
+    buildChatGptAccountStatus: async () => { limitsCalls++; return { status: { configured: true }, usage: { limitWindows: [{ id: 'weekly', usedPercent: 24, windowSeconds: 604800, resetAt: 1800000000000 }] } } },
+    fetchCodexResetCredits: async () => { creditsCalls++; return { credits: [] } },
+    redeemCodexResetCredit: async () => { throw new Error('Never redeem while reading limits') }
+}))
+const limits = await Promise.all([limitsService.getLimitsOverview(), limitsService.getLimitsOverview()])
+assert.equal(limitsCalls, 1, 'simultaneous mobile limits requests share one status request')
+assert.equal(creditsCalls, 0, 'limits do not fetch reset-credit inventory')
+assert.ok(Object.keys(limits[0].rateLimitsByLimitId || {}).length > 0, 'limits preserve normalized windows')
+await limitsService.getOverview()
+assert.equal(creditsCalls, 1, 'full Desktop overview still fetches reset-credit inventory')
+console.log('Mobile limits skip-credit path: ok')

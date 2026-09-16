@@ -43,6 +43,7 @@ import type {
     AssistantSetPluginSetInput,
     AssistantSetPluginStateInput,
     AssistantSetSessionProjectInput,
+    AssistantUpdateSessionConfigurationInput,
     AssistantTranscribeVoiceInput,
     AssistantUpdateProjectInput,
     AssistantUserInputResponseInput,
@@ -121,6 +122,7 @@ export function createAssistantAdapter() {
             deleteSession: (sessionId: string) => ipcRenderer.invoke(ASSISTANT_IPC.deleteSession, sessionId),
             deleteMessage: (input: AssistantDeleteMessageInput) => ipcRenderer.invoke(ASSISTANT_IPC.deleteMessage, input),
             clearLogs: (input?: AssistantClearLogsInput) => ipcRenderer.invoke(ASSISTANT_IPC.clearLogs, input),
+            updateSessionConfiguration: (input: AssistantUpdateSessionConfigurationInput) => ipcRenderer.invoke(ASSISTANT_IPC.updateSessionConfiguration, input),
             setSessionProject: (sessionId: string, input: AssistantSetSessionProjectInput) =>
                 ipcRenderer.invoke(ASSISTANT_IPC.setSessionProject, sessionId, input),
             setSessionProjectPath: (sessionId: string, projectPath: string | null) =>

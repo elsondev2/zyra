@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import { ApprovalResponses } from '../src/agent-server/approval-responses.mjs';
+const pending = new Set(['a', 'b']);
+const gate = new ApprovalResponses(pending);
+let calls = 0;
+const payload = { requestId: 'a', decision: 'acceptOnce' };
+const action = async () => { calls++; return { ok: true }; };
+await Promise.all([gate.respond('desktop', payload, action), gate.respond('desktop', payload, action)]);
+assert.equal(calls, 1);
+assert.throws(() => gate.respond('mobile', payload, action), { code: 'AGENT_SERVER_APPROVAL_ALREADY_ANSWERED' });
+assert.throws(() => gate.respond('desktop', { ...payload, decision: 'decline' }, action), { code: 'AGENT_SERVER_APPROVAL_ALREADY_ANSWERED' });
+assert.throws(() => gate.respond('mobile', { requestId: 'absent', decision: 'acceptOnce' }, action), { code: 'AGENT_SERVER_APPROVAL_UNKNOWN' });
+assert.throws(() => gate.respond('mobile', { requestId: 'b', decision: 'anything' }, action), { code: 'AGENT_SERVER_APPROVAL_INVALID' });
+console.log('Canonical approval ownership: passed');

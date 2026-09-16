@@ -42,6 +42,7 @@ import type {
     AssistantSetPluginSetInput,
     AssistantSetPluginStateInput,
     AssistantSetSessionProjectInput,
+    AssistantUpdateSessionConfigurationInput,
     AssistantTranscribeVoiceInput,
     AssistantUpdateProjectInput,
     AssistantUserInputResponseInput,
@@ -199,14 +200,14 @@ export function handleAssistantSetPluginState(
     _event: Electron.IpcMainInvokeEvent,
     input: AssistantSetPluginStateInput
 ) {
-    return withAssistantResult(() => getAssistantService().setPluginState(input.pluginId, input.state))
+    return withAssistantResult(() => getAssistantService().setPluginState(input.pluginId, input.state, input.expectedCatalogRevision))
 }
 
 export function handleAssistantRollbackPlugin(
     _event: Electron.IpcMainInvokeEvent,
     input: AssistantRollbackPluginInput
 ) {
-    return withAssistantResult(() => getAssistantService().rollbackPlugin(input.pluginId, input.releaseId, input.confirmed))
+    return withAssistantResult(() => getAssistantService().rollbackPlugin(input.pluginId, input.releaseId, input.confirmed, input.expectedCatalogRevision))
 }
 
 export function handleAssistantCreateProject(
@@ -361,6 +362,10 @@ export function handleAssistantDeleteMessage(_event: Electron.IpcMainInvokeEvent
 export function handleAssistantClearLogs(_event: Electron.IpcMainInvokeEvent, input?: AssistantClearLogsInput) {
     log.info('IPC: assistant:clearLogs', { sessionId: input?.sessionId })
     return withAssistantResult(() => getAssistantService().clearLogs(input))
+}
+
+export function handleAssistantUpdateSessionConfiguration(_event: Electron.IpcMainInvokeEvent, input: AssistantUpdateSessionConfigurationInput) {
+    return withAssistantResult(() => getAssistantService().updateSessionConfiguration(input))
 }
 
 export function handleAssistantSetSessionProject(

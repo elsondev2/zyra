@@ -1,3 +1,6 @@
+import { MobileAccessManager } from '../mobile-access'
+import { MOBILE_ACCESS_IPC } from '../../shared/mobile-access'
+import { getAssistantService } from '../assistant'
 import { readRuntimeActivation, subscribeRuntimeActivation } from '../assistant/runtime-activation'
 import { RUNTIME_ACTIVATION_GET, RUNTIME_ACTIVATION_CHANGED } from '../../shared/runtime-activation'
 /**
@@ -97,6 +100,7 @@ import {
     handleAssistantSendPrompt,
     handleAssistantSetPlaygroundRoot,
     handleAssistantSetSessionProject,
+    handleAssistantUpdateSessionConfiguration,
     handleAssistantSetSessionProjectPath,
     handleAssistantSubscribe,
     handleAssistantUnsubscribe
@@ -305,6 +309,23 @@ const ipcMain = createOnboardingGatedIpcMain(trustedIpcMain, {
 
 export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: DesktopSetupServices, getMainWindow: () => BrowserWindow | null = () => mainWindow): void {
     log.info('Registering IPC handlers...')
+    const mobileAccess = new MobileAccessManager(app.getPath('userData'), getAssistantService, async () => {
+        const value = (await setupServices.preferences.get({ surface: 'desktop' })).settings.projectIconOverrides
+        return value && typeof value === 'object' ? value as Record<string, string> : {}
+    })
+    setupServices.preferences.subscribe(event => { if (event.changedKeys.includes('projectIconOverrides')) mobileAccess.invalidateProjectArtwork() })
+    ipcMain.handle(MOBILE_ACCESS_IPC, (_event, action, input) => {
+        if (action === 'state') return mobileAccess.state()
+        if (action === 'device-access') return mobileAccess.setDeviceAccess(input?.id, input?.access)
+        if (action === 'projects') return mobileAccess.projectChoices()
+        if (action === 'configure') return mobileAccess.configure(input)
+        if (action === 'pair') return mobileAccess.pair()
+        if (action === 'revoke') return mobileAccess.revoke(input)
+        throw new Error('Unknown mobile access action.')
+    })
+    if (setupServices.onboarding.isAccessAllowed()) void mobileAccess.restore()
+    setupServices.onboarding.subscribe(snapshot => { if (!snapshot.accessAllowed) void mobileAccess.stop() })
+    app.once('before-quit', () => { void mobileAccess.stop() })
 
     isOnboardingAccessAllowed = () => setupServices.onboarding.isAccessAllowed()
     configureHostedAiSecretResolver((provider) => setupServices.secrets.getHostedAiKey(provider))
@@ -429,6 +450,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(ASSISTANT_IPC.deleteSession, requireCompletedSetup(handleAssistantDeleteSession))
     ipcMain.handle(ASSISTANT_IPC.deleteMessage, requireCompletedSetup(handleAssistantDeleteMessage))
     ipcMain.handle(ASSISTANT_IPC.clearLogs, requireCompletedSetup(handleAssistantClearLogs))
+    ipcMain.handle(ASSISTANT_IPC.updateSessionConfiguration, requireCompletedSetup(handleAssistantUpdateSessionConfiguration))
     ipcMain.handle(ASSISTANT_IPC.setSessionProject, requireCompletedSetup(handleAssistantSetSessionProject))
     ipcMain.handle(ASSISTANT_IPC.setSessionProjectPath, requireCompletedSetup(handleAssistantSetSessionProjectPath))
     ipcMain.handle(ASSISTANT_IPC.setPlaygroundRoot, requireCompletedSetup(handleAssistantSetPlaygroundRoot))

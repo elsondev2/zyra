@@ -1,3 +1,4 @@
+import { openDesktopLink } from '@/lib/desktop-links'
 import { AnchoredNativeOverlay } from '@/components/ui/AnchoredNativeOverlay'
 import { getOverlayActiveElement } from '@/components/ui/native-overlay-portal'
 import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
@@ -208,7 +209,7 @@ export function AssistantBrowserBackgroundPicker({
                                             </span>
                                             {selected ? <span className="absolute right-2 top-2 inline-flex size-5 items-center justify-center rounded-[5px] bg-[var(--accent-primary)] text-[var(--accent-contrast)] shadow"><Check size={11} /></span> : null}
                                         </button>
-                                        {background.provider === 'unsplash' ? <span className="mt-1 block truncate text-[10px] text-sparkle-text-muted/65">Photo by <button type="button" onClick={() => void window.devscope.openBrowserPreviewExternal(background.photographerUrl)} className="hover:text-sparkle-text hover:underline">{background.photographer}</button> on <button type="button" onClick={() => void window.devscope.openBrowserPreviewExternal('https://unsplash.com/?utm_source=zyra&utm_medium=referral')} className="hover:text-sparkle-text hover:underline">Unsplash</button></span> : null}
+                                        {background.provider === 'unsplash' ? <span className="mt-1 block truncate text-[10px] text-sparkle-text-muted/65">Photo by <button type="button" onClick={() => void openDesktopLink(background.photographerUrl)} className="hover:text-sparkle-text hover:underline">{background.photographer}</button> on <button type="button" onClick={() => void openDesktopLink('https://unsplash.com/?utm_source=zyra&utm_medium=referral')} className="hover:text-sparkle-text hover:underline">Unsplash</button></span> : null}
                                     </div>
                                 )
                             })}

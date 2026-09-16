@@ -41,7 +41,7 @@ try {
     { type: "message", id: "22222222", parentId: "11111111", timestamp: fixtureTimestamp, message: { role: "assistant", content: [{ type: "text", text: "fixture ready" }], timestamp: Date.parse(fixtureTimestamp) + 1, stopReason: "stop", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { total: 0 } } } }
   ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
   server = new ZyraAgentServer({
-    root, stateDirectory, channel, idleTimeoutMs: 5_000,
+    root, stateDirectory, channel, idleTimeoutMs: 5_000, desktopAuthorityToken: "bridge-fixture-authority",
     createWorker(options) {
       const worker = new AgentBridgeWorker(options);
       const dispose = worker.dispose.bind(worker);
@@ -70,6 +70,14 @@ try {
   });
   assert.match(attached.canonicalChatId, /.+/);
   assert.equal(attached.connected.model, fixtureModel, "the real SDK must resolve the authenticated fixture model");
+  const preferences = await desktop.request('session.request', { sessionKey: attached.sessionKey, type: 'preferences.get', payload: {} });
+  assert.ok(preferences.profiles.some(profile => profile.name === 'friendly'));
+  assert.ok(preferences.profiles.every(profile => Object.keys(profile).every(key => ['name', 'description'].includes(key))));
+  const memory = await desktop.request('session.request', { sessionKey: attached.sessionKey, type: 'memory.configure', payload: { enabled: false } });
+  assert.equal(memory.memoryMode, 'disabled');
+  assert.equal((await desktop.request('session.request', { sessionKey: attached.sessionKey, type: 'preferences.get', payload: {} })).memoryMode, 'disabled');
+  await desktop.request('session.request', { sessionKey: attached.sessionKey, type: 'configure', payload: { profile: 'friendly' } });
+  assert.equal((await desktop.request('session.request', { sessionKey: attached.sessionKey, type: 'preferences.get', payload: {} })).profile, 'friendly');
   await desktop.request("session.request", {
     sessionKey: attached.sessionKey,
     type: "configure",
@@ -138,6 +146,32 @@ try {
   assert.equal(reopened.connected.runtimeMode, "edits-only", "reopened surfaces must inherit the canonical permission mode");
   assert.equal(reopened.connected.model, attached.connected.model, "reopened surfaces must inherit the canonical model");
   assert.equal(server.state().sessions.length, 1, "both surfaces must resolve to the same bridge worker");
+  desktop = new ZyraAgentServerClient({ root, stateDirectory, channel, autoStart: false, clientId: "desktop:voice-bridge", surface: "desktop", authorities: ["desktop-control"], authorityProof: "bridge-fixture-authority" });
+  await desktop.connect();
+  const liveSession = server.sessions.get(reopened.sessionKey);
+  const previousTurn = { id: "previous-strong-turn", state: "completed", completedAt: fixtureTimestamp, assistantMessageId: "previous-answer" };
+  liveSession.latestTurn = { ...previousTurn };
+  const committedEvent = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { tui.off("session-event", receive); reject(new Error("Committed Voice message did not reach the attached TUI client.")); }, 10000);
+    function receive(envelope) {
+      if (envelope.event?.canonicalCommit !== true) return;
+      clearTimeout(timer); tui.off("session-event", receive); resolve(envelope);
+    }
+    tui.on("session-event", receive);
+  });
+  const committed = await desktop.request("catalog.message.append", { session: reopened.canonicalChatId, message: {
+    operationId: "voice-bridge-operation", idempotencyKey: "voice-bridge-commit", conversationId: reopened.canonicalChatId,
+    messageId: "voice-bridge-message", role: "assistant", producer: "realtime_foreground", modality: "voice", text: "This saved Voice response is shared immediately.",
+    attachmentIds: [], providerItemId: "voice-bridge-provider-item", providerCompletedAt: new Date().toISOString(), payloadSha256: "a".repeat(64),
+    routeClaim: { foregroundRouteId: "voice-bridge-route", routeEpoch: 1, ownerClaimId: "voice-bridge-owner" }
+  } });
+  const liveCommit = await committedEvent;
+  assert.equal(liveCommit.event.message.id, committed.receipt.canonicalMessageId);
+  assert.equal(liveCommit.event.message.zyraCanonicalMessage.providerItemId, "voice-bridge-provider-item");
+  assert.ok(Number.isSafeInteger(liveCommit.event.historyEntryIndex));
+  assert.deepEqual(liveSession.latestTurn, previousTurn, "a Voice commit must not rewrite the previous strong turn summary");
+  const committedHistory = await tui.request("catalog.history", { session: reopened.canonicalChatId });
+  assert.deepEqual(committedHistory.history.entries.find(entry => entry.message?.id === "voice-bridge-message")?.message, liveCommit.event.message);
   await tui.request("session.stop", { sessionKey: reopened.sessionKey, reason: "bridge test complete" });
   tui.close();
 } finally {

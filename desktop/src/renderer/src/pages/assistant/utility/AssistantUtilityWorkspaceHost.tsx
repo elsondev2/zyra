@@ -1,3 +1,4 @@
+import { openDesktopLink } from '@/lib/desktop-links'
 import { LoaderCircle, TriangleAlert } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { AssistantActivity, AssistantMessage, AssistantTurnDetail, FleetSnapshot } from '@shared/assistant/contracts'
@@ -133,7 +134,7 @@ export function AssistantUtilityWorkspaceHost({ tab, active, windowId, onStateCa
             projectPath={tab.projectPath || null}
             activeFilePath={preview.previewFile.path}
             onOpenPreview={preview.openPreview}
-            onOpenUrl={(url) => { void window.devscope.openBrowserPreviewExternal(url) }}
+            onOpenUrl={(url) => { void openDesktopLink(url) }}
         />
     ) : undefined
     const previewModal = preview.previewFile ? (
@@ -211,7 +212,7 @@ export function AssistantUtilityWorkspaceHost({ tab, active, windowId, onStateCa
                 projectPath={tab.projectPath || null}
                 onOpenPreview={preview.openPreview}
                 onOpenPreviewInNewTab={preview.openPreviewInNewTab}
-                onOpenUrl={(url) => void window.devscope.openBrowserPreviewExternal(url)}
+                onOpenUrl={(url) => void openDesktopLink(url)}
                 onOpenDiff={(target) => { if (target.turnId) void hydrateTurn(target.turnId); setResourceTurnId(target.turnId || null); setResourceDiff(target); if (target.turnId) publishCapsule({ ...(capsuleRef.current as AssistantUtilityResourcesStateCapsule), drillDown: { turnId: target.turnId, selectedDiff: toAssistantUtilityDiffSelection(target) } }) }}
                 onOpenTurn={(turnId) => { void hydrateTurn(turnId); setResourceTurnId(turnId); setResourceDiff(null); publishCapsule({ ...(capsuleRef.current as AssistantUtilityResourcesStateCapsule), drillDown: { turnId } }) }}
                 stateCapsule={resourcesCapsule}

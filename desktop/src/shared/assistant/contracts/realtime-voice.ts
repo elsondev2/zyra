@@ -81,7 +81,13 @@ export interface AssistantRealtimeVoiceClientCommandEvent {
     messages: AssistantRealtimeVoiceClientMessage[]
 }
 
-export type AssistantRealtimeVoiceEvent =
+export interface AssistantRealtimeVoiceEventIdentity {
+    adapterSessionId?: string
+    realtimeSessionId?: string
+    realtimeSessionGeneration?: number
+}
+
+export type AssistantRealtimeVoiceEvent = AssistantRealtimeVoiceEventIdentity & (
     | {
         type: 'session.starting'
         threadId?: string
@@ -96,6 +102,7 @@ export type AssistantRealtimeVoiceEvent =
         type: 'transcript.delta'
         threadId?: string
         providerItemId?: string
+        transcriptSource?: 'turn' | 'chunk'
         role: string
         delta: string
     }
@@ -103,8 +110,15 @@ export type AssistantRealtimeVoiceEvent =
         type: 'transcript.done'
         threadId?: string
         providerItemId?: string
+        transcriptSource?: 'turn' | 'chunk'
         role: string
         text: string
+    }
+    | {
+        type: 'transcript.suppressed'
+        threadId?: string
+        providerItemId: string
+        role: 'user' | 'assistant'
     }
     | {
         type: 'composer.response.delta'
@@ -137,3 +151,4 @@ export type AssistantRealtimeVoiceEvent =
         threadId?: string
         reason?: string
     }
+)

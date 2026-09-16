@@ -214,17 +214,20 @@ export interface AssistantSetPluginSetInput {
 
 export interface AssistantRefreshChatPluginScopeInput {
     sessionId: string
+    expectedCatalogRevision?: number
 }
 
 export interface AssistantSetPluginStateInput {
     pluginId: string
     state: 'active' | 'disabled'
+    expectedCatalogRevision?: number
 }
 
 export interface AssistantRollbackPluginInput {
     pluginId: string
     releaseId: string
     confirmed: true
+    expectedCatalogRevision?: number
 }
 
 export interface AssistantPluginScopeDiff {

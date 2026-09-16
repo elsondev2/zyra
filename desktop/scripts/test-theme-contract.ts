@@ -29,9 +29,10 @@ const MINIMUMS = {
     surface: 1.04
 }
 
-assert.equal(THEMES.length, 72, 'Theme additions or removals must update the audited theme count')
+assert.equal(THEMES.length, 71, 'Theme additions or removals must update the audited theme count')
 assert.equal(LIGHT_THEMES.length, 27, 'the light catalog must keep its audited breadth')
-assert.equal(DARK_THEMES.length, 45, 'the dark catalog must keep its audited breadth')
+assert.equal(DARK_THEMES.length, 44, 'the dark catalog must keep its audited breadth')
+assert.ok(!THEMES.some((theme) => String(theme.id) === 'dark'), 'the retired blue Dark preset must not appear on any theme picker')
 assert.equal(new Set(THEMES.map((theme) => theme.id)).size, THEMES.length, 'Theme ids must be unique')
 assert.ok(LIGHT_THEMES.every((theme) => getThemeAppearance(theme.id) === 'light'))
 assert.ok(DARK_THEMES.every((theme) => getThemeAppearance(theme.id) === 'dark'))

@@ -1,0 +1,21 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {WorkspaceFiles} from '../src/workspace-files.mjs';
+test('folder search filters before paging and preserves hidden project policy',async t=>{
+ const root=await mkdtemp(path.join(tmpdir(),'zyra-folder-search-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const hidden=path.join(root,'private-note');await mkdir(hidden);
+ for(let i=0;i<205;i++)await writeFile(path.join(root,`file-${String(i).padStart(3,'0')}.txt`),'');
+ await writeFile(path.join(root,'Zebra-NOTE.md'),'');await writeFile(path.join(root,'.note'),'');
+ const files=new WorkspaceFiles({projects:[root],hiddenProjects:[hidden]}),chat={canonicalChatId:'chat',project:root};
+ const [{id:rootId}]=await files.roots(chat);
+ const search=params=>files.dispatch('workspace.files.list',{rootId,...params},chat);
+ const result=await search({query:'note'});
+ assert.deepEqual(result.entries.map(e=>e.name),['Zebra-NOTE.md']);assert.equal(result.nextOffset,null);
+ assert.deepEqual((await search({query:'note',hidden:true})).entries.map(e=>e.name),['.note','Zebra-NOTE.md']);
+ const page=await search({query:'file'});assert.equal(page.entries.length,200);assert.equal(page.nextOffset,200);
+ assert.equal((await search({query:'file',offset:200})).entries.length,5);
+ await assert.rejects(search({path:'../',query:'note'}));
+});

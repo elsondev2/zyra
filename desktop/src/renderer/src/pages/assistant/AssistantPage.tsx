@@ -1,3 +1,5 @@
+import { openDesktopLink } from '@/lib/desktop-links'
+import { desktopWebLink } from '@shared/desktop-link-policy'
 import { AssistantInspectorFrame } from './AssistantInspectorFrame'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
@@ -403,6 +405,7 @@ export default function AssistantPage() {
     }, [diffSource.projectRootPath, preview.openPreview, showToast])
 
     const handleOpenAssistantInternalLink = useCallback(async (href: string) => {
+        if (desktopWebLink(href)) return (await openDesktopLink(href)).success
         return openAssistantTarget(href, false, false)
     }, [openAssistantTarget])
 

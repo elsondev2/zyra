@@ -1,3 +1,4 @@
+import { defaultThemeTokens } from '@shared/preferences/default-theme-tokens'
 import { getThemeAppearance, type Theme, type ThemeDefinition } from '@/lib/settings-theme-catalog'
 import { useMemo } from 'react'
 import CloudField from '@/components/ui/CloudField'
@@ -13,11 +14,12 @@ function readThemeColor(variable: string, fallback: string): string {
 export function OnboardingBackground({ theme }: { theme?: ThemeDefinition } = {}) {
     const { settings } = useSettings()
     const themeRevision = useThemeRevision()
+    const fallback = defaultThemeTokens(settings.appearanceResolvedMode)
     const palette = useMemo(() => ({
-        background: theme?.tokens.bg || readThemeColor('--color-bg', '#0c121f'),
+        background: theme?.tokens.bg || readThemeColor('--color-bg', fallback.bg),
         accent: theme?.tokens.primary || readThemeColor('--accent-primary', settings.accentColor.primary),
-        ink: theme?.tokens.text || readThemeColor('--color-text', '#f0f4f8')
-    }), [theme, settings.accentColor.primary, settings.theme, themeRevision])
+        ink: theme?.tokens.text || readThemeColor('--color-text', fallback.text)
+    }), [theme, settings.accentColor.primary, settings.theme, themeRevision, fallback])
 
     return (
         <div className="pointer-events-none absolute inset-0 overflow-hidden" data-appearance={theme ? getThemeAppearance(theme.id as Theme) : settings.appearanceResolvedMode} aria-hidden="true">

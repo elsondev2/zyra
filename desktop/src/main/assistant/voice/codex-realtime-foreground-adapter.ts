@@ -234,14 +234,7 @@ export class ChatGptRealtimeForegroundAdapter implements RealtimeForegroundAdapt
         const event = normalizeWebRtcTranscriptEvent(value, session.webRtcTurnRoles)
         if (event && session.suppressedHydrationProviderItemIds.has(event.providerItemId)) return
         if (event && session.completedTranscriptProviderItemIds.has(event.providerItemId)) return
-        if (event?.kind === 'completed' && event.role === 'assistant'
-            && consumeCanonicalSpeechReplay(session, event.text, event.providerItemId)) return
-        if (event?.kind === 'completed' && consumeHydrationReplay(
-            session,
-            event.role,
-            event.text,
-            event.providerItemId
-        )) return
+        if (event?.kind === 'completed' && this.suppressTranscriptReplay(session, event.role, event.text, event.providerItemId)) return
         if (!event) {
             if (isWebRtcTranscriptCompletion(value)) {
                 this.emit({
@@ -254,10 +247,14 @@ export class ChatGptRealtimeForegroundAdapter implements RealtimeForegroundAdapt
             return
         }
         if (event.kind === 'completed') session.completedTranscriptProviderItemIds.add(event.providerItemId)
+        const providerType = asText(asRecord(value)?.['type']) || ''
+        const transcriptSource = providerType.startsWith('turn.') ? 'turn'
+            : providerType === 'input_transcript.added' || providerType === 'output_transcript.added' ? 'chunk' : undefined
         this.emit({
             ...eventBase(session, this.clock.now()),
             type: `realtime.${event.role}.transcript.${event.kind}`,
             providerItemId: event.providerItemId,
+            ...(transcriptSource ? { transcriptSource } : {}),
             ...(event.kind === 'completed' ? { text: event.text } : { delta: event.delta })
         } as RealtimeDomainEvent)
     }
@@ -328,18 +325,8 @@ export class ChatGptRealtimeForegroundAdapter implements RealtimeForegroundAdapt
         if (event.type === 'transcript.delta' || event.type === 'transcript.done') {
             if (event.providerItemId && session.suppressedHydrationProviderItemIds.has(event.providerItemId)) return
             if (event.providerItemId && session.completedTranscriptProviderItemIds.has(event.providerItemId)) return
-            if (event.type === 'transcript.done'
-                && event.providerItemId
-                && event.role === 'assistant'
-                && consumeCanonicalSpeechReplay(session, event.text, event.providerItemId)) return
-            if (event.type === 'transcript.done'
-                && event.providerItemId
-                && consumeHydrationReplay(
-                    session,
-                    event.role === 'user' ? 'user' : 'assistant',
-                    event.text,
-                    event.providerItemId
-                )) return
+            if (event.type === 'transcript.done' && event.providerItemId
+                && this.suppressTranscriptReplay(session, event.role === 'user' ? 'user' : 'assistant', event.text, event.providerItemId)) return
             // Flat legacy notifications may omit item identity. The
             // production Desktop bridge supplies the identity-bearing WebRTC
             // event instead; never guess or commit the flat notification.
@@ -368,6 +355,13 @@ export class ChatGptRealtimeForegroundAdapter implements RealtimeForegroundAdapt
             this.currentAdapterSessionId = null
             this.emit({ ...eventBase(session, this.clock.now()), type: 'realtime.session.closed', reason: event.reason || null })
         }
+    }
+
+    private suppressTranscriptReplay(session: ChatGptAdapterSession, role: 'user' | 'assistant', text: string, providerItemId: string): boolean {
+        const suppressed = (role === 'assistant' && consumeCanonicalSpeechReplay(session, text, providerItemId))
+            || consumeHydrationReplay(session, role, text, providerItemId)
+        if (suppressed) this.emit({ ...eventBase(session, this.clock.now()), type: 'realtime.transcript.suppressed', role, providerItemId })
+        return suppressed
     }
 
     private emit(event: RealtimeDomainEvent): void {
@@ -472,14 +466,20 @@ export function normalizeWebRtcTranscriptEvent(
     const turn = asRecord(payload?.['turn'])
     const item = asRecord(payload?.['item'])
     const turnId = boundedProviderItemId(
-        asText(turn?.['id']) || asText(item?.['id']) || asText(payload?.['turn_id']) || asText(payload?.['item_id'])
+        asText(turn?.['id']) || asText(payload?.['turn_id']) || asText(payload?.['item_id']) || asText(item?.['id'])
     )
     const explicitRole = normalizeTranscriptRole(
         asText(turn?.['role']) || asText(item?.['role']) || asText(payload?.['role'])
     )
     if (turnId && explicitRole) turnRoles.set(turnId, explicitRole)
 
-    if (type === 'turn.created' || type === 'conversation.item.created') return null
+    if (type === 'conversation.item.created') return null
+    // The logical turn promotes provisional word chunks on every client, even
+    // when its first transcript is empty. Keep its identity through transport.
+    if (type === 'turn.created' && turnId && explicitRole) {
+        return { kind: 'delta', role: explicitRole, providerItemId: turnId,
+            delta: typeof turn?.['transcript'] === 'string' ? turn.transcript : '' }
+    }
     const role = explicitRole
         || (turnId ? turnRoles.get(turnId) : undefined)
         || (type.includes('input_transcript') || type.includes('input_audio_transcription')

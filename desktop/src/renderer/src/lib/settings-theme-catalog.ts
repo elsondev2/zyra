@@ -1,3 +1,4 @@
+import { DEFAULT_DARK_THEME_TOKENS, DEFAULT_LIGHT_THEME_TOKENS } from '@shared/preferences/default-theme-tokens'
 import {
     DARK_THEME_IDS,
     LIGHT_THEME_IDS,
@@ -36,27 +37,6 @@ export interface ThemeDefinition {
 }
 
 export const THEMES = [
-    {
-        id: 'dark',
-        name: 'Dark',
-        color: '#0c121f',
-        description: 'Classic dark theme',
-        accentColor: 'Blue',
-        tokens: {
-            bg: '#0c121f',
-            text: '#f0f4f8',
-            textDark: '#d3dbe4',
-            textDarker: '#aab4c3',
-            textSecondary: '#7e92a9',
-            textMuted: '#3b4658',
-            card: '#131c2c',
-            border: '#1f2a3d',
-            borderSecondary: '#212f44',
-            primary: '#4f90e6',
-            secondary: '#3db58a',
-            accent: '#243144'
-        }
-    },
     {
         id: 'midnight',
         name: 'Midnight',
@@ -294,20 +274,7 @@ export const THEMES = [
         color: '#000000',
         description: 'Vercel black-and-white shell with blue focus',
         accentColor: 'Sky',
-        tokens: {
-            bg: '#000000',
-            text: '#ededed',
-            textDark: '#cccccc',
-            textDarker: '#9c9c9c',
-            textSecondary: '#006efe',
-            textMuted: '#3e3e3e',
-            card: '#0d0d0d',
-            border: '#222222',
-            borderSecondary: '#313131',
-            primary: '#006efe',
-            secondary: '#9540d5',
-            accent: '#121212'
-        }
+        tokens: DEFAULT_DARK_THEME_TOKENS
     },
     {
         id: 'notion',
@@ -1008,20 +975,7 @@ export const THEMES = [
         color: '#f7f3ea',
         description: 'Warm editorial paper with earthy accents',
         accentColor: 'Orange',
-        tokens: {
-            bg: '#f7f3ea',
-            text: '#302d28',
-            textDark: '#454038',
-            textDarker: '#625b50',
-            textSecondary: '#766d60',
-            textMuted: '#a39989',
-            card: '#fffdf8',
-            border: '#ded7c8',
-            borderSecondary: '#c9bfad',
-            primary: '#9a5b31',
-            secondary: '#4e7a68',
-            accent: '#eee6d8'
-        }
+        tokens: DEFAULT_LIGHT_THEME_TOKENS
     },
     {
         id: 'notion-light',
@@ -1565,7 +1519,6 @@ export {
 
 export const THEME_CLASS_IDS = THEMES
     .map((theme) => theme.id)
-    .filter((themeId): themeId is Exclude<Theme, 'dark'> => themeId !== 'dark')
 
 const THEME_LOOKUP = new Map<string, ThemeDefinition>(THEMES.map((theme) => [theme.id, theme]))
 
@@ -1573,5 +1526,5 @@ export const LIGHT_THEMES = THEMES.filter((theme): theme is (typeof THEMES)[numb
 export const DARK_THEMES = THEMES.filter((theme): theme is (typeof THEMES)[number] & { id: DarkTheme } => isDarkThemeId(theme.id))
 
 export function getThemeDefinition(themeId: Theme): ThemeDefinition {
-    return THEME_LOOKUP.get(themeId) || THEMES[0]
+    return THEME_LOOKUP.get(themeId) || THEME_LOOKUP.get('vercel')!
 }

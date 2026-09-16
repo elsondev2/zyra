@@ -7,7 +7,7 @@ import { copyTextToClipboard } from './AssistantPageHelpers'
 import { AssistantProjectIcon } from './AssistantProjectIcon'
 import { AssistantSessionTitleText } from './AssistantSessionTitleText'
 import { AssistantTuiPresenceIndicator } from './AssistantTuiPresenceIndicator'
-import { hasAssistantTuiPresence } from './assistant-tui-presence'
+import { assistantMobileDevices, assistantMobileVoiceDevice, hasAssistantTuiPresence } from './assistant-tui-presence'
 
 export const AssistantConversationHeader = memo(function AssistantConversationHeader(props: {
     displayMode?: AssistantChatDisplayMode
@@ -19,9 +19,10 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
     canonicalThreadId: string | null
     canonicalPresence?: {
         state: 'detached' | 'ready' | 'running' | 'background'
-        clients: Array<{ clientId: string; surface: string }>
+        clients: Array<{ clientId: string; surface: string; displayName?: string }>
         latestSequence?: number
     } | null
+    mobileVoice?: { deviceName: string } | null
     showPresenceBadge?: boolean
     showDiagnostics?: boolean
     activeThreadIsSubagent: boolean
@@ -46,6 +47,7 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
         titleGenerating = false,
         canonicalThreadId,
         canonicalPresence,
+        mobileVoice,
         showPresenceBadge = true,
         showDiagnostics = false,
         latestProjectLabel,
@@ -71,9 +73,11 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
     const minimal = displayMode === 'minimal'
     const RightSidebarIcon = rightPanelOpen && rightPanelMode === 'review' ? PanelRightClose : PanelRightOpen
     const tuiOpen = showPresenceBadge && hasAssistantTuiPresence(canonicalPresence)
+    const mobileDevices = showPresenceBadge ? assistantMobileDevices(canonicalPresence) : []
+    const mobileVoiceDevice = showPresenceBadge ? assistantMobileVoiceDevice(mobileVoice) : null
     const remoteSurfaces = [...new Set((canonicalPresence?.clients || [])
         .map((client) => client.surface.trim().toLowerCase())
-        .filter((surface) => surface && surface !== 'desktop' && surface !== 'tui'))]
+        .filter((surface) => surface && surface !== 'desktop' && surface !== 'tui' && surface !== 'mobile'))]
     const remotePresenceLabel = showPresenceBadge && remoteSurfaces.length > 0
         ? `${canonicalPresence?.state === 'running' ? 'Running' : canonicalPresence?.state === 'background' ? 'Background work' : 'Open'} in ${remoteSurfaces.join(' + ')}`
         : null
@@ -177,6 +181,7 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
                         openButtonClassName="rounded-md border-transparent bg-[var(--surface-hover)] p-0 text-sparkle-text"
                     />
                     {tuiOpen ? <AssistantTuiPresenceIndicator /> : null}
+                    {mobileDevices.length > 0 || mobileVoiceDevice ? <AssistantTuiPresenceIndicator mobileDevices={mobileDevices} mobileVoiceDevice={mobileVoiceDevice} /> : null}
                 </div>
                 {activeThreadIsSubagent && activeThreadLabel ? (
                     <span

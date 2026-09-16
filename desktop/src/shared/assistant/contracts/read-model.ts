@@ -169,10 +169,12 @@ export interface AssistantThreadShell {
     state: AssistantThreadState
     canonicalHistoryModifiedAt?: string | null
     canonicalHistoryEntryCount?: number | null
+    /** Live mobile adapter state; cleared on process startup, never inferred from attached clients. */
+    mobileVoice?: { deviceName: string } | null
     canonicalPresence?: {
         state: 'detached' | 'ready' | 'running' | 'background'
         activeTurnId: string | null
-        clients: Array<{ clientId: string; surface: string }>
+        clients: Array<{ clientId: string; surface: string; displayName?: string }>
         backgroundWorkActive: boolean
         attention?: 'approval' | 'input' | 'user-input' | null
         latestTurn?: AssistantLatestTurn | null

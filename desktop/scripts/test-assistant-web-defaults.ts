@@ -56,7 +56,7 @@ const mainSource = readFileSync(resolve(here, '../src/main/index.ts'), 'utf8')
 const workerSource = readFileSync(resolve(here, '../src/main/assistant/zyra-agent-server-worker.ts'), 'utf8')
 const bridgeSource = readFileSync(resolve(here, '../../src/zyra-ui-bridge.mjs'), 'utf8')
 const serverSource = readFileSync(resolve(here, '../../src/agent-server/server.mjs'), 'utf8')
-const settingsSource = readFileSync(resolve(here, '../src/renderer/src/pages/settings/AssistantSettings.tsx'), 'utf8')
+const settingsSource = readFileSync(resolve(here, '../src/renderer/src/pages/settings/PermissionsSettings.tsx'), 'utf8')
 
 assert.match(serviceSource, /Promise\.resolve\(\{ webSearch: true, webFetch: true \}\)/, 'ordinary new chats must fail open to both web tools when no preference exists')
 assert.match(mainSource, /getNewChatExecutionDefaults: \(\) => setupServices\.preferences\.getNewChatWebDefaults\(\)/, 'Desktop must inject main-owned web defaults into new chats')

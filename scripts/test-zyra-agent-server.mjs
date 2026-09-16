@@ -394,6 +394,10 @@ try {
   }, "an attached surface should resolve a canonical approval while the prompt remains active");
   await waitUntil(() => tuiEvents.some((entry) => entry.event?.type === "approval_resolved"));
   assert.equal((await tui.request("catalog.list", {})).chats[0].presence.attention, null, "catalog presence must clear resolved approval attention");
+  await assert.rejects(tui.request("session.request", {
+    sessionKey: "chat:test", type: "approval.respond",
+    payload: { requestId: "approval:test", decision: "decline" }
+  }), { code: "AGENT_SERVER_APPROVAL_ALREADY_ANSWERED" }, "a conflicting stale approval must not reach the worker");
   workers[0].emit("event", {
     type: "user_input_requested",
     requestId: "user-input:test",

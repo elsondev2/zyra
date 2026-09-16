@@ -1,3 +1,5 @@
+import { assistantUtilityProvisionalUrl } from './assistant-utility-provisional-document'
+import { defaultThemeTokens, resolveDefaultAppearance } from '../shared/preferences/default-theme-tokens'
 import { browserRecordingCapture } from './browser-recording-capture'
 /**
  * Zyra
@@ -136,6 +138,14 @@ async function readMainRendererOverlayAppearance(): Promise<Record<string, unkno
 
 const launchStartedAt = performance.now()
 const setupServices = createDesktopSetupServices(app.getPath('userData'))
+let startupThemeMode: unknown = 'system'
+async function refreshStartupTheme(): Promise<void> {
+    try { startupThemeMode = (await setupServices.preferences.get({ surface: 'desktop' })).settings.appearanceThemeMode }
+    catch (error) { log.warn('[Appearance] could not load startup appearance', error) }
+}
+function startupTheme() {
+    return defaultThemeTokens(resolveDefaultAppearance(startupThemeMode, nativeTheme.shouldUseDarkColors))
+}
 configureChromeBrowserAppearance(async () => {
     const { settings } = await setupServices.preferences.get({ surface: 'desktop' })
     return Object.fromEntries(['appearanceThemeMode', 'appearanceLightTheme', 'appearanceDarkTheme', 'accentColor', 'appearanceCustomTheme', 'appearanceCustomThemeActive', 'accessibilityReduceMotion'].map((key) => [key, settings[key]]))
@@ -145,14 +155,9 @@ configureWindowsControlOverlayAppearance(async () => {
     const accent = settings.accentColor && typeof settings.accentColor === 'object' && !Array.isArray(settings.accentColor)
         ? settings.accentColor as Record<string, unknown>
         : {}
-    const themeAppearance = settings.appearanceThemeMode === 'light'
-        ? 'light'
-        : settings.appearanceThemeMode === 'dark'
-            ? 'dark'
-            : nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
-    const themeFallback = themeAppearance === 'light'
-        ? { themeBackground: '#f7f7f5', themeSurface: '#ffffff', themeText: '#202124', themeTextSecondary: '#62666d', themeBorder: '#d7d9dc' }
-        : { themeBackground: '#0c121f', themeSurface: '#131c2c', themeText: '#f0f4f8', themeTextSecondary: '#aab4c3', themeBorder: '#2c394c' }
+    const themeAppearance = resolveDefaultAppearance(settings.appearanceThemeMode, nativeTheme.shouldUseDarkColors)
+    const tokens = defaultThemeTokens(themeAppearance)
+    const themeFallback = { themeBackground: tokens.bg, themeSurface: tokens.card, themeText: tokens.text, themeTextSecondary: tokens.textSecondary, themeBorder: tokens.borderSecondary }
     return {
         accentPrimary: typeof accent.primary === 'string' ? accent.primary : undefined,
         accentSecondary: typeof accent.secondary === 'string' ? accent.secondary : undefined,
@@ -169,6 +174,7 @@ const WINDOWS_OVERLAY_APPEARANCE_KEYS = new Set([
     'accessibilityReduceMotion', 'compactMode'
 ])
 setupServices.preferences.subscribe((event) => {
+    if (event.changedKeys.includes('appearanceThemeMode')) void refreshStartupTheme()
     if (event.changedKeys.some((key) => WINDOWS_OVERLAY_APPEARANCE_KEYS.has(key))) {
         setTimeout(refreshWindowsControlOverlayAppearance, 50).unref?.()
         void refreshChromeBrowserAppearance().catch(() => undefined)
@@ -685,7 +691,7 @@ function createWindow(showOnReady = true, initialRoute = '/'): BrowserWindow {
         minHeight: 600,
         show: false,
         ...getWindowChromeOptions(),
-        backgroundColor: '#0c121f',
+        backgroundColor: startupTheme().bg,
         ...(iconPath ? { icon: iconPath } : {}),
         webPreferences: {
             preload: getPreloadPath(),
@@ -738,17 +744,6 @@ function createWindow(showOnReady = true, initialRoute = '/'): BrowserWindow {
     return window
 }
 
-function escapeUtilityProvisionalText(value: string): string {
-    return value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character] || character)
-}
-
-function assistantUtilityProvisionalUrl(options: UtilityWindowCreationOptions): string {
-    const label = escapeUtilityProvisionalText(String(options.label || 'Workspace').slice(0, 160))
-    const accent = /^#[0-9a-f]{6}$/i.test(String(options.accentColor || '')) ? String(options.accentColor) : '#5b8cff'
-    const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="color-scheme" content="dark"><title>Zyra</title><style>*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#0c121f;color:#f0f4f8;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}.bar{height:34px;display:flex;align-items:center;border-bottom:1px solid #222d3f;background:#101827;box-shadow:inset 0 2px 0 ${accent}}.brand{width:76px;height:100%;display:flex;align-items:center;padding:0 12px;border-right:1px solid #222d3f;color:#aeb7c5;font-size:11px;font-weight:650}.tab{height:28px;max-width:220px;margin-left:4px;padding:0 10px;display:flex;align-items:center;gap:7px;border:1px solid color-mix(in srgb,${accent} 30%,#2a3548);border-radius:6px;background:color-mix(in srgb,${accent} 10%,#131c2c);font-size:10px;font-weight:600}.dot{width:7px;height:7px;flex:0 0 auto;border-radius:50%;background:${accent}}.label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.surface{height:calc(100% - 34px);display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 36%,color-mix(in srgb,${accent} 8%,transparent),transparent 42%),#0c121f}.status{display:flex;align-items:center;gap:8px;color:#7f8a9b;font-size:11px}.spinner{width:12px;height:12px;border:1.5px solid #344158;border-top-color:${accent};border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.spinner{animation:none}}</style></head><body><div class="bar"><div class="brand">Zyra</div><div class="tab"><span class="dot"></span><span class="label">${label}</span></div></div><div class="surface"><div class="status"><span class="spinner"></span><span>${label}</span></div></div></body></html>`
-    return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
-}
-
 function createAssistantUtilityShellWindow(windowId: string, creationOptions: UtilityWindowCreationOptions = {}): BrowserWindow {
     const iconPath = getAppIconPath()
     const window = new BrowserWindow({
@@ -759,7 +754,7 @@ function createAssistantUtilityShellWindow(windowId: string, creationOptions: Ut
         show: false,
         title: 'Zyra',
         ...getWindowChromeOptions(),
-        backgroundColor: '#0c121f',
+        backgroundColor: startupTheme().bg,
         ...(iconPath ? { icon: iconPath } : {}),
         webPreferences: {
             preload: getPreloadPath(),
@@ -785,7 +780,7 @@ function createAssistantUtilityShellWindow(windowId: string, creationOptions: Ut
     attachWindowStateEvents(window)
     lockWindowZoom(window)
     if (creationOptions.provisional) {
-        void window.loadURL(assistantUtilityProvisionalUrl(creationOptions))
+        void window.loadURL(assistantUtilityProvisionalUrl(creationOptions, resolveDefaultAppearance(startupThemeMode, nativeTheme.shouldUseDarkColors)))
     } else {
         loadRendererRoute(window, `/assistant-utility/${encodeURIComponent(windowId)}`)
     }
@@ -830,7 +825,7 @@ function createBrowserPopupShellWindow(input: {
             show: false,
             title: 'Zyra Browser',
             ...getWindowChromeOptions(),
-            backgroundColor: '#0c121f',
+            backgroundColor: startupTheme().bg,
             ...(iconPath ? { icon: iconPath } : {}),
             webPreferences: {
                 preload: getPreloadPath(),
@@ -881,7 +876,7 @@ function createQuickPreviewWindow(filePath: string): BrowserWindow {
         minHeight: 520,
         show: false,
         ...getWindowChromeOptions(),
-        backgroundColor: '#0c121f',
+        backgroundColor: startupTheme().bg,
         ...(iconPath ? { icon: iconPath } : {}),
         webPreferences: {
             preload: getPreloadPath(),
@@ -1095,6 +1090,7 @@ app.whenReady().then(async () => {
     void registerInstalledDesktop().catch((error) => log.warn('[DesktopInstall] could not register this installation', error))
 
     electronApp.setAppUserModelId(runtimeIdentity.appUserModelId)
+    await refreshStartupTheme()
     await setupServices.analytics.initialize()
     const initialOnboardingSnapshot = await setupServices.onboarding.initialize().catch((error) => {
         log.error('[Onboarding] failed to hydrate mandatory setup state', error)

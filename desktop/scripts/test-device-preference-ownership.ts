@@ -49,6 +49,7 @@ try {
     assert.equal(sanitizeDevicePreferenceValue('appearanceDarkTheme', 'paper-light'), undefined, 'light themes cannot enter the dark half')
     assert.equal(sanitizeDevicePreferenceValue('appearanceLightTheme', 'paper-light'), 'paper-light')
     assert.equal(sanitizeDevicePreferenceValue('appearanceDarkTheme', 'forest'), 'forest')
+    assert.equal(sanitizeDevicePreferenceValue('appearanceDarkTheme', 'dark'), 'vercel', 'retired blue Dark preferences migrate consistently across surfaces')
     assert.equal(sanitizeDevicePreferenceValue('assistantTitleModel', 56), undefined, 'the title model rejects malformed non-string values')
     assert.equal(sanitizeDevicePreferenceValue('assistantReasoningSummary', 'raw'), undefined, 'raw chain-of-thought cannot become a reasoning-summary mode')
     assert.equal(sanitizeDevicePreferenceValue('assistantReasoningSummary', 'detailed'), 'detailed')
