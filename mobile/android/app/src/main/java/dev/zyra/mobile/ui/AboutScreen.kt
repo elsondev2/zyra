@@ -6,25 +6,25 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.contentDescription
 import dev.zyra.mobile.BuildConfig
 import dev.zyra.mobile.R
 
 @Composable fun AboutScreen(navigate: (String) -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        Column(Modifier.padding(horizontal = 24.dp, vertical = 30.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("┏━━━┳┓ ┏┳━┳━━┓\n┣━━┃┃┃ ┃┃┏┫┏┓┃\n┃┃━━┫┗━┛┃┃┃┏┓┃\n┗━━━┻━┓┏┻┛┗┛┗┛\n    ┏━┛┃\n    ┗━━┛",
-                Modifier.clearAndSetSemantics { contentDescription = "Zyra" },
-                fontFamily = FontFamily.Monospace, fontSize = 23.sp, lineHeight = 23.sp,
-                color = MaterialTheme.colorScheme.primary, softWrap = false)
-            Text("Your workspace, with you.", style = MaterialTheme.typography.titleMedium)
-            Text("Android · " + BuildConfig.VERSION_NAME, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            ZyraWordmark(Modifier.width(144.dp).padding(bottom = 12.dp))
+            Text("Your workspace, with you.", style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+            Text("Android · " + BuildConfig.VERSION_NAME, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         }
         HorizontalDivider(Modifier.padding(horizontal = 20.dp))
         ZyraSettingRow(R.drawable.ic_shield_check, "On your devices", "Chats stay on your computers. Pairing, recent history and drafts are saved locally on this phone.")
