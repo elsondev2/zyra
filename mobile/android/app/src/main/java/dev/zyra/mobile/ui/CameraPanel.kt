@@ -18,7 +18,7 @@ import dev.zyra.mobile.R
     onCancel: () -> Unit = {}, onCapture: () -> Unit = {}, onPermission: () -> Unit = {},
     onFlip: () -> Unit = {}, onFlash: () -> Unit = {}, preview: @Composable BoxScope.() -> Unit = {}) {
     var options by remember { mutableStateOf(false) }
-    Box(Modifier.fillMaxWidth().height(288.dp).background(Color.Black)) {
+    Box(Modifier.fillMaxWidth().height(336.dp).background(Color.Black)) {
         preview()
         if (!granted || failure != null) Column(Modifier.align(Alignment.Center).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text(failure ?: if (denied) "Allow camera access to take a picture." else "Opening camera…", color = Color.White, style = MaterialTheme.typography.bodyMedium)

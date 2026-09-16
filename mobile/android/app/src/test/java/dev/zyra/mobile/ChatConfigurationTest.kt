@@ -15,4 +15,17 @@ class ChatConfigurationTest {
         assertFalse(restored.config.webSearch)
         assertEquals(restored.config, TimelineReducer.apply(restored, JSONObject("""{"sequence":1,"event":{"type":"session_config","thinking":"high"}}""")).config)
     }
+    @Test fun canonicalPermissionAndModelChangesReachVisibleStateWithoutHistoryReload() {
+        var view = SessionView("chat", config = ChatConfiguration(model = "old/model", runtimeMode = "approval-required"))
+        listOf("auto-review", "edits-only", "full-access", "approval-required").forEachIndexed { index, mode ->
+            view = TimelineReducer.apply(view, JSONObject().put("sequence", index + 1).put("event", JSONObject()
+                .put("type", "session_config").put("runtimeMode", mode).put("model", "provider/model-$index")))
+            assertEquals(mode, view.config.runtimeMode)
+            assertEquals("provider/model-$index", view.config.model)
+            assertNotEquals("Permissions unavailable", permissionLabel(view.config.runtimeMode))
+            assertEquals(view.config, TimelineReducer.decode(TimelineReducer.encode(view)).config)
+        }
+        assertEquals("Permissions unavailable", permissionLabel(""))
+        assertEquals("Permissions unavailable", permissionLabel("future-mode"))
+    }
 }

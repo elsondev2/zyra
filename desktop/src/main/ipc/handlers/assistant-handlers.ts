@@ -42,6 +42,7 @@ import type {
     AssistantSetPluginSetInput,
     AssistantSetPluginStateInput,
     AssistantSetSessionProjectInput,
+    AssistantUpdateSessionConfigurationInput,
     AssistantTranscribeVoiceInput,
     AssistantUpdateProjectInput,
     AssistantUserInputResponseInput,
@@ -361,6 +362,10 @@ export function handleAssistantDeleteMessage(_event: Electron.IpcMainInvokeEvent
 export function handleAssistantClearLogs(_event: Electron.IpcMainInvokeEvent, input?: AssistantClearLogsInput) {
     log.info('IPC: assistant:clearLogs', { sessionId: input?.sessionId })
     return withAssistantResult(() => getAssistantService().clearLogs(input))
+}
+
+export function handleAssistantUpdateSessionConfiguration(_event: Electron.IpcMainInvokeEvent, input: AssistantUpdateSessionConfigurationInput) {
+    return withAssistantResult(() => getAssistantService().updateSessionConfiguration(input))
 }
 
 export function handleAssistantSetSessionProject(

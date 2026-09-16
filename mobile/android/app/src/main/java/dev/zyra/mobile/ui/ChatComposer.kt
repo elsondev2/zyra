@@ -5,6 +5,8 @@ package dev.zyra.mobile.ui
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.fadeIn
@@ -109,13 +111,16 @@ data class ComposerActions(val draft: (String) -> Unit, val send: (String) -> Un
     val connected = state.connection == ConnectionState.Connected
     val reduced = LocalReduceMotion.current
     var inputFocused by remember { mutableStateOf(false) }
+    val inputFocus = remember { FocusRequester() }
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val textMode = !questionVisible && !cameraVisible && !voice.inCall && voice.error == null && !dictation.active
     val keyboardTarget = WindowInsets.imeAnimationTarget.getBottom(androidx.compose.ui.platform.LocalDensity.current)
     // Closing the IME changes presentation, not focus ownership. A deferred clearFocus
     // can otherwise cancel a fresh tap or another field that gained focus meanwhile.
     val hardwareKeyboard = androidx.compose.ui.platform.LocalConfiguration.current.keyboard != android.content.res.Configuration.KEYBOARD_NOKEYS
     val expandedInput = inputFocused && (keyboardTarget > 0 || hardwareKeyboard)
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
-        Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surfaceContainer, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+        Surface(modifier = if (textMode) Modifier.focusComposerOnUnusedTap { inputFocus.requestFocus(); keyboard?.show() } else Modifier, shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surfaceContainer, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
             Column {
                 if (!questionVisible) Box(Modifier.padding(horizontal = 10.dp)) { attachmentContent() }
                 AnimatedContent(targetState = when { questionVisible -> "question"; cameraVisible -> "camera"; voice.inCall || voice.error != null -> "voice"; dictation.active -> "dictation"; else -> "text" },
@@ -131,9 +136,9 @@ data class ComposerActions(val draft: (String) -> Unit, val send: (String) -> Un
                     Box {
                         IconButton(onClick = { menu = true }, enabled = !voice.inCall && !dictation.active, modifier = Modifier.size(44.dp)) { AppIcon(R.drawable.ic_plus, "Add attachment") }
                         DropdownMenu(menu, { menu = false }, shape = MaterialTheme.shapes.medium, containerColor = MaterialTheme.colorScheme.surfaceContainer, tonalElevation = 0.dp) {
-                            DropdownMenuItem(text = { Text("Add photos") }, leadingIcon = { AppIcon(R.drawable.ic_paperclip) }, enabled = !attachments.preparing && attachments.items.size < 12, onClick = { menu = false; actions.photos() })
+                            DropdownMenuItem(text = { Text("Add photos") }, leadingIcon = { AppIcon(R.drawable.ic_image) }, enabled = !attachments.preparing && attachments.items.size < 12, onClick = { menu = false; actions.photos() })
                             DropdownMenuItem(text = { Text("Take picture") }, leadingIcon = { AppIcon(R.drawable.ic_camera) }, enabled = !attachments.preparing && attachments.items.size < 12, onClick = { menu = false; actions.camera() })
-                            DropdownMenuItem(text = { Text("Add files") }, leadingIcon = { AppIcon(R.drawable.ic_file) }, enabled = !attachments.preparing && attachments.items.size < 12, onClick = { menu = false; actions.files() })
+                            DropdownMenuItem(text = { Text("Add files") }, leadingIcon = { AppIcon(R.drawable.ic_paperclip) }, enabled = !attachments.preparing && attachments.items.size < 12, onClick = { menu = false; actions.files() })
                             if (state.session.running) {
                                 DropdownMenuItem(text = { Text("Queue next message") }, trailingIcon = { ZyraSwitch(mode == "follow_up", null) }, onClick = { mode = if (mode == "follow_up") "steer" else "follow_up" })
                                 DropdownMenuItem(text = { Text("Stop response") }, leadingIcon = { AppIcon(R.drawable.ic_square) }, onClick = { menu = false; actions.stop() })
@@ -142,13 +147,15 @@ data class ComposerActions(val draft: (String) -> Unit, val send: (String) -> Un
                     }
                     }, input = { BasicTextField(value = state.draft, onValueChange = actions.draft, minLines = 1, maxLines = if (expandedInput) 5 else 2,
                         textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface), cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                        modifier = Modifier.onFocusChanged { inputFocused = it.isFocused }.heightIn(min = 44.dp).padding(vertical = 11.dp, horizontal = 2.dp),
+                        modifier = Modifier.focusRequester(inputFocus).onFocusChanged { inputFocused = it.isFocused }.heightIn(min = 44.dp).padding(vertical = 11.dp, horizontal = 2.dp),
                         decorationBox = { inner -> Box(contentAlignment = Alignment.CenterStart) { if (state.draft.isEmpty()) Text(if (!connected) "Write a draft…" else if (state.session.running && mode == "follow_up") "Queue a message…" else "Message…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant); inner() } })
-                    }, trailing = { Row(verticalAlignment = Alignment.CenterVertically) {
+                    }, trailing = { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     IconButton(onClick = actions.models, enabled = connected && !state.busy && !dictation.active && (state.session.id.isNotBlank() || allowUnboundControls), modifier = Modifier.size(44.dp)) { ThinkingGaugeIcon(state.session.config.thinking, Modifier.size(22.dp)) }
-                    if (dictationEnabled && !voice.inCall) IconButton(actions.dictate, enabled = connected && !state.busy && !dictation.active, modifier = Modifier.size(44.dp)) { AppIcon(R.drawable.ic_mic, "Dictate a message", Modifier.size(20.dp)) }
+                    if (dictationEnabled && !voice.inCall) IconButton(actions.dictate, enabled = connected && !state.busy && !dictation.active, modifier = Modifier.size(44.dp)) { AppIcon(R.drawable.ic_mic, "Dictate a message", Modifier.size(22.dp)) }
                     val hasMessage = state.draft.isNotBlank() || attachments.items.isNotEmpty()
-                    FilledIconButton(onClick = {
+                    // The filled circle is 22dp wider than the line icons. Reserve half
+                    // that difference so the visible gaps match, while targets stay 44dp.
+                    Box(Modifier.padding(start = 11.dp)) { FilledIconButton(onClick = {
                         if (hasMessage) actions.send(if (state.session.running) mode else "prompt")
                         else if (state.session.running && !voice.inCall) actions.stop() else actions.voice()
                     }, enabled = connected && !state.busy && !dictation.active && !voice.sending &&
@@ -157,7 +164,7 @@ data class ComposerActions(val draft: (String) -> Unit, val send: (String) -> Un
                         shape = androidx.compose.foundation.shape.CircleShape, modifier = Modifier.size(44.dp)) {
                         AppIcon(if (hasMessage) R.drawable.ic_arrow_up else if (state.session.running && !voice.inCall) R.drawable.ic_square else R.drawable.ic_audio_lines,
                             if (hasMessage) "Send message" else if (state.session.running && !voice.inCall) "Stop response" else "Start Voice")
-                    }
+                    } }
                 } })
                     }
                 }

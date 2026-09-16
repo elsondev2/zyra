@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.zyra.mobile.R
 import dev.zyra.mobile.data.ChatConfiguration
+import dev.zyra.mobile.data.permissionLabel
 
 @Composable internal fun ChatSettingsGroup(content: @Composable ColumnScope.() -> Unit) {
     Surface(Modifier.fillMaxWidth().padding(horizontal = 20.dp), shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer) {
@@ -56,7 +57,7 @@ import dev.zyra.mobile.data.ChatConfiguration
             })
         }
         ChatSettingsDivider()
-        ChatSettingControl("Advanced", click = { advanced = true }, leading = { AppIcon(R.drawable.ic_sliders_horizontal, modifier = Modifier.size(20.dp)) })
+        ChatSettingControl("Advanced", permissionLabel(config.runtimeMode), click = { advanced = true }, leading = { AppIcon(R.drawable.ic_sliders_horizontal, modifier = Modifier.size(20.dp)) })
     }
     preferences.error?.let { message -> ZyraSettingRow(R.drawable.ic_info, message, click = if (connected) retry else null, trailing = { AppIcon(R.drawable.ic_refresh_cw, "Reload preferences", Modifier.size(18.dp)) }) }
     if (stylesExpanded && chooseProfile != null) ZyraSheet("Speaking style", close = { stylesExpanded = false }) {
@@ -82,11 +83,24 @@ import dev.zyra.mobile.data.ChatConfiguration
 
 @Composable internal fun AdvancedChatControls(config: ChatConfiguration, connected: Boolean, configure: (String, Any) -> Unit) {
         Column(Modifier.padding(bottom = 12.dp)) {
-            Text("Approvals", Modifier.padding(horizontal = 20.dp, vertical = 8.dp), style = MaterialTheme.typography.titleSmall)
-            ZyraSettingRow(R.drawable.ic_shield_check, "Ask before actions", click = if (connected) ({ configure("runtimeMode", "approval-required") }) else null, trailing = { ZyraSelectionMark(config.runtimeMode == "approval-required") })
-            ZyraSettingRow(R.drawable.ic_check, "Automatic review", "Follow this PC’s approval rules", click = if (connected) ({ configure("runtimeMode", "auto-review") }) else null, trailing = { ZyraSelectionMark(config.runtimeMode == "auto-review") })
+            PermissionControls(config.runtimeMode, connected) { configure("runtimeMode", it) }
             HorizontalDivider(Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
             ZyraSettingRow(title = "Web search", trailing = { ZyraSwitch(config.webSearch, { configure("webSearch", it) }, enabled = connected) })
             ZyraSettingRow(title = "Read web pages", trailing = { ZyraSwitch(config.webFetch, { configure("webFetch", it) }, enabled = connected) })
         }
+}
+
+@Composable internal fun PermissionControls(mode: String, connected: Boolean, select: (String) -> Unit) {
+    val choices = listOf(
+        Triple("approval-required", R.drawable.ic_shield_check, "Ask before actions"),
+        Triple("auto-review", R.drawable.ic_check, "Automatic review"),
+        Triple("edits-only", R.drawable.ic_pencil, "Allow file edits"),
+        Triple("full-access", R.drawable.ic_shield_check, "Full access"),
+    )
+    if (mode.isBlank() || choices.none { it.first == mode }) Text(permissionLabel(mode), Modifier.padding(20.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+    choices.forEach { (value, icon, label) ->
+        ZyraSettingRow(icon, label, if (value == "full-access") "Actions run without approval" else null,
+            click = if (connected) ({ select(value) }) else null,
+            trailing = { ZyraSelectionMark(mode == value) })
+    }
 }

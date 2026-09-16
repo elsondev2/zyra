@@ -32,6 +32,7 @@ import dev.zyra.mobile.data.*
     val modelPicker by vm.modelPicker.state.collectAsStateWithLifecycle()
     var setup by rememberSaveable { mutableStateOf(false) }
     var tools by remember { mutableStateOf(false) }
+    var permissions by remember { mutableStateOf(false) }
     var machinePicker by remember { mutableStateOf(false) }
     var pluginMachines by remember { mutableStateOf(false) }
     var pluginScope by remember { mutableStateOf(false) }
@@ -63,7 +64,8 @@ import dev.zyra.mobile.data.*
                     Row(Modifier.then(if (state.page == "chats") Modifier.clickable { machinePicker = true } else Modifier).padding(top = 3.dp, bottom = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(if (state.page == "chats") state.machines.find { it.id == state.machineFilter }?.name ?: "All machines"
                             else listOf(projectLabel(state.activeProject, state.projectArtwork["${state.machine?.id}:${state.activeProject}"]), state.machine?.name.orEmpty()).filter { it.isNotBlank() }.joinToString(" · "),
-                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        if (state.page == "chat") PermissionStatus(state.session.config.runtimeMode) { permissions = true }
                         if (state.page == "chats") AppIcon(R.drawable.ic_chevron_down, "Choose machine", Modifier.size(12.dp))
                     }
                 }
@@ -138,6 +140,9 @@ import dev.zyra.mobile.data.*
     }
     if (setup) SetupSheet(state, scannedLink, consumedLink, vm::pair, cancel = { setup = false }) { setup = false; vm.page("chats") }
     if (machinePicker) MachinePickerSheet(state, select = { vm.selectMachineFilter(it); machinePicker = false }, manage = { machinePicker = false; vm.page("machines") }, pair = { machinePicker = false; setup = true }, close = { machinePicker = false })
+    if (permissions) ZyraSheet("Chat permissions", { permissions = false }) {
+        PermissionControls(state.session.config.runtimeMode, state.connection == ConnectionState.Connected) { vm.configure("runtimeMode", it) }
+    }
     if (tools) ChatToolsSheet(vm, state, { tools = false }, { tools = false; vm.page("chat-settings") })
     if (pluginMachines) PluginMachineSheet(state, { pluginMachines = false }, { pluginMachines = false; vm.selectPluginMachine(it) }, { pluginMachines = false; vm.page("machines") })
     if (pluginScope) ZyraSheet("Plugin scope", { pluginScope = false }) {

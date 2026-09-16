@@ -46,7 +46,6 @@ import dev.zyra.mobile.data.Appearance
         } }
         item { AppearanceValueRow("Typeface", when (value.font) { "hanken" -> "Hanken"; "system" -> "System"; else -> "Bricolage" }) { fontPicker = true } }
         item { HorizontalDivider(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) }
-        item { SectionCaption("Chat display") }
         item { AppearanceValueRow("Chat list", if (value.sidebar == "v2") "Desktop inbox" else "Compact list") { listPicker = true } }
         item { ZyraSettingRow(title = "Message timestamps", click = { change(value.copy(timestamps = !value.timestamps)) }, trailing = { ZyraSwitch(value.timestamps, null) }) }
         item { ZyraSettingRow(title = "Work duration", click = { change(value.copy(workDetails = !value.workDetails)) }, trailing = { ZyraSwitch(value.workDetails, null) }) }

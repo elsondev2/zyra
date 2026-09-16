@@ -1,3 +1,4 @@
+import { validateAssistantSessionConfiguration } from '../../shared/assistant/session-configuration'
 import { MobileVoicePresence, clearRestoredMobileVoice } from './mobile-voice-presence'
 import { settleActivityAtTurnEnd } from '../../shared/assistant/activity-settlement'
 import { canonicalVoicePresentationEvent } from './voice/canonical-voice-presentation'
@@ -45,6 +46,7 @@ import type {
     AssistantRuntimeStatus,
     AssistantSearchChatsInput,
     AssistantSetSessionProjectInput,
+    AssistantUpdateSessionConfigurationInput,
     AssistantSendPromptOptions,
     AssistantSendRealtimeVoiceMessageInput,
     AssistantSession,
@@ -1386,6 +1388,18 @@ export class AssistantService {
         // Deletion planning must see persisted history even when the renderer has only a page loaded.
         this.state.snapshot = await this.persistence.hydrateSelectedSession(this.state.snapshot, sessionId)
         return deleteAssistantMessageAction(this.actionDeps, input)
+    }
+
+    async updateSessionConfiguration(value: AssistantUpdateSessionConfigurationInput) {
+        const input = validateAssistantSessionConfiguration(value)
+        await this.ensureReady()
+        const record = findThreadRecord(this.state.snapshot, input.threadId)
+        if (!record || record.session.id !== input.sessionId) throw new Error('This chat configuration belongs to a stale selection.')
+        const runtimeId = record.thread.providerThreadId || record.thread.id
+        if (!this.runtime.hasSession(runtimeId)) throw new Error('Connect this chat before changing its configuration.')
+        const { sessionId: _sessionId, threadId: _threadId, ...patch } = input
+        await this.runtime.configureSession(runtimeId, patch)
+        return { success: true as const }
     }
 
     async setSessionProject(sessionId: string, input: AssistantSetSessionProjectInput) {

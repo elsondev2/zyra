@@ -365,6 +365,7 @@ export function createBrowserAssistantBridgeAdapter(): DevScopeApi['assistant'] 
         deleteSession: remoteAssistantMethod('deleteSession'),
         deleteMessage: remoteAssistantMethod('deleteMessage'),
         clearLogs: remoteAssistantMethod('clearLogs'),
+        updateSessionConfiguration: remoteAssistantMethod('updateSessionConfiguration'),
         setSessionProject: remoteAssistantMethod('setSessionProject'),
         setSessionProjectPath: remoteAssistantMethod('setSessionProjectPath'),
         setPlaygroundRoot: remoteAssistantMethod('setPlaygroundRoot'),

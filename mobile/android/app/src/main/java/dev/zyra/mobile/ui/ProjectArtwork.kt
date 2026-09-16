@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.util.Base64
-import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.*
@@ -21,16 +20,18 @@ import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.unit.dp
 import com.caverock.androidsvg.SVG
 import dev.zyra.mobile.R
+import dev.zyra.mobile.data.ArtworkCache
+import dev.zyra.mobile.data.ProjectArtworkKey
 import dev.zyra.mobile.data.ProjectMark
 import dev.zyra.mobile.data.safeProjectSvg
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 private data class ProjectBitmap(val bitmap: Bitmap, val brand: Boolean)
 private object ProjectBitmaps {
-    private val cache = LruCache<ProjectMark, ProjectBitmap>(96)
-    @Synchronized fun load(assets: AssetManager, mark: ProjectMark): ProjectBitmap? {
-        cache.get(mark)?.let { return it }
+    private val cache = ArtworkCache<ProjectArtworkKey, ProjectBitmap>()
+    fun peek(key: ProjectArtworkKey) = cache.peek(key)
+    suspend fun load(assets: AssetManager, key: ProjectArtworkKey) = cache.load(key) { decode(assets, key) }
+    fun preview(assets: AssetManager, key: ProjectArtworkKey) = cache.preview(key) { decode(assets, key) }
+    private fun decode(assets: AssetManager, mark: ProjectArtworkKey): ProjectBitmap? {
         val custom = runCatching {
             require(mark.encoded.length <= 24000)
             val bytes = Base64.decode(mark.encoded, Base64.DEFAULT)
@@ -50,7 +51,6 @@ private object ProjectBitmaps {
             require(Regex("[a-z0-9]{1,40}").matches(mark.slug))
             ProjectBitmap(svg(assets.open("project-icons/${mark.slug}.svg").bufferedReader().use { it.readText() }), true)
         }.getOrNull()
-        if (result != null) cache.put(mark, result)
         return result
     }
     private fun svg(source: String): Bitmap {
@@ -64,11 +64,18 @@ private object ProjectBitmaps {
 @Composable fun ProjectArtwork(mark: ProjectMark?, open: Boolean = false) {
     val assets = LocalContext.current.assets
     val preview = LocalInspectionMode.current
-    val bitmap by produceState<ProjectBitmap?>(if (preview && mark != null) ProjectBitmaps.load(assets, mark) else null, mark) {
-        value = if (mark == null) null else withContext(Dispatchers.IO) { ProjectBitmaps.load(assets, mark) }
+    val key = remember(mark?.encoded, mark?.mime, mark?.slug) { mark?.let(ProjectArtworkKey::from) }
+    // Keep cached pixels on first composition; keying state prevents stale artwork on reused rows.
+    val bitmap = key(key) {
+        val loaded by produceState<ProjectBitmap?>(key?.let { if (preview) ProjectBitmaps.preview(assets, it) else ProjectBitmaps.peek(it) }, key) {
+            value = key?.let { ProjectBitmaps.load(assets, it) }
+        }
+        loaded
     }
     val colors = MaterialTheme.colorScheme
-    val color = runCatching { Color(android.graphics.Color.parseColor(mark?.color)) }.getOrDefault(colors.onSurface)
+    val color = remember(mark?.color, colors.onSurface) {
+        mark?.color?.takeIf { it.isNotBlank() }?.let { runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull() } ?: colors.onSurface
+    }
     fun contrast(a: Color, b: Color) = (maxOf(a.luminance(), b.luminance()) + .05f) / (minOf(a.luminance(), b.luminance()) + .05f)
     val mixed = lerp(color, colors.onSurface, if (colors.background.luminance() > .5f) .72f else .62f)
     val readable = if (contrast(color, colors.surfaceContainer) >= 2.8f) color else if (contrast(mixed, colors.surfaceContainer) >= 2.8f) mixed else colors.onSurface

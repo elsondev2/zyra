@@ -1190,6 +1190,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
                         onDeleteQueuedMessage={handleDeleteQueuedMessage}
                         onMoveQueuedMessage={handleMoveQueuedMessage}
                         selectedSessionId={visibleComposerSessionId}
+                        configurationThreadId={controller.activeThread?.id}
                         useSettingsDefaults={selectedSessionIsDraft || newChatHandoffActive}
                         resetComposerStateToken={resetComposerStateToken}
                         selectedSessionMode={selectedSessionMode}

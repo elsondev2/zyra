@@ -541,6 +541,7 @@ export class BrowserAssistantBridge {
             case 'deleteSession': return service.deleteSession(args[0] as string)
             case 'deleteMessage': return service.deleteMessage(args[0] as any)
             case 'clearLogs': return service.clearLogs(args[0] as any)
+            case 'updateSessionConfiguration': return service.updateSessionConfiguration(args[0] as any)
             case 'setSessionProject': return service.setSessionProject(args[0] as string, args[1] as any)
             case 'setSessionProjectPath': return service.setSessionProjectPath(args[0] as string, args[1] as string | null)
             case 'setPlaygroundRoot': return service.setPlaygroundRoot(args[0] as any)

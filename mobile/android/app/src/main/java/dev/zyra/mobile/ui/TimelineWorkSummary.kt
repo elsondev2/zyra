@@ -25,8 +25,12 @@ import androidx.compose.ui.unit.dp
 import dev.zyra.mobile.R
 import dev.zyra.mobile.data.*
 
+// A disclosure expresses reading intent before its size starts changing.
+internal val LocalWorkDisclosure = staticCompositionLocalOf<() -> Unit> { {} }
+
 @Composable fun TimelineWorkSummary(group: ChatRailRow.Work, inspect: (WorkAction) -> Unit,
     question: @Composable (TimelineItem) -> Unit = {}, media: @Composable (TimelineItem) -> Unit = {}) {
+    val reading = LocalWorkDisclosure.current
     var expanded by rememberSaveable(group.id) { mutableStateOf(group.running && !group.finalVisible) }
     var previouslyWorking by rememberSaveable(group.id) { mutableStateOf(group.running && !group.finalVisible) }
     LaunchedEffect(group.running, group.finalVisible) {
@@ -44,7 +48,7 @@ import dev.zyra.mobile.data.*
     val showThoughts = LocalThoughtProcesses.current
     val segments = remember(group.entries, group.actions, showThoughts) { workSegments(group, showThoughtProcesses = showThoughts, showQuestions = false) }
     Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(MaterialTheme.shapes.small).clickable(role = Role.Button) { expanded = !expanded }
+        Row(Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(MaterialTheme.shapes.small).clickable(role = Role.Button) { reading(); expanded = !expanded }
             .semantics { stateDescription = if (expanded) "Work expanded" else "Work collapsed" },
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (group.running && !group.finalVisible) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
@@ -75,8 +79,9 @@ import dev.zyra.mobile.data.*
 }
 
 @Composable private fun WorkThought(item: TimelineItem) {
+    val reading = LocalWorkDisclosure.current
     var expanded by rememberSaveable(item.id) { mutableStateOf(false) }
-    TextButton(onClick = { expanded = !expanded }, contentPadding = PaddingValues(horizontal = 4.dp)) {
+    TextButton(onClick = { reading(); expanded = !expanded }, contentPadding = PaddingValues(horizontal = 4.dp)) {
         Text("Thought process", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         AppIcon(R.drawable.ic_chevron_right, modifier = Modifier.size(14.dp).rotate(if (expanded) 90f else 0f))
     }
@@ -84,8 +89,9 @@ import dev.zyra.mobile.data.*
 }
 
 @Composable private fun TimelineActionBatch(actions: List<WorkAction>, running: Boolean, inspect: (WorkAction) -> Unit, media: @Composable (TimelineItem) -> Unit) {
+    val reading = LocalWorkDisclosure.current
     var expanded by rememberSaveable(actions.first().item.id) { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(MaterialTheme.shapes.small).clickable(role = Role.Button) { expanded = !expanded }.padding(horizontal = 4.dp),
+    Row(Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(MaterialTheme.shapes.small).clickable(role = Role.Button) { reading(); expanded = !expanded }.padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         if (running && actions.any { it.item.pending }) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 1.5.dp) else AppIcon(R.drawable.ic_workflow, modifier = Modifier.size(16.dp))
         Text(workSegmentTitle(actions), Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -97,8 +103,9 @@ import dev.zyra.mobile.data.*
 }
 
 @Composable private fun TimelineActionRow(action: WorkAction, running: Boolean, inspect: (WorkAction) -> Unit, media: @Composable (TimelineItem) -> Unit) {
+    val reading = LocalWorkDisclosure.current
     var expanded by rememberSaveable(action.item.id) { mutableStateOf(false) }
-    TimelineActionContent(action, running, expanded, { expanded = !expanded }, inspect, media)
+    TimelineActionContent(action, running, expanded, { reading(); expanded = !expanded }, inspect, media)
 }
 
 @Composable fun TimelineActionContent(action: WorkAction, running: Boolean, expanded: Boolean, toggle: () -> Unit,

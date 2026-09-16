@@ -69,6 +69,7 @@ import type {
     AssistantSetPluginSetInput,
     AssistantSetPluginStateInput,
     AssistantSetSessionProjectInput,
+    AssistantUpdateSessionConfigurationInput,
     AssistantSessionTurnUsageResultPayload,
     AssistantShellSnapshot,
     AssistantSnapshot,
@@ -664,6 +665,7 @@ export interface DevScopeAssistantApi {
     deleteSession: (sessionId: string) => Promise<DevScopeResult>
     deleteMessage: (input: AssistantDeleteMessageInput) => Promise<DevScopeResult>
     clearLogs: (input?: AssistantClearLogsInput) => Promise<DevScopeResult>
+    updateSessionConfiguration: (input: AssistantUpdateSessionConfigurationInput) => Promise<DevScopeResult>
     setSessionProject: (sessionId: string, input: AssistantSetSessionProjectInput) => Promise<DevScopeResult>
     setSessionProjectPath: (sessionId: string, projectPath: string | null) => Promise<DevScopeResult>
     setPlaygroundRoot: (input: AssistantSetPlaygroundRootInput) => Promise<DevScopeResult<AssistantPlaygroundResultPayload>>

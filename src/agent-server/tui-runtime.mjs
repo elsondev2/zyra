@@ -133,6 +133,15 @@ export async function createZyraTuiClientRuntime(options = {}) {
   let currentWebFetch = typeof connectedConfig.webFetch === "boolean" ? connectedConfig.webFetch : preferences.webFetch;
   let compacting = false;
   let configSyncQueued = false;
+  const configRevisions = {};
+  const confirmedChatConfig = {
+    model: `${model.provider}/${model.id}`,
+    thinking: connectedConfig.thinking || connected.thinking || preferences.thinking,
+    profile: currentProfile,
+    runtimeMode: normalizeRemoteRuntimeMode(connectedPermissionMode),
+    webSearch: currentWebSearch,
+    webFetch: currentWebFetch,
+  };
   let latestFleet = asRecord(connected.fleet);
   let agentDefinitions = normalizeDefinitions(connected.agentDefinitions);
   let workflowDefinitions = normalizeDefinitions(connected.workflowDefinitions);
@@ -192,6 +201,11 @@ export async function createZyraTuiClientRuntime(options = {}) {
     if (event.type === "zyra_server_turn_completed") return;
     if (event.type === "session_config") {
       const config = normalizeRemoteChatConfig(event);
+      for (const [field, value] of Object.entries(config)) {
+        if (value == null) continue;
+        confirmedChatConfig[field] = value;
+        configRevisions[field] = (configRevisions[field] || 0) + 1;
+      }
       if (config.model) currentModel = resolveModel(modelRegistry, config.model);
       if (config.thinking) {
         thinkingLevel = config.thinking;
@@ -504,28 +518,42 @@ export async function createZyraTuiClientRuntime(options = {}) {
     appendCustomEntry: () => undefined
   };
 
-  const remoteChatConfig = () => ({
-    model: `${currentModel.provider}/${currentModel.id}`,
-    thinking: thinkingLevel,
-    profile: currentProfile,
-    runtimeMode: currentPermissionMode,
-    webSearch: currentWebSearch,
-    webFetch: currentWebFetch,
-  });
-  const syncRemoteChatConfig = () => request("configure", remoteChatConfig());
-  const queueRemoteChatConfigSync = () => {
-    if (configSyncQueued || disposed) return;
+  const syncRemoteChatConfig = (patch) => request("configure", patch);
+  let pendingChatConfig = {};
+  const queueRemoteChatConfigSync = (patch) => {
+    if (disposed) return;
+    // Each surface writes only the fields it changed. A full local snapshot can
+    // overwrite a newer server value whose socket event has not arrived yet.
+    Object.assign(pendingChatConfig, patch);
+    for (const field of Object.keys(patch)) configRevisions[field] = (configRevisions[field] || 0) + 1;
+    if (configSyncQueued) return;
     configSyncQueued = true;
     queueMicrotask(() => {
       configSyncQueued = false;
-      if (!disposed) void syncRemoteChatConfig().catch(() => undefined);
+      const pending = pendingChatConfig;
+      pendingChatConfig = {};
+      const revisions = Object.fromEntries(Object.keys(pending).map(field => [field, configRevisions[field]]));
+      if (!disposed) void syncRemoteChatConfig(pending).catch((error) => {
+        if (disposed) return;
+        const rollback = Object.fromEntries(Object.keys(pending)
+          .filter(field => configRevisions[field] === revisions[field] && confirmedChatConfig[field] != null)
+          .map(field => [field, confirmedChatConfig[field]]));
+        if (Object.keys(rollback).length) dispatch({ type: "session_config", ...rollback });
+        // Reuse the renderer's error-panel event without changing turn ownership
+        // or emitting an unhandled EventEmitter "error" event.
+        dispatch({ type: "history_error", historical: false, errorMessage: `Could not update chat settings: ${String(error?.message || error)}` });
+      });
     });
   };
+
   if (
     (requestedChatConfig.thinking && requestedChatConfig.thinking !== connectedConfig.thinking)
     || (requestedChatConfig.runtimeMode && requestedChatConfig.runtimeMode !== connectedPermissionMode)
   ) {
-    await syncRemoteChatConfig();
+    await syncRemoteChatConfig({
+      ...(requestedChatConfig.thinking ? { thinking: requestedChatConfig.thinking } : {}),
+      ...(requestedChatConfig.runtimeMode ? { runtimeMode: requestedChatConfig.runtimeMode } : {}),
+    });
   }
 
   const session = {
@@ -603,15 +631,15 @@ export async function createZyraTuiClientRuntime(options = {}) {
     setThinkingLevel(value) {
       thinkingLevel = String(value || "off");
       thinkingState.value = thinkingLevel;
-      queueRemoteChatConfigSync();
+      queueRemoteChatConfigSync({ thinking: thinkingLevel });
     },
     async setModel(nextModel) {
       const previousModel = currentModel;
       currentModel = nextModel;
       try {
-        await syncRemoteChatConfig();
+        await syncRemoteChatConfig({ model: `${nextModel.provider}/${nextModel.id}` });
       } catch (error) {
-        currentModel = previousModel;
+        if (currentModel === nextModel) currentModel = previousModel;
         throw error;
       }
     },
@@ -677,9 +705,9 @@ export async function createZyraTuiClientRuntime(options = {}) {
     theme: "dark",
     terminalTheme,
     get profile() { return currentProfile; },
-    set profile(value) { currentProfile = String(value || "default"); queueRemoteChatConfigSync(); },
+    set profile(value) { currentProfile = String(value || "default"); queueRemoteChatConfigSync({ profile: currentProfile }); },
     get permissionMode() { return currentPermissionMode; },
-    set permissionMode(value) { currentPermissionMode = normalizeRemoteRuntimeMode(value); queueRemoteChatConfigSync(); },
+    set permissionMode(value) { currentPermissionMode = normalizeRemoteRuntimeMode(value); queueRemoteChatConfigSync({ runtimeMode: currentPermissionMode }); },
     surface: "tui-client",
     async syncAuthProvider(providerValue) {
       const provider = String(providerValue || "").trim();
@@ -695,12 +723,13 @@ export async function createZyraTuiClientRuntime(options = {}) {
     set thinking(value) {
       thinkingLevel = String(value || "off");
       thinkingState.value = thinkingLevel;
+      queueRemoteChatConfigSync({ thinking: thinkingLevel });
     },
     thinkingState,
     get webSearch() { return currentWebSearch; },
-    set webSearch(value) { currentWebSearch = Boolean(value); queueRemoteChatConfigSync(); },
+    set webSearch(value) { currentWebSearch = Boolean(value); queueRemoteChatConfigSync({ webSearch: currentWebSearch }); },
     get webFetch() { return currentWebFetch; },
-    set webFetch(value) { currentWebFetch = Boolean(value); queueRemoteChatConfigSync(); },
+    set webFetch(value) { currentWebFetch = Boolean(value); queueRemoteChatConfigSync({ webFetch: currentWebFetch }); },
     statusLine: preferences.statusLine,
     notifications: preferences.notifications,
     interruptMode: preferences.interruptMode,

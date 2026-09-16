@@ -142,7 +142,11 @@ import dev.zyra.mobile.voice.VoiceTimeline
                 (last == null || last.index < layout.totalItemsCount - 1 || last.offset + last.size > layout.viewportEndOffset)
         }.collectLatest { needsTail -> if (needsTail) list.requestScrollToItem((list.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)) }
     }
-    CompositionLocalProvider(LocalMarkdownBeforeNavigate provides {
+    val beginReading = {
+        scrollIntent = scrollIntent.reading()
+        vm.timelineFollowing(state.machine?.id, state.session.id, false)
+    }
+    CompositionLocalProvider(LocalWorkDisclosure provides beginReading, LocalMarkdownBeforeNavigate provides {
         scrollIntent = scrollIntent.reading()
         vm.timelineFollowing(state.machine?.id, state.session.id, false)
     }) {

@@ -1776,32 +1776,31 @@ export class ZyraPiRuntime extends EventEmitter {
     async configureSession(
         threadId: string,
         configuration: {
-            model: string
-            effort: AssistantReasoningEffort
-            runtimeMode: AssistantRuntimeMode
-            interactionMode: AssistantInteractionMode
-            profile: string
+            model?: string
+            effort?: AssistantReasoningEffort
+            runtimeMode?: AssistantRuntimeMode
+            interactionMode?: AssistantInteractionMode
+            profile?: string
         }
     ): Promise<void> {
         const context = this.requireSession(threadId)
-        const model = normalizeZyraModel(configuration.model)
-        if (!model) throw new Error('Assistant configuration requires a model.')
-        const profile = normalizeZyraProfile(configuration.profile)
+        const model = configuration.model === undefined ? undefined : normalizeZyraModel(configuration.model)
+        if (configuration.model !== undefined && !model) throw new Error('Assistant configuration requires a model.')
+        const profile = configuration.profile === undefined ? undefined : normalizeZyraProfile(configuration.profile)
+        // Configure is a patch: never resend stale sibling fields from another surface.
         const result = await context.worker.request('configure', {
-            model,
-            thinking: configuration.effort,
-            runtimeMode: configuration.runtimeMode,
-            interactionMode: 'default',
-            profile
+            ...(model ? { model } : {}),
+            ...(configuration.effort !== undefined ? { thinking: configuration.effort } : {}),
+            ...(configuration.runtimeMode !== undefined ? { runtimeMode: configuration.runtimeMode } : {}),
+            ...(configuration.interactionMode !== undefined ? { interactionMode: 'default' } : {}),
+            ...(profile !== undefined ? { profile } : {})
         })
         const config = asRecord(result['config']) || result
-        context.model = normalizeZyraModel(asString(config['model']) || undefined) || model
-        context.thinking = isAssistantReasoningEffort(config['thinking']) ? config['thinking'] : configuration.effort
-        context.runtimeMode = isAssistantRuntimeMode(config['runtimeMode'])
-            ? config['runtimeMode']
-            : configuration.runtimeMode
-        context.interactionMode = 'default'
-        context.profile = normalizeZyraProfile(config['profile'] || profile)
+        context.model = normalizeZyraModel(asString(config['model']) || undefined) || model || context.model
+        context.thinking = isAssistantReasoningEffort(config['thinking']) ? config['thinking'] : configuration.effort ?? context.thinking
+        context.runtimeMode = isAssistantRuntimeMode(config['runtimeMode']) ? config['runtimeMode'] : configuration.runtimeMode ?? context.runtimeMode
+        if (configuration.interactionMode !== undefined) context.interactionMode = 'default'
+        context.profile = normalizeZyraProfile(config['profile'] || profile || context.profile)
     }
 
     async sendPrompt(

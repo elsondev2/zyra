@@ -100,6 +100,7 @@ import {
     handleAssistantSendPrompt,
     handleAssistantSetPlaygroundRoot,
     handleAssistantSetSessionProject,
+    handleAssistantUpdateSessionConfiguration,
     handleAssistantSetSessionProjectPath,
     handleAssistantSubscribe,
     handleAssistantUnsubscribe
@@ -449,6 +450,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(ASSISTANT_IPC.deleteSession, requireCompletedSetup(handleAssistantDeleteSession))
     ipcMain.handle(ASSISTANT_IPC.deleteMessage, requireCompletedSetup(handleAssistantDeleteMessage))
     ipcMain.handle(ASSISTANT_IPC.clearLogs, requireCompletedSetup(handleAssistantClearLogs))
+    ipcMain.handle(ASSISTANT_IPC.updateSessionConfiguration, requireCompletedSetup(handleAssistantUpdateSessionConfiguration))
     ipcMain.handle(ASSISTANT_IPC.setSessionProject, requireCompletedSetup(handleAssistantSetSessionProject))
     ipcMain.handle(ASSISTANT_IPC.setSessionProjectPath, requireCompletedSetup(handleAssistantSetSessionProjectPath))
     ipcMain.handle(ASSISTANT_IPC.setPlaygroundRoot, requireCompletedSetup(handleAssistantSetPlaygroundRoot))

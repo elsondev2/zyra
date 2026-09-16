@@ -162,3 +162,15 @@ Usage combines the period and coverage disclosure into one row, removes repeated
 Verification: fresh app and unit compilation, all 352 Android tests across 68 classes, APK packaging, lint (zero errors, 61 warnings), privacy check and all 41 native render fixtures passed. Sheet-body geometry, narrow width, enlarged text, compact Usage and light/dark About rendering were reviewed. No on-device gesture or frame-rate claim is made.
 
 The signed APK is 56,562,255 bytes, version code 15, SHA-256 `a0c7c4baabc8d4a207905e43fa5c6bf4f76a7f4dbc9c2736d431852b8065a371`. Existing signing identity, signature and 16 KiB ZIP/native-library alignment verify. LAN page, HEAD, range, stale-range fallback and full download hash verify. Physical-phone sheet scrolling, Usage navigation and theme appearance remain acceptance checks before production release.
+
+## Review package: 0.1.15-dev
+
+Version code 16 adds a visible canonical permission indicator and all four permission modes on mobile. Desktop and terminal configuration changes publish partial field updates to the shared session authority; incoming changes replace stale persisted picker selections. Ordered optimistic edits retain newer choices when earlier requests complete, and rejected changes roll back only the affected current fields with an error.
+
+The composer spaces its model, dictation and primary controls evenly and focuses text from unused bubble space while preserving button taps, selection and drag gestures. The inline camera is taller, photo/file actions use distinct icons, and Appearance omits the redundant Chat display heading. Work disclosures enter reading mode before expansion so tail-following does not compete with the size animation. About uses a compact, centered, theme-colored vector wordmark.
+
+Artwork uses bounded shared caches, negative-result caching and suspended background decoding. Sixty concurrent requests for identical artwork perform one decode; sixty subsequent warm requests perform none. Tint, project labels, fallback behavior and image quality are preserved.
+
+Verification: fresh main and unit compilation from exact Gradle-exported inputs; 358 Android tests across 69 classes; APK assembly; lint (zero errors, 61 warnings); all Desktop main/preload/renderer typechecks; 31 Desktop configuration assertions; terminal propagation/rejection/race regressions; privacy check; and all 42 native renders pass. Composer, camera, permissions, Appearance and light/dark About renders were visually reviewed. Physical phone gesture, keyboard, camera, cross-device convergence and frame-rate checks remain acceptance gates.
+
+The signed APK is 54,764,182 bytes, version code 16, SHA-256 `6b98caa69c9c277c53de9d2c99c0dfdb8a9715b24cc7e84fb2f8c06775c40076`. Existing review signing identity, APK signature, 16 KiB ZIP/native-library alignment, LAN page, HEAD, range, stale-range fallback and full download hash verify. Desktop development was restored. The Desktop and terminal synchronization fixes require the updated host code; existing terminal processes must be reopened.

@@ -5,6 +5,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TimelineViewportTest {
+    @Test fun disclosureAtTailDoesNotReanchorDuringExpansionOrFetchOlderPages() {
+        val intent = TimelineScrollIntent().reading()
+        val gate = TimelinePagingGate()
+        repeat(20) {
+            assertFalse(intent.settled(atBottom = it < 3).followingLatest)
+            assertFalse(gate.request("older", intent.followingLatest, gesture = 0))
+        }
+        assertTrue(intent.userScroll(-10f).settled(atBottom = true).followingLatest)
+    }
+
     @Test fun contentPaddingItemsNeverBecomeThePrependAnchor() {
         val anchor = TimelineAnchor.capture(3, 47, listOf(2 to "under-header", 3 to "reading", 4 to "answer"))!!
         assertEquals("reading", anchor.key)

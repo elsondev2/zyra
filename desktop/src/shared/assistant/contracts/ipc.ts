@@ -82,6 +82,7 @@ export const ASSISTANT_IPC = {
     deleteSession: 'devscope:assistant:deleteSession',
     deleteMessage: 'devscope:assistant:deleteMessage',
     clearLogs: 'devscope:assistant:clearLogs',
+    updateSessionConfiguration: 'devscope:assistant:updateSessionConfiguration',
     setSessionProject: 'devscope:assistant:setSessionProject',
     setSessionProjectPath: 'devscope:assistant:setSessionProjectPath',
     setPlaygroundRoot: 'devscope:assistant:setPlaygroundRoot',
@@ -276,6 +277,14 @@ export interface AssistantPromptImageInput {
     path: string
     name?: string
     mimeType?: string
+}
+
+export interface AssistantUpdateSessionConfigurationInput {
+    sessionId: string
+    threadId: string
+    model?: string
+    runtimeMode?: AssistantRuntimeMode
+    effort?: AssistantReasoningEffort
 }
 
 export interface AssistantSendPromptOptions {

@@ -12,3 +12,12 @@ data class ChatConfiguration(val model: String = "", val thinking: String = "", 
     }
     fun encode(): JSONObject = JSONObject().put("model", model).put("thinking", thinking).put("runtimeMode", runtimeMode).put("webSearch", webSearch).put("webFetch", webFetch).put("profile", profile)
 }
+
+/** Unknown or not-yet-loaded permissions must never look like granted access. */
+fun permissionLabel(mode: String): String = when (mode) {
+    "approval-required" -> "Ask before actions"
+    "auto-review" -> "Automatic review"
+    "edits-only" -> "Allow file edits"
+    "full-access" -> "Full access"
+    else -> "Permissions unavailable"
+}
