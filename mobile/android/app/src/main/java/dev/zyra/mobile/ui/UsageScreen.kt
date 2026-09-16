@@ -74,8 +74,8 @@ private val usageHarnesses = linkedMapOf("zyra" to "Zyra", "codex" to "Codex", "
     Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f)) {
-                TextButton({ picker = "machine" }, enabled = state.machines.size > 1, colors = ButtonDefaults.textButtonColors(disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant)) {
-                    AppIcon(R.drawable.ic_monitor, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp))
+                TextButton({ picker = "machine" }, enabled = state.machines.size > 1, contentPadding = PaddingValues(horizontal = 0.dp), colors = ButtonDefaults.textButtonColors(disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant)) {
+                    if (state.machines.size > 1) { AppIcon(R.drawable.ic_monitor, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)) }
                     Text(selected?.name ?: "No computer paired", Modifier.weight(1f, fill = false), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (state.machines.size > 1) AppIcon(R.drawable.ic_chevron_down, modifier = Modifier.size(16.dp))
                 }
@@ -105,19 +105,22 @@ private val usageHarnesses = linkedMapOf("zyra" to "Zyra", "codex" to "Codex", "
     val totals = result.optJSONObject("totals") ?: JSONObject()
     val models = result.optJSONArray("models")
     var coverageDetails by remember { mutableStateOf(false) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (header != null) item { header() }
-        item { Text("Last 30 days · Shared projects", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        item {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Last 30 days", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val partial = result.optBoolean("indexing") || result.optBoolean("limited") || result.optBoolean("partial")
+                TextButton({ coverageDetails = true }, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                    if (partial) { Text("Partial", style = MaterialTheme.typography.labelSmall); Spacer(Modifier.width(6.dp)) }
+                    AppIcon(R.drawable.ic_info, "Usage details and coverage", Modifier.size(16.dp))
+                }
+            }
+        }
         if (totals.optInt("responses") > 0) item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column(Modifier.weight(1f)) { Text(usageCompact(totals.optLong("totalTokens")), style = MaterialTheme.typography.headlineMedium); Text("recorded tokens", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) { Text(usageCost(totals), style = MaterialTheme.typography.titleLarge); Text("model cost", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            }
-        }
-        if (!busy && (result.optBoolean("indexing") || result.optBoolean("limited") || result.optBoolean("partial"))) item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Partial history", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                IconButton({ coverageDetails = !coverageDetails }, Modifier.size(36.dp)) { AppIcon(R.drawable.ic_info, "Usage coverage", Modifier.size(16.dp)) }
             }
         }
         if (!busy && result.has("totals") && totals.optInt("responses") == 0) item {
@@ -152,10 +155,13 @@ private val usageHarnesses = linkedMapOf("zyra" to "Zyra", "codex" to "Codex", "
                 }
             }
         }
-        item { TextButton({ coverageDetails = true }, contentPadding = PaddingValues(0.dp)) { AppIcon(R.drawable.ic_info, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("About these numbers") } }
+
     }
     if (coverageDetails) ZyraSheet("Usage details", close = { coverageDetails = false }) {
-        Column(Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Last 30 days · Shared projects · UTC", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (result.optBoolean("partial") || result.optBoolean("limited") || result.optBoolean("indexing")) Text("Some local history is not included yet. Totals show recorded history so far.", style = MaterialTheme.typography.bodyMedium)
+            Text("Model costs are recorded values or API estimates; they are separate from subscription charges. A + means some responses have no known price. Dots on the cost chart mark days with unpriced responses.", style = MaterialTheme.typography.bodySmall)
             Text(result.optString("note").ifBlank { "Recorded activity and API estimates come from this computer. They are separate from subscription allowances." }, style = MaterialTheme.typography.bodyMedium)
             val sources = result.optJSONArray("sources")
             for (i in 0 until (sources?.length() ?: 0)) {

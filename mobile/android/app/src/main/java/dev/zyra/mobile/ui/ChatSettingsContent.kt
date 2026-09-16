@@ -44,7 +44,7 @@ import dev.zyra.mobile.data.ChatConfiguration
         ChatSettingsDivider()
         ChatSettingControl("Speaking style", preferences.profile.ifBlank { config.profile }.replaceFirstChar { it.uppercase() }.ifBlank { "From your PC" },
             click = if (personalizing) ({ if (chooseProfile == null) profiles() else stylesExpanded = true }) else null,
-            leading = { AppIcon(R.drawable.ic_message_square, modifier = Modifier.size(20.dp)) },
+            leading = { AppIcon(R.drawable.ic_audio_lines, modifier = Modifier.size(20.dp)) },
             trailing = { if (preferences.busy || preferences.saving) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else AppIcon(R.drawable.ic_chevron_right, "Speaking styles", Modifier.size(16.dp)) })
         if (preferences.loaded) {
             ChatSettingsDivider()
@@ -60,18 +60,28 @@ import dev.zyra.mobile.data.ChatConfiguration
     }
     preferences.error?.let { message -> ZyraSettingRow(R.drawable.ic_info, message, click = if (connected) retry else null, trailing = { AppIcon(R.drawable.ic_refresh_cw, "Reload preferences", Modifier.size(18.dp)) }) }
     if (stylesExpanded && chooseProfile != null) ZyraSheet("Speaking style", close = { stylesExpanded = false }) {
-        Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
-            preferences.profiles.forEach { profile -> ZyraSettingRow(title = profile.name.replaceFirstChar { it.uppercase() }, subtitle = profile.description,
-                click = if (personalizing) ({ chooseProfile(profile.name); stylesExpanded = false }) else null,
-                trailing = { ZyraSelectionMark(profile.name == preferences.profile) }) }
-        }
+        SpeakingStyleOptions(preferences, personalizing) { chooseProfile(it); stylesExpanded = false }
     }
     if (memoryDetails) ZyraSheet("Chat memory", close = { memoryDetails = false }) {
         Text(if (preferences.memoryMode == "polluted") "Learning is off because this chat contains external context. Turn on Learn from this chat to include it again." else "Save useful learnings from this chat on your PC.",
             Modifier.padding(horizontal = 20.dp, vertical = 12.dp), style = MaterialTheme.typography.bodyMedium)
     }
     if (advanced) ZyraSheet("Advanced", close = { advanced = false }) {
-        Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(bottom = 12.dp)) {
+        AdvancedChatControls(config, connected, configure)
+    }
+}
+
+@Composable internal fun SpeakingStyleOptions(preferences: ChatPreferencesState, personalizing: Boolean, select: (String) -> Unit) {
+        Column(Modifier) {
+            if (preferences.profiles.isEmpty()) Text("No speaking styles available. Reload preferences to try again.", Modifier.padding(20.dp), style = MaterialTheme.typography.bodyMedium)
+            preferences.profiles.forEach { profile -> ZyraSettingRow(title = profile.name.replaceFirstChar { it.uppercase() }, subtitle = profile.description,
+                click = if (personalizing) ({ select(profile.name) }) else null,
+                trailing = { ZyraSelectionMark(profile.name == preferences.profile) }) }
+        }
+}
+
+@Composable internal fun AdvancedChatControls(config: ChatConfiguration, connected: Boolean, configure: (String, Any) -> Unit) {
+        Column(Modifier.padding(bottom = 12.dp)) {
             Text("Approvals", Modifier.padding(horizontal = 20.dp, vertical = 8.dp), style = MaterialTheme.typography.titleSmall)
             ZyraSettingRow(R.drawable.ic_shield_check, "Ask before actions", click = if (connected) ({ configure("runtimeMode", "approval-required") }) else null, trailing = { ZyraSelectionMark(config.runtimeMode == "approval-required") })
             ZyraSettingRow(R.drawable.ic_check, "Automatic review", "Follow this PC’s approval rules", click = if (connected) ({ configure("runtimeMode", "auto-review") }) else null, trailing = { ZyraSelectionMark(config.runtimeMode == "auto-review") })
@@ -79,5 +89,4 @@ import dev.zyra.mobile.data.ChatConfiguration
             ZyraSettingRow(title = "Web search", trailing = { ZyraSwitch(config.webSearch, { configure("webSearch", it) }, enabled = connected) })
             ZyraSettingRow(title = "Read web pages", trailing = { ZyraSwitch(config.webFetch, { configure("webFetch", it) }, enabled = connected) })
         }
-    }
 }

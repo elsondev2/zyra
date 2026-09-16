@@ -9,13 +9,20 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import dev.zyra.mobile.BuildConfig
 import dev.zyra.mobile.R
 
 @Composable fun AboutScreen(navigate: (String) -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Column(Modifier.padding(horizontal = 24.dp, vertical = 30.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Zyra", style = MaterialTheme.typography.headlineLarge)
+            Text("┏━━━┳┓ ┏┳━┳━━┓\n┣━━┃┃┃ ┃┃┏┫┏┓┃\n┃┃━━┫┗━┛┃┃┃┏┓┃\n┗━━━┻━┓┏┻┛┗┛┗┛\n    ┏━┛┃\n    ┗━━┛",
+                Modifier.clearAndSetSemantics { contentDescription = "Zyra" },
+                fontFamily = FontFamily.Monospace, fontSize = 23.sp, lineHeight = 23.sp,
+                color = MaterialTheme.colorScheme.primary, softWrap = false)
             Text("Your workspace, with you.", style = MaterialTheme.typography.titleMedium)
             Text("Android · " + BuildConfig.VERSION_NAME, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }

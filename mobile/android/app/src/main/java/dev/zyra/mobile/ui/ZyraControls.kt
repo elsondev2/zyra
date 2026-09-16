@@ -152,6 +152,7 @@ private val LocalSheetHeaderDrag = staticCompositionLocalOf<Modifier> { Modifier
 }
 
 
+/** Owns the only vertical scroll container. Callers must provide wrap-content rows, never weighted scrolling columns. */
 @Composable fun ZyraSheetContent(title: String, close: () -> Unit, footer: (@Composable () -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
         Column(Modifier.fillMaxWidth().heightIn(max = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp * .88f).imePadding()) {
             Column(LocalSheetHeaderDrag.current) {

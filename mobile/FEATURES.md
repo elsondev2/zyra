@@ -152,3 +152,13 @@ Verification: 352 Android tests across 68 classes, 163 gateway tests, staged Des
 
 The signed APK is 54,747,727 bytes, version code 14, SHA-256 `8fcebfbb8b36b8221f42915158aa3f6078503bb59e279a77b37fb5692eb27722`. Existing signing identity, APK signature and 16 KiB alignment verify. LAN page, HEAD, range, stale-range fallback and full download hash pass. Development is restored on the current canonical runtime with the existing paired TLS certificate. Physical-phone new-chat, keyboard/voice/long-thread interactions and native desktop link interaction remain acceptance gates before production release.
 
+
+## Review package: 0.1.14-dev
+
+Version code 15 fixes header-only bottom sheets caused by weighted, nested scrolling bodies. Speaking style, Advanced, Activity details, Usage details and attachment/file previews now use the sheet's shared scroll container. Missing speaking-style choices have an explicit empty state, and the speaking-style entry uses the audio-lines icon.
+
+Usage combines the period and coverage disclosure into one row, removes repeated history explanations, and tightens spacing. Partial history and unpriced costs remain identified, with source/price details available from the info control. About displays the same ASCII Zyra mark used on Desktop in the active theme color, with an accessible name.
+
+Verification: fresh app and unit compilation, all 352 Android tests across 68 classes, APK packaging, lint (zero errors, 61 warnings), privacy check and all 41 native render fixtures passed. Sheet-body geometry, narrow width, enlarged text, compact Usage and light/dark About rendering were reviewed. No on-device gesture or frame-rate claim is made.
+
+The signed APK is 56,562,255 bytes, version code 15, SHA-256 `a0c7c4baabc8d4a207905e43fa5c6bf4f76a7f4dbc9c2736d431852b8065a371`. Existing signing identity, signature and 16 KiB ZIP/native-library alignment verify. LAN page, HEAD, range, stale-range fallback and full download hash verify. Physical-phone sheet scrolling, Usage navigation and theme appearance remain acceptance checks before production release.

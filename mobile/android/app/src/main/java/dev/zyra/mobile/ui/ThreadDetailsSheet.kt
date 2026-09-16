@@ -110,18 +110,7 @@ import kotlinx.coroutines.ensureActive
         }
     }
     if (expanded) ZyraSheet("Activity details", close = { expanded = false }) {
-        Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            ThreadMetric("Context tokens", used)
-            ThreadMetric("Context window", capacity)
-            usage?.let {
-                ThreadMetric("Input", it.number("inputTokens"))
-                ThreadMetric("Cached input", it.number("cachedInputTokens"))
-                ThreadMetric("Output", it.number("outputTokens"))
-                if ((it.number("cacheWriteTokens") ?: 0.0) > 0) ThreadMetric("Cache writes", it.number("cacheWriteTokens"))
-                if (it.optInt("unpricedResponses") > 0) Text("Some responses have no available price.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            details.optString("note").takeUnless { it.isBlank() || it == "null" }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        }
+        ThreadActivityDetails(details)
     }
 }
 @Composable private fun ThreadMetric(label: String, value: Double?) {
@@ -131,3 +120,21 @@ import kotlinx.coroutines.ensureActive
     }
 }
 private fun JSONObject.number(key: String): Double? = (opt(key) as? Number)?.toDouble()?.takeIf { it.isFinite() && it >= 0 }
+
+@Composable internal fun ThreadActivityDetails(details: JSONObject) {
+    val used = details.optJSONObject("context")?.number("usedTokens")
+    val capacity = details.optJSONObject("context")?.number("windowTokens")
+    val usage = details.optJSONObject("usage")
+    Column(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        ThreadMetric("Context tokens", used)
+        ThreadMetric("Context window", capacity)
+        usage?.let {
+            ThreadMetric("Input", it.number("inputTokens"))
+            ThreadMetric("Cached input", it.number("cachedInputTokens"))
+            ThreadMetric("Output", it.number("outputTokens"))
+            if ((it.number("cacheWriteTokens") ?: 0.0) > 0) ThreadMetric("Cache writes", it.number("cacheWriteTokens"))
+            if (it.optInt("unpricedResponses") > 0) Text("Some responses have no available price.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        details.optString("note").takeUnless { it.isBlank() || it == "null" }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    }
+}

@@ -11,7 +11,7 @@ import dev.zyra.mobile.R
     openProfiles: () -> Unit, setMemory: (Boolean) -> Unit, retry: () -> Unit) {
     val enabled = connected && state.loaded && !state.saving
     if (state.busy || state.saving) LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 20.dp))
-    ZyraSettingRow(R.drawable.ic_message_square, "Speaking style", state.profile.ifBlank { profile }.replaceFirstChar { it.uppercase() }.ifBlank { "From your PC" },
+    ZyraSettingRow(R.drawable.ic_audio_lines, "Speaking style", state.profile.ifBlank { profile }.replaceFirstChar { it.uppercase() }.ifBlank { "From your PC" },
         click = if (enabled) openProfiles else null)
     if (state.loaded) ZyraSettingRow(title = "Learn from this chat",
         subtitle = if (state.memoryMode == "polluted") "Excluded because this chat contains external context. Turn on to include it again."

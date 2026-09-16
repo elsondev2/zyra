@@ -106,7 +106,7 @@ private fun decodeLocalImage(file: File, size: Int): ImageBitmap? = runCatching 
             else {
                 val content by produceState<String?>(null, id) { value = withContext(Dispatchers.IO) { runCatching { controller.store.file(id).readText() }.getOrNull() } }
                 ZyraSheet(item.name, close = { preview = null }) {
-                    Column(Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(16.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
                         content?.let { AttachmentTextContent(item.name, it) } ?: CircularProgressIndicator(Modifier.size(20.dp))
                     }
                 }

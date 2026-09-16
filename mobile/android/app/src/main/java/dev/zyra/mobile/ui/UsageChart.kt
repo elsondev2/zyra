@@ -39,7 +39,7 @@ import java.util.Locale
         if (selected.optInt("responses") == 0) usageMoney(0.0) else usageCost(selected)
     val accent = MaterialTheme.colorScheme.primary
     val muted = MaterialTheme.colorScheme.outlineVariant
-    val description = "${usageDate(selected.optString("date"))} UTC, $selectedValue. ${selected.optInt("responses")} recorded responses."
+    val description = "${usageDate(selected.optString("date"))} UTC, $selectedValue. ${selected.optInt("responses")} recorded responses." + if (partial) " Partial recorded history." else ""
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("Daily usage", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
@@ -92,9 +92,7 @@ import java.util.Locale
             Text(usageDate(days.first().optString("date")), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("UTC · ${usageDate(days.last().optString("date"))}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        if (partial || (metric == "cost" && days.any { it.optInt("unpricedResponses") > 0 })) {
-            Text(if (partial) "Recorded history so far" else "Dots mark days with unpriced responses", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+
     }
 }
 

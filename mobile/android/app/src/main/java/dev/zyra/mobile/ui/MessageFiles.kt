@@ -26,7 +26,7 @@ import dev.zyra.mobile.data.MessageTextAttachment
         }
     }
     selected?.let { file -> ZyraSheet(file.name, close = { selected = null }) {
-        Column(Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(16.dp)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp)) {
             AttachmentTextContent(file.name, file.text)
         }
     } }
