@@ -161,6 +161,7 @@ const syntaxTargets = [
 ];
 
 const coreTests = [
+  "scripts/test-message-attachments.mjs",
   "scripts/test-agent-server-approval-responses.mjs",
   "scripts/test-agent-server-mobile-sync.mjs",
   "scripts/test-control-bridge-deadline.mjs",

@@ -5,6 +5,7 @@
   "description": "Local Zyra coding assistant CLI.",
   "type": "module",
   "scripts": {
+    "test:message-attachments": "node scripts/test-message-attachments.mjs",
     "test:session-preferences": "node --test scripts/test-session-preferences.mjs",
     "test:provider-connections": "node scripts/test-model-provider-connections.mjs && node scripts/test-provider-transactions.mjs",
     "test:runtime-architecture": "node scripts/test-server-memory-queue.mjs && node scripts/test-agent-role-models.mjs && node scripts/test-runtime-activation.mjs",

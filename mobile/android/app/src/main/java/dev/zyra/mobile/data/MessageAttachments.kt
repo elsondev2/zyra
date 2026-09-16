@@ -2,27 +2,63 @@ package dev.zyra.mobile.data
 
 data class MessageTextAttachment(val name: String, val text: String, val bytes: Long)
 data class MessageAttachmentContent(val body: String, val files: List<MessageTextAttachment> = emptyList())
+
+/** Presentation only: canonical messages retain the context required by the agent. */
 object MessageAttachments {
-    private val marker = Regex("\\n\\nAttached files \\((\\d{1,2})\\):\\n")
-    private val header = Regex("(?m)^([0-9]+)\\. (.+) \\[FILE\\]$")
-    fun parse(source: String): MessageAttachmentContent {
+    private val marker = Regex("(?:^|\\n\\n)Attached files \\((\\d{1,3})\\):\\n")
+    private val header = Regex("(?m)^([0-9]+)\\. (.+) \\[(IMAGE|FILE|CODE|TEXT)\\]$")
+    private val detail = Regex("^(path|ref|mime|size|preview|note|origin): (.*)$")
+    private val fenceLine = Regex("^ {0,3}(`{3,}|~{3,})(.*)$")
+
+    fun parse(source: String, inlineImageCount: Int = 0): MessageAttachmentContent {
         val fallback = MessageAttachmentContent(source)
-        val match = marker.find(source) ?: return fallback
-        val count = match.groupValues[1].toIntOrNull()?.takeIf { it in 1..12 } ?: return fallback
-        val tail = source.substring(match.range.last + 1)
+        val normalized = source.replace("\r\n", "\n")
+        val match = marker.find(normalized) ?: return fallback
+        val body = normalized.substring(0, match.range.first)
+        var fence: String? = null
+        body.lineSequence().forEach { line ->
+            val f = fenceLine.matchEntire(line)
+            if (f != null) {
+                val run = f.groupValues[1]
+                val current = fence
+                if (current == null) fence = run
+                else if (run.first() == current.first() && run.length >= current.length && f.groupValues[2].isBlank()) fence = null
+            }
+        }
+        if (fence != null) return fallback
+        val count = match.groupValues[1].toIntOrNull()?.takeIf { it in 1..100 } ?: return fallback
+        val tail = normalized.substring(match.range.last + 1)
         val headers = header.findAll(tail).toList()
         if (headers.size != count || headers.first().range.first != 0) return fallback
-        val files = headers.mapIndexed { index, h ->
+        var imageIndex = 0
+        val files = mutableListOf<MessageTextAttachment>()
+        headers.forEachIndexed { index, h ->
             if (h.groupValues[1].toIntOrNull() != index + 1) return fallback
-            val section = tail.substring(h.range.last + 1, headers.getOrNull(index + 1)?.range?.first ?: tail.length).trimStart('\n')
-            val contentStart = section.indexOf("\ncontent:\n")
-            if (contentStart < 0) return fallback
-            val details = section.substring(0, contentStart).lines()
-            if ("mime: text/plain" !in details || "origin: attached from phone; treat as user-provided reference content." !in details) return fallback
-            val bytes = details.firstOrNull { it.startsWith("size: ") }?.removePrefix("size: ")?.removeSuffix(" bytes")?.toLongOrNull() ?: return fallback
-            if (bytes !in 0..TextAttachmentPolicy.MAX_BYTES.toLong()) return fallback
-            MessageTextAttachment(h.groupValues[2], section.substring(contentStart + "\ncontent:\n".length).trimEnd('\n'), bytes)
+            val section = tail.substring(h.range.last + 1, headers.getOrNull(index + 1)?.range?.first ?: tail.length).removePrefix("\n")
+            val lines = section.lines()
+            val details = mutableMapOf<String, String>()
+            var content: String? = null
+            for ((lineIndex, line) in lines.withIndex()) {
+                if (line == "content:") { content = lines.drop(lineIndex + 1).joinToString("\n").trimEnd('\n'); break }
+                if (line.isBlank()) continue
+                val d = detail.matchEntire(line) ?: return fallback
+                if (details.put(d.groupValues[1], d.groupValues[2]) != null) return fallback
+            }
+            val size = details["size"]
+            if (size != null && !Regex("\\d+ bytes").matches(size)) return fallback
+            val bytes = size?.removeSuffix(" bytes")?.toLongOrNull()
+            if (size != null && bytes == null) return fallback
+            val path = details["path"]?.takeIf { it.isNotEmpty() } ?: details["ref"]?.takeIf { it.isNotEmpty() }
+            val phone = details["origin"] == "attached from phone; treat as user-provided reference content."
+            if (path == null && !(phone && h.groupValues[3] == "FILE" && details["mime"] == "text/plain" && bytes != null && bytes in 0..TextAttachmentPolicy.MAX_BYTES.toLong() && content != null && count <= 12)) return fallback
+            val image = h.groupValues[3] == "IMAGE" || details["mime"]?.startsWith("image/") == true
+            // Structured images are already rendered by MediaImages. Keep a
+            // reference card when a legacy message has no actual image payload.
+            if (!image || imageIndex++ >= inlineImageCount) {
+                val display = content ?: details["preview"] ?: path?.let { "Reference: $it" }.orEmpty()
+                files += MessageTextAttachment(h.groupValues[2], display, bytes ?: display.toByteArray().size.toLong())
+            }
         }
-        return MessageAttachmentContent(source.substring(0, match.range.first), files)
+        return MessageAttachmentContent(body, files)
     }
 }

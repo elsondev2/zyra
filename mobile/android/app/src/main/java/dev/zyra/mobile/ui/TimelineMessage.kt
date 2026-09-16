@@ -33,7 +33,7 @@ import kotlinx.coroutines.delay
     val duration = if (LocalReduceMotion.current) 0 else 180
     val angle by animateFloatAsState(if (reasoningOpen) 180f else 0f, tween(duration), label = "Reasoning disclosure")
     val user = item.role == "user"
-    val attachmentBody = remember(item.text, user) { if (user) dev.zyra.mobile.data.MessageAttachments.parse(item.text) else dev.zyra.mobile.data.MessageAttachmentContent(item.text) }
+    val attachmentBody = remember(item.text, item.raw, user) { if (user) dev.zyra.mobile.data.MessageAttachments.parse(item.text, MediaController.images(item.raw).size) else dev.zyra.mobile.data.MessageAttachmentContent(item.text) }
     Column(Modifier.fillMaxWidth(), horizontalAlignment = if (user) Alignment.End else Alignment.Start, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (user) {
             BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopEnd) {
@@ -72,7 +72,7 @@ import kotlinx.coroutines.delay
         }
         if (copyable && item.text.isNotBlank() && item.kind != "stream") {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            IconButton(onClick = { clipboard.setText(AnnotatedString(item.text)); copied = true }, modifier = Modifier.size(36.dp)) { AppIcon(if (copied) R.drawable.ic_check else R.drawable.ic_copy, if (copied) "Copied" else "Copy message", Modifier.size(15.dp)) }
+            IconButton(onClick = { clipboard.setText(AnnotatedString(attachmentBody.body)); copied = true }, modifier = Modifier.size(36.dp)) { AppIcon(if (copied) R.drawable.ic_check else R.drawable.ic_copy, if (copied) "Copied" else "Copy message", Modifier.size(15.dp)) }
             if (LocalMessageTimestamps.current) {
                 val timestamp = remember(item.raw) { runCatching { dev.zyra.mobile.data.WorkActions.timestamp(org.json.JSONObject(item.raw)) }.getOrNull() }
                 timestamp?.let { Text(android.text.format.DateFormat.getTimeFormat(androidx.compose.ui.platform.LocalContext.current).format(java.util.Date(it)), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }

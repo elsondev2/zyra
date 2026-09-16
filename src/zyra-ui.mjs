@@ -316,7 +316,7 @@ export function createZyraUi(options = {}) {
     if (!normalized && imageAttachments.length === 0) return;
     if (normalized && !options.force && consumeSuppressedUserMessage(normalized)) return;
     if (!options.force && consumeRecentlyEchoedUserMessage(normalized, imageAttachments)) return;
-    host.append(new UserMessageComponent(`user-${Date.now()}-${Math.random()}`, normalized, theme, { imageAttachments }));
+    host.append(new UserMessageComponent(`user-${Date.now()}-${Math.random()}`, text, theme, { imageAttachments }));
   };
 
   const rememberEchoedUserMessage = (text, imageAttachments = []) => {
@@ -1365,7 +1365,7 @@ function extractUserMessageContent(message = {}) {
   const content = message.content ?? message.text ?? "";
   if (!Array.isArray(content)) {
     return {
-      text: normalizeUserMessageText(typeof content === "string" ? content : content?.text),
+      text: String((typeof content === "string" ? content : content?.text) ?? ""),
       imageAttachments: [],
     };
   }
@@ -1385,7 +1385,7 @@ function extractUserMessageContent(message = {}) {
     });
   }
   return {
-    text: normalizeUserMessageText(text.join("\n")),
+    text: text.join("\n"),
     imageAttachments,
   };
 }

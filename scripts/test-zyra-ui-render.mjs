@@ -554,6 +554,31 @@ function runInteractiveNoTurnEndDuplicateRegression() {
   assert.equal((after.match(/Final answer/g) ?? []).length, 1, "turn_end/agent_end must not append a delayed duplicate");
 }
 
+function runCrossClientAttachmentPresentationRegression() {
+  const text = 'Check this picture\n\nAttached files (2):\n1. Pasted image [IMAGE]\nref: clipboard://fixture.png\nmime: image/png\nsize: 400 bytes\n\n2. notes.md [FILE]\npath: C:/example/notes.md\nmime: text/plain\ncontent:\nPrivate reference content';
+  const message = { id: 'cross-client-attachments', role: 'user', content: [{ type: 'text', text }, { type: 'image', mimeType: 'image/png', data: 'fixture' }] };
+  const before = JSON.stringify(message);
+  for (const events of [[{ type: 'message_start', message }], projectHistoryEntries([{ type: 'message', id: 'saved', message }])]) {
+    const ui = createZyraUi();
+    ui._debugBeginInteractiveForTests();
+    for (const event of events) ui.event(event);
+    const plain = ui._debugRenderLinesForTests(80).map(stripAnsi).join('\n');
+    assert.match(plain, /Check this picture/);
+    assert.match(plain, /notes\.md/);
+    assert.equal((plain.match(/Image attached/g) ?? []).length, 1);
+    assert.doesNotMatch(plain, /Attached files|clipboard:\/\/|mime:|Private reference content/);
+  }
+  assert.equal(JSON.stringify(message), before, 'display parsing must not rewrite agent context or saved history');
+  const legacy = new UserMessageComponent('legacy', text, {});
+  assert.equal(legacy.imageAttachments.length, 1, 'legacy image references still get an attachment indicator');
+  assert.equal(legacy.fileAttachments.length, 1);
+  for (const content of [text, { text }]) {
+    const ui = createZyraUi();
+    ui._debugBeginInteractiveForTests();
+    ui.event({ type: 'message_start', message: { role: 'user', content } });
+    assert.doesNotMatch(ui._debugRenderLinesForTests(80).map(stripAnsi).join('\n'), /Attached files|clipboard:\/\//);
+  }
+}
 function runInteractiveImageUserMessageDedupRegression() {
   const ui = createZyraUi();
   ui._debugBeginInteractiveForTests();
@@ -2800,6 +2825,7 @@ runWriteFileChangeMatchesEditRegression();
 runToolCallThemeStylingRegression();
 runInteractiveAssistantComponentRegression();
 runInteractiveNoTurnEndDuplicateRegression();
+runCrossClientAttachmentPresentationRegression();
 runInteractiveImageUserMessageDedupRegression();
 runTurnEndKeepsRuntimeBusyRegression();
 runNetworkRecoveryLifecycleRegression();

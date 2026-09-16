@@ -1,6 +1,7 @@
 import { isAgentSurfaceDescriptor, normalizeAgentSurfaceTool } from "../../agent-surface.mjs";
 import { renderMarkdown } from "../../pi-markdown.mjs";
 import { buildTerminalTheme } from "../../terminal-theme.mjs";
+import { parseMessageAttachments } from "../../message-attachments.mjs";
 import {
   bold,
   normalIntensity,
@@ -21,11 +22,14 @@ const commandOutputPreviewRows = 3;
 export class UserMessageComponent {
   constructor(key, text, theme = fallbackTheme, options = {}) {
     this.key = key;
-    const legacy = extractLegacyImageMarkers(text);
+    const parsed = parseMessageAttachments(text);
+    const legacy = extractLegacyImageMarkers(parsed.body);
     this.text = legacy.text;
     this.theme = theme;
     const structured = Array.isArray(options.imageAttachments) ? options.imageAttachments.filter(Boolean) : [];
-    this.imageAttachments = structured.length > 0 ? structured : legacy.imageAttachments;
+    const images = parsed.attachments.filter((file) => file.type === 'IMAGE' || file.mime?.startsWith('image/'));
+    this.imageAttachments = structured.length > 0 ? structured : images.length > 0 ? images : legacy.imageAttachments;
+    this.fileAttachments = parsed.attachments.filter((file) => !images.includes(file));
   }
 
   setHost(host) {
@@ -39,6 +43,9 @@ export class UserMessageComponent {
       const count = this.imageAttachments.length;
       const label = count === 1 ? "▣ Image attached" : `▣ ${count} images attached`;
       rows.push(...renderUserMessageRows(label, contentWidth, rows.length > 0 ? "  " : "> "));
+    }
+    for (const file of this.fileAttachments) {
+      rows.push(...renderUserMessageRows(`▤ ${file.name}`, contentWidth, rows.length > 0 ? "  " : "> "));
     }
     if (rows.length === 0) return [];
     const bgLine = (content = "") => `${this.theme.userBg}${this.theme.userFg}${content.padEnd(contentWidth)}${reset}`;
