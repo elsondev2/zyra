@@ -56,6 +56,14 @@ jobs:
       - name: Install Desktop dependencies
         run: npm --prefix desktop ci --no-audit --no-fund
 
+      - name: Prepare Linux Electron sandbox helper and virtual display
+        shell: bash
+        run: |
+          test -f desktop/node_modules/electron/dist/chrome-sandbox
+          sudo chown root:root desktop/node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 desktop/node_modules/electron/dist/chrome-sandbox
+          command -v xvfb-run >/dev/null 2>&1 || { echo 'xvfb-run is required on the Ubuntu release runner' >&2; exit 1; }
+
       - name: Enforce tag, version, HEAD, master, and signing gates
         id: release_contract
         env:
@@ -90,7 +98,7 @@ jobs:
         run: npm run privacy-check
 
       - name: Run repository check
-        run: npm run check
+        run: xvfb-run -a --server-args="-screen 0 1920x1080x24" npm run check
 
       - name: Verify clean patch formatting
         shell: bash
