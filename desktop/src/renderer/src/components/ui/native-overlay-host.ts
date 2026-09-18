@@ -1,7 +1,7 @@
 import { initializeNativeOverlayDocument, type NativeOverlayDocument } from './native-overlay-document'
 import { getOverlayActiveElement, getOverlayEventDocuments, registerOverlayDocument } from './native-overlay-events'
 import { dismissTransientMenus } from '@/lib/transient-menu'
-import type { NativeOverlayApi, NativeOverlayKind } from '@shared/contracts/native-overlay'
+import type { NativeOverlayApi, NativeOverlayKind, NativeOverlayBounds } from '@shared/contracts/native-overlay'
 
 type Kind = NativeOverlayKind
 type NativeOverlayBridge = Pick<NativeOverlayApi, 'prepareNativeOverlay' | 'setNativeOverlayVisible'> & Partial<Pick<NativeOverlayApi, 'onNativeOverlayDismiss' | 'recoverNativeOverlay'>>
@@ -9,6 +9,7 @@ interface Surface { window: Window; frameName: string; document: NativeOverlayDo
 export interface NativeOverlayLease {
     ready: Promise<HTMLElement | null>
     present: () => Promise<boolean>
+    setBounds: (bounds: NativeOverlayBounds | null) => void
     release: () => void
 }
 
@@ -34,6 +35,8 @@ class NativeOverlayHost {
     private pendingFrameName: string | null = null
     private revision = Date.now() * 1000
     private visibility = false
+    private boundsKey = ''
+    private leaseBounds = new Map<symbol, NativeOverlayBounds | null>()
     private visibilityPending: Promise<void> | null = null
     private hideFrame = 0
     private restoreFocus: HTMLElement | null = null
@@ -50,17 +53,39 @@ class NativeOverlayHost {
     subscribe = (listener: () => void) => { this.changes.add(listener); return () => { this.changes.delete(listener) } }
     matches = (frameName: string) => this.surface?.frameName === frameName || (!this.surface && this.pendingFrameName === frameName)
 
+    private presentationBounds(): NativeOverlayBounds | null {
+        const values = [...this.presented].filter(id => !this.suspended.has(id)).map(id => this.leaseBounds.get(id))
+        if (!values.length || values.some(value => !value)) return null
+        const rectangles = values as NativeOverlayBounds[]
+        const x = Math.max(0, Math.min(window.innerWidth, ...rectangles.map(value => value.x)))
+        const y = Math.max(0, Math.min(window.innerHeight, ...rectangles.map(value => value.y)))
+        return { x, y, width: Math.max(0, Math.min(window.innerWidth, Math.max(...rectangles.map(value => value.x + value.width))) - x), height: Math.max(0, Math.min(window.innerHeight, Math.max(...rectangles.map(value => value.y + value.height))) - y) }
+    }
+
     private async setVisible(visible: boolean): Promise<void> {
-        if (this.visibility === visible) { await this.visibilityPending; return }
+        const bounds = this.kind === 'interactive' && visible ? this.presentationBounds() : null
+        const boundsKey = JSON.stringify(bounds)
+        if (this.visibility === visible && this.boundsKey === boundsKey) { await this.visibilityPending; return }
         this.visibility = visible
+        this.boundsKey = boundsKey
         const api = bridge()
         const frameName = this.surface?.frameName
         if (api && frameName) {
-            const request = api.setNativeOverlayVisible({ kind: this.kind, frameName, visible, revision: ++this.revision, focus: false }).then(result => {
-                if (!this.matches(frameName)) return
+            const revision = ++this.revision
+            const request = api.setNativeOverlayVisible({ kind: this.kind, frameName, visible, revision, focus: false, bounds }).then(result => {
+                if (!this.matches(frameName) || revision !== this.revision) return
                 if (!result.success) {
                     this.visibility = false
                     throw new Error('Native overlay visibility was rejected')
+                }
+                // Only compensate for bounds the native host actually applied. Older running
+                // hosts acknowledge visibility but ignore bounds during renderer-only HMR.
+                const applied = result.bounds
+                const root = this.surface?.document.container
+                if (root) {
+                    root.style.transform = applied ? `translate(${-applied.x}px, ${-applied.y}px)` : ''
+                    root.style.width = applied ? `${window.innerWidth}px` : ''
+                    root.style.height = applied ? `${window.innerHeight}px` : ''
                 }
             })
             this.visibilityPending = request
@@ -144,12 +169,18 @@ class NativeOverlayHost {
     }
 
     /** A lease remains held while React runs existing exit animations and nested content. */
-    acquire(): NativeOverlayLease {
+    acquire(bounds: NativeOverlayBounds | null = null): NativeOverlayLease {
         const id = Symbol('native-overlay')
         this.leases.add(id)
+        this.leaseBounds.set(id, bounds)
         cancelAnimationFrame(this.hideFrame)
         if (this.leases.size === 1 && this.kind === 'interactive') this.restoreFocus = getOverlayActiveElement()
         return {
+            setBounds: bounds => {
+                if (!this.leases.has(id)) return
+                this.leaseBounds.set(id, bounds)
+                if (this.presented.has(id)) void this.setVisible(this.hasPresented()).catch(error => console.error('Native overlay bounds update failed', error))
+            },
             ready: this.getSurface().then(value => this.leases.has(id) ? value?.document.container ?? null : null),
             present: async () => {
                 if (!this.leases.has(id) || !this.surface) return false
@@ -172,7 +203,12 @@ class NativeOverlayHost {
             release: () => {
                 if (!this.leases.delete(id)) return
                 this.presented.delete(id)
-                if (this.hasPresented()) return
+                this.leaseBounds.delete(id)
+                this.suspended.delete(id)
+                if (this.hasPresented()) {
+                    void this.setVisible(true).catch(error => console.error('Native overlay bounds update failed', error))
+                    return
+                }
                 cancelAnimationFrame(this.hideFrame)
                 this.hideFrame = requestAnimationFrame(() => {
                     if (this.hasPresented()) return
@@ -195,7 +231,7 @@ class NativeOverlayHost {
         const ids = [...this.leases].filter(id => !this.suspended.has(id))
         for (const id of ids) this.suspended.add(id)
         cancelAnimationFrame(this.hideFrame)
-        if (!this.hasPresented()) void this.setVisible(false).catch(error => console.error('Overlay suspension failed', error))
+        void this.setVisible(this.hasPresented()).catch(error => console.error('Overlay suspension failed', error))
         let restored = false
         return () => {
             if (restored) return
@@ -205,16 +241,17 @@ class NativeOverlayHost {
         }
     }
 
-    dispose() {
+    dispose(closeWindow = true) {
         this.disposed = true
         cancelAnimationFrame(this.hideFrame)
         this.leases.clear()
+        this.leaseBounds.clear()
         this.presented.clear()
         const child = this.surface?.window
         this.surface?.unregister()
         this.surface?.document.dispose()
         this.surface = null
-        if (child && !child.closed) child.close()
+        if (closeWindow && child && !child.closed) child.close()
     }
 }
 
@@ -229,12 +266,15 @@ function installDismissListener(api: NativeOverlayBridge) {
 }
 export function getNativeOverlayHost(passive = false) { return hosts[passive ? 'passive' : 'interactive'] }
 
-function disposeHosts() {
+function disposeHosts(closeWindows = true) {
     removeDismiss?.()
-    for (const host of Object.values(hosts)) host.dispose()
+    for (const host of Object.values(hosts)) host.dispose(closeWindows)
 }
-if (typeof window !== 'undefined') window.addEventListener('beforeunload', disposeHosts, { once: true })
+// beforeunload is cancellable: save/close dialogs still need their native hosts.
+// On committed exit, main owns child destruction; avoid reentrant child.close().
+const ownerPageExited = () => disposeHosts(false)
+if (typeof window !== 'undefined') window.addEventListener('pagehide', ownerPageExited, { once: true })
 if (import.meta.hot) import.meta.hot.dispose(() => {
-    window.removeEventListener('beforeunload', disposeHosts)
+    window.removeEventListener('pagehide', ownerPageExited)
     disposeHosts()
 })

@@ -126,7 +126,7 @@ export function PreviewHeaderEditMenu({
     return (
         <div className="relative inline-flex" ref={controlRef}>
             <div className={cn(
-                'inline-flex overflow-hidden rounded-md border border-[var(--surface-divider)] bg-[var(--surface-floating)] transition-[border-color,border-radius,box-shadow] duration-150',
+                'inline-flex h-7 overflow-hidden rounded-md border border-[var(--surface-divider)] bg-[var(--surface-floating)] transition-[border-color,border-radius,box-shadow] duration-150',
                 menuVisible && 'rounded-b-none border-b-transparent shadow-[0_10px_24px_rgba(0,0,0,0.16)]'
             )}>
                 <button
@@ -134,7 +134,7 @@ export function PreviewHeaderEditMenu({
                     onClick={handlePrimaryAction}
                     disabled={!canToggleMode && !canOpenMenuFromPrimary}
                     className={cn(
-                        'inline-flex h-6 min-w-[112px] items-center gap-1.5 px-2.5 text-[11px] transition-colors',
+                        'inline-flex h-full min-w-[112px] items-center gap-1.5 px-2.5 text-[11px] transition-colors',
                         canToggleMode || canOpenMenuFromPrimary
                             ? 'text-sparkle-text hover:bg-[var(--surface-hover)]'
                             : 'cursor-not-allowed text-sparkle-text-muted/45'
@@ -148,7 +148,7 @@ export function PreviewHeaderEditMenu({
                 <button
                     type="button"
                     onClick={toggleMenu}
-                    className="inline-flex h-6 w-7 items-center justify-center border-l border-[var(--surface-divider)] text-sparkle-text-muted transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
+                    className="inline-flex h-full w-7 items-center justify-center border-l border-[var(--surface-divider)] text-sparkle-text-muted transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text"
                     title="File view menu"
                     aria-label="File view menu"
                     aria-haspopup="menu"

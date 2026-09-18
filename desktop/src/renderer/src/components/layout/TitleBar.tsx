@@ -5,16 +5,19 @@ import { addOverlayEventListener, addOverlayWindowBlurListener } from '@/compone
  * Zyra - contextual desktop title bar
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { ChevronDown, Copy, Minus, PanelLeftClose, PanelLeftOpen, Square, X } from 'lucide-react'
+import { AudioLines, ChevronDown, Copy, Minus, PanelLeftClose, PanelLeftOpen, PanelsTopLeft, Puzzle, RotateCw, Search, Settings2, Square, SquarePen, X } from 'lucide-react'
 import { useAssistantStoreActions, useAssistantStoreSelector } from '@/lib/assistant/store'
 import { useAssistantTitleBarContent, useAssistantTitleBarEndRegion } from '@/lib/assistant/assistant-title-bar'
 import { useLoadingScreenActive } from '@/components/ui/LoadingState'
 import { useCommandPalette } from '@/lib/commandPalette'
 import { useSettings } from '@/lib/settings'
 import { TRANSIENT_MENU_DISMISS_EVENT } from '@/lib/transient-menu'
-import { findSettingsNavigationItem } from '@/pages/settings/settings-navigation'
+import { getSettingsLocationTrail } from '@/pages/settings/settings-navigation-context'
+import { AccessoriesMenu } from './AccessoriesMenu'
+import { AppSubmenu } from './AppSubmenu'
+import { openAccessory } from '@/lib/accessories'
 import {
     ASSISTANT_LEFT_SIDEBAR_WIDTH_STORAGE_KEY,
     resolveStoredAssistantLeftSidebarWidth
@@ -25,6 +28,7 @@ import { cn } from '@/lib/utils'
 import { AssistantControlStatus } from '@/pages/assistant/AssistantControlStatus'
 import type { ControlStateSnapshot } from '@shared/agent-control/contracts'
 import { useWindowChrome } from '@/lib/useWindowChrome'
+import { useRuntimeConnection } from '@/lib/runtime-connection'
 import {
     FILE_PREVIEW_FOCUS_STATE_EVENT,
     FILE_PREVIEW_TOGGLE_NAVIGATOR_EVENT,
@@ -35,6 +39,7 @@ type AppNavEntry = { path: string; search: string; sessionId: string | null }
 type AppMenuItem = {
     id: string
     label: string
+    icon: ReactNode
     shortcut?: string
     danger?: boolean
     action: () => void
@@ -46,8 +51,7 @@ function getAppNavEntryKey(entry: AppNavEntry) {
 
 function getContextualTitleParts(pathname: string) {
     if (pathname.startsWith('/settings')) {
-        const section = findSettingsNavigationItem(pathname)
-        return section.id === 'home' ? ['Settings'] : ['Settings', section.label]
+        return getSettingsLocationTrail(pathname)
     }
     if (pathname === '/assistant/instructor') return ['Instructor Voice Lab']
     if (pathname.startsWith('/plugins')) return ['Plugins']
@@ -61,6 +65,7 @@ export default function TitleBar() {
     const { settings } = useSettings()
     const { runtime, policy: windowChromePolicy, isMaximized } = useWindowChrome()
     const loadingScreenActive = useLoadingScreenActive()
+    const runtimeConnection = useRuntimeConnection()
     const assistantTitleBarContent = useAssistantTitleBarContent()
     const assistantTitleBarEndRegion = useAssistantTitleBarEndRegion()
     const assistantActions = useAssistantStoreActions()
@@ -79,6 +84,7 @@ export default function TitleBar() {
     const pendingNavigationKeyRef = useRef<string | null>(null)
     const [sidebarCollapsed, setSidebarCollapsed] = useState(settings.sidebarCollapsed)
     const [appMenuOpen, setAppMenuOpen] = useState(false)
+    const [accessoryError, setAccessoryError] = useState<string | null>(null)
     const [controlState, setControlState] = useState<ControlStateSnapshot | null>(null)
     const controlActive = Boolean(controlState?.active || (controlState && controlState.pairing.state !== 'stopped') || controlState?.pendingGrants.length)
     const [filePreviewFocusState, setFilePreviewFocusState] = useState<FilePreviewFocusState>({ active: false, leftPanelOpen: false })
@@ -176,7 +182,7 @@ export default function TitleBar() {
             if (!isOverlayEventInside(event, appMenuRootRef.current)) dismissAppMenu()
         }
         const handleEscape = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') dismissAppMenu()
+            if (event.key === 'Escape' && !event.defaultPrevented) dismissAppMenu()
         }
 
         const removeOverlayListener1 = addOverlayEventListener('pointerdown', handlePointerDown, true)
@@ -279,25 +285,16 @@ export default function TitleBar() {
     }
 
     const primaryShortcut = isMac ? 'âŒ˜' : 'Ctrl '
-    const closeShortcut = isMac ? 'âŒ˜W' : 'Alt F4'
     const appMenuGroups: AppMenuItem[][] = [
         [
-            { id: 'new-chat', label: 'New chat', shortcut: `${primaryShortcut}N`, action: handleNewChat },
-            { id: 'search', label: 'Search', shortcut: `${primaryShortcut}K`, action: commandPalette.open }
+            { id: 'new-chat', label: 'New chat', icon: <SquarePen size={14} />, shortcut: `${primaryShortcut}N`, action: handleNewChat },
+            { id: 'search', label: 'Search', icon: <Search size={14} />, shortcut: `${primaryShortcut}K`, action: commandPalette.open }
         ],
         [
-            ...(sidebarWorkspaceActive ? [{ id: 'sidebar', label: sidebarActionLabel, action: handleToggleSidebar }] : []),
-            { id: 'plugins', label: 'Plugins', action: () => navigate('/plugins') },
-            { id: 'settings', label: 'Settings', shortcut: isMac ? 'âŒ˜,' : undefined, action: () => navigate('/settings') },
-            { id: 'reload', label: 'Reload UI', shortcut: `${primaryShortcut}R`, action: () => window.location.reload() }
-        ],
-        [
-            { id: 'voice-lab', label: 'Instructor Voice Lab', action: () => navigate('/assistant/instructor') },
-            { id: 'about', label: 'About Zyra', action: () => navigate('/settings/about') }
-        ],
-        ...(nativeDesktop ? [[
-            { id: 'close', label: 'Close window', shortcut: closeShortcut, danger: true, action: handleClose }
-        ]] : [])
+            { id: 'plugins', label: 'Plugins', icon: <Puzzle size={14} />, action: () => navigate('/plugins') },
+            { id: 'settings', label: 'Settings', icon: <Settings2 size={14} />, shortcut: isMac ? 'âŒ˜,' : undefined, action: () => navigate('/settings') },
+            ...(!nativeDesktop ? [{ id: 'voice-lab', label: 'Voice Lab', icon: <AudioLines size={14} />, action: () => navigate('/assistant/instructor') }] : [])
+        ]
     ]
 
     const expandedSidebar = sidebarWorkspaceActive && !filePreviewFocusState.active && !sidebarCollapsed
@@ -355,11 +352,19 @@ export default function TitleBar() {
                         aria-haspopup="menu"
                         aria-expanded={appMenuOpen}
                     >
-                        <span>Zyra</span>
+                        <span
+                            title={`${runtimeConnection.label} · ${runtimeConnection.detail}`}
+                            aria-label={`Zyra · ${runtimeConnection.label} · ${runtimeConnection.detail}`}
+                            style={{ color: `var(--status-${runtimeConnection.tone})` }}
+                        >Zyra{runtimeConnection.state.installation?.kind === 'development' ? ' Dev' : ''}</span>
                         <ChevronDown size={11} className={cn('text-sparkle-text-muted transition-[color,transform] group-hover:text-sparkle-text-secondary', appMenuOpen && 'rotate-180 text-sparkle-text-secondary')} />
                     </button>
                     {appMenuOpen ? (
                         <AnchoredNativeOverlay><div className="absolute left-0 top-full z-[190] mt-1 w-[208px] overflow-hidden rounded-xl border border-[var(--surface-divider)] bg-[var(--surface-floating)] p-1 text-[13px] shadow-[0_18px_48px_rgba(0,0,0,0.28)] backdrop-blur-xl" role="menu">
+                            <div className="border-b border-[var(--surface-divider)] px-2.5 py-2 text-[11px] text-sparkle-text-muted" role="presentation">
+                                <div>{runtimeConnection.label} · {runtimeConnection.detail}</div>
+                                {runtimeConnection.state.instance ? <div className="mt-1 font-mono text-[10px] opacity-70" title="Connected instance">{runtimeConnection.state.instance.namespaceId.slice(0, 8)} / {runtimeConnection.state.instance.instanceId.slice(0, 8)}</div> : null}
+                            </div>
                             {appMenuGroups.map((group, groupIndex) => (
                                 <div key={group[0]?.id || groupIndex} className={cn(groupIndex > 0 && 'mt-1 border-t border-[var(--surface-divider)] pt-1')}>
                                     {group.map((item) => (
@@ -373,14 +378,24 @@ export default function TitleBar() {
                                             )}
                                             role="menuitem"
                                         >
+                                            <span className="inline-flex size-4 shrink-0 items-center justify-center">{item.icon}</span>
                                             <span className="min-w-0 flex-1 truncate">{item.label}</span>
                                             {item.shortcut ? <span className="shrink-0 text-[11px] text-sparkle-text-muted/75">{item.shortcut}</span> : null}
                                         </button>
                                     ))}
+                                    {groupIndex === 0 && nativeDesktop ? <AccessoriesMenu onVoiceLab={() => runAppMenuAction(() => navigate('/assistant/instructor'))} onOpen={input => {
+                                        setAppMenuOpen(false); setAccessoryError(null)
+                                        void openAccessory(input).then(result => { if (!result.success) setAccessoryError(result.error || 'Could not open Accessories.') })
+                                    }} /> : null}
+                                    {groupIndex === 1 ? <AppSubmenu label="View" icon={<PanelsTopLeft size={14} />} items={[
+                                        ...(sidebarWorkspaceActive ? [{ id: 'sidebar', label: sidebarActionLabel, icon: <SidebarIcon size={14} />, onSelect: () => runAppMenuAction(handleToggleSidebar) }] : []),
+                                        { id: 'reload', label: 'Reload UI', icon: <RotateCw size={14} />, onSelect: () => runAppMenuAction(() => window.location.reload()) }
+                                    ]} /> : null}
                                 </div>
                             ))}
                         </div></AnchoredNativeOverlay>
                     ) : null}
+                    {accessoryError ? <div role="alert" className="fixed left-3 top-12 z-[220] flex max-w-sm items-center gap-3 rounded-lg border border-[var(--surface-divider)] bg-[var(--surface-floating)] px-3 py-2 text-[12px] text-sparkle-text"><span>{accessoryError}</span><button type="button" aria-label="Dismiss accessory error" onClick={() => setAccessoryError(null)}><X size={13} /></button></div> : null}
                 </div>
             </div>
 

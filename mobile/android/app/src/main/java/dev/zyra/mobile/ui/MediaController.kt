@@ -33,6 +33,9 @@ class MediaController(private val app: Application, private val scope: Coroutine
         val cached = downloads.cached(machine, ref)
         return if (cached != null || ref.optLong("bytes") <= 512 * 1024) downloads.load(machine, session, ref, request) { _, _ -> } else null
     }
+    /** Called only while an attachment tile is in or near the viewport. */
+    suspend fun visibleThumbnail(machine: String, session: String, ref: JSONObject, request: suspend (String, JSONObject) -> JSONObject): File =
+        downloads.load(machine, session, ref, request) { _, _ -> }
     private var job: Job? = null
     suspend fun forget(machine: String) { close(); job?.join(); downloads.forget(machine) }
     fun close() { job?.cancel(); mutable.value = null }

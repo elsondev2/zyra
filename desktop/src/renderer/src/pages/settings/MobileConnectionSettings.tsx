@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
+import { useRuntimeConnection } from '@/lib/runtime-connection'
 import { Check, Copy, Loader2, Settings2, SlidersHorizontal, QrCode, RefreshCw, Smartphone, X } from 'lucide-react'
 import type { MobileAccessState, MobilePairing } from '@shared/mobile-access'
 import { mobileAccessError, mobilePairingCompleted, preferredMobileAddress } from '@shared/mobile-access-policy'
 import { SettingsButton, SettingsRow, SettingsSection } from './settings-layout'
 
+import { SensitiveSettingValue } from './SensitiveSettingValue'
 import { MobileAccessDialog } from './MobileAccessDialog'
 import { MobileDeviceAccessDialog } from './MobileDeviceAccessDialog'
 
 export function MobileConnectionSettings() {
     const api = window.devscope.mobileAccess
+    const runtimeConnection = useRuntimeConnection()
     const pairingPanel = useRef<HTMLDivElement>(null)
     const [state, setState] = useState<MobileAccessState | null>(null)
     const [address, setAddress] = useState('')
@@ -65,8 +68,8 @@ export function MobileConnectionSettings() {
         setPairing(await api.pair())
     })
     return <><SettingsSection title="Zyra on your phone" icon={<Smartphone size={15} />}>
-        <SettingsRow title="Continue from Android" description="Connect Android directly to this PC without another account."
-            status={state?.running ? 'Ready' : undefined} statusTone="ready"
+        <SettingsRow title="Continue from Android" description={`Connect Android to ${runtimeConnection.label} on this PC. ${runtimeConnection.detail}.`}
+            status={state?.running ? runtimeConnection.live ? 'Live' : 'Listening' : undefined} statusTone={runtimeConnection.live ? 'ready' : undefined}
             control={<><SettingsButton disabled={busy || !state || !api} onClick={() => void pair()}>{busy ? <Loader2 size={14} className="animate-spin" /> : <QrCode size={14} />}Pair phone</SettingsButton><SettingsButton variant="ghost" aria-label="Network settings" title="Network settings" disabled={!state || busy} onClick={() => setDialog(true)}><Settings2 size={16} /></SettingsButton></>} />
         {!state && !error ? <p className="px-4 pb-4 text-xs text-[var(--settings-text-secondary)]">Preparing mobile access…</p> : null}
         {error ? <div role="alert" className="flex items-center gap-3 px-4 py-3 text-sm text-[var(--status-danger)]"><span className="flex-1">{error}</span><SettingsButton onClick={() => void run(async () => { if (api) install(await api.getState()) })}>Retry</SettingsButton></div> : null}
@@ -85,6 +88,6 @@ export function MobileConnectionSettings() {
                 </div>
             </div>
         </div> : null}
-        {state?.devices.map(device => <div key={device.id} className="flex items-center gap-3 border-t border-[var(--settings-border)] px-4 py-3"><Smartphone size={16} /><div className="min-w-0 flex-1"><p className="truncate text-sm">{device.name}</p><p className="mt-0.5 text-[11px] text-[var(--settings-text-secondary)]">{device.connected ? "Connected · " : "Not connected · "}{device.hiddenProjects?.length ? "Custom project access" : "All projects"}</p></div><SettingsButton variant="ghost" aria-label={"Project access for " + device.name} title="Project access" disabled={busy} onClick={() => setDeviceDialog(device.id)}><SlidersHorizontal size={15} /></SettingsButton><SettingsButton variant="ghost" disabled={busy} onClick={() => void run(async () => { if (api) install(await api.revoke(device.id)) })}>Revoke access</SettingsButton></div>)}
+        {state?.devices.map(device => <div key={device.id} className="flex items-center gap-3 border-t border-[var(--settings-border)] px-4 py-3"><Smartphone size={16} /><div className="min-w-0 flex-1"><div className="min-w-0 text-sm"><SensitiveSettingValue value={device.name} label="Device name" /></div><p className="mt-0.5 text-[11px] text-[var(--settings-text-secondary)]">{device.connected ? "Connected · " : "Not connected · "}{device.hiddenProjects?.length ? "Custom project access" : "All projects"}</p></div><SettingsButton variant="ghost" aria-label="Project access for this device" title="Project access" disabled={busy} onClick={() => setDeviceDialog(device.id)}><SlidersHorizontal size={15} /></SettingsButton><SettingsButton variant="ghost" disabled={busy} onClick={() => void run(async () => { if (api) install(await api.revoke(device.id)) })}>Revoke access</SettingsButton></div>)}
     </SettingsSection>{dialog && state && api ? <MobileAccessDialog state={state} api={api} onClose={() => setDialog(false)} onSaved={next => { install(next); setPairing(null); setDialog(false) }} /> : null}{deviceDialog && state && api && state.devices.some(device => device.id === deviceDialog) ? <MobileDeviceAccessDialog device={state.devices.find(device => device.id === deviceDialog)!} api={api} onClose={() => setDeviceDialog(null)} onSaved={next => { install(next); setDeviceDialog(null) }} /> : null}</>
 }

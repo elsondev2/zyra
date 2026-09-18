@@ -1,11 +1,13 @@
-import { useCallback, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { NativeOverlayPortal, registerOverlayAnchor } from './native-overlay-portal'
 
 /** Keeps an inline overlay's original containing block when it moves to the native layer. */
-export function AnchoredNativeOverlay({ children, anchorRef, enabled = true, passive = false, autoFocus = true, onReady }: {
+export function AnchoredNativeOverlay({ children, anchorRef, enabled = true, passive = false, scoped = false, autoFocus = true, onReady }: {
     children: ReactNode
     enabled?: boolean
     passive?: boolean
+    /** Restrict native input interception to the anchor instead of the whole app. */
+    scoped?: boolean
     autoFocus?: boolean
     onReady?: (container: HTMLElement) => void
     anchorRef?: RefObject<HTMLElement | null>
@@ -16,7 +18,7 @@ export function AnchoredNativeOverlay({ children, anchorRef, enabled = true, pas
         releaseAnchor.current?.()
         releaseAnchor.current = node && marker.current ? registerOverlayAnchor(marker.current, node) : undefined
     }, [])
-    const [bounds, setBounds] = useState<CSSProperties | null>(null)
+    const [bounds, setBounds] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
     useLayoutEffect(() => {
         if (!enabled) return
         let anchor = anchorRef?.current || marker.current?.parentElement || null
@@ -63,6 +65,6 @@ export function AnchoredNativeOverlay({ children, anchorRef, enabled = true, pas
     if (!enabled) return <>{children}</>
     return <>
         <span ref={marker} hidden aria-hidden="true" />
-        {bounds && <NativeOverlayPortal passive={passive} autoFocus={autoFocus} onReady={onReady}><div ref={portalRef} style={{ position: 'fixed', pointerEvents: 'none', ...bounds }}><div style={{ display: 'contents', pointerEvents: 'auto' }}>{children}</div></div></NativeOverlayPortal>}
+        {bounds && <NativeOverlayPortal bounds={scoped ? { x: bounds.left, y: bounds.top, width: bounds.width, height: bounds.height } : null} passive={passive} autoFocus={autoFocus} onReady={onReady}><div ref={portalRef} style={{ position: 'fixed', pointerEvents: 'none', ...bounds }}><div style={{ display: 'contents', pointerEvents: 'auto' }}>{children}</div></div></NativeOverlayPortal>}
     </>
 }

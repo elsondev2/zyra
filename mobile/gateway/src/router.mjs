@@ -10,7 +10,7 @@ import { readReview, REVIEW_METHODS } from './review.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { assert, fault } from './errors.mjs';
-import { projectEvent, replayGap } from './projection.mjs';
+import { mobileEvent, projectEvent, replayGap } from './projection.mjs';
 const TERMINAL_METHODS = new Set(['terminal.list', 'terminal.create', 'terminal.attach', 'terminal.detach', 'terminal.input', 'terminal.resize', 'terminal.close', 'terminal.clear']);
 const VOICE_METHODS = new Set(['voice.status', 'voice.start', 'voice.stop', 'voice.ingest', 'voice.message', 'voice.recovery.begin', 'voice.recovery.chunk', 'voice.recovery.finish', 'voice.recovery.cancel']);
 const READS = new Set(['catalog.project', 'catalog.search', 'catalog.search.context', 'catalog.list', 'catalog.get', 'catalog.history', 'catalog.entry.body', 'catalog.tool-output.search', 'runtime.models']);
@@ -21,7 +21,7 @@ const ACTIONS = new Set(['prompt', 'abort', 'steer', 'follow_up', 'compact', 'cl
 const CONFIG = ['model', 'thinking', 'profile', 'runtimeMode', 'webSearch', 'webFetch'];
 const pick = (value, keys) => Object.fromEntries(keys.filter(key => value[key] !== undefined).map(key => [key, value[key]]));
 export class HostRouter {
-  constructor({ client, owner, cache, projects = [], allProjects = false, hiddenProjects = [], prepareChat, regenerateTitle, review, accountLimits, usage, resolveScope, searchChats, searchContext, projectPresentation, terminal, voice, plugins, uploads }) { this.client = client; this.owner = owner; this.cache = cache; this.projects = projects; this.allProjects = allProjects; this.hiddenProjects = hiddenProjects; this.attached = new Set(); this.prepareChat = prepareChat; this.regenerateTitle = regenerateTitle; this.review = review; this.accountLimits = accountLimits; this.usage = usage; this.searchChats = searchChats; this.searchContext = searchContext; this.projectPresentation = projectPresentation; this.terminal = terminal; this.voice = voice; this.plugins = plugins; this.uploads = uploads; this.files = new WorkspaceFiles({ projects, resolveScope, allProjects, hiddenProjects, allowsProject: project => this.allowsProject(project) }); }
+  constructor({ client, owner, cache, projects = [], allProjects = false, hiddenProjects = [], prepareChat, regenerateTitle, review, fleet, accountLimits, usage, resolveScope, searchChats, searchContext, projectPresentation, terminal, voice, plugins, uploads, runtimeStatus }) { this.client = client; this.owner = owner; this.cache = cache; this.projects = projects; this.allProjects = allProjects; this.hiddenProjects = hiddenProjects; this.attached = new Set(); this.prepareChat = prepareChat; this.regenerateTitle = regenerateTitle; this.review = review; this.fleet = fleet; this.accountLimits = accountLimits; this.usage = usage; this.searchChats = searchChats; this.searchContext = searchContext; this.projectPresentation = projectPresentation; this.terminal = terminal; this.voice = voice; this.plugins = plugins; this.uploads = uploads; this.runtimeStatus = runtimeStatus; this.files = new WorkspaceFiles({ projects, resolveScope, allProjects, hiddenProjects, allowsProject: project => this.allowsProject(project) }); }
   allowsProject(project) {
     const key = value => { const normalized = path.resolve(String(value || '.')); return process.platform === 'win32' ? normalized.toLowerCase() : normalized; };
     return !this.hiddenProjects.some(hidden => key(hidden) === key(project)) && (this.allProjects || this.projects.some(shared => key(shared) === key(project)));
@@ -145,8 +145,8 @@ export class HostRouter {
     }
     if (method === 'body.chunk') return this.cache.chunk(this.owner, params.id, params.offset);
     if (method === 'host.status') {
-      const status = await this.client.request('server.status');
-      return { version: 1, protocolVersion: status.version, sessions: status.sessions.filter(session => this.attached.has(session.sessionKey)), projects: await this.visibleProjects() };
+      const status = await this.client.request('server.status'), runtimeStatus = this.runtimeStatus?.();
+      return { version: 1, protocolVersion: status.version, sessions: status.sessions.filter(session => this.attached.has(session.sessionKey)), projects: await this.visibleProjects(), ...(runtimeStatus ? { runtimeStatus } : {}) };
     }
     if (READS.has(method)) {
       let safe = pick(params, ['session', 'query', 'before', 'ref', 'includeArchived', 'project']);
@@ -187,6 +187,7 @@ export class HostRouter {
       return this.cache.project(this.owner, { ...attached,
         liveMessage: attached.liveMessage ? this.cache.project(this.owner, this.cache.media.project(this.owner, attached.sessionKey, attached.liveMessage)) : null,
         pendingTools: (attached.pendingTools || []).map(event => projectEvent(event, this.owner, this.cache, attached.sessionKey)),
+        pendingOperations: (attached.pendingOperations || []).map(entry => mobileEvent({ ...entry, sessionKey: attached.sessionKey }, this.owner, this.cache)),
         connected: this.cache.project(this.owner, this.cache.media.project(this.owner, attached.sessionKey, attached.connected)),
         pendingAttention: (attached.pendingAttention || []).map(event => projectEvent(event, this.owner, this.cache, attached.sessionKey)),
         replay: [], snapshotVersion: 1,
@@ -240,13 +241,22 @@ export class HostRouter {
       if (params.type === 'configure') assert(Object.keys(payload).every(key => CONFIG.includes(key)), 'Unsupported configuration field.');
       if (params.type === 'preferences.get') assert(Object.keys(payload).length === 0, 'Chat preferences do not accept a scope override.');
       if (params.type === 'memory.configure') assert(Object.keys(payload).every(key => key === 'enabled') && typeof payload.enabled === 'boolean', 'Choose whether this chat can contribute to memory.');
+      const fleetRead = /^(agents|workflows)\.(list|listRuns|status|transcript)$/.test(params.type);
+      if (fleetRead) await this.assertChat(params.sessionKey);
       const turnId = 'mobile:' + operationId;
-      const result = await this.client.request(method, {
+      let result; let liveFailure;
+      try { result = await this.client.request(method, {
         sessionKey: params.sessionKey, type: params.type, payload: params.type === 'prompt' ? { ...payload, turnId } : params.type === 'user_input.respond' ? { ...payload, continue: true } : payload,
         // Desktop uses the origin to distinguish remote user messages from its
         // own optimistic echo. Derive it from the authenticated paired device.
         ...(['prompt', 'user_input.respond'].includes(params.type) ? { requestContext: { turnId, localThreadId: `mobile-device:${this.owner}` } } : {})
       });
+      } catch (error) { if (!fleetRead || !this.fleet) throw error; liveFailure = error; }
+      if (fleetRead && this.fleet) {
+        try { result = await this.fleet.read(params.sessionKey, params.type, payload, result); }
+        catch (error) { if (result == null) throw error; }
+      }
+      if (liveFailure && result == null) throw liveFailure;
       if (params.type === 'user_input.respond' && payload.cancelled !== true && result?.cancelled !== true && result?.continuation?.state !== 'completed') {
         throw fault('HOST_UPDATE_REQUIRED', 'The answer was received, but this PC needs a Zyra runtime restart to continue it. Open the chat on the PC.');
       }

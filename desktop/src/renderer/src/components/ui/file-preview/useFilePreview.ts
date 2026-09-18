@@ -271,6 +271,7 @@ export function useFilePreview(): UseFilePreviewReturn {
             startInEditMode: options?.startInEditMode === true,
             focusLine: requestedFocusLine,
             focusLineRequestId,
+            htmlLocation: previewTarget.type === 'html' && options?.htmlLocation ? { ...options.htmlLocation } : undefined,
             openNavigator: options?.openNavigator === true || previewTarget.type === 'directory',
             navigatorRevealRequestId: options?.revealNavigatorTarget === true
                 ? createPreviewNavigatorRevealRequestId()

@@ -7,6 +7,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class VoicePresentationTest {
+    @Test fun `live user and assistant rows already carry a display timestamp`() {
+        val view = VoicePresentation()
+        view.speech("spoken", "listening")
+        view.event(event("transcript.delta", "answer", "Ready", "assistant"))
+        for (entry in view.entries) {
+            val raw = JSONObject(VoiceTimeline.item(entry).raw.ifBlank { "{}" })
+            assertNotNull("Live ${entry.role} must not wait for its saved row to show time", dev.zyra.mobile.data.WorkActions.timestamp(raw))
+        }
+    }
+
     @Test fun `physical chunks become one logical turn and stay gone after canonical save`() {
         val view = VoicePresentation()
         fun chunk(id: String, words: String, role: String = "user") = view.event(event("transcript.delta", id, words, role).put("transcriptSource", "chunk"))
@@ -28,6 +38,47 @@ class VoicePresentationTest {
         view.reconcile(listOf(saved("saved-two", "turn-two", "Hello there."), saved("saved-answer", "assistant-turn", "Ready.", "assistant")))
         assertTrue(view.entries.isEmpty())
     }
+    @Test fun `utterance time is fixed from speech start across delayed transcription and recovery`() {
+        var clock = 1000L
+        val view = VoicePresentation { clock }
+        view.speech("spoken", "listening")
+        clock = 9000L; view.speech("spoken", "transcribing")
+        clock = 30000L; view.speech("spoken", "recovering")
+        clock = 45000L; view.event(event("transcript.delta", "spoken", "Long sentence"))
+        clock = 60000L; view.event(event("transcript.done", "spoken", "Long sentence."))
+        assertEquals(1000L, view.entries.single().startedAt)
+        assertEquals(1000L, dev.zyra.mobile.data.WorkActions.timestamp(JSONObject(VoiceTimeline.item(view.entries.single()).raw)))
+        view.interrupted(); assertEquals(1000L, view.entries.single().startedAt)
+    }
+
+    @Test fun `assistant chunks logical turns and typed replies retain their initial time`() {
+        var clock = 1000L
+        val view = VoicePresentation { clock }
+        view.event(event("transcript.delta", "chunk1", "First", "assistant").put("transcriptSource", "chunk"))
+        clock = 2000L
+        view.event(event("transcript.delta", "chunk2", " words", "assistant").put("transcriptSource", "chunk"))
+        clock = 5000L
+        view.event(event("transcript.done", "logical", "First words.", "assistant").put("transcriptSource", "turn"))
+        assertEquals(1000L, view.entries.single().startedAt)
+        clock = 8000L; view.event(event("transcript.delta", "next", "Next", "assistant").put("transcriptSource", "turn"))
+        assertEquals(8000L, view.entries.last().startedAt)
+        clock = 9000L; view.typed("typed", "Hello")
+        clock = 12000L; view.delivery("typed", "sent")
+        assertEquals(9000L, view.entries.last().startedAt)
+    }
+
+    @Test fun `canonical save replaces optimistic time without a second message`() {
+        val view = VoicePresentation { 1000L }
+        view.event(event("transcript.delta", "spoken", "Hello"))
+        val canonical = saved("saved", "spoken", "Hello").let { it.copy(raw = JSONObject(it.raw).apply {
+            getJSONObject("message").put("timestamp", 90000L)
+        }.toString()) }
+        assertEquals(1000L, dev.zyra.mobile.data.WorkActions.timestamp(JSONObject(VoiceTimeline.item(view.entries.single()).raw)))
+        assertTrue(VoiceTimeline.pending(listOf(canonical), view.entries).isEmpty())
+        assertEquals(90000L, dev.zyra.mobile.data.WorkActions.timestamp(JSONObject(canonical.raw)))
+        view.reconcile(listOf(canonical)); assertTrue(view.entries.isEmpty())
+    }
+
     private fun event(type: String, id: String, text: String, role: String = "user") = JSONObject().put("type", type).put("providerItemId", id).put("role", role).put(if (type.endsWith("delta")) "delta" else "text", text)
     private fun saved(canonical: String, provider: String, text: String, role: String = "user") = TimelineItem("message:$canonical", role, text,
         raw = JSONObject().put("message", JSONObject().put("zyraCanonicalMessage", JSONObject().put("canonicalMessageId", canonical).put("providerItemId", provider))).toString())

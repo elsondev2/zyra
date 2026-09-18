@@ -138,17 +138,18 @@ try {
     workers[0].emit('event', { type: 'message_update', message: { role: 'assistant', content: 'working' } })
     workers[0].finishPrompt({})
     await prompt
-    await waitUntil(() => events.length === 2)
-    assert.equal((events[0].event as { type: string }).type, 'message_update')
-    assert.equal(events[0].metadata?.turnId, 'turn:desktop-test')
-    assert.equal(events[0].metadata?.localThreadId, 'assistant-thread:desktop-test')
-    assert.equal((events[1].event as { type: string }).type, 'zyra_server_turn_completed')
-    assert.equal(secondEvents.length, 2, 'two local Desktop projections must receive the same canonical events')
+    await waitUntil(() => events.length === 3)
+    assert.equal((events[0].event as { type: string }).type, 'zyra_server_prompt_accepted', 'the accepted turn becomes visible before provider output')
+    assert.equal((events[1].event as { type: string }).type, 'message_update')
+    assert.equal(events[1].metadata?.turnId, 'turn:desktop-test')
+    assert.equal(events[1].metadata?.localThreadId, 'assistant-thread:desktop-test')
+    assert.equal((events[2].event as { type: string }).type, 'zyra_server_turn_completed')
+    assert.equal(secondEvents.length, 3, 'two local Desktop projections must receive the same canonical events')
 
     worker.dispose()
     assert.equal(workers[0].disposed, false, 'desktop detach must leave the server-owned worker alive')
     workers[0].emit('event', { type: 'message_update', message: { role: 'assistant', content: 'second projection remains' } })
-    await waitUntil(() => secondEvents.length === 3)
+    await waitUntil(() => secondEvents.length === 4)
     secondWorker.dispose()
     connection.close()
 
@@ -164,7 +165,7 @@ try {
         pluginSkillSources: [pluginSkillSourceV1]
     })
     reconnectWorker.flushReplay()
-    assert.equal(replay.length, 2, 'a persisted sequence watermark must skip already-projected events')
+    assert.equal(replay.length, 3, 'a persisted sequence watermark must skip the already-projected acceptance event')
     assert.equal(replay[0]?.replay, true)
     assert.equal(replay[0]?.turnId, 'turn:desktop-test')
     const latestSequence = reconnectWorker.latestSequence

@@ -1,21 +1,19 @@
 {
   "manifest_version": 3,
   "name": "Zyra Browser",
-  "version": "1.0.0",
-  "description": "Share selected Chrome tabs with Zyra. Explicit access, reliable input, and a connected app experience.",
+  "version": "1.1.1",
+  "description": "Chat with Zyra beside your current tab. Use your connected browser from Zyra Desktop.",
   "permissions": [
     "debugger",
     "tabs",
     "storage",
     "webNavigation",
-    "favicon"
-  ],
-  "optional_host_permissions": [
-    "http://127.0.0.1/*"
+    "favicon",
+    "sidePanel",
+    "alarms"
   ],
   "action": {
     "default_title": "Zyra Browser",
-    "default_popup": "popup.html",
     "default_icon": {
       "16": "icon16.png",
       "32": "icon32.png"
@@ -26,7 +24,7 @@
     "type": "module"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'none'; connect-src http://127.0.0.1:*; style-src 'self'; font-src 'self'; img-src 'self' data:; base-uri 'none'"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; connect-src 'self' blob: data: http://127.0.0.1:*; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: http://127.0.0.1:*; media-src 'self' blob: http://127.0.0.1:*; worker-src 'self'; base-uri 'none'"
   },
   "minimum_chrome_version": "125",
   "incognito": "not_allowed",
@@ -39,5 +37,12 @@
   "options_ui": {
     "page": "console.html",
     "open_in_tab": true
-  }
+  },
+  "host_permissions": [
+    "http://127.0.0.1/*"
+  ],
+  "side_panel": {
+    "default_path": "chat/extension.html"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw7xkH9yEPoUYFL/fphhtToyHy3FbU0hRhnQvuzjC4JUp2laXUkbQZVoa4HAjAwyvfWn7VYr6OI70S82XEMPBVq+IdoAvwUZnoi+ImchW+KaLSID5JkkgL/CuRZ2Mvi65XCO2mpsrq4w7QOCPdBcMEbpI3ylwEXElQeUCkrGzTfnzMqVGCeDYWl3xUIfrX10PKvQ7yGyWeyj/yGbBiT67KGKpDDL09NLmynOnFryFoAFTCIz0jbW9jRLO5pRiDjIXcVI2coOrqQp67SBzEWuEEjQo4wDSzOiWbyUZSQIKOVrXgOINlYA9O9vrG5kl2nP7w+btvONEdnqcmRzgqwnB3QIDAQAB"
 }

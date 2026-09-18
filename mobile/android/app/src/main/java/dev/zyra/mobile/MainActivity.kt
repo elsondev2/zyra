@@ -23,9 +23,14 @@ class MainActivity : ComponentActivity() {
         }
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); acceptIntent(intent) }
-    override fun onStart() { super.onStart(); session.foreground(true) }
+    override fun onStart() { super.onStart(); session.foreground(true); if (session.preferences.notifications.value) dev.zyra.mobile.notifications.ChatNotificationService.start(this) }
     override fun onStop() { session.foreground(false); super.onStop() }
     private fun acceptIntent(intent: Intent) {
+        if (intent.action == dev.zyra.mobile.notifications.ChatNotificationService.OPEN) {
+            val machine = intent.getStringExtra("machine").orEmpty(); val chat = intent.getStringExtra("chat").orEmpty()
+            getSystemService(android.app.NotificationManager::class.java).cancel("$machine:$chat", 1202)
+            session.openNotification(machine, chat)
+        }
         if (intent.action == Intent.ACTION_VIEW && intent.data?.scheme == "zyra") pairingLink.value = intent.data.toString()
         if (intent.action == Intent.ACTION_SEND && intent.type == "text/plain") session.setDraft(intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty())
     }

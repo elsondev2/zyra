@@ -11,6 +11,8 @@ import { BodyCache, MAX_FRAME_BYTES, mobileEvent } from './projection.mjs';
 import { HostRouter, isRead } from './router.mjs';
 import { assert, fault, publicError } from './errors.mjs';
 
+import { projectRuntimeStatus, mobileRuntimeStatus } from './runtime-status.mjs';
+
 export function createGateway(options) {
   const release = acquireHostLock(options.directory);
   try {
@@ -21,7 +23,8 @@ export function createGateway(options) {
     return gateway;
   } catch (error) { release(); throw error; }
 }
-function createGatewayRuntime({ tls, directory, projects, allProjects = false, hiddenProjects = [], name = 'Zyra', clientFactory, prepareChat, regenerateTitle, review, accountLimits, resolveScope, searchChats, searchContext, projectPresentation, terminalFactory, voiceFactory, pluginFactory }) {
+function createGatewayRuntime({ tls, directory, projects, allProjects = false, hiddenProjects = [], name = 'Zyra', clientFactory, prepareChat, regenerateTitle, review, fleet, accountLimits, resolveScope, searchChats, searchContext, projectPresentation, terminalFactory, voiceFactory, pluginFactory, runtimeStatus }) {
+  const readRuntimeStatus = () => { try { return projectRuntimeStatus(runtimeStatus?.()); } catch { return undefined; } };
   const usage = new UsageIndex({ directory });
   const devices = new DeviceStore(directory), ledger = new OperationLedger(directory), cache = new BodyCache(), uploads = new UploadStore(directory);
   const pruneCaches = setInterval(() => { cache.prune(); cache.media.prune(); }, 60000); pruneCaches.unref();
@@ -91,9 +94,13 @@ function createGatewayRuntime({ tls, directory, projects, allProjects = false, h
           if (voice) voiceSessions.set(ws, voice);
           plugins = pluginFactory?.(device, () => send({ type: 'plugins.changed' }));
           if (plugins) pluginSessions.set(ws, plugins);
-          router = new HostRouter({ client, owner: device.id, cache, projects, allProjects, hiddenProjects: [...hiddenProjects, ...(device.hiddenProjects || [])], prepareChat, regenerateTitle, review, accountLimits, usage, resolveScope, searchChats, searchContext, projectPresentation, terminal, voice, plugins, uploads });
+          router = new HostRouter({ client, owner: device.id, cache, projects, allProjects, hiddenProjects: [...hiddenProjects, ...(device.hiddenProjects || [])], prepareChat, regenerateTitle, review, fleet, accountLimits, usage, resolveScope, searchChats, searchContext, projectPresentation, terminal, voice, plugins, uploads, runtimeStatus: () => mobileRuntimeStatus(client.connectionStatus, readRuntimeStatus()) });
           connections.set(device.id, ws);
           client.on('session-event', event => send(mobileEvent(event, device.id, cache)));
+          client.on('runtime-status', event => {
+            const status = mobileRuntimeStatus(event, readRuntimeStatus());
+            if (status) send({ type: 'host.runtime-status', serverTime: Date.now(), ...status });
+          });
           client.on('catalog-changed', () => {
             if (catalogTimer) return;
             catalogTimer = setTimeout(() => { catalogTimer = null; send({ type: 'catalog.changed' }); }, 250);
@@ -101,8 +108,9 @@ function createGatewayRuntime({ tls, directory, projects, allProjects = false, h
           });
           client.on('disconnect', () => ws.close(1012, 'Host service disconnected'));
           clearTimeout(authTimer);
+          const initialRuntimeStatus = mobileRuntimeStatus(client.connectionStatus, readRuntimeStatus());
           send({ type: 'hello.ok', version: 1, serverTime: Date.now(), hostId: devices.state.hostId, name, projects: await router.visibleProjects(),
-            limits: { frameBytes: MAX_FRAME_BYTES, inlineBytes: 32768, historyPage: 60 },
+            ...(initialRuntimeStatus ? { runtimeStatus: initialRuntimeStatus } : {}), limits: { frameBytes: MAX_FRAME_BYTES, inlineBytes: 32768, historyPage: 60 },
             capabilities: ['chats', 'account-usage', ...(review?.details ? ['session-details'] : []), ...(regenerateTitle ? ['title-generation'] : []), ...(review ? ['turn-review'] : []), ...(accountLimits ? ['account-limits'] : []), 'approvals', 'questions', 'models', 'agents', 'workflows', 'lazy-bodies', 'image-uploads', 'project-images', 'file-links', 'files', 'file-move', 'git-review', ...(terminal ? ['terminal', ...(terminal.supportsSplit === true ? ['terminal-split'] : [])] : []), ...(voice ? ['voice', ...(voice.supportsDictation === true ? ['dictation'] : [])] : []), ...(plugins ? ['plugins', ...(plugins.supportsMachineScope === true ? ['plugins-machine'] : [])] : [])] });
           return;
         }

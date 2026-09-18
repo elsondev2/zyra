@@ -10,9 +10,9 @@ const desktopRoot = resolve(scriptDirectory, '..')
 const repoRoot = resolve(desktopRoot, '..')
 const accountServicePath = resolve(desktopRoot, 'src/main/assistant/zyra-account-service.ts')
 const accountServiceSource = readFileSync(accountServicePath, 'utf8')
-const authWorkerSource = readFileSync(resolve(repoRoot, 'src/desktop-openai-auth-worker.mjs'), 'utf8')
+const authWorkerSource = readFileSync(resolve(repoRoot, 'src/desktop-provider-worker.mjs'), 'utf8')
 const loaderSource = accountServiceSource.split('async function loadChatGptAccountModule()')[1].split('export class ZyraAccountService')[0]
-assert.match(loaderSource, /const \{ account \} = getSharedOpenAIAuthWorkerClient\(\)/, 'account reads must reuse the existing auth worker')
+assert.match(loaderSource, /const \{ account \} = getSharedProviderWorkerClient\(\)/, 'account reads must reuse the existing auth worker')
 assert.doesNotMatch(loaderSource, /import\(/, 'opening Account cannot import model runtime modules in Electron main')
 assert.match(authWorkerSource, /from "\.\/chatgpt-account\.mjs"/, 'the auth worker must load the dedicated account module')
 

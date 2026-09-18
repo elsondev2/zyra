@@ -1,7 +1,8 @@
+import { stripSidebarBrowserContext } from "./browser-context.mjs";
 // Display-only parsing of the legacy composer envelope. Never rewrite the
 // canonical message: the agent still needs these references and file contents.
 export function parseMessageAttachments(value) {
-  const original = String(value ?? '');
+  const original = stripSidebarBrowserContext(value);
   const fallback = { body: original, attachments: [] };
   const source = original.replace(/\r\n/g, '\n');
   const marker = /(?:^|\n\n)Attached files \((\d{1,3})\):\n/.exec(source);

@@ -1,9 +1,44 @@
 // @ts-nocheck
 import { POLL_INTERVAL_MS, PROTOCOL_VERSION, assertBoundedMessage } from './protocol.js'
+import { readConnectionIdentity } from './connection-identity'
 
 const SESSION_KEY = 'zyraPairingSessionV1'
 let polling = false
 let transportTail = Promise.resolve()
+
+export async function connectAutomatically({ clientOrigin: requestedOrigin, expectedNamespaceId } = {}) {
+  const saved = await chrome.storage.local.get(['browserInstanceId','browserName'])
+  const instanceId = saved.browserInstanceId || crypto.randomUUID().replace(/-/g, '')
+  const browserName = saved.browserName || `Chrome ${instanceId.slice(-4)}`
+  await chrome.storage.local.set({ browserInstanceId: instanceId, browserName })
+  let session, lastError
+  // Once a broker has been selected, reconnect only to that exact origin. A
+  // failed cached pairing must never cause an automatic prod/dev switch.
+  const candidates = requestedOrigin ? [requestedOrigin] : ['http://127.0.0.1:47821','http://127.0.0.1:47822']
+  for (const clientOrigin of candidates) {
+    try {
+      const response = await fetch(`${clientOrigin}/v1/extension/connect`, {
+        method:'POST', headers:{'x-zyra-browser-client-id':instanceId}, cache:'no-store', signal:AbortSignal.timeout(3000)
+      })
+      const value = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(value.error || 'Open the latest Zyra Desktop to connect this browser.')
+      if (!Number.isInteger(value.port) || !value.pairId || !value.token || !value.expiresAt || value.clientOrigin !== clientOrigin) throw new Error('Zyra returned an invalid browser connection.')
+      // Keep only installation metadata from the connection handshake. Its
+      // runtime phase/connection fields are descriptive, never liveness.
+      session = {
+        port: value.port, pairId: value.pairId, token: value.token, expiresAt: value.expiresAt, clientOrigin: value.clientOrigin, browserName,
+        ...readConnectionIdentity(value.runtimeStatus, expectedNamespaceId)
+      }
+      break
+    } catch (reason) {
+      // A missing app should not hide a useful response from the other app channel.
+      if (!(reason instanceof TypeError) && reason?.name !== 'TimeoutError') lastError = reason
+    }
+  }
+  if (!session) throw lastError || new Error('Waiting for Zyra Desktop. This browser will connect automatically when it opens.')
+  await chrome.storage.session.set({ [SESSION_KEY]: session })
+  return session
+}
 
 export async function pairWithZyra({ port, code }) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Enter the loopback port shown by Zyra.')
@@ -40,7 +75,7 @@ export async function sendEvent(event) {
 }
 
 let pollingGeneration = 0
-export function startPolling(handleRequest, handleDisconnect, handleAppearance) {
+export function startPolling(handleRequest, handleDisconnect, handleAppearance, handleConfirmed) {
   if (polling) return
   polling = true
   const generation = ++pollingGeneration
@@ -58,13 +93,20 @@ export function startPolling(handleRequest, handleDisconnect, handleAppearance) 
         if (!session) throw new Error('Pairing ended.')
         const result = await authenticatedPost(session, '/v1/poll', {})
         if (!current()) break
+        // A cached token only becomes a live connection after this authenticated
+        // broker response succeeds.
+        await handleConfirmed?.(session)
         if (result.appearance) handleAppearance?.(result.appearance)
         // Polling stays responsive to cancellation while a bounded input operation runs.
         for (const request of result.requests || []) void respond(session, request)
         await delay(POLL_INTERVAL_MS)
       }
-    } catch {
-      if (current()) { polling = false; await clearPairingSession(); await handleDisconnect?.().catch(() => undefined) }
+    } catch (error) {
+      if (current()) {
+        polling = false
+        await clearPairingSession()
+        await handleDisconnect?.(error).catch(() => undefined)
+      }
     } finally { if (generation === pollingGeneration) polling = false }
   })()
 }

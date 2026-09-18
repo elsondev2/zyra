@@ -11,6 +11,8 @@ const previousFetch = globalThis.fetch
 let requestedUrl = ''
 let eventRequestCount = 0
 let lastActionBody = ''
+let lastStreamController: ReadableStreamDefaultController<Uint8Array> | null = null
+const runtimeStatus = { phase: 'ready', connection: 'connected', lastConfirmedAt: new Date().toISOString() }
 
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     requestedUrl = String(input)
@@ -18,7 +20,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
         lastActionBody = String(init?.body || '')
         return new Response(JSON.stringify({
             ok: true,
-            value: { success: true, state: { active: false, grants: [], pendingGrants: [] } }
+            value: lastActionBody.includes('runtimeActivation') ? runtimeStatus : { success: true, state: { active: false, grants: [], pendingGrants: [] } }
         }), {
             status: 200,
             headers: { 'Content-Type': 'application/json; charset=utf-8' }
@@ -28,6 +30,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     const signal = init?.signal
     const stream = new ReadableStream<Uint8Array>({
         start(controller) {
+            lastStreamController = controller
             controller.enqueue(new TextEncoder().encode([
                 'data: {"event":"previewTerminal","payload":{"sessionId":"terminal:browser","type":"output","data":"hello"},"streamId":"stream:test","sequence":1}',
                 'data: {"event":"previewTerminal","payload":{"sessionId":"terminal:browser","type":"output","data":"duplicate"},"streamId":"stream:test","sequence":1}',
@@ -48,6 +51,10 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
 let guestConfigFallbackCalls = 0
 let guestBindFallbackCalls = 0
 const base = {
+    runtimeActivation: {
+        getState: async () => ({ phase: 'idle' as const }),
+        onStateChange: () => () => undefined
+    },
     onPreviewTerminalEvent: () => () => undefined,
     agentControl: {
         getState: async () => ({ success: false as const, error: 'Agent control requires Desktop.' }),
@@ -66,6 +73,9 @@ const base = {
 const adapter = createLiveBrowserDevscopeAdapter(base)
 
 try {
+    assert.notEqual(adapter.runtimeActivation, base.runtimeActivation, 'browser clients relay real runtime status instead of an idle stub')
+    assert.deepEqual(await adapter.runtimeActivation.getState(), runtimeStatus)
+    assert.ok(lastActionBody.includes('runtimeActivation'))
     const projectedFileUrl = projectLocalFileUrl('zyra:///C:/workspace/preview image.png')
     assert.equal(projectedFileUrl.includes('/v1/files/content?source='), true)
     assert.equal(decodeURIComponent(projectedFileUrl).includes('zyra:///C:/workspace/preview image.png'), true)
@@ -109,7 +119,21 @@ try {
     assert.equal(guestBindFallbackCalls, 1, 'Electron guest binding must remain gated in Chrome')
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    console.log('Browser DevScope live adapter: ok')
+    let unsubscribeRuntime = () => {}
+    const disconnected = new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Runtime relay did not report transport loss')), 2000)
+        unsubscribeRuntime = adapter.runtimeActivation.onStateChange(state => {
+            if (state.connection === 'connected') queueMicrotask(() => lastStreamController?.close())
+            if (state.connection === 'disconnected') {
+                clearTimeout(timeout)
+                assert.equal(state.phase, 'failed')
+                unsubscribeRuntime()
+                resolve()
+            }
+        })
+    })
+    await disconnected
+    console.log('Browser DevScope live adapter: real runtime status and disconnected stream recovery: ok')
 } finally {
     globalThis.fetch = previousFetch
     if (previousWindow) globalWithWindow.window = previousWindow

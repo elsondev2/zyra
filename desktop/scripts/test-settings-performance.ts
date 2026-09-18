@@ -60,7 +60,7 @@ try {
     assert.equal(modelRequests, 5, 'the post-invalidation generation performs its own model request')
     assert.equal(currentModels[0]?.id, 'model:current-account', 'stale model results cannot repopulate the current account cache')
 
-    const accountSource = readFileSync(new URL('../src/renderer/src/pages/settings/AccountSettings.tsx', import.meta.url), 'utf8')
+    const accountSource = readFileSync(new URL('../src/renderer/src/pages/settings/providers/useOpenAIAccountSettings.ts', import.meta.url), 'utf8')
     const connectionLoadSource = accountSource.split('const loadConnectionState')[1]?.split('const applyAccountOverview')[0] || ''
     assert.doesNotMatch(connectionLoadSource, /listModels/, 'opening Account cannot discover models as an unrelated side effect')
     assert.match(accountSource, /ACCOUNT_POLL_INTERVAL_MS = 60_000/, 'Account polling uses a quiet one-minute cadence')

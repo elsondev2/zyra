@@ -1,9 +1,10 @@
 import { MobileTerminalAccess } from './mobile-terminal-access'
 import { MobileVoiceAccess } from './mobile-voice-access'
 import { MobilePluginAccess } from './mobile-plugin-access'
+import { MobileFleetAccess } from './mobile-fleet-access'
 import { MobileReviewAccess } from './mobile-review-access'
 import { MobileProjectPresentations } from './mobile-project-presentation'
-import { preferredMobileAddress } from '../shared/mobile-access-policy'
+import { mobileListenerPort, preferredMobileAddress } from '../shared/mobile-access-policy'
 import { readFile, mkdir, rename, writeFile, realpath, stat } from 'node:fs/promises'
 import { networkInterfaces, hostname } from 'node:os'
 import { basename, join } from 'node:path'
@@ -13,6 +14,7 @@ import type { Gateway, MobileHostClient } from '../../../mobile/gateway/src/desk
 import { resolveZyraRoot } from './zyra/zyra-root'
 import { resolveDesktopAgentServerNamespace } from './assistant/zyra-agent-server-worker'
 import type { AssistantService } from './assistant/service'
+import { readRuntimeActivation } from './assistant/runtime-activation'
 
 export class MobileAccessManager {
     private config: MobileAccessConfig = { enabled: false, address: '', projects: [] }
@@ -41,7 +43,7 @@ export class MobileAccessManager {
     async state(): Promise<MobileAccessState> {
         const { DeviceStore } = await import('../../../mobile/gateway/src/desktop-entry.mjs')
         return { defaultProject: this.defaultProject, config: { ...this.config, address: preferredMobileAddress(this.addresses(), this.config.address), projects: this.config.projects.length ? [...this.config.projects] : [this.defaultProject] }, running: !!this.gateway,
-            origin: this.origin, addresses: this.addresses(), devices: new DeviceStore(this.directory).list().map(device => ({ ...device, connected: this.gateway?.connectedDeviceIds().includes(device.id) || false })), error: this.failure }
+            runtimeStatus: readRuntimeActivation(), origin: this.origin, addresses: this.addresses(), devices: new DeviceStore(this.directory).list().map(device => ({ ...device, connected: this.gateway?.connectedDeviceIds().includes(device.id) || false })), error: this.failure }
     }
     private get defaultProject() { return join(this.userData, 'assistant', 'global-workspace') }
     async restore(): Promise<void> {
@@ -58,9 +60,16 @@ export class MobileAccessManager {
                     await writeFile(join(this.directory, 'settings.json.tmp'), JSON.stringify(this.config), { mode: 0o600 })
                     await rename(join(this.directory, 'settings.json.tmp'), join(this.directory, 'settings.json'))
                 }
-                if (this.config.enabled) await this.start()
+                if (this.config.enabled) {
+                    await this.start()
+                    await writeFile(join(this.directory, 'settings.json.tmp'), JSON.stringify(this.config), { mode: 0o600 })
+                    await rename(join(this.directory, 'settings.json.tmp'), join(this.directory, 'settings.json'))
+                }
             } catch (error) {
-                if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.failure = error instanceof Error ? error.message : 'Mobile access could not start.'
+                if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+                    await this.stopNow()
+                    this.failure = error instanceof Error ? error.message : 'Mobile access could not start.'
+                }
             }
         })
     }
@@ -81,7 +90,7 @@ export class MobileAccessManager {
             }
             if (input.enabled && projects.length === 0) throw new Error('Choose at least one folder to share.')
             await this.stopNow()
-            this.config = { enabled: input.enabled, address, projects }
+            this.config = { enabled: input.enabled, address, projects, ...(this.config.port ? { port: this.config.port } : {}) }
             this.failure = undefined
             try {
                 if (input.enabled) await this.start()
@@ -129,9 +138,11 @@ export class MobileAccessManager {
         // Starting Desktop's normal runtime preserves its saved chat scope and plugin authority.
         await this.service().getStatus()
         const gateway = createGateway({ tls, directory: this.directory, projects: this.config.projects, allProjects: true, name: hostname(),
+            runtimeStatus: readRuntimeActivation,
             prepareChat: id => this.service().prepareMobileChat(id),
             regenerateTitle: id => this.service().regenerateMobileChatTitle(id),
             review: new MobileReviewAccess(this.service),
+            fleet: new MobileFleetAccess(this.service),
             accountLimits: async () => (await this.service().getAccountLimitsOverview()).overview,
             resolveScope: id => this.service().getMobileFilesystemContext(id),
             searchChats: input => this.service().searchMobileChats(input),
@@ -142,7 +153,8 @@ export class MobileAccessManager {
             pluginFactory: (_device, changed) => new MobilePluginAccess(this.service(), changed),
             clientFactory })
         try {
-            const address = await gateway.listen(this.config.address, 47321)
+            const address = await gateway.listen(this.config.address, mobileListenerPort(this.config.port, readRuntimeActivation().installation?.kind === 'development'))
+            this.config.port = address.port
             this.gateway = gateway; this.tls = tls; this.origin = 'https://' + this.config.address + ':' + address.port
         } catch (error) { await gateway.close(); throw error }
     }

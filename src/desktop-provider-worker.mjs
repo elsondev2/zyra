@@ -1,4 +1,5 @@
 import { readRoleModels, saveRoleModel } from "./agents/role-model-preferences.mjs";
+import { readDelegationPreferences, saveDelegationPreferences, delegationSettingsSnapshot } from "./agents/delegation-preferences.mjs";
 import { connectModelProvider, listModelProviders, disconnectModelProvider } from "./provider-connections.mjs";
 import { parentPort } from "node:worker_threads";
 import {
@@ -24,6 +25,8 @@ function messageFor(error) {
 
 async function execute(message) {
   switch (message.operation) {
+    case "readDelegationPreferences": return delegationSettingsSnapshot(readDelegationPreferences());
+    case "saveDelegationPreferences": return delegationSettingsSnapshot(await saveDelegationPreferences(message.input));
     case "readRoleModels": return readRoleModels();
     case "saveRoleModel": return saveRoleModel(message.input);
     case "disconnectModelProvider": return disconnectModelProvider(message.provider);

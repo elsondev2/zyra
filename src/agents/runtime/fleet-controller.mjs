@@ -1,4 +1,6 @@
 import { readRoleModels } from "../role-model-preferences.mjs";
+import { readDelegationPreferences } from "../delegation-preferences.mjs";
+import { buildDelegationModelOptions } from "../delegation-model-options.mjs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { assertControlCapabilities, assertControlIdentifier, assertControlPrincipal } from "../../agent-control/contracts.mjs";
@@ -6,7 +8,7 @@ import { attenuateAgentCapabilities, assertNoControlCapabilities } from "../capa
 import { normalizeAgentRun, TERMINAL_AGENT_STATES } from "../contracts.mjs";
 import { discoverAgentDefinitions } from "../definition-loader.mjs";
 import { FleetEventStore } from "../event-store.mjs";
-import { buildFleetModelCatalog } from "../model-catalog.mjs";
+import { buildFleetModelCatalog, buildFleetModelCatalogAsync } from "../model-catalog.mjs";
 import { ModelRouter } from "../model-router.mjs";
 import { scanChildOutput } from "../output-scanner.mjs";
 import { AgentRunner } from "./agent-runner.mjs";
@@ -22,6 +24,9 @@ export class AgentFleetController {
     this.project = path.resolve(options.project ?? process.cwd());
     this.rootSession = options.rootSession;
     this.readRoleModels = options.readRoleModels ?? readRoleModels;
+    this.readDelegationPreferences = options.readDelegationPreferences ?? readDelegationPreferences;
+    this.modelRegistry = options.modelRegistry ?? this.rootSession?.modelRegistry;
+    this.modelCatalogOptions = options.modelCatalogOptions;
     this.rootSessionId = String(options.rootSessionId ?? this.rootSession?.sessionManager?.getSessionId?.() ?? randomUUID());
     this.rootThreadId = String(options.rootThreadId ?? this.rootSessionId);
     this.fleetId = String(options.fleetId ?? randomUUID());
@@ -106,6 +111,20 @@ export class AgentFleetController {
     });
     await this.emit("definitions.changed", { revision: this.snapshot().definitionsRevision + 1, count: this.definitions.active.length });
     return this.definitions;
+  }
+
+  async delegationModelOptions(request = {}) {
+    this.assertUsable();
+    if (this.modelRegistry) {
+      this.modelCatalog = await buildFleetModelCatalogAsync(this.modelRegistry, this.modelCatalogOptions);
+      this.modelRouter.setCatalog?.(this.modelCatalog);
+    }
+    return buildDelegationModelOptions(this.modelCatalog, this.readDelegationPreferences(), {
+      provider: request.provider,
+      modelQuery: request.modelQuery,
+      limit: request.limit,
+      inheritModel: this.rootSession?.model,
+    });
   }
 
   previewRoute(request = {}) {

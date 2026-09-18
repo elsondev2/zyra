@@ -54,6 +54,7 @@ import {
     handleAssistantGetSkillSourceOverview,
     handleAssistantHydrateHistoryBody,
     handleAssistantGetReviewIndex,
+    handleAssistantGetUsageSummary,
     handleAssistantGetSessionTurnUsage,
     handleAssistantGetThreadDetailBootstrap,
     handleAssistantGetVoiceTranscriptionState,
@@ -409,6 +410,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow, setupServices: De
     ipcMain.handle(ASSISTANT_IPC.getStatus, requireCompletedSetup(handleAssistantGetStatus))
     ipcMain.handle(ASSISTANT_IPC.getAccountOverview, requireCompletedSetup(handleAssistantGetAccountOverview))
     ipcMain.handle(ASSISTANT_IPC.redeemAccountReset, requireCompletedSetup(handleAssistantRedeemAccountReset))
+    ipcMain.handle(ASSISTANT_IPC.getUsageSummary, requireCompletedSetup(handleAssistantGetUsageSummary))
     ipcMain.handle(ASSISTANT_IPC.getSessionTurnUsage, requireCompletedSetup(handleAssistantGetSessionTurnUsage))
     ipcMain.handle(ASSISTANT_IPC.listModels, requireCompletedSetup(handleAssistantListModels))
     ipcMain.handle(ASSISTANT_IPC.listProjects, requireCompletedSetup(handleAssistantListProjects))

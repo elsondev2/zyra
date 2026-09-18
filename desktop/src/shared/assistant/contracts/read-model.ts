@@ -127,6 +127,7 @@ export interface AssistantLatestTurn {
 export type AssistantThreadSource = 'root' | 'subagent' | 'other'
 
 export interface AssistantSessionTurnUsageEntry {
+    canonicalThreadId?: string | null
     id: string
     sessionId: string
     threadId: string

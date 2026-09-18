@@ -57,7 +57,7 @@ const BOOLEAN_KEYS = new Set<string>([
     'filePreviewFullscreenShowLeftPanel', 'filePreviewFullscreenShowRightPanel',
     'assistantBrowserRestoreTabs', 'assistantBrowserGoogleSuggestions', 'assistantBrowserAdBlockEnabled',
     'assistantBrowserAdBlockPromptDismissed', 'assistantAutoReconnect', 'assistantHistoryPrefetch',
-    'assistantShowActionStats', 'assistantShowStatusDetails', 'assistantShowDiagnostics', 'assistantTranscriptionEnabled'
+    'assistantAllowCollapseWhileWorking', 'assistantShowActionStats', 'assistantShowStatusDetails', 'assistantShowDiagnostics', 'assistantTranscriptionEnabled'
 ])
 
 const STRING_LIMITS: Record<string, number> = {

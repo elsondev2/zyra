@@ -26,6 +26,9 @@ fun workSegments(group: ChatRailRow.Work, showThoughtProcesses: Boolean, showQue
     return result
 }
 
-fun workSegmentTitle(actions: List<WorkAction>): String =
-    actions.asReversed().firstNotNullOfOrNull { it.batch?.takeIf(String::isNotBlank) }
-        ?: (actions.lastOrNull { it.item.pending } ?: actions.lastOrNull())?.title.orEmpty()
+fun workSegmentTitle(actions: List<WorkAction>): String = workSegmentTitle(actions, running = true)
+
+fun workSegmentTitle(actions: List<WorkAction>, running: Boolean): String =
+    actions.lastOrNull { running && it.item.pending }?.title
+        ?: actions.asReversed().firstNotNullOfOrNull { it.batch?.takeIf(String::isNotBlank) }
+        ?: actions.lastOrNull()?.title.orEmpty()

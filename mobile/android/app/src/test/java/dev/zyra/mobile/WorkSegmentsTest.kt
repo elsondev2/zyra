@@ -5,6 +5,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WorkSegmentsTest {
+    @Test fun `active action overrides intent until the action settles`() {
+        val first = WorkActions.project(tool("one", "bash", "Verify the change"))
+        val active = WorkActions.project(tool("two", "read", "Verify the change").copy(pending = true))
+        assertEquals(active.title, workSegmentTitle(listOf(first, active)))
+        assertEquals("Verify the change", workSegmentTitle(listOf(first, active), running = false))
+        assertEquals("Verify the change", workSegmentTitle(listOf(first, active.copy(item = active.item.copy(pending = false)))))
+    }
     private fun tool(id: String, name: String, intent: String? = null) = TimelineItem("tool:$id", "tool", "$name\nresult", "tool",
         raw = org.json.JSONObject().put("toolName", name).put("actionBatchIntent", intent).toString())
     @Test fun `mixed actions separated by invisible call envelopes form one run`() {

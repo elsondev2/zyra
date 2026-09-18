@@ -141,7 +141,7 @@ export function mergeAssistantShellSnapshot(
                     proposedPlans: retained?.proposedPlans || [],
                     activities: retained?.activities || [],
                     pendingApprovals: thread.hasPendingApprovals ? retained?.pendingApprovals || [] : [],
-                    pendingUserInputs: thread.hasPendingUserInputs ? retained?.pendingUserInputs || [] : []
+                    pendingUserInputs: thread.hasPendingUserInputs ? retained?.pendingUserInputs || [] : (retained?.pendingUserInputs || []).filter(input => input.status !== 'pending')
                 }
             })
         }))

@@ -67,6 +67,7 @@ export function createAssistantAdapter() {
             getAccountOverview: (forceRefresh = false) => ipcRenderer.invoke(ASSISTANT_IPC.getAccountOverview, forceRefresh),
             redeemAccountReset: (input: AssistantRedeemAccountResetInput) =>
                 ipcRenderer.invoke(ASSISTANT_IPC.redeemAccountReset, input),
+            getUsageSummary: (input?: import('../../shared/assistant/usage-summary').UsageSummaryInput) => ipcRenderer.invoke(ASSISTANT_IPC.getUsageSummary, input),
             getSessionTurnUsage: (input?: { sessionId?: string }) => ipcRenderer.invoke(ASSISTANT_IPC.getSessionTurnUsage, input),
             listModels: (forceRefresh = false) => ipcRenderer.invoke(ASSISTANT_IPC.listModels, forceRefresh),
             listProjects: () => ipcRenderer.invoke(ASSISTANT_IPC.listProjects),

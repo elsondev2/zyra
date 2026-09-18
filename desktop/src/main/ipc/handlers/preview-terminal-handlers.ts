@@ -8,6 +8,7 @@ import type {
     DevScopePreviewTerminalWorkspaceOwner
 } from '../../../shared/contracts/devscope-api'
 import { getAugmentedEnv } from '../../inspectors/safe-exec'
+import { desktopTerminalEnvironment } from '../../assistant/agent-server-namespace'
 import {
     PreviewTerminalWorkspaceRegistry,
     previewTerminalEventChannel,
@@ -316,6 +317,13 @@ function removeSession(sessionKey: string): void {
     previewTerminalSessions.delete(sessionKey)
 }
 
+export function disposePreviewTerminalRuntime(runtimeId: string): void {
+    const scopeKey = `workspace:${runtimeId}`
+    for (const session of [...previewTerminalSessions.values()]) {
+        if (session.scopeKey === scopeKey) removeSession(session.key)
+    }
+}
+
 export async function handleRegisterPreviewTerminalWorkspace(
     event: Electron.IpcMainInvokeEvent,
     owner: DevScopePreviewTerminalWorkspaceOwner
@@ -432,6 +440,7 @@ export async function handleCreatePreviewTerminal(
             rows,
             env: {
                 ...getAugmentedEnv(),
+                ...desktopTerminalEnvironment(),
                 TERM: 'xterm-256color',
                 COLORTERM: 'truecolor',
                 FORCE_COLOR: '1'

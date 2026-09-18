@@ -18,6 +18,10 @@ export function getAgentServerStateDirectory(options = {}) {
 export function getAgentServerPaths(options = {}) {
   const channel = normalizeAgentServerChannel(options.channel);
   const stateDirectory = getAgentServerStateDirectory(options);
+  const namespaceId = createHash("sha256")
+    .update(`${process.platform === 'win32' ? stateDirectory.toLowerCase() : stateDirectory}\0${channel}`)
+    .digest("hex")
+    .slice(0, 20);
   const identity = createHash("sha256")
     .update(`${os.homedir()}\0${stateDirectory}\0${channel}\0v${AGENT_SERVER_PROTOCOL_VERSION}`)
     .digest("hex")
@@ -28,6 +32,7 @@ export function getAgentServerPaths(options = {}) {
   return {
     channel,
     stateDirectory,
+    namespaceId,
     endpoint,
     descriptorFile: path.join(stateDirectory, `agent-server-v${AGENT_SERVER_PROTOCOL_VERSION}-${channel}.json`),
     // One channel-wide owner lock prevents different protocol generations from

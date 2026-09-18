@@ -4,6 +4,27 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class QuestionResponsesTest {
+    @Test fun `answered card survives cache restore and canonical history reload`() {
+        val questions = org.json.JSONArray("""[{"id":"q","header":"Style","question":"Which style?","type":"text"}]""")
+        val answers = org.json.JSONObject().put("q", "Paper\nwith soft borders")
+        val prompt = "Here are my answers:\n\n- Style: Paper\n- with soft borders"
+        val receipt = TimelineItem("receipt", "system", "", "resolved", org.json.JSONObject()
+            .put("type", "user_input_resolved").put("questions", questions).put("answers", answers).toString())
+        val message = org.json.JSONObject().put("id", "answer").put("role", "user").put("content", prompt)
+        val user = TimelineItem("message:answer", "user", prompt, raw = org.json.JSONObject().put("message", message).toString())
+        val live = SessionView("chat", items = listOf(receipt, user))
+        val expected = listOf(QuestionAnswer("Which style?", "Paper\nwith soft borders"))
+        assertEquals(expected, QuestionResponses.project(live.items)[user.id])
+        val restored = TimelineReducer.decode(TimelineReducer.encode(live))
+        assertEquals(expected, QuestionResponses.project(restored.items)[user.id])
+        val toolResult = org.json.JSONObject().put("role", "toolResult").put("toolName", "request_user_input")
+            .put("toolCallId", "question").put("content", "Answered")
+            .put("details", org.json.JSONObject().put("questions", questions).put("answers", answers))
+        val entries = org.json.JSONArray().put(org.json.JSONObject().put("type", "message").put("message", toolResult))
+            .put(org.json.JSONObject().put("type", "message").put("message", message))
+        val history = TimelineReducer.history("chat", org.json.JSONObject().put("entries", entries))
+        assertEquals(expected, QuestionResponses.project(history.items)[user.id])
+    }
     @Test fun `legacy labels and numbered fallback match canonical continuation`() {
         val requested = TimelineItem("q", "system", "", raw = """{"type":"user_input_requested","questions":[{"id":"a","label":"Color","prompt":"Which color?"},{"id":"b","prompt":"Which layout?"}]}""")
         val user = TimelineItem("a", "user", "Here are my answers:\n\n- Color: Paper\n- Question 2: Compact")

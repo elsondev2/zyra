@@ -16,7 +16,7 @@ export function FileActionsMenuSecondaryAction({ action, onClose }: {
                 onClose()
                 void action.onSelect()
             }}
-            className="flex w-7 shrink-0 items-center justify-center rounded-r-[4px] border-l border-[var(--surface-divider)] text-sparkle-text-muted transition-colors hover:bg-[var(--surface-hover)] hover:text-sparkle-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-text-muted)] disabled:cursor-not-allowed disabled:opacity-35"
+            className="flex w-7 shrink-0 items-center justify-center rounded-r-[4px] text-sparkle-text-muted transition-colors hover:text-sparkle-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-text-muted)] disabled:cursor-not-allowed disabled:opacity-35"
         >
             {action.icon}
         </button>

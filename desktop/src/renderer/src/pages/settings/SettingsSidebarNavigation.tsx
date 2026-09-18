@@ -22,7 +22,7 @@ export function SettingsSidebarNavigation({ hidden = false, preloadRoute }: Sett
             <div className="space-y-px">
                 {getSettingsCategoryDestinations(category.id).map(destination => {
                     const Icon = destination.icon
-                    const active = activeDestination?.id === destination.id
+                    const active = (activeDestination?.parentId || activeDestination?.id) === destination.id
                     return <Link key={destination.id}
                         ref={active ? activeLinkRef : undefined}
                         to={destination.to}
@@ -31,7 +31,7 @@ export function SettingsSidebarNavigation({ hidden = false, preloadRoute }: Sett
                         onPointerDown={() => preloadRoute(destination.to)}
                         onFocus={() => preloadRoute(destination.to)}
                         className={cn(
-                            'group flex min-h-[30px] min-w-0 items-center gap-2 rounded-md px-2 text-[12px] transition-colors duration-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--accent-primary)]',
+                            'zyra-settings-nav-link group flex min-h-[30px] min-w-0 items-center gap-2 rounded-md px-2 text-[12px] transition-colors duration-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--accent-primary)]',
                             active ? 'bg-[var(--settings-nav-active)] font-medium text-[var(--settings-text)]' : 'text-[var(--settings-text-secondary)] hover:bg-[var(--settings-nav-hover)] hover:text-[var(--settings-text)]'
                         )}>
                         <Icon size={14} strokeWidth={active ? 1.9 : 1.7} className={cn('shrink-0', active ? 'text-[var(--settings-text-secondary)]' : 'text-[var(--settings-text-faint)] group-hover:text-[var(--settings-text-secondary)]')} />

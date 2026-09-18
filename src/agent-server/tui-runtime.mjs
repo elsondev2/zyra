@@ -120,6 +120,7 @@ export async function createZyraTuiClientRuntime(options = {}) {
   let latestSequence = 0;
   let currentPresence = asRecord(attached.presence);
   let activeTurnId = asString(asRecord(attached.activeRequestContext)?.turnId) || activeTurnFromPresence(currentPresence);
+  let settledTurnId = currentPresence?.latestTurn?.state !== "running" ? asString(currentPresence?.latestTurn?.id) : null;
   let remotelyAttached = true;
   let reconnectDetached = () => Promise.resolve();
   let systemPrompt = "";
@@ -181,7 +182,10 @@ export async function createZyraTuiClientRuntime(options = {}) {
     // Replay rebuilds transcript/UI state only. Live turn ownership comes from
     // authoritative attach presence; otherwise a historical post-agent_end event
     // carrying the old request context can resurrect a completed turn locally.
-    if (!replay && requestContext?.turnId && event.type !== "zyra_server_turn_completed") {
+    // Post-answer maintenance retains its request context for attribution. It
+    // cannot reopen the completed response while compaction finishes.
+    if (!replay && requestContext?.turnId && requestContext.turnId !== settledTurnId
+      && event.type !== "zyra_server_turn_completed" && event.type !== "agent_settled") {
       activeTurnId = requestContext.turnId;
       currentPresence = {
         ...(currentPresence || {}),
@@ -190,6 +194,7 @@ export async function createZyraTuiClientRuntime(options = {}) {
       };
     }
     if (!replay && (event.type === "zyra_server_turn_completed" || (event.type === "agent_end" && event.willRetry !== true))) {
+      settledTurnId = requestContext?.turnId || activeTurnId || settledTurnId;
       if (!requestContext?.turnId || requestContext.turnId === activeTurnId) activeTurnId = null;
       currentPresence = {
         ...(currentPresence || {}),
@@ -296,6 +301,9 @@ export async function createZyraTuiClientRuntime(options = {}) {
   };
   client.on("session-event", onServerEvent);
   client.on("disconnect", onDisconnect);
+  client.on("runtime-status", (status) => {
+    for (const listener of eventListeners) listener({ type: "zyra_runtime_status", status });
+  });
   client.off("session-event", captureEarlyServerEvent);
   const initialEntries = [
     ...(Array.isArray(attached.replay) ? attached.replay.map((entry) => ({ entry, replay: true })) : []),
@@ -313,6 +321,7 @@ export async function createZyraTuiClientRuntime(options = {}) {
     const remoteTurnId = activeTurnFromPresence(presence);
     if (remoteTurnId) activeTurnId = remoteTurnId;
     else if (["ready", "idle", "completed", "failed", "interrupted"].includes(asString(presence.state))) {
+      settledTurnId = asString(presence.latestTurn?.id) || activeTurnId || settledTurnId;
       activeTurnId = null;
       queueMicrotask(() => { void drainUserInputContinuations(); });
     }
@@ -763,6 +772,7 @@ export async function createZyraTuiClientRuntime(options = {}) {
     },
     agentServer: {
       client,
+      connectionStatus: () => client.connectionStatus,
       canonicalChatId,
       activeTurnId: () => activeTurnId,
       presence: () => currentPresence,
@@ -875,6 +885,10 @@ function updateMessages(messages, event) {
   let index = id ? messages.findIndex((message) => message?.id === id) : -1;
   if (index < 0 && event.type !== "message_start" && incoming.role) {
     for (let candidate = messages.length - 1; candidate >= 0; candidate -= 1) {
+      // A snapshot without a matching id may complete this turn's streaming
+      // message, but must never overwrite a response from an earlier user turn.
+      // Exact id updates above remain valid across any turn boundary.
+      if (messages[candidate]?.role === "user" && incoming.role !== "user") break;
       if (messages[candidate]?.role === incoming.role) {
         index = candidate;
         break;

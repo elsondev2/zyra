@@ -23,9 +23,22 @@ const buttons = busy.match(/<button\b[^>]*>/g) || []
 assert.ok(buttons.length >= 2)
 assert.ok(buttons.every(button => button.includes('disabled')), 'duplicate clicks are disabled while responding')
 assert.equal(approval.status, 'pending', 'rendering cannot mutate the pending decision')
-console.log('Tool approval panel: exact command, no implicit approval, empty state and disabled response controls: ok')
 
 assert.ok(html.includes('This action has not run.'))
 assert.ok(busy.includes('Saving your choice'))
 assert.equal(render([{ ...approval, status: 'resolved' }]), '', 'resolved requests cannot reopen an approval prompt')
-assert.ok(render([{ ...approval, grantLabel: 'Allow shell commands for this chat' }]).includes('Allow shell commands for this chat'), 'prompt preserves the exact permission scope')
+const filePath = 'C:/workspace/desktop/scripts/release/runtime-contract.mjs'
+const fileRequest: AssistantPendingApproval = { ...approval, requestType: 'file-change', command: undefined, title: 'Edit needs approval', detail: filePath, paths: [filePath], grantLabel: 'Allow file changes for this chat' }
+const fileHtml = render([fileRequest])
+const fileText = fileHtml.replace(/<[^>]*>/g, '')
+assert.equal(fileText.split('runtime-contract.mjs').length - 1, 1, 'the file target is not repeated as a second path')
+assert.doesNotMatch(fileHtml, /<pre\b/, 'path-only requests use a file target rather than a command box')
+assert.ok(fileHtml.includes('Other approval options'), 'broader grants have a separate explicit entry')
+assert.ok(!fileText.includes('Allow file changes for this chat'), 'the broader grant is not a competing default action')
+assert.ok(render([fileRequest, { ...approval, requestId: 'next-request' }]).includes('1 of 2'))
+const { getApprovalPresentation } = await import('../src/renderer/src/pages/assistant/assistant-approval-presentation')
+assert.equal(getApprovalPresentation(fileRequest).grantLabel, fileRequest.grantLabel, 'the menu retains the exact backend scope label')
+assert.equal(getApprovalPresentation({ ...approval, grantLabel: 'Allow shell commands for this chat' }).grantLabel, 'Allow shell commands for this chat')
+const importantDetail = 'This updates the release manifest. Review the target before allowing it.'
+assert.ok(render([{ ...fileRequest, detail: importantDetail }]).includes(importantDetail), 'meaningful detail is never hidden as a duplicate')
+console.log('Tool approval panel: clear targets, exact command/scope, queued requests, no implicit decisions and responding lock: ok')

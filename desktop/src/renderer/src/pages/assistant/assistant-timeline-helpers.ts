@@ -1,3 +1,4 @@
+import { stripSidebarBrowserContext } from '@shared/assistant/browser-context'
 import { buildRenderableFileChangePatch } from '@shared/assistant/contracts/file-change'
 import { parseAgentSurfaceDescriptor } from '@shared/assistant/contracts'
 import type { AssistantActivity, AssistantMessage, AssistantPendingUserInput, AssistantProposedPlan } from '@shared/assistant/contracts'
@@ -102,6 +103,7 @@ export function isWarningOnlyAssistantMessage(message: AssistantMessage): boolea
 }
 
 export function shouldRenderMessage(message: AssistantMessage): boolean {
+    if (message.role === 'assistant' && !(message.text || '').trim()) return false
     return !isWarningOnlyAssistantMessage(message)
 }
 
@@ -165,7 +167,7 @@ export function getActivityRenderGroupKind(activity: AssistantActivity): 'issue'
     if (isModelNoticeActivity(activity)) return null
     if (isContextCompactionActivity(activity)) return null
     if (isCommandCheckpointActivity(activity)) return 'tool'
-    if (isAssistantConnectionRecoveryActivity(activity)) return null
+    if (isAssistantConnectionRecoveryActivity(activity)) return 'tool'
     if (isIssueActivity(activity)) return 'issue'
     if (isSubagentActivity(activity)) return 'tool'
     if (isToolLikeActivity(activity)) return 'tool'
@@ -545,7 +547,6 @@ export function getActivityCommand(activity: AssistantActivity): string {
 function groupAdjacentTimelineActivities(entries: TimelineEntry[]): TimelineEntry[] {
     const groupedEntries: TimelineEntry[] = []
     let pendingKind: 'issue' | 'subagent' | 'tool' | null = null
-    let pendingTurnId: string | null | undefined
     let pendingActivities: AssistantActivity[] = []
 
     const flush = () => {
@@ -569,7 +570,6 @@ function groupAdjacentTimelineActivities(entries: TimelineEntry[]): TimelineEntr
             })
         }
         pendingKind = null
-        pendingTurnId = undefined
         pendingActivities = []
     }
 
@@ -581,17 +581,15 @@ function groupAdjacentTimelineActivities(entries: TimelineEntry[]): TimelineEntr
         }
 
         const groupKind = getActivityRenderGroupKind(entry.activity)
-        if (!groupKind) {
+        if (!groupKind || entry.activity.turnTerminalOutcome) {
             flush()
             groupedEntries.push(entry)
             continue
         }
 
-        if (pendingKind && (pendingKind !== groupKind || pendingTurnId !== entry.activity.turnId)) {
-            flush()
-        }
-        pendingKind = groupKind
-        pendingTurnId = entry.activity.turnId
+        // Presentation follows visible boundaries, not transient local/provider turn aliases.
+        // Terminal records above remain separate, including in partially loaded history.
+        pendingKind = pendingKind === 'tool' || groupKind === 'tool' ? 'tool' : groupKind
         pendingActivities.push(entry.activity)
     }
 
@@ -622,6 +620,7 @@ export function areActivitiesEquivalent(left: AssistantActivity, right: Assistan
         && left.summary === right.summary
         && left.detail === right.detail
         && left.turnId === right.turnId
+        && left.turnTerminalOutcome === right.turnTerminalOutcome
         && left.timelineSequence === right.timelineSequence
         && left.createdAt === right.createdAt
         && getActivityCommand(left) === getActivityCommand(right)
@@ -642,7 +641,7 @@ export function areActivityListsEqual(left: AssistantActivity[], right: Assistan
 }
 
 export function parseUserMessageAttachments(text: string): { body: string; attachments: ParsedUserAttachment[] } {
-    const parsed = parseSerializedAssistantMessage(text)
+    const parsed = parseSerializedAssistantMessage(stripSidebarBrowserContext(text))
     return {
         body: parsed.body,
         attachments: parsed.attachments.map((attachment, index) => ({
@@ -1098,6 +1097,7 @@ export function getActivityStatus(activity: AssistantActivity): 'success' | 'run
         || surface?.lifecycle
         || ''
     const normalizedStatus = rawStatus.toLowerCase().replace(/[-_\s]/g, '')
+    if (isAssistantConnectionRecoveryActivity(activity) && ['retrying', 'connecting', 'reconnecting'].includes(normalizedStatus)) return 'running'
     if (activity.tone === 'error') return 'failed'
     if (normalizedStatus === 'running' || normalizedStatus === 'inprogress' || normalizedStatus === 'pending' || normalizedStatus === 'started') return 'running'
     if (normalizedStatus === 'error' || normalizedStatus === 'failed' || normalizedStatus === 'cancelled' || normalizedStatus === 'interrupted' || normalizedStatus === 'declined') return 'failed'
@@ -1199,6 +1199,7 @@ export function estimateTimelineRowHeight(
     if (row.kind === 'working') return 48
     if (row.kind === 'user-input') return row.input.status === 'pending' ? Math.max(220, 96 + row.input.questions.length * 156) : 40
     if (row.kind === 'activity') {
+        if (row.activity.turnTerminalOutcome === 'interrupted') return 28
         if (isVoiceStrongTaskActivity(row.activity)) return 36
         if (isCommandCheckpointActivity(row.activity)) return 34
         if (isInternalAssistantActivity(row.activity)) return 42
@@ -1207,12 +1208,12 @@ export function estimateTimelineRowHeight(
         return isSubagentActivity(row.activity) ? 212 : 168
     }
     if (row.kind === 'activity-group') {
-        const containsIssueActivity = row.activities.some((activity) => isIssueActivity(activity))
-        if (containsIssueActivity) {
-            return 4 + row.activities.length * 28
-        }
-        // Action blocks start collapsed; expanded content is measured by the list.
-        return 36
+        const visible = row.activities.filter(activity => activity.turnTerminalOutcome !== 'interrupted')
+        const boundaryHeight = visible.length < row.activities.length ? 28 : 0
+        if (visible.length === 0) return boundaryHeight
+        if (visible.every(isIssueActivity)) return 4 + visible.length * 28 + boundaryHeight
+        // Mixed action/error blocks also start collapsed; expansion is measured by the list.
+        return 36 + boundaryHeight
     }
     if (row.kind === 'command-checkpoint-group') {
         return 44 + Math.min(row.activities.length, 6) * 28

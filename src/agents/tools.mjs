@@ -5,14 +5,17 @@ export function createFleetTools(holder) {
   const agentTool = defineTool({
     name: "agent",
     label: "Agent fleet",
-    description: "Spawn, steer, inspect, wait for, stop, retry, or resume a bounded child agent. Children never receive this tool.",
+    description: "Manage bounded child agents. Before choosing a delegated model or effort, use action=models to read current delegation preferences and a small authenticated model/API-cost shortlist; choose suitable model and effort from that result. Respect explicit agent-model requirements and existing budgets/scopes. Children never receive this tool.",
     parameters: Type.Object({
-      action: Type.Union(["spawn", "send", "wait", "status", "stop", "retry", "resume"].map((value) => Type.Literal(value))),
+      action: Type.Union(["models", "spawn", "send", "wait", "status", "stop", "retry", "resume"].map((value) => Type.Literal(value))),
       agentRunId: Type.Optional(Type.String()),
       agent: Type.Optional(Type.String()),
       prompt: Type.Optional(Type.String()),
       label: Type.Optional(Type.String()),
       model: Type.Optional(Type.String()),
+      provider: Type.Optional(Type.String()),
+      modelQuery: Type.Optional(Type.String()),
+      limit: Type.Optional(Type.Number()),
       fallbackModels: Type.Optional(Type.Array(Type.String())),
       effort: Type.Optional(Type.String()),
       tools: Type.Optional(Type.Array(Type.String())),
@@ -55,6 +58,8 @@ export function createFleetTools(holder) {
 
 async function executeAgentAction(controller, params) {
   switch (params.action) {
+    case "models":
+      return controller.delegationModelOptions(params);
     case "spawn":
       if (!params.prompt) throw new Error("agent spawn requires prompt.");
       return controller.spawn({ ...params, goal: params.prompt });

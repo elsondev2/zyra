@@ -100,7 +100,7 @@ export function createBrowserToolSet(options = {}) {
     defineTool({
       name: BROWSER_LOADER_TOOL_NAME,
       label: "Browser tools",
-      description: "Load Zyra's built-in tools for in-app Browser and paired Chrome interaction. Use these app tools instead of external browser skills or CLI setup. Honor the user's requested surface; list targets and reuse its tab first. Chrome requires the Zyra Browser extension paired from Settings; never silently substitute the in-app browser. Computer/desktop apps use the computer tools.",
+      description: "Load Zyra's built-in tools for in-app Browser and paired Chrome interaction. Use these app tools instead of external browser skills or CLI setup. Honor the user's requested surface; list targets and reuse its tab first. Chrome connects automatically when the Zyra Browser extension and Desktop are running; list targets to discover the named Chrome browser and request access in chat; never silently substitute the in-app browser. Computer/desktop apps use the computer tools.",
       parameters: browserUseSchema,
       execute: async (_toolCallId, input = {}) => localToolResult(controller.run(input.action)),
     }),

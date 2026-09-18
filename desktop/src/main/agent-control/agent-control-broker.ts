@@ -1169,6 +1169,9 @@ export class AgentControlBroker extends EventEmitter {
             }
             case 'list_targets': {
                 const kind = operation.targetKind
+                if (principal.type === 'root' && (!kind || kind === 'chrome-tab')) {
+                    await this.options.drivers?.find(driver => driver.kind === 'chrome-tab')?.refreshTargets?.(signal)
+                }
                 const ownerThreadId = principal.type === 'root' ? principal.threadId : principal.parentThreadId
                 const activeGrants = this.grants.listForPrincipal(principal).filter((grant) => grant.state === 'active')
                 const ownedTargets = this.targets.list(kind).filter((entry) => (

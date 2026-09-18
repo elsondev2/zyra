@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import {
     AlertCircle,
     AppWindow,
@@ -147,6 +147,7 @@ type PreviewNavigationSidebarProps = {
     revealTargetRequestId?: string | null
     onRevealTargetHandled?: (requestId: string) => void
     variant?: 'sidebar' | 'workspace' | 'navigation'
+    workspaceHeaderActions?: ReactNode
     initialWorkspaceState?: PreviewNavigationWorkspaceState
     onWorkspaceStateChange?: (state: PreviewNavigationWorkspaceState) => void
 }
@@ -160,6 +161,7 @@ export function PreviewNavigationSidebar({
     revealTargetRequestId = null,
     onRevealTargetHandled,
     variant = 'sidebar',
+    workspaceHeaderActions,
     initialWorkspaceState,
     onWorkspaceStateChange
 }: PreviewNavigationSidebarProps) {
@@ -1012,6 +1014,7 @@ export function PreviewNavigationSidebar({
                             <h2 className="truncate text-[11px] font-semibold text-sparkle-text" title={activeFolderPath}>{workspaceFolderName}</h2>
                             <p className="truncate text-[8px] text-sparkle-text-muted/40" title={activeFolderPath}>{activeFolderPath}</p>
                         </div>
+                        {workspaceHeaderActions ? <div className="ml-auto flex min-w-0 max-w-[45%] shrink-0 items-center justify-end" data-files-root-selector="true">{workspaceHeaderActions}</div> : null}
                     </div>
                     <div className="flex h-10 shrink-0 items-center gap-2 border-b border-white/[0.05] px-3">
                         <div className="relative min-w-0 flex-1">

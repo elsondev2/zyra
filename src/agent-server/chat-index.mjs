@@ -1,3 +1,4 @@
+import { stripSidebarBrowserContext } from "../browser-context.mjs";
 import { mobileHistoryStart } from './mobile-history-window.mjs';
 import { EventEmitter } from 'node:events';
 import { ChatModelBackfill } from './chat-model-backfill.mjs';
@@ -357,7 +358,7 @@ function consumeLine(record, line, offset, byteLength) {
   const timestamp = typeof message.timestamp === "number" ? message.timestamp : entry.timestamp;
   record.modifiedAt = toIso(timestamp, record.modifiedAt);
   if (message.role === "user") {
-    const userText = extractText(message.content).slice(0, MAX_TITLE_SOURCE_CHARS);
+    const userText = stripSidebarBrowserContext(extractText(message.content)).slice(0, MAX_TITLE_SOURCE_CHARS);
     if (!record.firstMessage) {
       record.firstMessage = userText;
       if (!record.title || record.title === "New chat") record.title = normalizeTitle("", record.firstMessage);
@@ -438,9 +439,9 @@ function extractText(content) {
 }
 
 function normalizeTitle(value, fallback) {
-  const title = String(value || "").replace(/\s+/g, " ").trim();
+  const title = stripSidebarBrowserContext(value).replace(/\s+/g, " ").trim();
   if (title) return title.slice(0, 240);
-  const first = String(fallback || "").replace(/\s+/g, " ").trim();
+  const first = stripSidebarBrowserContext(fallback).replace(/\s+/g, " ").trim();
   return first.slice(0, 240) || "New chat";
 }
 

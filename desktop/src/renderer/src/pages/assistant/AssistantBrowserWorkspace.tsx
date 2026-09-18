@@ -94,6 +94,7 @@ import {
     ASSISTANT_BROWSER_TAB_LIMIT,
     browserTabFallbackTitle,
     closeAssistantBrowserTab,
+    createAssistantBrowserWorkspaceState,
     ensureAssistantBrowserSurfaceTabs,
     ensureAssistantBrowserWorkspaceTab,
     loadAssistantBrowserWorkspaceState,
@@ -106,6 +107,7 @@ import {
     type AssistantBrowserTabState,
     type AssistantBrowserWorkspaceState
 } from './assistant-browser-workspace-state'
+import { reorderBrowserTabs } from './assistant-browser-tab-order'
 
 function isSpotifyBrowserUrl(value: string): boolean {
     try {
@@ -168,6 +170,7 @@ export type AssistantBrowserWorkspaceController = {
     createTab: (url?: string, options?: { activate?: boolean; tabId?: string; sessionMode?: BrowserSessionMode }) => string
     closeTab: (tabId: string, options?: { transferred?: boolean }) => AssistantBrowserWorkspaceState
     activateTab: (tabId: string) => void
+    reorderTabs: (tabIds: string[]) => void
 }
 
 export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace({
@@ -187,7 +190,11 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     onRequestTabSelection,
     onControllerChange,
     onDeveloperToast,
-    onOpenPreview
+    onOpenPreview,
+    chatIntegration = true,
+    defaultSessionMode = 'normal',
+    tabIdPrefix = 'browser',
+    persistState = true
 }: {
     workspaceKey: string
     threadId: string
@@ -195,9 +202,9 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     active: boolean
     selectedTabId: string | null
     controlState: ControlStateSnapshot | null
-    navigationRequest: { id: number; tabId: string; url: string; sessionMode: BrowserSessionMode } | null
+    navigationRequest: { id: string | number; tabId: string; url: string; sessionMode: BrowserSessionMode } | null
     surfaceRequest: BrowserSurfaceOpenRequest | null
-    onNavigationRequestHandled: (requestId: number) => void
+    onNavigationRequestHandled: (requestId: string | number) => void
     onSurfaceRequestHandled: (requestId: string) => void
     onWorkspaceStateChange: (state: ControlWorkspaceSnapshot['browser']) => void
     onLocalControlTargetChange?: (tabId: string, targetId: string) => void
@@ -206,6 +213,10 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     onControllerChange: (controller: AssistantBrowserWorkspaceController | null) => void
     onDeveloperToast: (toast: AssistantInspectorDeveloperToastInput) => void
     onOpenPreview: (file: { name: string; path: string }, ext: string, options?: PreviewOpenOptions) => Promise<void>
+    chatIntegration?: boolean
+    defaultSessionMode?: BrowserSessionMode
+    tabIdPrefix?: string
+    persistState?: boolean
 }) {
     const { settings } = useSettings()
     const browserDownloadsApi = useMemo(() => ({
@@ -226,8 +237,11 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     }, [onOpenPreview])
     const normalizedProjectPath = String(projectPath || '').trim()
     const [workspaceState, setWorkspaceState] = useState<AssistantBrowserWorkspaceState>(() => {
+        const fallbackTabId = `${tabIdPrefix}:0`
         const restored = {
-            ...loadAssistantBrowserWorkspaceState(workspaceKey),
+            ...(persistState
+                ? loadAssistantBrowserWorkspaceState(workspaceKey, fallbackTabId, defaultSessionMode)
+                : createAssistantBrowserWorkspaceState(fallbackTabId, defaultSessionMode)),
             splitTabId: null
         }
         const initialSurfaceMode = surfaceRequest?.mode || 'open'
@@ -242,8 +256,8 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         const initialSessionMode = initialTabId && initialTabId === initialSurfaceTabId
             ? surfaceRequest?.sessionMode || 'normal'
             : initialTabId && initialTabId === initialNavigationTabId
-                ? navigationRequest?.sessionMode || 'normal'
-                : 'normal'
+                ? navigationRequest?.sessionMode || defaultSessionMode
+                : defaultSessionMode
         return initialTabId ? ensureAssistantBrowserWorkspaceTab(restored, initialTabId, initialSessionMode) : restored
     })
     const [viewportRects, setViewportRects] = useState<Record<string, { x: number; y: number; width: number; height: number }>>({})
@@ -285,17 +299,17 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const [serversLoading, setServersLoading] = useState(false)
     const [serversError, setServersError] = useState<string | null>(null)
     const workspaceStateRef = useRef(workspaceState)
-    const controlTargetsByTab = useMemo<Record<string, string>>(() => Object.fromEntries(
+    const controlTargetsByTab = useMemo<Record<string, string>>(() => chatIntegration ? Object.fromEntries(
         (controlState?.targets || []).flatMap((target): Array<[string, string]> => (
             target.kind === 'zyra-browser' && target.ownerThreadId === threadId ? [[target.tabId, target.targetId]] : []
         ))
-    ), [controlState?.targets, threadId])
+    ) : {}, [chatIntegration, controlState?.targets, threadId])
     const controlTargetsByTabRef = useRef(controlTargetsByTab)
     const webviewRefs = useRef(new Map<string, AssistantBrowserWebviewHandle>())
     const webviewRefCallbacks = useRef(new Map<string, (handle: AssistantBrowserWebviewHandle | null) => void>())
     const closedTabsRef = useRef<AssistantBrowserTabState[]>([])
     const pendingNavigationRef = useRef(new Map<string, string>())
-    const consumedNavigationRequestsRef = useRef(new Set<number>())
+    const consumedNavigationRequestsRef = useRef(new Set<string | number>())
     const consumedSurfaceRequestsRef = useRef(new Set<string>())
     const cancelledSurfaceRequestsRef = useRef(new Set<string>())
     const pendingSurfaceRequestsRef = useRef(new Map<string, BrowserSurfaceOpenRequest>())
@@ -370,11 +384,17 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         return () => window.cancelAnimationFrame(animationFrame)
     }, [active, activeTab?.id, activeTab?.url, browserChromeReady])
 
+    // A fresh New Tab can remain unchanged for its entire lifetime. Save it on
+    // mount as well as mutation so the inspector can restore its Browser entry.
+    useEffect(() => {
+        if (persistState) persistAssistantBrowserWorkspaceState(workspaceKey, workspaceStateRef.current)
+    }, [persistState, workspaceKey])
+
     const commitWorkspaceState = useCallback((nextState: AssistantBrowserWorkspaceState) => {
         workspaceStateRef.current = nextState
         setWorkspaceState(nextState)
-        persistAssistantBrowserWorkspaceState(workspaceKey, nextState)
-    }, [workspaceKey])
+        if (persistState) persistAssistantBrowserWorkspaceState(workspaceKey, nextState)
+    }, [persistState, workspaceKey])
 
     const mutateWorkspaceState = useCallback((
         updater: (current: AssistantBrowserWorkspaceState) => AssistantBrowserWorkspaceState
@@ -430,14 +450,17 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         }
     }, [configError, failSurfaceRequest])
 
-    useEffect(() => window.devscope.agentControl.onBrowserSurfaceCancel((requestId) => {
-        cancelledSurfaceRequestsRef.current.add(requestId)
-        pendingSurfaceRequestsRef.current.delete(requestId)
-        if (cancelledSurfaceRequestsRef.current.size > 100) {
-            const oldest = cancelledSurfaceRequestsRef.current.values().next().value
-            if (oldest) cancelledSurfaceRequestsRef.current.delete(oldest)
-        }
-    }), [])
+    useEffect(() => {
+        if (!chatIntegration) return
+        return window.devscope.agentControl.onBrowserSurfaceCancel((requestId) => {
+            cancelledSurfaceRequestsRef.current.add(requestId)
+            pendingSurfaceRequestsRef.current.delete(requestId)
+            if (cancelledSurfaceRequestsRef.current.size > 100) {
+                const oldest = cancelledSurfaceRequestsRef.current.values().next().value
+                if (oldest) cancelledSurfaceRequestsRef.current.delete(oldest)
+            }
+        })
+    }, [chatIntegration])
 
     const handleFullscreenChange = useCallback((tabId: string, fullscreen: boolean) => {
         setFullscreenTabId((current) => fullscreen ? tabId : current === tabId ? null : current)
@@ -718,7 +741,9 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         const popupApi = window.devscope.browserPopup
         if (typeof popupApi?.listOpenWindows !== 'function' || typeof popupApi.onOpenWindowsChange !== 'function') return
         let disposed = false
-        const scopeWindows = (windows: BrowserPopupSummary[]) => windows.filter((popup) => popup.ownerThreadId === threadId)
+        const scopeWindows = (windows: BrowserPopupSummary[]) => chatIntegration
+            ? windows.filter((popup) => popup.ownerThreadId === threadId)
+            : windows
         void popupApi.listOpenWindows().then((result) => {
             if (!disposed && result.success) setPopupWindows(scopeWindows(result.windows))
         }).catch(() => undefined)
@@ -729,7 +754,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             disposed = true
             unsubscribe()
         }
-    }, [active, threadId])
+    }, [active, chatIntegration, threadId])
 
     useEffect(() => {
         if (!historyQuery) {
@@ -942,7 +967,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     const createTab = useCallback((url = '', options?: { activate?: boolean; tabId?: string; sessionMode?: BrowserSessionMode }) => {
         const activate = options?.activate !== false
         const requestedTabId = options?.tabId
-        const sessionMode = options?.sessionMode || 'normal'
+        const sessionMode = options?.sessionMode || defaultSessionMode
         if (requestedTabId && workspaceStateRef.current.tabs.some((tab) => tab.id === requestedTabId)) {
             if (activate) transitionToBrowserTab(requestedTabId)
             return requestedTabId
@@ -953,7 +978,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         }
         const tabId = requestedTabId && /^browser:[a-zA-Z0-9][a-zA-Z0-9:._-]{0,127}$/.test(requestedTabId)
             ? requestedTabId
-            : `browser:${tabSequenceRef.current++}`
+            : `${tabIdPrefix}:${tabSequenceRef.current++}`
         if (activate) onRequestTabSelection(tabId)
         mutateWorkspaceState((current) => addAssistantBrowserTab(current, tabId, url, activate, sessionMode))
         if (activate) {
@@ -961,7 +986,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             setAddressError(null)
         }
         return tabId
-    }, [mutateWorkspaceState, onDeveloperToast, onRequestTabSelection, transitionToBrowserTab])
+    }, [defaultSessionMode, mutateWorkspaceState, onDeveloperToast, onRequestTabSelection, tabIdPrefix, transitionToBrowserTab])
 
     useEffect(() => {
         if (!config || !navigationRequest || consumedNavigationRequestsRef.current.has(navigationRequest.id)) return
@@ -1024,16 +1049,16 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         webviewRefCallbacks.current.delete(tabId)
         profileReloadHistorySuppressionRef.current.delete(tabId)
         pendingNavigationRef.current.delete(tabId)
-        const replacementTabId = `browser:${tabSequenceRef.current++}`
+        const replacementTabId = `${tabIdPrefix}:${tabSequenceRef.current++}`
         let nextState = workspaceStateRef.current
         mutateWorkspaceState((current) => {
-            nextState = closeAssistantBrowserTab(current, tabId, replacementTabId)
+            nextState = closeAssistantBrowserTab(current, tabId, replacementTabId, defaultSessionMode)
             return nextState
         })
         const nextActiveTab = nextState.tabs.find((tab) => tab.id === nextState.activeTabId)
         setAddressValue(browserTabAddress(nextActiveTab))
         return nextState
-    }, [cancelAnnotation, mutateWorkspaceState, onDeveloperToast, recordingTabId])
+    }, [cancelAnnotation, defaultSessionMode, mutateWorkspaceState, onDeveloperToast, recordingTabId, tabIdPrefix])
 
     const activateTab = transitionToBrowserTab
 
@@ -1188,11 +1213,19 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         if (targetTab) selectBrowserTab(targetTab.id)
     }, [closeTab, createTab, onDeveloperToast, onRequestTabSelection, openLocalFileInTab, selectBrowserTab])
 
+    const reorderTabs = useCallback((tabIds: string[]) => {
+        mutateWorkspaceState(current => {
+            const tabs = reorderBrowserTabs(current.tabs, tabIds)
+            return tabs === current.tabs ? current : { ...current, tabs }
+        })
+    }, [mutateWorkspaceState])
+
     const controller = useMemo<AssistantBrowserWorkspaceController>(() => ({
         createTab,
         closeTab,
-        activateTab
-    }), [activateTab, closeTab, createTab])
+        activateTab,
+        reorderTabs
+    }), [activateTab, closeTab, createTab, reorderTabs])
 
     useEffect(() => {
         onControllerChange(controller)
@@ -1315,7 +1348,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
     }, [mutateWorkspaceState])
 
     useEffect(() => {
-        if (!surfaceRequest || consumedSurfaceRequestsRef.current.has(surfaceRequest.requestId) || cancelledSurfaceRequestsRef.current.has(surfaceRequest.requestId)) return
+        if (!chatIntegration || !surfaceRequest || consumedSurfaceRequestsRef.current.has(surfaceRequest.requestId) || cancelledSurfaceRequestsRef.current.has(surfaceRequest.requestId)) return
         if (surfaceRequest.threadId !== threadId) {
             failSurfaceRequest(surfaceRequest, 'The Browser surface request belongs to another chat thread.')
             return
@@ -1420,7 +1453,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
         } else {
             pendingSurfaceRequestsRef.current.set(surfaceRequest.requestId, surfaceRequest)
         }
-    }, [closeTab, configError, controlTargetsByTab, failSurfaceRequest, mutateWorkspaceState, normalizedProjectPath, surfaceRequest, threadId, transitionToBrowserTab])
+    }, [chatIntegration, closeTab, configError, controlTargetsByTab, failSurfaceRequest, mutateWorkspaceState, normalizedProjectPath, surfaceRequest, threadId, transitionToBrowserTab])
 
     const getActiveDeveloperTarget = useCallback(() => {
         const tabId = workspaceStateRef.current.activeTabId
@@ -1537,6 +1570,10 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
             })
             if (!result.success) throw new Error(result.error || 'Could not annotate the Browser tab.')
             if (result.annotation && result.artifact) {
+                if (!chatIntegration) {
+                    onDeveloperToast({ message: 'Annotation ready', artifact: result.artifact })
+                    return
+                }
                 const staged = await window.devscope.stageBrowserPreviewArtifactForAssistant(result.artifact.artifactId)
                 if (!staged.success) throw new Error(staged.error || 'Could not attach the Browser annotation to chat.')
                 publishAssistantBrowserAnnotationAttachment({
@@ -1555,7 +1592,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                 setAnnotationTabId(null)
             }
         }
-    }, [cancelAnnotation, getActiveDeveloperTarget, onDeveloperToast, workspaceKey])
+    }, [cancelAnnotation, chatIntegration, getActiveDeveloperTarget, onDeveloperToast, workspaceKey])
 
     const toggleActiveRecording = useCallback(async () => {
         try {
@@ -1891,17 +1928,19 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                     scopeKey={browserOverlayScope}
                     onOpenHere={openDownloadHere}
                 />
-                <button
-                    type="button"
-                    onClick={() => void toggleAnnotation()}
-                    disabled={!activeTab?.url}
-                    className={cn(BROWSER_CHROME_BUTTON_CLASS, annotationTabId === activeTab?.id && 'bg-[var(--surface-hover)] text-[var(--accent-primary)]')}
-                    title={annotationTabId === activeTab?.id ? 'Cancel annotation' : 'Annotate page'}
-                    aria-pressed={annotationTabId === activeTab?.id}
-                >
-                    <Crosshair size={13} />
-                </button>
-                <button type="button" onClick={() => void captureActiveScreenshot()} disabled={!activeTab?.url} className={BROWSER_CHROME_BUTTON_CLASS} title="Capture screenshot"><Camera size={13} /></button>
+                <>
+                    <button
+                        type="button"
+                        onClick={() => void toggleAnnotation()}
+                        disabled={!activeTab?.url}
+                        className={cn(BROWSER_CHROME_BUTTON_CLASS, annotationTabId === activeTab?.id && 'bg-[var(--surface-hover)] text-[var(--accent-primary)]')}
+                        title={annotationTabId === activeTab?.id ? 'Cancel annotation' : 'Annotate page'}
+                        aria-pressed={annotationTabId === activeTab?.id}
+                    >
+                        <Crosshair size={13} />
+                    </button>
+                    <button type="button" onClick={() => void captureActiveScreenshot()} disabled={!activeTab?.url} className={BROWSER_CHROME_BUTTON_CLASS} title="Capture screenshot"><Camera size={13} /></button>
+                </>
                 {activePendingGrant ? (
                     <div className="flex h-5 items-center gap-1 border border-sky-300/25 bg-sky-400/[0.08] px-1.5 text-[8px] text-sky-100" title="Review this Browser request in chat.">
                         <ShieldAlert size={9} />
@@ -2056,6 +2095,7 @@ export const AssistantBrowserWorkspace = memo(function AssistantBrowserWorkspace
                                 visible={visible && !pageReplaced}
                                 placement="full"
                                 controlled={Boolean(grant)}
+                                agentControlEnabled={chatIntegration}
                                 cursor={cursor}
                             cursorTargetId={targetId}
                                 onStateChange={handleWebviewStateChange}

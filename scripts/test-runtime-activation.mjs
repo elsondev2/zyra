@@ -16,16 +16,19 @@ try {
  assert.notEqual(await readRuntimeRevision(root),first,'code updates are detected without changing package version');
  const options={root,stateDirectory:path.join(directory,"state"),channel:"activation",endpoint:0,desktopAuthorityToken:"fixture-proof"};
  let server = new ZyraAgentServer(options);servers.push(server);await server.start();server.runtimeRevision=first;
+ const initialInstance=server.instanceIdentity();
  const createClient=extra=>{const client=new ZyraAgentServerClient({...options,autoStart:false,verifyRuntimeRevision:true,surface:"desktop",authorities:["desktop-control"],authorityProof:"fixture-proof",...extra});clients.push(client);return client};
- const old=createClient();await assert.rejects(old.connect(),{code:"AGENT_SERVER_UPGRADE_REQUIRED"});
+ const old=createClient();await old.connect();assert.equal(old.connectionStatus.phase,"waiting");assert.equal(old.connectionStatus.connection,"connected",'a compatible passive client can observe the previous revision');
  server.sessions.set("busy",{summary:()=>({activeRequests:1}),dispose(){},detach(){}});
  const busy=createClient({autoStart:true});const phases=[];busy.on("runtime-status",s=>phases.push(s.phase));
- await assert.rejects(busy.connect(),{code:"AGENT_SERVER_UPGRADE_BUSY"});assert.equal(phases.at(-1),"waiting");assert.equal(server.retiring,false);server.sessions.clear();
+ await busy.connect();assert.equal(phases.at(-1),"waiting");assert.equal(busy.connectionStatus.connection,"connected");assert.equal(server.retiring,false);
+ assert.deepEqual((await busy.request('server.status',{identityOnly:true})).sessions,[],'heartbeats do not serialize chat state');server.sessions.clear();
  const descriptor=JSON.parse(readFileSync(server.paths.descriptorFile,"utf8"));writeFileSync(server.paths.descriptorFile,JSON.stringify({...descriptor,pid:2147483646}));
  let finish;const retired=new Promise(resolve=>finish=resolve);server.once("retire",()=>void server.stop().then(finish));
- const next=createClient({autoStart:true});next.on("runtime-status",s=>phases.push(s.phase));next.startServer=()=>void retired.then(async()=>{server=new ZyraAgentServer(options);servers.push(server);await server.start()});
+ const next=createClient({autoStart:true});const nextPhases=[];next.on("runtime-status",s=>nextPhases.push(s.phase));next.startServer=()=>void retired.then(async()=>{server=new ZyraAgentServer(options);servers.push(server);await server.start()});
  const state=await next.request("server.status");assert.equal(state.runtimeRevision,await readRuntimeRevision(root));assert.equal(state.activationVersion,1);
- assert.deepEqual(phases.slice(-3),["checking","restarting","ready"]);
+ assert.equal(state.instance.namespaceId,initialInstance.namespaceId);assert.notEqual(state.instance.instanceId,initialInstance.instanceId,'a replacement has a fresh per-start identity');
+ assert.deepEqual(nextPhases.slice(-3),["checking","restarting","ready"]);
  assert.ok(!JSON.stringify(phases).includes("fixture-proof"));
  console.log("Runtime activation: portable release fingerprint, same-version update, idle protection and verified restart passed");
 } finally {for(const client of clients)client.close();for(const server of servers)await server.stop();await rm(directory,{recursive:true,force:true});}

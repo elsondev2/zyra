@@ -6,6 +6,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { getAgentServerPaths } from "./paths.mjs";
+import { createConnectionStatus, projectAgentServerInstance } from "./connection-status.mjs";
 import {
   AGENT_SERVER_PROTOCOL_VERSION,
   AGENT_SERVER_METHODS,
@@ -15,6 +16,9 @@ import {
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
 const DEFAULT_ATTACH_TIMEOUT_MS = 65_000;
+const HEARTBEAT_INTERVAL_MS = 15_000;
+const HEARTBEAT_TIMEOUT_MS = 5_000;
+const UPDATE_DEFERRED_CODES = new Set(["AGENT_SERVER_UPGRADE_BUSY", "AGENT_SERVER_UPGRADE_REQUIRED", "AGENT_SERVER_AUTH_FAILED"]);
 // Bound replacement across connection objects recreated by Desktop recovery.
 const SERVICE_UPGRADE_ATTEMPTS = new Set();
 
@@ -36,6 +40,13 @@ export class ZyraAgentServerClient extends EventEmitter {
     this.verifyRuntimeRevision = options.verifyRuntimeRevision ?? this.autoStart;
     this.socket = null;
     this.cleanupReader = null;
+    this.heartbeat = options.heartbeat !== false;
+    this.heartbeatIntervalMs = Math.max(100, Math.min(60_000, Number(options.heartbeatIntervalMs) || HEARTBEAT_INTERVAL_MS));
+    this.heartbeatTimeoutMs = Math.max(100, Math.min(60_000, Number(options.heartbeatTimeoutMs) || HEARTBEAT_TIMEOUT_MS));
+    this.heartbeatTimer = null;
+    this._connectionStatus = createConnectionStatus({ phase: "idle", connection: "disconnected" });
+    this.serverState = null;
+    this.instance = null;
     this.pending = new Map();
     this.nextRequestId = 1;
     this.connectPromise = null;
@@ -46,6 +57,10 @@ export class ZyraAgentServerClient extends EventEmitter {
     this.desktopWorkspaceCancelHandler = null;
     this.desktopWorkspaceTurnHandler = null;
     this.desktopWorkspaceTurnEndHandler = null;
+  }
+
+  get connectionStatus() {
+    return this._connectionStatus;
   }
 
   setControlHandler(handler) {
@@ -71,13 +86,17 @@ export class ZyraAgentServerClient extends EventEmitter {
   async connect() {
     if (this.connectPromise) return this.connectPromise;
     if (this.socket?.writable) return;
-    this.connectPromise = this.connectInternal().finally(() => {
+    this.connectPromise = this.connectInternal().catch((error) => {
+      this.close(error?.code || "AGENT_SERVER_UNAVAILABLE", "failed");
+      throw error;
+    }).finally(() => {
       this.connectPromise = null;
     });
     return this.connectPromise;
   }
 
   async connectInternal() {
+    this.publishConnectionStatus({ phase: "checking", connection: "connecting", errorCode: undefined, updatePending: false });
     const expectedRevision = this.verifyRuntimeRevision ? await readRuntimeRevision(this.root) : null;
     let descriptor = readDescriptor(this.paths.descriptorFile);
     if (!descriptor && this.autoStart) {
@@ -89,7 +108,8 @@ export class ZyraAgentServerClient extends EventEmitter {
     try {
       await this.openSocket(descriptor);
     } catch (error) {
-      if (!this.autoStart) throw error;
+      if (!this.autoStart || error?.code === "AGENT_SERVER_NAMESPACE_MISMATCH") throw error;
+      this.close();
       assertNoLiveIncompatibleAgentServer(this.paths);
       this.startServer();
       descriptor = await waitForDescriptor(this.paths.descriptorFile, DEFAULT_CONNECT_TIMEOUT_MS, descriptor.pid, this.paths);
@@ -98,9 +118,9 @@ export class ZyraAgentServerClient extends EventEmitter {
     const missing = () => this.requiredMethods.filter((method) => !this.serverMethods.includes(method));
     const revisionMatches = () => !expectedRevision || this.serverRuntimeRevision === expectedRevision;
     if (missing().length === 0 && revisionMatches()) {
-      this.emit("runtime-status", { phase: "ready", revision: this.serverRuntimeRevision }); return;
+      this.acceptConnection(false); return;
     }
-    this.emit("runtime-status", { phase: "checking" });
+    this.publishConnectionStatus({ phase: "checking", connection: "connecting" });
     const upgradeError = () => Object.assign(new Error("Zyra's background service is older than this app. Restart the background service to finish updating, then try again."), { code: "AGENT_SERVER_UPGRADE_REQUIRED", missingMethods: missing() });
     const upgradeKey = JSON.stringify([this.root, this.paths.descriptorFile, [...this.requiredMethods].sort(), expectedRevision]);
     try {
@@ -108,8 +128,7 @@ export class ZyraAgentServerClient extends EventEmitter {
       const retired = await this.requestConnected("server.retire", { activationVersion: RUNTIME_ACTIVATION_VERSION, expectedRevision }, { timeoutMs: 5_000 });
       if (retired.retiring !== true) throw upgradeError();
       SERVICE_UPGRADE_ATTEMPTS.add(upgradeKey);
-      this.emit("runtime-status", { phase: "restarting" });
-      this.close();
+      this.close(undefined, "restarting");
       const deadline = Date.now() + 10_000;
       while (processAlive(descriptor.pid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 75));
       if (processAlive(descriptor.pid)) throw upgradeError();
@@ -118,24 +137,40 @@ export class ZyraAgentServerClient extends EventEmitter {
       await this.openSocket(descriptor);
       // A competing older client can win startup. Never enter an upgrade loop.
       if (missing().length > 0 || !revisionMatches()) throw upgradeError();
-      this.emit("runtime-status", { phase: "ready", revision: this.serverRuntimeRevision });
+      this.acceptConnection(false);
     } catch (error) {
-      this.emit("runtime-status", { phase: error.code === "AGENT_SERVER_UPGRADE_BUSY" ? "waiting" : "failed" });
-      this.close();
+      if (this.socket?.writable && missing().length === 0 && !revisionMatches() && UPDATE_DEFERRED_CODES.has(error?.code)) {
+        this.acceptConnection(true, error.code);
+        return;
+      }
       throw error;
     }
   }
 
+  acceptConnection(updatePending, errorCode) {
+    this.publishConnectionStatus({ phase: updatePending ? "waiting" : "ready", connection: "connected",
+      instance: projectAgentServerInstance(this.serverState), lastConfirmedAt: new Date().toISOString(), updatePending, errorCode });
+    this.startHeartbeat(this.socket);
+    this.emit("connect", this.serverState || {});
+  }
+
   async openSocket(descriptor) {
+    if (descriptor.namespaceId && descriptor.namespaceId !== this.paths.namespaceId) {
+      throw Object.assign(new Error("Zyra agent-server descriptor belongs to a different namespace."), { code: "AGENT_SERVER_NAMESPACE_MISMATCH" });
+    }
+    const expectedNamespaceId = descriptor.namespaceId || this.paths.namespaceId;
     const socket = net.createConnection(descriptor.endpoint);
     this.socket = socket;
     socket.setNoDelay(true);
     this.cleanupReader = createAgentServerLineReader(
       socket,
-      (message) => void this.handleMessage(message),
+      (message) => { if (this.socket === socket) void this.handleMessage(message); },
       (error) => this.emit("protocol-error", error)
     );
+    let socketError = null;
     socket.on("error", (error) => {
+      if (this.socket !== socket) return;
+      socketError = error;
       this.helloReject?.(error);
       this.rejectPending(error);
     });
@@ -144,9 +179,11 @@ export class ZyraAgentServerClient extends EventEmitter {
       this.cleanupReader?.();
       this.cleanupReader = null;
       if (this.socket === socket) this.socket = null;
-      const error = Object.assign(new Error("Zyra agent-server connection closed."), { code: "AGENT_SERVER_DISCONNECTED" });
+      this.cancelHeartbeat(socket);
+      const error = Object.assign(new Error("Zyra agent-server connection closed."), { code: socketError?.code || "AGENT_SERVER_DISCONNECTED" });
       this.helloReject?.(error);
       this.rejectPending(error);
+      this.publishConnectionStatus({ phase: "failed", connection: "disconnected", errorCode: error.code });
       this.emit("disconnect", error);
     });
     await new Promise((resolve, reject) => {
@@ -156,6 +193,14 @@ export class ZyraAgentServerClient extends EventEmitter {
       }, 5_000);
       timer.unref?.();
       this.helloResolve = (value) => {
+        const serverNamespaceId = value?.instance?.namespaceId;
+        if (serverNamespaceId && serverNamespaceId !== expectedNamespaceId) {
+          const error = Object.assign(new Error("Zyra agent-server handshake belongs to a different namespace."), { code: "AGENT_SERVER_NAMESPACE_MISMATCH" });
+          clearTimeout(timer);
+          socket.destroy(error);
+          reject(error);
+          return;
+        }
         clearTimeout(timer);
         resolve(value);
       };
@@ -186,7 +231,11 @@ export class ZyraAgentServerClient extends EventEmitter {
   }
 
   async requestConnected(method, params = {}, options = {}) {
-    if (!this.socket?.writable) throw Object.assign(new Error("Zyra agent server is disconnected."), { code: "AGENT_SERVER_DISCONNECTED" });
+    return this.requestOnSocket(this.socket, method, params, options);
+  }
+
+  async requestOnSocket(socket, method, params = {}, options = {}) {
+    if (!socket?.writable) throw Object.assign(new Error("Zyra agent server is disconnected."), { code: "AGENT_SERVER_DISCONNECTED" });
     const id = `request:${process.pid}:${this.nextRequestId++}`;
     return new Promise((resolve, reject) => {
       let timer;
@@ -199,7 +248,7 @@ export class ZyraAgentServerClient extends EventEmitter {
       }
       this.pending.set(id, { resolve, reject, timer });
       try {
-        writeAgentServerMessage(this.socket, { type: "request", id, method, params });
+        writeAgentServerMessage(socket, { type: "request", id, method, params });
       } catch (error) {
         this.pending.delete(id);
         if (timer) clearTimeout(timer);
@@ -216,12 +265,67 @@ export class ZyraAgentServerClient extends EventEmitter {
     return this.request("session.detach", { sessionKey }, { timeoutMs: 5_000 });
   }
 
-  close() {
+  close(errorCode = "AGENT_SERVER_DISCONNECTED", phase = "idle") {
+    const socket = this.socket;
+    this.cancelHeartbeat(socket);
     this.cleanupReader?.();
     this.cleanupReader = null;
-    this.socket?.destroy();
     this.socket = null;
-    this.rejectPending(Object.assign(new Error("Zyra agent-server client closed."), { code: "AGENT_SERVER_DISCONNECTED" }));
+    socket?.destroy();
+    const error = Object.assign(new Error("Zyra agent-server client closed."), { code: "AGENT_SERVER_DISCONNECTED" });
+    this.rejectPending(error);
+    this.publishConnectionStatus({ phase, connection: "disconnected", errorCode });
+  }
+
+  publishConnectionStatus(values = {}) {
+    const has = (key) => Object.prototype.hasOwnProperty.call(values, key);
+    const status = createConnectionStatus({
+      phase: has("phase") ? values.phase : this._connectionStatus.phase,
+      connection: has("connection") ? values.connection : this._connectionStatus.connection,
+      instance: has("instance") ? values.instance : this.instance,
+      lastConfirmedAt: has("lastConfirmedAt") ? values.lastConfirmedAt : this._connectionStatus.lastConfirmedAt,
+      ...(has("errorCode") ? { errorCode: values.errorCode } : this._connectionStatus.errorCode ? { errorCode: this._connectionStatus.errorCode } : {}),
+      ...(has("updatePending") ? { updatePending: values.updatePending } : this._connectionStatus.updatePending ? { updatePending: true } : {}),
+    });
+    const previousConnection = this._connectionStatus.connection;
+    this._connectionStatus = status;
+    this.instance = status.instance;
+    this.emit("connection-status", status);
+    this.emit("runtime-status", status);
+    if (status.connection !== previousConnection && ["connecting", "connected", "disconnected"].includes(status.connection)) this.emit(status.connection, status);
+  }
+
+  startHeartbeat(socket) {
+    if (!this.heartbeat || this.socket !== socket) return;
+    this.cancelHeartbeat();
+    const check = async () => {
+      if (this.socket !== socket || !socket.writable) return;
+      try {
+        const state = await this.requestOnSocket(socket, "server.status", { identityOnly: true }, { timeoutMs: this.heartbeatTimeoutMs });
+        if (this.socket !== socket) return;
+        const observedInstance = projectAgentServerInstance(state);
+        if (observedInstance && this.instance && (observedInstance.namespaceId !== this.instance.namespaceId || observedInstance.instanceId !== this.instance.instanceId)) {
+          throw Object.assign(new Error('The connected Zyra instance changed. Reconnect to confirm its state.'), { code: 'AGENT_SERVER_INSTANCE_CHANGED' });
+        }
+        this.publishConnectionStatus({ phase: this.connectionStatus.updatePending ? "waiting" : "ready", connection: "connected", instance: observedInstance || this.instance, errorCode: undefined, lastConfirmedAt: new Date().toISOString() });
+      } catch (error) {
+        // A previous connection's timeout must never tear down its replacement.
+        if (this.socket === socket) socket.destroy(error);
+        return;
+      }
+      if (this.socket === socket) {
+        this.heartbeatTimer = setTimeout(check, this.heartbeatIntervalMs);
+        this.heartbeatTimer.unref?.();
+      }
+    };
+    this.heartbeatTimer = setTimeout(check, this.heartbeatIntervalMs);
+    this.heartbeatTimer.unref?.();
+  }
+
+  cancelHeartbeat(socket) {
+    if (socket && this.socket && this.socket !== socket) return;
+    if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
+    this.heartbeatTimer = null;
   }
 
   startServer() {
@@ -255,8 +359,8 @@ export class ZyraAgentServerClient extends EventEmitter {
     if (message?.type === "hello.ok") {
       this.serverRuntimeRevision = message.server?.activationVersion === RUNTIME_ACTIVATION_VERSION ? message.server?.runtimeRevision : null;
       this.serverMethods = Array.isArray(message.server?.methods) ? message.server.methods : [];
-      this.helloResolve?.(message.server || {});
-      this.emit("connect", message.server || {});
+      this.serverState = message.server || {};
+      this.helloResolve?.(this.serverState);
       return;
     }
     if (message?.type === "catalog.changed") {

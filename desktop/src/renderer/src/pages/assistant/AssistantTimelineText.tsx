@@ -1,6 +1,7 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import MarkdownRenderer, { prepareMarkdownRender, type MarkdownMediaMode } from '@/components/ui/MarkdownRenderer'
 import { useObservedElementWidth } from '@/lib/text-layout/useObservedElementWidth'
+import { VisualizationMessage } from '@/components/ui/visualization/VisualizationMessage'
 import {
     getUserMessageBodyWidth,
     measureTimelinePlainTextHeight,
@@ -14,6 +15,8 @@ type StreamingAssistantTextProps = {
 }
 
 type AssistantMarkdownInteractionProps = {
+    timestamp?: ReactNode
+    renderFooter?: (showTimestamp: boolean) => ReactNode
     onInternalLinkClick?: (href: string) => Promise<boolean | void> | boolean | void
     onLinkNotice?: (message: string, tone: 'info' | 'error') => void
     mediaMode?: MarkdownMediaMode
@@ -115,7 +118,11 @@ const StreamingMarkdownBlock = memo(function StreamingMarkdownBlock(props: {
     )
 })
 
-export const StreamingAssistantMarkdown = memo(function StreamingAssistantMarkdown({
+export const StreamingAssistantMarkdown = memo(function StreamingAssistantMarkdown(props: StreamingAssistantMarkdownProps) {
+    return <VisualizationMessage content={props.content} streaming timestamp={props.timestamp} renderFooter={props.renderFooter} renderMarkdown={(content, key) => <StreamingAssistantMarkdownText {...props} content={content} cacheKey={key ? `${props.cacheKey}:${key}` : props.cacheKey} />} />
+})
+
+const StreamingAssistantMarkdownText = memo(function StreamingAssistantMarkdownText({
     content,
     filePath,
     className,
@@ -157,7 +164,11 @@ export const StreamingAssistantMarkdown = memo(function StreamingAssistantMarkdo
     )
 })
 
-export const CompletedAssistantMarkdown = memo(function CompletedAssistantMarkdown({
+export const CompletedAssistantMarkdown = memo(function CompletedAssistantMarkdown(props: CompletedAssistantMarkdownProps) {
+    return <VisualizationMessage content={props.content} streaming={false} timestamp={props.timestamp} renderFooter={props.renderFooter} renderMarkdown={(content, key) => <CompletedAssistantMarkdownText {...props} content={content} cacheKey={key ? `${props.cacheKey}:${key}` : props.cacheKey} />} />
+})
+
+const CompletedAssistantMarkdownText = memo(function CompletedAssistantMarkdownText({
     content,
     filePath,
     className,

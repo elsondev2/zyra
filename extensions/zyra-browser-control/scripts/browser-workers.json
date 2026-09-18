@@ -1,0 +1,21 @@
+{
+  "editor": {
+    "entry": "node_modules/monaco-editor/esm/vs/editor/editor.worker.js"
+  },
+  "json": {
+    "entry": "node_modules/monaco-editor/esm/vs/language/json/json.worker.js"
+  },
+  "css": {
+    "entry": "node_modules/monaco-editor/esm/vs/language/css/css.worker.js"
+  },
+  "html": {
+    "entry": "node_modules/monaco-editor/esm/vs/language/html/html.worker.js"
+  },
+  "typescript": {
+    "entry": "node_modules/monaco-editor/esm/vs/language/typescript/ts.worker.js"
+  },
+  "diff": {
+    "entry": "node_modules/@pierre/diffs/dist/worker/worker.js",
+    "import": "@pierre/diffs/worker/worker.js"
+  }
+}

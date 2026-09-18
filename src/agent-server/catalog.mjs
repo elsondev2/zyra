@@ -1,3 +1,4 @@
+import { stripSidebarBrowserContext } from "../browser-context.mjs";
 import { mobileHistoryStart } from './mobile-history-window.mjs';
 import { normalizeChatModel } from './chat-model.mjs';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -313,7 +314,7 @@ function applyMetadata(chat, metadata = {}, record = {}) {
   const canonicalChatId = String(chat.canonicalChatId || "");
   return {
     ...chat,
-    title: metadata.title || chat.title || "New chat",
+    title: normalizeTitle(metadata.title || chat.title),
     project: metadata.project || chat.project || chat.storageProject || chat.cwd,
     cwd: metadata.cwd || metadata.project || chat.cwd || chat.project,
     archived: metadata.archived === true,
@@ -326,7 +327,7 @@ function applyMetadata(chat, metadata = {}, record = {}) {
 }
 
 function normalizeTitle(value) {
-  return String(value || "").replace(/\s+/g, " ").trim().slice(0, 240) || "New chat";
+  return stripSidebarBrowserContext(value).replace(/\s+/g, " ").trim().slice(0, 240) || "New chat";
 }
 
 function normalizeProject(value) {

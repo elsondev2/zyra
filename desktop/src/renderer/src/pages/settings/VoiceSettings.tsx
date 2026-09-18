@@ -7,6 +7,8 @@ import {
     writeInstructorVoicePreferences,
     type InstructorVoicePreferences
 } from '../assistant/instructor-voice-preferences'
+import { SettingsPageLink, SettingsPageTabs } from './SettingsPageTabs'
+import { createSettingsRowTargetId } from './settings-search'
 import {
     SettingsButton,
     SettingsDialog,
@@ -18,7 +20,18 @@ import {
     SettingsTextarea
 } from './settings-layout'
 
-export default function VoiceSettings() {
+export type VoiceSettingsView = 'dictation' | 'conversation'
+
+export default function VoiceSettings({ view = 'dictation' }: { view?: VoiceSettingsView }) {
+    return (
+        <SettingsPageContainer title="Voice" navigation={<SettingsPageTabs family="voice" />}>
+            {view === 'dictation' ? <VoiceTranscriptionSettings /> : null}
+            {view === 'conversation' ? <VoiceConversationSettings /> : null}
+        </SettingsPageContainer>
+    )
+}
+
+function VoiceConversationSettings() {
     const navigate = useNavigate()
     const [preferences, setPreferences] = useState<InstructorVoicePreferences>(() => readInstructorVoicePreferences())
     const [instructionsOpen, setInstructionsOpen] = useState(false)
@@ -31,19 +44,24 @@ export default function VoiceSettings() {
     }
 
     return (
-        <SettingsPageContainer title="Voice" backTo="/settings/assistant" backLabel="Assistant">
-            <VoiceTranscriptionSettings />
+        <>
+            <SettingsSection title="ChatGPT Voice">
+                <SettingsPageLink to="/settings/providers" title="ChatGPT connection" description="Voice conversation requires a connected ChatGPT account." />
+            </SettingsSection>
+
             <SettingsSection title="Instructor Voice Lab" headerAction={<SettingsButton variant="ghost" onClick={() => navigate('/assistant/instructor')}>Open Voice Lab</SettingsButton>}>
-                <SettingsRow
+                {preferences.outputModality === 'audio' ? (<SettingsRow
                     title="Voice"
                     description="Choose the realtime voice used by new Voice Lab sessions."
-                    control={
+                    control={(
                         <SettingsSelect value={preferences.voice} onChange={(event) => updatePreferences({ voice: event.target.value as InstructorVoicePreferences['voice'] })} aria-label="Instructor voice">
                             {INSTRUCTOR_REALTIME_VOICES.map((voice) => <option key={voice} value={voice}>{voice.charAt(0).toUpperCase() + voice.slice(1)}</option>)}
                         </SettingsSelect>
-                    }
-                />
+                    )}
+                />) : null}
+                <div data-settings-search-target={preferences.outputModality === 'text' ? createSettingsRowTargetId('Instructor Voice Lab', 'Voice') : undefined} tabIndex={-1}>
                 <SettingsRow title="Output" description="Play spoken responses or keep the session text-only." control={<SettingsSegmented value={preferences.outputModality} options={[{ value: 'audio', label: 'Audio' }, { value: 'text', label: 'Text' }]} onChange={(outputModality) => updatePreferences({ outputModality })} label="Voice Lab output" />} />
+                </div>
                 <SettingsRow
                     title="Instructions"
                     description="Set instructions for new Voice Lab sessions."
@@ -69,6 +87,6 @@ export default function VoiceSettings() {
                 <SettingsTextarea autoFocus value={instructionsDraft} maxLength={8000} rows={9} onChange={(event) => setInstructionsDraft(event.target.value)} placeholder="Describe how the instructor should respond." aria-label="Voice Lab instructions" />
                 <div className="text-right text-[10px] tabular-nums text-[var(--settings-text-muted)]">{instructionsDraft.length.toLocaleString()} / 8,000</div>
             </SettingsDialog>
-        </SettingsPageContainer>
+        </>
     )
 }

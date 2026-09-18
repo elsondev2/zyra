@@ -35,6 +35,7 @@ val LocalReduceMotion = staticCompositionLocalOf { false }
 val LocalMessageTimestamps = staticCompositionLocalOf { false }
 val LocalThoughtProcesses = staticCompositionLocalOf { false }
 val LocalActionCounts = staticCompositionLocalOf { false }
+val LocalCollapseActiveWork = staticCompositionLocalOf { false }
 val LocalWorkDetails = staticCompositionLocalOf { true }
 val LocalDesktopTheme = staticCompositionLocalOf<DesktopTheme?> { null }
 private fun contrast(color: Color) = if (color.luminance() > 0.179f) Color.Black else Color.White
@@ -83,7 +84,7 @@ private val hanken = FontFamily(Font(R.font.hanken_400, FontWeight.Normal), Font
         labelSmall = baseline.labelSmall.copy(fontFamily = family)
     )
     CompositionLocalProvider(LocalDesktopTheme provides selected, LocalReduceMotion provides appearance.reduceMotion,
-        LocalMessageTimestamps provides appearance.timestamps, LocalWorkDetails provides appearance.workDetails, LocalActionCounts provides appearance.actionCounts, LocalThoughtProcesses provides appearance.thoughtProcesses) {
+        LocalMessageTimestamps provides appearance.timestamps, LocalWorkDetails provides appearance.workDetails, LocalActionCounts provides appearance.actionCounts, LocalThoughtProcesses provides appearance.thoughtProcesses, LocalCollapseActiveWork provides appearance.collapseActiveWork) {
         MaterialTheme(colorScheme = colors, typography = typography, shapes = Shapes(extraSmall = RoundedCornerShape(4.dp), small = RoundedCornerShape(8.dp), medium = RoundedCornerShape(12.dp), large = RoundedCornerShape(16.dp), extraLarge = RoundedCornerShape(24.dp)), content = content)
     }
 }

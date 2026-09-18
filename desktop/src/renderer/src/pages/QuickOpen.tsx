@@ -76,7 +76,7 @@ export default function QuickOpen() {
 
     return (
         <div className="flex h-screen flex-col overflow-hidden bg-sparkle-bg text-sparkle-text">
-            <QuickPreviewTitleBar />
+            {!previewFile && <QuickPreviewTitleBar title={filePath ? splitFileNameAndExtension(filePath).fileName : undefined} />}
             {loadingPreview && !previewFile && (
                 <div className="flex flex-1 items-center justify-center">
                     <div className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-4 py-2 text-sm text-white/80">
@@ -108,12 +108,15 @@ export default function QuickOpen() {
             {previewFile && (
                 <Suspense
                     fallback={
-                        <div className="flex flex-1 items-center justify-center">
-                            <div className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-4 py-2 text-sm text-white/80">
-                                <Loader2 size={14} className="animate-spin text-[var(--accent-primary)]" />
-                                Loading preview...
+                        <>
+                            <QuickPreviewTitleBar title={previewFile.name} />
+                            <div className="flex flex-1 items-center justify-center">
+                                <div className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-4 py-2 text-sm text-white/80">
+                                    <Loader2 size={14} className="animate-spin text-[var(--accent-primary)]" />
+                                    Loading preview...
+                                </div>
                             </div>
-                        </div>
+                        </>
                     }
                 >
                     <FilePreviewModal

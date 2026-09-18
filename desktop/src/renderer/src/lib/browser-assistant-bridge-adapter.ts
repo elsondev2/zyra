@@ -316,6 +316,7 @@ export function createBrowserAssistantBridgeAdapter(): DevScopeApi['assistant'] 
         getAccountOverview: remoteAssistantMethod('getAccountOverview'),
         redeemAccountReset: remoteAssistantMethod('redeemAccountReset'),
         getSessionTurnUsage: remoteAssistantMethod('getSessionTurnUsage'),
+        getUsageSummary: remoteAssistantMethod('getUsageSummary'),
         listModels: remoteAssistantMethod('listModels'),
         listProjects: remoteAssistantMethod('listProjects'),
         getPluginCatalog: remoteAssistantMethod('getPluginCatalog'),

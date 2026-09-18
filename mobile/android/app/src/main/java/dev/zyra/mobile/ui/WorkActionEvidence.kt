@@ -18,7 +18,8 @@ import dev.zyra.mobile.data.*
     val uri = LocalUriHandler.current
     var linkError by remember(action.item.id) { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (action.target.isNotBlank()) SelectionContainer { Text(action.target, style = MaterialTheme.typography.labelSmall,
+        if (full && action.target.isNotBlank() && action.family in setOf("read", "edit", "skill")) CapturedPathRow(action.target)
+        else if (action.target.isNotBlank()) SelectionContainer { Text(action.target, style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = if (full) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis) }
         action.run?.let { run ->
             if (run.status.isNotBlank()) Text(run.status.replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.labelMedium)
@@ -42,13 +43,15 @@ import dev.zyra.mobile.data.*
         }
         if (action.command.isNotBlank()) SelectionContainer { Text(highlightedCode(action.command, "command.sh"),
             style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)) }
-        val output = if (full) action.output else action.output.take(2000)
+        val edit = remember(action.family, action.item.raw) { if (action.family == "edit") capturedEdit(action.item.raw) else null }
+        val body = edit?.text ?: action.output
+        val output = if (full) body else body.take(2000)
         if (output.isNotBlank() && action.web.isEmpty()) {
             if (action.family == "skill") {
                 val snapshot = remember(output) { skillSnapshot(output) }
                 if (snapshot.first.isNotBlank()) Text(snapshot.first, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Markdown(snapshot.second)
-            } else SelectionContainer { Text(highlightedCode(output, action.paths.firstOrNull() ?: if (action.family in setOf("agent", "workflow")) "run.json" else "output.txt"),
+            } else SelectionContainer { Text(highlightedCode(output, if (edit != null) "changes.diff" else action.paths.firstOrNull() ?: if (action.family in setOf("agent", "workflow")) "run.json" else "output.txt"),
                 maxLines = if (full) Int.MAX_VALUE else 18, overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }

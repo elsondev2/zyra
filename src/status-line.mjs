@@ -1,4 +1,5 @@
 import os from "node:os";
+import { formatAgentConnectionStatus } from "./agent-server/status-presentation.mjs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { truncateToWidth } from "@earendil-works/pi-tui";
@@ -30,6 +31,7 @@ export function renderStatusLine(runtime, width = Math.max(24, (process.stdout.c
   const codexMode = formatCodexMode(runtime);
   const permissionMode = formatPermissionMode(runtime.permissionMode);
   const activity = String(state.activity ?? "").trim();
+  const connection = formatAgentConnectionStatus(runtime.agentServer?.connectionStatus?.());
   const contextUsage = getRuntimeContextUsage(runtime);
   const context = formatContext(contextUsage);
   const cwdPath = session.sessionManager.getCwd();
@@ -39,10 +41,10 @@ export function renderStatusLine(runtime, width = Math.max(24, (process.stdout.c
   const maxWidth = Math.max(24, width);
   const theme = getStatusLineTheme(runtime);
   if (mode === "minimal") {
-    return renderMinimalStatusLine({ theme, contextUsage, modelLabel, permissionMode, context, cost, maxWidth });
+    return renderMinimalStatusLine({ theme, contextUsage, modelLabel, permissionMode, context, cost, maxWidth, connection });
   }
 
-  const modelStatus = `${modelLabel} ${thinking}${codexMode ? `/${codexMode}` : ""}${sep}${permissionMode}`;
+  const modelStatus = `${modelLabel} ${thinking}${codexMode ? `/${codexMode}` : ""}${sep}${permissionMode}${connection ? sep + connection : ""}`;
   const leftPlain = activity ? ` ${modelStatus}${sep}${activity}` : ` ${modelStatus}`;
   const rightBudget = Math.max(8, maxWidth - visibleWidth(leftPlain) - 1);
   const rightPlain = buildRightStatus(context, cwd, cost, rightBudget);
@@ -60,6 +62,7 @@ export function renderStatusLine(runtime, width = Math.max(24, (process.stdout.c
     color(theme.warning, ` ${thinking}${codexMode ? `/${codexMode}` : ""}`),
     low(theme.muted, sep),
     color(permissionModeColor(theme, permissionMode), permissionMode),
+    connection ? low(theme.muted, sep + connection) : "",
     activity ? low(theme.muted, sep) : "",
     activity ? color(theme.info, activity) : "",
   ].join("");
@@ -94,8 +97,8 @@ function formatCodexMode(runtime) {
   return "";
 }
 
-function renderMinimalStatusLine({ theme, contextUsage, modelLabel, permissionMode, context, cost, maxWidth }) {
-  const leftPlain = ` ${modelLabel}${sep}${permissionMode}`;
+function renderMinimalStatusLine({ theme, contextUsage, modelLabel, permissionMode, context, cost, maxWidth, connection }) {
+  const leftPlain = ` ${modelLabel}${sep}${permissionMode}${connection ? sep + connection : ""}`;
   const rightPlain = `${context}${sep}${cost}`;
   const gap = Math.max(1, maxWidth - visibleWidth(leftPlain) - visibleWidth(rightPlain));
   const plain = truncateToWidth(`${leftPlain}${" ".repeat(gap)}${rightPlain}`, maxWidth, "...");
@@ -108,6 +111,7 @@ function renderMinimalStatusLine({ theme, contextUsage, modelLabel, permissionMo
     color(theme.primary, ` ${modelLabel}`),
     low(theme.muted, sep),
     color(permissionModeColor(theme, permissionMode), permissionMode),
+    connection ? low(theme.muted, sep + connection) : "",
   ].join("");
   const right = [
     color(contextColor(theme, contextUsage), context),

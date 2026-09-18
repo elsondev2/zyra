@@ -38,7 +38,8 @@ export function mobileEvent(message, owner, cache) {
   const event = message.event || {};
   const delta = event.assistantMessageEvent;
   // Pi emits the accumulated message with every delta. Only send the new text.
-  const projected = event.type === 'message_update' && ['text_delta', 'thinking_delta'].includes(delta?.type)
+  const projected = hiddenMessage(event.message) ? { type: 'message_hidden' }
+    : event.type === 'message_update' && ['text_delta', 'thinking_delta'].includes(delta?.type)
     ? { type: delta.type, delta: delta.delta, contentIndex: delta.contentIndex }
     : projectEvent(event, owner, cache, message.sessionKey);
   return { type: 'session.event', sessionKey: message.sessionKey, sequence: message.sequence,
@@ -49,13 +50,16 @@ export function replayGap(after, latest, replay) {
 }
 
 export function projectEvent(event, owner, cache, chat) {
+  // Internal context still reaches the agent, but never becomes a mobile body or delta.
+  // Retain an empty envelope so replay cursors remain contiguous.
+  if (hiddenMessage(event.message)) return { type: 'message_hidden' };
   if (chat) event = cache.media.project(owner, chat, event);
   const projected = cache.project(owner, event);
   if (!projected?.deferred) return projected;
   const message = event.message;
   const preview = message && typeof message === 'object' ? {
     role: message.role, id: message.id, timestamp: message.timestamp, toolCallId: message.toolCallId,
-    toolName: message.toolName, isError: message.isError,
+    toolName: message.toolName, isError: message.isError, display: message.display, customType: message.customType,
     content: typeof message.content === 'string' ? message.content.slice(0, 4096) : Array.isArray(message.content)
       ? message.content.slice(0, 24).map(part => part?.type === 'image' && part.mediaRef ? part
         : part?.type === 'text' ? { type: 'text', text: String(part.text || '').slice(0, 1024) }
@@ -66,5 +70,19 @@ export function projectEvent(event, owner, cache, chat) {
     ...(event.args ? { args: actionArgsPreview(event.args) } : {}), surface: actionSurfacePreview(event.surface), isError: event.isError,
     command: typeof event.command === 'string' ? event.command.slice(0, 1000) : undefined,
     description: typeof event.description === 'string' ? event.description.slice(0, 1000) : undefined,
-    outcome: event.outcome, willRetry: event.willRetry };
+    outcome: event.outcome, willRetry: event.willRetry,
+    // Oversized failure details stay deferred; retain lifecycle fields so the
+    // activity row still settles without fetching or rendering the raw output.
+    reason: typeof event.reason === 'string' ? event.reason.slice(0, 256) : undefined,
+    errorMessage: typeof event.errorMessage === 'string' ? event.errorMessage.slice(0, 1000) : undefined,
+    finalError: typeof event.finalError === 'string' ? event.finalError.slice(0, 1000) : undefined,
+    recoveryKind: event.recoveryKind, attempt: event.attempt, maxAttempts: event.maxAttempts,
+    delayMs: event.delayMs, success: event.success, aborted: event.aborted,
+    ...(event.type === 'compaction_end' && event.result ? { result: {
+      tokensBefore: event.result.tokensBefore, estimatedTokensAfter: event.result.estimatedTokensAfter,
+    } } : {}) };
+}
+
+function hiddenMessage(message) {
+  return message?.display === false || (message?.role === 'custom' && message.display !== true);
 }

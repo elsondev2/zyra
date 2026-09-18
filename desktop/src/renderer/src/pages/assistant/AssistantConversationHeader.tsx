@@ -171,12 +171,13 @@ export const AssistantConversationHeader = memo(function AssistantConversationHe
                     </h2>
                     <FileActionsMenu
                         items={headerMenuItems}
+                        rootClassName={minimal ? 'assistant-header-actions' : undefined}
                         title="Chat actions"
                         triggerIcon={<MoreHorizontal size={14} className="rotate-90" />}
                         presentation="portal"
                         buttonClassName={cn(
-                            'size-5 rounded-md border-transparent bg-transparent p-0 text-sparkle-text-muted hover:border-transparent hover:bg-[var(--surface-hover)] hover:text-sparkle-text',
-                            minimal && 'opacity-0 transition-opacity group-hover/chat-header:opacity-100 focus-visible:opacity-100'
+                            'h-5 w-5 rounded-md border-transparent bg-transparent p-0 text-sparkle-text-muted hover:border-transparent hover:bg-[var(--surface-hover)] hover:text-sparkle-text',
+                            minimal && 'shrink-0'
                         )}
                         openButtonClassName="rounded-md border-transparent bg-[var(--surface-hover)] p-0 text-sparkle-text"
                     />

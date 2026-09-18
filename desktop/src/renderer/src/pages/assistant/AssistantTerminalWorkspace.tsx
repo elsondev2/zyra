@@ -93,7 +93,9 @@ export const AssistantTerminalWorkspace = memo(function AssistantTerminalWorkspa
     const terminalOwnerKind = terminalOwner?.kind || null
     const terminalOwnerIdentity = terminalOwner?.kind === 'utility-tab'
         ? terminalOwner.tabId
-        : terminalOwner?.runtimeId || null
+        : terminalOwner?.kind === 'accessory-window'
+            ? terminalOwner.workspaceId
+            : terminalOwner?.runtimeId || null
 
     sessionsRef.current = sessions
     onReadyRef.current = onReady
@@ -114,7 +116,9 @@ export const AssistantTerminalWorkspace = memo(function AssistantTerminalWorkspa
         setError(null)
         const owner: DevScopePreviewTerminalWorkspaceOwner = terminalOwnerKind === 'utility-tab'
             ? { kind: 'utility-tab', tabId: terminalOwnerIdentity }
-            : { kind: 'main-workspace', runtimeId: terminalOwnerIdentity }
+            : terminalOwnerKind === 'accessory-window'
+                ? { kind: 'accessory-window', workspaceId: terminalOwnerIdentity }
+                : { kind: 'main-workspace', runtimeId: terminalOwnerIdentity }
         void window.devscope.registerPreviewTerminalWorkspace(owner).then((result) => {
             if (!result.success) {
                 if (!cancelled) setError(result.error || 'Failed to authorize terminal workspace.')

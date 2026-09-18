@@ -21,7 +21,10 @@ import {
     shouldPersistAssistantSession,
     sqlBool
 } from './persistence-utils'
-import { serializeAssistantActivityPayload } from './persistence-activity-payload'
+import {
+    serializeAssistantActivityPayload,
+    serializeAssistantActivityTerminalOutcome
+} from './persistence-activity-payload'
 import { upsertAssistantChatScope } from './assistant-project-persistence'
 import { sanitizeOptionalPath } from './utils'
 
@@ -547,8 +550,8 @@ function updateAssistantThreadMessageCount(db: SqlDatabase, threadId: string): v
 
 function upsertAssistantActivity(db: SqlDatabase, threadId: string, activity: AssistantActivity): void {
     db.run(`
-        INSERT INTO assistant_activities (id, thread_id, kind, tone, summary, detail, turn_id, timeline_sequence, created_at, payload_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO assistant_activities (id, thread_id, kind, tone, summary, detail, turn_id, turn_terminal_outcome, timeline_sequence, created_at, payload_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             thread_id = excluded.thread_id,
             kind = excluded.kind,
@@ -556,10 +559,11 @@ function upsertAssistantActivity(db: SqlDatabase, threadId: string, activity: As
             summary = excluded.summary,
             detail = excluded.detail,
             turn_id = excluded.turn_id,
+            turn_terminal_outcome = excluded.turn_terminal_outcome,
             timeline_sequence = excluded.timeline_sequence,
             created_at = excluded.created_at,
             payload_json = excluded.payload_json
-    `, [activity.id, threadId, activity.kind, activity.tone, activity.summary, activity.detail || null, activity.turnId, activity.timelineSequence ?? null, activity.createdAt, serializeAssistantActivityPayload(activity.payload)])
+    `, [activity.id, threadId, activity.kind, activity.tone, activity.summary, activity.detail || null, activity.turnId, serializeAssistantActivityTerminalOutcome(activity.turnTerminalOutcome), activity.timelineSequence ?? null, activity.createdAt, serializeAssistantActivityPayload(activity.payload)])
 }
 
 function upsertAssistantProposedPlan(db: SqlDatabase, threadId: string, plan: AssistantProposedPlan): void {

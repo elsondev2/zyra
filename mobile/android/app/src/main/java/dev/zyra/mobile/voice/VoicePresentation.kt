@@ -5,11 +5,11 @@ import org.json.JSONObject
 
 data class VoiceTranscript(val id: String, val role: String, val text: String, val complete: Boolean = false,
     val providerId: String? = null, val canonicalId: String? = null, val delivery: String? = null, val placeholder: Boolean = false,
-    val transcriptSource: String? = null)
+    val transcriptSource: String? = null, val startedAt: Long = System.currentTimeMillis())
 
 /** Ephemeral presentation only. PC history is the source of saved messages.
  * Normalized transcript events come from the same adapter used by Desktop. */
-class VoicePresentation {
+class VoicePresentation(private val wallTime: () -> Long = { System.currentTimeMillis() }) {
     private val rows = LinkedHashMap<String, VoiceTranscript>()
     private val suppressed = LinkedHashSet<String>()
     // Keep the capability after reconciliation removes a saved row: late
@@ -17,13 +17,13 @@ class VoicePresentation {
     private val turnSpeakers = mutableSetOf<String>()
     val entries get() = rows.values.toList()
 
-    fun typed(id: String, text: String) { put(VoiceTranscript("typed:$id", "user", text, complete = true, providerId = "typed:$id", delivery = "sending")) }
+    fun typed(id: String, text: String) { put(VoiceTranscript("typed:$id", "user", text, complete = true, providerId = "typed:$id", delivery = "sending", startedAt = rows["typed:$id"]?.startedAt ?: wallTime())) }
     fun delivery(id: String, state: String) { rows["typed:$id"]?.let { put(it.copy(delivery = state)) } }
     fun speech(providerId: String, state: String) {
         val id = "provider:user:$providerId"
         val previous = rows[id]
         if (previous?.complete == true && previous.delivery !in inputStates) return
-        put(VoiceTranscript(id, "user", previous?.text ?: "Voice message", complete = state == "unavailable", providerId = providerId, delivery = state, placeholder = previous?.placeholder ?: true))
+        put(VoiceTranscript(id, "user", previous?.text ?: "Voice message", complete = state == "unavailable", providerId = providerId, delivery = state, placeholder = previous?.placeholder ?: true, startedAt = previous?.startedAt ?: wallTime()))
     }
     fun event(event: JSONObject) {
         val type = event.optString("type")
@@ -42,6 +42,11 @@ class VoicePresentation {
         if (role !in setOf("user", "assistant")) return
         val source = event.optString("transcriptSource").takeIf { it == "turn" || it == "chunk" }
         if (source == "chunk" && role in turnSpeakers) return
+        // Logical turn IDs replace physical chunks without resetting the time
+        // the first words appeared. Wall time is independent of recovery timers.
+        val chunkStartedAt = if (source == "turn") rows.values.firstOrNull {
+            it.role == role && it.transcriptSource == "chunk" && !it.complete
+        }?.startedAt else null
         if (source == "turn") {
             turnSpeakers.add(role)
             rows.entries.removeAll { (_, row) -> row.role == role && row.transcriptSource == "chunk" && !row.complete }
@@ -56,7 +61,7 @@ class VoicePresentation {
             else append(previous?.text?.takeUnless { previous.placeholder }.orEmpty(), event.optString("delta"))
         val canonical = event.optString("canonicalMessageId").takeIf(String::isNotBlank) ?: previous?.canonicalId
         if (done && source == null) rows.entries.removeAll { (_, row) -> row.id != id && row.role == role && row.transcriptSource == "chunk" && !row.complete }
-        put(VoiceTranscript(id, role, text, done, provisional?.providerId ?: providerId, canonical, if (event.has("error")) "failed" else null, transcriptSource = source ?: previous?.transcriptSource))
+        put(VoiceTranscript(id, role, text, done, provisional?.providerId ?: providerId, canonical, if (event.has("error")) "failed" else null, transcriptSource = source ?: previous?.transcriptSource, startedAt = previous?.startedAt ?: provisional?.startedAt ?: chunkStartedAt ?: wallTime()))
     }
     fun reconcile(canonical: List<TimelineItem>) {
         val keys = VoiceTimeline.identities(canonical)
@@ -81,6 +86,9 @@ class VoicePresentation {
 }
 
 object VoiceTimeline {
+    fun item(entry: VoiceTranscript) = TimelineItem("voice:" + entry.id, entry.role, entry.text, if (entry.complete) "message" else "stream",
+        raw = JSONObject().put("timestamp", entry.startedAt).toString())
+
     data class Identity(val role: String, val canonical: String?, val provider: String?)
     fun identities(items: List<TimelineItem>): Set<Identity> = items.mapNotNull { item ->
         if (item.role !in setOf("user", "assistant")) return@mapNotNull null

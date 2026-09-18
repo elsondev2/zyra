@@ -89,8 +89,13 @@ type ReportedSlot = {
 
 type PendingTransfer = {
     tabId: string
+    sourceWindow: BrowserWindow
+    sourceOwnerId: string
+    sourceThreadId: string
+    sessionMode: BrowserSessionMode
     destinationWindow: BrowserWindow
     destinationOwnerId: string
+    destinationThreadId: string
     promise: Promise<BrowserViewTransferResult>
     resolve: (result: BrowserViewTransferResult) => void
     reject: (error: Error) => void
@@ -103,8 +108,15 @@ export type BrowserViewTransferResult = {
     ownerId: string
 }
 
+export type BrowserViewTransferOptions = {
+    expectedSourceWindow?: BrowserWindow
+    expectedSourceOwnerId?: string
+    expectedSessionMode?: BrowserSessionMode
+    destinationThreadId?: string
+}
+
 export type BrowserViewTransferHost = {
-    transferTo(tabId: string, destinationWindow: BrowserWindow): Promise<BrowserViewTransferResult>
+    transferTo(tabId: string, destinationWindow: BrowserWindow, options?: BrowserViewTransferOptions): Promise<BrowserViewTransferResult>
     closeIfOwned(tabId: string, ownerWindow: BrowserWindow | null): boolean
 }
 
@@ -236,7 +248,7 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         ipcMain.on(BROWSER_VIEW_IPC.reportSlot, (event, input: BrowserViewSlotInput) => this.reportSlot(event, input))
     }
 
-    async transferTo(tabId: string, destinationWindow: BrowserWindow): Promise<BrowserViewTransferResult> {
+    async transferTo(tabId: string, destinationWindow: BrowserWindow, options: BrowserViewTransferOptions = {}): Promise<BrowserViewTransferResult> {
         if (this.disposed) throw new Error('The Browser view manager is closed.')
         if (!isTrustedBrowserTabId(tabId)) throw new Error('Browser tab identity is invalid.')
         if (destinationWindow.isDestroyed() || destinationWindow.webContents.isDestroyed()) throw new Error('The destination window is unavailable.')
@@ -246,14 +258,22 @@ export class BrowserViewManager implements BrowserViewTransferHost {
 
         const record = this.records.get(tabId)
         if (!record || record.disposed) throw new Error('The live Browser source view is unavailable.')
+        if (options.expectedSourceWindow && record.ownerWindow !== options.expectedSourceWindow) throw new Error('The Browser source window changed before transfer.')
+        if (options.expectedSourceOwnerId && record.ownerId !== options.expectedSourceOwnerId) throw new Error('The Browser source owner changed before transfer.')
+        if (options.expectedSessionMode && record.sessionMode !== options.expectedSessionMode) throw new Error('The Browser tab session mode does not match the transfer.')
+        const destinationThreadId = options.destinationThreadId ? normalizeThreadId(options.destinationThreadId) : record.threadId
+        if (destinationOwnerId.startsWith('accessory:') && destinationThreadId !== destinationOwnerId) {
+            throw new Error('Accessory Browser destination ownership does not match this window.')
+        }
         if (record.ownerWindow === destinationWindow) {
+            if (record.threadId !== destinationThreadId) throw new Error('The Browser tab is already attached with another owner identity.')
             this.cancelRelease(tabId)
             this.applyCurrentSlot(record)
             return { tabId, guestWebContentsId: record.view.webContents.id, ownerId: record.ownerId }
         }
         const existing = this.pendingTransfers.get(tabId)
         if (existing) {
-            if (existing.destinationWindow === destinationWindow) return existing.promise
+            if (existing.destinationWindow === destinationWindow && existing.destinationThreadId === destinationThreadId) return existing.promise
             this.rejectTransfer(existing, new Error('A newer Browser tab transfer replaced the pending destination.'))
         }
 
@@ -266,8 +286,13 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         const analyticsAllowed = record.sessionMode === 'normal'
         const pending: PendingTransfer = {
             tabId,
+            sourceWindow: record.ownerWindow,
+            sourceOwnerId: record.ownerId,
+            sourceThreadId: record.threadId,
+            sessionMode: record.sessionMode,
             destinationWindow,
             destinationOwnerId,
+            destinationThreadId,
             promise,
             resolve: resolveTransfer,
             reject: rejectTransfer,
@@ -315,24 +340,33 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         const tabId = String(input?.tabId || '')
         if (!isTrustedBrowserTabId(tabId)) throw new Error('Browser tab identity is invalid.')
         const threadId = normalizeThreadId(input?.threadId)
+        if (ownerId.startsWith('accessory:') && threadId !== ownerId) {
+            throw new Error('Accessory Browser ownership does not match this window.')
+        }
         const sessionMode = normalizeSessionMode(input?.sessionMode)
         let existing = this.records.get(tabId)
+        const pending = this.pendingTransfers.get(tabId)
+        const isPendingDestination = pending?.destinationWindow === window
         if (existing && existing.threadId !== threadId && existing.ownerWindow === window) {
             this.closeRecord(existing)
             existing = undefined
         }
         if (existing) {
-            if (existing.threadId !== threadId) throw new Error('The Browser tab belongs to another chat thread.')
             if (existing.sessionMode !== sessionMode) throw new Error('An existing Browser tab cannot change between normal and incognito mode.')
-            const pending = this.pendingTransfers.get(tabId)
-            if (existing.ownerWindow !== window && pending?.destinationWindow !== window) {
+            if (isPendingDestination) {
+                if (pending!.sessionMode !== sessionMode || pending!.destinationThreadId !== threadId) {
+                    throw new Error('The Browser transfer destination identity changed while preparing its slot.')
+                }
+            } else if (existing.threadId !== threadId) {
+                throw new Error('The Browser tab belongs to another owner.')
+            }
+            if (existing.ownerWindow !== window && !isPendingDestination) {
                 throw new Error('The Browser tab belongs to another Zyra window.')
             }
             this.cancelRelease(tabId)
             return { created: false, state: this.readState(existing) }
         }
 
-        const pending = this.pendingTransfers.get(tabId)
         if (pending && pending.destinationWindow === window) {
             throw new Error('The live Browser source has not finished preparing its view.')
         }
@@ -344,7 +378,8 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             destination: initialUrl ? classifyBrowserDestination(initialUrl) : 'blank'
         })
         if (initialUrl) setImmediate(() => {
-            if (record.disposed || record.view.webContents.getURL() !== 'about:blank') return
+            const currentUrl = record.view.webContents.getURL()
+            if (record.disposed || (currentUrl && currentUrl !== 'about:blank')) return
             void this.navigate(record, initialUrl).catch((error) => {
                 if (record.disposed) return
                 record.status = 'error'
@@ -409,6 +444,10 @@ export class BrowserViewManager implements BrowserViewTransferHost {
             view.setBounds({ x: 0, y: 0, width: 1, height: 1 })
             view.setVisible(false)
             trustedBrowserGuests.register(record.ownerWindow.webContents.id, page)
+            if (record.ownerId.startsWith('accessory:')) {
+                // User browser tools need guest ownership, not an agent-control target or grant.
+                trustedBrowserGuests.bind(record.ownerWindow.webContents.id, page.id, record.tabId, record.threadId, record.sessionMode)
+            }
             registerManagedBrowserPresentation(page)
             registerBrowserPermissionTarget(page, record.ownerWindow.webContents)
             this.options.popupManager.registerGuest(record.ownerWindow, page, page.id)
@@ -749,8 +788,12 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         const record = this.records.get(pending.tabId)
         const slot = this.slotsByOwner.get(pending.destinationWindow.webContents.id)?.get(pending.tabId)
         if (!record || !slot?.active || !slot.bounds) return
+        if (record.ownerWindow !== pending.sourceWindow || record.ownerId !== pending.sourceOwnerId || record.threadId !== pending.sourceThreadId || record.sessionMode !== pending.sessionMode) {
+            this.rejectTransfer(pending, new Error('The Browser source owner changed while preparing the destination.'))
+            return
+        }
         try {
-            this.performTransfer(record, pending.destinationWindow, pending.destinationOwnerId, slot)
+            this.performTransfer(record, pending.destinationWindow, pending.destinationOwnerId, pending.destinationThreadId, slot)
             this.pendingTransfers.delete(pending.tabId)
             clearTimeout(pending.timer)
             pending.resolve({
@@ -763,35 +806,59 @@ export class BrowserViewManager implements BrowserViewTransferHost {
         }
     }
 
-    private performTransfer(record: BrowserViewRecord, destinationWindow: BrowserWindow, destinationOwnerId: string, slot: ReportedSlot): void {
+    private performTransfer(record: BrowserViewRecord, destinationWindow: BrowserWindow, destinationOwnerId: string, destinationThreadId: string, slot: ReportedSlot): void {
         this.cancelRelease(record.tabId)
         if (record.ownerWindow === destinationWindow) {
+            if (record.threadId !== destinationThreadId) throw new Error('The Browser destination owner identity does not match the live view.')
             this.applySlot(record, slot)
             return
         }
         const sourceWindow = record.ownerWindow
         const sourceOwnerId = record.ownerId
+        const sourceThreadId = record.threadId
         const sourceWebContentsId = sourceWindow.webContents.id
         const destinationWebContentsId = destinationWindow.webContents.id
         const page = record.view.webContents
         assertBrowserPreviewDeveloperTransferable(page.id)
 
         record.view.setVisible(false)
-        sourceWindow.contentView.removeChildView(record.view)
-        addNativeWindowView(destinationWindow, record.view, 'browser')
-        record.ownerWindow = destinationWindow
-        record.ownerId = destinationOwnerId
+        let viewRemovedFromSource = false
+        let viewAddedToDestination = false
+        let trustedOwnerMoved = false
+        let permissionOwnerMoved = false
+        let popupOwnerMoved = false
+        let threatOwnerMoved = false
+        let developerOwnerMoved = false
+        const threatProtection = getBrowserThreatProtectionService()
         try {
-            transferTrustedBrowserTargetOwner(page.id, sourceWebContentsId, destinationWebContentsId)
+            sourceWindow.contentView.removeChildView(record.view)
+            viewRemovedFromSource = true
+            addNativeWindowView(destinationWindow, record.view, 'browser')
+            viewAddedToDestination = true
+            record.ownerWindow = destinationWindow
+            record.ownerId = destinationOwnerId
+            record.threadId = destinationThreadId
+            trustedOwnerMoved = true
+            transferTrustedBrowserTargetOwner(page.id, sourceWebContentsId, destinationWebContentsId, destinationThreadId)
+            permissionOwnerMoved = true
             transferBrowserPermissionTargetOwner(page, destinationWindow.webContents)
+            popupOwnerMoved = true
             this.options.popupManager.transferGuestOwner(page.id, sourceWindow, destinationWindow)
-            getBrowserThreatProtectionService()?.transferGuestOwner(page.id, sourceWebContentsId, destinationWebContentsId)
+            threatOwnerMoved = Boolean(threatProtection)
+            threatProtection?.transferGuestOwner(page.id, sourceWebContentsId, destinationWebContentsId)
+            developerOwnerMoved = true
             transferBrowserPreviewDeveloperOwner(page.id, sourceWebContentsId, destinationWebContentsId)
         } catch (error) {
+            if (developerOwnerMoved) try { transferBrowserPreviewDeveloperOwner(page.id, destinationWebContentsId, sourceWebContentsId) } catch {}
+            if (threatOwnerMoved) try { threatProtection?.transferGuestOwner(page.id, destinationWebContentsId, sourceWebContentsId) } catch {}
+            if (popupOwnerMoved) try { this.options.popupManager.transferGuestOwner(page.id, destinationWindow, sourceWindow) } catch {}
+            if (permissionOwnerMoved) try { transferBrowserPermissionTargetOwner(page, sourceWindow.webContents) } catch {}
+            if (trustedOwnerMoved) try { transferTrustedBrowserTargetOwner(page.id, destinationWebContentsId, sourceWebContentsId, sourceThreadId) } catch {}
             record.ownerWindow = sourceWindow
             record.ownerId = sourceOwnerId
-            destinationWindow.contentView.removeChildView(record.view)
-            addNativeWindowView(sourceWindow, record.view, 'browser')
+            record.threadId = sourceThreadId
+            if (viewAddedToDestination) try { destinationWindow.contentView.removeChildView(record.view) } catch {}
+            if (viewRemovedFromSource) addNativeWindowView(sourceWindow, record.view, 'browser')
             this.applyCurrentSlot(record)
             throw error
         }

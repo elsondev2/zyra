@@ -126,6 +126,8 @@ export function registerSetupIpcHandlers(services: DesktopSetupServices): void {
         snapshot: await services.onboarding.getState()
     })))
     ipcMain.handle(ONBOARDING_IPC.disconnectModelProvider, (_event, provider: string) => result(async () => await getSharedProviderWorkerClient().providers.disconnect(provider)))
+    ipcMain.handle(ONBOARDING_IPC.getDelegationPreferences, () => result(async () => getSharedProviderWorkerClient().providers.delegationPreferences()))
+    ipcMain.handle(ONBOARDING_IPC.saveDelegationPreferences, (_event, input) => result(async () => getSharedProviderWorkerClient().providers.saveDelegationPreferences(input)))
     ipcMain.handle(ONBOARDING_IPC.getAgentRoleModels, () => result(async () => ({ models: await getSharedProviderWorkerClient().providers.roleModels() })))
     ipcMain.handle(ONBOARDING_IPC.setAgentRoleModel, (_event, input) => result(async () => ({ models: await getSharedProviderWorkerClient().providers.saveRoleModel(input) })))
     ipcMain.handle(ONBOARDING_IPC.listModelProviders, () => result(async () => ({ connections: await getSharedProviderWorkerClient().providers.list() })))

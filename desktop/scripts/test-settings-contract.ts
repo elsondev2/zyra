@@ -120,8 +120,8 @@ const existingClassicPair = loadSettings({
     appearanceDarkTheme: 'dark'
 })
 assert.equal(existingClassicPair.appearanceLightTheme, 'light', 'saved light-theme choices must not migrate to Paper')
-assert.equal(existingClassicPair.appearanceDarkTheme, 'dark', 'saved dark-theme choices must not migrate to Vercel')
-assert.equal(existingClassicPair.theme, 'dark', 'the saved active theme remains authoritative')
+assert.equal(existingClassicPair.appearanceDarkTheme, 'vercel', 'the retired blue Dark selection migrates to the Desktop default')
+assert.equal(existingClassicPair.theme, 'vercel', 'the retired active theme resolves to Vercel')
 
 storage.clear()
 storage.setItem('devscope-settings', JSON.stringify({ settingsSchemaVersion: 4, assistantDefaultWebSearch: false, assistantDefaultWebFetch: false }))
@@ -217,7 +217,8 @@ storage.setItem('devscope-settings', JSON.stringify({
 const customTheme = loadSettings()
 assert.equal(customTheme.appearanceCustomThemeActive, true)
 assert.equal(customTheme.appearanceCustomTheme?.tokens.bg, '#112233')
-assert.equal(customTheme.appearanceCustomTheme?.tokens.text, '#f0f4f8', 'missing custom values must inherit from the base theme')
+assert.equal(customTheme.appearanceCustomTheme?.baseTheme, 'vercel', 'custom themes migrate their retired base without losing explicit colors')
+assert.equal(customTheme.appearanceCustomTheme?.tokens.text, '#ededed', 'missing custom values inherit from the replacement base theme')
 assert.equal(customTheme.appearanceUiFont, 'local:Aptos')
 assert.equal(customTheme.appearanceCodeFont, 'managed:google-jetbrains-mono-abc123')
 assert.deepEqual(customTheme.accentColor, { name: 'Custom', primary: '#123456', secondary: '#abcdef' })
@@ -281,7 +282,7 @@ assert.equal(migrated.appearanceThemeMode, 'dark')
 assert.equal(migrated.appearanceDarkTheme, 'midnight', 'legacy dark presets must remain the selected dark preset')
 assert.equal(migrated.assistantAgentInboxSidebarEnabled, false)
 assert.equal(migrated.fileDiffRenderMode, 'split')
-assert.equal(migrated.assistantProductProfile, 'builder')
+assert.equal(migrated.assistantProductProfile, 'concise', 'retired profile values use the current speaking-style fallback')
 assert.equal(migrated.assistantDefaultModel, 'legacy-model')
 assert.equal(migrated.assistantTitleModel, 'openai-codex/gpt-5.6-luna')
 assert.equal(migrated.assistantDefaultRuntimeMode, 'auto-review')
@@ -299,32 +300,34 @@ const centralWins = loadSettings()
 assert.equal(centralWins.assistantDefaultModel, 'central-model')
 assert.equal(centralWins.assistantTitleModel, 'openai-codex/gpt-5.6-terra')
 assert.equal(centralWins.fileDiffRenderMode, 'stacked')
-assert.equal(centralWins.assistantProductProfile, 'default')
+assert.equal(centralWins.assistantProductProfile, 'concise')
 
 const settingsLayoutSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/settings-layout.tsx'), 'utf8')
 assert.match(settingsLayoutSource, /data-state=\{checked \? 'checked' : 'unchecked'\}/, 'Settings switches must expose an explicit visual state')
 assert.match(settingsLayoutSource, /className="zyra-settings-switch"/, 'Settings switches must use the shared CSS contract')
-assert.match(settingsLayoutSource, /max-w-\[760px\]/, 'Settings content must use the shared readable column with balanced controls')
+const settingsFrameSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/SettingsPageFrame.tsx'), 'utf8')
+assert.match(settingsFrameSource, /max-w-\[760px\]/, 'Settings content must use the shared readable column with balanced controls')
+assert.match(settingsLayoutSource, /<SettingsPageFrame/, 'all loaded pages use that same frame')
 assert.doesNotMatch(settingsLayoutSource, /\[var\(--accent-primary\)\]\/\d+/, 'Shared Settings controls cannot use unsupported Tailwind opacity on CSS variables')
 assert.match(settingsLayoutSource, /export function SettingsStatusPill/, 'Settings rows should share one compact inline status treatment')
 assert.doesNotMatch(settingsLayoutSource, /\{status \? <div className="pt-0\.5/, 'Settings status must not add a third text line below the description')
 assert.match(settingsLayoutSource, /data-settings-search-target=\{searchTargetId\}/, 'Settings sections must expose stable search targets')
 assert.match(settingsLayoutSource, /data-settings-search-target=\{searchTargetId \|\| undefined\}/, 'Settings rows must expose stable search targets')
 
-const appearanceFontTargets = findSettingsSearchTargets('appearance', 'font').map((target) => target.label)
+const appearanceFontTargets = findSettingsSearchTargets('appearance-typography', 'font').map((target) => target.label)
 assert.deepEqual(appearanceFontTargets.slice(0, 2), ['UI font', 'Code font'], 'Settings search must return matching sub-options within a page')
 assert.equal(findSettingsSearchTargets('appearance', 'paper')[0]?.label, 'Light and dark themes', 'light palette search must reach the stable paired selector')
 assert.equal(findSettingsSearchTargets('appearance', 'midnight')[0]?.label, 'Light and dark themes', 'dark palette search must reach the stable paired selector')
 assert.equal(findSettingsSearchTargets('terminal-runtime', 'font size')[0]?.targetId, createSettingsRowTargetId('Terminal', 'Font size'), 'search results must identify the exact section-aware row target')
-assert.equal(findSettingsSearchTargets('connections', 'phone')[0]?.label, 'Other devices', 'Settings keywords must locate future-facing device controls')
+assert.equal(findSettingsSearchTargets('device-mobile', 'phone')[0]?.label, 'Continue from Android', 'Settings keywords must locate future-facing device controls')
 assert.equal(findSettingsSearchTargets('assistant', 'web access')[0]?.label, 'Web access', 'Settings search must locate the web default after it leaves onboarding')
-assert.equal(findSettingsSearchTargets('assistant', 'luna')[0]?.label, 'Chat title model', 'Settings search must locate the independent chat-title model')
-assert.equal(findSettingsSearchTargets('assistant', 'detailed reasoning')[0]?.label, 'Reasoning summaries', 'Settings search must locate readable reasoning controls')
-assert.equal(findSettingsSearchTargets('assistant', '256k')[0]?.label, 'Context limit', 'Settings search must locate the real automatic-compaction boundary')
+assert.equal(findSettingsSearchTargets('provider-models', 'luna')[0]?.label, 'Chat title model', 'Settings search must locate the independent chat-title model')
+assert.equal(findSettingsSearchTargets('chat-display', 'detailed reasoning')[0]?.label, 'Reasoning summaries', 'Settings search must locate readable reasoning controls')
+assert.equal(findSettingsSearchTargets('memory', '256k')[0]?.label, 'Context limit', 'Settings search must locate the real automatic-compaction boundary')
 const globalSettingsMatches = findAllSettingsSearchMatches('font size')
-assert.ok(globalSettingsMatches.some((match) => match.destination.id === 'files-editor' && match.target?.label === 'Font size'), 'app-wide search must include the editor font setting')
+assert.ok(globalSettingsMatches.some((match) => match.destination.id === 'file-editor' && match.target?.label === 'Font size'), 'app-wide search must include the editor font setting')
 assert.ok(globalSettingsMatches.some((match) => match.destination.id === 'terminal-runtime' && match.target?.label === 'Font size'), 'app-wide search must include the terminal font setting')
-assert.equal(findAllSettingsSearchMatches('256k')[0]?.destination.to, '/settings/assistant/defaults', 'app-wide settings search must use the direct nested destination')
+assert.equal(findAllSettingsSearchMatches('256k')[0]?.destination.to, '/settings/assistant/memory', 'app-wide settings search must use the direct nested destination')
 assert.equal(findAllSettingsSearchMatches('anonymous diagnostics')[0]?.destination.to, '/settings/data/privacy', 'privacy controls must be globally searchable')
 
 const settingsShellSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/SettingsShell.tsx'), 'utf8')
@@ -349,20 +352,23 @@ assert.match(settingsShellSource, /target\.style\.scrollMarginTop = `\$\{\(navig
 assert.match(settingsShellSource, /target\.classList\.add\('zyra-settings-search-target'\)/, 'the selected setting must receive a visible arrival highlight')
 
 const assistantSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/AssistantSettings.tsx'), 'utf8')
+const providerModelsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/ProviderModelSettings.tsx'), 'utf8')
+const permissionsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/PermissionsSettings.tsx'), 'utf8')
+const memorySource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/MemorySettings.tsx'), 'utf8')
 const voiceTranscriptionSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/VoiceTranscriptionSettings.tsx'), 'utf8')
 const voiceSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/VoiceSettings.tsx'), 'utf8')
 assert.match(voiceSettingsSource, /<VoiceTranscriptionSettings \/>/, 'Voice owns dictation controls')
 assert.doesNotMatch(assistantSettingsSource, /getVoiceTranscriptionState|<SettingsSection title="Voice transcription"/, 'opening Assistant defaults must not load unrelated voice state')
 for (const mode of ['approval-required', 'auto-review', 'edits-only', 'full-access']) {
-    assert.match(assistantSettingsSource, new RegExp(`<option value="${mode}">`), `Assistant Settings must expose ${mode}`)
+    assert.match(permissionsSource, new RegExp(`<option value="${mode}">`), `Permissions must expose ${mode}`)
 }
 assert.match(
-    assistantSettingsSource,
+    providerModelsSource,
     /title="Chat title model"[\s\S]{0,520}updateSettings\(\{ assistantTitleModel: event\.target\.value \}\)/,
     'Assistant Settings must expose the persisted chat-title model selector'
 )
 assert.match(
-    assistantSettingsSource,
+    providerModelsSource,
     /Names new chats without adding the title request to the conversation\./,
     'the title-model row must explain that utility prompts stay out of the chat timeline'
 )
@@ -372,21 +378,22 @@ assert.match(
     'Assistant Settings must expose the provider-supported detailed reasoning-summary mode'
 )
 assert.match(
-    assistantSettingsSource,
+    memorySource,
     /title="Context limit"[\s\S]{0,1200}assistantContextCompactionThresholdTokens: Number\(event\.target\.value\)/,
     'Assistant Settings must persist the real automatic-compaction threshold'
 )
 assert.match(
-    assistantSettingsSource,
+    memorySource,
     /ASSISTANT_CONTEXT_COMPACTION_THRESHOLD_OPTIONS\.map/,
     'the context selector must use the shared bounded runtime policy options'
 )
-assert.doesNotMatch(assistantSettingsSource, /settings\.assistantTitleAutoRegenerate \? \(/, 'Title refresh interval must stay mounted for exact search navigation when automatic refresh is off')
-assert.doesNotMatch(voiceTranscriptionSource, /settings\.assistantTranscriptionEnabled \? \(/, 'Voice transcription rows must stay mounted for exact search navigation when voice input is off')
-assert.match(voiceTranscriptionSource, /disabled=\{!settings\.assistantTranscriptionEnabled\}/, 'inactive transcription controls should remain visible but disabled')
+assert.match(providerModelsSource, /settings\.assistantTitleAutoRegenerate \? \(/, 'Title refresh interval is shown only while automatic refresh is on')
+assert.match(voiceTranscriptionSource, /settings\.assistantTranscriptionEnabled \? \(/, 'Voice input owns the visibility of its dependent controls')
+assert.match(voiceTranscriptionSource, /disabled=\{!settings\.assistantTranscriptionEnabled\}/, 'transcription controls retain their disabled-state guard')
 const generalSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/Settings.tsx'), 'utf8')
-assert.match(generalSettingsSource, /title="Start hidden"[\s\S]{0,280}disabled=\{!settings\.startWithWindows\}/, 'Start hidden must stay mounted for exact search navigation when login startup is off')
+assert.match(generalSettingsSource, /title="Start hidden"(?:(?!<SettingsRow\b|<\/SettingsSection>)[\s\S])*disabled=\{!settings\.startWithWindows\}/, 'Start hidden must stay mounted for exact search navigation when login startup is off')
 const accountSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/AccountSettings.tsx'), 'utf8')
+const accountControllerSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/providers/useOpenAIAccountSettings.ts'), 'utf8')
 const accountResetCreditsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/AccountResetCreditsSection.tsx'), 'utf8')
 const connectionsSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/ConnectionsSettings.tsx'), 'utf8')
 const browserControlSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/BrowserControlSettings.tsx'), 'utf8')
@@ -398,10 +405,10 @@ const appSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/App
 const settingsOverviewSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/SettingsOverview.tsx'), 'utf8')
 const commandPaletteSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/components/CommandPalette.tsx'), 'utf8')
 const titleBarSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/components/layout/TitleBar.tsx'), 'utf8')
-assert.match(accountSettingsSource, /data-settings-search-target=\{createSettingsRowTargetId\('Usage limits', 'Usage windows'\)\}/, 'dynamic account usage cards must keep one stable exact search target')
-assert.doesNotMatch(gitSettingsSource, /gitPullRequestGlobalGuide\.mode === 'text' \? \(/, 'both global guide controls must stay mounted for exact search navigation')
-assert.match(gitSettingsSource, /title="Global guide"[\s\S]{0,420}disabled=\{settings\.gitPullRequestGlobalGuide\.mode !== 'text'\}/, 'the inactive text guide stays mounted but disabled')
-assert.match(gitSettingsSource, /title="Guide file"[\s\S]{0,420}disabled=\{settings\.gitPullRequestGlobalGuide\.mode !== 'file'\}/, 'the inactive guide file stays mounted but disabled')
+assert.match(readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/AccountUsageLimits.tsx'), 'utf8'), /data-settings-search-target=\{createSettingsRowTargetId\('Usage limits', 'Usage windows'\)\}/, 'dynamic account usage cards must keep one stable exact search target')
+assert.match(gitSettingsSource, /gitPullRequestGlobalGuide\.mode === 'text' \? \(/, 'only the active guide editor is shown')
+assert.match(gitSettingsSource, /title="Global guide"[\s\S]{0,420}disabled=\{settings\.gitPullRequestGlobalGuide\.mode !== 'text'\}/, 'the text guide retains its editing guard')
+assert.match(gitSettingsSource, /title="Guide file"[\s\S]{0,420}disabled=\{settings\.gitPullRequestGlobalGuide\.mode !== 'file'\}/, 'the guide file retains its editing guard')
 assert.match(
     assistantSettingsSource,
     /title="Default prompt"(?:(?!<SettingsRow\b|<\/SettingsSection>)[\s\S])*?control=\{<SettingsButton onClick=\{openPromptTemplate\}>Edit prompt<\/SettingsButton>\}/,
@@ -461,17 +468,17 @@ assert.equal((settingsNavigationSource.match(/detailPageIds:/g) || []).length, 5
 assert.doesNotMatch(settingsNavigationSource, /id: 'home'|label: 'Settings',[\s\S]{0,120}to: '\/settings'/, 'Settings must not expose a redundant home destination')
 assert.match(appSource, /<Route index element=\{<SettingsRedirect to="\/settings\/app\/general" \/>\}/, 'Settings should open a usable page without a category landing step')
 assert.match(settingsOverviewSource, /<SettingsCategoryRedirect/, 'older overview imports redirect instead of adding a landing-page step')
-assert.match(titleBarSource, /section\.id === 'home' \? \['Settings'\] : \['Settings', section\.label\]/, 'the Settings home title bar must not repeat Settings twice')
+assert.match(titleBarSource, /return getSettingsLocationTrail\(pathname\)/, 'the title bar names the actual page and its parent rather than only a broad category')
 assert.match(commandPaletteSource, /findAllSettingsSearchMatches\(deferredSearchTerm\)/, 'Cmd\/Ctrl+K must search the complete Settings inventory')
 assert.match(commandPaletteSource, /targetUrl = match\.target[\s\S]{0,180}setting=\$\{encodeURIComponent\(match\.target\.targetId\)\}/, 'command-palette settings results must navigate to the exact control')
 assert.doesNotMatch(commandPaletteSource, /\.slice\(0, 12\)/, 'global Settings matches must not be silently truncated')
 assert.match(settingsNavigationSource, /label: 'Connections'[\s\S]{0,220}to: '\/settings\/account'/, 'accounts and devices share the Connections group')
 assert.match(appSource, /<Route path="account" element=\{<SettingsCategoryRedirect categoryId="account" \/>\}/, 'the old Account category URL must open its real entry page')
-assert.match(appSource, /<Route path="account\/openai" element=\{<AccountSettings \/>\}/, 'the OpenAI account detail route must render the real account page')
-assert.match(appSource, /const AccountSettings = lazy\(loadAccountSettings\)/, 'Settings lazy routes must reuse the same preloadable module loader')
+assert.match(appSource, /<Route path="account\/openai" element=\{<SettingsRedirect to="\/settings\/providers\/usage" \/>\}/, 'old account links reach the provider usage view')
+assert.match(appSource, /const ProvidersSettings = lazy\(loadProviderSettings\)/, 'Settings lazy routes must reuse the same preloadable module loader')
 assert.match(settingsNavigationSource, /label: 'Skills'[\s\S]{0,260}to: '\/settings\/assistant\/skills'/, 'Skills must live beneath the Assistant category')
 assert.match(appSource, /<Route path="assistant\/skills" element=\{<SkillsSettings \/>\}/, 'the Skills detail destination must render the real source manager')
-assert.match(settingsRouteLoadersSource, /'\/settings\/assistant\/skills': loadSkillsSettings/, 'Skills must participate in Settings intent preloading')
+assert.match(settingsRouteLoadersSource, /skills: loadSkillsSettings/, 'Skills must participate in Settings intent preloading')
 assert.match(skillsSettingsSource, /title="Resolution order"[\s\S]{0,520}Project skills still win over personal skills/, 'Skills settings must explain deterministic scope and source priority')
 assert.match(skillsSettingsSource, /getSkillSourceOverview\(selectedProjectPath\)/, 'Skills settings must inspect personal and current-project source folders')
 assert.match(skillsSettingsSource, /cachedOverviewProjectKey === projectCacheKey\(projectPath\)/, 'Skills settings must not reuse one project overview for another project')
@@ -485,22 +492,26 @@ assert.match(settingsShellSource, /<SettingsSidebarNavigation hidden=\{Boolean\(
 const intentHandlers = ['onPointerEnter', 'onPointerDown', 'onFocus'].map(event => `${event}=\\{\\(\\) => preloadRoute\\(destination\\.to\\)\\}`).join('\\s+')
 assert.match(settingsSidebarSource, new RegExp(intentHandlers), 'direct page links preload from mouse and keyboard intent')
 assert.match(settingsLayoutSource, /<SettingsSectionNavigation containerRef=\{containerRef\}/, 'page layout includes real section navigation')
-assert.match(settingsRouteLoadersSource, /'\/settings\/account\/openai': loadAccountSettings[\s\S]*'\/settings\/about': loadAboutSettings/, 'every Settings detail destination must participate in intent preloading')
-assert.match(settingsNavigationSource, /label: 'Device connections'[\s\S]{0,260}to: '\/settings\/account\/devices'/, 'Device connections must live beneath the Account category')
+assert.match(settingsRouteLoadersSource, /account: loadProviderSettings[\s\S]*about: loadAboutSettings/, 'every Settings detail destination must participate in intent preloading')
+assert.match(settingsNavigationSource, /label: 'Devices'[\s\S]{0,260}to: '\/settings\/account\/devices'/, 'Device connections must live beneath the Account category')
 assert.match(appSource, /<Route path="account\/devices" element=\{<ConnectionsSettings \/>\}/, 'the device connection detail route must render the real connection page')
 assert.match(connectionsSettingsSource, /copyToClipboard\(BROWSER_CLIENT_HOST_ORIGIN\)/, 'Connections must expose a working local-browser Copy link action')
 assert.match(connectionsSettingsSource, /openBrowserPreviewExternal\(BROWSER_CLIENT_HOST_ORIGIN\)/, 'Connections must expose a working Desktop Open action')
 assert.match(connectionsSettingsSource, /title="Connection scope"[\s\S]{0,220}status="Local only"/, 'Connections must state the real loopback-only access boundary')
-assert.match(connectionsSettingsSource, /title="Trusted devices"[\s\S]{0,260}Connections from phones and other computers are currently disabled/, 'Connections must reserve the trusted-device surface without offering fake pairing controls')
+const mobileViewSource = connectionsSettingsSource.split("{view === 'mobile' ?")[1]?.split(') : null}')[0] || ''
+assert.match(mobileViewSource, /\{desktopHost\s*\? <MobileConnectionSettings \/>/, 'the mobile view mounts the real desktop-gated pairing component')
+const mobileSettingsSource = readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/MobileConnectionSettings.tsx'), 'utf8')
+assert.match(mobileSettingsSource, /window\.devscope\.mobileAccess/, 'mobile settings use the existing access API')
+assert.match(mobileSettingsSource, /setPairing\(await api\.pair\(\)\)/, 'pairing remains backed by the actual existing operation')
 assert.doesNotMatch(browserControlSettingsSource, /BROWSER_CLIENT_HOST_ORIGIN|Local browser client|openLocalBrowserClient/, 'Browser & control must stay focused on integrated-browser state after the link moves to Connections')
 assert.doesNotMatch(assistantSettingsSource, /getAccountOverview|AccountResetCreditsSection/, 'Assistant settings must not fetch or render account data')
 assert.doesNotMatch(`${accountSettingsSource}\n${accountResetCreditsSource}`, /Zyra subscription|subscription account|subscription-backed/, 'Account UI must not imply that Zyra owns the user’s ChatGPT plan')
-assert.match(accountSettingsSource, /overviewLoading, setOverviewLoading\] = useState\(\(\) => !accountSettingsCache\.overview\)/, 'the first Account visit loads while a recent in-memory snapshot makes repeat visits immediate')
-assert.match(accountSettingsSource, /ACCOUNT_POLL_INTERVAL_MS = 60_000[\s\S]{0,900}isAccountCacheFresh/, 'Account refreshes must use a bounded freshness window instead of aggressive remount polling')
-assert.doesNotMatch(accountSettingsSource.split('const loadConnectionState')[1]?.split('const applyAccountOverview')[0] || '', /listModels/, 'Account connection status must not discover models during page entry')
-assert.match(accountSettingsSource, /initialAccountLoading = overviewLoading && !overview/, 'background refreshes must preserve already-loaded account values')
-assert.match(accountSettingsSource, /initialAccountLoading \? 'Checking…'/, 'unresolved account values must say Checking instead of showing unavailable placeholders')
-assert.match(accountSettingsSource, /title="Usage windows"[\s\S]{0,180}status="Checking"/, 'usage limits must expose a clear initial loading row')
+assert.match(accountControllerSource, /overviewLoading, setOverviewLoading\] = useState\(\(\) => !accountSettingsCache\.overview\)/, 'the first Account visit loads while a recent in-memory snapshot makes repeat visits immediate')
+assert.match(accountControllerSource, /ACCOUNT_POLL_INTERVAL_MS = 60_000[\s\S]{0,900}isAccountCacheFresh/, 'Account refreshes must use a bounded freshness window instead of aggressive remount polling')
+assert.doesNotMatch(accountControllerSource.split('const loadConnectionState')[1]?.split('const applyAccountOverview')[0] || '', /listModels/, 'Account connection status must not discover models during page entry')
+assert.match(accountControllerSource, /initialAccountLoading = overviewLoading && !overview/, 'background refreshes must preserve already-loaded account values')
+assert.match(accountControllerSource, /initialAccountLoading \? 'Checking…'/, 'unresolved account values must say Checking instead of showing unavailable placeholders')
+assert.match(readFileSync(resolve(import.meta.dir, '../src/renderer/src/pages/settings/AccountUsageLimits.tsx'), 'utf8'), /loading \? 'Checking limits/, 'collapsed usage limits must expose a clear initial loading state')
 assert.match(accountResetCreditsSource, /title="Reset credits"/, 'the Account page must keep one compact reset summary row')
 assert.match(
     accountResetCreditsSource,

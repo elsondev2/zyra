@@ -6,6 +6,7 @@ import { SettingsActionsMenu } from './SettingsActionsMenu'
 import { SettingsListPagination } from './SettingsListPagination'
 import { paginateSettingsItems } from './settings-list-page'
 import { createSettingsRowTargetId } from './settings-search'
+import { SettingsPageTabs } from './SettingsPageTabs'
 import { useAssistantStoreActions, useAssistantStoreSelector } from '@/lib/assistant/store'
 import {
     formatAssistantSidebarRelativeTime,
@@ -74,7 +75,7 @@ export default function ArchivedChatsSettings() {
     const page = paginateSettingsItems(filteredSessions, requestedPage)
 
     return (
-        <SettingsPageContainer title="Archived chats" backTo="/settings/data" backLabel="Data & privacy">
+        <SettingsPageContainer title="Chats" navigation={<SettingsPageTabs family="chats" />}>
             <SettingsSection title="Archive">
                 <SettingsRow title="Archived chats" description="Chats stay saved until you restore or delete them." control={<span className="font-mono text-xs tabular-nums text-sparkle-text-secondary">{archivedSessions.length}</span>} />
                 {actionError ? <SettingsNotice tone="error">{actionError}</SettingsNotice> : null}

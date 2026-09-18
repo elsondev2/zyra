@@ -5,9 +5,9 @@ import { useSettings } from '@/lib/settings'
 import { SettingsInput, SettingsSelect } from '@/pages/settings/settings-layout'
 
 const field = '!h-11 !min-w-0 !w-full !rounded-lg !px-3 !text-[13px] focus:ring-2 focus:ring-[color-mix(in_srgb,var(--accent-primary)_12%,transparent)] disabled:opacity-50'
-export function ModelProviderForm({ onConnected }: { onConnected?: (connection: ModelProviderConnection) => void | Promise<void> }) {
+export function ModelProviderForm({ onConnected, onBusyChange, initialProvider = 'opencode' }: { onConnected?: (connection: ModelProviderConnection) => void | Promise<void>; onBusyChange?: (busy: boolean) => void; initialProvider?: ModelProviderInput['provider'] }) {
     const { updateSettings } = useSettings()
-    const [provider, setProvider] = useState<ModelProviderInput['provider']>('opencode')
+    const [provider, setProvider] = useState<ModelProviderInput['provider']>(initialProvider)
     const [apiKey, setApiKey] = useState('')
     const [name, setName] = useState('')
     const [baseUrl, setBaseUrl] = useState('')
@@ -18,7 +18,7 @@ export function ModelProviderForm({ onConnected }: { onConnected?: (connection: 
     const [success, setSuccess] = useState('')
     async function connect() {
         if (busy) return
-        setBusy(true); setError(''); setSuccess('')
+        setBusy(true); onBusyChange?.(true); setError(''); setSuccess('')
         try {
             const result = await window.devscope.onboarding.connectModelProvider({ provider, apiKey, name, baseUrl, model, api })
             if (!result.success) throw new Error(result.error)
@@ -27,7 +27,7 @@ export function ModelProviderForm({ onConnected }: { onConnected?: (connection: 
             setSuccess(`${result.connection.label} connected`)
             await onConnected?.(result.connection)
         } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not connect this provider.') }
-        finally { setBusy(false) }
+        finally { setBusy(false); onBusyChange?.(false) }
     }
     return <form className="space-y-4 text-left" onSubmit={event => { event.preventDefault(); void connect() }}>
         <label className="block text-[12px] text-sparkle-text-secondary">Provider

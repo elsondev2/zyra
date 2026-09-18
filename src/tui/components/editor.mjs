@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { stripSidebarBrowserContext } from "../../browser-context.mjs";
 import { readClipboardImage } from "../../clipboard-image.mjs";
 import { buildTerminalTheme } from "../../terminal-theme.mjs";
 import {
@@ -786,7 +787,7 @@ export class EditorComponent {
   }
 
   rememberInputHistory(text) {
-    const value = String(text ?? "").trim();
+    const value = stripSidebarBrowserContext(text).trim();
     if (!value) return;
     this.inputHistory = this.inputHistory.filter((item) => item !== value);
     this.inputHistory.push(value);

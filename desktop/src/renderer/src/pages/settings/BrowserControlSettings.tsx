@@ -1,9 +1,9 @@
 import type { DesktopLinkPreference } from '@shared/desktop-link-policy'
-import { useDesktopLinkPreference, setDesktopLinkPreference } from '@/lib/desktop-links'
 import { useEffect, useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import { isElectronRendererRuntime } from '@/lib/browser-file-url'
 import { useSettings } from '@/lib/settings'
+import { useDesktopLinkPreference, setDesktopLinkPreference } from '@/lib/desktop-links'
 import {
     clearPersistedAssistantBrowserWorkspaces,
     countPersistedAssistantBrowserWorkspaces
@@ -17,17 +17,22 @@ import {
     SettingsSegmented,
     SettingsSwitch
 } from './settings-layout'
+import { SettingsPageTabs } from './SettingsPageTabs'
 
-export default function BrowserControlSettings() {
+export default function BrowserControlSettings({ view = 'browsing' }: { view?: 'browsing' | 'privacy' | 'data' }) {
     const { settings, updateSettings } = useSettings()
     const linkPreference = useDesktopLinkPreference()
-    const [retainedWorkspaceCount, setRetainedWorkspaceCount] = useState(() => countPersistedAssistantBrowserWorkspaces())
+    const [retainedWorkspaceCount, setRetainedWorkspaceCount] = useState(() => view === 'data' ? countPersistedAssistantBrowserWorkspaces() : 0)
     const [browserHistoryState, setBrowserHistoryState] = useState<'checking' | 'present' | 'empty' | 'unavailable'>('checking')
     const [adBlockBusy, setAdBlockBusy] = useState(false)
-    const [status, setStatus] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
+    const [status, setStatus] = useState<{ tone: 'success' | 'error'; message: string; view: typeof view } | null>(null)
+    const showStatus = (next: Omit<NonNullable<typeof status>, 'view'>) => setStatus({ ...next, view })
     const integratedBrowserAvailable = isElectronRendererRuntime()
 
     useEffect(() => {
+        if (view !== 'data') return
+        setRetainedWorkspaceCount(countPersistedAssistantBrowserWorkspaces())
+        setBrowserHistoryState('checking')
         if (!integratedBrowserAvailable || typeof window.devscope.getBrowserHistory !== 'function') {
             setBrowserHistoryState('unavailable')
             return
@@ -39,7 +44,7 @@ export default function BrowserControlSettings() {
             if (!cancelled) setBrowserHistoryState('unavailable')
         })
         return () => { cancelled = true }
-    }, [integratedBrowserAvailable])
+    }, [integratedBrowserAvailable, view])
 
     const runMaintenance = async (action: 'history' | 'cache' | 'cookies' | 'profile') => {
         if (action === 'history' && !window.confirm('Clear visited addresses and omnibox suggestions from Zyra Browser?')) return
@@ -56,9 +61,9 @@ export default function BrowserControlSettings() {
                         : await window.devscope.clearBrowserPreviewData()
             if (!result.success) throw new Error(result.error || `Failed to clear Browser ${action}.`)
             if (action === 'history' || action === 'profile') setBrowserHistoryState('empty')
-            setStatus({ tone: 'success', message: action === 'profile' ? 'Local Browser profile reset.' : action === 'cookies' ? 'Signed out of websites.' : `Browser ${action} cleared.` })
+            showStatus({ tone: 'success', message: action === 'profile' ? 'Local Browser profile reset.' : action === 'cookies' ? 'Signed out of websites.' : `Browser ${action} cleared.` })
         } catch (error) {
-            setStatus({ tone: 'error', message: error instanceof Error ? error.message : `Failed to clear Browser ${action}.` })
+            showStatus({ tone: 'error', message: error instanceof Error ? error.message : `Failed to clear Browser ${action}.` })
         }
     }
 
@@ -70,9 +75,9 @@ export default function BrowserControlSettings() {
             if (typeof window.devscope.setBrowserAdBlockEnabled !== 'function') throw new Error('Restart Zyra Desktop to load built-in ad blocking.')
             const result = await window.devscope.setBrowserAdBlockEnabled({ enabled, promptDismissed: true })
             if (!result.success) throw new Error(result.error || 'Could not update built-in ad blocking.')
-            setStatus({ tone: 'success', message: enabled ? 'Built-in ad and tracker blocking enabled.' : 'Built-in ad and tracker blocking disabled.' })
+            showStatus({ tone: 'success', message: enabled ? 'Built-in ad and tracker blocking enabled.' : 'Built-in ad and tracker blocking disabled.' })
         } catch (error) {
-            setStatus({ tone: 'error', message: error instanceof Error ? error.message : 'Could not update built-in ad blocking.' })
+            showStatus({ tone: 'error', message: error instanceof Error ? error.message : 'Could not update built-in ad blocking.' })
         } finally {
             setAdBlockBusy(false)
         }
@@ -82,33 +87,46 @@ export default function BrowserControlSettings() {
         if (retainedWorkspaceCount > 0 && !window.confirm(`Clear ${retainedWorkspaceCount} retained Browser workspace${retainedWorkspaceCount === 1 ? '' : 's'}? Open chats and project files are not affected.`)) return
         clearPersistedAssistantBrowserWorkspaces()
         setRetainedWorkspaceCount(0)
-        setStatus({ tone: 'success', message: 'Retained Browser workspace layouts cleared.' })
+        showStatus({ tone: 'success', message: 'Retained Browser workspace layouts cleared.' })
     }
 
     return (
-        <SettingsPageContainer title="Browser" backTo="/settings/workspace" backLabel="Workspace">
-            {integratedBrowserAvailable ? <>
-                <SettingsSection title="Browsing" searchSection="Browser workspace">
-                    <SettingsRow title="Open links in" description="Choose where links from chats, files, and the Plugin store open." info="Remembered on this device. Sign-in flows and explicitly named browser actions keep their own destination." control={<SettingsSegmented<DesktopLinkPreference> value={linkPreference} options={[{ value: 'ask', label: 'Ask me' }, { value: 'zyra', label: 'Zyra Browser' }, { value: 'system', label: 'Default browser' }]} onChange={value => { try { setDesktopLinkPreference(value) } catch { setStatus({ tone: 'error', message: 'Could not save the link preference.' }) } }} label="Open links in" />} />
-                    <SettingsRow title="Restore Browser tabs" description="Reopen saved tabs when you return to a chat workspace." control={<SettingsSwitch checked={settings.assistantBrowserRestoreTabs} onCheckedChange={(assistantBrowserRestoreTabs) => updateSettings({ assistantBrowserRestoreTabs })} label="Restore Browser tabs" />} />
-                    <SettingsRow title="New Tab backgrounds" description="Choose a background source for new tabs." info="Built-in uses an attributed nature pack; configure your Unsplash key in the New Tab background picker." control={<SettingsSegmented value={settings.assistantBrowserNewTabBackgroundMode} options={[{ value: 'off', label: 'Off' }, { value: 'built-in', label: 'Built-in' }, { value: 'unsplash', label: 'Unsplash' }]} onChange={(assistantBrowserNewTabBackgroundMode) => updateSettings({ assistantBrowserNewTabBackgroundMode })} label="New Tab background source" />} />
-                    <SettingsRow title="Background behavior" description="Change the image per tab or keep your selected image." control={<SettingsSegmented value={settings.assistantBrowserNewTabBackgroundRotation} options={[{ value: 'every-tab', label: 'Every tab' }, { value: 'fixed', label: 'Locked' }]} onChange={(assistantBrowserNewTabBackgroundRotation) => updateSettings({ assistantBrowserNewTabBackgroundRotation })} label="New Tab background behavior" disabled={settings.assistantBrowserNewTabBackgroundMode === 'off'} />} />
-                </SettingsSection>
-                <SettingsSection title="Browser privacy" searchSection="Browser workspace">
-                    <SettingsRow title="Website sign-ins" description="Keep website sign-ins on this device across chats." info="Cookies and site storage persist across restarts; Zyra does not save passwords." status="Saved on this device" statusTone="ready" />
-                    <SettingsRow title="Google search suggestions" description="Send search text to Google for live suggestions." info="Addresses, localhost targets, paths and credential-shaped text are excluded." control={<SettingsSwitch checked={settings.assistantBrowserGoogleSuggestions} onCheckedChange={(assistantBrowserGoogleSuggestions) => updateSettings({ assistantBrowserGoogleSuggestions })} label="Google search suggestions" />} />
-                    <SettingsRow title="Built-in ad blocking" description="Block ads and trackers in the built-in Browser." info="Off by default; enabled blocking covers network, media, cosmetic, popup and tracking rules, excluding local development sites." status={settings.assistantBrowserAdBlockEnabled ? 'On' : 'Off'} statusTone={settings.assistantBrowserAdBlockEnabled ? 'ready' : 'muted'} control={<SettingsSwitch checked={settings.assistantBrowserAdBlockEnabled} disabled={adBlockBusy} onCheckedChange={(enabled) => void setAdBlocking(enabled)} label="Built-in ad blocking" />} />
-                </SettingsSection>
-                <SettingsSection title="Site data" searchSection="Browser workspace">
-                    <SettingsRow title="Retained workspaces" description="Clear saved tab layouts without deleting chats or files." status={`${retainedWorkspaceCount} saved`} statusTone={retainedWorkspaceCount > 0 ? 'info' : 'muted'} control={<SettingsButton variant="ghost" onClick={clearRetainedWorkspaces} disabled={retainedWorkspaceCount === 0}><Trash2 size={12} />Clear layouts</SettingsButton>} />
-                    <SettingsRow title="Browser history" description="Clear visited addresses while keeping website sign-ins." status={browserHistoryState === 'checking' ? 'Checking…' : browserHistoryState === 'present' ? 'Saved locally' : browserHistoryState === 'empty' ? 'Empty' : 'Unavailable'} statusTone={browserHistoryState === 'present' ? 'info' : 'muted'} control={<SettingsButton variant="ghost" onClick={() => void runMaintenance('history')} disabled={browserHistoryState !== 'present'}>Clear history</SettingsButton>} />
-                    <SettingsRow title="Temporary cache" description="Clear downloaded resources while keeping website sign-ins." control={<SettingsButton variant="ghost" onClick={() => void runMaintenance('cache')}>Clear cache</SettingsButton>} />
-                    <SettingsRow title="Sign out of websites" description="Clear cookies and sign out of all Browser websites." info="This requires confirmation and does not involve saved passwords because Zyra does not store them." control={<SettingsButton variant="ghost" onClick={() => void runMaintenance('cookies')}>Sign out everywhere</SettingsButton>} />
-                    <SettingsRow title="Reset Browser profile" description="Remove all local Browser history, cookies and site data." info="This also clears cached resources and site permissions after confirmation." control={<SettingsButton variant="danger" onClick={() => void runMaintenance('profile')}>Reset profile</SettingsButton>} />
-                </SettingsSection>
-                {status ? <SettingsNotice tone={status.tone}>{status.message}</SettingsNotice> : null}
-            </> : <SettingsSection title="Browser workspace"><SettingsNotice>Open Zyra Desktop to manage its Browser and site data.</SettingsNotice></SettingsSection>}
-
+        <SettingsPageContainer
+            title="Browser"
+            description="Manage browsing preferences, privacy controls, and local site data."
+            navigation={<SettingsPageTabs family="browser" />}
+            backTo="/settings/workspace/browser"
+            backLabel="Browser"
+        >
+            {integratedBrowserAvailable ? (
+                <>
+                    {view === 'browsing' ? (
+                        <SettingsSection title="Browsing" searchSection="Browser workspace">
+                            <SettingsRow title="Open links in" description="Choose where links from chats, files, and the Plugin store open." info="Remembered on this device. Sign-in flows and explicitly named browser actions keep their own destination." control={<SettingsSegmented<DesktopLinkPreference> value={linkPreference} options={[{ value: 'ask', label: 'Ask me' }, { value: 'zyra', label: 'Zyra Browser' }, { value: 'system', label: 'Default browser' }]} onChange={value => { try { setDesktopLinkPreference(value) } catch { showStatus({ tone: 'error', message: 'Could not save the link preference.' }) } }} label="Open links in" />} />
+                            <SettingsRow title="Restore Browser tabs" description="Reopen saved tabs when you return to a chat workspace." control={<SettingsSwitch checked={settings.assistantBrowserRestoreTabs} onCheckedChange={(assistantBrowserRestoreTabs) => updateSettings({ assistantBrowserRestoreTabs })} label="Restore Browser tabs" />} />
+                            <SettingsRow title="New Tab backgrounds" description="Choose a background source for new tabs." info="Built-in uses an attributed nature pack; configure your Unsplash key in the New Tab background picker." control={<SettingsSegmented value={settings.assistantBrowserNewTabBackgroundMode} options={[{ value: 'off', label: 'Off' }, { value: 'built-in', label: 'Built-in' }, { value: 'unsplash', label: 'Unsplash' }]} onChange={(assistantBrowserNewTabBackgroundMode) => updateSettings({ assistantBrowserNewTabBackgroundMode })} label="New Tab background source" />} />
+                            {settings.assistantBrowserNewTabBackgroundMode !== 'off' ? (<SettingsRow title="Background behavior" description="Change the image per tab or keep your selected image." control={<SettingsSegmented value={settings.assistantBrowserNewTabBackgroundRotation} options={[{ value: 'every-tab', label: 'Every tab' }, { value: 'fixed', label: 'Locked' }]} onChange={(assistantBrowserNewTabBackgroundRotation) => updateSettings({ assistantBrowserNewTabBackgroundRotation })} label="New Tab background behavior" />} />) : null}
+                        </SettingsSection>
+                    ) : view === 'privacy' ? (
+                        <SettingsSection title="Browser privacy" searchSection="Browser workspace">
+                            <SettingsRow title="Website sign-ins" description="Keep website sign-ins on this device across chats." info="Cookies and site storage persist across restarts; Zyra does not save passwords." status="Saved on this device" statusTone="ready" />
+                            <SettingsRow title="Google search suggestions" description="Send search text to Google for live suggestions." info="Addresses, localhost targets, paths and credential-shaped text are excluded." control={<SettingsSwitch checked={settings.assistantBrowserGoogleSuggestions} onCheckedChange={(assistantBrowserGoogleSuggestions) => updateSettings({ assistantBrowserGoogleSuggestions })} label="Google search suggestions" />} />
+                            <SettingsRow title="Built-in ad blocking" description="Block ads and trackers in the built-in Browser." info="Off by default; enabled blocking covers network, media, cosmetic, popup and tracking rules, excluding local development sites." status={settings.assistantBrowserAdBlockEnabled ? 'On' : 'Off'} statusTone={settings.assistantBrowserAdBlockEnabled ? 'ready' : 'muted'} control={<SettingsSwitch checked={settings.assistantBrowserAdBlockEnabled} disabled={adBlockBusy} onCheckedChange={(enabled) => void setAdBlocking(enabled)} label="Built-in ad blocking" />} />
+                        </SettingsSection>
+                    ) : (
+                        <SettingsSection title="Site data" searchSection="Browser workspace">
+                            <SettingsRow title="Retained workspaces" description="Clear saved tab layouts without deleting chats or files." status={`${retainedWorkspaceCount} saved`} statusTone={retainedWorkspaceCount > 0 ? 'info' : 'muted'} control={<SettingsButton variant="ghost" onClick={clearRetainedWorkspaces} disabled={retainedWorkspaceCount === 0}><Trash2 size={12} />Clear layouts</SettingsButton>} />
+                            <SettingsRow title="Browser history" description="Clear visited addresses while keeping website sign-ins." status={browserHistoryState === 'checking' ? 'Checking…' : browserHistoryState === 'present' ? 'Saved locally' : browserHistoryState === 'empty' ? 'Empty' : 'Unavailable'} statusTone={browserHistoryState === 'present' ? 'info' : 'muted'} control={<SettingsButton variant="ghost" onClick={() => void runMaintenance('history')} disabled={browserHistoryState !== 'present'}>Clear history</SettingsButton>} />
+                            <SettingsRow title="Temporary cache" description="Clear downloaded resources while keeping website sign-ins." control={<SettingsButton variant="ghost" onClick={() => void runMaintenance('cache')}>Clear cache</SettingsButton>} />
+                            <SettingsRow title="Sign out of websites" description="Clear cookies and sign out of all Browser websites." info="This requires confirmation and does not involve saved passwords because Zyra does not store them." control={<SettingsButton variant="ghost" onClick={() => void runMaintenance('cookies')}>Sign out everywhere</SettingsButton>} />
+                            <SettingsRow title="Reset Browser profile" description="Remove all local Browser history, cookies and site data." info="This also clears cached resources and site permissions after confirmation." control={<SettingsButton variant="danger" onClick={() => void runMaintenance('profile')}>Reset profile</SettingsButton>} />
+                        </SettingsSection>
+                    )}
+                    {status && status.view === view ? <SettingsNotice tone={status.tone}>{status.message}</SettingsNotice> : null}
+                </>
+            ) : (
+                <SettingsSection title="Browser workspace"><SettingsNotice>Open Zyra Desktop to manage its Browser and site data.</SettingsNotice></SettingsSection>
+            )}
         </SettingsPageContainer>
     )
 }

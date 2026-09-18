@@ -62,8 +62,8 @@ data class WorkspaceGitActions(val refresh: ()->Unit,val search:(String)->Unit,v
     }
 }
 
-@Composable fun GitDiffContent(diff: String,singleFile: Boolean,modifier: Modifier=Modifier,wrap: Boolean=true) {
-    val rows=remember(diff,singleFile) {gitDiffRows(diff).filter {!(singleFile && it.kind==GitDiffKind.FILE)}}
+@Composable fun GitDiffContent(diff: String,singleFile: Boolean,modifier: Modifier=Modifier,wrap: Boolean=true, capturedRows: List<GitDiffRow>? = null) {
+    val rows=remember(diff,singleFile,capturedRows) {(capturedRows ?: gitDiffRows(diff)).filter {!(singleFile && it.kind==GitDiffKind.FILE)}}
     val dark=MaterialTheme.colorScheme.background.luminance()<.5f
     val added=if(dark) Color(0xffa7e5ba) else Color(0xff176534)
     val removed=if(dark) Color(0xffffb3bd) else Color(0xffa51d34)
@@ -86,4 +86,3 @@ data class WorkspaceGitActions(val refresh: ()->Unit,val search:(String)->Unit,v
         }
     }
 }
-

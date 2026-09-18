@@ -16,6 +16,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -31,50 +33,75 @@ internal val LocalWorkDisclosure = staticCompositionLocalOf<() -> Unit> { {} }
 @Composable fun TimelineWorkSummary(group: ChatRailRow.Work, inspect: (WorkAction) -> Unit,
     question: @Composable (TimelineItem) -> Unit = {}, media: @Composable (TimelineItem) -> Unit = {}) {
     val reading = LocalWorkDisclosure.current
-    var expanded by rememberSaveable(group.id) { mutableStateOf(group.running && !group.finalVisible) }
-    var previouslyWorking by rememberSaveable(group.id) { mutableStateOf(group.running && !group.finalVisible) }
-    LaunchedEffect(group.running, group.finalVisible) {
-        val working = group.running && !group.finalVisible
+    val activeStatus = group.entries.lastOrNull { it.kind == "work_status" && it.pending }
+    val latestStatus = group.entries.lastOrNull { it.kind == "work_status" }
+    val headerStatus = activeStatus ?: latestStatus?.takeIf { TimelineStatus.failed(it) }
+    val statusColor = headerStatus?.let { workStatusColor(it) } ?: MaterialTheme.colorScheme.onSurfaceVariant
+    val working = group.running || activeStatus != null
+    val allowActiveCollapse = LocalCollapseActiveWork.current
+    var expanded by rememberSaveable(group.id) { mutableStateOf(working) }
+    val shown = (working && !allowActiveCollapse) || expanded
+    var previouslyWorking by rememberSaveable(group.id) { mutableStateOf(working) }
+    LaunchedEffect(working) {
+        if (!previouslyWorking && working) expanded = true
         // Collapse on completion, preserving a manually expanded finished turn
         // when returning from another page or restoring the app.
         if (previouslyWorking && !working) expanded = false
         previouslyWorking = working
     }
     val duration = if (LocalReduceMotion.current) 0 else 260
-    val angle by animateFloatAsState(if (expanded) 90f else 0f, tween(duration), label = "Work disclosure")
+    val angle by animateFloatAsState(if (shown) 90f else 0f, tween(duration), label = "Work disclosure")
     var now by remember(group.id) { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(group.id, group.running, group.finalVisible) { while (group.running && !group.finalVisible) { now = System.currentTimeMillis(); kotlinx.coroutines.delay(1000) } }
-    val elapsed = workElapsed(group.startedAt, if (group.running && !group.finalVisible) now else group.completedAt)
+    LaunchedEffect(group.id, working) { while (working) { now = System.currentTimeMillis(); kotlinx.coroutines.delay(1000) } }
+    val elapsed = workElapsed(group.startedAt, if (working) now else group.completedAt)
     val showThoughts = LocalThoughtProcesses.current
-    val segments = remember(group.entries, group.actions, showThoughts) { workSegments(group, showThoughtProcesses = showThoughts, showQuestions = false) }
+    val segments = remember(group.entries, group.actions, showThoughts, headerStatus) { workSegments(group, showThoughtProcesses = showThoughts, showQuestions = false).filterNot { it is WorkSegment.Content && it.item.id == headerStatus?.id } }
+    val canCollapse = segments.isNotEmpty() && (!working || allowActiveCollapse)
     Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(MaterialTheme.shapes.small).clickable(role = Role.Button) { reading(); expanded = !expanded }
-            .semantics { stateDescription = if (expanded) "Work expanded" else "Work collapsed" },
+        Row(Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(MaterialTheme.shapes.small).clickable(enabled = canCollapse, role = Role.Button) { reading(); expanded = !shown }
+            .semantics { if (segments.isNotEmpty()) stateDescription = if (shown) "Work expanded" else "Work collapsed" },
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (group.running && !group.finalVisible) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
-            Text((if (group.running && !group.finalVisible) "Working" else "Worked") + (elapsed?.takeIf { LocalWorkDetails.current }?.let { " for " + it } ?: ""), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f, fill = false), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (working) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp, color = statusColor)
+            else if (headerStatus != null) CompositionLocalProvider(LocalContentColor provides statusColor) { AppIcon(R.drawable.ic_circle_alert, "Work failed", Modifier.size(14.dp)) }
+            Text(headerStatus?.text ?: ((if (working) "Working" else "Worked") + (elapsed?.takeIf { LocalWorkDetails.current }?.let { " for " + it } ?: "")), style = MaterialTheme.typography.labelMedium, color = statusColor, modifier = Modifier.weight(1f, fill = false), maxLines = if (headerStatus != null) 2 else 1, overflow = TextOverflow.Ellipsis)
             if (LocalActionCounts.current && group.actions.isNotEmpty()) Text("· ${group.actions.size} ${if (group.actions.size == 1) "action" else "actions"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            AppIcon(R.drawable.ic_chevron_right, if (expanded) "Hide work" else "Show work", Modifier.size(14.dp).rotate(angle))
+            if (canCollapse) AppIcon(R.drawable.ic_chevron_right, if (shown) "Hide work" else "Show work", Modifier.size(14.dp).rotate(angle))
         }
         HorizontalDivider(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .65f))
-        androidx.compose.animation.AnimatedVisibility(expanded, enter = expandVertically(tween(duration)) + fadeIn(tween(duration)), exit = shrinkVertically(tween(duration)) + fadeOut(tween(duration))) {
+        androidx.compose.animation.AnimatedVisibility(shown && segments.isNotEmpty(), enter = expandVertically(tween(duration)) + fadeIn(tween(duration)), exit = shrinkVertically(tween(duration)) + fadeOut(tween(duration))) {
             Column(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (segment in segments) {
                     if (segment is WorkSegment.Actions) {
                         val batch = segment.actions
-                        if (batch.size > 1) TimelineActionBatch(batch, group.running, inspect, media)
+                        if (batch.size > 1 || batch.first().batch != null) TimelineActionBatch(batch, group.running, inspect, media)
                         else TimelineActionRow(batch.single(), group.running, inspect, media)
                     } else if (segment is WorkSegment.Content) {
                         val item = segment.item
-                        if (item.kind == "user_input_requested") question(item)
+                        if (item.kind == "work_status") WorkStatus(item)
+                        else if (item.kind == "user_input_requested") question(item)
                         else if (item.kind != "resolved") {
                             if (LocalThoughtProcesses.current && item.reasoning.isNotBlank()) WorkThought(item)
-                            if (item.text.isNotBlank()) Markdown(item.text)
+                            if (item.text.isNotBlank()) AssistantContent(item.text, group.running && item.kind == "stream")
                         }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable private fun workStatusColor(item: TimelineItem): Color = when {
+        TimelineStatus.failed(item) -> MaterialTheme.colorScheme.error
+        TimelineStatus.family(item) == "recovery" -> if (MaterialTheme.colorScheme.surface.luminance() > .5f) Color(0xFF196C48) else Color(0xFF8ED8AE)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+@Composable private fun WorkStatus(item: TimelineItem) {
+    val color = workStatusColor(item)
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (item.pending) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp, color = color)
+        else CompositionLocalProvider(LocalContentColor provides color) { AppIcon(if (TimelineStatus.failed(item)) R.drawable.ic_circle_alert else R.drawable.ic_check, modifier = Modifier.size(14.dp)) }
+        Text(item.text, color = color, style = MaterialTheme.typography.labelMedium)
     }
 }
 
@@ -94,7 +121,7 @@ internal val LocalWorkDisclosure = staticCompositionLocalOf<() -> Unit> { {} }
     Row(Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(MaterialTheme.shapes.small).clickable(role = Role.Button) { reading(); expanded = !expanded }.padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         if (running && actions.any { it.item.pending }) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 1.5.dp) else AppIcon(R.drawable.ic_workflow, modifier = Modifier.size(16.dp))
-        Text(workSegmentTitle(actions), Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(workSegmentTitle(actions, running), Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (LocalActionCounts.current) Text("${actions.size}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (actions.any { it.failed }) CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.error) { AppIcon(R.drawable.ic_circle_alert, "Failed action", Modifier.size(14.dp)) }
         AppIcon(R.drawable.ic_chevron_right, if (expanded) "Hide actions" else "Show actions", Modifier.size(14.dp).rotate(if (expanded) 90f else 0f))

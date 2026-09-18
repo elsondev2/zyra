@@ -1,3 +1,5 @@
+import { isBrowserExtension } from '@/lib/browser-extension'
+import { ExtensionSettingsMenu } from '@/components/layout/ExtensionSettingsMenu'
 import { Settings } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { SidebarUpdateButton } from '@/components/updates/SidebarUpdateButton'
@@ -6,6 +8,7 @@ import { preloadSettingsRoute } from '../settings/settings-route-loaders'
 
 export function AssistantSidebarFooter({ agentInboxEnabled }: { agentInboxEnabled: boolean }) {
     const navigate = useNavigate()
+    if (isBrowserExtension) return <div className="mt-auto flex shrink-0 items-center border-t border-[var(--surface-divider)] pt-2" data-assistant-sidebar-footer><ExtensionSettingsMenu /></div>
     return <div className="mt-auto flex shrink-0 items-center gap-1 border-t border-[var(--surface-divider)] pt-2" data-assistant-sidebar-footer>
         <button
             type="button"

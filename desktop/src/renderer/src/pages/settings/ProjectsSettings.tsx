@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { FolderOpen, Image, RefreshCw, X } from 'lucide-react'
 import ProjectIcon from '@/components/ui/ProjectIcon'
 import { useSettings } from '@/lib/settings'
@@ -13,49 +13,36 @@ import {
 import { ExplorerPreferencesSections } from './ExplorerSettings'
 import { useAssistantProjectCatalog } from '../assistant/useAssistantProjectCatalog'
 import { ProjectSettingsCatalog } from './ProjectSettingsCatalog'
+import { SettingsPageTabs } from './SettingsPageTabs'
 
 type IndexResult = { success: boolean; projects: number; folders: number; files: number; error?: string }
 
-export default function ProjectsSettings() {
-    const { settings, updateSettings } = useSettings()
-    const [indexing, setIndexing] = useState(false)
-    const [indexResult, setIndexResult] = useState<IndexResult | null>(null)
+export default function ProjectsSettings({ view = 'catalog' }: { view?: 'catalog' | 'discovery' | 'presentation' }) {
+    return (
+        <SettingsPageContainer
+            title="Projects"
+            description="Manage the Project catalog, discovery boundaries, and presentation defaults."
+            navigation={<SettingsPageTabs family="projects" />}
+            backTo="/settings/workspace/projects"
+            backLabel="Projects"
+        >
+            {view === 'catalog' ? <ProjectCatalogSettings /> : view === 'discovery' ? <ProjectDiscoverySettings /> : <ProjectPresentationSettings />}
+        </SettingsPageContainer>
+    )
+}
+
+function ProjectCatalogSettings() {
     const requestProjectCreation = useProjectCreation()
     const [projectActionPending, setProjectActionPending] = useState(false)
     const {
         catalog,
         loading: projectsLoading,
         error: projectsError,
-        refresh: refreshProjects,
         associateFolder,
         removeFolder,
         dismissCandidate,
         updateProject
     } = useAssistantProjectCatalog()
-    const roots = useMemo(() => [settings.projectsFolder, ...settings.additionalFolders].filter((value) => value.trim()), [settings.additionalFolders, settings.projectsFolder])
-
-    const rootsKey = JSON.stringify(roots)
-    const previousRootsKey = useRef(rootsKey)
-    useEffect(() => {
-        if (previousRootsKey.current === rootsKey) return
-        previousRootsKey.current = rootsKey
-        void refreshProjects()
-    }, [refreshProjects, rootsKey])
-
-    const chooseMainRoot = async () => {
-        const result = await window.devscope.selectFolder()
-        if (result.success && result.folderPath) {
-            updateSettings({ projectsFolder: result.folderPath })
-            setIndexResult(null)
-        }
-    }
-
-    const addRoot = async () => {
-        const result = await window.devscope.selectFolder()
-        if (!result.success || !result.folderPath || roots.includes(result.folderPath)) return
-        updateSettings({ additionalFolders: [...settings.additionalFolders, result.folderPath] })
-        setIndexResult(null)
-    }
 
     const createProject = async () => {
         if (projectActionPending) return
@@ -73,12 +60,39 @@ export default function ProjectsSettings() {
         await associateFolder({ projectId, path: result.folderPath, access })
     }
 
-    const addIconOverride = async () => {
-        const project = await window.devscope.selectFolder()
-        if (!project.success || !project.folderPath) return
-        const icon = await window.devscope.selectProjectIconFile()
-        if (!icon.success || !icon.filePath) return
-        updateSettings({ projectIconOverrides: { ...settings.projectIconOverrides, [project.folderPath]: icon.filePath } })
+    return (
+        <ProjectSettingsCatalog
+            catalog={catalog} loading={projectsLoading} error={projectsError} creating={projectActionPending}
+            onCreate={createProject}
+            onOpenHome={async project => { const result = await window.devscope.openInExplorer(project.homePath); if (!result.success) throw new Error(result.error || 'Could not open the Project home.'); return result }}
+            onAddFolder={addAssociatedFolder}
+            onRemoveFolder={(projectId, folderId) => removeFolder({ projectId, folderId })}
+            onArchive={(projectId, archived) => updateProject({ projectId, archived })}
+            onImport={candidate => requestProjectCreation({ name: candidate.suggestedName, folderPaths: [candidate.path], candidateId: candidate.id, candidatePath: candidate.path })}
+            onDismiss={dismissCandidate}
+        />
+    )
+}
+
+function ProjectDiscoverySettings() {
+    const { settings, updateSettings } = useSettings()
+    const [indexing, setIndexing] = useState(false)
+    const [indexResult, setIndexResult] = useState<IndexResult | null>(null)
+    const roots = useMemo(() => [settings.projectsFolder, ...settings.additionalFolders].filter((value) => value.trim()), [settings.additionalFolders, settings.projectsFolder])
+
+    const chooseMainRoot = async () => {
+        const result = await window.devscope.selectFolder()
+        if (result.success && result.folderPath) {
+            updateSettings({ projectsFolder: result.folderPath })
+            setIndexResult(null)
+        }
+    }
+
+    const addRoot = async () => {
+        const result = await window.devscope.selectFolder()
+        if (!result.success || !result.folderPath || roots.includes(result.folderPath)) return
+        updateSettings({ additionalFolders: [...settings.additionalFolders, result.folderPath] })
+        setIndexResult(null)
     }
 
     const rebuildIndex = async () => {
@@ -102,7 +116,7 @@ export default function ProjectsSettings() {
     }
 
     return (
-        <SettingsPageContainer title="Projects" backTo="/settings/workspace" backLabel="Workspace">
+        <>
             <SettingsSection title="Project roots">
                 <SettingsRow
                     title="Main projects folder"
@@ -124,17 +138,6 @@ export default function ProjectsSettings() {
                 <SettingsRow title="Additional roots" description="Add another explicit folder to project discovery." control={<SettingsButton onClick={() => void addRoot()}><FolderOpen size={13} />Add folder</SettingsButton>} />
             </SettingsSection>
 
-            <ProjectSettingsCatalog
-                catalog={catalog} loading={projectsLoading} error={projectsError} creating={projectActionPending}
-                onCreate={createProject}
-                onOpenHome={async project => { const result = await window.devscope.openInExplorer(project.homePath); if (!result.success) throw new Error(result.error || 'Could not open the Project home.'); return result }}
-                onAddFolder={addAssociatedFolder}
-                onRemoveFolder={(projectId, folderId) => removeFolder({ projectId, folderId })}
-                onArchive={(projectId, archived) => updateProject({ projectId, archived })}
-                onImport={candidate => requestProjectCreation({ name: candidate.suggestedName, folderPaths: [candidate.path], candidateId: candidate.id, candidatePath: candidate.path })}
-                onDismiss={dismissCandidate}
-            />
-
             <SettingsSection title="Indexing" headerAction={<SettingsButton variant="ghost" onClick={() => void rebuildIndex()} disabled={indexing || roots.length === 0}><RefreshCw size={12} className={indexing ? 'animate-spin' : ''} />Rebuild</SettingsButton>}>
                 <SettingsRow title="Configured roots" description="Only these roots are eligible for recursive indexing." control={<span className="font-mono text-xs tabular-nums text-sparkle-text-secondary">{roots.length}</span>} />
                 <SettingsRow title="Persistence" description="The file index is stored incrementally and reused after restart." control={<span className="text-xs font-medium text-sparkle-text-secondary">On disk</span>} />
@@ -145,7 +148,23 @@ export default function ProjectsSettings() {
                     </SettingsNotice>
                 ) : null}
             </SettingsSection>
+        </>
+    )
+}
 
+function ProjectPresentationSettings() {
+    const { settings, updateSettings } = useSettings()
+
+    const addIconOverride = async () => {
+        const project = await window.devscope.selectFolder()
+        if (!project.success || !project.folderPath) return
+        const icon = await window.devscope.selectProjectIconFile()
+        if (!icon.success || !icon.filePath) return
+        updateSettings({ projectIconOverrides: { ...settings.projectIconOverrides, [project.folderPath]: icon.filePath } })
+    }
+
+    return (
+        <>
             <ExplorerPreferencesSections />
 
             <SettingsSection title="Project icons" headerAction={<SettingsButton variant="ghost" onClick={() => void addIconOverride()}><Image size={12} />Add override</SettingsButton>}>
@@ -165,6 +184,6 @@ export default function ProjectsSettings() {
                 ))}
                 {Object.keys(settings.projectIconOverrides).length === 0 ? <SettingsNotice>No manual overrides. Detected project icons remain active.</SettingsNotice> : null}
             </SettingsSection>
-        </SettingsPageContainer>
+        </>
     )
 }

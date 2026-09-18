@@ -13,9 +13,9 @@ import dev.zyra.mobile.data.*
 
 @Composable fun SettingsScreen(vm: MobileSession, plugins: () -> Unit) {
     val optimizePhotos by vm.preferences.optimizePhotos.collectAsState()
-    SettingsContent(vm::page, plugins, optimizePhotos, vm.preferences::optimizePhotos)
+    SettingsContent(vm::page, plugins, optimizePhotos, vm.preferences::optimizePhotos) { ChatNotificationSetting(vm) }
 }
-@Composable internal fun SettingsContent(page: (String) -> Unit, plugins: () -> Unit, optimizePhotos: Boolean = true, changeOptimizePhotos: (Boolean) -> Unit = {}) {
+@Composable internal fun SettingsContent(page: (String) -> Unit, plugins: () -> Unit, optimizePhotos: Boolean = true, changeOptimizePhotos: (Boolean) -> Unit = {}, notifications: @Composable () -> Unit = {}) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
         item { SettingsCategory("Personalize") }
         item { SettingsLink(R.drawable.ic_palette, "Appearance", "Theme, layout and motion") { page("appearance") } }
@@ -25,6 +25,7 @@ import dev.zyra.mobile.data.*
         item { SettingsLink(R.drawable.ic_puzzle, "Plugins", "Installed on your computers", plugins) }
         item { SettingsLink(R.drawable.ic_sliders_horizontal, "Usage & limits", "Activity, costs and account allowances") { page("limits") } }
         item { SettingsCategory("This phone") }
+        item { notifications() }
         item { ZyraSettingRow(R.drawable.ic_camera, "Optimize new photos", "Smaller uploads on slower connections", trailing = { ZyraSwitch(optimizePhotos, changeOptimizePhotos) }) }
         item { SettingsLink(R.drawable.ic_folder, "Storage", "Saved history and downloads") { page("storage") } }
         item { SettingsLink(R.drawable.ic_info, "About Zyra", "Version and licenses") { page("about") } }

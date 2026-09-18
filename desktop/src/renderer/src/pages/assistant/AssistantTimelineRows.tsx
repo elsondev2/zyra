@@ -665,6 +665,40 @@ export const TimelineMessage = memo(({
         const assistantCopyValue = renderedAssistantText.trim() ? renderedAssistantText : copyValue
         if (!renderedAssistantText.trim() && !presentationActive) return null
 
+        const timestamp = <time dateTime={message.updatedAt} data-assistant-message-timestamp="true">{formatAssistantDateTime(message.updatedAt)}</time>
+        const showElapsed = settings.assistantShowActionStats && assistantElapsed
+        const showCopy = isLastAssistantInTurn && assistantCopyValue.trim()
+        const renderMessageFooter = (showTimestamp: boolean) => {
+            if (!showTimestamp && !showElapsed && !showCopy) return null
+            return <div
+                className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-sparkle-text-muted"
+                data-assistant-message-metadata={displayMode}
+            >
+                {showTimestamp ? timestamp : null}
+                {showElapsed ? <span className="text-sparkle-text">{showTimestamp ? '| ' : ''}{assistantElapsed}</span> : null}
+                {showCopy ? <button
+                    type="button"
+                    onClick={async () => {
+                        try {
+                            await copyTextToClipboard(assistantCopyValue)
+                            setCopied(true)
+                            window.setTimeout(() => setCopied(false), 1600)
+                        } catch {}
+                    }}
+                    className={cn(
+                        'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 opacity-0 transition-all duration-150 focus-visible:opacity-100 group-hover/assistant-message:opacity-100',
+                        copied
+                            ? 'border-emerald-400/20 bg-emerald-500/[0.08] text-emerald-200'
+                            : 'border-transparent bg-white/[0.03] text-sparkle-text-secondary hover:bg-white/[0.05] hover:text-sparkle-text'
+                    )}
+                    title={copied ? 'Copied' : 'Copy message'}
+                >
+                    {copied ? <Check size={11} /> : <Copy size={11} />}
+                    <span>{copied ? 'Copied' : 'Copy'}</span>
+                </button> : null}
+            </div>
+        }
+
         return (
             <div
                 className={cn('group group/assistant-message max-w-4xl', compactLiveNarration || inlineWorkNarration ? 'py-0.5' : minimal ? 'py-0.5' : 'py-1')}
@@ -741,6 +775,8 @@ export const TimelineMessage = memo(({
                     <StreamingAssistantMarkdown
                         content={renderedAssistantText || ' '}
                         cacheKey={`${message.id}:stream`}
+                        timestamp={timestamp}
+                        renderFooter={renderMessageFooter}
                         filePath={filePath || undefined}
                         onInternalLinkClick={onInternalLinkClick}
                         onLinkNotice={onLinkNotice}
@@ -751,6 +787,8 @@ export const TimelineMessage = memo(({
                     <CompletedAssistantMarkdown
                         content={renderedAssistantText}
                         cacheKey={`${message.id}:${message.updatedAt}:${renderedAssistantText.length}`}
+                        timestamp={timestamp}
+                        renderFooter={renderMessageFooter}
                         filePath={filePath || undefined}
                         deferInitialRender={streamedMessageRef.current}
                         onInternalLinkClick={onInternalLinkClick}
@@ -759,44 +797,15 @@ export const TimelineMessage = memo(({
                         mediaMode="images-and-videos"
                     />
                 )}
-                {!compactLiveNarration && !inlineWorkNarration ? <div
-                    className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-sparkle-text-muted"
-                    data-assistant-message-metadata={displayMode}
-                >
-                    <span data-assistant-message-timestamp="true">{formatAssistantDateTime(message.updatedAt)}</span>
-                    {settings.assistantShowActionStats && assistantElapsed ? <span className="text-sparkle-text">| {assistantElapsed}</span> : null}
-                    {isLastAssistantInTurn && assistantCopyValue.trim() ? (
-                        <button
-                            type="button"
-                            onClick={async () => {
-                                try {
-                                    await copyTextToClipboard(assistantCopyValue)
-                                    setCopied(true)
-                                    window.setTimeout(() => setCopied(false), 1600)
-                                } catch {}
-                            }}
-                            className={cn(
-                                'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 opacity-0 transition-all duration-150 focus-visible:opacity-100 group-hover/assistant-message:opacity-100',
-                                copied
-                                    ? 'border-emerald-400/20 bg-emerald-500/[0.08] text-emerald-200'
-                                    : 'border-transparent bg-white/[0.03] text-sparkle-text-secondary hover:bg-white/[0.05] hover:text-sparkle-text'
-                            )}
-                            title={copied ? 'Copied' : 'Copy message'}
-                        >
-                            {copied ? <Check size={11} /> : <Copy size={11} />}
-                            <span>{copied ? 'Copied' : 'Copy'}</span>
-                        </button>
-                    ) : null}
-                </div> : null}
             </div>
         )
     }
 
     return (
         <div className={cn('group/user-message ml-auto flex flex-col items-end', minimal ? 'max-w-[80%] py-0.5' : 'py-1')} data-assistant-message-surface={displayMode}>
-            <div className={cn('group relative', minimal ? 'max-w-full' : 'max-w-[36rem]')}>
+            <div className={cn('group relative', questionResponse ? 'w-[26rem] max-w-full' : minimal ? 'max-w-full' : 'max-w-[36rem]')}>
                 <div className={cn(
-                    minimal
+                    questionResponse ? 'min-w-0' : minimal
                         ? 'rounded-2xl bg-[var(--surface-hover)] px-3.5 py-2.5'
                         : 'rounded-[1.15rem] border border-white/10 bg-white/[0.03] px-4 py-2.5'
                 )}>
@@ -922,7 +931,7 @@ export const TimelineMessage = memo(({
                         </div>
                     ) : null}
                     {questionResponse ? (
-                        <AssistantQuestionResponse input={questionResponse} />
+                        <AssistantQuestionResponse input={questionResponse} minimal={minimal} />
                     ) : parsedUserMessage.body ? (
                         <CollapsibleUserMessageBody content={parsedUserMessage.body} />
                     ) : null}

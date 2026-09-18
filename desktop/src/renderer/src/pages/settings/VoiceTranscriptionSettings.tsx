@@ -42,8 +42,9 @@ export function VoiceTranscriptionSettings() {
                         : { label: 'Not checked', tone: 'muted' }
     return <SettingsSection title="Voice transcription">
         <SettingsRow title="Voice input" description="Dictate messages or record voice notes in chat." control={<SettingsSwitch checked={settings.assistantTranscriptionEnabled} onCheckedChange={(assistantTranscriptionEnabled) => updateSettings({ assistantTranscriptionEnabled })} label="Enable voice input" />} />
+        {settings.assistantTranscriptionEnabled ? (<>
         <SettingsRow title="Transcription engine" description="Choose live browser dictation or recorded ChatGPT transcription." control={<SettingsSegmented value={settings.assistantTranscriptionEngine} options={[{ value: 'browser', label: 'Browser' }, { value: 'codex', label: 'ChatGPT' }]} onChange={(assistantTranscriptionEngine) => updateSettings({ assistantTranscriptionEngine })} label="Transcription engine" disabled={!settings.assistantTranscriptionEnabled} />} />
-        <SettingsRow
+        {settings.assistantTranscriptionEngine === 'codex' ? (<SettingsRow
             title="ChatGPT transcription"
             description="Transcribe voice notes with your connected ChatGPT account."
             icon={<SettingsProviderIcon provider="chatgpt" />}
@@ -51,12 +52,12 @@ export function VoiceTranscriptionSettings() {
             statusTone={chatGptVoiceStatus.tone}
             statusTitle={chatGptVoiceStatus.title}
             control={<SettingsButton variant="ghost" onClick={() => void loadTranscriptionState()} disabled={!settings.assistantTranscriptionEnabled || settings.assistantTranscriptionEngine !== 'codex' || transcriptionStateLoading}><RefreshCw size={12} className={transcriptionStateLoading ? 'animate-spin motion-reduce:animate-none' : ''} />Refresh status</SettingsButton>}
-        />
-        <SettingsRow
+        />) : (<SettingsRow
             title="Browser dictation"
             description="Use live speech recognition when your browser supports it."
             status={browserSpeechAvailable ? 'Available' : 'Unavailable'}
             statusTone={browserSpeechAvailable ? 'ready' : 'warning'}
-        />
+        />)}
+        </>) : null}
     </SettingsSection>
 }

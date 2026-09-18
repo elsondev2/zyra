@@ -7,6 +7,9 @@ shims/
 .coord/
 /.agents/
 /.codex/
+/.codex-remote-attachments/
+/image-preview-review.png
+/review-markdown-image.png
 /AGENTS.override.md
 /AGENTS.local.md
 /docs.local/

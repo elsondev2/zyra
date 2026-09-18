@@ -42,7 +42,9 @@ import {
     ASSISTANT_ACTIVITY_PAYLOAD_MAX_CHARACTERS,
     ASSISTANT_TRUNCATED_ACTIVITY_PAYLOAD_ESTIMATED_CHARACTERS,
     assistantActivityPayloadColumns,
-    parseAssistantActivityPayload
+    assistantActivityTerminalOutcomeColumn,
+    parseAssistantActivityPayload,
+    parseAssistantActivityTerminalOutcome
 } from './persistence-activity-payload'
 import { parseJson, toNullableString, toNumber } from './persistence-utils'
 
@@ -94,16 +96,21 @@ function mapMessage(row: SqlValue[]): AssistantMessage {
 }
 
 function mapActivity(row: SqlValue[]): AssistantActivity {
+    const kind = String(row[1] || '')
+    const payload = parseAssistantActivityPayload(row[9], row[10])
+    const detail = toNullableString(row[4]) || undefined
+    const turnTerminalOutcome = parseAssistantActivityTerminalOutcome(row[6], kind, payload, detail)
     return {
         id: String(row[0] || ''),
-        kind: String(row[1] || ''),
+        kind,
         tone: String(row[2] || 'info') as AssistantActivity['tone'],
         summary: String(row[3] || ''),
-        detail: toNullableString(row[4]) || undefined,
+        detail,
         turnId: toNullableString(row[5]),
-        timelineSequence: typeof row[6] === 'number' ? row[6] : undefined,
-        createdAt: String(row[7] || new Date(0).toISOString()),
-        payload: parseAssistantActivityPayload(row[8], row[9])
+        ...(turnTerminalOutcome ? { turnTerminalOutcome } : {}),
+        timelineSequence: typeof row[7] === 'number' ? row[7] : undefined,
+        createdAt: String(row[8] || new Date(0).toISOString()),
+        payload
     }
 }
 
@@ -134,13 +141,13 @@ function readMessageById(db: SqlDatabase, threadId: string, messageId: string): 
 function readActivities(db: SqlDatabase, threadId: string, lower: AssistantTimelineOrderKey | null, upper: AssistantTimelineOrderKey | null, limit?: number): AssistantActivity[] {
     const range = keyRangeSql('activity', lower, upper)
     const descending = typeof limit === 'number'
-    const rows = db.exec(`SELECT id, kind, tone, summary, detail, turn_id, timeline_sequence, created_at, ${assistantActivityPayloadColumns()} FROM assistant_activities WHERE thread_id = ?${range.sql} ORDER BY created_at ${descending ? 'DESC' : 'ASC'}, COALESCE(timeline_sequence, -1) ${descending ? 'DESC' : 'ASC'}, id ${descending ? 'DESC' : 'ASC'}${descending ? ' LIMIT ?' : ''}`, [threadId, ...range.params, ...(descending ? [limit!] : [])])[0]?.values || []
+    const rows = db.exec(`SELECT id, kind, tone, summary, detail, turn_id, ${assistantActivityTerminalOutcomeColumn()}, timeline_sequence, created_at, ${assistantActivityPayloadColumns()} FROM assistant_activities WHERE thread_id = ?${range.sql} ORDER BY created_at ${descending ? 'DESC' : 'ASC'}, COALESCE(timeline_sequence, -1) ${descending ? 'DESC' : 'ASC'}, id ${descending ? 'DESC' : 'ASC'}${descending ? ' LIMIT ?' : ''}`, [threadId, ...range.params, ...(descending ? [limit!] : [])])[0]?.values || []
     const records = rows.map(mapActivity)
     return descending ? records.reverse() : records
 }
 
 export function readAssistantActivity(db: SqlDatabase, threadId: string, activityId: string): AssistantActivity | null {
-    const row = db.exec(`SELECT id, kind, tone, summary, detail, turn_id, timeline_sequence, created_at, ${assistantActivityPayloadColumns()} FROM assistant_activities WHERE thread_id = ? AND id = ? LIMIT 1`, [threadId, activityId])[0]?.values?.[0]
+    const row = db.exec(`SELECT id, kind, tone, summary, detail, turn_id, ${assistantActivityTerminalOutcomeColumn()}, timeline_sequence, created_at, ${assistantActivityPayloadColumns()} FROM assistant_activities WHERE thread_id = ? AND id = ? LIMIT 1`, [threadId, activityId])[0]?.values?.[0]
     return row ? mapActivity(row) : null
 }
 
@@ -805,7 +812,7 @@ export function readAssistantReviewIndex(db: SqlDatabase, threadId: string): Ass
     }
 
     const fileActivities = (db.exec(`
-        SELECT id, kind, tone, summary, detail, turn_id, timeline_sequence, created_at, ${assistantActivityPayloadColumns()}
+        SELECT id, kind, tone, summary, detail, turn_id, ${assistantActivityTerminalOutcomeColumn()}, timeline_sequence, created_at, ${assistantActivityPayloadColumns()}
         FROM assistant_activities
         WHERE thread_id = ? AND kind = 'file-change'
         ORDER BY created_at ASC, COALESCE(timeline_sequence, -1) ASC, id ASC
@@ -920,11 +927,11 @@ export function mergeAssistantSearchTurnIds(
 export function readAssistantTurnDetail(db: SqlDatabase, threadId: string, turnId: string): AssistantTurnDetail {
     const turnRow = db.exec('SELECT requested_at FROM assistant_turns WHERE id = ? AND thread_id = ? LIMIT 1', [turnId, threadId])[0]?.values?.[0]
     const directMessageRows = db.exec(`SELECT id, role, text, turn_id, streaming, timeline_sequence, created_at, updated_at, provider_item_id, modality FROM assistant_messages WHERE thread_id = ? AND turn_id = ? ORDER BY created_at ASC, COALESCE(timeline_sequence, -1) ASC, id ASC`, [threadId, turnId])[0]?.values || []
-    const directActivityRows = db.exec(`SELECT id, kind, tone, summary, detail, turn_id, timeline_sequence, created_at, ${assistantActivityPayloadColumns()} FROM assistant_activities WHERE thread_id = ? AND turn_id = ? ORDER BY created_at ASC, COALESCE(timeline_sequence, -1) ASC, id ASC`, [threadId, turnId])[0]?.values || []
+    const directActivityRows = db.exec(`SELECT id, kind, tone, summary, detail, turn_id, ${assistantActivityTerminalOutcomeColumn()}, timeline_sequence, created_at, ${assistantActivityPayloadColumns()} FROM assistant_activities WHERE thread_id = ? AND turn_id = ? ORDER BY created_at ASC, COALESCE(timeline_sequence, -1) ASC, id ASC`, [threadId, turnId])[0]?.values || []
     const directPlanRows = db.exec(`SELECT id, turn_id, plan_markdown, timeline_sequence, created_at, updated_at FROM assistant_proposed_plans WHERE thread_id = ? AND turn_id = ? ORDER BY created_at ASC, COALESCE(timeline_sequence, -1) ASC, id ASC`, [threadId, turnId])[0]?.values || []
 
     if (turnRow || directMessageRows.length > 0 || directActivityRows.length > 0 || directPlanRows.length > 0) {
-        const requestedAt = String(turnRow?.[0] || directMessageRows[0]?.[6] || directActivityRows[0]?.[7] || directPlanRows[0]?.[4] || '')
+        const requestedAt = String(turnRow?.[0] || directMessageRows[0]?.[6] || directActivityRows[0]?.[8] || directPlanRows[0]?.[4] || '')
         const messages = directMessageRows.map(mapMessage)
         if (!messages.some((message) => message.role === 'user')) {
             const userRows = db.exec(`

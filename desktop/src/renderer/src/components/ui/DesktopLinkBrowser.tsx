@@ -37,7 +37,7 @@ export function DesktopLinkBrowser({ id, url, visible, onReady, onClose }: {
             if (!disposed && event.type === 'state' && event.state.tabId === id) { liveState.current = event.state; setState(event.state) }
         })
         void window.devscope.browserView.ensure({ tabId: id, threadId: `desktop-links:${id.slice(8)}`, sessionMode: 'normal', initialUrl: url }).then(result => {
-            if (disposed) { void window.devscope.browserView.close(id).catch(() => undefined); return }
+            if (disposed) return
             if (result.success) { liveState.current = result.state; setState(result.state); ready.current({ success: true }) }
             else { setError(result.error); ready.current(result) }
         }).catch(cause => {

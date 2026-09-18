@@ -1,3 +1,5 @@
+import { useRef } from 'react'
+import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
 import type { PluginDownloadState } from './plugin-download-controller'
 
 function size(bytes: number): string {
@@ -10,7 +12,22 @@ export function PluginDownloadPanel({ state, displayName, onCancel, onRetry }: {
     onCancel: () => void
     onRetry: () => void
 }) {
-    if (!state.name || ['idle', 'ready', 'installing'].includes(state.phase)) return null
+    const visible = Boolean(state.name && !['idle', 'ready', 'installing'].includes(state.phase))
+    const retainedState = useRef<{ state: PluginDownloadState; displayName?: string } | null>(null)
+    if (visible) retainedState.current = { state, displayName }
+    const displayedState = visible ? state : retainedState.current?.state
+    const displayedName = visible ? displayName : retainedState.current?.displayName
+    return <AnimatedHeight isOpen={visible} duration={240} unmountOnExit className="plugin-install-job-reveal">
+        {displayedState ? <PluginDownloadStatus state={displayedState} displayName={displayedName} onCancel={onCancel} onRetry={onRetry} /> : null}
+    </AnimatedHeight>
+}
+
+function PluginDownloadStatus({ state, displayName, onCancel, onRetry }: {
+    state: PluginDownloadState
+    displayName?: string
+    onCancel: () => void
+    onRetry: () => void
+}) {
     const progress = state.download?.progress
     const downloading = state.phase === 'preparing' && progress?.phase === 'downloading'
     const label = state.phase === 'failed' ? state.error || 'Could not prepare this Plugin.'

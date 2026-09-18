@@ -15,7 +15,7 @@ export function AssistantTimelineNetworkRecovery({ activity }: { activity: Assis
         <div
             className={cn(
                 'flex min-h-7 items-center gap-2 py-0.5 text-[11px] font-medium',
-                paused ? 'text-amber-200/70' : retrying ? 'text-amber-100/65' : 'text-emerald-200/55'
+                paused ? 'text-amber-200/70' : 'text-[var(--status-success)]'
             )}
             role="status"
             aria-live="polite"

@@ -202,6 +202,9 @@ export default function PreviewBody({
             filePath={file.path}
             fileName={file.name}
             content={content}
+            location={file.htmlLocation}
+            onInternalLinkClick={onInternalLinkClick}
+            onLinkNotice={onLinkNotice}
             viewport={viewport}
             presetConfig={presetConfig}
             isExpanded={useFullBleed}

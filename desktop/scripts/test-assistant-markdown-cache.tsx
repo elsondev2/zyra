@@ -8,7 +8,8 @@ import {
 import { getCodeHighlightCacheStats } from '../src/renderer/src/components/ui/markdown/CodeElements'
 import {
     splitStreamingMarkdownBlocks,
-    StreamingAssistantMarkdown
+    StreamingAssistantMarkdown,
+    CompletedAssistantMarkdown
 } from '../src/renderer/src/pages/assistant/AssistantTimelineText'
 
 const content = `# Cached heading
@@ -88,5 +89,18 @@ assert.match(streamingMarkup, /<h1[^>]*>Live heading/)
 assert.match(streamingMarkup, /<strong[^>]*>already bold<\/strong>/)
 assert.match(streamingMarkup, /const streaming = true/)
 
-console.log('Assistant Markdown compiled-cache contract: ok')
+const visual = '<visualization title="Chart" summary="Two values.">\n<svg>private-source-marker</svg>'
+const pendingVisual = renderToStaticMarkup(createElement(StreamingAssistantMarkdown, { content: 'Before\n' + visual, cacheKey: 'visual-stream' }))
+assert.match(pendingVisual, /Creating visualization/)
+assert.doesNotMatch(pendingVisual, /private-source-marker/)
+const stoppedVisual = renderToStaticMarkup(createElement(CompletedAssistantMarkdown, { content: visual, cacheKey: 'visual-stopped' }))
+assert.match(stoppedVisual, /Visualization incomplete/)
+assert.doesNotMatch(stoppedVisual, /Creating visualization|private-source-marker/)
+const oldThreadVisual = renderToStaticMarkup(createElement(CompletedAssistantMarkdown, { content: 'Before\n' + visual + '\n</visualization>\nAfter', cacheKey: 'historical-visual' }))
+assert.match(oldThreadVisual, /data-visualization-state="complete"/)
+assert.match(oldThreadVisual, /Before[\s\S]*Chart[\s\S]*After/)
+const literalVisual = renderToStaticMarkup(createElement(CompletedAssistantMarkdown, { content: '```html\n' + visual + '\n</visualization>\n```', cacheKey: 'visual-example' }))
+assert.doesNotMatch(literalVisual, /data-visualization-state/)
+
+console.log('Assistant Markdown compiled-cache and visualization routing contracts: ok')
 process.exit(0)

@@ -260,6 +260,7 @@ export function createZyraUi(options = {}) {
     committedAssistantKeys.add(pending.key);
     const component = new AssistantMessageComponent(`assistant-committed-${pending.id || Date.now()}`, pending.content, theme, {
       showDivider: pending.showDivider === true,
+      final: true,
     });
     if (pending.historical) host.append(component);
     else host.printLines(component.render(host.width()));
@@ -678,7 +679,7 @@ export function createZyraUi(options = {}) {
         setActivityLabel("thinking");
         host.invalidate();
       }
-      if (event.type === "queue_update") {
+      if (event.type === "queue_update" || event.type === "zyra_runtime_status") {
         host.invalidate();
         return;
       }

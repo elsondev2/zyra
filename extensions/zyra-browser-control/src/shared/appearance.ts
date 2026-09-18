@@ -3,7 +3,7 @@ import { getThemeDefinition, isThemeId, isLightThemeId, isDarkThemeId, type Them
 import { ACCENT_COLORS, presetAccent } from './zyra/appearance-presets';
 export type ThemePreference = 'zyra' | Theme;
 const color = z.string().regex(/^#[0-9a-f]{6}$/i);
-const tokens = z.object(Object.fromEntries(Object.keys(getThemeDefinition('dark').tokens).map(key => [key, color])) as Record<keyof ThemeTokens, typeof color>);
+const tokens = z.object(Object.fromEntries(Object.keys(getThemeDefinition('vercel').tokens).map(key => [key, color])) as Record<keyof ThemeTokens, typeof color>);
 const accent = z.object({ primary: color, secondary: color });
 const theme = z.custom<Theme>(isThemeId);
 export const appearanceSchema = z.object({

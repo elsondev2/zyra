@@ -1,4 +1,5 @@
 import type { Database as SqlDatabase } from 'sql.js/dist/sql-asm.js'
+import { stripSidebarBrowserContext } from '../../shared/assistant/browser-context'
 import type {
     AssistantChatSearchMatch,
     AssistantChatSearchScope,
@@ -365,7 +366,7 @@ function collapseWhitespace(value: string): string {
 }
 
 function buildSnippet(text: string, query: string): string {
-    const normalizedText = collapseWhitespace(text)
+    const normalizedText = collapseWhitespace(stripSidebarBrowserContext(text))
     if (normalizedText.length <= SEARCH_SNIPPET_MAX_CHARACTERS) return normalizedText
     const normalizedQuery = collapseWhitespace(query).replace(/^"|"$/g, '').toLowerCase()
     const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean)

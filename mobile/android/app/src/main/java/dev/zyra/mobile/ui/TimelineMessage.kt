@@ -37,14 +37,13 @@ import kotlinx.coroutines.delay
     Column(Modifier.fillMaxWidth(), horizontalAlignment = if (user) Alignment.End else Alignment.Start, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (user) {
             BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopEnd) {
-            Surface(Modifier.widthIn(max = maxWidth * .88f), shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer,
+            if (questionAnswers.isNotEmpty()) QuestionResponseSummary(questionAnswers, Modifier.widthIn(max = maxWidth * .88f), media)
+            else Surface(Modifier.widthIn(max = maxWidth * .88f), shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f))) {
                 Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
                     media()
-                    if (questionAnswers.isNotEmpty()) QuestionResponseSummary(questionAnswers) else {
-                        if (attachmentBody.body.isNotBlank()) Markdown(attachmentBody.body, preserveLineBreaks = true, selectable = copyable)
-                        if (attachmentBody.files.isNotEmpty()) { Spacer(Modifier.height(8.dp)); MessageFiles(attachmentBody.files) }
-                    }
+                    if (attachmentBody.body.isNotBlank()) Markdown(attachmentBody.body, preserveLineBreaks = true, selectable = copyable)
+                    if (attachmentBody.files.isNotEmpty()) { Spacer(Modifier.height(8.dp)); MessageFiles(attachmentBody.files) }
                 }
             }
             }
@@ -61,22 +60,27 @@ import kotlinx.coroutines.delay
                     }
                 }
             }
-            if (item.text.isNotBlank()) Markdown(item.text)
+            if (item.text.isNotBlank()) AssistantContent(item.text, item.kind == "stream")
             else if (item.kind == "stream" && item.reasoning.isBlank() && item.toolNames.isEmpty()) Text("Working…", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             media()
-            if (item.toolNames.any { it != "request_user_input" }) TextButton(onClick = inspect, contentPadding = PaddingValues(0.dp)) {
+            if (item.toolNames.any { it !in setOf("request_user_input", "begin_action_batch") }) TextButton(onClick = inspect, contentPadding = PaddingValues(0.dp)) {
                 AppIcon(R.drawable.ic_terminal, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(8.dp))
                 Text(item.toolNames.joinToString(" · "), style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 Spacer(Modifier.width(6.dp)); AppIcon(R.drawable.ic_chevron_right, "Inspect tool calls", Modifier.size(14.dp))
             }
         }
-        if (copyable && item.text.isNotBlank() && item.kind != "stream") {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            IconButton(onClick = { clipboard.setText(AnnotatedString(attachmentBody.body)); copied = true }, modifier = Modifier.size(36.dp)) { AppIcon(if (copied) R.drawable.ic_check else R.drawable.ic_copy, if (copied) "Copied" else "Copy message", Modifier.size(15.dp)) }
-            if (LocalMessageTimestamps.current) {
-                val timestamp = remember(item.raw) { runCatching { dev.zyra.mobile.data.WorkActions.timestamp(org.json.JSONObject(item.raw)) }.getOrNull() }
-                timestamp?.let { Text(android.text.format.DateFormat.getTimeFormat(androidx.compose.ui.platform.LocalContext.current).format(java.util.Date(it)), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            }
+        val liveVoiceTime = item.id.startsWith("voice:") && LocalMessageTimestamps.current
+        val showCopy = copyable && item.text.isNotBlank() && (item.kind != "stream" || liveVoiceTime)
+        if (showCopy || liveVoiceTime) {
+            // Reserve the same footer from speech start through the canonical
+            // saved message. Timestamp text updates in place without animation.
+            Row(Modifier.heightIn(min = 36.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (showCopy) IconButton(onClick = { clipboard.setText(AnnotatedString(attachmentBody.body)); copied = true }, modifier = Modifier.size(36.dp)) { AppIcon(if (copied) R.drawable.ic_check else R.drawable.ic_copy, if (copied) "Copied" else "Copy message", Modifier.size(15.dp)) }
+                else Spacer(Modifier.size(36.dp))
+                if (LocalMessageTimestamps.current) {
+                    val timestamp = remember(item.raw) { runCatching { dev.zyra.mobile.data.WorkActions.timestamp(org.json.JSONObject(item.raw)) }.getOrNull() }
+                    timestamp?.let { Text(android.text.format.DateFormat.getTimeFormat(androidx.compose.ui.platform.LocalContext.current).format(java.util.Date(it)), style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, softWrap = false) }
+                }
             }
         }
     }

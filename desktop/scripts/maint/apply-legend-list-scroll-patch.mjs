@@ -23,15 +23,43 @@ const patchedBlock = [
     '            temporaryPaddingRef.current = { baseline: baselinePaddingEnd, value: contentNode.style[axis.paddingEndProp] };'
 ].join('\n')
 
+// Connected containers all belong to this same parent. Atomic moves preserve
+// iframe documents, native details state and focus while restoring DOM order.
+// Older browser clients retain LegendList's original insertion behavior.
+const originalReorder = [
+    '      if (nextStableElement) {',
+    '        container.insertBefore(element, nextStableElement);',
+    '      } else {',
+    '        container.appendChild(element);',
+    '      }'
+].join('\n')
+const patchedReorder = [
+    '      if (typeof container.moveBefore === "function") {',
+    '        container.moveBefore(element, nextStableElement);',
+    '      } else if (nextStableElement) {',
+    '        container.insertBefore(element, nextStableElement);',
+    '      } else {',
+    '        container.appendChild(element);',
+    '      }'
+].join('\n')
+const patches = [
+    { name: 'scroll padding', original: originalBlock, patched: patchedBlock },
+    { name: 'state-preserving DOM reorder', original: originalReorder, patched: patchedReorder }
+]
 let appliedCount = 0
 for (const fileName of ['react.js', 'react.mjs']) {
     const filePath = resolve(packageDirectory, fileName)
     const source = await readFile(filePath, 'utf8')
-    if (source.includes(patchedBlock)) continue
-    if (!source.includes(originalBlock)) {
-        throw new Error(`LegendList scroll patch could not find the expected block in ${fileName}.`)
+    let next = source
+    for (const patch of patches) {
+        if (next.includes(patch.patched)) continue
+        if (next.split(patch.original).length !== 2) {
+            throw new Error(`LegendList ${patch.name} patch expected one matching block in ${fileName}.`)
+        }
+        next = next.replace(patch.original, patch.patched)
     }
-    await writeFile(filePath, source.replace(originalBlock, patchedBlock), 'utf8')
+    if (next === source) continue
+    await writeFile(filePath, next, 'utf8')
     appliedCount += 1
 }
 

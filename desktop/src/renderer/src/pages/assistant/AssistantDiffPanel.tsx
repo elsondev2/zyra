@@ -620,7 +620,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
 
     const browserTabIdentity = browserTabs.map((tab) => tab.id).join('|')
     useEffect(() => {
-        if (!browserOpen) return
+        if (!browserOpen || workspaceHydratedKey !== browserWorkspaceKey) return
         const pendingBrowserTabIds = [...pendingBrowserTabIdsRef.current]
         const validIds = new Set([
             ...browserTabs.map((tab) => tab.id),
@@ -634,7 +634,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
         setActiveTabId((current) => current.startsWith('browser:') && !validIds.has(current)
             ? browserActiveTabId || browserTabs[0]?.id || ''
             : current)
-    }, [browserActiveTabId, browserOpen, browserTabIdentity, browserTabs])
+    }, [browserActiveTabId, browserOpen, browserTabIdentity, browserTabs, browserWorkspaceKey, workspaceHydratedKey])
 
     useEffect(() => {
         const activeWorkspace = open && activeWorkspaceTab
@@ -756,7 +756,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
         })
     }, [showDeveloperToast])
 
-    const handleBrowserNavigationRequestHandled = useCallback((requestId: number) => {
+    const handleBrowserNavigationRequestHandled = useCallback((requestId: number | string) => {
         setBrowserNavigationRequest((current) => current?.id === requestId ? null : current)
     }, [])
 
@@ -1281,7 +1281,7 @@ export const AssistantDiffPanel = memo(function AssistantDiffPanel(props: {
                             />
                 </InspectorWorkspaceSurface>
 
-                <InspectorWorkspaceSurface kind="browser" mounted={browserOpen} open={open} active={activeWorkspaceTab?.kind === 'browser'}>
+                <InspectorWorkspaceSurface kind="browser" mounted={browserOpen && workspaceHydratedKey === browserWorkspaceKey} open={open} active={activeWorkspaceTab?.kind === 'browser'}>
                     <AssistantBrowserWorkspace
                                 key={browserWorkspaceKey}
                                 workspaceKey={browserWorkspaceKey}

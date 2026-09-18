@@ -1,3 +1,6 @@
+import { isNativeOverlayMethod } from '@shared/contracts/native-overlay'
+import { browserBridgeJsonReviver } from '@shared/browser-bridge-json'
+import type { RuntimeActivationStatus } from '@shared/runtime-activation'
 import type { ControlCursorState, ControlStateSnapshot } from '@shared/agent-control/contracts'
 import type { OnboardingSnapshot } from '@shared/onboarding/contracts'
 import type { DevicePreferencesChangedEvent } from '@shared/preferences/contracts'
@@ -42,7 +45,8 @@ const BROWSER_NAMESPACE_EVENT_METHODS = {
     'agentControl.onCursorChange': 'agentControlCursor',
     'agentControl.onStateChange': 'agentControlState',
     'preferences.onChanged': 'preferencesChanged',
-    'onboarding.onChanged': 'onboardingChanged'
+    'onboarding.onChanged': 'onboardingChanged',
+    'runtimeActivation.onStateChange': 'runtimeActivationChanged'
 } as const
 
 const AGENT_CONTROL_GUEST_ONLY_METHODS = new Set([
@@ -53,7 +57,7 @@ const AGENT_CONTROL_GUEST_ONLY_METHODS = new Set([
     'updateWorkspaceState'
 ])
 
-const LIVE_RELAY_NAMESPACES = new Set(['preferences', 'onboarding'])
+const LIVE_RELAY_NAMESPACES = new Set(['preferences', 'onboarding', 'runtimeActivation'])
 
 const ELECTRON_GUEST_ONLY_METHODS = new Set([
     'registerPreviewTerminalWorkspace',
@@ -101,6 +105,7 @@ type BrowserEventPayloadByName = {
     pythonPreview: DevScopePythonPreviewEvent
     preferencesChanged: DevicePreferencesChangedEvent
     onboardingChanged: OnboardingSnapshot
+    runtimeActivationChanged: RuntimeActivationStatus
 }
 
 type BrowserActionTask = {
@@ -118,6 +123,14 @@ class BrowserDevscopeEventHub {
     private controller: AbortController | null = null
     private streamId: string | null = null
     private lastSequence = 0
+    private runtimeStatus: RuntimeActivationStatus = { phase: 'idle', connection: 'unknown' }
+
+    private publishRuntimeStatus(status: RuntimeActivationStatus): void {
+        this.runtimeStatus = status
+        for (const listener of this.listeners.get('runtimeActivationChanged') || []) {
+            try { listener(status) } catch { /* isolate subscribers */ }
+        }
+    }
 
     subscribe<Name extends BrowserDevscopeEventName>(
         event: Name,
@@ -158,6 +171,10 @@ class BrowserDevscopeEventHub {
                     signal
                 })
                 if (!response.ok || !response.body) throw new Error(`Browser event bridge returned ${response.status}.`)
+                if (this.listeners.has('runtimeActivationChanged')) {
+                    const status = await invokeBrowserDevscope(['runtimeActivation', 'getState'], []) as RuntimeActivationStatus
+                    if (!signal.aborted) this.publishRuntimeStatus(status)
+                }
                 const reader = response.body.getReader()
                 const decoder = new TextDecoder()
                 let buffer = ''
@@ -190,6 +207,7 @@ class BrowserDevscopeEventHub {
                                         }
                                         this.lastSequence = event.sequence
                                     }
+                                    if (event.event === 'runtimeActivationChanged') this.runtimeStatus = event.payload as RuntimeActivationStatus
                                     for (const listener of this.listeners.get(event.event) || []) {
                                         try { listener(event.payload) } catch { /* isolate renderer subscribers */ }
                                     }
@@ -204,6 +222,8 @@ class BrowserDevscopeEventHub {
             } catch (error) {
                 if (signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) return
             }
+            if (signal.aborted) return
+            this.publishRuntimeStatus({ ...this.runtimeStatus, phase: 'failed', connection: 'disconnected', errorCode: 'BROWSER_HOST_DISCONNECTED' })
             if (signal.aborted) return
             await new Promise<void>((resolve) => {
                 const timer = window.setTimeout(done, BROWSER_EVENT_RECONNECT_DELAY_MS)
@@ -222,7 +242,7 @@ const browserDevscopeEventHub = new BrowserDevscopeEventHub()
 
 function isPriorityBrowserAction(path: string[]): boolean {
     const method = path[path.length - 1] || ''
-    return method === 'getUserHomePath'
+    return path[0] === 'runtimeActivation' || method === 'getUserHomePath'
         || method.startsWith('listInstalled')
         || PRIORITY_ACTION_PREFIXES.some((prefix) => method.startsWith(prefix))
 }
@@ -242,6 +262,7 @@ function drainBrowserActionQueue(): void {
 }
 
 function getBrowserActionTimeout(path: string[]): number {
+    if (path[0] === 'runtimeActivation') return 5_000
     return ['selectFolder', 'selectMarkdownFile', 'selectProjectIconFile'].includes(path[path.length - 1])
         ? INTERACTIVE_BROWSER_ACTION_TIMEOUT_MS
         : DEFAULT_BROWSER_ACTION_TIMEOUT_MS
@@ -263,7 +284,7 @@ function scheduleBrowserDevscope(path: string[], args: unknown[], priority: bool
                     body: JSON.stringify({ path, args }),
                     signal: controller.signal
                 }).then(async (response) => {
-                    const payload = await response.json() as BrowserAssistantBridgeInvokeResponse
+                    const payload = JSON.parse(await response.text(), browserBridgeJsonReviver) as BrowserAssistantBridgeInvokeResponse
                     if (!response.ok || !payload.ok) {
                         throw new Error(payload.ok ? `Browser action failed (${response.status}).` : payload.error)
                     }
@@ -314,7 +335,7 @@ export function createLiveBrowserDevscopeAdapter(base: DevScopeApi): DevScopeApi
     const namespaceCache = new Map<string, object>()
     return new Proxy(base as unknown as Record<string, unknown>, {
         get(target, property) {
-            if (property === 'then') return undefined
+            if (property === 'then' || isNativeOverlayMethod(property)) return undefined
             if (typeof property !== 'string') return Reflect.get(target, property)
             const value = target[property]
             if (property === 'window' || property === 'assistant' || property === 'updates' || property === 'secrets') return value

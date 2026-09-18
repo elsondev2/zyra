@@ -21,6 +21,12 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const syntaxTargets = [
+  "scripts/test-zyra-task-ownership-prompt.mjs",
+  "src/agents/delegation-policy.mjs",
+  "src/agents/delegation-preferences.mjs",
+  "src/agents/delegation-model-options.mjs",
+  "scripts/test-delegation-preferences.mjs",
+  "scripts/test-delegation-tools.mjs",
   "src/agent-server/approval-responses.mjs",
   "src/agent-server/replay-window.mjs",
   "src/agent-server/history-bodies.mjs",
@@ -32,6 +38,9 @@ const syntaxTargets = [
   "scripts/test-zyra-update-isolation.mjs",
   "src/agent-server/plugin-authority.mjs",
   "src/agent-server/protocol.mjs",
+  "src/agent-server/connection-status.mjs",
+  "src/agent-server/status-presentation.mjs",
+  "scripts/test-agent-server-connection-status.mjs",
   "src/agent-server/server.mjs",
   "src/plugins/revoke-runtime.mjs",
   "scripts/test-zyra-plugin-availability.mjs",
@@ -146,6 +155,7 @@ const syntaxTargets = [
   "scripts/test-provider-runtime-migration.mjs",
   "scripts/test-pi-runtime-auth-sync.mjs",
   "scripts/test-zyra-prompt-errors.mjs",
+  "scripts/test-zyra-post-turn-compaction.mjs",
   "scripts/test-zyra-prompt-resources.mjs",
   "scripts/test-zyra-plugin-system.mjs",
   "scripts/test-zyra-plugin-runtime.mjs",
@@ -161,6 +171,10 @@ const syntaxTargets = [
 ];
 
 const coreTests = [
+  "scripts/test-agent-server-connection-status.mjs",
+  "scripts/test-zyra-task-ownership-prompt.mjs",
+  "scripts/test-delegation-preferences.mjs",
+  "scripts/test-delegation-tools.mjs",
   "scripts/test-message-attachments.mjs",
   "scripts/test-agent-server-approval-responses.mjs",
   "scripts/test-agent-server-mobile-sync.mjs",
@@ -211,6 +225,7 @@ const coreTests = [
   "scripts/test-provider-runtime-migration.mjs",
   "scripts/test-pi-runtime-auth-sync.mjs",
   "scripts/test-zyra-prompt-errors.mjs",
+  "scripts/test-zyra-post-turn-compaction.mjs",
   "scripts/test-zyra-prompt-resources.mjs",
   "scripts/test-zyra-plugin-system.mjs",
   "scripts/test-zyra-plugin-runtime.mjs",
@@ -218,6 +233,9 @@ const coreTests = [
   "scripts/test-zyra-plugin-logos.mjs",
   "scripts/test-zyra-version.mjs",
   "scripts/test-zyra-ui-render.mjs",
+  "scripts/test-visualization-blocks.mjs",
+  "scripts/test-visualization-terminal.mjs",
+  "scripts/test-visualization-skill.mjs",
   "scripts/test-zyra-subagents.mjs",
   "scripts/test-zyra-workflows.mjs",
   "scripts/test-zyra-fleet-ui.mjs",
@@ -226,6 +244,7 @@ const coreTests = [
 // Quick mode stays deterministic and side-effect-light. Larger state, UI, and
 // orchestration suites remain in core/full so quick is useful during iteration.
 const quickCoreTests = [
+  "scripts/test-zyra-task-ownership-prompt.mjs",
   "scripts/test-control-bridge-deadline.mjs",
   "scripts/test-permission-command-policy.mjs",
   "scripts/test-permission-approval-lifecycle.mjs",
@@ -248,6 +267,7 @@ const quickCoreTests = [
   "scripts/test-provider-runtime-migration.mjs",
   "scripts/test-pi-runtime-auth-sync.mjs",
   "scripts/test-zyra-prompt-errors.mjs",
+  "scripts/test-zyra-post-turn-compaction.mjs",
   "scripts/test-zyra-prompt-resources.mjs",
   "scripts/test-zyra-version.mjs",
   "scripts/test-zyra-fleet-ui.mjs",
@@ -269,6 +289,9 @@ const serialCoreTests = new Set([
 ]);
 
 const desktopTasks = [
+  { label: "desktop:test:visualizations", bunArgs: ["run", "--cwd", "desktop", "test:visualizations"] },
+  { label: "desktop:test:browser-surface-parity", bunArgs: ["run", "--cwd", "desktop", "test:browser-surface-parity"] },
+  { label: "desktop:test:visualization-scroll", bunArgs: ["run", "--cwd", "desktop", "test:visualization-scroll"] },
   { label: "desktop:test:agent-control", bunArgs: ["run", "--cwd", "desktop", "test:agent-control"] },
   { label: "desktop:test:update-controls", bunArgs: ["run", "--cwd", "desktop", "test:update-controls"] },
   { label: "desktop:test:assistant-project-creation", bunArgs: ["run", "--cwd", "desktop", "test:assistant-project-creation"] },
@@ -277,6 +300,8 @@ const desktopTasks = [
   { label: "desktop:test:default-chat-folder", bunArgs: ["desktop/scripts/test-assistant-default-folder.ts"] },
   { label: "desktop:test:assistant-new-chat-surface", bunArgs: ["desktop/scripts/test-assistant-new-chat-surface.ts"] },
   { label: "desktop:test:shell-file-preview", bunArgs: ["run", "--cwd", "desktop", "test:shell-file-preview"] },
+  { label: "desktop:test:html-preview", bunArgs: ["run", "--cwd", "desktop", "test:html-preview"] },
+  { label: "desktop:test:accessories", bunArgs: ["run", "--cwd", "desktop", "test:accessories"] },
   { label: "desktop:test:assistant-model-catalog", bunArgs: ["desktop/scripts/test-assistant-model-catalog.tsx"] },
   { label: "desktop:test:work-timeline-v2", bunArgs: ["run", "--cwd", "desktop", "test:work-timeline-v2"] },
   { label: "desktop:test:action-batch-intent", bunArgs: ["run", "--cwd", "desktop", "test:assistant-action-batch-intent"] },

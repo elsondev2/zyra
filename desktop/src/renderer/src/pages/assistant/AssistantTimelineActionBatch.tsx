@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ChevronRight, ListTree, Loader2, Monitor, MousePointer2 } from 'lucide-react'
+import { ChevronRight, ListTree, Loader2, Monitor, MousePointer2, Wifi } from 'lucide-react'
 import type { AssistantActivity } from '@shared/assistant/contracts'
 import { readAssistantActionBatchIntent } from '@shared/assistant/action-batch-intent'
 import { AnimatedHeight } from '@/components/ui/AnimatedHeight'
@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 import { getAssistantActionFamily, getAssistantActionTitle } from './assistant-action-presentation'
 import { useSettings } from '@/lib/settings'
 import { formatAssistantActionTime } from './AssistantTimelineActionShell'
-import { getActivityElapsed, getActivityStatus } from './assistant-timeline-helpers'
+import { getActivityElapsed, getActivityStatus, isAssistantConnectionRecoveryActivity } from './assistant-timeline-helpers'
 import { requestAssistantTimelineDisclosureAnchor } from './assistant-timeline-scroll-events'
 
 const ACTION_BATCH_MOTION_MS = 220
@@ -22,16 +22,22 @@ export function AssistantTimelineActionBatch(props: {
     const [expanded, setExpanded] = useState(false)
     const triggerRef = useRef<HTMLButtonElement | null>(null)
     const [nowIso, setNowIso] = useState(() => new Date().toISOString())
-    const currentActivity = [...props.activities].reverse().find((activity) => getActivityStatus(activity) === 'running')
+    const isRunning = (activity: AssistantActivity) => getActivityStatus(activity) === 'running'
+        && (!isAssistantConnectionRecoveryActivity(activity) || activity === props.activities.at(-1))
+    const currentActivity = [...props.activities].reverse().find(isRunning)
+        || [...props.activities].reverse().find(activity => !isAssistantConnectionRecoveryActivity(activity))
         || props.activities.at(-1)!
-    const running = props.activities.some((activity) => getActivityStatus(activity) === 'running')
+    const running = props.activities.some(isRunning)
     const failed = props.activities.some((activity) => getActivityStatus(activity) === 'failed')
-    const currentActionTitle = getAssistantActionTitle(currentActivity, props.projectRootPath)
+    const connecting = running && isAssistantConnectionRecoveryActivity(currentActivity)
+    const currentActionTitle = connecting
+        ? String(currentActivity.payload?.status).toLowerCase() === 'connecting' ? 'Connecting' : 'Reconnecting'
+        : getAssistantActionTitle(currentActivity, props.projectRootPath)
     const settledIntent = [...props.activities].reverse()
         .map(readAssistantActionBatchIntent)
         .find((value): value is string => Boolean(value)) || null
     const browserRun = props.controlRun && getAssistantActionFamily(currentActivity) === 'browser'
-    const title = settledIntent || (props.controlRun ? browserRun ? 'Using the browser' : 'Using the computer' : currentActionTitle)
+    const title = running ? currentActionTitle : settledIntent || (props.controlRun ? browserRun ? 'Using the browser' : 'Using the computer' : currentActionTitle)
     const elapsed = useMemo(
         () => getActivityElapsed(currentActivity, running ? nowIso : null),
         [currentActivity, nowIso, running]
@@ -71,9 +77,9 @@ export function AssistantTimelineActionBatch(props: {
             >
                 <span className={cn(
                     'inline-flex size-4 shrink-0 items-center justify-center',
-                    running ? 'text-[color-mix(in_srgb,var(--status-warning)_72%,var(--color-text))]' : failed ? 'text-[color-mix(in_srgb,var(--status-danger)_72%,var(--color-text))]' : 'text-sparkle-text-muted'
+                    connecting ? 'text-[var(--status-success)]' : running ? 'text-[color-mix(in_srgb,var(--status-warning)_72%,var(--color-text))]' : failed ? 'text-[color-mix(in_srgb,var(--status-danger)_72%,var(--color-text))]' : 'text-sparkle-text-muted'
                 )}>
-                    {running ? <Loader2 size={13} className="motion-safe:animate-spin" /> : browserRun ? <MousePointer2 size={13} /> : props.controlRun ? <Monitor size={13} /> : <ListTree size={13} />}
+                    {connecting ? <Wifi size={13} className="motion-safe:animate-pulse" /> : running ? <Loader2 size={13} className="motion-safe:animate-spin" /> : browserRun ? <MousePointer2 size={13} /> : props.controlRun ? <Monitor size={13} /> : <ListTree size={13} />}
                 </span>
                 <span className={cn(
                     'min-w-0 flex-1 truncate text-[12px] font-medium leading-5 text-sparkle-text-secondary group-hover/action-batch:text-sparkle-text',

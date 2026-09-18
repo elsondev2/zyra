@@ -1,4 +1,6 @@
 import { act } from 'react'
+import { AssistantBrowserBackgroundPicker } from '../../src/renderer/src/pages/assistant/AssistantBrowserBackgroundPicker'
+import { AssistantBrowserHistoryPanel } from '../../src/renderer/src/pages/assistant/AssistantBrowserHistoryPanel'
 import { NativeOverlayPortal } from '../../src/renderer/src/components/ui/native-overlay-portal'
 import { useFilePreviewChrome } from '../../src/renderer/src/components/ui/file-preview/useFilePreviewChrome'
 import { createRoot } from 'react-dom/client'
@@ -25,10 +27,11 @@ const childDocument = iframe.contentDocument!
 let prepared!: () => void
 const preparation = new Promise<void>(resolve => { prepared = resolve })
 const visibility: boolean[] = []
+let nativeBounds: { x: number; y: number; width: number; height: number } | null = null
 const focusRequests: Array<boolean | undefined> = []
 Object.assign(window, { devscope: {
     prepareNativeOverlay: async () => { await preparation; return { success: true, frameName: 'synthetic-native-caller' } },
-    setNativeOverlayVisible: async ({ visible, focus }: { visible: boolean; focus?: boolean }) => { visibility.push(visible); if (visible) focusRequests.push(focus); return { success: true } },
+    setNativeOverlayVisible: async ({ visible, focus, bounds }: { visible: boolean; focus?: boolean; bounds?: typeof nativeBounds }) => { nativeBounds = bounds ?? null; visibility.push(visible); if (visible) focusRequests.push(focus); return { success: true, bounds: nativeBounds } },
     onNativeOverlayDismiss: () => () => {}
 } })
 // The real native host/portal is exercised across documents; window ownership and IPC
@@ -130,6 +133,31 @@ Object.assign(window, { nativeOverlayCallerCheck: (async () => {
     await key(buttons[0], 'Escape')
     await settle(() => !childDocument.querySelector('[aria-label="Choose import start date"]'), 'date picker Escape closes')
     results.push('actual date picker: child-document Tab wrap and Escape')
+
+    const noop = () => {}
+    for (const kind of ['backgrounds', 'history']) {
+        let closed = 0
+        const onClose = () => { closed++ }
+        await act(async () => root.render(kind === 'history'
+            ? <AssistantBrowserHistoryPanel entries={[]} loading={false} query="" onQueryChange={noop} onClose={onClose} onNavigate={noop} onOpenInNewTab={noop} onClear={noop} onImport={noop} />
+            : <AssistantBrowserBackgroundPicker controller={{ mode: 'off', providerStatus: null, visibleBackgrounds: [], setMode: noop } as never} onClose={onClose} />))
+        const label = kind === 'history' ? 'Browser history' : 'New Tab backgrounds'
+        await settle(() => Boolean(childDocument.querySelector(`[aria-label="${label}"]`)) && nativeBounds !== null, `${kind} mounts with scoped input bounds`)
+        const browserDialog = childDocument.querySelector(`[aria-label="${label}"]`)!
+        const rect = host.getBoundingClientRect()
+        check(nativeBounds?.x === rect.left && nativeBounds?.width === rect.width, `${kind} limits the native surface to its browser anchor`)
+        check(browserDialog.getAttribute('aria-modal') === 'false', `${kind} does not mark unrelated app controls as inaccessible`)
+        await click(browserDialog.parentElement)
+        await act(async () => { await delay(260) })
+        check(closed === 0, `${kind} stays open when its backdrop is clicked`)
+        await key(ownerInput, 'Escape')
+        await act(async () => { await delay(260) })
+        check(closed === 0, `${kind} ignores keyboard events outside the browser dialog`)
+        await key(browserDialog, 'Escape')
+        await settle(() => closed === 1, `${kind} still closes with Escape inside its own dialog`)
+        await act(async () => root.render(null))
+    }
+    results.push('actual Backgrounds and History: browser-only bounds, non-modal app semantics and scoped Escape')
 
     let selected = 0
     await act(async () => root.render(<FileActionsMenu title="Add fixture tab" items={[{ id: 'first', label: 'First action', onSelect: () => { selected++ } }]} />))

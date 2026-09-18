@@ -1,3 +1,5 @@
+import { usageProjectionFallback } from '../../shared/assistant/usage-ownership'
+import { buildUsageSummary, mergeUsageSummaries, usageWindow, type UsageSummaryInput } from '../../shared/assistant/usage-summary'
 import { isAssistantSessionProjectLocked } from '../../shared/assistant/session-project'
 import { validateAssistantSessionConfiguration } from '../../shared/assistant/session-configuration'
 import { MobileVoicePresence, clearRestoredMobileVoice } from './mobile-voice-presence'
@@ -84,6 +86,7 @@ import { classifyAnalyticsErrorCode as classifyAnalyticsError } from '../../shar
 import { findAssistantMessageReplayDuplicateIds, preserveCanonicalUserReplayBoundaries } from '../../shared/assistant/message-reconciliation'
 import { replaceSerializedAssistantImageAttachments } from '../../shared/assistant/message-attachments'
 import { reconcileAssistantUserInputResponseMessageIds } from '../../shared/assistant/user-input-continuation'
+import { recoverCanonicalUserInputReceipts, mergeRecoveredUserInputReceipts } from './user-input-history'
 import {
     ASSISTANT_ACTION_BATCH_TOOL_NAME,
     normalizeAssistantActionBatchIntent
@@ -116,6 +119,7 @@ import {
     readPiFileChangeData,
     ZyraPiRuntime
 } from './zyra-pi-runtime'
+import { readTerminalAssistantMessageOutcome } from './assistant-terminal-outcome'
 import { createAssistantId, deriveSessionTitleFromPrompt, isDefaultSessionTitle, nowIso } from './utils'
 import { canonicalImageAttachmentSection } from './canonical-media-cache'
 import { getAssistantCanonicalThreadId } from './thread-identity'
@@ -976,6 +980,21 @@ export class AssistantService {
             success: true as const,
             ...await this.accountService.redeemAccountReset(input)
         }
+    }
+
+    async getUsageSummary(input: UsageSummaryInput = {}) {
+        await this.ensureReady()
+        const now = new Date()
+        const window = usageWindow(input, now)
+        const turns = await this.persistence.readUsageTurns(window.since)
+        const included = turns.filter(turn => !isAssistantDevelopmentChatFixtureSessionId(turn.sessionId))
+        if (!input.harness) return {success:true as const,summary:buildUsageSummary(included,input,now)}
+        const { readHarnessUsage } = await import('./usage/harness-client')
+        const external = await readHarnessUsage(input,await this.persistence.readUsageOwners(),await this.persistence.readUsageProjectPaths())
+        const fallback = input.harness === 'zyra' || input.harness === 'all' ? usageProjectionFallback(included,external.coveredSessionIds) : []
+        const zyra = buildUsageSummary(fallback,input,now)
+        zyra.sources = [{ id:'zyra',state:'ready',files:1,records:fallback.length,updatedAt:now.toISOString() }]
+        return {success:true as const,summary:mergeUsageSummaries(zyra,external.summary)}
     }
 
     async getSessionTurnUsage(input?: AssistantGetSessionTurnUsageInput) {
@@ -2994,13 +3013,13 @@ export class AssistantService {
                 const persistedTimeline = await this.persistence.readTimelineProjectionRows(input.threadId)
                 const canonicalMessages = preserveCanonicalUserReplayBoundaries(persistedTimeline.messages, projection.messages)
                 const reconciledUserInputs = reconcileAssistantUserInputResponseMessageIds(
-                    record.thread.pendingUserInputs,
+                    mergeRecoveredUserInputReceipts(record.thread.pendingUserInputs, recoverCanonicalUserInputReceipts(canonicalEntries, [...persistedTimeline.messages, ...canonicalMessages], canonicalStartCursor)),
                     persistedTimeline.messages,
                     canonicalMessages
                 )
                 for (let index = 0; index < reconciledUserInputs.length; index += 1) {
                     const userInput = reconciledUserInputs[index]!
-                    if (userInput.responseMessageId === record.thread.pendingUserInputs[index]?.responseMessageId) continue
+                    if (JSON.stringify(userInput) === JSON.stringify(record.thread.pendingUserInputs[index])) continue
                     this.appendEvent('thread.user-input.updated', nowIso(), {
                         threadId: record.thread.id,
                         userInput
@@ -3151,13 +3170,13 @@ export class AssistantService {
         const persistedTimeline = await this.persistence.readTimelineProjectionRows(thread.id)
         const canonicalMessages = preserveCanonicalUserReplayBoundaries(persistedTimeline.messages, projection.messages)
         const reconciledUserInputs = reconcileAssistantUserInputResponseMessageIds(
-            thread.pendingUserInputs,
+            mergeRecoveredUserInputReceipts(thread.pendingUserInputs, recoverCanonicalUserInputReceipts(entries, [...persistedTimeline.messages, ...canonicalMessages], baseEntryIndex)),
             persistedTimeline.messages,
             canonicalMessages
         )
         for (let index = 0; index < reconciledUserInputs.length; index += 1) {
             const userInput = reconciledUserInputs[index]!
-            if (userInput.responseMessageId === thread.pendingUserInputs[index]?.responseMessageId) continue
+            if (JSON.stringify(userInput) === JSON.stringify(thread.pendingUserInputs[index])) continue
             this.appendEvent('thread.user-input.updated', nowIso(), {
                 threadId: thread.id,
                 userInput
@@ -3901,19 +3920,18 @@ export function projectCanonicalTimeline(
 
         const errorMessage = String(message['errorMessage'] || '').trim()
         const stopReason = String(message['stopReason'] || '').trim().toLowerCase()
-        const interrupted = stopReason === 'aborted'
-            || stopReason === 'cancelled'
-            || stopReason === 'canceled'
-            || stopReason === 'interrupted'
-            || stopReason === 'stopped'
-        if (role === 'assistant' && activeTurnId && (interrupted || errorMessage || ['stop', 'length', 'error'].includes(stopReason))) {
+        const terminalMessageOutcome = role === 'assistant'
+            ? readTerminalAssistantMessageOutcome(message, sourceMessageId)
+            : null
+        const interrupted = terminalMessageOutcome?.outcome === 'interrupted'
+        if (role === 'assistant' && activeTurnId && (terminalMessageOutcome || ['stop', 'length'].includes(stopReason))) {
             for (const [id, activity] of activities) {
                 if (activity.turnId !== activeTurnId) continue
-                const settled = settleActivityAtTurnEnd(activity, messageOccurredAt, !interrupted && !errorMessage && stopReason !== 'error' ? 'completed' : 'interrupted')
+                const settled = settleActivityAtTurnEnd(activity, messageOccurredAt, terminalMessageOutcome ? 'interrupted' : 'completed')
                 if (settled !== activity) activities.set(id, settled)
             }
         }
-        if (interrupted || errorMessage || stopReason === 'error') {
+        if (terminalMessageOutcome) {
             const errorActivityId = `shared-error:${sourceMessageId}`
             const legacyErrorActivityId = `shared-error:${legacyMessageId}`
             if (errorActivityId !== legacyErrorActivityId) legacyActivityIds.add(legacyErrorActivityId)
@@ -3933,10 +3951,10 @@ export function projectCanonicalTimeline(
                     canonicalMessageId: messageId
                 }
             })
-            if (role === 'assistant' && activeTurnId) {
+            if (activeTurnId) {
                 terminalActivityByTurn.set(activeTurnId, {
                     activityId: errorActivityId,
-                    outcome: interrupted ? 'interrupted' : 'failed'
+                    outcome: terminalMessageOutcome.outcome
                 })
             }
         } else if (role === 'assistant' && activeTurnId) {

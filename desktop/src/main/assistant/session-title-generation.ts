@@ -1,3 +1,4 @@
+import { stripSidebarBrowserContext } from '../../shared/assistant/browser-context'
 import log from 'electron-log'
 import type { AssistantDomainEvent, AssistantReviewTurnIndexEntry, AssistantSession } from '../../shared/assistant/contracts'
 import {
@@ -93,7 +94,7 @@ function describeAttachment(attachment: SerializedAssistantAttachment): string {
 }
 
 function buildSessionTitlePrompt(messageText: string, seedTitle: string): string {
-    const parsed = parseSerializedAssistantMessage(messageText)
+    const parsed = parseSerializedAssistantMessage(stripSidebarBrowserContext(messageText))
     const body = clip(parsed.body, BODY_EXCERPT_LIMIT)
     const attachmentLines = parsed.attachments
         .slice(0, ATTACHMENT_LIMIT)
@@ -127,7 +128,7 @@ export function buildSessionRetitlePrompt(turns: AssistantReviewTurnIndexEntry[]
         .sort((left, right) => left.requestedAt.localeCompare(right.requestedAt) || left.id.localeCompare(right.id))
         .slice(-RETITLE_TURN_LIMIT)
     const transcript = recentTurns.map((turn, index) => {
-        const userPrompt = clip(parseSerializedAssistantMessage(turn.prompt?.text || '').body, RETITLE_USER_EXCERPT_LIMIT)
+        const userPrompt = clip(parseSerializedAssistantMessage(stripSidebarBrowserContext(turn.prompt?.text || '')).body, RETITLE_USER_EXCERPT_LIMIT)
         const finalResponse = clip(turn.response?.text || '', RETITLE_ASSISTANT_EXCERPT_LIMIT)
         return [
             `Turn ${index + 1}`,

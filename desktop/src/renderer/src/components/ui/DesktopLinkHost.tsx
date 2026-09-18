@@ -1,30 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ExternalLink, Globe2, X } from 'lucide-react'
-import { createDesktopLinkDispatcher, desktopWebLink, type DesktopLinkResult } from '@shared/desktop-link-policy'
+import { createDesktopLinkDispatcher, desktopWebLink } from '@shared/desktop-link-policy'
 import { getDesktopLinkPreference, installDesktopLinkHandler, openDesktopLink, setDesktopLinkPreference } from '@/lib/desktop-links'
 import { isElectronRendererRuntime } from '@/lib/browser-file-url'
 import { addOverlayEventListener, NativeOverlayPortal } from './native-overlay-portal'
-import { DesktopLinkBrowser } from './DesktopLinkBrowser'
+import { openAccessory } from '@/lib/accessories'
 
-type BrowserRequest = { id: string; url: string; resolve: (result: DesktopLinkResult) => void }
 export function DesktopLinkHost() {
     const [choice, setChoice] = useState<string | null>(null)
-    const [browser, setBrowser] = useState<BrowserRequest | null>(null)
     const [error, setError] = useState<string | null>(null)
-    const browserRef = useRef(browser)
-    browserRef.current = browser
     const dispatch = useMemo(() => createDesktopLinkDispatcher({
         preference: getDesktopLinkPreference,
         remember: setDesktopLinkPreference,
         choose: setChoice,
         open: async (url, destination) => {
             if (destination === 'system' || !isElectronRendererRuntime()) return window.devscope.openBrowserPreviewExternal(url)
-            browserRef.current?.resolve({ success: true, cancelled: true })
-            return new Promise<DesktopLinkResult>(resolve => {
-                const next = { id: `browser:desktop-link:${crypto.randomUUID()}`, url, resolve }
-                browserRef.current = next
-                setBrowser(next)
-            })
+            return openAccessory({ kind: 'browser', sessionMode: 'normal', url })
         }
     }), [])
     useEffect(() => {
@@ -34,7 +25,7 @@ export function DesktopLinkHost() {
             if (!result.success) setError(result.error || 'Could not open this link.')
             return result
         })
-        return () => { uninstall(); dispatch.cancel(); browserRef.current?.resolve({ success: true, cancelled: true }) }
+        return () => { uninstall(); dispatch.cancel() }
     }, [dispatch])
     useEffect(() => {
         if (!isElectronRendererRuntime()) return
@@ -54,7 +45,6 @@ export function DesktopLinkHost() {
         }, true)
     }, [])
     return <>
-        {browser ? <DesktopLinkBrowser key={browser.id} id={browser.id} url={browser.url} visible={!choice} onReady={browser.resolve} onClose={() => { browser.resolve({ success: true, cancelled: true }); setBrowser(null) }} /> : null}
         {choice ? <DesktopLinkChoice key={choice} url={choice} onCancel={dispatch.cancel} onSelect={(destination, remember) => { void dispatch.select(destination, remember) }} /> : null}
         {error ? <div role="alert" className="fixed bottom-5 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-xl border border-[var(--color-border)] bg-sparkle-bg px-4 py-3 text-xs text-sparkle-text shadow-xl">{error}<button aria-label="Dismiss link error" onClick={() => setError(null)}><X size={14} /></button></div> : null}
     </>

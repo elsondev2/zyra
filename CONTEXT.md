@@ -72,6 +72,18 @@ _Avoid_: Project Plugin set, Chat scope
 A separately authenticated link between one Plugin contribution and an external service.
 _Avoid_: Plugin installation, permission grant
 
+**Runtime namespace**:
+An installation's state-directory and channel identity. Its service endpoint, catalog, journal and authority are independent of other namespaces on the same computer.
+_Avoid_: Computer, process ID
+
+**Runtime instance**:
+One start of the service within a Runtime namespace. Restarting changes the instance ID without changing the namespace.
+_Avoid_: Installation, app version
+
+**Connection observation**:
+A client's timestamped confirmation of the Runtime instance it can reach. It establishes freshness, not whether a particular Turn is running or permission to control another surface.
+_Avoid_: Cached history, listener enabled, paired
+
 **Turn**:
 One user message and the assistant work it starts, ending in a completed, failed, or interrupted outcome.
 _Avoid_: Tool call, transport request
@@ -142,6 +154,9 @@ _Avoid_: Approval, blocking tool continuation
 - A global Chat uses a neutral managed workspace inside its installation's data root instead of `process.cwd()`.
 - Each desktop installation runs its canonical agent server from an installation-specific namespace under its own `userData`; development and packaged builds never share the server endpoint, authority, lock, journal, or catalog.
 - Windows path identity is case-insensitive.
+- A compatible busy service remains observable while a code update waits; protocol incompatibility still fails closed.
+- Connection observations can become stale without stopping server-owned work. Cached Chat history never proves current liveness.
+- Desktop-owned terminals inherit their owning Runtime namespace, without gaining Desktop control authority.
 - Nested legacy paths remain separate Projects until a later explicit merge.
 - Configured discovery locations produce review candidates; discovery never creates Projects automatically.
 - `projectPath` remains a compatibility projection of the Chat's **Working root** during migration.

@@ -26,11 +26,14 @@ function fixture() {
 }
 test('packaged MV3 app extension has trusted input and no broad host authority or executable remote code',async()=>{
   const manifest=JSON.parse(await readFile(path.join(root,'dist/unpacked/manifest.json'),'utf8'))
-  assert.deepEqual(manifest.permissions,['debugger','tabs','storage','webNavigation','favicon'])
-  assert.deepEqual(manifest.optional_host_permissions,['http://127.0.0.1/*'])
-  assert.equal(manifest.host_permissions,undefined)
+  assert.deepEqual(manifest.permissions,['debugger','tabs','storage','webNavigation','favicon','sidePanel','alarms'])
+  assert.deepEqual(manifest.host_permissions,['http://127.0.0.1/*'])
+  assert.equal(manifest.action.default_popup,undefined)
+  assert.equal(manifest.side_panel.default_path,'chat/extension.html')
   assert.equal(manifest.incognito,'not_allowed')
-  assert.doesNotMatch(manifest.content_security_policy.extension_pages,/unsafe-eval|unsafe-inline/)
+  assert.doesNotMatch(manifest.content_security_policy.extension_pages,/script-src[^;]*'(?:unsafe-eval|unsafe-inline)'/)
+  assert.match(manifest.content_security_policy.extension_pages, /(?:^|;\s*)worker-src 'self';/,
+    'MV3 workers must load packaged modules; Chrome rejects blob worker sources at install time')
   for(const name of ['service-worker.js','ui.js','ui.css','popup.html','console.html','font.woff2']) assert.ok((await readFile(path.join(root,'dist/unpacked',name))).length>0)
   const popup=await readFile(path.join(root,'dist/unpacked/ui.js'),'utf8')
   assert.doesNotMatch(popup,/Start\.ps1|Install-Codex|local bridge|XXXX XXXX XXXX/)
@@ -72,4 +75,74 @@ test('late error responses rotate tokens without exposing or persisting credenti
     await assert.rejects(sendEvent({type:'tab.closed',tabId:41}),/unknown-or-late/)
     assert.equal(f.values.zyraPairingSessionV1.token,'next-token','a cancelled/late request must not break the next poll')
   }finally{globalThis.fetch=originalFetch;delete globalThis.chrome}
+})
+
+test('sidebar tab access follows that tab across websites but still rejects privileged pages',async()=>{
+  const f=fixture(),{Controller}=await moduleAt('src/extension/control.ts')
+  const c=new Controller(()=>{})
+  await c.grant(41,'control','tab')
+  f.setTab({url:'https://another.test/editor'})
+  f.listeners.updated(41,{url:'https://another.test/editor'})
+  assert.equal(c.list().length,1)
+  assert.equal(c.list()[0].origin,'https://another.test')
+  f.listeners.committed({tabId:41,frameId:0,url:'chrome://settings'})
+  await new Promise(resolve=>setTimeout(resolve,0))
+  assert.equal(c.list().length,0)
+  assert.ok(f.detached.includes(41))
+  delete globalThis.chrome
+})
+
+test('browser scope shares website tabs, adds new tabs and stops adding after release',async()=>{
+  const f=fixture(),{BrowserScope}=await moduleAt('src/browser-scope.ts')
+  let tabs=[{id:41,url:'https://one.test',incognito:false},{id:42,url:'chrome://settings',incognito:false},{id:43,url:'https://private.test',incognito:true}]
+  globalThis.chrome.tabs.query=async()=>tabs
+  globalThis.chrome.tabs.get=async(id)=>tabs.find(tab=>tab.id===id)
+  const grants=[],calls=[]
+  const controller={control:{list:()=>grants},grant:async(id,mode,scope)=>{calls.push(id);grants.push({tabId:id,mode,scope})},release:async(id)=>{const i=grants.findIndex(grant=>grant.tabId===id);if(i>=0)grants.splice(i,1)}}
+  const scope=new BrowserScope(controller,()=>{})
+  await scope.enable();assert.equal(scope.active,true);assert.deepEqual(calls,[41])
+  tabs.push({id:44,url:'https://two.test',incognito:false})
+  await scope.tabCompleted(44);assert.deepEqual(calls,[41,44])
+  scope.disable();tabs.push({id:45,url:'https://three.test',incognito:false});await scope.tabCompleted(45)
+  assert.deepEqual(calls,[41,44])
+  delete globalThis.chrome
+})
+
+
+test('desktop discovery exposes metadata without attaching; approved observation acquires the exact tab',async()=>{
+  const f=fixture()
+  chrome.tabs.query=async()=>[{id:41,url:'https://example.test/editor?token=private',title:'Editor',incognito:false},{id:42,url:'chrome://settings',title:'Settings'},{id:43,url:'https://example.test/private',incognito:true}]
+  f.values.zyraPairingSessionV1={pairId:'pair-test',token:'token-test',port:45678,expiresAt:new Date(Date.now()+60000).toISOString()}
+  const originalFetch=globalThis.fetch
+  const registered=[]
+  globalThis.fetch=async(_url,init)=>{
+    const event=JSON.parse(init.body)
+    if(event.type==='tabs.discover') registered.push(...event.tabs)
+    return new Response(JSON.stringify({ok:true,nextToken:'token-test',targets:event.tabs?.map(tab=>({tabId:tab.tabId,targetId:'control-target:chrome-tab:41'}))}),{status:200})
+  }
+  try {
+    const {AppController}=await moduleAt('src/app-controller.ts')
+    const controller=new AppController(()=>{},()=> 'Chrome Review')
+    await controller.execute({type:'discover-tabs'},new AbortController().signal)
+    assert.equal(registered.length,1)
+    assert.equal(registered[0].url,'https://example.test/editor')
+    assert.equal(registered[0].browserName,'Chrome Review')
+    assert.deepEqual(controller.control.list(),[],'metadata enumeration grants no page access')
+    assert.equal(controller.targetId(41),'control-target:chrome-tab:41')
+    await assert.rejects(controller.execute({type:'observe',tabId:41,documentId:'wrong'},new AbortController().signal),/no longer shared/)
+    await assert.rejects(controller.execute({type:'action',tabId:41,documentId:registered[0].documentId,observationRevision:1,action:{type:'click'}},new AbortController().signal),/Stale observation/)
+    const acquired=[]
+    controller.control.grant=async(...args)=>{acquired.push(args)}
+    controller.control.execute=async()=>({url:'https://example.test/editor',title:'Editor',viewport:{width:800,height:600},elements:[
+      {ref:'count:1',role:'status',name:'Save count: 1',interactive:false},
+      {ref:'save:2',role:'button',name:'Save note',interactive:true}
+    ]})
+    const observation=await controller.execute({type:'observe',tabId:41,documentId:registered[0].documentId,observationRevision:1},new AbortController().signal)
+    assert.equal(observation.elements[0].name,'Save count: 1','readable page status reaches the agent')
+    assert.deepEqual(observation.elements[0].actions,[],'static status text is not offered as a clickable control')
+    assert.deepEqual(observation.elements[1].actions,['click'])
+    assert.deepEqual(acquired,[[41,'control','tab']])
+    await controller.release(41)
+    assert.equal(controller.targetId(41),undefined)
+  } finally { globalThis.fetch=originalFetch }
 })

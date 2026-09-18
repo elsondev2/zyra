@@ -43,6 +43,8 @@ try {
         assistantContextCompactionThresholdTokens: 256_000
     })
     assert.deepEqual(partitioned.surface, { assistantChatDisplayMode: 'detailed', browserViewMode: 'grid', assistantShowActionStats: true })
+    assert.deepEqual(partitionDevicePreferencePatch({ assistantAllowCollapseWhileWorking: true }, 'desktop').surface, { assistantAllowCollapseWhileWorking: true })
+    assert.equal(sanitizeDevicePreferenceValue('assistantAllowCollapseWhileWorking', 'true'), undefined)
     assert.equal(getDevicePreferenceOwnership('startWithWindows'), 'os')
     assert.equal(getDevicePreferenceOwnership('groqApiKey'), 'secret')
     assert.equal(sanitizeDevicePreferenceValue('appearanceLightTheme', 'forest'), undefined, 'dark themes cannot enter the light half')

@@ -1,3 +1,4 @@
+import { DEFAULT_DARK_THEME_TOKENS as fallbackTheme } from '@shared/preferences/default-theme-tokens'
 import { useEffect, useRef } from 'react'
 
 export type CloudFieldProps = {
@@ -268,9 +269,9 @@ export default function CloudField({
         const accent = gl.getUniformLocation(program, 'u_accent')
         const ink = gl.getUniformLocation(program, 'u_ink')
         const lightMode = gl.getUniformLocation(program, 'u_light_mode')
-        const backgroundRgb = parseCssColor(backgroundColor, '#0c121f')
-        const accentRgb = parseCssColor(accentColor, '#7c3aed')
-        const inkRgb = parseCssColor(inkColor, '#f0f4f8')
+        const backgroundRgb = parseCssColor(backgroundColor, fallbackTheme.bg)
+        const accentRgb = parseCssColor(accentColor, fallbackTheme.primary)
+        const inkRgb = parseCssColor(inkColor, fallbackTheme.text)
         const backgroundLuminance = backgroundRgb[0] * 0.2126 + backgroundRgb[1] * 0.7152 + backgroundRgb[2] * 0.0722
         gl.uniform3fv(background, backgroundRgb)
         gl.uniform3fv(accent, accentRgb)

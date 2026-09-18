@@ -34,7 +34,7 @@ assert.doesNotMatch(conversation, /actions\.(?:chooseProjectPath|createProjectSe
 const dialog = source('renderer/src/components/projects/ProjectCreationDialog.tsx')
 assert.match(dialog, /showModal\(\)/)
 assert.match(dialog, /nameRef.current\?\.focus\(\)/)
-assert.match(dialog, /data-zyra-native-view-occluder="true"/)
+assert.match(dialog, /<NativeOverlayPortal\b[\s\S]*onReady=[\s\S]*showModal\(\)[\s\S]*<\/dialog><\/NativeOverlayPortal>/, 'project setup opens in the ready native overlay above the retained page')
 assert.match(dialog, /if \(!busy\) onClose\(\)/)
 assert.match(dialog, /role="alert"/)
 assert.doesNotMatch(dialog, /project-creation-hint|project-creation-empty|line-clamp|truncate/)

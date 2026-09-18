@@ -53,6 +53,7 @@ assert.equal(preloadRelaySource.includes('BROWSER_DEVSCOPE_RELAY_READY_CHANNEL')
 assert.equal(mainRelaySource.includes('waitForReadyTarget'), true, 'browser actions must wait for the Desktop preload instead of being dropped during startup')
 assert.equal(liveDevscopeSource.includes('MAX_CONCURRENT_BACKGROUND_BROWSER_ACTIONS = 1'), true, 'background native reads must leave capacity for browser navigation and user actions')
 assert.equal(liveDevscopeSource.includes('isPriorityBrowserAction'), true, 'interactive native browser actions must bypass background read backlog')
+assert.equal(browserAssistantAdapterSource.includes("getUsageSummary: remoteAssistantMethod('getUsageSummary')"), true, 'browser usage settings must reach the authenticated assistant bridge')
 assert.equal(browserAssistantAdapterSource.includes('waitForVoiceStream()'), true, 'browser Voice start must wait until its owner-scoped event stream is connected')
 assert.equal(browserAssistantAdapterSource.includes('realtimeVoiceIngestQueue'), true, 'browser WebRTC control events must preserve provider ordering across HTTP requests')
 assert.match(assistantServiceSource, /app\.isPackaged \|\| !\/\^zyra-dev/, 'the live fixture owner rejects packaged and non-development profiles')
@@ -140,6 +141,7 @@ const bridge = new BrowserAssistantBridge({
     port: 0,
     invokeDevscope: async (methodPath, args) => {
         devscopeInvocations.push({ methodPath, args })
+        if (methodPath.join('.') === 'fonts.readManaged') return { success: true, faces: [{ data: new Uint8Array([0, 127, 255]) }] }
         return { methodPath, args }
     },
     subscribeDevscopeEvents: (listener) => {
@@ -218,6 +220,11 @@ try {
         headers,
         body: JSON.stringify({ path: ['selectFolder'], args: [] })
     })
+    const fontResponse = await fetch(`${baseUrl}${BROWSER_DEVSCOPE_BRIDGE_INVOKE_PATH}`, {
+        method: 'POST', headers, body: JSON.stringify({ path: ['fonts', 'readManaged'], args: ['fixture-font'] })
+    })
+    const fontPayload = await fontResponse.json() as any
+    assert.deepEqual(fontPayload.value.faces[0].data, { type: 'Buffer', data: [0, 127, 255] }, 'font bytes survive the actual JSON bridge')
     const devscope = await devscopeResponse.json() as any
     assert.equal(devscope.ok, true)
     assert.deepEqual(devscope.value, { methodPath: ['selectFolder'], args: [] }, 'browser-native actions must relay through the real Desktop adapter')
@@ -246,6 +253,7 @@ try {
     assert.equal(prototypeTraversal.status, 400, 'browser action paths must reject prototype traversal')
 
     const desktopOnlyMethods = ['getBrowserHistory', 'recordBrowserHistory', 'clearBrowserHistory', 'getRunningLocalServers', 'getBrowserSearchSuggestions', 'getBrowserAdBlockStatus', 'setBrowserAdBlockEnabled', 'onBrowserAdDetected', 'getBrowserBackgroundProviderStatus', 'validateBrowserUnsplashAccessKey', 'getBrowserRemoteBackgrounds', 'trackBrowserRemoteBackground', 'scanExternalBrowserHistoryProfiles', 'importExternalBrowserHistory']
+    desktopOnlyMethods.push('prepareNativeOverlay', 'recoverNativeOverlay', 'setNativeOverlayVisible', 'onNativeOverlayDismiss', 'onNativeOverlayLinkActivated')
     for (const method of desktopOnlyMethods) {
         const desktopOnlyBypass = await fetch(`${baseUrl}${BROWSER_DEVSCOPE_BRIDGE_INVOKE_PATH}`, {
             method: 'POST',
@@ -256,7 +264,7 @@ try {
     }
     assert.deepEqual(
         devscopeInvocations.map(({ methodPath }) => methodPath),
-        [['selectFolder']],
+        [['selectFolder'], ['fonts', 'readManaged']],
         'raw HTTP attempts for every Desktop-only Browser operation are rejected before the native adapter runs'
     )
 

@@ -17,6 +17,7 @@ export class ChromeExtensionDriver implements AgentControlDriver {
     private onRemove?: (targetId: string, reason: string) => void
     private disconnectedReason: string | undefined
     private readonly artifacts = new Map<string, string>()
+    private discovery: Promise<void> | null = null
 
     constructor(private readonly pairing: ChromePairingServer, private readonly artifactDirectory: string) {
         pairing.on('extension-event', (event: ChromePairingEvent) => this.handleEvent(event))
@@ -28,6 +29,17 @@ export class ChromeExtensionDriver implements AgentControlDriver {
     }): void {
         this.onRegister = handlers.register
         this.onRemove = handlers.remove
+    }
+
+    async refreshTargets(signal?: AbortSignal): Promise<void> {
+        if (this.discovery) return this.discovery
+        const discovery = Promise.all(this.pairing.connectedSessionIds().map(pairId =>
+            this.pairing.request(pairId, {type:'discover-tabs'}, 5000, signal).catch(error => {
+                if (signal?.aborted) throw error
+            })
+        )).then(() => undefined)
+        this.discovery = discovery
+        try { await discovery } finally { if (this.discovery === discovery) this.discovery = null }
     }
 
     async observe(target: RegisteredControlTarget, options: DriverObservationOptions): Promise<ControlObservation> {
@@ -123,6 +135,8 @@ export class ChromeExtensionDriver implements AgentControlDriver {
         }
     }
 
+    getTargetId(pairId: string, tabId: number): string | undefined { return this.targetByTab.get(`${pairId}:${tabId}`) }
+
     private handleEvent(event: ChromePairingEvent): void {
         if (event.type === 'tab.register') {
             const key = `${event.pairId}:${event.tabId}`
@@ -137,7 +151,7 @@ export class ChromeExtensionDriver implements AgentControlDriver {
                 tabToken
             }
             const targetId = this.onRegister?.({
-                target: { kind: 'chrome-tab', accessMode: event.mode || 'control', pairId: event.pairId, tabToken, title: safeString(event.title, 512), url: safeString(event.url, CONTROL_BOUNDS.maxUrlLength), origin: normalizedOrigin(event.url) },
+                target: { kind: 'chrome-tab', browserName: event.browserName || 'Chrome', accessMode: event.mode || 'control', pairId: event.pairId, tabToken, title: safeString(event.title, 512), url: safeString(event.url, CONTROL_BOUNDS.maxUrlLength), origin: normalizedOrigin(event.url) },
                 trustedIdentity
             })
             if (targetId) this.targetByTab.set(key, targetId)

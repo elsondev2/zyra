@@ -64,11 +64,13 @@ function AppearanceThemeSelect({
     appearance,
     value,
     themes,
+    active,
     onChange
 }: {
     appearance: 'light' | 'dark'
     value: Theme
     themes: readonly ThemeDefinition[]
+    active: boolean
     onChange: (theme: Theme) => void
 }) {
     const [open, setOpen] = useState(false)
@@ -242,16 +244,20 @@ function AppearanceThemeSelect({
                         setOpen(true)
                     }
                 }}
-                className="grid h-[58px] w-full grid-cols-[28px_minmax(0,1fr)_auto_16px] items-center gap-2.5 rounded-lg border border-[var(--settings-border)] bg-[color-mix(in_srgb,var(--color-bg)_72%,var(--color-card))] px-3 text-left outline-none transition-colors hover:border-[var(--settings-border-strong)] hover:bg-[color-mix(in_srgb,var(--color-bg)_58%,var(--color-card))] focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]"
+                className={cn(
+                    'grid h-[62px] w-full grid-cols-[22px_minmax(0,1fr)_auto_16px] items-center gap-2.5 rounded-lg border bg-[color-mix(in_srgb,var(--color-bg)_72%,var(--color-card))] px-3 text-left outline-none transition-colors hover:border-[var(--settings-border-strong)] hover:bg-[color-mix(in_srgb,var(--color-bg)_58%,var(--color-card))] focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]',
+                    active ? 'border-[color-mix(in_srgb,var(--accent-primary)_52%,var(--settings-border))]' : 'border-[var(--settings-border)]'
+                )}
             >
-                <span className="inline-flex size-7 items-center justify-center rounded-md bg-[var(--surface-hover)] text-[var(--settings-text-secondary)]">
-                    <Icon size={14} />
-                </span>
+                <Icon size={15} className="text-[var(--settings-text-secondary)]" />
                 <span className="min-w-0">
-                    <span className="block text-[10px] font-medium text-[var(--settings-text-muted)]">{label}</span>
+                    <span className="flex items-center gap-2 text-[10px] font-medium text-[var(--settings-text-muted)]">
+                        {label}
+                        <span className={cn('text-[9px]', active ? 'text-[var(--accent-primary)]' : 'text-[var(--settings-text-faint)]')}>{active ? 'Active now' : 'Saved preset'}</span>
+                    </span>
                     <span className="mt-0.5 block truncate text-[12px] font-semibold text-[var(--settings-text)]">{selected.name}</span>
                 </span>
-                <ThemePaletteStrip theme={selected} className="hidden sm:flex" />
+                <ThemePaletteStrip theme={selected} className="hidden lg:flex" />
                 <ChevronDown size={14} className={cn('text-[var(--settings-text-muted)] transition-transform', open && 'rotate-180')} />
             </button>
             {popover ? createPortal(popover, document.body) : null}
@@ -274,22 +280,26 @@ export function AppearanceThemeSelector({
     onDarkThemeChange: (theme: DarkTheme) => void
     className?: string
 }) {
-    const isLight = appearance === 'light'
     return (
-        <div
-            className={cn('mx-auto w-full max-w-[520px]', className)}
-            data-settings-search-target={createSettingsRowTargetId('Theme', isLight ? 'Light theme' : 'Dark theme')}
-            tabIndex={-1}
-        >
-            <AppearanceThemeSelect
-                appearance={appearance}
-                value={isLight ? lightTheme : darkTheme}
-                themes={isLight ? LIGHT_THEMES : DARK_THEMES}
-                onChange={(theme) => {
-                    if (isLight) onLightThemeChange(theme as LightTheme)
-                    else onDarkThemeChange(theme as DarkTheme)
-                }}
-            />
+        <div className={cn('grid w-full gap-2 sm:grid-cols-2', className)}>
+            <div data-settings-search-target={createSettingsRowTargetId('Theme', 'Light theme')} tabIndex={-1}>
+                <AppearanceThemeSelect
+                    appearance="light"
+                    value={lightTheme}
+                    themes={LIGHT_THEMES}
+                    active={appearance === 'light'}
+                    onChange={(theme) => onLightThemeChange(theme as LightTheme)}
+                />
+            </div>
+            <div data-settings-search-target={createSettingsRowTargetId('Theme', 'Dark theme')} tabIndex={-1}>
+                <AppearanceThemeSelect
+                    appearance="dark"
+                    value={darkTheme}
+                    themes={DARK_THEMES}
+                    active={appearance === 'dark'}
+                    onChange={(theme) => onDarkThemeChange(theme as DarkTheme)}
+                />
+            </div>
         </div>
     )
 }

@@ -1,3 +1,4 @@
+import { defaultThemeTokens } from '@shared/preferences/default-theme-tokens'
 import { CodePreviewPlaceholder } from './CodePreviewPlaceholder'
 import Editor from '@monaco-editor/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -129,13 +130,14 @@ function readThemeVariable(name: string, fallback: string): string {
 
 function applyMonacoTheme(appearance: 'light' | 'dark') {
     const isLightTheme = appearance === 'light'
-    const text = readThemeVariable('--color-text', isLightTheme ? '#1e293b' : '#e2e8f0')
-    const textDark = readThemeVariable('--color-text-dark', isLightTheme ? '#475569' : '#cbd5e1')
-    const textSecondary = readThemeVariable('--color-text-secondary', isLightTheme ? '#64748b' : '#94a3b8')
-    const card = readThemeVariable('--color-card', isLightTheme ? '#ffffff' : '#131c2c')
-    const bg = readThemeVariable('--color-bg', isLightTheme ? '#f9fafb' : '#0c121f')
-    const border = readThemeVariable('--color-border', isLightTheme ? '#e2e8f0' : '#1f2a3d')
-    const accent = readThemeVariable('--accent-primary', isLightTheme ? '#2563eb' : '#60a5fa')
+    const fallback = defaultThemeTokens(appearance)
+    const text = readThemeVariable('--color-text', fallback.text)
+    const textDark = readThemeVariable('--color-text-dark', fallback.textDark)
+    const textSecondary = readThemeVariable('--color-text-secondary', fallback.textSecondary)
+    const card = readThemeVariable('--color-card', fallback.card)
+    const bg = readThemeVariable('--color-bg', fallback.bg)
+    const border = readThemeVariable('--color-border', fallback.border)
+    const accent = readThemeVariable('--accent-primary', fallback.primary)
     const selectionHighlightBackground = isLightTheme ? `${accent}1f` : `${accent}26`
     const selectionHighlightBorder = isLightTheme ? `${accent}55` : `${accent}66`
     const wordHighlightBackground = isLightTheme ? `${accent}18` : `${accent}1c`

@@ -12,8 +12,8 @@ android {
         applicationId = "dev.zyra.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = 17
-        versionName = "0.1.16-dev"
+        versionCode = 19
+        versionName = "0.1.18-dev"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }

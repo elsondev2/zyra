@@ -279,6 +279,7 @@ export interface Settings {
     assistantUsageDisplayMode: AssistantUsageDisplayMode
     assistantTextStreamingMode: AssistantTextStreamingMode
     assistantToolOutputDefaultMode: AssistantToolOutputDefaultMode
+    assistantAllowCollapseWhileWorking: boolean
     assistantShowActionStats: boolean
     assistantChatDisplayMode: AssistantChatDisplayMode
     assistantDefaultModel: string
@@ -381,6 +382,7 @@ const DEFAULT_SETTINGS: Settings = {
     assistantUsageDisplayMode: 'remaining',
     assistantTextStreamingMode: 'stream',
     assistantToolOutputDefaultMode: 'minimized',
+    assistantAllowCollapseWhileWorking: false,
     assistantShowActionStats: false,
     assistantChatDisplayMode: 'minimal',
     assistantDefaultModel: '',
@@ -751,6 +753,7 @@ export function loadSettings(source?: Record<string, unknown>): Settings {
                     )
                     ? 'expanded'
                     : 'minimized',
+                assistantAllowCollapseWhileWorking: candidate.assistantAllowCollapseWhileWorking === true,
                 assistantShowActionStats: candidate.assistantShowActionStats === true,
                 assistantChatDisplayMode: candidate.assistantChatDisplayMode === 'detailed' ? 'detailed' : 'minimal',
                 assistantDefaultModel: sanitizeString(candidate.assistantDefaultModel, 256),

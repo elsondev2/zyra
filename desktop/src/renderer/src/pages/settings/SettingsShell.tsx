@@ -19,6 +19,7 @@ import {
     type SettingsDestination
 } from './settings-navigation'
 import { SettingsSidebarNavigation } from './SettingsSidebarNavigation'
+import { SettingsPageFrame } from './SettingsPageFrame'
 import { getSettingsSearchKeyAction } from './settings-search-keyboard'
 import { preloadSettingsRoute } from './settings-route-loaders'
 import {
@@ -65,14 +66,14 @@ type AnalyticsSettingsSection = NonNullable<AnalyticsEventPropertiesMap['zyra_v1
 const analyticsSettingsSections = new Set(SETTINGS_DESTINATIONS.map((destination) => destination.id.replaceAll('-', '_')))
 
 function analyticsSettingsSection(value: string): AnalyticsSettingsSection {
-    const normalized = value.replaceAll('-', '_')
+    const normalized = value === 'permissions' ? 'assistant' : value.replaceAll('-', '_')
     return analyticsSettingsSections.has(normalized) ? normalized as AnalyticsSettingsSection : 'unknown'
 }
 
 function SettingsRouteFallback() {
     return (
-        <div className="mx-auto w-full max-w-[760px] px-5 pb-16 pt-8 sm:px-10 sm:pt-10" aria-busy="true" aria-label="Opening settings page">
-            <div className="space-y-10">
+        <SettingsPageFrame>
+            <div aria-busy="true" aria-label="Opening settings page" data-settings-page-content="true" className="flex min-w-0 flex-col gap-8">
                 {[0, 1].map((section) => (
                     <div key={section} className="space-y-2.5">
                         <div className="h-4 w-28 animate-pulse rounded bg-[var(--settings-text-faint)]/12 motion-reduce:animate-none" />
@@ -80,7 +81,7 @@ function SettingsRouteFallback() {
                     </div>
                 ))}
             </div>
-        </div>
+        </SettingsPageFrame>
     )
 }
 
@@ -113,7 +114,7 @@ export default function SettingsShell() {
         else if (action.type === 'activate') links[action.index]?.click()
         else links[action.index]?.focus()
     }
-    const activeAnalyticsId = activeDestination?.id || null
+    const activeAnalyticsId = activeDestination?.parentId || activeDestination?.id || null
     useEffect(() => {
         if (!activeAnalyticsId) return
         captureProductEventOnce(`settings:${activeAnalyticsId}`, {
@@ -133,12 +134,12 @@ export default function SettingsShell() {
 
     useEffect(() => {
         if (!requestedSearchTarget) return
-        const resolved = resolveSettingsSearchLocation(activeDestination?.id || null, requestedSearchTarget)
+        const resolved = resolveSettingsSearchLocation(activeDestination?.id || null, requestedSearchTarget, settings)
         if (!resolved || resolved.pathname === location.pathname && resolved.targetId === requestedSearchTarget) return
         const search = new URLSearchParams(location.search)
         search.set('setting', resolved.targetId)
         navigate({ pathname: resolved.pathname, search: `?${search}`, hash: location.hash }, { replace: true, state: location.state })
-    }, [activeDestination?.id, location.pathname, location.search, location.hash, location.state, requestedSearchTarget, navigate])
+    }, [activeDestination?.id, location.pathname, location.search, location.hash, location.state, requestedSearchTarget, navigate, settings])
 
     useLayoutEffect(() => {
         if (requestedSearchTarget) return
@@ -157,6 +158,8 @@ export default function SettingsShell() {
             : null
         const fallbackTargetId = searchTarget?.sectionTargetId || null
         let frameId = 0
+        let revealFrame = 0
+        const openingDetails: HTMLDetailsElement[] = []
         let clearTimer = 0
         let observer: MutationObserver | null = null
         let highlighted: HTMLElement | null = null
@@ -170,6 +173,16 @@ export default function SettingsShell() {
             const fallbackTarget = exactTarget ? null : findTarget(fallbackTargetId)
             const target = exactTarget || fallbackTarget
             if (!target) return false
+            for (let details = target.closest('details'); details; details = details.parentElement?.closest('details') || null) {
+                if (details.open) continue
+                details.setAttribute('data-settings-search-opening', '')
+                openingDetails.push(details)
+                details.open = true
+            }
+            revealFrame = window.requestAnimationFrame(() => {
+                openingDetails.forEach(details => details.removeAttribute('data-settings-search-opening'))
+                openingDetails.length = 0
+            })
             highlighted = target
             observer?.disconnect()
             target.classList.add('zyra-settings-search-target')
@@ -195,6 +208,8 @@ export default function SettingsShell() {
         })
         return () => {
             window.cancelAnimationFrame(frameId)
+            window.cancelAnimationFrame(revealFrame)
+            openingDetails.forEach(details => details.removeAttribute('data-settings-search-opening'))
             window.clearTimeout(clearTimer)
             observer?.disconnect()
             highlighted?.classList.remove('zyra-settings-search-target')

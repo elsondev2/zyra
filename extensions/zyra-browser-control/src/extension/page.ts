@@ -15,7 +15,7 @@ export function pageTask(command: string, args: Record<string, unknown>): unknow
     const r = el.getBoundingClientRect(), s = el.ownerDocument.defaultView!.getComputedStyle(el);
     return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0' && !el.closest('[inert],[aria-hidden="true"]');
   };
-  const role = (e: Element) => e.getAttribute('role') || ({ A: 'link', BUTTON: 'button', INPUT: (e as HTMLInputElement).type === 'checkbox' ? 'checkbox' : (e as HTMLInputElement).type === 'radio' ? 'radio' : 'textbox', TEXTAREA: 'textbox', SELECT: 'combobox', H1: 'heading', H2: 'heading', H3: 'heading', H4: 'heading', IMG: 'image', IFRAME: 'iframe', SUMMARY: 'button' } as Record<string, string>)[e.tagName] || 'generic';
+  const role = (e: Element) => e.getAttribute('role') || ({ A: 'link', BUTTON: 'button', INPUT: (e as HTMLInputElement).type === 'checkbox' ? 'checkbox' : (e as HTMLInputElement).type === 'radio' ? 'radio' : 'textbox', TEXTAREA: 'textbox', SELECT: 'combobox', H1: 'heading', H2: 'heading', H3: 'heading', H4: 'heading', H5: 'heading', H6: 'heading', P: 'text', LI: 'text', OUTPUT: 'status', TD: 'cell', TH: 'columnheader', PRE: 'text', BLOCKQUOTE: 'text', FIGCAPTION: 'text', DT: 'term', DD: 'definition', IMG: 'image', IFRAME: 'iframe', SUMMARY: 'button' } as Record<string, string>)[e.tagName] || 'generic';
   const point = (el: Element) => {
     const r = el.getBoundingClientRect(); let x = r.x + r.width / 2, y = r.y + r.height / 2;
     let win = el.ownerDocument.defaultView;
@@ -57,12 +57,12 @@ export function pageTask(command: string, args: Record<string, unknown>): unknow
       for (const el of root.querySelectorAll('*')) {
         if (el.shadowRoot) walk(el.shadowRoot);
         if (el.tagName === 'IFRAME') { try { const doc = (el as HTMLIFrameElement).contentDocument; if (doc) { frameCount++; walk(doc); } } catch {} }
-        if (!el.matches('a,button,input,textarea,select,summary,[contenteditable="true"],[role],[tabindex],h1,h2,h3,h4,img,iframe') || !visible(el)) continue;
+        if (!el.matches('a,button,input,textarea,select,summary,[contenteditable="true"],[role],[tabindex],h1,h2,h3,h4,h5,h6,img,iframe,p,li,output,td,th,pre,blockquote,figcaption,dt,dd') || !visible(el)) continue;
         count++; if (nodes.length >= max) continue;
         const name = label(el), id = `${state.revision}:${nodes.length + 1}`, e = el as HTMLInputElement;
         state.refs.set(id, { element: el, label: name, tag: el.tagName, identity: identity(el) });
         const r = el.getBoundingClientRect();
-        nodes.push({ ref: id, role: role(el), name, sensitive: sensitive(el), value: sensitive(el) ? undefined : typeof e.value === 'string' ? e.value.slice(0, 2000) : undefined,
+        nodes.push({ ref: id, interactive: el.matches('a,button,input,textarea,select,summary,[contenteditable="true"],[tabindex]') || /^(button|link|checkbox|radio|switch|textbox|searchbox|combobox|listbox|option|menuitem|menuitemcheckbox|menuitemradio|slider|spinbutton|tab|treeitem)$/.test(role(el)), role: role(el), name, sensitive: sensitive(el), value: sensitive(el) ? undefined : typeof e.value === 'string' ? e.value.slice(0, 2000) : undefined,
           bounds: { x: point(el).x - r.width / 2, y: point(el).y - r.height / 2, width: r.width, height: r.height }, focused: el.ownerDocument.activeElement === el,
           disabled: !!e.disabled || el.getAttribute('aria-disabled') === 'true', checked: e.checked, expanded: el.getAttribute('aria-expanded'),
           inViewport: r.top < innerHeight && r.bottom > 0 && r.left < innerWidth && r.right > 0,

@@ -1,6 +1,8 @@
 import { Check, Copy, Expand, PanelLeftClose, PanelLeftOpen, Play, Save, Square, Undo2 } from 'lucide-react'
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from 'react'
+import { PreviewAppMenu, PreviewWindowControls } from './PreviewWindowChrome'
 import { cn } from '@/lib/utils'
+import { useWindowChrome } from '@/lib/useWindowChrome'
 import { FileEntryIcon } from '@/components/ui/FileEntryIcon'
 import { useSettings } from '@/lib/settings'
 import type { PreviewFile, PreviewTab } from './types'
@@ -11,6 +13,7 @@ import { PreviewHeaderStatusActions } from './PreviewHeaderStatusActions'
 import { PreviewHeaderHtmlControls } from './PreviewHeaderHtmlControls'
 import { PreviewHistoryNavigation } from './PreviewHistoryNavigation'
 import { PreviewTabStrip } from './PreviewTabStrip'
+import { usePreviewPathCopy } from './usePreviewPathCopy'
 
 interface PreviewModalHeaderProps {
     file: PreviewFile
@@ -186,6 +189,8 @@ function PreviewWindowedHeader({
     onClosePreviewTab
 }: PreviewModalHeaderProps) {
     const { settings } = useSettings()
+    const { runtime } = useWindowChrome()
+    const isQuickPreviewWindow = !showCloseButton
     const iconTheme = settings.appearanceResolvedMode
     const isHtml = file.type === 'html'
     const isCsv = file.type === 'csv'
@@ -193,7 +198,7 @@ function PreviewWindowedHeader({
     const isPythonRunning = pythonRunState === 'running'
     const containerRef = useRef<HTMLDivElement | null>(null)
     const [headerWidth, setHeaderWidth] = useState(1280)
-    const [copied, setCopied] = useState(false)
+    const { copied, copyFailed, copyPath } = usePreviewPathCopy(file.path)
 
     useEffect(() => {
         const node = containerRef.current
@@ -204,12 +209,6 @@ function PreviewWindowedHeader({
         observer.observe(node)
         return () => observer.disconnect()
     }, [])
-
-    const handleCopyPath = () => {
-        navigator.clipboard.writeText(file.path)
-        setCopied(true)
-        window.setTimeout(() => setCopied(false), 1500)
-    }
 
     const isCompactHtmlHeader = isHtml && headerWidth < 1024
     const isVeryCompactHtmlHeader = isHtml && headerWidth < 820
@@ -226,9 +225,13 @@ function PreviewWindowedHeader({
             ref={containerRef}
             className={cn(
                 'flex h-10 shrink-0 items-center gap-1.5 border-y border-[var(--surface-panel-divider)] bg-white/[0.02]',
-                showCloseButton ? 'pl-2 pr-0' : 'px-2'
+                showCloseButton ? 'pl-2 pr-0' : 'pl-1 pr-0',
+                isQuickPreviewWindow && '[&_button]:[-webkit-app-region:no-drag] [&_input]:[-webkit-app-region:no-drag] [&_select]:[-webkit-app-region:no-drag]'
             )}
+            style={isQuickPreviewWindow ? { WebkitAppRegion: 'drag', ...(runtime.platform === 'darwin' ? { paddingLeft: '76px' } : {}) } as CSSProperties : undefined}
+            data-standalone-preview-header={isQuickPreviewWindow || undefined}
         >
+            {isQuickPreviewWindow ? <PreviewAppMenu filePath={file.path} isDirty={isDirty} onClose={onClose} /> : null}
             <div className="flex min-w-0 flex-1 items-center gap-1.5">
                 {windowedNavigatorEnabled ? (
                     <button
@@ -276,16 +279,18 @@ function PreviewWindowedHeader({
                             className="size-4 shrink-0"
                         />
                         <div className="flex min-w-0 items-center gap-1">
-                            <h3 className="truncate text-[13px] font-semibold text-white" title={file.name}>
+                            <h3 className="truncate text-[13px] font-semibold text-sparkle-text" title={file.name}>
                                 {visibleFileName}
                             </h3>
                             <button
-                                onClick={handleCopyPath}
+                                type="button"
+                                onClick={() => void copyPath()}
                                 className={cn(
                                     'shrink-0 rounded p-1 opacity-0 transition-[opacity,color,background-color] group-hover/file:opacity-100 focus-visible:opacity-100',
                                     copied ? 'bg-emerald-400/10 text-emerald-400 opacity-100' : 'text-white/35 hover:bg-white/[0.07] hover:text-white'
                                 )}
-                                title={copied ? 'Copied!' : `Copy path: ${file.path}`}
+                                title={copyFailed ? 'Could not copy path' : copied ? 'Copied!' : `Copy path: ${file.path}`}
+                                aria-label={copyFailed ? 'Could not copy path' : copied ? 'Path copied' : 'Copy path'}
                             >
                                 {copied ? <Check size={14} /> : <Copy size={14} />}
                             </button>
@@ -297,7 +302,7 @@ function PreviewWindowedHeader({
                     <button
                         type="button"
                         onClick={onToggleExpanded}
-                        className="group/expand ml-auto inline-flex size-6 shrink-0 items-center justify-center text-white/48 outline-none transition-colors hover:text-white focus-visible:text-white"
+                        className="group/expand ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md text-white/48 outline-none transition-colors hover:bg-[var(--surface-hover)] hover:text-white focus-visible:text-white"
                         title="Expand workspace"
                         aria-label="Expand workspace"
                     >
@@ -330,8 +335,20 @@ function PreviewWindowedHeader({
                     </div>
                 ) : null}
 
-                {showWindowedEditMenu ? (
+                {isHtml && !isEditMode ? (
                     <div className={cn('shrink-0', !allowExpanded && 'ml-auto')}>
+                        <PreviewHeaderHtmlControls
+                            isCompactHtmlHeader={isCompactHtmlHeader}
+                            isVeryCompactHtmlHeader={isVeryCompactHtmlHeader}
+                            isUltraCompactHtmlHeader={isUltraCompactHtmlHeader}
+                            viewport={viewport}
+                            onViewportChange={onViewportChange}
+                        />
+                    </div>
+                ) : null}
+
+                {showWindowedEditMenu ? (
+                    <div className={cn('shrink-0', !allowExpanded && (!isHtml || isEditMode) && 'ml-auto')}>
                         <PreviewHeaderEditMenu
                             previewModeEnabled={previewModeEnabled}
                             isEditable={isEditable}
@@ -344,7 +361,7 @@ function PreviewWindowedHeader({
                             onRevert={onRevert}
                         />
                     </div>
-                ) : !allowExpanded ? <span className="ml-auto" /> : null}
+                ) : !allowExpanded && (!isHtml || isEditMode) ? <span className="ml-auto" /> : null}
 
                 {canRunPython ? (
                     <button
@@ -363,16 +380,6 @@ function PreviewWindowedHeader({
 
             </div>
 
-            {isHtml && !isEditMode ? (
-                <PreviewHeaderHtmlControls
-                    isCompactHtmlHeader={isCompactHtmlHeader}
-                    isVeryCompactHtmlHeader={isVeryCompactHtmlHeader}
-                    isUltraCompactHtmlHeader={isUltraCompactHtmlHeader}
-                    viewport={viewport}
-                    onViewportChange={onViewportChange}
-                />
-            ) : null}
-
             <PreviewHeaderStatusActions
                 isEditMode={isEditMode}
                 isHtml={isHtml}
@@ -384,6 +391,7 @@ function PreviewWindowedHeader({
                 showCloseButton={showCloseButton}
                 controlGroupClass={controlGroupClass}
             />
+            {isQuickPreviewWindow ? <PreviewWindowControls onClose={onClose} /> : null}
         </div>
     )
 }

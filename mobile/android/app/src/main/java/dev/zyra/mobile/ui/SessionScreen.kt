@@ -46,6 +46,9 @@ import dev.zyra.mobile.voice.VoiceTimeline
     val owner = "${state.machine?.id}:${state.session.id}"
     val work = remember(owner) { TimelineWork() }
     val rows = remember(state.session.items, state.session.running, owner) { work.rows(state.session).filterNot { it is ChatRailRow.Message && it.item.kind in setOf("resolved", "user_input_requested") } }
+    val pendingSends = remember(state.pendingSends, state.session.items) {
+        MobilePromptDelivery.visiblePending(state.pendingSends, state.session.items)
+    }
     val questionAnswers = remember(state.session.items) { QuestionResponses.project(state.session.items) }
     val pendingVoice = remember(state.session.items, voice.entries, voice.ownerKey, owner) {
         if (voice.ownerKey == owner) VoiceTimeline.pending(state.session.items, voice.entries) else emptyList()
@@ -115,7 +118,7 @@ import dev.zyra.mobile.voice.VoiceTimeline
             if (!followTail && !list.isScrollInProgress && anchor != null) {
                 val keys = buildList {
                     addAll(rows.map { it.id })
-                    addAll(state.pendingSends.map { "pending:" + it.id })
+                    addAll(pendingSends.map { "pending:" + it.id })
                     addAll(pendingVoice.map { "voice:" + it.id })
                     add("timeline:tail")
                 }
@@ -125,10 +128,10 @@ import dev.zyra.mobile.voice.VoiceTimeline
             }
             prependCursor = null
         }
-        val index = rows.size + state.pendingSends.size + pendingVoice.size
+        val index = rows.size + pendingSends.size + pendingVoice.size
         val tail = state.session.items.lastOrNull()
         val voiceTail = pendingVoice.lastOrNull()
-        if (followTail && !jumping && !dragging && (tail != null || voiceTail != null || state.pendingSends.isNotEmpty()) &&
+        if (followTail && !jumping && !dragging && (tail != null || voiceTail != null || pendingSends.isNotEmpty()) &&
             (appliedRows != index || appliedTail != tail || appliedVoice != voiceTail)) {
             appliedRows = index; appliedTail = tail; appliedVoice = voiceTail
             list.requestScrollToItem(index)
@@ -153,7 +156,7 @@ import dev.zyra.mobile.voice.VoiceTimeline
     Column(Modifier.fillMaxSize()) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
         LazyColumn(Modifier.fillMaxSize().nestedScroll(scrollConnection), state = list, contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = topInset + 16.dp, bottom = composerHeight + 16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            if (state.session.items.isEmpty() && state.pendingSends.isEmpty() && pendingVoice.isEmpty() && !state.busy) item {
+            if (state.session.items.isEmpty() && pendingSends.isEmpty() && pendingVoice.isEmpty() && !state.busy) item {
                 Text("What are we working on?", style = MaterialTheme.typography.headlineSmall)
                 Text("Work runs on ${state.machine?.name.orEmpty()}.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
             }
@@ -165,12 +168,13 @@ import dev.zyra.mobile.voice.VoiceTimeline
                     "approval_requested" -> ApprovalCard(item, connected && item.id !in state.responding, vm)
                     "user_input_requested" -> Unit // The active form lives in the composer.
                     "tool", "deferred" -> { TimelineTool(item) { vm.inspect(item) }; MediaImages(item.raw, vm) }
+                    "interrupted" -> Text("Interrupted", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     "resolved" -> Unit // The canonical response renders its question/answer summary.
                     else -> TimelineMessage(item, media = { MediaImages(item.raw, vm) }, questionAnswers = questionAnswers[item.id].orEmpty()) { vm.inspect(item) }
                 }
                 }
             }
-            items(state.pendingSends, key = { "pending:" + it.id }) { send ->
+            items(pendingSends, key = { "pending:" + it.id }) { send ->
                 PendingSendContent(send, state.machine?.id.orEmpty(), state.session.id, connected, vm)
             }
             items(pendingVoice, key = { "voice:" + it.id }) { VoiceTranscriptMessage(it) }

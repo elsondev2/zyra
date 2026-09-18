@@ -142,7 +142,7 @@ data class ComposerActions(val draft: (String) -> Unit, val send: (String) -> Un
                             DropdownMenuItem(text = { Text("Take picture") }, leadingIcon = { AppIcon(R.drawable.ic_camera) }, enabled = !attachments.preparing && attachments.items.size < 12, onClick = { menu = false; actions.camera() })
                             DropdownMenuItem(text = { Text("Add files") }, leadingIcon = { AppIcon(R.drawable.ic_paperclip) }, enabled = !attachments.preparing && attachments.items.size < 12, onClick = { menu = false; actions.files() })
                             if (state.session.running) {
-                                DropdownMenuItem(text = { Text("Queue next message") }, trailingIcon = { ZyraSwitch(mode == "follow_up", null) }, onClick = { mode = if (mode == "follow_up") "steer" else "follow_up" })
+                                BusySendModeItem(mode == "follow_up") { mode = if (mode == "follow_up") "steer" else "follow_up" }
                                 DropdownMenuItem(text = { Text("Stop response") }, leadingIcon = { AppIcon(R.drawable.ic_square) }, onClick = { menu = false; actions.stop() })
                             }
                         }

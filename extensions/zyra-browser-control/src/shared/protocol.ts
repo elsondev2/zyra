@@ -44,8 +44,8 @@ export function errorInfo(error: unknown) {
   if (error instanceof z.ZodError) return { code: 'INVALID_ARGUMENT', message: error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ') };
   return { code: error instanceof BridgeError ? error.code : 'OPERATION_FAILED', message: error instanceof Error ? error.message : 'Unknown operation failure.' };
 }
-export interface Grant { tabId: number; title: string; url: string; origin: string; grantedAt: number; mode: 'read' | 'control'; }
+export interface Grant { scope?: 'site' | 'tab'; tabId: number; title: string; url: string; origin: string; grantedAt: number; mode: 'read' | 'control'; }
 export interface Activity { id: string; method: string; tabId?: number; startedAt: number; durationMs: number; outcome: 'ok' | 'error'; code?: string; }
-export interface ExtensionState { connected: boolean; connecting: boolean; port: number; grants: Grant[]; activity: Activity[]; lastError: string | null; theme: ThemePreference; zyraAppearance: ZyraAppearance; tabsLayout: 'list' | 'grid'; }
+export interface ExtensionState { installation?: { kind: 'development' | 'installed' | 'standalone'; label: string }; connectionPaused?: boolean; clientOrigin?: string; browserShared?: boolean; browserName?: string; connected: boolean; connecting: boolean; port: number; grants: Grant[]; activity: Activity[]; lastError: string | null; /** Most recent successful authenticated broker poll; cached credentials do not set this. */ lastConfirmedAt?: string | null; theme: ThemePreference; zyraAppearance: ZyraAppearance; tabsLayout: 'list' | 'grid'; }
 export interface RequestMessage { type: 'request'; id: string; deadline: number; operation: Operation; }
 export const readMethods = new Set<Method>(['tabs','snapshot','screenshot','wait','diagnostics']);

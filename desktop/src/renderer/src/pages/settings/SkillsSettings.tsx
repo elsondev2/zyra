@@ -21,7 +21,6 @@ import {
     SettingsSwitch
 } from './settings-layout'
 import { createSettingsRowTargetId } from './settings-search'
-import { SettingsActionsMenu } from './SettingsActionsMenu'
 import { SettingsProviderIcon } from './SettingsProviderIcon'
 
 let cachedOverview: AssistantSkillSourceOverviewPayload | null = null
@@ -54,6 +53,14 @@ function sourceStatus(source: AssistantSkillSourceSummary): string {
 function sourceStatusTone(source: AssistantSkillSourceSummary): 'ready' | 'muted' | 'warning' {
     if (!source.detected) return source.enabled ? 'warning' : 'muted'
     return source.enabled ? 'ready' : 'muted'
+}
+
+function sourceScopeSummary(source: AssistantSkillSourceSummary): string {
+    if (source.custom) return 'Folder you added.'
+    const scopes = new Set(source.paths.map((entry) => entry.scope))
+    if (scopes.has('project') && scopes.has('personal')) return 'Personal and current-project folders.'
+    if (scopes.has('project')) return 'Current-project folder.'
+    return 'Personal folder.'
 }
 
 function folderLabel(folderPath: string): string {
@@ -232,16 +239,20 @@ export default function SkillsSettings({ embedded = false, onSaved }: { embedded
             >
                 <SettingsRow
                     title="Resolution order"
-                    description="Choose which source wins when skill names overlap."
-                    info="Sources are checked from top to bottom, and Project skills still win over personal skills."
-                    status={overview ? `${enabledCount} enabled` : loading ? 'Checking' : undefined}
+                    description="Higher sources win when skill names overlap."
+                    info="Sources are checked from top to bottom. Project skills still win over personal skills. Changes apply to new chats; run /reload in an existing chat."
+                    status={overview ? saving ? 'Saving' : `${enabledCount} enabled` : loading ? 'Checking' : undefined}
                     statusTone="info"
                 />
                 {overview?.sources.map((source, index) => (
                     <SettingsRow
                         key={source.id}
-                        title={source.label}
-                        description={source.custom ? 'Skills from a folder you added.' : source.description}
+                        searchTargetId={createSettingsRowTargetId('Skill sources', source.label)}
+                        title={<span className="inline-flex min-w-0 items-center gap-2">
+                            <span aria-label={`Priority ${source.priority + 1}`} className="inline-flex size-5 shrink-0 items-center justify-center rounded bg-[var(--settings-control)] font-mono text-[10px] text-[var(--settings-text-muted)]">{source.priority + 1}</span>
+                            <span className="truncate">{source.label}</span>
+                        </span>}
+                        description={sourceScopeSummary(source)}
                         icon={<SettingsProviderIcon provider={source.id} />}
                         info={<div className="space-y-2">{source.paths.length ? source.paths.map(entry => <div key={`${entry.scope}:${entry.path}`}>
                             <span className="block font-medium capitalize text-[var(--settings-text)]">{entry.scope}</span>
@@ -249,19 +260,26 @@ export default function SkillsSettings({ embedded = false, onSaved }: { embedded
                         </div>) : <p>No folders were found for this source.</p>}</div>}
                         status={sourceStatus(source)}
                         statusTone={sourceStatusTone(source)}
+                        className="py-2.5"
                         control={(
-                            <div className="flex items-center gap-2">
-                                <SettingsActionsMenu label="Order" ariaLabel={`Manage ${source.label} source`} disabled={saving} items={[
-                                    { id: 'up', label: 'Move up', icon: <ChevronUp size={13} />, disabled: index === 0, onSelect: () => moveSource(source.id, -1) },
-                                    { id: 'down', label: 'Move down', icon: <ChevronDown size={13} />, disabled: index === overview.sources.length - 1, onSelect: () => moveSource(source.id, 1) },
-                                    ...(source.custom ? [{ id: 'remove', label: 'Remove source, keep files', icon: <Trash2 size={13} />, danger: true, separatorBefore: true, onSelect: () => removeFolder(source.id) }] : [])
-                                ]} />
-                                <SettingsSwitch
-                                    checked={source.enabled}
-                                    onCheckedChange={(checked) => toggleSource(source.id, checked)}
-                                    disabled={saving}
-                                    label={`Use skills from ${source.label}`}
-                                />
+                            <div className="flex items-center gap-1">
+                                {source.enabled ? (<><SettingsButton variant="ghost" className="!size-7 !px-0" aria-label={`Move ${source.label} up`} title="Move up" disabled={saving || index === 0} onClick={() => moveSource(source.id, -1)}>
+                                    <ChevronUp size={13} />
+                                </SettingsButton>
+                                <SettingsButton variant="ghost" className="!size-7 !px-0" aria-label={`Move ${source.label} down`} title="Move down" disabled={saving || index === overview.sources.length - 1} onClick={() => moveSource(source.id, 1)}>
+                                    <ChevronDown size={13} />
+                                </SettingsButton></>) : null}
+                                {source.custom ? <SettingsButton variant="ghost" className="!size-7 !px-0" aria-label={`Remove ${source.label} source, keep files`} title="Remove source, keep files" disabled={saving} onClick={() => removeFolder(source.id)}>
+                                    <Trash2 size={13} />
+                                </SettingsButton> : null}
+                                <span className="ml-1 inline-flex">
+                                    <SettingsSwitch
+                                        checked={source.enabled}
+                                        onCheckedChange={(checked) => toggleSource(source.id, checked)}
+                                        disabled={saving}
+                                        label={`Use skills from ${source.label}`}
+                                    />
+                                </span>
                             </div>
                         )}
                     />
@@ -283,10 +301,6 @@ export default function SkillsSettings({ embedded = false, onSaved }: { embedded
                     statusTone={!overview ? 'muted' : conflicts.length ? 'info' : 'ready'}
                     control={conflicts.length ? <SettingsButton onClick={() => setConflictsOpen(true)}>Review</SettingsButton> : undefined}
                 />
-            </SettingsSection>
-
-            <SettingsSection title="When changes apply">
-                <SettingsRow title="New chats" description="Changes apply to new chats; use /reload for existing chats." />
             </SettingsSection>
 
             {error ? <SettingsNotice tone="error">{error}</SettingsNotice> : null}

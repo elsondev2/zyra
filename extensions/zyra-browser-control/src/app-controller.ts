@@ -1,10 +1,11 @@
 import { Controller } from './extension/control'
 import { parseOperation, type Grant } from './shared/protocol'
+import { pageUrl, safeUrl, safeText } from './shared/safety'
 import { sendEvent } from './pairing'
 import { redactExtensionObservation } from './redaction'
 
 type Request = { type: string; tabId: number; documentId?: string; observationRevision?: number; includeScreenshot?: boolean; allowWindowFocus?: boolean; bounds?: { maxElements?: number }; action?: Record<string, any> }
-type Binding = { documentId: string; mode: Grant['mode'] }
+type Binding = { discovered?: boolean; browserName?: string; targetId?: string; documentId: string; mode: Grant['mode'] }
 
 /** Adapt the app's scoped broker protocol to the trusted Chrome controller. */
 export class AppController {
@@ -12,21 +13,22 @@ export class AppController {
   private readonly bindings = new Map<number, Binding>()
   private readonly revisions = new Map<number, number>()
   private tail: Promise<void> = Promise.resolve()
-  constructor(private readonly changed: () => void) {
+  constructor(private readonly changed: () => void, private readonly browserName: () => string = () => 'Chrome') {
     this.control = new Controller(() => { void this.synchronize().catch(() => undefined); this.changed() })
   }
   private synchronize() {
     const next = this.tail.then(async () => {
       const grants = this.control.list()
       for (const [tabId] of this.bindings) {
-        if (grants.some((grant) => grant.tabId === tabId)) continue
+        if (this.bindings.get(tabId)?.discovered || grants.some((grant) => grant.tabId === tabId)) continue
         this.bindings.delete(tabId); this.revisions.delete(tabId)
         await sendEvent({ type: 'tab.closed', tabId }).catch(() => undefined)
       }
       for (const grant of grants) {
-        if (this.bindings.get(grant.tabId)?.mode === grant.mode) continue
-        const binding = { documentId: crypto.randomUUID(), mode: grant.mode }
-        await sendEvent({ type: 'tab.register', tabId: grant.tabId, documentId: binding.documentId, mode: grant.mode, url: grant.url, title: grant.title })
+        if (this.bindings.get(grant.tabId)?.mode === grant.mode && this.bindings.get(grant.tabId)?.browserName === this.browserName()) continue
+        const binding: Binding = { browserName: this.browserName(), documentId: crypto.randomUUID(), mode: grant.mode }
+        const registration = await sendEvent({ type: 'tab.register', browserName: this.browserName(), tabId: grant.tabId, documentId: binding.documentId, mode: grant.mode, url: grant.url, title: grant.title })
+        binding.targetId = registration.targetId
         this.bindings.set(grant.tabId, binding)
       }
       await chrome.storage.session.set({ grantedIds: grants.map((grant) => grant.tabId) })
@@ -34,15 +36,51 @@ export class AppController {
     this.tail = next.catch(() => undefined)
     return next
   }
-  async grant(tabId: number, mode: Grant['mode']) { await this.control.grant(tabId, mode); await this.synchronize() }
-  async release(tabId?: number) { await this.control.release(tabId); await this.synchronize() }
+  private async discover() {
+    await this.synchronize()
+    const tabs = (await chrome.tabs.query({})).filter(tab => {
+      try { pageUrl(tab.url || ''); return !tab.incognito && tab.id !== undefined } catch { return false }
+    }).slice(0, 200)
+    for (const [tabId, binding] of this.bindings) {
+      if (binding.discovered && !tabs.some(tab => tab.id === tabId)) await this.release(tabId)
+    }
+    const added = tabs.filter(tab => !this.bindings.has(tab.id!) || (this.bindings.get(tab.id!)?.discovered && this.bindings.get(tab.id!)?.browserName !== this.browserName())).map(tab => {
+      const url = safeUrl(tab.url!)
+      return {tabId:tab.id!, documentId:crypto.randomUUID(), mode:'control' as const,
+        browserName:this.browserName(), url:url.length <= 1024 ? url : pageUrl(url).origin,
+        title:safeText(tab.title || '', 256)}
+    })
+    if (added.length) {
+      const result = await sendEvent({type:'tabs.discover', tabs:added})
+      for (const tab of added) this.bindings.set(tab.tabId, {...tab, discovered:true, targetId:result.targets?.find((target: {tabId:number; targetId?:string}) => target.tabId === tab.tabId)?.targetId})
+    }
+    return {count:tabs.length}
+  }
+  async refresh() { await this.synchronize(); if ([...this.bindings.values()].some(binding => binding.discovered)) await this.discover() }
+  targetId(tabId: number) { return this.bindings.get(tabId)?.targetId }
+  async grant(tabId: number, mode: Grant['mode'], scope: 'site' | 'tab' = 'site') { await this.control.grant(tabId, mode, scope); await this.synchronize() }
+  async release(tabId?: number) {
+    await this.control.release(tabId)
+    for (const [id, binding] of this.bindings) if (binding.discovered && (tabId === undefined || tabId === id)) {
+      this.bindings.delete(id); this.revisions.delete(id)
+      await sendEvent({type:'tab.closed', tabId:id}).catch(() => undefined)
+    }
+    await this.synchronize()
+  }
   async execute(request: Request, signal: AbortSignal) {
     signal.throwIfAborted()
+    if (request.type === 'discover-tabs') return this.discover()
     if (request.type === 'revoke-tab') { await this.release(request.tabId); return { revoked: true } }
     const binding = this.bindings.get(request.tabId)
     if (!binding || binding.documentId !== request.documentId) throw new Error('This Chrome tab is no longer shared with Zyra. Share it again from the extension.')
     const run = (method: string, params: object = {}) => this.control.execute(parseOperation({ method, params: { tabId: request.tabId, ...params } }), signal)
     if (request.type === 'observe') {
+      // Discovery exposes metadata only. The desktop broker has checked the
+      // user's grant before it can send this first observation request.
+      if (binding.discovered && !this.control.list().some(grant => grant.tabId === request.tabId)) {
+        await this.control.grant(request.tabId, 'control', 'tab')
+        signal.throwIfAborted()
+      }
       const snapshot = await run('snapshot', { maxElements: Math.min(1000, request.bounds?.maxElements || 400) }) as Record<string, any>
       this.revisions.set(request.tabId, Number(request.observationRevision))
       let screenshotData: string | undefined
@@ -55,7 +93,7 @@ export class AppController {
         url: snapshot.url, title: snapshot.title, viewport: { ...snapshot.viewport, scale: 1 }, targetState: 'ready',
         elements: snapshot.elements.map((element: any) => ({ ...element, elementRef: element.ref,
           states: [element.disabled && 'disabled', element.checked && 'checked', element.focused && 'focused'].filter(Boolean),
-          actions: element.sensitive ? [] : ['click', ...(/textbox|combobox/.test(element.role) ? ['type'] : []), ...(element.options ? ['select'] : [])],
+          actions: element.sensitive || element.interactive === false ? [] : ['click', ...(/textbox|combobox/.test(element.role) ? ['type'] : []), ...(element.options ? ['select'] : [])],
           description: element.options ? element.options.map((option: any) => `${option.value}: ${option.label}`).join('; ').slice(0, 512) : undefined,
         })),
         focusedElementRef: snapshot.elements.find((element: any) => element.focused)?.ref,

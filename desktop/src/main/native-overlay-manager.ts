@@ -1,9 +1,16 @@
 import { randomUUID } from 'node:crypto'
-import { BrowserWindow, WebContentsView, dialog, screen, type IpcMainInvokeEvent, type WebContents, type WindowOpenHandlerResponse, type HandlerDetails } from 'electron'
+import { BrowserWindow, WebContentsView, dialog, screen, type IpcMainInvokeEvent, type WebContents, type WebFrameMain, type WindowOpenHandlerResponse, type HandlerDetails } from 'electron'
 import { ipcMain } from './ipc/trusted-ipc'
 import { addNativeWindowView } from './native-view-layers'
-import { NATIVE_OVERLAY_FRAME_PREFIX, NATIVE_OVERLAY_IPC as IPC, type NativeOverlayDismissReason, type NativeOverlayKind, type NativeOverlayVisibility } from '../shared/contracts/native-overlay'
+import { NATIVE_OVERLAY_FRAME_PREFIX, NATIVE_OVERLAY_IPC as IPC, type NativeOverlayDismissReason, type NativeOverlayKind, type NativeOverlayVisibility, type NativeOverlayBounds } from '../shared/contracts/native-overlay'
 
+type LinkActivation = {
+    expiresAt: number
+    frame: WebFrameMain
+    target: Promise<string | null>
+    resolvedTarget?: string | null
+    mousePoint?: { x: number; y: number }
+}
 type OverlaySlot = {
     kind: NativeOverlayKind
     view: WebContentsView | null
@@ -12,9 +19,12 @@ type OverlaySlot = {
     frameName: string | null
     armedUntil: number
     frame: WebContents['mainFrame'] | null
+    previewFrame: WebFrameMain | null
+    linkActivation: LinkActivation | null
     revision: number
     visible: boolean
     focus: boolean
+    bounds: NativeOverlayBounds | null
 }
 type Owner = {
     window: BrowserWindow
@@ -25,7 +35,45 @@ type Owner = {
     dispose: () => void
 }
 const isKind = (kind: unknown): kind is NativeOverlayKind => kind === 'interactive' || kind === 'passive'
-const createSlot = (kind: NativeOverlayKind): OverlaySlot => ({ kind, view: null, companion: null, contents: null, frameName: null, armedUntil: 0, frame: null, revision: -1, visible: false, focus: false })
+const createSlot = (kind: NativeOverlayKind): OverlaySlot => ({ kind, view: null, companion: null, contents: null, frameName: null, armedUntil: 0, frame: null, previewFrame: null, linkActivation: null, revision: -1, visible: false, focus: false, bounds: null })
+
+const LINK_ACTIVATION_WINDOW_MS = 1_000
+const LINK_CAPTURE_WORLD_ID = 1007
+
+function sameFrame(left: WebFrameMain | null | undefined, right: WebFrameMain | null | undefined): boolean {
+    return Boolean(left && right && left.processId === right.processId && left.routingId === right.routingId)
+}
+
+function isDeliverablePreviewLink(value: string): boolean {
+    try { return ['zyra:', 'file:', 'http:', 'https:'].includes(new URL(value).protocol) }
+    catch { return false }
+}
+
+function samePreviewDocument(target: string, source: string): boolean {
+    try {
+        const targetUrl = new URL(target)
+        const sourceUrl = new URL(source)
+        targetUrl.hash = ''
+        sourceUrl.hash = ''
+        return targetUrl.href === sourceUrl.href
+    } catch { return false }
+}
+
+function isSameDocumentFragment(target: string, source: string): boolean {
+    return target.includes('#') && samePreviewDocument(target, source)
+}
+
+function isInitialLocalHtmlPreviewNavigation(contents: WebContents, details: Electron.Event<Electron.WebContentsWillFrameNavigateEventParams>): boolean {
+    const frame = details.frame
+    if (details.isMainFrame || !frame || frame.parent !== contents.mainFrame) return false
+    if (frame.url && frame.url !== 'about:blank') return false
+    try {
+        const url = new URL(details.url)
+        return url.protocol === 'zyra:' && url.searchParams.has('devscope-preview')
+    } catch {
+        return false
+    }
+}
 
 /** Native portal documents share their trusted opener's React ownership, never its IPC authority. */
 export class NativeOverlayManager {
@@ -56,11 +104,16 @@ export class NativeOverlayManager {
             if (!slot.contents || input.frameName !== slot.frameName || typeof input.visible !== 'boolean'
                 || !Number.isSafeInteger(input.revision) || input.revision < 0
                 || input.revision <= slot.revision) return { success: false }
+            if (input.bounds != null && (!['x', 'y', 'width', 'height'].every(key => Number.isFinite(input.bounds?.[key as keyof NativeOverlayBounds]))
+                || input.bounds.width < 0 || input.bounds.height < 0)) return { success: false }
+            slot.bounds = input.bounds ?? null
             slot.revision = input.revision
             slot.visible = input.visible
             slot.focus = input.focus === true
             this.present(owner, slot)
-            return { success: true }
+            const applied = slot.visible && slot.bounds && slot.view ? slot.view.getBounds() : null
+            const zoom = owner.contents.getZoomFactor()
+            return { success: true, bounds: applied ? { x: applied.x / zoom, y: applied.y / zoom, width: applied.width / zoom, height: applied.height / zoom } : null }
         })
         ipcMain.handle(IPC.recover, async (event, input: { kind?: unknown } | null) => {
             const owner = this.ownerFor(event)
@@ -178,10 +231,77 @@ export class NativeOverlayManager {
                     companion.setIgnoreMouseEvents(true, { forward: true })
                 }
                 this.resize(owner, slot)
+                // Present the empty click-through host before React inserts hover content.
+                // Subsequent hovers animate their own content, never a Windows window.
+                if (slot.companion) this.present(owner, slot)
                 const contents = slot.contents
-                contents.setWindowOpenHandler(() => ({ action: 'deny' }))
+                contents.setWindowOpenHandler(details => {
+                    void this.deliverActivatedLink(owner, slot, contents, details.url, slot.previewFrame)
+                    return { action: 'deny' }
+                })
+                contents.on('before-mouse-event', (event, mouse) => {
+                    const frame = slot.previewFrame
+                    if (!frame || frame.isDestroyed() || mouse.button !== 'left') return
+                    if (mouse.type === 'mouseDown') {
+                        const activation: LinkActivation = {
+                            expiresAt: Date.now() + LINK_ACTIVATION_WINDOW_MS,
+                            frame,
+                            target: this.captureMouseLink(contents, frame, mouse.x, mouse.y),
+                            mousePoint: { x: mouse.x, y: mouse.y }
+                        }
+                        void activation.target.then(value => { activation.resolvedTarget = value })
+                        slot.linkActivation = activation
+                        return
+                    }
+                    const activation = slot.linkActivation
+                    if (mouse.type !== 'mouseUp' || !activation?.mousePoint) return
+                    if (Math.abs(activation.mousePoint.x - mouse.x) > 4 || Math.abs(activation.mousePoint.y - mouse.y) > 4) {
+                        slot.linkActivation = null
+                        return
+                    }
+                    if (activation.resolvedTarget === undefined) {
+                        this.finishDelayedActivation(owner, slot, contents, activation)
+                        return
+                    }
+                    slot.linkActivation = null
+                    if (!activation.resolvedTarget || isSameDocumentFragment(activation.resolvedTarget, activation.frame.url)) return
+                    event.preventDefault()
+                    if (isDeliverablePreviewLink(activation.resolvedTarget)) this.emitActivatedLink(owner, slot, contents, activation, activation.resolvedTarget)
+                })
+                contents.on('before-input-event', (event, input) => {
+                    const frame = slot.previewFrame
+                    if (!frame || frame.isDestroyed() || input.key !== 'Enter' || !sameFrame(contents.focusedFrame, frame)) return
+                    if ((input.type === 'keyDown' || input.type === 'rawKeyDown') && !input.isAutoRepeat) {
+                        const activation: LinkActivation = {
+                            expiresAt: Date.now() + LINK_ACTIVATION_WINDOW_MS,
+                            frame,
+                            target: this.captureFocusedLink(frame)
+                        }
+                        void activation.target.then(value => { activation.resolvedTarget = value })
+                        slot.linkActivation = activation
+                        return
+                    }
+                    const activation = slot.linkActivation
+                    if (input.type !== 'keyUp' || !activation) return
+                    if (activation.resolvedTarget === undefined) {
+                        this.finishDelayedActivation(owner, slot, contents, activation)
+                        return
+                    }
+                    slot.linkActivation = null
+                    if (!activation.resolvedTarget || isSameDocumentFragment(activation.resolvedTarget, activation.frame.url)) return
+                    event.preventDefault()
+                    if (isDeliverablePreviewLink(activation.resolvedTarget)) this.emitActivatedLink(owner, slot, contents, activation, activation.resolvedTarget)
+                })
                 contents.on('will-navigate', event => event.preventDefault())
-                contents.on('will-frame-navigate', event => event.preventDefault())
+                contents.on('will-frame-navigate', event => {
+                    if (isInitialLocalHtmlPreviewNavigation(contents, event)) {
+                        slot.previewFrame = event.frame
+                        event.frame?.once('dom-ready', () => { void this.installDangerousLinkGuard(slot, contents, event.frame) })
+                        return
+                    }
+                    event.preventDefault()
+                    void this.deliverActivatedLink(owner, slot, contents, event.url, event.frame, event.initiator)
+                })
                 contents.on('will-attach-webview', event => event.preventDefault())
                 contents.on('content-bounds-updated', event => event.preventDefault())
                 const lost = () => { if (slot.contents === contents) this.closeSlot(owner, slot, true) }
@@ -190,6 +310,78 @@ export class NativeOverlayManager {
                 return contents
             }
         }
+    }
+
+    private async captureMouseLink(contents: WebContents, frame: WebFrameMain, x: number, y: number): Promise<string | null> {
+        const bounds = await contents.executeJavaScriptInIsolatedWorld(LINK_CAPTURE_WORLD_ID, [{ code: `(() => {
+            const point = { x: ${JSON.stringify(x)}, y: ${JSON.stringify(y)} };
+            const element = document.elementFromPoint(point.x, point.y);
+            if (element?.tagName !== 'IFRAME') return null;
+            const rect = element.getBoundingClientRect();
+            if (rect.width < 1 || rect.height < 1) return null;
+            return { x: point.x - rect.left, y: point.y - rect.top, src: element.src };
+        })()` }], false).catch(() => null) as { x: number; y: number; src: string } | null
+        if (!bounds || frame.isDestroyed() || !samePreviewDocument(bounds.src, frame.url)) return null
+        return this.captureFrameLink(frame, `document.elementFromPoint(${JSON.stringify(bounds.x)}, ${JSON.stringify(bounds.y)})`)
+    }
+
+    private captureFocusedLink(frame: WebFrameMain): Promise<string | null> {
+        return this.captureFrameLink(frame, 'document.activeElement')
+    }
+
+    private async captureFrameLink(frame: WebFrameMain, elementExpression: string): Promise<string | null> {
+        if (frame.isDestroyed()) return null
+        const value = await frame.executeJavaScript(`(() => {
+            const element = ${elementExpression};
+            const anchor = element?.closest?.('a[href]');
+            if (!anchor || anchor.hasAttribute('download')) return null;
+            try { return new URL(anchor.getAttribute('href'), document.baseURI).href; } catch { return null; }
+        })()`, false).catch(() => null)
+        return typeof value === 'string' ? value : null
+    }
+
+    private async installDangerousLinkGuard(slot: OverlaySlot, contents: WebContents, frame: WebFrameMain | null): Promise<void> {
+        if (!frame || frame.isDestroyed() || slot.contents !== contents || !sameFrame(slot.previewFrame, frame)) return
+        await frame.executeJavaScript(`(() => {
+            document.addEventListener('click', event => {
+                const anchor = event.target?.closest?.('a[href]');
+                if (!anchor) return;
+                let protocol = '';
+                try { protocol = new URL(anchor.getAttribute('href'), document.baseURI).protocol; } catch {}
+                if (!['zyra:', 'file:', 'http:', 'https:'].includes(protocol)) event.preventDefault();
+            }, true);
+        })()`, false).catch(() => undefined)
+    }
+
+    private finishDelayedActivation(owner: Owner, slot: OverlaySlot, contents: WebContents, activation: LinkActivation): void {
+        void activation.target.then(target => {
+            // Normal browser navigation may already have consumed this gesture.
+            if (slot.linkActivation !== activation) return
+            slot.linkActivation = null
+            if (!target || activation.frame.isDestroyed() || isSameDocumentFragment(target, activation.frame.url)) return
+            if (isDeliverablePreviewLink(target)) this.emitActivatedLink(owner, slot, contents, activation, target)
+        }).catch(() => { if (slot.linkActivation === activation) slot.linkActivation = null })
+    }
+
+    private emitActivatedLink(owner: Owner, slot: OverlaySlot, contents: WebContents, activation: LinkActivation, targetUrl: string): void {
+        if (Date.now() > activation.expiresAt || owner.contents.isDestroyed() || owner.window.isDestroyed()
+            || slot.contents !== contents || !sameFrame(slot.previewFrame, activation.frame) || activation.frame.isDestroyed()) return
+        owner.contents.send(IPC.linkActivated, {
+            kind: 'interactive',
+            frameName: slot.frameName,
+            sourceUrl: activation.frame.url,
+            targetUrl
+        })
+    }
+
+    private async deliverActivatedLink(owner: Owner, slot: OverlaySlot, contents: WebContents, targetUrl: string, frame: WebFrameMain | null, initiator?: WebFrameMain | null): Promise<void> {
+        const activation = slot.linkActivation
+        slot.linkActivation = null
+        if (!activation || Date.now() > activation.expiresAt || !sameFrame(frame, activation.frame)
+            || (initiator && !sameFrame(initiator, activation.frame))) return
+        const capturedTarget = await activation.target
+        if (!capturedTarget || capturedTarget !== targetUrl || !isDeliverablePreviewLink(capturedTarget)) return
+        this.emitActivatedLink(owner, slot, contents, activation, capturedTarget)
     }
 
     private ownerFor(event: IpcMainInvokeEvent): Owner | undefined {
@@ -201,8 +393,14 @@ export class NativeOverlayManager {
     private resize(owner: Owner, slot: OverlaySlot): void {
         if (!slot.contents || owner.window.isDestroyed()) return
         const bounds = owner.window.getContentBounds()
-        slot.contents.setZoomFactor(owner.contents.getZoomFactor())
-        slot.view?.setBounds({ x: 0, y: 0, width: bounds.width, height: bounds.height })
+        const zoom = owner.contents.getZoomFactor()
+        slot.contents.setZoomFactor(zoom)
+        const region = slot.bounds
+        const x = region ? Math.max(0, Math.min(bounds.width, Math.floor(region.x * zoom))) : 0
+        const y = region ? Math.max(0, Math.min(bounds.height, Math.floor(region.y * zoom))) : 0
+        const right = region ? Math.max(x, Math.min(bounds.width, Math.ceil((region.x + region.width) * zoom))) : bounds.width
+        const bottom = region ? Math.max(y, Math.min(bounds.height, Math.ceil((region.y + region.height) * zoom))) : bounds.height
+        slot.view?.setBounds({ x, y, width: right - x, height: bottom - y })
         slot.companion?.setBounds(bounds, false)
     }
 
@@ -218,8 +416,12 @@ export class NativeOverlayManager {
             if (changed && visible && slot.focus && owner.window.isFocused()) slot.contents.focus()
             else if (changed && !visible && heldFocus && allowed && !owner.contents.isDestroyed()) owner.contents.focus()
         } else if (slot.companion) {
-            if (visible && !slot.companion.isVisible()) slot.companion.showInactive()
-            else if (!visible && slot.companion.isVisible()) slot.companion.hide()
+            // React removes passive content when its lease ends. Keep that transparent,
+            // non-focusable host stable until the owner itself loses visibility/focus.
+            if (allowed && !slot.companion.isVisible()) {
+                this.resize(owner, slot)
+                slot.companion.showInactive()
+            } else if (!allowed && slot.companion.isVisible()) slot.companion.hide()
         }
     }
 
@@ -234,7 +436,10 @@ export class NativeOverlayManager {
         slot.contents = null
         slot.frameName = null
         slot.frame = null
+        slot.previewFrame = null
+        slot.linkActivation = null
         slot.armedUntil = 0
+        slot.bounds = null
         slot.visible = false
         // Keep revisions across child loss; an old queued show must not revive it.
         if (view && !owner.window.isDestroyed()) owner.window.contentView.removeChildView(view)

@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/extension/control.ts",
+    "src/extension/cursor.ts",
+    "src/extension/cursor-page.ts",
+    "src/extension/cursor-favicon.ts",
+    "tests/fixtures/cursor-page.ts"
+  ]
+}

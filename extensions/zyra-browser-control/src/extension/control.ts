@@ -3,6 +3,7 @@ import { pageUrl, safeText, safeUrl, sameOrigin } from '../shared/safety';
 import { pageTask } from './page';
 import { CursorController, cursorDelay } from './cursor';
 import { cursorPageTask, type CursorFrame } from './cursor-page';
+import { createCursorFavicon } from './cursor-favicon';
 import type { ThemePreference, ZyraAppearance } from '../shared/appearance';
 
 type Diagnostic = { time: number; type: string; message?: string; url?: string; status?: number };
@@ -18,14 +19,14 @@ export class Controller {
     chrome.tabs.onUpdated.addListener((id, change) => {
       const grant = this.grants.get(id); if (!grant) return;
       if (change.status === 'loading') this.invalidate(id);
-      if (change.url) { try { sameOrigin(change.url, grant.origin); grant.url = safeUrl(change.url); } catch { void this.release(id); } }
+      if (change.url) { try { this.acceptNavigation(id, change.url); } catch { void this.release(id); } }
       if (change.title) grant.title = change.title.slice(0, 1000);
       this.changed();
     });
     chrome.webNavigation.onCommitted.addListener(details => {
       if (details.frameId !== 0 || !this.grants.has(details.tabId)) return;
       this.invalidate(details.tabId);
-      try { sameOrigin(details.url, this.grants.get(details.tabId)!.origin); } catch { void this.release(details.tabId); }
+      try { this.acceptNavigation(details.tabId, details.url); } catch { void this.release(details.tabId); }
     });
     chrome.debugger.onEvent.addListener((source, method, raw) => {
       const id = source.tabId; if (!id || !this.grants.has(id)) return;
@@ -52,19 +53,19 @@ export class Controller {
     });
   }
   private log(id: number, entry: Diagnostic) { const items = this.logs.get(id) || []; items.push(entry); if (items.length > 100) items.shift(); this.logs.set(id, items); }
-  private invalidate(id: number) { this.cursor.forget(id); this.worlds.delete(id); this.epochs.set(id, (this.epochs.get(id) || 0) + 1); }
+  private invalidate(id: number) { this.worlds.delete(id); this.epochs.set(id, (this.epochs.get(id) || 0) + 1); }
   private forget(id: number) { this.cursor.forget(id); this.grants.delete(id); this.worlds.delete(id); this.logs.delete(id); this.epochs.delete(id); }
-  async grant(id: number, mode: Grant['mode']) {
+  async grant(id: number, mode: Grant['mode'], scope: 'site' | 'tab' = 'site') {
     const tab = await chrome.tabs.get(id), url = pageUrl(tab.url || '');
     if (tab.incognito) throw new BridgeError('INCOGNITO', 'Private browsing tabs cannot be shared.');
-    if (this.grants.has(id)) { this.grants.get(id)!.mode = mode; if (mode === 'read') await this.cursor.destroy(id); this.changed(); return; }
+    if (this.grants.has(id)) { this.grants.get(id)!.mode = mode; this.grants.get(id)!.scope = scope; if (mode === 'read') await this.cursor.destroy(id); this.changed(); return; }
     if (this.grants.size >= 20) throw new BridgeError('TAB_LIMIT', 'Release a tab before sharing more than twenty tabs.');
     await chrome.debugger.attach({ tabId: id }, '1.3');
     try {
       // Check again after attachment so a navigation race cannot grant a different site.
       const current = await chrome.tabs.get(id); sameOrigin(current.url || '', url.origin);
       for (const domain of ['Page','Runtime','Log','Network']) await chrome.debugger.sendCommand({ tabId: id }, `${domain}.enable`);
-      this.grants.set(id, { tabId: id, origin: url.origin, url: safeUrl(current.url || ''), title: (current.title || url.hostname).slice(0, 1000), mode, grantedAt: Date.now() });
+      this.grants.set(id, { tabId: id, origin: url.origin, url: safeUrl(current.url || ''), title: (current.title || url.hostname).slice(0, 1000), mode, scope, grantedAt: Date.now() });
       this.changed();
     } catch (error) { await chrome.debugger.detach({ tabId: id }).catch(() => {}); throw error; }
   }
@@ -77,12 +78,20 @@ export class Controller {
     }
     this.changed(); return { released: ids };
   }
+  private acceptNavigation(id: number, value: string) {
+    const grant = this.grants.get(id)
+    if (!grant) throw new BridgeError('TAB_NOT_GRANTED', 'Tab access ended.')
+    const url = pageUrl(value)
+    if (grant.scope !== 'tab') sameOrigin(value, grant.origin)
+    if (url.origin !== grant.origin) { this.invalidate(id); grant.origin = url.origin }
+    grant.url = safeUrl(value)
+  }
   private async require(id: number, method: Operation['method']) {
     const grant = this.grants.get(id);
     if (!grant) throw new BridgeError('TAB_NOT_GRANTED', 'Grant this tab from the extension before using it.');
     const tab = await chrome.tabs.get(id);
     if (this.grants.get(id) !== grant) throw new BridgeError('TAB_NOT_GRANTED', 'Access ended during this action.');
-    try { sameOrigin(tab.url || '', grant.origin); } catch (error) { await this.release(id); throw error; }
+    try { this.acceptNavigation(id, tab.url || ''); } catch (error) { await this.release(id); throw error; }
     if (!readMethods.has(method) && grant.mode !== 'control') throw new BridgeError('READ_ONLY', 'This tab has read-only access. Change its access mode in the extension.');
     return grant;
   }
@@ -105,15 +114,19 @@ export class Controller {
   private async page(id: number, command: string, args: object = {}, retry = true, validate?: () => void): Promise<any> {
     let world = this.worlds.get(id);
     if (!world) {
+      const epoch = this.epochs.get(id) || 0;
       const tree = await this.cdp(id, 'Page.getFrameTree');
       world = (await this.cdp(id, 'Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'zyra-browser-v1' })).executionContextId as number;
+      validate?.();
+      if ((this.epochs.get(id) || 0) !== epoch) throw new BridgeError('PAGE_CHANGED', 'The document changed while preparing access.');
       this.worlds.set(id, world);
     }
     let response;
     try {
       validate?.();
       const task = command.startsWith('cursor:') ? cursorPageTask : pageTask;
-      response = await this.cdp(id, 'Runtime.evaluate', { expression: `(${task.toString()})(${JSON.stringify(command)},${JSON.stringify(args)})`, contextId: world, returnByValue: true, awaitPromise: false, timeout: 5000 });
+      const helpers = command.startsWith('cursor:') ? `,(${createCursorFavicon.toString()})` : '';
+      response = await this.cdp(id, 'Runtime.evaluate', { expression: `(${task.toString()})(${JSON.stringify(command)},${JSON.stringify(args)}${helpers})`, contextId: world, returnByValue: true, awaitPromise: false, timeout: 5000 });
     } catch (error) {
       if (/Cannot find context|Execution context was destroyed/.test(String(error))) {
         this.worlds.delete(id);
@@ -249,13 +262,13 @@ export class Controller {
       }
       case 'diagnostics': return { entries: this.logs.get(id) || [] };
       case 'focus': { const tab = await chrome.tabs.update(id, { active: true }); await guard(); if (tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true }); return { focused: true }; }
-      case 'navigate': sameOrigin(op.params.url, grant.origin); await this.cursor.destroy(id); await guard(); this.invalidate(id); { const result = await this.cdp(id, 'Page.navigate', { url: op.params.url }); if (result.errorText) throw new BridgeError('NAVIGATION_FAILED', result.errorText); } return { navigating: true };
-      case 'reload': await this.cursor.destroy(id); await guard(); this.invalidate(id); await this.cdp(id, 'Page.reload'); return { navigating: true };
+      case 'navigate': if (grant.scope === 'tab') pageUrl(op.params.url); else sameOrigin(op.params.url, grant.origin); await guard(); this.invalidate(id); { const result = await this.cdp(id, 'Page.navigate', { url: op.params.url }); if (result.errorText) throw new BridgeError('NAVIGATION_FAILED', result.errorText); } return { navigating: true };
+      case 'reload': await guard(); this.invalidate(id); await this.cdp(id, 'Page.reload'); return { navigating: true };
       case 'back': case 'forward': {
         const history = await this.cdp(id, 'Page.getNavigationHistory');
         const entry = history.entries[history.currentIndex + (op.method === 'back' ? -1 : 1)];
         if (!entry) throw new BridgeError('NO_HISTORY', 'No page in that direction.');
-        sameOrigin(entry.url, grant.origin); await this.cursor.destroy(id); await guard(); this.invalidate(id); await this.cdp(id, 'Page.navigateToHistoryEntry', { entryId: entry.id }); return { navigating: true };
+        if (grant.scope === 'tab') pageUrl(entry.url); else sameOrigin(entry.url, grant.origin); await guard(); this.invalidate(id); await this.cdp(id, 'Page.navigateToHistoryEntry', { entryId: entry.id }); return { navigating: true };
       }
       case 'wait': {
         const until = Date.now() + op.params.timeoutMs;

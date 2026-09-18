@@ -1,9 +1,12 @@
+import type { RuntimeActivationStatus } from './runtime-activation'
 export const MOBILE_ACCESS_IPC = 'zyra:mobile-access'
-export interface MobileAccessConfig { hiddenProjects?: string[]; enabled: boolean; address: string; projects: string[] }
+export interface MobileAccessConfig { hiddenProjects?: string[]; enabled: boolean; address: string; projects: string[]; port?: number }
 export interface MobileAccessState {
     defaultProject?: string
     config: MobileAccessConfig
+    /** Listener availability, independent of upstream agent-server health. */
     running: boolean
+    runtimeStatus?: RuntimeActivationStatus
     origin?: string
     addresses: { name: string; address: string }[]
     devices: MobileDevice[]

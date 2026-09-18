@@ -256,7 +256,7 @@ function AgentInboxSlimRow({ item, action, onAction, props }: { item: SidebarIte
                 <AssistantSessionTitleText title={title} generating={item.session.titleGenerating === true} className={cn('min-w-0 flex-1 text-sm group-hover/agent-inbox-row:text-sparkle-text', item.active ? 'text-sparkle-text' : 'text-sparkle-text-muted/70')} />
                 <div className="relative ml-auto flex h-6 min-w-[4.5rem] shrink-0 items-center justify-end gap-1.5">
                     {item.tuiOpen || item.mobileDevices.length > 0 ? (
-                        <span className="inline-flex shrink-0 transition-transform duration-150 ease-out group-hover/agent-inbox-row:-translate-x-9 group-focus-within/agent-inbox-row:-translate-x-9 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:-translate-x-9 motion-reduce:transition-none">
+                        <span className="inline-flex shrink-0 transition-transform duration-150 ease-out group-hover/agent-inbox-row:-translate-x-6 group-focus-within/agent-inbox-row:-translate-x-6 group-has-[[aria-haspopup=menu][aria-expanded=true]]/agent-inbox-row:-translate-x-6 motion-reduce:transition-none">
                             {item.tuiOpen ? <AssistantTuiPresenceIndicator focusable={false} /> : null}
                             {item.mobileDevices.length > 0 ? <AssistantTuiPresenceIndicator focusable={false} mobileDevices={item.mobileDevices} /> : null}
                         </span>

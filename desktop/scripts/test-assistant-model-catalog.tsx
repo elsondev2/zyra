@@ -1,3 +1,4 @@
+import './fixtures/inline-overlay-ssr'
 import assert from 'node:assert/strict'
 import { createElement, createRef } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'

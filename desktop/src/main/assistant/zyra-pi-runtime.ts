@@ -21,7 +21,6 @@ import type {
     AssistantRuntimeMode,
     AssistantSessionUsageTotals,
     AssistantThread,
-    AssistantTurnOutcome,
     AssistantTurnUsage,
     AssistantUserInputAnswer,
     AssistantUserInputQuestion,
@@ -43,6 +42,11 @@ import {
     hasAssistantContentText,
     hasAssistantThinkingText
 } from './assistant-message-content'
+import {
+    readTerminalAssistantMessageOutcome,
+    resolveZyraTerminalOutcome,
+    type TerminalAssistantMessageOutcome
+} from './assistant-terminal-outcome'
 import { getAgentControlBroker } from '../agent-control'
 import { revokePluginChatControl } from './assistant-plugin-control'
 import { AgentControlError, toAgentControlError } from '../agent-control/control-errors'
@@ -70,12 +74,6 @@ type ActiveRetryLifecycle = {
     recoveryKind: 'network' | 'provider'
     attempt: number
     maxAttempts: number
-}
-
-type TerminalAssistantMessageOutcome = {
-    turnId: string
-    outcome: 'interrupted' | 'failed'
-    errorMessage: string | null
 }
 
 export type PrivateVoiceTaskInput = {
@@ -219,38 +217,6 @@ function readUserInputAnswers(value: unknown): Record<string, AssistantUserInput
     ]))
 }
 
-function readTerminalAssistantMessageOutcome(message: Record<string, unknown> | null): Omit<TerminalAssistantMessageOutcome, 'turnId'> | null {
-    const stopReason = String(message?.['stopReason'] || '').trim().toLowerCase()
-    const errorMessage = asString(message?.['errorMessage'])
-    if (
-        stopReason === 'aborted'
-        || stopReason === 'cancelled'
-        || stopReason === 'canceled'
-        || stopReason === 'interrupted'
-        || stopReason === 'stopped'
-    ) return { outcome: 'interrupted', errorMessage }
-    if (stopReason === 'error' || errorMessage) return { outcome: 'failed', errorMessage }
-    return null
-}
-
-function resolveZyraTerminalOutcome(
-    type: string,
-    event: Record<string, unknown>,
-    messageOutcome: TerminalAssistantMessageOutcome | null
-): AssistantTurnOutcome {
-    if (messageOutcome) return messageOutcome.outcome
-    if (type === 'agent_end') return 'completed'
-    const outcome = String(event['outcome'] || '').trim().toLowerCase()
-    if (outcome === 'interrupted' || outcome === 'cancelled' || outcome === 'canceled') return 'interrupted'
-    if (outcome === 'failed') {
-        const errorMessage = asString(event['errorMessage']) || ''
-        return /\b(?:abort(?:ed)?|cancel(?:led|ed)?|interrupt(?:ed)?|stopp?ed)\b/i.test(errorMessage)
-            ? 'interrupted'
-            : 'failed'
-    }
-    return 'completed'
-}
-
 function nowIso(): string {
     return new Date().toISOString()
 }
@@ -334,6 +300,7 @@ function readUsage(value: unknown): AssistantTurnUsage | null {
     const cost = asRecord(usage['cost'])
     const costTotal = cost?.['total']
     return {
+        inputIncludesCachedTokens: false,
         inputTokens: numberValue('input'),
         outputTokens: numberValue('output'),
         cachedInputTokens: numberValue('cacheRead'),
@@ -400,6 +367,9 @@ export function mergeAssistantTurnUsage(
     next: AssistantTurnUsage
 ): AssistantTurnUsage {
     return {
+        ...(typeof next.inputIncludesCachedTokens === 'boolean' || typeof current?.inputIncludesCachedTokens === 'boolean'
+            ? { inputIncludesCachedTokens: next.inputIncludesCachedTokens ?? current?.inputIncludesCachedTokens }
+            : {}),
         inputTokens: sumAssistantUsageMetric(current?.inputTokens, next.inputTokens),
         outputTokens: sumAssistantUsageMetric(current?.outputTokens, next.outputTokens),
         cachedInputTokens: sumAssistantUsageMetric(current?.cachedInputTokens, next.cachedInputTokens),
@@ -2764,12 +2734,15 @@ export class ZyraPiRuntime extends EventEmitter {
                 threadId: context.localThreadId,
                 providerThreadId: context.providerThreadId,
                 turnId,
+                itemId: terminalMessageOutcome?.sourceMessageId || undefined,
                 sourceSequence: metadata?.sequence,
                 payload: {
                     outcome,
-                    ...(outcome === 'failed' ? {
-                        errorMessage: terminalMessageOutcome?.errorMessage || asString(event['errorMessage']) || 'Zyra prompt failed.'
-                    } : {}),
+                    ...(outcome === 'completed' ? {} : {
+                        errorMessage: terminalMessageOutcome?.errorMessage
+                            || asString(event['errorMessage'])
+                            || (outcome === 'interrupted' ? 'The assistant turn was interrupted.' : 'Zyra prompt failed.')
+                    }),
                     usage: buildCompletedTurnUsage(context)
                 }
             })
@@ -2984,7 +2957,7 @@ export class ZyraPiRuntime extends EventEmitter {
                 if (hasAssistantContentText(content) && !isReasoningOnlyAssistantEvent(event)) {
                     this.completeAssistantText(context, turnId, content.text, itemId)
                 }
-                const terminalOutcome = readTerminalAssistantMessageOutcome(message)
+                const terminalOutcome = readTerminalAssistantMessageOutcome(message, itemId)
                 if (terminalOutcome) {
                     context.terminalAssistantMessageOutcome = { turnId, ...terminalOutcome }
                 } else if (context.terminalAssistantMessageOutcome?.turnId === turnId) {

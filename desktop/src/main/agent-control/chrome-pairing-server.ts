@@ -7,19 +7,21 @@ import { AgentControlError } from './control-errors'
 
 const MAX_REQUEST_BYTES = 512 * 1024
 const PAIRING_TTL_MS = 5 * 60 * 1000
+const SESSION_IDLE_MS = 20_000
 const SESSION_TTL_MS = 30 * 60 * 1000
 const MAX_REQUESTS_PER_SECOND = 30
 
 type PendingPair = { sessionId: string; extensionId: string; nonce: string; challenge: string; expiresAt: number }
-type PairSession = { pairId: string; extensionId: string; token: string; expiresAt: number; requests: Array<{ requestId: string; operation: unknown; deadline?: number }> }
-type PendingDriverRequest = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
+type PairSession = { lastSeenAt: number; instanceId?: string; pairId: string; extensionId: string; token: string; expiresAt: number; requests: Array<{ requestId: string; operation: unknown; deadline?: number }> }
+type PendingDriverRequest = { pairId: string; resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
 
 export type ChromePairingEvent =
-    | { type: 'tab.register'; pairId: string; extensionId: string; tabId: number; url: string; title: string; documentId: string; mode?: 'read' | 'control' }
+    | { type: 'tab.register'; browserName?: string; pairId: string; extensionId: string; tabId: number; url: string; title: string; documentId: string; mode?: 'read' | 'control' }
     | { type: 'tab.closed'; pairId: string; tabId: number }
     | { type: 'session.disconnected'; pairId: string; reason: string }
 
 export class ChromePairingServer extends EventEmitter {
+    resolveTabTarget?: (pairId: string, tabId: number) => string | undefined
     private server: Server | null = null
     private pairingCode = ''
     private pairingExpiresAt = 0
@@ -28,6 +30,11 @@ export class ChromePairingServer extends EventEmitter {
     private readonly sessions = new Map<string, PairSession>()
     private readonly pendingDriver = new Map<string, PendingDriverRequest>()
     private appearance: Record<string, unknown> = {}
+    private heartbeatTimer: NodeJS.Timeout | null = null
+    private automaticConnectionBlocked = false
+    private automaticStart: Promise<ControlPairingState> | null = null
+
+    connectedSessionIds(): string[] { return [...this.sessions.keys()] }
 
     setAppearance(appearance: Record<string, unknown>): void { this.appearance = appearance }
 
@@ -37,11 +44,12 @@ export class ChromePairingServer extends EventEmitter {
         if (this.currentState.expiresAt && Date.parse(this.currentState.expiresAt) <= Date.now() && this.currentState.state === 'waiting') {
             void this.stop('pairing-expired')
         }
-        return { ...this.currentState }
+        return { ...this.currentState, automaticConnectionPaused: this.automaticConnectionBlocked }
     }
 
     async start(): Promise<ControlPairingState> {
         await this.stop('restart')
+        this.automaticConnectionBlocked = false
         this.pairingCode = String(randomBytes(4).readUInt32BE(0) % 100_000_000).padStart(8, '0')
         this.pairingExpiresAt = Date.now() + PAIRING_TTL_MS
         this.server = createServer((request, response) => void this.handle(request, response))
@@ -57,10 +65,15 @@ export class ChromePairingServer extends EventEmitter {
             port: address.port,
             expiresAt: new Date(this.pairingExpiresAt).toISOString()
         }
+        this.heartbeatTimer = setInterval(() => this.sweepInactiveSessions(), 5000)
+        this.heartbeatTimer.unref?.()
         return this.state()
     }
 
     async stop(reason = 'stopped'): Promise<void> {
+        if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
+        this.heartbeatTimer = null
+        if (reason === 'emergency-stop' || reason === 'user-request') this.automaticConnectionBlocked = true
         const sessions = [...this.sessions.values()]
         this.sessions.clear()
         this.pendingPairs.clear()
@@ -78,6 +91,52 @@ export class ChromePairingServer extends EventEmitter {
         this.currentState = { state: 'stopped' }
         this.pairingCode = ''
         this.pairingExpiresAt = 0
+    }
+
+    sweepInactiveSessions(now = Date.now()): void {
+        const expired = [...this.sessions.values()].filter(session => now - session.lastSeenAt > SESSION_IDLE_MS || session.expiresAt <= now)
+        if (!expired.length) return
+        for (const session of expired) {
+            this.sessions.delete(session.pairId)
+            for (const [id, pending] of this.pendingDriver) {
+                if (pending.pairId !== session.pairId) continue
+                this.pendingDriver.delete(id); clearTimeout(pending.timer)
+                pending.reject(new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', 'The Chrome browser disconnected.'))
+            }
+            this.emitEvent({type:'session.disconnected', pairId:session.pairId, reason:'browser-offline'})
+        }
+        const current = [...this.sessions.values()].at(-1)
+        this.currentState = current
+            ? {state:'paired', pairId:current.pairId, extensionId:current.extensionId, port:this.currentState.port}
+            : {state:'stopped', port:this.currentState.port}
+        this.emit('state-changed')
+    }
+
+    // Called only by the host after verifying the exact extension origin.
+    async connectExtension(extensionId: string, instanceId: string) {
+        if (!/^[a-p]{32}$/.test(extensionId) || !/^[a-zA-Z0-9_-]{16,128}$/.test(instanceId)) throw new Error('Invalid browser identity.')
+        if (this.automaticConnectionBlocked) throw new Error('Chrome access is paused in Zyra. Resume it in Device connections.')
+        this.checkRate(extensionId)
+        this.sweepInactiveSessions()
+        if (this.sessions.size >= 16 && ![...this.sessions.values()].some(entry => entry.instanceId === instanceId && entry.extensionId === extensionId)) throw new Error('Too many connected Chrome profiles.')
+        if (!this.server) {
+            this.automaticStart ||= this.start().finally(() => { this.automaticStart = null })
+            await this.automaticStart
+        }
+        const previous = [...this.sessions.values()].find(entry => entry.extensionId === extensionId && entry.instanceId === instanceId)
+        if (previous) {
+            this.sessions.delete(previous.pairId)
+            this.emitEvent({ type: 'session.disconnected', pairId: previous.pairId, reason: 'browser-reconnected' })
+        }
+        const pairId = `chrome-pair:${randomUUID()}`
+        const token = randomBytes(32).toString('base64url')
+        const expiresAt = Date.now() + SESSION_TTL_MS
+        this.sessions.set(pairId, { lastSeenAt:Date.now(), pairId, extensionId, instanceId, token, expiresAt, requests: [] })
+        const address = this.server!.address()
+        if (!address || typeof address === 'string') throw new Error('Chrome connection is unavailable.')
+        this.currentState = { state: 'paired', pairId, port: address.port, extensionId }
+        this.emit('state-changed')
+        return { port: address.port, pairId, token, expiresAt: new Date(expiresAt).toISOString() }
     }
 
     async request(pairId: string, operation: unknown, timeoutMs: number = CONTROL_BOUNDS.defaultActionTimeoutMs, signal?: AbortSignal): Promise<unknown> {
@@ -98,7 +157,7 @@ export class ChromePairingServer extends EventEmitter {
             const abort = () => cancel(new AgentControlError('CONTROL_CANCELLED', 'Chrome action cancelled.'))
             const timer = setTimeout(() => cancel(new AgentControlError('CONTROL_TIMEOUT', 'Chrome extension request timed out. Observe the page before retrying.')), timeoutMs)
             const finish = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort) }
-            this.pendingDriver.set(requestId, { resolve: (value) => { finish(); resolve(value) }, reject: (error) => { finish(); reject(error) }, timer })
+            this.pendingDriver.set(requestId, { pairId, resolve: (value) => { finish(); resolve(value) }, reject: (error) => { finish(); reject(error) }, timer })
             signal?.addEventListener('abort', abort, { once: true })
             if (signal?.aborted) abort()
         })
@@ -117,6 +176,7 @@ export class ChromePairingServer extends EventEmitter {
             if (request.url === '/v1/pair/prove') return this.pairProve(origin, body, response)
             const session = this.authenticate(origin, request.headers.authorization)
             const nextToken = randomBytes(32).toString('base64url')
+            session.lastSeenAt = Date.now()
             session.token = nextToken
             session.expiresAt = Date.now() + SESSION_TTL_MS
             if (request.url === '/v1/poll') {
@@ -126,7 +186,7 @@ export class ChromePairingServer extends EventEmitter {
             if (request.url === '/v1/respond') {
                 const requestId = String(body.requestId || '')
                 const pending = this.pendingDriver.get(requestId)
-                if (!pending) return this.reply(response, 409, { error: 'unknown-or-late-request', nextToken })
+                if (!pending || pending.pairId !== session.pairId) return this.reply(response, 409, { error: 'unknown-or-late-request', nextToken })
                 clearTimeout(pending.timer)
                 this.pendingDriver.delete(requestId)
                 if (body.ok === false) pending.reject(new AgentControlError('CONTROL_DRIVER_UNAVAILABLE', String(body.error || 'Chrome extension action failed.'), { retryable: false }))
@@ -135,7 +195,9 @@ export class ChromePairingServer extends EventEmitter {
             }
             if (request.url === '/v1/event') {
                 this.handleExtensionEvent(session, body)
-                return this.reply(response, 200, { ok: true, nextToken })
+                const targetId = body.type === 'tab.register' ? this.resolveTabTarget?.(session.pairId, Number(body.tabId)) : undefined
+                const targets = body.type === 'tabs.discover' && Array.isArray(body.tabs) ? body.tabs.map(tab => ({tabId:Number(tab.tabId), targetId:this.resolveTabTarget?.(session.pairId, Number(tab.tabId))})) : undefined
+                return this.reply(response, 200, { ok: true, nextToken, targetId, targets })
             }
             return this.reply(response, 404, { error: 'unknown-route', nextToken })
         } catch (error) {
@@ -165,15 +227,15 @@ export class ChromePairingServer extends EventEmitter {
         this.pendingPairs.delete(pending.sessionId)
         const pairId = `chrome-pair:${randomUUID()}`
         const token = randomBytes(32).toString('base64url')
-        this.sessions.set(pending.extensionId, { pairId, extensionId: pending.extensionId, token, expiresAt: Date.now() + SESSION_TTL_MS, requests: [] })
+        this.sessions.set(pairId, { lastSeenAt:Date.now(), pairId, extensionId: pending.extensionId, token, expiresAt: Date.now() + SESSION_TTL_MS, requests: [] })
         this.currentState = { state: 'paired', pairId, port: this.currentState.port, extensionId: pending.extensionId }
         this.reply(response, 200, { protocolVersion: 1, pairId, token, expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString() })
     }
 
     private authenticate(origin: string, authorization: string | undefined): PairSession {
         const extensionId = origin.slice('chrome-extension://'.length)
-        const session = this.sessions.get(extensionId)
         const supplied = String(authorization || '').replace(/^Bearer\s+/i, '')
+        const session = [...this.sessions.values()].find(entry => entry.extensionId === extensionId && Buffer.byteLength(entry.token) === Buffer.byteLength(supplied) && timingSafeEqual(Buffer.from(entry.token), Buffer.from(supplied)))
         if (!session || session.expiresAt <= Date.now() || supplied.length !== session.token.length) throw new AgentControlError('CONTROL_CAPABILITY_DENIED', 'Chrome pairing credential is invalid or expired.')
         const left = Buffer.from(supplied)
         const right = Buffer.from(session.token)
@@ -184,18 +246,27 @@ export class ChromePairingServer extends EventEmitter {
     private handleExtensionEvent(session: PairSession, body: Record<string, unknown>): void {
         const type = String(body.type || '')
         if (type === 'session.disconnect') {
-            this.sessions.delete(session.extensionId)
+            this.sessions.delete(session.pairId)
             if (this.currentState.state === 'paired' && this.currentState.pairId === session.pairId) {
                 const remaining = this.sessions.values().next().value as PairSession | undefined
                 this.currentState = remaining
                     ? { state: 'paired', pairId: remaining.pairId, port: this.currentState.port, extensionId: remaining.extensionId }
-                    : { state: 'stopped' }
+                    : { state: 'stopped', port: this.currentState.port }
             }
             if (this.sessions.size === 0) {
                 this.pairingCode = ''
                 this.pairingExpiresAt = 0
             }
             this.emitEvent({ type: 'session.disconnected', pairId: session.pairId, reason: 'extension-disconnected' })
+            this.emit('state-changed')
+            return
+        }
+        if (type === 'tabs.discover') {
+            if (!Array.isArray(body.tabs) || body.tabs.length > 200) throw new Error('Invalid Chrome tab catalog.')
+            for (const tab of body.tabs) {
+                if (!tab || typeof tab !== 'object') throw new Error('Invalid Chrome tab catalog entry.')
+                this.handleExtensionEvent(session, {...tab, type:'tab.register'})
+            }
             return
         }
         if (type === 'tab.register') {
@@ -204,7 +275,7 @@ export class ChromePairingServer extends EventEmitter {
             if (!Number.isInteger(tabId) || tabId < 0 || !/^https?:\/\//.test(url)) throw new Error('Invalid exact-tab registration.')
             this.emitEvent({
                 type, pairId: session.pairId, extensionId: session.extensionId, tabId,
-                url, mode: body.mode === 'read' ? 'read' : 'control', title: String(body.title || '').slice(0, 512), documentId: String(body.documentId || '').slice(0, 192)
+                url, browserName: String(body.browserName || 'Chrome').slice(0,60), mode: body.mode === 'read' ? 'read' : 'control', title: String(body.title || '').slice(0, 512), documentId: String(body.documentId || '').slice(0, 192)
             })
             return
         }

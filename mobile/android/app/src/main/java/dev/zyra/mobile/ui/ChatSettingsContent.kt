@@ -45,7 +45,7 @@ import dev.zyra.mobile.data.permissionLabel
         ChatSettingsDivider()
         ChatSettingControl("Speaking style", preferences.profile.ifBlank { config.profile }.replaceFirstChar { it.uppercase() }.ifBlank { "From your PC" },
             click = if (personalizing) ({ if (chooseProfile == null) profiles() else stylesExpanded = true }) else null,
-            leading = { AppIcon(R.drawable.ic_audio_lines, modifier = Modifier.size(20.dp)) },
+            leading = { AppIcon(R.drawable.ic_text_cursor_input, modifier = Modifier.size(20.dp)) },
             trailing = { if (preferences.busy || preferences.saving) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else AppIcon(R.drawable.ic_chevron_right, "Speaking styles", Modifier.size(16.dp)) })
         if (preferences.loaded) {
             ChatSettingsDivider()

@@ -1,3 +1,4 @@
+import { normalizePromptImages } from '../prompt-images.mjs';
 import { normalizeChatModel } from './chat-model.mjs';
 import { ReplayWindow } from './replay-window.mjs';
 import { ApprovalResponses } from "./approval-responses.mjs";
@@ -76,6 +77,7 @@ export class ZyraAgentServer extends EventEmitter {
     this.desktopWorkspaceRequests = new Map();
     this.server = null;
     this.startedAt = null;
+    this.instanceId = null;
     this.retiring = false;
     this.pendingRequests = 0;
     const memoryStatusFile = path.join(this.paths.stateDirectory, "memory-jobs.json");
@@ -98,6 +100,7 @@ export class ZyraAgentServer extends EventEmitter {
     mkdirSync(this.paths.stateDirectory, { recursive: true });
     this.assertNoIncompatibleServer();
     this.runtimeRevision = await readRuntimeRevision(this.root);
+    this.instanceId = randomUUID();
     if (!this.desktopAuthorityHash) {
       try {
         this.desktopAuthorityHash = readFileSync(this.paths.desktopAuthorityFile, "utf8").trim() || null;
@@ -185,12 +188,13 @@ export class ZyraAgentServer extends EventEmitter {
       endpoint: this.endpoint,
       token: this.token,
       channel: this.paths.channel,
+      namespaceId: this.paths.namespaceId,
       startedAt: this.startedAt
     };
   }
 
-  state() {
-    const uniqueSessions = [...new Set(this.sessions.values())];
+  state({ identityOnly = false } = {}) {
+    const uniqueSessions = identityOnly ? [] : [...new Set(this.sessions.values())];
     return {
       version: AGENT_SERVER_PROTOCOL_VERSION,
       activationVersion: RUNTIME_ACTIVATION_VERSION,
@@ -199,7 +203,19 @@ export class ZyraAgentServer extends EventEmitter {
       startedAt: this.startedAt,
       clients: this.clients.size,
       methods: AGENT_SERVER_METHODS,
+      instance: this.instanceIdentity(),
       sessions: uniqueSessions.map((session) => session.summary())
+    };
+  }
+
+  instanceIdentity() {
+    return {
+      instanceId: this.instanceId,
+      namespaceId: this.paths.namespaceId,
+      channel: this.paths.channel,
+      protocolVersion: AGENT_SERVER_PROTOCOL_VERSION,
+      runtimeRevision: this.runtimeRevision,
+      startedAt: this.startedAt,
     };
   }
 
@@ -296,7 +312,7 @@ export class ZyraAgentServer extends EventEmitter {
   }
 
   async handleRequest(client, method, params) {
-    if (method === "server.status") return this.state();
+    if (method === "server.status") return this.state({ identityOnly: params?.identityOnly === true });
     if (method === "server.retire") {
       if (params.activationVersion !== undefined && (params.activationVersion !== RUNTIME_ACTIVATION_VERSION
         || typeof params.expectedRevision !== "string" || !/^[a-f0-9]{64}$/.test(params.expectedRevision))) {
@@ -708,11 +724,13 @@ export class ZyraAgentServer extends EventEmitter {
       connected: session.connectedResult,
       replay: session.replay(lastSequence),
       pendingAttention: [...session.pendingAttentionEvents.values()],
+      pendingOperations: [...session.pendingOperationEvents.values()].sort((a, b) => a.sequence - b.sequence),
       liveMessage: session.liveMessage,
       pendingTools: [...session.pendingToolEvents.values()],
       latestSequence: session.sequence,
       activeRequestContext: session.latestTurn?.state === "running" ? session.activeRequestContext : null,
-      presence: this.sessionPresence(session.sessionKey)
+      presence: this.sessionPresence(session.sessionKey),
+      instance: this.instanceIdentity()
     };
   }
 
@@ -894,6 +912,7 @@ class ServerOwnedSession {
     this.pendingAttentionEvents = new Map();
     this.liveMessage = null;
     this.pendingToolEvents = new Map();
+    this.pendingOperationEvents = new Map();
     this.pendingApprovalRequestIds = new Set();
     this.approvalResponses = new ApprovalResponses(this.pendingApprovalRequestIds);
     this.pendingUserInputRequestIds = new Set();
@@ -1034,8 +1053,20 @@ class ServerOwnedSession {
     if (type === "prompt" && !requestContext?.turnId) {
       throw new AgentServerProtocolError("Prompt requests require a durable turn id.");
     }
-    if (type === "prompt" && this.activeRequestContext) {
-      throw new AgentServerProtocolError("This canonical chat already has an active turn.", "AGENT_SERVER_SESSION_BUSY");
+    // Validate attachments before accepting a visible prompt, using the worker's contract.
+    const promptImages = type === "prompt" ? normalizePromptImages(payload?.images) : undefined;
+    if (type === "prompt" && (this.activeRequestContext || this.foregroundPromptRequests > 0)) {
+      if (!this.isTurnTerminal(this.activeRequestContext?.turnId)) {
+        throw new AgentServerProtocolError("This canonical chat already has an active turn.", "AGENT_SERVER_SESSION_BUSY");
+      }
+      // The answer is complete, but context maintenance still owns the worker.
+      // Wait for that request to unwind instead of racing a second session.prompt.
+      while (this.activeRequestContext || this.foregroundPromptRequests > 0) {
+        await new Promise((resolve, reject) => this.userInputContinuationWaiters.add({ resolve, reject }));
+        if (continuationEpoch !== this.userInputContinuationEpoch) throw new Error('The waiting prompt was stopped.');
+      }
+      if (this.disposed || this.revocationPromise) throw new AgentServerProtocolError('The session ended before the prompt could start.', 'AGENT_SERVER_SESSION_NOT_FOUND');
+      this.server.pluginAuthority.assertAllowed(this.sessionKey, this.pluginSkillSources);
     }
     clearTimeout(this.idleTimer);
     this.idleTimer = null;
@@ -1055,6 +1086,11 @@ class ServerOwnedSession {
       };
       this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, presence: true });
       this.server.notifyDesktopWorkspaceTurn(this.sessionKey, requestContext.turnId);
+      // SDK preflight may compact before it appends the canonical user message.
+      // This receipt is a presentation event; the worker remains the transcript writer.
+      this.publish({ type: "zyra_server_prompt_accepted", message: {
+        role: "user", content: [{ type: "text", text: String(payload?.prompt || "") }, ...(promptImages || [])], timestamp: Date.now()
+      } });
     }
     try {
       const result = await (approvalResponsePromise || userInputResponsePromise || this.worker.request(type, payload));
@@ -1153,6 +1189,7 @@ class ServerOwnedSession {
       ...(publishedRequestContext ? { requestContext: publishedRequestContext } : {})
     };
     this.eventWindow.append(entry);
+    this.updatePendingOperations(entry);
     try {
       this.journal?.append(entry);
     } catch (error) {
@@ -1166,7 +1203,9 @@ class ServerOwnedSession {
       && this.activeRequestContext === publishedRequestContext
       && ((event?.type === "agent_end" && event.willRetry !== true) || event?.type === "zyra_server_turn_completed")
     ) {
-      this.activeRequestContext = null;
+      // Keep attribution and serialization until the worker finishes post-turn
+      // maintenance. Presence already reflects the completed answer above.
+      if (this.foregroundPromptRequests === 0) this.activeRequestContext = null;
       this.server.broadcastCatalogChanged({ canonicalChatId: this.sessionKey, presence: true });
       this.releaseUserInputContinuations();
     }
@@ -1181,6 +1220,19 @@ class ServerOwnedSession {
       || previousAttention !== (this.pendingApprovalRequestIds.size > 0 || this.pendingUserInputRequestIds.size > 0)
       || previousBackgroundWork !== this.hasBackgroundWork()) this.syncMemoryQueue();
     this.scheduleIdleStop();
+  }
+
+  updatePendingOperations(entry) {
+    const { event, requestContext } = entry;
+    const type = event?.type;
+    if (type === 'zyra_server_prompt_accepted') this.pendingOperationEvents.set('prompt', entry);
+    if (['message_start', 'message_update', 'message_end'].includes(type) && event.message?.role === 'user'
+      && this.pendingOperationEvents.get('prompt')?.requestContext?.turnId === requestContext?.turnId) this.pendingOperationEvents.delete('prompt');
+    if (type === 'compaction_start') this.pendingOperationEvents.set('compaction', entry);
+    if (type === 'compaction_end') this.pendingOperationEvents.delete('compaction');
+    if (type === 'auto_retry_start') this.pendingOperationEvents.set('recovery', entry);
+    if (type === 'auto_retry_end') this.pendingOperationEvents.delete('recovery');
+    if (type === 'zyra_server_turn_completed' || type === 'agent_end' && event.willRetry !== true) this.pendingOperationEvents.clear();
   }
 
   isTurnTerminal(turnIdValue) {

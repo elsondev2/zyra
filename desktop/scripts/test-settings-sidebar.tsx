@@ -11,23 +11,25 @@ const render = (route: string, hidden = false) => renderToStaticMarkup(
 const anchors = (html: string) => html.match(/<a\b[^>]*>/g) || []
 const appSource = readFileSync(new URL('../src/renderer/src/App.tsx', import.meta.url), 'utf8')
 assert.deepEqual(SETTINGS_NAVIGATION_ITEMS.map(item => item.id), ['app', 'assistant', 'workspace', 'account', 'data'])
-assert.deepEqual(getSettingsCategoryDestinations('assistant').map(item => item.id), ['assistant', 'skills', 'voice', 'memory', 'archived'])
+assert.deepEqual(getSettingsCategoryDestinations('assistant').map(item => item.id), ['assistant', 'skills', 'voice', 'memory'])
 assert.deepEqual(getSettingsCategoryDestinations('workspace').map(item => item.id), ['projects', 'files-editor', 'terminal-runtime', 'source-control', 'browser-control'])
 assert.deepEqual(getSettingsCategoryDestinations('data').map(item => item.id), ['privacy', 'diagnostics', 'about'])
 assert.equal(getSettingsCategoryEntry('workspace').id, 'projects')
 const groupedIds = SETTINGS_NAVIGATION_ITEMS.flatMap(item => getSettingsCategoryDestinations(item.id).map(page => page.id))
-assert.equal(new Set(groupedIds).size, SETTINGS_DESTINATIONS.length)
-assert.equal(groupedIds.length, SETTINGS_DESTINATIONS.length, 'each destination belongs to exactly one visible group')
+const primary = SETTINGS_DESTINATIONS.filter(destination => !destination.parentId)
+assert.equal(new Set(groupedIds).size, primary.length)
+assert.equal(groupedIds.length, primary.length, 'each primary destination belongs to exactly one visible group')
 for (const destination of SETTINGS_DESTINATIONS) {
     assert.ok(appSource.includes(`<Route path="${destination.to.slice('/settings/'.length)}" element={<`), 'each page remains wired to its real route')
     for (const route of [destination.to, ...(destination.legacyPaths || [])]) {
         const html = render(route)
         const active = anchors(html).filter(tag => tag.includes('aria-current="page"'))
         assert.equal(active.length, 1, 'canonical and legacy links identify exactly one current page')
-        assert.ok(active[0].includes(`href="${destination.to}"`))
-        assert.equal(anchors(html).length, SETTINGS_DESTINATIONS.length, 'all pages are available without expanding a category')
+        const parent = SETTINGS_DESTINATIONS.find(page => page.id === (destination.parentId || destination.id))!
+        assert.ok(active[0].includes(`href="${parent.to}"`))
+        assert.equal(anchors(html).length, primary.length, 'all primary pages are available without expanding a category')
         assert.ok(!html.includes('<button') && !html.includes('aria-expanded'), 'group headings cannot add a hidden navigation step')
-        for (const page of SETTINGS_DESTINATIONS) assert.equal(anchors(html).filter(tag => tag.includes(`href="${page.to}"`)).length, 1)
+        for (const page of primary) assert.equal(anchors(html).filter(tag => tag.includes(`href="${page.to}"`)).length, 1)
     }
 }
 for (const category of SETTINGS_NAVIGATION_ITEMS) {
@@ -36,4 +38,4 @@ for (const category of SETTINGS_NAVIGATION_ITEMS) {
 assert.ok(render('/settings/app/general', true).startsWith('<div hidden=""'), 'search can hide and restore the same navigation component')
 const styles = readFileSync(new URL('../src/renderer/src/index.css', import.meta.url), 'utf8')
 assert.match(styles, /\.settings-sidebar-scrollbar,\s*\.settings-content-scrollbar\s*\{\s*scrollbar-gutter: stable;/)
-console.log('Settings sidebar: 18 one-click destinations, five purposeful groups, current/legacy routes, category redirects and stable scroll space: ok')
+console.log('Settings sidebar: 16 one-click destinations with nested-view ownership, five purposeful groups, current/legacy routes, category redirects and stable scroll space: ok')

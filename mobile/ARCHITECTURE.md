@@ -166,3 +166,13 @@ Usage and account limits share one machine selector and one scrolling page. The 
 Pending questions own the existing composer surface while retaining the unsent draft. The gateway supplies a stable client and operation identity; the canonical server resolves the answer and schedules exactly one continuation after the current foreground prompt finishes cleanup. Answer retries, reconnects and concurrent taps reuse the same continuation; conflicting responses are rejected and Stop cancels queued work. The gateway refuses an incomplete receipt from an older host runtime. Canonical resolved-question events drive the compact answered-question message.
 
 Desktop live user-message events use the same validated image materialization and attachment envelope as history hydration. Android seeds the bounded media cache from matching outgoing originals before draft cleanup. Pending sends read attachment ownership from the durable operation and render the same thumbnails as canonical messages; another machine or chat cannot supply those previews. Replay reconciliation retains one canonical message.
+
+## Mobile chat presentation parity
+
+Mobile projects interrupted turns from canonical assistant stop reasons and explicit turn outcomes. The existing work disclosure stays above the last narration; a separate Interrupted row precedes the next user prompt. Internal action-batch declarations remain available in canonical data but do not render as tool-name links.
+
+Inbox settlement uses the Desktop three-day inactivity window for idle chats, while preserving active work, attention requests, and failures. Compact settled rows are automatic. Explicit phone-local overrides remain activity-scoped; they are not synchronized Desktop preferences.
+
+Assistant visualization blocks use the same explicit line-delimited format as Desktop. A bounded parser hides incomplete source, and a cached HTML/SVG allowlist feeds a transparent inline Android WebView. JavaScript, file/content access, navigation, and network loading are disabled; CSP adds a second restriction layer. Stable block keys and document comparisons avoid reloading unchanged blocks during text updates. Renderer loss offers a reload action.
+
+Desktop-hosted mobile fleet reads use Desktop's canonical-chat mapping and persisted fleet snapshot for agents/workflows missing from the live worker. The gateway verifies current project sharing before invoking this read-only adapter. Saved transcript paths come only from the mapped run; the phone supplies a run ID, not a filesystem path. Live results take precedence, mutation requests remain on the existing runtime path, and standalone gateways retain their normal live-runtime behavior.

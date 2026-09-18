@@ -50,7 +50,9 @@ function groupConsecutiveActionRows(rows: TimelineRenderRow[]): TimelineRenderRo
         const activities = getActionRowActivities(row)
         const previous = groupedRows[groupedRows.length - 1]
         const previousActivities = previous ? getActionRowActivities(previous) : null
-        if (!activities || !previous || !previousActivities || (getRowTurnId(previous) && getRowTurnId(row) && getRowTurnId(previous) !== getRowTurnId(row))) {
+        // This list is already bounded by the user turn. Local/provider IDs can
+        // differ during reconciliation without starting a new action block.
+        if (!activities || !previous || !previousActivities) {
             groupedRows.push(row)
             continue
         }
@@ -405,11 +407,9 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
         const boundaryRows = rows.slice(userIndex + 1, boundaryEndIndex)
         if (boundaryRows.some((row) => row.kind === 'user-input')) continue
         const usage = turnUsageById?.get(turnId)
-        const projectedTerminalOutcome = usage?.state === 'completed'
-            ? null
-            : projectedTerminalOutcomeByTurn.get(turnId)
-                || getProjectedTerminalOutcomeFromRows(boundaryRows)
-                || null
+        const projectedTerminalOutcome = projectedTerminalOutcomeByTurn.get(turnId)
+            || getProjectedTerminalOutcomeFromRows(boundaryRows)
+            || null
         const isLatestFinal = finalRow.message.id === resolvedLatestAssistantMessageId
         const turnCompleted = usage?.state === 'completed'
         const safeHistoricalFallback = turnId !== activeTurnId
@@ -515,19 +515,15 @@ export function groupTimelineRowsIntoWorkSummaries(input: {
             })
             continue
         }
-        const projectedTerminalOutcome = usage?.state === 'completed'
-            ? null
-            : projectedTerminalOutcomeByTurn.get(turnId)
-                || getProjectedTerminalOutcomeFromRows(turnRows)
-                || null
+        const projectedTerminalOutcome = projectedTerminalOutcomeByTurn.get(turnId)
+            || getProjectedTerminalOutcomeFromRows(turnRows)
+            || null
         const terminalIncomplete = usage?.state === 'interrupted' || usage?.state === 'error' || Boolean(projectedTerminalOutcome)
         if (finalByTurn.has(turnId) && !terminalIncomplete) continue
         if ((usage?.state === 'running' && !projectedTerminalOutcome) || (isWorking && turnId === activeTurnId && !projectedTerminalOutcome)) continue
         const outcome = usage?.state === 'interrupted'
             ? 'interrupted'
-            : usage?.state === 'error'
-                ? 'failed'
-                : projectedTerminalOutcome || 'no-response'
+            : projectedTerminalOutcome || (usage?.state === 'error' ? 'failed' : 'no-response')
         const displayTurnRows = outcome === 'interrupted' ? stripProjectedInterruptions(turnRows) : turnRows
         const workRows = displayTurnRows.filter((row) => row.kind !== 'working' && !rowMustStayVisible(row))
         const groupedWorkRows = groupConsecutiveActionRows(workRows)

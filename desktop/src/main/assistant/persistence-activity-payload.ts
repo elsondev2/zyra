@@ -1,12 +1,16 @@
 import type { SqlValue } from 'sql.js/dist/sql-asm.js'
 import type { AssistantActivity } from '../../shared/assistant/contracts'
 import { parseJson, toNumber } from './persistence-utils'
+import { isAssistantInterruptionErrorMessage } from './assistant-terminal-outcome'
 
 export const ASSISTANT_ACTIVITY_PAYLOAD_MAX_CHARACTERS = 512 * 1024
 export const ASSISTANT_TRUNCATED_ACTIVITY_PAYLOAD_ESTIMATED_CHARACTERS = 160
+// SQL NULL is reserved for rows written before whole-turn metadata existed.
+const ASSISTANT_ACTIVITY_NONTERMINAL_OUTCOME = 'nonterminal'
 
 const COMPACT_PAYLOAD_KEYS = [
     'status',
+    'stopReason',
     'toolName',
     'toolCallId',
     'canonicalMessageId',
@@ -134,4 +138,43 @@ export function parseAssistantActivityPayload(
         originalPayloadCharacters,
         omittedPayloadFields: ['oversized-persisted-payload']
     }
+}
+
+export function assistantActivityTerminalOutcomeColumn(): string {
+    // A later assistant response proves a legacy error was an attempt, not the turn's end.
+    // Fresh projections carry an explicit value and do not need this correlated lookup.
+    return `CASE WHEN assistant_activities.turn_terminal_outcome IS NULL
+        AND assistant_activities.kind = 'error'
+        AND EXISTS (SELECT 1 FROM assistant_messages later
+            WHERE later.thread_id = assistant_activities.thread_id
+              AND later.turn_id = assistant_activities.turn_id
+              AND later.role = 'assistant'
+              AND LENGTH(TRIM(later.text)) > 0
+              AND (later.created_at > assistant_activities.created_at
+                OR (later.created_at = assistant_activities.created_at
+                  AND COALESCE(later.timeline_sequence, -1) > COALESCE(assistant_activities.timeline_sequence, -1))))
+        THEN '${ASSISTANT_ACTIVITY_NONTERMINAL_OUTCOME}' ELSE assistant_activities.turn_terminal_outcome END`
+}
+
+export function serializeAssistantActivityTerminalOutcome(
+    outcome: AssistantActivity['turnTerminalOutcome']
+): string {
+    return outcome ?? ASSISTANT_ACTIVITY_NONTERMINAL_OUTCOME
+}
+
+export function parseAssistantActivityTerminalOutcome(
+    value: SqlValue,
+    kind: string,
+    payload: AssistantActivity['payload'],
+    detail?: string
+): AssistantActivity['turnTerminalOutcome'] {
+    if (value === 'failed' || value === 'interrupted') return value
+    if (value !== null) return undefined
+    if (kind !== 'error') return undefined
+
+    const stopReason = String(payload?.['stopReason'] || '').trim().toLowerCase()
+    if (['aborted', 'cancelled', 'canceled', 'interrupted', 'stopped'].includes(stopReason)) return 'interrupted'
+    if (stopReason === 'error') return isAssistantInterruptionErrorMessage(detail) ? 'interrupted' : 'failed'
+    if (payload?.['canonicalMessageId'] && payload?.['status'] === 'failed') return 'failed'
+    return undefined
 }

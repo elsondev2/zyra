@@ -5,7 +5,6 @@ import {
     clearResolvedApprovals,
     deriveSessionTitleFromPrompt,
     isDefaultSessionTitle,
-    clearResolvedUserInputs,
     nowIso,
     runtimeStateAfterRestore,
     settleRunningTurn,
@@ -58,7 +57,8 @@ export function recoverPersistedSnapshot(snapshot: AssistantSnapshot): Assistant
             thread.lastSeenCompletedTurnId = thread.lastSeenCompletedTurnId || null
             thread.state = runtimeStateAfterRestore(thread.state)
             thread.pendingApprovals = clearResolvedApprovals(thread.pendingApprovals || [])
-            thread.pendingUserInputs = clearResolvedUserInputs(thread.pendingUserInputs || [])
+            // Resolved questions are durable answer-message receipts, not transient approvals.
+            thread.pendingUserInputs = thread.pendingUserInputs || []
             thread.latestTurn = settleRunningTurn(thread.latestTurn, recoveredAt)
         }
     }

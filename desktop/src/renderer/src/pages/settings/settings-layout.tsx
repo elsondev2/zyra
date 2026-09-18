@@ -2,43 +2,41 @@ import { addOverlayEventListener } from '@/components/ui/native-overlay-portal'
 import { createContext, useContext, useEffect, useRef } from 'react'
 import type { ButtonHTMLAttributes, HTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react'
 import { createOverlayPortal as createPortal } from '@/components/ui/native-overlay-portal'
-import { ChevronLeft, Undo2, X } from 'lucide-react'
-import { Link, useInRouterContext } from 'react-router-dom'
+import { Undo2, X } from 'lucide-react'
+import { useInRouterContext } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { createSettingsRowTargetId, createSettingsSectionTargetId } from './settings-search'
 import { SettingsInfoTooltip } from './SettingsInfoTooltip'
 import { SettingsSectionNavigation } from './SettingsSectionNavigation'
+import { SettingsBackLink } from './SettingsBackLink'
+import { SettingsPageFrame } from './SettingsPageFrame'
 
 const SettingsSearchSectionContext = createContext<string | null>(null)
 
-export function SettingsPageContainer({ children, className, title, backTo, backLabel }: {
+export function SettingsPageContainer({ children, className, title, navigation, backTo, backLabel, showSettingsBack = false }: {
     children: ReactNode
     className?: string
     title?: string
+    description?: string
+    navigation?: ReactNode
     backTo?: string
     backLabel?: string
+    showSettingsBack?: boolean
 }) {
     const containerRef = useRef<HTMLDivElement | null>(null)
     const inRouter = useInRouterContext()
-    const showBackLink = backTo && !backTo.startsWith('/settings')
+    const showBackLink = backTo && (showSettingsBack || !backTo.startsWith('/settings'))
     return (
-        <div ref={containerRef} className="zyra-settings-page-container flex w-full min-w-0 justify-center px-5 pb-16 pt-8 sm:px-10 sm:pt-10">
-            <div className={cn('zyra-settings-page-column flex w-full max-w-[760px] flex-col', title ? 'gap-4' : 'gap-10', className)}>
+        <SettingsPageFrame containerRef={containerRef} className={className}>
                 {title ? (
                     <header className="px-0.5">
-                        {showBackLink ? (
-                            <Link to={backTo!} className="mb-2 inline-flex h-6 items-center gap-0.5 text-[11px] font-medium text-[var(--settings-text-muted)] transition-colors hover:text-[var(--settings-text)]">
-                                <ChevronLeft size={13} strokeWidth={1.8} />
-                                {backLabel || 'Settings'}
-                            </Link>
-                        ) : null}
-                        <h1 className="text-[24px] font-medium tracking-[-0.025em] text-[var(--settings-text)]">{title}</h1>
+                        {inRouter ? <SettingsBackLink fallback={showBackLink ? backTo : undefined} fallbackLabel={backLabel} /> : null}
+                        <h1 className="text-[22px] font-medium tracking-[-0.025em] text-[var(--settings-text)]">{title}</h1>
                     </header>
                 ) : null}
-                {inRouter ? <SettingsSectionNavigation containerRef={containerRef} /> : null}
-                <div className={cn('flex min-w-0 flex-col', title ? 'gap-8' : 'gap-10')} data-settings-page-content="true">{children}</div>
-            </div>
-        </div>
+                {inRouter ? navigation || <SettingsSectionNavigation containerRef={containerRef} /> : null}
+                <div className="flex min-w-0 flex-col gap-8" data-settings-page-content="true">{children}</div>
+        </SettingsPageFrame>
     )
 }
 
@@ -198,10 +196,12 @@ export function SettingsButton({ variant = 'outline', ...props }: ButtonHTMLAttr
     )
 }
 
-export function SettingsDialog({ open, title, description, children, footer, className, contentClassName, onClose }: {
+export function SettingsDialog({ open, title, description, descriptionMode = 'text', headerAction, children, footer, className, contentClassName, onClose }: {
     open: boolean
     title: string
     description?: string
+    descriptionMode?: 'text' | 'info'
+    headerAction?: ReactNode
     children: ReactNode
     footer?: ReactNode
     className?: string
@@ -230,14 +230,15 @@ export function SettingsDialog({ open, title, description, children, footer, cla
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="settings-dialog-title"
-                aria-describedby={description ? 'settings-dialog-description' : undefined}
-                className={cn('flex max-h-[calc(100vh-2.5rem)] w-full max-w-[480px] flex-col overflow-hidden rounded-xl border border-[var(--settings-border-strong)] bg-[var(--settings-popover)] text-[var(--settings-text)] shadow-[0_24px_80px_color-mix(in_srgb,var(--color-bg)_70%,transparent)]', className)}
+                aria-describedby={description && descriptionMode === 'text' ? 'settings-dialog-description' : undefined}
+                className={cn('zyra-settings-dialog flex max-h-[calc(100vh-2.5rem)] w-full max-w-[480px] flex-col overflow-hidden rounded-xl border border-[var(--settings-border-strong)] bg-[var(--settings-popover)] text-[var(--settings-text)] shadow-[0_24px_80px_color-mix(in_srgb,var(--color-bg)_70%,transparent)]', className)}
             >
-                <header className="flex shrink-0 items-start gap-4 border-b border-[var(--settings-divider)] px-4 py-3">
+                <header className={cn('flex shrink-0 gap-4 border-b border-[var(--settings-divider)] px-4 py-3', descriptionMode === 'info' ? 'items-center' : 'items-start')}>
                     <div className="min-w-0 flex-1">
-                        <h2 id="settings-dialog-title" className="text-[14px] font-semibold tracking-[-0.01em]">{title}</h2>
-                        {description ? <p id="settings-dialog-description" className="mt-1 text-[12px] leading-5 text-[var(--settings-text-secondary)]">{description}</p> : null}
+                        <div className="flex items-center gap-2"><h2 id="settings-dialog-title" className="text-[14px] font-semibold tracking-[-0.01em]">{title}</h2>{description && descriptionMode === 'info' ? <SettingsInfoTooltip label={`About ${title}`}>{description}</SettingsInfoTooltip> : null}</div>
+                        {description && descriptionMode === 'text' ? <p id="settings-dialog-description" className="mt-1 text-[12px] leading-5 text-[var(--settings-text-secondary)]">{description}</p> : null}
                     </div>
+                    {headerAction ? <div className="ml-auto shrink-0">{headerAction}</div> : null}
                     <button type="button" onClick={onClose} aria-label="Close dialog" className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--settings-text-muted)] transition-colors hover:bg-[var(--settings-control-hover)] hover:text-[var(--settings-text)]">
                         <X size={14} />
                     </button>
@@ -250,29 +251,8 @@ export function SettingsDialog({ open, title, description, children, footer, cla
     )
 }
 
-export function SettingsSegmented<T extends string>({ value, options, onChange, label, disabled = false }: {
-    value: T
-    options: ReadonlyArray<{ value: T; label: string }>
-    onChange: (value: T) => void
-    label: string
-    disabled?: boolean
-}) {
-    return (
-        <div className={cn('inline-flex rounded-md border border-[var(--settings-border)] bg-[var(--settings-control)] p-0.5', disabled && 'opacity-55')} role="group" aria-label={label} aria-disabled={disabled || undefined}>
-            {options.map((option) => (
-                <button
-                    key={option.value}
-                    type="button"
-                    disabled={disabled}
-                    onClick={() => onChange(option.value)}
-                    className={cn('h-6 rounded px-2 text-[11px] font-medium transition-colors disabled:cursor-not-allowed', value === option.value ? 'bg-[var(--settings-active)] text-[var(--settings-text)]' : 'text-[var(--settings-text-muted)] hover:bg-[var(--settings-nav-hover)] hover:text-[var(--settings-text)]')}
-                >
-                    {option.label}
-                </button>
-            ))}
-        </div>
-    )
-}
+// Compatibility name for existing setting-choice callers.
+export { SettingsChoiceDropdown as SettingsSegmented } from './SettingsChoiceDropdown'
 
 export function SettingResetButton({ label, onClick }: { label: string; onClick: () => void }) {
     return (

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { createElement } from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
+import { createElement, type ReactNode } from 'react'
+import { renderToStaticMarkup as renderMarkup } from 'react-dom/server'
+import { SettingsProvider } from '../src/renderer/src/lib/settings'
+const renderToStaticMarkup = (node: ReactNode) => renderMarkup(createElement(SettingsProvider, null, node))
 import type { AssistantActivity, AssistantMessage, AssistantSessionTurnUsageEntry } from '../src/shared/assistant/contracts'
 import { AssistantInlineDiffPreview } from '../src/renderer/src/pages/assistant/AssistantInlineDiffPreview'
 import { TimelineToolCallCard } from '../src/renderer/src/pages/assistant/AssistantTimelineToolCallCard'

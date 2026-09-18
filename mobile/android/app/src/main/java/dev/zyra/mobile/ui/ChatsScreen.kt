@@ -20,12 +20,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.zyra.mobile.R
 import dev.zyra.mobile.data.*
 
-data class ChatListActions(val search: (String) -> Unit, val open: (Chat) -> Unit, val create: () -> Unit, val more: () -> Unit, val update: (Chat, String?, Boolean?) -> Unit, val openMatch: (ChatSearchMatch) -> Unit = {})
+data class ChatListActions(val search: (String) -> Unit, val open: (Chat) -> Unit, val create: () -> Unit, val more: () -> Unit, val update: (Chat, String?, Boolean?) -> Unit, val openMatch: (ChatSearchMatch) -> Unit = {}, val settle: (Chat, Boolean) -> Unit = { _, _ -> })
 @Composable fun ChatsScreen(state: MobileState, vm: MobileSession, create: () -> Unit) {
     val appearance by vm.preferences.appearance.collectAsStateWithLifecycle()
-    ChatsContent(state, appearance, ChatListActions(vm::searchChats, vm::open, create, vm::moreChats, { chat, title, archived -> vm.updateChat(chat, title, archived) }, vm::openSearchMatch))
+    val settlements by vm.preferences.settlements.collectAsStateWithLifecycle()
+    LaunchedEffect(state.chats) { vm.preferences.reconcileSettlements(state.chats) }
+    ChatsContent(state, appearance, ChatListActions(vm::searchChats, vm::open, create, vm::moreChats, { chat, title, archived -> vm.updateChat(chat, title, archived) }, vm::openSearchMatch, vm.preferences::setChatSettled), settlements)
 }
-@Composable fun ChatsContent(state: MobileState, appearance: Appearance, actions: ChatListActions) {
+@Composable fun ChatsContent(state: MobileState, appearance: Appearance, actions: ChatListActions, settlements: Map<String, String> = emptyMap()) {
     var filter by rememberSaveable { mutableStateOf("all") }
     var filters by remember { mutableStateOf(false) }
     var rename by remember { mutableStateOf<Chat?>(null) }
@@ -76,12 +78,13 @@ data class ChatListActions(val search: (String) -> Unit, val open: (Chat) -> Uni
                     }
                 }
                 if (inbox) {
-                    val sections = if (state.chatQuery.isBlank() && filter == "all") chatInboxSections(chats) else listOf("" to chats)
+                    val sections = if (state.chatQuery.isBlank() && filter == "all") chatInboxSections(chats, settlements) else listOf("" to chats)
                     sections.forEach { (label, rows) ->
                         if (label.isNotBlank()) item(key = "inbox:$label") { ChatSectionLabel(label) }
                         items(rows, key = { it.key }) { chat ->
                             ChatInboxCard(chat, state.machines.find { it.id == chat.machineId }?.name, state.projectArtwork["${chat.machineId}:${chat.project}"],
-                                state.session.id == chat.id && state.machine?.id == chat.machineId, { actions.open(chat) }, { rename = chat }, { actions.update(chat, null, !chat.archived) })
+                                state.session.id == chat.id && state.machine?.id == chat.machineId, { actions.open(chat) }, { rename = chat }, { actions.update(chat, null, !chat.archived) },
+                                settled = ChatSettlement.isSettled(chat, settlements), settle = { actions.settle(chat, !ChatSettlement.isSettled(chat, settlements)) })
                         }
                     }
                 } else items(chats, key = { it.key }) { chat -> ChatListRow(chat, state, actions, showProject = true, rename = { rename = chat }) }
@@ -115,7 +118,12 @@ data class ChatListActions(val search: (String) -> Unit, val open: (Chat) -> Uni
             confirmButton = { TextButton(onClick = { actions.update(chat, name, null); rename = null }, enabled = name.isNotBlank()) { Text("Save") } }, dismissButton = { TextButton(onClick = { rename = null }) { Text("Cancel") } })
     }
 }
-@Composable private fun ChatSectionLabel(title: String) { Text(title, Modifier.padding(start = 10.dp, top = 14.dp, bottom = 8.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+@Composable private fun ChatSectionLabel(title: String) {
+    Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 14.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(title, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (title == "Recent" || title == "Settled") HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .6f))
+    }
+}
 @Composable private fun ChatListRow(chat: Chat, state: MobileState, actions: ChatListActions, inset: Boolean = false, showProject: Boolean = false, rename: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     val selected = state.session.id == chat.id && state.machine?.id == chat.machineId

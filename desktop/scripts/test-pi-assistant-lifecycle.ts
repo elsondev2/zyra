@@ -328,7 +328,7 @@ const canonicalAbortedProjection = projectCanonicalTimeline([
             role: 'assistant',
             timestamp: canonicalAssistantTimestamp + 100,
             content: [{ type: 'thinking', thinking: '' }],
-            stopReason: 'aborted',
+            stopReason: 'error',
             errorMessage: 'Request was aborted'
         }
     }
@@ -337,7 +337,7 @@ const canonicalInterruptedActivity = canonicalAbortedProjection.activities.find(
 assert.equal(canonicalInterruptedActivity?.tone, 'warning', 'a canonical TUI abort must project as an intentional interruption rather than an Assistant error')
 assert.equal(canonicalInterruptedActivity?.summary, 'Assistant interrupted')
 assert.equal(canonicalInterruptedActivity?.payload?.['status'], 'cancelled')
-assert.equal(canonicalInterruptedActivity?.payload?.['stopReason'], 'aborted')
+assert.equal(canonicalInterruptedActivity?.payload?.['stopReason'], 'error', 'Pi can encode an intentional abort as an error stopReason with interruption-class terminal detail')
 assert.equal(canonicalInterruptedActivity?.turnTerminalOutcome, 'interrupted', 'canonical replay marks a certain end-of-turn interruption explicitly')
 
 const canonicalRecoveredProjection = projectCanonicalTimeline([
@@ -997,13 +997,15 @@ assert.equal(
 
 replayGuardEvents.length = 0
 replayGuardContext.completedTurnIds.clear()
+const liveAbortedTimestamp = canonicalAssistantTimestamp + 500
 replayGuardHandler.handleZyraEvent(replayGuardContext, {
     type: 'message_end',
+    timestamp: new Date(liveAbortedTimestamp).toISOString(),
     message: {
-        id: 'live-aborted-response',
         role: 'assistant',
+        timestamp: liveAbortedTimestamp,
         content: [{ type: 'thinking', thinking: '' }],
-        stopReason: 'aborted',
+        stopReason: 'error',
         errorMessage: 'Request was aborted'
     }
 }, { turnId: 'turn-live-aborted', replay: false })
@@ -1016,6 +1018,8 @@ assert.equal(
     'interrupted',
     'agent_end must preserve the aborted assistant response as an interrupted TUI turn'
 )
+assert.equal(liveAbortedCompletion?.itemId, `pi-message:assistant:${liveAbortedTimestamp}`, 'live terminal metadata keeps the canonical assistant message identity')
+assert.equal(liveAbortedCompletion?.type === 'turn.completed' ? liveAbortedCompletion.payload.errorMessage : null, 'Request was aborted')
 assert.equal(replayGuardContext.activeTurnId, null)
 
 replayGuardEvents.length = 0
@@ -1592,6 +1596,14 @@ const projectedDeps = {
     },
     updateLatestTurnAssistantMessage: () => {}
 }
+if (!liveAbortedCompletion) throw new Error('Expected an interrupted live completion event')
+handleAssistantRuntimeEvent(liveAbortedCompletion, projectedDeps)
+const liveInterruptedActivities = findProjectedRecord(projectedThread.id)?.thread.activities.filter((activity) => (
+    activity.turnId === 'turn-live-aborted' && activity.turnTerminalOutcome === 'interrupted'
+)) || []
+assert.equal(liveInterruptedActivities.length, 1, 'live interrupted completion projects one authoritative terminal activity')
+assert.equal(liveInterruptedActivities[0]?.id, `shared-error:pi-message:assistant:${liveAbortedTimestamp}`)
+
 const recoveredTurnEvents = replayGuardEvents.filter((event) => event.turnId === 'turn-live-recovered')
 const recoveredTurnCompletionIndex = recoveredTurnEvents.findIndex((event) => event.type === 'turn.completed')
 assert.ok(recoveredTurnCompletionIndex > 0)
@@ -1607,6 +1619,11 @@ const recoveredProjectedThread = findProjectedRecord(projectedThread.id)?.thread
 assert.equal(recoveredProjectedThread?.state, 'ready')
 assert.equal(recoveredProjectedThread?.latestTurn?.state, 'completed')
 assert.equal(recoveredProjectedThread?.lastError, null)
+assert.equal(
+    recoveredProjectedThread?.activities.some((activity) => activity.turnId === 'turn-live-recovered' && activity.turnTerminalOutcome !== undefined),
+    false,
+    'a failed assistant attempt followed by a successful assistant response must not become terminal metadata'
+)
 
 const stalePreviousTurnStartedAt = '2026-07-10T15:00:00.000Z'
 projectedDeps.appendEvent('thread.latest-turn.updated', stalePreviousTurnStartedAt, {

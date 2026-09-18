@@ -1,12 +1,10 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
 import { RefreshCw, Trash2 } from 'lucide-react'
 import { ConfirmModal } from '@/components/ui/ConfirmModal'
 import { useSettings, type CommitAIProvider } from '@/lib/settings'
 import { isElectronRendererRuntime } from '@/lib/browser-file-url'
 import { SettingsProviderIcon } from './SettingsProviderIcon'
 import { createSettingsRowTargetId } from './settings-search'
-import { findSettingsDestinationById } from './settings-navigation'
 import {
     SettingsButton,
     SettingsDialog,
@@ -17,27 +15,26 @@ import {
     SettingsSection
 } from './settings-layout'
 
+type HostedProvider = Exclude<CommitAIProvider, 'codex'>
 type ProviderStatus = 'idle' | 'testing' | 'saving' | 'success' | 'error'
 
-export default function AISettings() {
+export default function AISettings({ backTo = '/settings/providers', backLabel = 'Providers' }: { backTo?: string; backLabel?: string }) {
     const { settings, updateHostedAiSecrets } = useSettings()
     const desktopHost = isElectronRendererRuntime()
     const [groqDraft, setGroqDraft] = useState('')
     const [geminiDraft, setGeminiDraft] = useState('')
-    const [editingProvider, setEditingProvider] = useState<Exclude<CommitAIProvider, 'codex'> | null>(null)
+    const [editingProvider, setEditingProvider] = useState<HostedProvider | null>(null)
     const [clearKeysConfirmOpen, setClearKeysConfirmOpen] = useState(false)
-    const [status, setStatus] = useState<Record<CommitAIProvider, ProviderStatus>>({ groq: 'idle', gemini: 'idle', codex: 'idle' })
-    const [errors, setErrors] = useState<Record<CommitAIProvider, string>>({ groq: '', gemini: '', codex: '' })
+    const [status, setStatus] = useState<Record<HostedProvider, ProviderStatus>>({ groq: 'idle', gemini: 'idle' })
+    const [errors, setErrors] = useState<Record<HostedProvider, string>>({ groq: '', gemini: '' })
 
-    const testProvider = async (provider: CommitAIProvider) => {
+    const testProvider = async (provider: HostedProvider) => {
         setStatus((current) => ({ ...current, [provider]: 'testing' }))
         setErrors((current) => ({ ...current, [provider]: '' }))
         try {
             const result = provider === 'groq'
                 ? await window.devscope.testGroqConnection(groqDraft.trim())
-                : provider === 'gemini'
-                    ? await window.devscope.testGeminiConnection(geminiDraft.trim())
-                    : await window.devscope.testCodexConnection(settings.gitCommitCodexModel || settings.gitPullRequestCodexModel || settings.assistantDefaultModel || undefined)
+                : await window.devscope.testGeminiConnection(geminiDraft.trim())
             if (!result.success) throw new Error(result.error || 'Connection test failed.')
             setStatus((current) => ({ ...current, [provider]: 'success' }))
         } catch (error) {
@@ -46,7 +43,7 @@ export default function AISettings() {
         }
     }
 
-    const saveHostedKey = async (provider: Exclude<CommitAIProvider, 'codex'>) => {
+    const saveHostedKey = async (provider: HostedProvider) => {
         const key = (provider === 'groq' ? groqDraft : geminiDraft).trim()
         if (!key) return
         setStatus((current) => ({ ...current, [provider]: 'saving' }))
@@ -68,7 +65,7 @@ export default function AISettings() {
             await updateHostedAiSecrets({ groqApiKey: '', geminiApiKey: '', confirmClear: true })
             setGroqDraft('')
             setGeminiDraft('')
-            setStatus({ groq: 'idle', gemini: 'idle', codex: status.codex })
+            setStatus({ groq: 'idle', gemini: 'idle' })
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Could not clear hosted API keys.'
             setErrors((current) => ({ ...current, groq: message, gemini: message }))
@@ -76,8 +73,8 @@ export default function AISettings() {
         }
     }
 
-    const providerStatus = (provider: CommitAIProvider, draft = false) => {
-        if (provider !== 'codex' && !draft) {
+    const providerStatus = (provider: HostedProvider, draft = false) => {
+        if (!draft) {
             if (status[provider] === 'saving') return 'Saving…'
             return (provider === 'groq' ? settings.groqApiKeyConfigured : settings.geminiApiKeyConfigured) ? 'Key saved' : 'Not configured'
         }
@@ -88,23 +85,20 @@ export default function AISettings() {
         return 'Not checked'
     }
 
-    const providerStatusTone = (provider: CommitAIProvider): 'ready' | 'warning' | 'danger' | 'info' | 'muted' => {
-        if (provider !== 'codex') return status[provider] === 'saving' ? 'info' : (provider === 'groq' ? settings.groqApiKeyConfigured : settings.geminiApiKeyConfigured) ? 'ready' : 'muted'
-        if (status[provider] === 'testing' || status[provider] === 'saving') return 'info'
-        if (status[provider] === 'success') return 'ready'
-        if (status[provider] === 'error') return 'danger'
-        return 'muted'
-    }
+    const providerStatusTone = (provider: HostedProvider): 'ready' | 'info' | 'muted' => (
+        status[provider] === 'saving' ? 'info' : (provider === 'groq' ? settings.groqApiKeyConfigured : settings.geminiApiKeyConfigured) ? 'ready' : 'muted'
+    )
 
     const providerBusy = editingProvider !== null && (status[editingProvider] === 'testing' || status[editingProvider] === 'saving')
     const savingKey = editingProvider !== null && status[editingProvider] === 'saving'
 
     return (
-        <SettingsPageContainer title="AI providers" backTo="/settings/account" backLabel="Account & connections">
+        <SettingsPageContainer title="Git writing services" description="Provider credentials used for commit messages and pull requests." backTo={backTo} backLabel={backLabel} showSettingsBack>
             <SettingsSection title="Hosted providers">
                 <SettingsRow
                     title="Groq"
                     description="API key for Git text generation with Groq."
+                    icon={<SettingsProviderIcon provider="groq" />}
                     searchTargetId={createSettingsRowTargetId('Groq', 'API key')}
                     status={providerStatus('groq')}
                     statusTone={providerStatusTone('groq')}
@@ -121,16 +115,6 @@ export default function AISettings() {
                     statusTitle={editingProvider === 'gemini' && status.gemini === 'error' ? errors.gemini : undefined}
                     control={desktopHost ? <SettingsButton onClick={() => { setGeminiDraft(''); setEditingProvider('gemini') }}>{settings.geminiApiKeyConfigured ? 'Replace key' : 'Add key'}</SettingsButton> : <span className="text-xs text-sparkle-text-muted">Managed in Desktop</span>}
                 />
-            </SettingsSection>
-
-            <SettingsSection title="ChatGPT" icon={<SettingsProviderIcon provider="chatgpt" />} headerAction={<SettingsButton variant="ghost" onClick={() => void testProvider('codex')} disabled={status.codex === 'testing'}>{status.codex === 'testing' ? <RefreshCw size={12} className="animate-spin motion-reduce:animate-none" /> : null}Test connection</SettingsButton>}>
-                <SettingsRow title="Connected account" description="Uses the subscription in your OpenAI account settings." status={providerStatus('codex')} statusTone={providerStatusTone('codex')} statusTitle={status.codex === 'error' ? errors.codex : undefined}
-                    control={<Link to={findSettingsDestinationById('account')!.to} className="text-[12px] text-[var(--settings-text-secondary)] hover:text-[var(--settings-text)] hover:underline">Manage account</Link>} />
-                {status.codex === 'error' ? <SettingsNotice tone="error">{errors.codex}</SettingsNotice> : null}
-            </SettingsSection>
-            <SettingsSection title="Text generation">
-                <SettingsRow title="Git writing defaults" description="Choose providers and models in Source control."
-                    control={<Link to={findSettingsDestinationById('source-control')!.to} className="text-[12px] text-[var(--settings-text-secondary)] hover:text-[var(--settings-text)] hover:underline">Open Source control</Link>} />
             </SettingsSection>
 
             <SettingsSection title="Stored credentials">

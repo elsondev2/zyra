@@ -76,8 +76,8 @@ class FakeWindow {
     focus() { calls.push('focus') }
 }
 const windowSource = main.slice(main.indexOf('function createQuickPreviewWindow('), main.indexOf('function captureProjectOpenAnalytics('))
-const create = new Function('deps', `const { BrowserWindow, getAppIconPath, buildQuickPreviewRoute, getWindowChromeOptions, getPreloadPath, configureTrustedRendererWindow, registerEditableContextMenu, attachWindowStateEvents, lockWindowZoom, loadRendererRoute, shell } = deps; let quickPreviewWindow = null; ${transpiler.transformSync(windowSource)}; return createQuickPreviewWindow;`)({
-    BrowserWindow: FakeWindow, getAppIconPath: () => null, buildQuickPreviewRoute, getWindowChromeOptions: () => ({}), getPreloadPath: () => 'fixture-preload',
+const create = new Function('deps', `const { BrowserWindow, getAppIconPath, buildQuickPreviewRoute, getWindowChromeOptions, getPreloadPath, configureTrustedRendererWindow, registerEditableContextMenu, attachWindowStateEvents, lockWindowZoom, loadRendererRoute, shell, startupTheme } = deps; let quickPreviewWindow = null; ${transpiler.transformSync(windowSource)}; return createQuickPreviewWindow;`)({
+    BrowserWindow: FakeWindow, startupTheme: () => ({ bg: '#101010' }), getAppIconPath: () => null, buildQuickPreviewRoute, getWindowChromeOptions: () => ({}), getPreloadPath: () => 'fixture-preload',
     configureTrustedRendererWindow() {}, registerEditableContextMenu() {}, attachWindowStateEvents() {}, lockWindowZoom() {}, shell: { openExternal() {} },
     loadRendererRoute: (window: FakeWindow, route: string) => { window.route = route }
 })

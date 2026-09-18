@@ -122,6 +122,10 @@ try {
     db.run(`INSERT INTO assistant_messages (id, thread_id, role, text, turn_id, streaming, created_at, updated_at) VALUES (?, ?, 'user', ?, ?, 0, ?, ?)`, [
         'message-user', 'thread-active', 'Please fix the duplicated voice transcript after restart.', 'turn-active', '2026-08-02T00:00:00.000Z', '2026-08-02T00:00:00.000Z'
     ])
+    const browserPrompt = 'Sidebar context display check\n\n<browser-context>{"source":"Zyra Chrome sidebar","targetId":"control-target:chrome-tab:test-123","url":"https://example.com/context"}</browser-context>'
+    db.run(`INSERT INTO assistant_messages (id, thread_id, role, text, turn_id, streaming, created_at, updated_at) VALUES (?, ?, 'user', ?, ?, 0, ?, ?)`, [
+        'message-browser-context', 'thread-active', browserPrompt, 'turn-browser-context', '2026-08-02T00:00:00.100Z', '2026-08-02T00:00:00.100Z'
+    ])
     db.run(`INSERT INTO assistant_messages (id, thread_id, role, text, turn_id, streaming, created_at, updated_at) VALUES (?, ?, 'assistant', ?, ?, 0, ?, ?)`, [
         'message-final', 'thread-active', 'Canonical identity now keeps one voice transcript after restart.', 'turn-active', '2026-08-02T00:00:01.000Z', '2026-08-02T00:00:01.000Z'
     ])
@@ -236,6 +240,7 @@ try {
     assert.equal(boundedHistory.page.activities.length, 0, 'an oversized turn must collapse to the exact canonical target before IPC')
 
     const fallback = searchAssistantChatsFallback(db, { query: 'voice transcript', scope: 'active' })
+    assert.equal(searchAssistantChatsFallback(db, { query: 'Sidebar context display', scope: 'active' }).matches[0]?.snippet, 'Sidebar context display check')
     assert.equal(fallback.matches[0]?.sessionId, 'session-active')
     assert.equal(fallback.matches[0]?.role, 'user')
     assert.equal(searchAssistantChatsFallback(db, { query: 'private needle', scope: 'active' }).matches.length, 0, 'interim assistant rows must be filtered')
@@ -281,6 +286,8 @@ try {
     const afterWorkerBackfill = await runWorker(databasePath, 'worker refreshed', 'active')
     assert.equal(afterWorkerBackfill.result.matches[0]?.messageId, 'message-worker-refresh', 'worker-owned backfill must preserve immediate exact-message coverage')
 
+    const browserResult = await runWorker(databasePath, 'Sidebar context display', 'active')
+    assert.equal(browserResult.result.matches[0]?.snippet, 'Sidebar context display check', 'worker snippets must hide browser context before truncation')
     const workerResult = await runWorker(databasePath, 'voice transcript', 'active')
     assert.equal(workerResult.type, 'result')
     assert.equal(workerResult.result.searchBackend, 'fts5')

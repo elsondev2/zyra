@@ -12,7 +12,7 @@ const required = [
     'src/analytics/cli.mjs', 'src/zyra-sdk.mjs', 'src/zyra-ui-bridge.mjs',
     'src/agent-server/main.mjs', 'bin/zyra.mjs', 'prompts/zyra_system_prompt.md',
     'prompts/inspect-project.md', 'agents/bug-analyzer.md', 'agents/code-reviewer.md',
-    'workflows/review-changes.mjs'
+    'workflows/review-changes.mjs', 'skills/visualize/SKILL.md'
 ]
 
 async function put(root, name, content = '') {

@@ -173,12 +173,27 @@ export class WindowsControlOverlayManager {
                 this.safetyHideTimer = setTimeout(() => {
                     this.safetyHideTimer = null
                     if (!this.activeTargetId && !window.isDestroyed()) window.hide()
+                    this.destroyIdleWindows()
                 }, 460)
             }
         }
         if (this.cursorWindow && !this.cursorWindow.isDestroyed()) {
             void this.cursorWindow.webContents.executeJavaScript('globalThis.hideZyraCursor?.()', true).catch(() => undefined)
             this.cursorWindow.hide()
+        }
+        if (!this.safetyHideTimer) this.destroyIdleWindows()
+    }
+
+    private destroyIdleWindows(): void {
+        if (this.activeTargetId) return
+        // Hidden, unparented BrowserWindows still prevent window-all-closed.
+        // Release them when a grant ends, after the safety exit animation.
+        this.clearSafetyHide()
+        const windows = [this.safetyWindow, this.cursorWindow]
+        this.safetyWindow = null
+        this.cursorWindow = null
+        for (const window of windows) {
+            if (window && !window.isDestroyed()) window.destroy()
         }
     }
 

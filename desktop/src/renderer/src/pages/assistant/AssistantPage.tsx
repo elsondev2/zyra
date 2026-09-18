@@ -484,7 +484,7 @@ export default function AssistantPage() {
     const noop = useCallback(() => undefined, [])
 
     return (
-        <div className="flex h-[calc(100vh-34px)] min-h-[calc(100vh-34px)] flex-col overflow-hidden [--accent-primary:var(--color-primary)] [--accent-secondary:var(--color-secondary)]">
+        <div data-assistant-page="true" className="flex h-[calc(100vh-34px)] min-h-[calc(100vh-34px)] flex-col overflow-hidden [--accent-primary:var(--color-primary)] [--accent-secondary:var(--color-secondary)]">
             <div className="min-h-0 flex-1 overflow-hidden">
                 <div className="flex h-full min-w-0 overflow-x-hidden">
                     <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">

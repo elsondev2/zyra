@@ -3,6 +3,7 @@ import { useSettings } from '@/lib/settings'
 import { useOnboarding } from '@/lib/onboarding'
 import { isElectronRendererRuntime } from '@/lib/browser-file-url'
 import { registerSettingsCacheClearer } from '@/lib/settings-cache-registry'
+import { createSettingsRowTargetId } from './settings/settings-search'
 import {
     SettingsButton,
     SettingsNotice,
@@ -90,29 +91,36 @@ export default function GeneralSettings() {
     }
 
     return (
-        <SettingsPageContainer title="General" backTo="/settings/app" backLabel="App">
-            {desktopHost ? (
-                <SettingsSection title="Desktop host">
-                    <SettingsRow
-                        title="Open at login"
-                        description="Launch Zyra automatically when you sign in to this computer."
-                        status={startupStatus === 'Saved' ? 'Saved' : startupStatus ? 'Not saved' : null}
-                        statusTone={startupStatus === 'Saved' ? 'ready' : 'danger'}
-                        statusTitle={startupStatus && startupStatus !== 'Saved' ? startupStatus : undefined}
-                        control={<SettingsSwitch checked={settings.startWithWindows} onCheckedChange={(checked) => void setStartup(checked, checked ? settings.startMinimized : false)} label="Open Zyra at login" />}
-                    />
-                    <SettingsRow title="Start hidden" description="Start in the background when you sign in." info="Open Zyra again whenever you want to show the window." control={<SettingsSwitch checked={settings.startWithWindows && settings.startMinimized} disabled={!settings.startWithWindows} onCheckedChange={(checked) => void setStartup(true, checked)} label="Start Zyra hidden" />} />
-                </SettingsSection>
-            ) : (
-                <SettingsSection title="Desktop host">
+        <SettingsPageContainer title="Startup & setup">
+            <SettingsSection title="Startup">
+                {desktopHost ? (
+                    <>
+                        <SettingsRow
+                            searchTargetId={createSettingsRowTargetId('Desktop host', 'Open at login')}
+                            title="Open at login"
+                            description="Launch Zyra automatically when you sign in to this computer."
+                            status={startupStatus === 'Saved' ? 'Saved' : startupStatus ? 'Not saved' : null}
+                            statusTone={startupStatus === 'Saved' ? 'ready' : 'danger'}
+                            statusTitle={startupStatus && startupStatus !== 'Saved' ? startupStatus : undefined}
+                            control={<SettingsSwitch checked={settings.startWithWindows} onCheckedChange={(checked) => void setStartup(checked, checked ? settings.startMinimized : false)} label="Open Zyra at login" />}
+                        />
+                        {settings.startWithWindows ? (<SettingsRow
+                            searchTargetId={createSettingsRowTargetId('Desktop host', 'Start hidden')}
+                            title="Start hidden"
+                            description="Start in the background when you sign in."
+                            info="Open Zyra again whenever you want to show the window."
+                            control={<SettingsSwitch checked={settings.startWithWindows && settings.startMinimized} disabled={!settings.startWithWindows} onCheckedChange={(checked) => void setStartup(true, checked)} label="Start Zyra hidden" />}
+                        />) : null}
+                    </>
+                ) : (
                     <SettingsNotice tone="neutral">Open Zyra Desktop on this computer to change login and background-start behavior.</SettingsNotice>
-                </SettingsSection>
-            )}
-
-            <SettingsSection title="Interface">
-                <SettingsRow title="Chat rail" description="Keep the conversation sidebar collapsed across restarts on this surface." control={<SettingsSwitch checked={settings.sidebarCollapsed} onCheckedChange={(sidebarCollapsed) => updateSettings({ sidebarCollapsed })} label="Collapse chat rail" />} />
-                <SettingsRow title="Sidebar hover preview" description="Temporarily show a minimized sidebar when the pointer reaches the left edge." control={<SettingsSwitch checked={settings.sidebarHoverPreviewEnabled} onCheckedChange={(sidebarHoverPreviewEnabled) => updateSettings({ sidebarHoverPreviewEnabled })} label="Preview minimized sidebar on hover" />} />
-                <SettingsRow title="Agent Inbox sidebar" description="Keep chats in creation order with compact completed rows." info="Active work uses expanded cards; turn this off to return to the standard chat list." control={<SettingsSwitch checked={settings.assistantAgentInboxSidebarEnabled} onCheckedChange={(assistantAgentInboxSidebarEnabled) => updateSettings({ assistantAgentInboxSidebarEnabled })} label="Use Agent Inbox sidebar" />} />
+                )}
+                <SettingsRow
+                    searchTargetId={createSettingsRowTargetId('Output and history', 'Reconnect on startup')}
+                    title="Reconnect on startup"
+                    description="Reconnect the selected chat after this client opens."
+                    control={<SettingsSwitch checked={settings.assistantAutoReconnect} onCheckedChange={(assistantAutoReconnect) => updateSettings({ assistantAutoReconnect })} label="Reconnect selected chat on startup" />}
+                />
             </SettingsSection>
 
             {desktopHost ? (
@@ -128,7 +136,6 @@ export default function GeneralSettings() {
                     {setupReviewError ? <SettingsNotice tone="error">{setupReviewError}</SettingsNotice> : null}
                 </SettingsSection>
             ) : null}
-
         </SettingsPageContainer>
     )
 }

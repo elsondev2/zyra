@@ -328,7 +328,7 @@ export function FilePreviewModal({
         folderTreeRefreshToken,
         dndSensors,
         openMediaItem,
-        handleInternalMarkdownLink,
+        handleInternalPreviewLink,
         handleSelectPreviewTab,
         handleClosePreviewTab,
         handleOpenLinkedPreview,
@@ -497,7 +497,7 @@ export function FilePreviewModal({
             mediaItems={effectiveMediaItems}
             navigationSidebar={navigationSidebar}
             openMediaItem={openMediaItem}
-            onInternalLinkClick={handleInternalMarkdownLink}
+            onInternalLinkClick={handleInternalPreviewLink}
             onLinkNotice={onShowToast}
             mode={mode}
             canNavigateBack={canNavigateBack}

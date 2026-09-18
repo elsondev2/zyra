@@ -126,6 +126,10 @@ export function handleAssistantRedeemAccountReset(_event: Electron.IpcMainInvoke
     return withAssistantResult(() => getAssistantService().redeemAccountReset(input))
 }
 
+export function handleAssistantGetUsageSummary(_event: Electron.IpcMainInvokeEvent, input?: import('../../../shared/assistant/usage-summary').UsageSummaryInput) {
+    return withAssistantResult(() => getAssistantService().getUsageSummary(input))
+}
+
 export function handleAssistantGetSessionTurnUsage(_event: Electron.IpcMainInvokeEvent, input?: AssistantGetSessionTurnUsageInput) {
     log.info('IPC: assistant:getSessionTurnUsage', { sessionId: input?.sessionId })
     return withAssistantResult(() => getAssistantService().getSessionTurnUsage(input))

@@ -50,6 +50,8 @@ export class ProviderWorkerClient {
     }
 
     readonly providers = {
+        delegationPreferences: () => this.request({ operation: 'readDelegationPreferences' }),
+        saveDelegationPreferences: (input: unknown) => this.request({ operation: 'saveDelegationPreferences', input }),
         roleModels: () => this.request({ operation: 'readRoleModels' }),
         saveRoleModel: (input: unknown) => this.request({ operation: 'saveRoleModel', input }),
         disconnect: (provider: string) => this.request({ operation: 'disconnectModelProvider', provider }),

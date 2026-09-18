@@ -17,6 +17,11 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
+import kotlinx.coroutines.CancellationException
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import org.json.JSONObject
@@ -30,20 +35,55 @@ import org.json.JSONObject
     images.take(12).forEachIndexed { index, image ->
         val ref = image.optJSONObject("mediaRef")
         if (ref != null) {
-            val cached by produceState<File?>(null, state.machine?.id, ref.optString("sha256"), revision) { value = state.machine?.id?.let { vm.media.cached(it, ref) } }
-            MessageImageTile(cached, index + 1, ref.optLong("bytes")) { vm.openImage(ref) }
+            key(state.machine?.id, state.session.id, ref.optString("sha256")) {
+                val view = LocalView.current
+                val margin = with(LocalDensity.current) { 180.dp.toPx() }
+                var nearby by remember { mutableStateOf(false) }
+                var retry by remember { mutableIntStateOf(0) }
+                val preview by produceState(InlineImagePreview(), nearby, state.connection, revision, retry) {
+                    if (!nearby) return@produceState
+                    try {
+                        val machine = state.machine?.id ?: error("Connect to load this image.")
+                        val cached = vm.media.cached(machine, ref)
+                        if (cached != null) {
+                            value = InlineImagePreview(file = cached)
+                            return@produceState
+                        }
+                        value = InlineImagePreview(loading = true)
+                        value = InlineImagePreview(file = vm.inlineImage(machine, state.session.id, ref))
+                    } catch (error: Exception) {
+                        if (error is CancellationException) throw error
+                        value = InlineImagePreview(failed = true)
+                    }
+                }
+                Box(Modifier.onGloballyPositioned { coordinates ->
+                    val origin = IntArray(2).also(view::getLocationInWindow)
+                    val position = coordinates.positionInWindow()
+                    // Use unclipped geometry: a work block may compose images far offscreen.
+                    nearby = imageNearViewport(position.x, position.y, coordinates.size.width.toFloat(), coordinates.size.height.toFloat(), origin[0].toFloat(), origin[1].toFloat(), view.width.toFloat(), view.height.toFloat(), margin)
+                }) {
+                    MessageImageTile(preview.file, index + 1, ref.optLong("bytes"), preview.loading, preview.failed, { retry++ }) { vm.openImage(ref) }
+                }
+            }
         }
         else image.optString("unavailable").takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
     }
     }
 }
+private data class InlineImagePreview(val file: File? = null, val loading: Boolean = false, val failed: Boolean = false)
 /** Shared by live chat and native fixtures: always the same 4:3 tile. */
 @Composable fun MessageImageTile(file: File?, position: Int = 1, bytes: Long = 0, onClick: () -> Unit = {}) {
+    MessageImageTile(file, position, bytes, loading = false, failed = false, onRetry = {}, onClick = onClick)
+}
+@Composable fun MessageImageTile(file: File?, position: Int, bytes: Long, loading: Boolean, failed: Boolean, onRetry: () -> Unit, onClick: () -> Unit) {
     Surface(onClick = onClick, shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.size(width = 120.dp, height = 90.dp)) {
         if (file != null) LocalImage(file, "Open image $position", 256, Modifier.fillMaxSize(), androidx.compose.ui.layout.ContentScale.Crop)
-        else Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-            AppIcon(R.drawable.ic_camera, "Load image $position")
-            if (bytes > 0) Text("${bytes / 1024} KB", Modifier.padding(top = 6.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            when {
+                loading -> CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                failed -> IconButton(onClick = onRetry) { AppIcon(R.drawable.ic_refresh_cw, "Retry image $position") }
+                else -> AppIcon(R.drawable.ic_image, "Image $position")
+            }
         }
     }
 }

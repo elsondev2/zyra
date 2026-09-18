@@ -29,6 +29,8 @@ export type AssistantContentStreamKind =
     | 'file_change_output'
 
 export interface AssistantTurnUsage {
+    /** Whether inputTokens already includes cache reads (legacy Codex). */
+    inputIncludesCachedTokens?: boolean
     inputTokens?: number | null
     outputTokens?: number | null
     reasoningOutputTokens?: number | null

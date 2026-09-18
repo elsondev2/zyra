@@ -54,6 +54,7 @@ export function readTurnUsage(
     }
 
     return {
+        inputIncludesCachedTokens: true,
         inputTokens: inputTokens ?? null,
         outputTokens: outputTokens ?? null,
         reasoningOutputTokens: reasoningOutputTokens ?? null,

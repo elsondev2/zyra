@@ -140,6 +140,11 @@ export type CancelOnboardingReviewInput = {
     expectedRevision: number
 }
 
+export type DelegationPreset = 'balanced' | 'cost' | 'quality' | 'speed'
+export type DelegationPreferences = { version: 1; preset: DelegationPreset; notes: string }
+export type DelegationPreferencesUpdate = Partial<Pick<DelegationPreferences, 'preset' | 'notes'>>
+export type DelegationSettingsSnapshot = { preferences: DelegationPreferences; presets: Array<{ id: DelegationPreset; label: string; description: string }> }
+
 export type AgentRoleModels = Record<string, Partial<Record<'planner' | 'implementer' | 'reviewer' | 'debugger' | 'verifier' | 'researcher' | 'specialist', string>>>
 export type AgentRoleModelInput = { provider: string; role: string; model: string }
 
@@ -149,6 +154,8 @@ export const ONBOARDING_IPC = {
     connectModelProvider: 'zyra:providers:connect',
     disconnectModelProvider: 'zyra:providers:disconnect',
     listModelProviders: 'zyra:providers:list',
+    getDelegationPreferences: 'zyra:providers:delegationPreferences',
+    saveDelegationPreferences: 'zyra:providers:saveDelegationPreferences',
     getAgentRoleModels: 'zyra:providers:roleModels',
     setAgentRoleModel: 'zyra:providers:saveRoleModel',
     getState: 'zyra:onboarding:get-state',

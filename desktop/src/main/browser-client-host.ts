@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs'
 import { access, stat } from 'node:fs/promises'
 import { createServer, request as requestHttp, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { extname, isAbsolute, join, relative, resolve } from 'node:path'
+import type { Socket } from 'node:net'
 import {
     BROWSER_ASSISTANT_BRIDGE_CAPABILITY_HEADER,
     BROWSER_ASSISTANT_BRIDGE_HEADER,
@@ -52,10 +53,14 @@ type BrowserClientHostDependencies = {
     devRendererUrl?: string
     host?: string
     port?: number
+    extensionOrigins?: ReadonlySet<string>
+    connectExtension?: (extensionId: string, instanceId: string) => Promise<unknown>
+    getRuntimeStatus?: () => unknown
 }
 
 export class BrowserClientHost {
     private server: Server | null = null
+    private readonly sockets = new Set<Socket>()
 
     constructor(private readonly dependencies: BrowserClientHostDependencies) {}
 
@@ -78,6 +83,10 @@ export class BrowserClientHost {
             })
         })
         this.server = server
+        server.on('connection', socket => {
+            this.sockets.add(socket)
+            socket.once('close', () => this.sockets.delete(socket))
+        })
         try {
             await new Promise<void>((resolveStart, rejectStart) => {
                 const fail = (error: Error) => {
@@ -104,7 +113,16 @@ export class BrowserClientHost {
         const server = this.server
         this.server = null
         if (!server) return
-        await new Promise<void>((resolveStop) => server.close(() => resolveStop()))
+        await new Promise<void>((resolveStop) => {
+            server.close(() => resolveStop())
+            // Sidebar event streams remain open for the lifetime of the panel.
+            // Closing their sockets also cancels the upstream proxy requests.
+            server.closeAllConnections()
+            // Explicitly release long-lived sidebar streams as well. Some HTTP
+            // runtimes do not include streaming responses in closeAllConnections.
+            for (const socket of this.sockets) socket.destroy()
+            this.sockets.clear()
+        })
     }
 
     private address(): { host: string; port: number; origin: string } {
@@ -130,6 +148,28 @@ export class BrowserClientHost {
         }
 
         const requestUrl = new URL(request.url || '/', localOrigin)
+        const extensionOrigin = String(request.headers.origin || '')
+        const isExtension = this.dependencies.extensionOrigins?.has(extensionOrigin) === true
+        if (isExtension) {
+            response.setHeader('Access-Control-Allow-Origin', extensionOrigin)
+            response.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, POST, OPTIONS')
+            response.setHeader('Access-Control-Allow-Headers', 'content-type, x-zyra-browser-client, x-zyra-browser-client-id, range')
+            response.setHeader('Vary', 'Origin')
+            response.setHeader('Cache-Control', 'no-store')
+            if (request.method === 'OPTIONS') { response.writeHead(204).end(); return }
+            if (requestUrl.pathname === '/v1/extension/connect' && request.method === 'POST') {
+                const instanceId = String(request.headers[BROWSER_ASSISTANT_CLIENT_ID_HEADER] || '')
+                if (!/^[a-zA-Z0-9_-]{16,128}$/.test(instanceId) || !this.dependencies.connectExtension) {
+                    this.writeError(response, 400, 'Browser instance identity is missing.'); return
+                }
+                const connection = await this.dependencies.connectExtension(extensionOrigin.slice('chrome-extension://'.length), instanceId)
+                response.setHeader('Content-Type', 'application/json')
+                response.end(JSON.stringify(Object.assign({}, connection, { clientOrigin: this.address().origin, runtimeStatus: this.dependencies.getRuntimeStatus?.() }))); return
+            }
+            if (!this.isBridgePath(requestUrl.pathname)) {
+                this.writeError(response, 403, 'Extensions can access only the Zyra connection and data bridge.'); return
+            }
+        }
         if (this.shouldCanonicalizeRendererOrigin(request, requestUrl)) {
             const address = this.address()
             response.statusCode = 308
@@ -164,14 +204,15 @@ export class BrowserClientHost {
         if (requestedPort !== address.port) return null
         const localOrigin = hostUrl.origin
         const requestOrigin = String(request.headers.origin || '').trim()
+        const trustedExtension = this.dependencies.extensionOrigins?.has(requestOrigin) === true
         if (requestOrigin) {
             try {
-                if (new URL(requestOrigin).origin.toLowerCase() !== localOrigin.toLowerCase()) return null
+                if (!trustedExtension && new URL(requestOrigin).origin.toLowerCase() !== localOrigin.toLowerCase()) return null
             } catch {
                 return null
             }
         }
-        if (String(request.headers['sec-fetch-site'] || '').toLowerCase() === 'cross-site') return null
+        if (!trustedExtension && String(request.headers['sec-fetch-site'] || '').toLowerCase() === 'cross-site') return null
         return localOrigin
     }
 

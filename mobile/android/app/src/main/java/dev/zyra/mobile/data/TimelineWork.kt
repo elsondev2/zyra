@@ -77,14 +77,24 @@ class TimelineWork {
         if (boundaries.firstOrNull() != 0) boundaries.add(0, 0)
         boundaries.add(view.items.size)
         for (part in 0 until boundaries.lastIndex) {
-            val segment = view.items.subList(boundaries[part], boundaries[part + 1])
+            // Anonymous result echoes remain in SessionView/cache for inspection,
+            // but are not another visible action, count, heading or narration row.
+            val segment = view.items.subList(boundaries[part], boundaries[part + 1]).filterNot { item ->
+                (item.kind == "tool" || item.kind == "deferred") && action(item, calls[item.id], batches[item.id]).let {
+                    it.toolName.equals("Tool output", ignoreCase = true) && it.title.equals("Using Tool output", ignoreCase = true)
+                }
+            }
             if (segment.isEmpty()) continue
+            val interrupted = segment.any { item ->
+                val value = raw(item); val message = value.optJSONObject("message") ?: value
+                message.optString("stopReason") in setOf("aborted", "interrupted") || value.optString("outcome") == "interrupted"
+            }
             val running = view.running && part == boundaries.lastIndex - 1
             val toolIndex = segment.indexOfLast { it.kind == "tool" || it.kind == "deferred" }
             val finalIndex = segment.indexOfLast { it.role == "assistant" && reply(it) && !voice(it) }
-                .takeIf { it >= 0 && (it > toolIndex || !running) }
+                .takeIf { it >= 0 && !running }
             val work = segment.filterIndexed { index, item ->
-                !voice(item) && (item.kind == "tool" || item.kind == "deferred" || item.kind == "user_input_requested" || item.kind == "resolved" && raw(item).has("questions") || item.role == "assistant" &&
+                !voice(item) && (item.kind == "work_status" || item.kind == "tool" || item.kind == "deferred" || item.kind == "user_input_requested" || item.kind == "resolved" && raw(item).has("questions") || item.role == "assistant" &&
                     (item.reasoning.isNotBlank() || index != finalIndex && (toolIndex >= 0 || item.text.isBlank())))
             }.filter { calls[it.id]?.first != "begin_action_batch" && it.text.substringBefore('\n') != "begin_action_batch" }
                 .map { if (finalIndex != null && it.id == segment[finalIndex].id) it.copy(text = "") else it }
@@ -92,6 +102,7 @@ class TimelineWork {
             val actions = work.filter { it.kind == "tool" || it.kind == "deferred" }.map { action(it, calls[it.id], batches[it.id]) }
             var emitted = false
             for ((index, item) in segment.withIndex()) {
+                if (item.kind == "turn_outcome") continue
                 if (work.isNotEmpty() && (item.id in workIds || index == finalIndex) && !emitted) {
                     // Older pages can reveal the user boundary of a work group
                     // already being read. Retain its key and disclosure state.
@@ -110,6 +121,8 @@ class TimelineWork {
                     result.add(ChatRailRow.Message(if (item.id in workIds && index == finalIndex) item.copy(reasoning = "") else item))
                 }
             }
+            if (interrupted && !running) result.add(ChatRailRow.Message(TimelineItem(
+                "interrupted:" + segment.first().id, "system", "Interrupted", "interrupted")))
         }
         groupIds = nextGroupIds
         return result

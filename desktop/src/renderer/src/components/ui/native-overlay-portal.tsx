@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import type { NativeOverlayBounds } from '@shared/contracts/native-overlay'
 import { getNativeOverlayHost, supportsNativeOverlay, type NativeOverlayLease } from './native-overlay-host'
 export { addOverlayEventListener, addOverlayWindowBlurListener, getOverlayActiveElement, getOverlayEventDocuments, isOverlayEventInside, isOverlayWindowFocused, registerOverlayAnchor } from './native-overlay-events'
 
@@ -7,16 +8,19 @@ interface NativeOverlayPortalProps {
     children: ReactNode
     container?: Element | DocumentFragment
     passive?: boolean
+    bounds?: NativeOverlayBounds | null
     autoFocus?: boolean
     onReady?: (container: HTMLElement) => void
 }
 
-export function NativeOverlayPortal({ children, container = document.body, passive = false, autoFocus = true, onReady }: NativeOverlayPortalProps) {
+export function NativeOverlayPortal({ children, container = document.body, passive = false, autoFocus = true, onReady, bounds = null }: NativeOverlayPortalProps) {
     const native = container === document.body && supportsNativeOverlay()
     const host = getNativeOverlayHost(passive)
     const generation = useSyncExternalStore(host.subscribe, host.snapshot, host.snapshot)
     const [target, setTarget] = useState<Element | DocumentFragment | null>(() => native ? null : container)
     const lease = useRef<NativeOverlayLease | null>(null)
+    const currentBounds = useRef(bounds)
+    currentBounds.current = bounds
     const content = useRef<HTMLDivElement | null>(null)
     const readyCallback = useRef(onReady)
     const [failure, setFailure] = useState<unknown>(null)
@@ -25,7 +29,7 @@ export function NativeOverlayPortal({ children, container = document.body, passi
         if (!native) { setTarget(container); return }
         setTarget(null)
         let current = true
-        const acquired = host.acquire()
+        const acquired = host.acquire(currentBounds.current)
         lease.current = acquired
         void acquired.ready.then(destination => { if (current) setTarget(destination) }).catch(error => { if (current) setFailure(error) })
         return () => {
@@ -34,6 +38,9 @@ export function NativeOverlayPortal({ children, container = document.body, passi
             if (lease.current === acquired) lease.current = null
         }
     }, [container, native, host, generation])
+    useLayoutEffect(() => {
+        lease.current?.setBounds(bounds)
+    }, [bounds?.x, bounds?.y, bounds?.width, bounds?.height])
     useLayoutEffect(() => {
         if (!target) return
         let current = true

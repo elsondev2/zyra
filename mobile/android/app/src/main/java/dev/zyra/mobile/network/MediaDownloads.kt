@@ -1,4 +1,6 @@
 package dev.zyra.mobile.network
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -53,8 +55,10 @@ class MediaDownloads(private val directory: File) {
             if (output.length() > total) output.setLength(0)
             var offset = output.length(); progress(offset, total)
             while (offset < total) {
+                currentCoroutineContext().ensureActive()
                 val method = if (ref.optJSONObject("source")?.optString("kind") == "workspace") "workspace.image.chunk" else "media.chunk"
                 val chunk = request(method, JSONObject().put("session", session).put("ref", ref).put("offset", offset))
+                currentCoroutineContext().ensureActive()
                 val bytes = Base64.getDecoder().decode(chunk.getString("base64")); val next = chunk.getLong("next")
                 require(chunk.getLong("total") == total && chunk.getString("sha256") == sha && next > offset && next <= total && next - offset == bytes.size.toLong() && bytes.size <= 49152) { "Image transfer was interrupted." }
                 output.seek(offset); output.write(bytes); output.fd.sync(); offset = next; progress(offset, total)

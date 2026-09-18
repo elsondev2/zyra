@@ -1,4 +1,6 @@
 import { recoverAttachmentReplay } from './agent-server-attachment-recovery'
+import { resolveDesktopAgentServerNamespace } from './agent-server-namespace'
+export { resolveDesktopAgentServerNamespace } from './agent-server-namespace'
 import { publishRuntimeActivation } from './runtime-activation'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
@@ -586,16 +588,6 @@ export class ZyraAgentServerWorker implements ZyraWorkerLike {
         this.controlAbortControllers.clear()
         this.connection.detach(this)
         this.eventListeners.clear()
-    }
-}
-
-export function resolveDesktopAgentServerNamespace(
-    userDataPath: string,
-    options: Pick<DesktopAgentServerConnectionOptions, 'stateDirectory' | 'channel'> = {}
-): { stateDirectory: string; channel: string } {
-    return {
-        stateDirectory: resolve(options.stateDirectory || join(userDataPath, 'assistant', 'agent-server')),
-        channel: String(options.channel || 'desktop').trim().toLowerCase()
     }
 }
 

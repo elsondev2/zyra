@@ -7,6 +7,7 @@ import { createNativeOverlayAdapter } from './adapters/native-overlay-adapter'
  */
 
 import type { DevScopeApi } from '../shared/contracts/devscope-api'
+import { createAccessoriesAdapter } from './adapters/accessories-adapter'
 import { createAssistantAdapter } from './adapters/assistant-adapter'
 import { createAssistantUtilityAdapter } from './adapters/assistant-utility-adapter'
 import { createBrowserPopupAdapter } from './adapters/browser-popup-adapter'
@@ -25,6 +26,7 @@ export function createDevScopeElectronAdapter(): DevScopeApi {
     const api: DevScopeApi = {
         runtimeActivation: createRuntimeActivationAdapter(),
         mobileAccess: createMobileAccessAdapter(),
+        ...createAccessoriesAdapter(),
         ...createSettingsAndAiAdapter(),
         ...createSetupAdapter(),
         ...createMemoryAdapter(),

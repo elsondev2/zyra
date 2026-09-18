@@ -2,6 +2,10 @@ import type { AssistantMessage, AssistantPendingUserInput, AssistantUserInputAns
 
 const USER_INPUT_RESPONSE_REPLAY_WINDOW_MS = 5 * 60_000
 
+function normalizeResponseText(text: string): string {
+    return text.replace(/\r\n/g, '\n').trim()
+}
+
 function formatAnswer(question: AssistantUserInputQuestion, answer: AssistantUserInputAnswer | undefined): string {
     if (Array.isArray(answer)) {
         if (answer.length === 0) return 'Skipped'
@@ -18,6 +22,12 @@ export function formatAssistantUserInputContinuationPrompt(
     return ['Here are my answers:', '', ...lines].join('\n')
 }
 
+export function assistantUserInputContinuationVariants(questions: ReadonlyArray<AssistantUserInputQuestion>, answers: Record<string, AssistantUserInputAnswer>): string[] {
+    const legacyLines = questions.map(question => `${question.header}: ${formatAnswer(question, answers[question.id])}`)
+        .join('\n').split('\n').filter(Boolean).map(line => `- ${line}`)
+    return [formatAssistantUserInputContinuationPrompt(questions, answers), ['Here are my answers:', '', ...legacyLines].join('\n')]
+}
+
 export function reconcileAssistantUserInputResponseMessageIds(
     inputs: ReadonlyArray<AssistantPendingUserInput>,
     existingMessages: ReadonlyArray<AssistantMessage>,
@@ -30,17 +40,19 @@ export function reconcileAssistantUserInputResponseMessageIds(
     )))
 
     return inputs.map((input) => {
+        if (input.questions.length === 0) return input
         const responseMessageId = input.responseMessageId
-        if (!responseMessageId || canonicalIds.has(responseMessageId) || input.status !== 'resolved') return input
-        const optimisticMessage = existingById.get(responseMessageId)
+        if ((responseMessageId && canonicalIds.has(responseMessageId)) || input.status !== 'resolved') return input
+        const optimisticMessage = responseMessageId ? existingById.get(responseMessageId) : undefined
         const expectedText = optimisticMessage?.text
             || (input.answers ? formatAssistantUserInputContinuationPrompt(input.questions, input.answers) : '')
+        const expectedVariants = new Set([expectedText, ...(input.answers ? assistantUserInputContinuationVariants(input.questions, input.answers) : [])].map(normalizeResponseText))
         const anchorTime = Date.parse(optimisticMessage?.createdAt || input.resolvedAt || input.createdAt)
         if (!expectedText || !Number.isFinite(anchorTime)) return input
 
         const canonical = canonicalMessages
             .filter((message) => {
-                if (message.role !== 'user' || message.text !== expectedText || claimedCanonicalIds.has(message.id)) return false
+                if (message.role !== 'user' || !expectedVariants.has(normalizeResponseText(message.text)) || claimedCanonicalIds.has(message.id)) return false
                 const createdAt = Date.parse(message.createdAt)
                 return Number.isFinite(createdAt) && Math.abs(createdAt - anchorTime) <= USER_INPUT_RESPONSE_REPLAY_WINDOW_MS
             })

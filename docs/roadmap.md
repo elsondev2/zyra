@@ -1,6 +1,6 @@
 # Zyra roadmap
 
-**Status: Proposed. Last reviewed: 2026-09-09.**
+**Status: v0.6.2 release preparation. Last reviewed: 2026-09-18.**
 
 This is the public, maintained backlog for upcoming Zyra releases. Add newly reported issues here as they arrive, and update their status as work progresses. Detailed execution notes and private diagnostics stay outside the public repository.
 
@@ -10,7 +10,7 @@ Planning starts from v0.6.1. See [published releases](https://github.com/justels
 
 | Target | Focus | Planning state |
 | --- | --- | --- |
-| v0.6.2 | A stabilization batch across Desktop and TUI, including file opening, responsiveness and other confirmed issues added during triage. | Open for additional fixes. |
+| v0.6.2 | A stabilization batch across Desktop and TUI, including file opening, responsiveness and other confirmed issues added during triage. | Candidate under review. Publication requires native build gates. |
 | v0.6.3 | Compatible fixes to update preparation, process ownership, installer preflight and update feedback. | Proposed; scope and compatibility review required. |
 | Later, potentially v0.7.0 | Versioned runtime activation and rollback design that changes installation or compatibility contracts. | Design required; no release commitment. |
 
@@ -18,7 +18,11 @@ CLI/runtime and Desktop versions remain in lockstep. Roadmap targets do not chan
 
 ## v0.6.2: stabilization
 
-Keep this release open to additional confirmed bugs. The entries below are an initial backlog, not a frozen release checklist.
+The v0.6.2 candidate combines the stabilization work accumulated on `dev`. The maintainer requested a patch bump from 0.6.1 and authorized a version-scoped unsigned publication exception. See [candidate notes and distribution limits](releases/0.6.2.md). Signing and the documented browser security delta are the only exceptions; testing, native builds, checksums and remote artifact readback remain required. Existing chats and installation namespaces are preserved, with no cross-installation takeover.
+
+As of release preparation, the owner's hosted native jobs are rejected before startup. The approved build-helper workflow can supply native evidence for the same candidate SHA. Local Windows checks cannot replace macOS/Linux build evidence. The candidate is not published or installed until the required gates complete.
+
+The entries below retain their individual verification limits. Unresolved candidate issues are not silently declared fixed by the release.
 
 | ID | Kind / status | Issue or work item | Completion evidence |
 | --- | --- | --- | --- |
@@ -75,6 +79,30 @@ Fixed locally and checked in the development app; not released. Native browser g
 Follow-up: Record Browser opens compact setup with explicit Start and remembered audio choices. Option panels animate their content-sized bounds. App menus and dialogs now use retained native overlay surfaces above the original live page. The temporary video/screenshot presentation path and per-menu capture preparation are removed. Focus, nested menus, late preparation and owner closure share one lifecycle contract; passive previews allow native pointer input through to the page. See [native app overlays](architecture/native-overlays.md).
 
 Focused Electron checks cover moving video with generated tab audio, narrow menus, native layering, transfers and recovery. A live recording saved successfully; its frames exclude the controls, and microphone names, pause/resume, save, panel switching and inspector reopening were verified. Physical microphone and system-loopback recording remain separate device checks. See [browser recording and presentation](development/browser-recording.md).
+
+Browser Backgrounds and History input-scope follow-up: fixed locally, not released. Their native input layer now uses browser bounds instead of covering the entire app. Scoped keyboard handlers leave other app controls alone; app-wide nested dialogs temporarily restore full coverage. `npm --prefix desktop run test:browser-scoped-overlays` passes real Electron bounds/zoom checks, portal lifecycle checks, and both panel interaction fixtures. Shared contract typecheck passes. Live app/OS pointer verification remains pending; the broader native smoke stopped on its guest-animation continuity check. A follow-up reproduced an up-left displacement when renderer HMR ran against a native build that ignored bounds. Renderer offsets now follow acknowledged native coordinates only, with legacy-host and delayed-acknowledgement coverage. Both panels keep their backdrop open on pointer clicks. Native bounds, renderer lifecycle, and panel fixtures pass individually; the combined command hit its overall timeout. The native process still needs an updated build and restart before the running app can provide browser-only input interception.
+
+Background gallery redesign: implemented locally, not released. Backgrounds now uses a History-aligned right drawer without a dimmed backdrop, larger responsive photo previews, theme-aware captions below images, and fixed rotation controls. Connection settings scroll with the gallery instead of consuming the header. Catalog, native-caller, and isolated light/dark/narrow-layout checks pass, including selection, rotation, keyboard source switching and the search callback. The existing native-process restart remains deferred; isolated screenshots do not prove the running app has loaded that earlier fix.
+
+Browser tab persistence follow-up: fixed the unsaved initial New Tab case locally. Browser saves its initial workspace snapshot even without navigation; mounting and reconciliation wait for the selected chat's inspector hydration. Focused persistence, inspector-state, New Tab interaction and TSX syntax checks pass. Private tabs remain excluded. Live chat-switch verification is pending.
+
+Inline visualizations: implemented locally, not released. A bundled `visualize` skill supports proactive HTML/CSS/SVG explanations. Assistant messages use unboxed themed sandboxed previews, stream placeholders, incomplete states, inline expansion and sanitized HTML download; existing messages need no migration. A title-adjacent information popup contains the description and controls. View HTML opens a separate source dialog rather than expanding in the message. Focused interaction tests cover hover/click/keyboard access, focus return, escaped source and transparent light/dark rendering; isolated screenshots were inspected. The subsequent timestamp-placement change puts the message time beside the visualization information button and after following text, without repeating a final visualization's timestamp below it. That follow-up was source-reviewed only; tests were not run. Terminal replies show titles and summaries, without a new preview-opening command. Focused parser, TUI, skill/distribution, Markdown/media and Electron CSP/isolation tests pass, as do runtime manifest tests. The full renderer typecheck timed out without diagnostics after two minutes. No app restart or production build was performed. See [inline visualizations](architecture/visualizations.md).
+
+Visualization scroll/reload follow-up, local only: the pinned LegendList web patch now preserves iframe state during DOM reordering; bounded sanitized-HTML caching removes repeated preparation, and initial previews reserve their full height. The isolated 40-chart workload reduced sanitizer calls from 211 to 41 and same-frame scroll reloads from 12 to zero. Focused renderer, dependency reorder, virtual timeline and leaf type checks passed. Live scrolling and the exact prompt-triggered flash remain unverified; a dependency bundle refresh is needed to exercise the patch in an already-running app. No restart or production build was performed. See [benchmark details and caveats](development/visualization-performance.md).
+
+Browser/extension parity follow-up, local only: verified shared visualization imports in the browser and preview behavior under an MV3 extension origin/CSP. Fixed managed-font byte serialization across the browser bridge. The extension footer now has a Settings disclosure with extension settings, a fixed Desktop settings action and read-only account quota; it no longer shows the Desktop updater. Desktop app-menu commands now have a root-level renderer listener and bounded preload buffering through startup/remounts. Focused bridge, menu, font, visualization and syntax checks passed. The reported separate-window warning was traced to browser clients advertising Desktop-owned native overlays. Live and fallback browser adapters now omit those methods, and the HTTP bridge rejects them. A real-adapter regression failed before the fix and passed afterward with no companion-window attempts. The Desktop native-overlay renderer suite also passed. No production builds, client reloads or app restarts were performed. See `npm --prefix desktop run test:browser-surface-parity`.
+
+### FIX-022: native file icons and preview chrome
+
+Implemented locally, not released. Windows associations now use generated Material ICOs and per-extension registrations instead of the app logo. Context menus use normal placement, and upgrades remove the old pinned position. Installed Windows icon extraction verified distinct Markdown, lockfile, command and TSX icons while other applications retained their selected icons. Generated-asset tests and a compile-only NSIS fixture pass; a fresh install/upgrade/uninstall remains release QA. See [Windows file integration](development/windows-file-icons.md).
+
+The standalone file viewer uses one header with the normal Zyra dropdown, filename, file actions and window controls. Loading retains usable controls; reload cannot discard a dirty editor, and close follows the preview's existing guard. Scoped menu-action and shell-window tests pass. Live visual acceptance remains pending.
+
+### FIX-023: live status across runtime instances
+
+Implemented locally, not released. A compatible busy service remains attached while a fingerprint update waits, instead of closing the observing client. Public namespace/instance identity, bounded heartbeats and last-confirmed timestamps distinguish live, stale, disconnected and update-pending status. Desktop, browser renderer, mobile and TUI consume this information; browser sharing also confirms its own broker connection and pins the selected installation. Desktop-owned terminals inherit the correct namespace, and development mobile hosts persist a separate listener port.
+
+Connection, compatibility, idle-replacement, Desktop-worker replay, browser relay/shutdown, extension identity and mobile projection tests pass. Shared Desktop and extension TypeScript checks pass. Android parser/device verification and the live multi-instance matrix remain pending. No production service was stopped to apply this work. This pass does not merge dev/prod authority or introduce a cross-installation active-work directory. See [ADR 0018](adr/0018-separate-runtime-identity-compatibility-and-liveness.md).
 
 ### GitHub issue verification, 2026-09-16
 

@@ -1,3 +1,4 @@
+import { stripSidebarBrowserContext } from './browser-context'
 export type SerializedAssistantAttachment = {
     name: string
     type: string
@@ -103,7 +104,7 @@ export function parseSerializedAssistantMessage(text: string): SerializedAssista
 }
 
 export function stripSerializedAssistantAttachments(text: string): string {
-    return parseSerializedAssistantMessage(text).body
+    return stripSidebarBrowserContext(parseSerializedAssistantMessage(text).body)
 }
 
 function isSerializedImageAttachment(attachment: SerializedAssistantAttachment): boolean {

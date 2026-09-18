@@ -10,7 +10,8 @@ object MessageAttachments {
     private val detail = Regex("^(path|ref|mime|size|preview|note|origin): (.*)$")
     private val fenceLine = Regex("^ {0,3}(`{3,}|~{3,})(.*)$")
 
-    fun parse(source: String, inlineImageCount: Int = 0): MessageAttachmentContent {
+    fun parse(original: String, inlineImageCount: Int = 0): MessageAttachmentContent {
+        val source = BrowserContext.display(original)
         val fallback = MessageAttachmentContent(source)
         val normalized = source.replace("\r\n", "\n")
         val match = marker.find(normalized) ?: return fallback

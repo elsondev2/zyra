@@ -1,5 +1,5 @@
 import { openDesktopLink } from '@/lib/desktop-links'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { ChevronRight, ExternalLink, Info, MessageSquarePlus, Plug, Search } from 'lucide-react'
 import type { AssistantPluginCatalog } from '@shared/assistant/contracts'
 import catalog from '@shared/plugins/openai-directory.json'
@@ -22,11 +22,12 @@ export function StoreIcon({ entry, loading = 'lazy' }: { entry: StoreEntry; load
     </span>
 }
 
-export function PluginStore({ canInstall, busy, installedCatalog, loading, onManage, onSelectInstalled, onUseInChat, onOpenEntry, onImportFolder }: {
+export function PluginStore({ canInstall, busy, installedCatalog, loading, installContent, onManage, onSelectInstalled, onUseInChat, onOpenEntry, onImportFolder }: {
     canInstall: boolean
     busy: boolean
     installedCatalog: AssistantPluginCatalog | null
     loading: boolean
+    installContent?: ReactNode
     onManage: () => void
     onSelectInstalled: (id: string) => void
     onUseInChat: (id: string) => void
@@ -64,6 +65,7 @@ export function PluginStore({ canInstall, busy, installedCatalog, loading, onMan
             <label className="plugin-search"><Search size={15} /><input aria-label="Search Plugin store" placeholder="Search Plugins" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
             <select className="plugin-store-filter" aria-label="Plugin category" value={category} onChange={(event) => setCategory(event.target.value)}><option>All categories</option>{categories.map((name) => <option key={name}>{name}</option>)}</select>
         </div>
+        {installContent}
         {!query.trim() && category === 'All categories' ? <section className="plugin-store-installed" aria-label="Installed preview">
             <div className="plugin-store-source"><div className="plugin-store-installed-heading"><h2>Installed</h2>{!installed.length ? <span role="status">{loading ? 'Loading…' : installedCatalog ? 'None yet' : 'Unavailable'}</span> : null}</div><button type="button" className="plugin-text-button" aria-label="View all Plugins, Skills, and MCPs" onClick={onManage}>View all <ChevronRight size={14} /></button></div>
             {installed.length && installedCatalog ? <ul className="plugin-store-installed-grid">{installed.slice(0, 6).map((plugin) => {

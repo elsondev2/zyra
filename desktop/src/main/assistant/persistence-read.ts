@@ -34,7 +34,7 @@ import {
     toNullableString,
     toNumber
 } from './persistence-utils'
-import { assistantActivityPayloadColumns, parseAssistantActivityPayload } from './persistence-activity-payload'
+import { assistantActivityPayloadColumns, assistantActivityTerminalOutcomeColumn, parseAssistantActivityPayload, parseAssistantActivityTerminalOutcome } from './persistence-activity-payload'
 import { persistAssistantSnapshotMeta } from './persistence-write'
 
 function readAssistantUserMessageText(db: SqlDatabase, sessionId: string, direction: 'ASC' | 'DESC'): string | null {
@@ -160,18 +160,25 @@ function readAssistantMessages(db: SqlDatabase, threadId: string): AssistantMess
 function readAssistantActivities(db: SqlDatabase, threadId: string, includePayload: boolean): AssistantActivity[] {
     const payloadColumns = includePayload ? [assistantActivityPayloadColumns()] : []
     return readThreadRows<AssistantActivity>(db, 'assistant_activities', threadId, [
-        'id', 'kind', 'tone', 'summary', 'detail', 'turn_id', 'timeline_sequence', 'created_at', ...payloadColumns
-    ], (row) => ({
-        id: String(row[0] || ''),
-        kind: String(row[1] || ''),
-        tone: String(row[2] || 'info') as AssistantActivity['tone'],
-        summary: String(row[3] || ''),
-        detail: toNullableString(row[4]) || undefined,
-        turnId: toNullableString(row[5]),
-        timelineSequence: typeof row[6] === 'number' ? row[6] : undefined,
-        createdAt: String(row[7] || new Date(0).toISOString()),
-        ...(includePayload ? { payload: parseAssistantActivityPayload(row[8], row[9]) } : {})
-    }))
+        'id', 'kind', 'tone', 'summary', 'detail', 'turn_id', assistantActivityTerminalOutcomeColumn(), 'timeline_sequence', 'created_at', ...payloadColumns
+    ], (row) => {
+        const kind = String(row[1] || '')
+        const payload = includePayload ? parseAssistantActivityPayload(row[9], row[10]) : undefined
+        const detail = toNullableString(row[4]) || undefined
+        const turnTerminalOutcome = parseAssistantActivityTerminalOutcome(row[6], kind, payload, detail)
+        return {
+            id: String(row[0] || ''),
+            kind,
+            tone: String(row[2] || 'info') as AssistantActivity['tone'],
+            summary: String(row[3] || ''),
+            detail,
+            turnId: toNullableString(row[5]),
+            ...(turnTerminalOutcome ? { turnTerminalOutcome } : {}),
+            timelineSequence: typeof row[7] === 'number' ? row[7] : undefined,
+            createdAt: String(row[8] || new Date(0).toISOString()),
+            ...(includePayload ? { payload } : {})
+        }
+    })
 }
 
 function readThreadDetails(db: SqlDatabase, threadId: string): AssistantHydratedThreadData | null {
@@ -224,7 +231,7 @@ function readThreadDetails(db: SqlDatabase, threadId: string): AssistantHydrated
     }
 }
 
-export function readAssistantSessionTurnUsage(db: SqlDatabase, sessionId: string): AssistantSessionTurnUsageEntry[] {
+export function readAssistantSessionTurnUsage(db: SqlDatabase, sessionId?: string, since?: string): AssistantSessionTurnUsageEntry[] {
     const rows = db.exec(`
         SELECT
             assistant_turns.id,
@@ -239,12 +246,13 @@ export function readAssistantSessionTurnUsage(db: SqlDatabase, sessionId: string
             assistant_turns.effort,
             assistant_turns.service_tier,
             assistant_turns.usage_json,
-            assistant_turns.updated_at
+            assistant_turns.updated_at,
+            assistant_threads.provider_thread_id
         FROM assistant_turns
         INNER JOIN assistant_threads ON assistant_threads.id = assistant_turns.thread_id
-        WHERE assistant_threads.session_id = ?
+        WHERE ${sessionId ? 'assistant_threads.session_id = ?' : 'assistant_turns.requested_at >= ?'}
         ORDER BY assistant_turns.requested_at ASC, assistant_turns.id ASC
-    `, [sessionId])[0]?.values || []
+    `, [sessionId || since || new Date(0).toISOString()])[0]?.values || []
 
     return rows.map((row) => ({
         id: String(row[0] || ''),
@@ -259,7 +267,8 @@ export function readAssistantSessionTurnUsage(db: SqlDatabase, sessionId: string
         effort: toNullableString(row[9]) as AssistantLatestTurn['effort'],
         serviceTier: toNullableString(row[10]) as AssistantLatestTurn['serviceTier'],
         usage: parseJson(row[11], null),
-        updatedAt: String(row[12] || new Date(0).toISOString())
+        updatedAt: String(row[12] || new Date(0).toISOString()),
+        canonicalThreadId: toNullableString(row[13])
     }))
 }
 
@@ -580,4 +589,9 @@ function readThreadRows<T>(db: SqlDatabase, tableName: string, threadId: string,
         ORDER BY created_at ASC, id ASC
     `, [threadId])[0]?.values || []
     return result.map((row) => mapRow(row))
+}
+
+export function readAssistantUsageOwners(db: SqlDatabase): string[] {
+    const rows = db.exec('SELECT id, session_id, provider_thread_id FROM assistant_threads')[0]?.values || []
+    return [...new Set(rows.flatMap(row => row.filter((value): value is string => typeof value === 'string' && value.length > 0)))]
 }

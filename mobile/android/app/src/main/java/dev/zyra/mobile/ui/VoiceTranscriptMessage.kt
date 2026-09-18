@@ -6,12 +6,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import dev.zyra.mobile.data.TimelineItem
+import dev.zyra.mobile.voice.VoiceTimeline
 import dev.zyra.mobile.voice.VoiceTranscript
 
 @Composable fun VoiceTranscriptMessage(entry: VoiceTranscript) {
     Column(Modifier.fillMaxWidth(), horizontalAlignment = if (entry.role == "user") Alignment.End else Alignment.Start) {
-        TimelineMessage(TimelineItem("voice:" + entry.id, entry.role, entry.text, if (entry.complete) "message" else "stream"), copyable = !entry.placeholder) {}
+        TimelineMessage(VoiceTimeline.item(entry), copyable = !entry.placeholder) {}
         val status = when (entry.delivery) {
             "listening" -> "Listening…"
             "transcribing", "recovering" -> "Transcribing…"

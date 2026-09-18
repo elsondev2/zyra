@@ -11,6 +11,15 @@ export function preferredMobileAddress(addresses: MobileAccessState['addresses']
     return (physical.find(entry => /wi.?fi|wireless|wlan/i.test(entry.name)) || physical[0] || addresses[0])?.address || ''
 }
 
+/** Development profiles choose and persist their own port rather than blocking installed Zyra. */
+export function mobileListenerPort(saved: number | undefined, development: boolean): number {
+    if (saved !== undefined) {
+        if (!Number.isInteger(saved) || saved < 1 || saved > 65535) throw new Error('Invalid saved mobile access port.')
+        return saved
+    }
+    return development ? 0 : 47321
+}
+
 export function mobileAccessError(error: unknown): string {
     const text = error instanceof Error ? error.message : String(error)
     return text.replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/, '').replace(/^Error:\s*/, '')

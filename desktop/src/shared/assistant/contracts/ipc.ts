@@ -41,6 +41,7 @@ export const ASSISTANT_IPC = {
     getStatus: 'devscope:assistant:getStatus',
     getAccountOverview: 'devscope:assistant:getAccountOverview',
     redeemAccountReset: 'devscope:assistant:redeemAccountReset',
+    getUsageSummary: 'devscope:assistant:getUsageSummary',
     getSessionTurnUsage: 'devscope:assistant:getSessionTurnUsage',
     listModels: 'devscope:assistant:listModels',
     listProjects: 'devscope:assistant:listProjects',

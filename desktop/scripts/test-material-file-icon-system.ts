@@ -129,7 +129,7 @@ const associationByName = new Map(associations.map((association) => [association
 for (const associationName of ['Zyra Code and Text Preview', 'Zyra Document Preview', 'Zyra Image Preview', 'Zyra Media Preview']) {
     const association = associationByName.get(associationName)
     assert.ok(association, `${associationName} is visible as an OS-level file type`)
-    assert.equal(association?.icon, 'resources/icon', 'native Explorer/Finder aliases use the recognizable Zyra application icon')
+    assert.equal(association?.icon, 'resources/icon', 'non-Windows defaults retain the application icon; the Windows beforePack hook replaces these with per-extension Material ICOs')
 }
 const documentExtensions = new Set(associationByName.get('Zyra Document Preview')?.ext || [])
 for (const extension of ['pdf', 'docx', 'xlsx', 'pptx', 'csv', 'tsv']) assert.equal(documentExtensions.has(extension), true)

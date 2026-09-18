@@ -46,7 +46,9 @@ export function AssistantBrowserHistoryPanel({
         const frame = window.requestAnimationFrame(() => panelRef.current?.querySelector<HTMLInputElement>('input')?.focus())
         return () => {
             window.cancelAnimationFrame(frame)
-            window.requestAnimationFrame(() => previousFocusRef.current?.focus())
+            if (panelRef.current?.contains(getOverlayActiveElement())) {
+                window.requestAnimationFrame(() => previousFocusRef.current?.isConnected && previousFocusRef.current?.focus())
+            }
         }
     }, [])
 
@@ -69,6 +71,7 @@ export function AssistantBrowserHistoryPanel({
 
     useEffect(() => {
         const handleEscape = (event: KeyboardEvent) => {
+            if (!panelRef.current || (!event.composedPath().includes(panelRef.current) && event.target !== panelRef.current.ownerDocument)) return
             if (event.key === 'Escape') {
                 exitWith(onClose)
                 return
@@ -93,10 +96,8 @@ export function AssistantBrowserHistoryPanel({
     useEffect(() => () => window.clearTimeout(closeTimerRef.current), [])
 
     return (
-        <AnchoredNativeOverlay><div className="absolute inset-0 z-[80]" onPointerDown={(event) => {
-            if (event.target === event.currentTarget) exitWith(onClose)
-        }}>
-            <section ref={panelRef} tabIndex={-1} className={cn('absolute bottom-3 right-3 top-3 flex w-[min(440px,calc(100%-24px))] flex-col overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--color-text)_12%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_97%,var(--color-bg))] shadow-[0_24px_70px_rgba(0,0,0,0.38)] transition-transform duration-[220ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none', closing ? 'translate-x-[calc(100%+16px)]' : 'translate-x-0 animate-[assistant-browser-history-panel-in_180ms_cubic-bezier(0.22,1,0.36,1)_both] motion-reduce:animate-none')} aria-label="Browser history" role="dialog" aria-modal="true">
+        <AnchoredNativeOverlay scoped><div className="absolute inset-0 z-[80]">
+            <section ref={panelRef} tabIndex={-1} className={cn('absolute bottom-3 right-3 top-3 flex w-[min(440px,calc(100%-24px))] flex-col overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--color-text)_12%,transparent)] bg-[color-mix(in_srgb,var(--color-card)_97%,var(--color-bg))] shadow-[0_24px_70px_rgba(0,0,0,0.38)] transition-transform duration-[220ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none', closing ? 'translate-x-[calc(100%+16px)]' : 'translate-x-0 animate-[assistant-browser-history-panel-in_180ms_cubic-bezier(0.22,1,0.36,1)_both] motion-reduce:animate-none')} aria-label="Browser history" role="dialog" aria-modal="false">
                 <header className="flex h-12 shrink-0 items-center gap-2 border-b border-[var(--surface-divider)] px-3">
                     <Clock3 size={14} className="text-[var(--accent-primary)]/80" />
                     <h3 className="text-[12px] font-semibold text-sparkle-text">History</h3>

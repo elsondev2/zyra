@@ -76,19 +76,22 @@ export default function PluginsPage() {
         scrollContainer.current?.scrollTo({ top: productOpen ? 0 : browseScroll.current })
     }, [productOpen])
 
+    const installContent = <>
+        <PluginDownloadPanel state={directory.download} displayName={storeCatalog.entries.find(entry => entry.name === directory.download.name)?.displayName} onCancel={() => void directory.cancelDownload()} onRetry={() => { if (directory.download.name) void directory.beginCatalogInstall(directory.download.name) }} />
+        {managedInspection ? <AssistantPluginInstallDialog inline inspection={managedInspection} packageLabel="OpenAI catalog" installing={busy || directory.download.phase === 'installing'} error={null} onCancel={() => void directory.cancelDownload()} onInstall={() => void directory.installReviewedPlugin()} onInstallAndUse={() => void directory.installReviewedPlugin(openCreatedChat)} /> : null}
+    </>
+
     return <section ref={scrollContainer} className="plugin-directory custom-scrollbar" data-testid="plugins-page">
         <div className="plugin-directory-column">
             {!productOpen ? <Link to="/assistant" className="plugin-text-button plugin-back-link"><ArrowLeft size={15} />Back to Chat</Link> : null}
-            <PluginDownloadPanel state={directory.download} displayName={storeCatalog.entries.find(entry => entry.name === directory.download.name)?.displayName} onCancel={() => void directory.cancelDownload()} onRetry={() => { if (directory.download.name) void directory.beginCatalogInstall(directory.download.name) }} />
-            {managedInspection ? <AssistantPluginInstallDialog inline inspection={managedInspection} packageLabel="OpenAI catalog" installing={busy || directory.download.phase === 'installing'} error={null} onCancel={() => void directory.cancelDownload()} onInstall={() => void directory.installReviewedPlugin()} onInstallAndUse={() => void directory.installReviewedPlugin(openCreatedChat)} /> : null}
             {productOpen ? <>
                 {error ? <p className="plugin-notice" role="alert">{error}</p> : null}
-                {loading && !productEntry && !productInstallation ? <DirectoryEmpty title="Loading Plugin…" /> : <PluginProductPage key={params.get('plugin') || params.get('installed')} entry={productEntry} installation={productInstallation} catalog={catalog} busy={busy} canInstall={installAvailable} onBack={() => setParams({})} onInstall={name => void directory.beginCatalogInstall(name)} onUseInChat={useInChat} onManage={directory.selectPlugin} />}
+                {loading && !productEntry && !productInstallation ? <><DirectoryEmpty title="Loading Plugin…" />{installContent}</> : <PluginProductPage key={params.get('plugin') || params.get('installed')} installContent={installContent} entry={productEntry} installation={productInstallation} catalog={catalog} busy={busy} canInstall={installAvailable} onBack={() => setParams({})} onInstall={name => void directory.beginCatalogInstall(name)} onUseInChat={useInChat} onManage={directory.selectPlugin} />}
             </> : null}
             <div style={{ display: productOpen ? 'none' : undefined }}>
             {storeOpen ? <>
             {error || notice ? <p className="plugin-notice" role={error ? 'alert' : 'status'}>{error || notice}</p> : null}
-            <PluginStore canInstall={directory.serviceAvailable && installAvailable} busy={busy} installedCatalog={catalog} loading={loading} onManage={() => setStoreOpen(false)} onSelectInstalled={openInstalled} onUseInChat={useInChat} onOpenEntry={name => openProduct('plugin', name)} onImportFolder={() => void directory.beginInstall()} />
+            <PluginStore installContent={!productOpen ? installContent : undefined} canInstall={directory.serviceAvailable && installAvailable} busy={busy} installedCatalog={catalog} loading={loading} onManage={() => setStoreOpen(false)} onSelectInstalled={openInstalled} onUseInChat={useInChat} onOpenEntry={name => openProduct('plugin', name)} onImportFolder={() => void directory.beginInstall()} />
             </> : <>
             <header className="plugin-directory-header">
                 <div><h1>Plugins</h1></div>
@@ -114,6 +117,7 @@ export default function PluginsPage() {
                 </div>
                 {desktopHost && !sourcesOpen ? <label className="plugin-search"><Search size={15} /><input aria-label={`Search ${tab === 'mcps' ? 'MCP contributions' : tab === 'skills' ? 'Skills' : 'Plugins'}`} placeholder={`Search ${tab === 'mcps' ? 'MCPs' : tab === 'skills' ? 'Skills' : 'Plugins'}`} value={query} onChange={(event) => setQuery(event.target.value)} /></label> : null}
             </div>
+            {!productOpen ? installContent : null}
             {activeError || notice ? <p className="plugin-notice" role={activeError ? 'alert' : 'status'}>{activeError || notice}</p> : null}
             <div role="tabpanel" id={`directory-panel-${tab}`} aria-labelledby={`directory-tab-${tab}`} tabIndex={0}>
                 {!desktopHost ? <DirectoryEmpty title="Available in Zyra Desktop" description="Open Zyra Desktop to inspect and manage local Plugins and Skill folders." /> : sourcesOpen && tab === 'skills' ? <>

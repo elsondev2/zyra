@@ -49,6 +49,7 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
     visible: boolean
     placement: 'full' | 'primary' | 'secondary'
     controlled: boolean
+    agentControlEnabled?: boolean
     cursorTargetId?: string
     cursor: ControlCursorState | null
     onStateChange: (tabId: string, patch: BrowserStatePatch, options?: BrowserStateChangeOptions) => void
@@ -63,6 +64,7 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
     visible,
     placement,
     controlled,
+    agentControlEnabled = true,
     cursor: initialCursor,
     cursorTargetId,
     onStateChange,
@@ -94,7 +96,7 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
 
     const bindControlTarget = useCallback(() => {
         const state = stateRef.current
-        if (disposedRef.current || !state || controlBindingRef.current || controlTargetIdRef.current) return
+        if (!agentControlEnabled || disposedRef.current || !state || controlBindingRef.current || controlTargetIdRef.current) return
         controlBindAttemptsRef.current += 1
         controlBindingRef.current = true
         void window.devscope.agentControl.bindBrowserTab({
@@ -115,15 +117,15 @@ export const AssistantBrowserWebview = memo(forwardRef<AssistantBrowserWebviewHa
             controlBindingRef.current = false
             if (!disposedRef.current) scheduleControlBind()
         })
-    }, [tab.id, threadId])
+    }, [agentControlEnabled, tab.id, threadId])
 
     const scheduleControlBind = useCallback(() => {
-        if (disposedRef.current || controlTargetIdRef.current || controlBindTimerRef.current || controlBindAttemptsRef.current >= 8) return
+        if (!agentControlEnabled || disposedRef.current || controlTargetIdRef.current || controlBindTimerRef.current || controlBindAttemptsRef.current >= 8) return
         controlBindTimerRef.current = window.setTimeout(() => {
             controlBindTimerRef.current = 0
             bindControlTarget()
         }, Math.min(800, 50 * (2 ** Math.max(0, controlBindAttemptsRef.current - 1))))
-    }, [bindControlTarget])
+    }, [agentControlEnabled, bindControlTarget])
 
     const applyState = useCallback((state: BrowserViewState, suppressHistory: boolean) => {
         const previous = stateRef.current

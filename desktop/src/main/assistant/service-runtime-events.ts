@@ -1,3 +1,4 @@
+import { reconcileAssistantUserInputResponseMessageIds } from '../../shared/assistant/user-input-continuation'
 import { settleActivityAtTurnEnd } from '../../shared/assistant/activity-settlement'
 import type {
     AssistantActivity,
@@ -844,13 +845,17 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
         if (!eventSession) return
         const existingThread = eventThreadRecord?.thread || deps.requireThread(event.threadId)
         if (existingThread.messages.some((message) => message.id === event.payload.messageId)) return
-        deps.appendEvent('thread.message.user', event.createdAt, {
-            threadId: eventThreadId,
-            message: {
-                ...createAssistantUserMessage(event.payload.text, event.createdAt, event.payload.messageId),
-                turnId: event.turnId || null
-            }
-        }, eventSession.id, eventThreadId)
+        const message = {
+            ...createAssistantUserMessage(event.payload.text, event.createdAt, event.payload.messageId),
+            turnId: event.turnId || null
+        }
+        const linkedInputs = reconcileAssistantUserInputResponseMessageIds(existingThread.pendingUserInputs, existingThread.messages, [...existingThread.messages, message])
+        for (let index = 0; index < linkedInputs.length; index++) {
+            const userInput = linkedInputs[index]!
+            if (userInput.responseMessageId === existingThread.pendingUserInputs[index]?.responseMessageId) continue
+            deps.appendEvent('thread.user-input.updated', event.createdAt, { threadId: eventThreadId, userInput }, eventSession.id, eventThreadId)
+        }
+        deps.appendEvent('thread.message.user', event.createdAt, { threadId: eventThreadId, message }, eventSession.id, eventThreadId)
         return
     }
 
@@ -941,6 +946,36 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
             if (activity.turnId !== latestTurn.id) continue
             const settled = settleActivityAtTurnEnd(activity, event.createdAt, completedTurnState)
             if (settled !== activity) deps.appendEvent('thread.activity.appended', event.createdAt, { threadId: eventThreadId, activity: settled }, eventSession.id, eventThreadId)
+        }
+        const turnTerminalOutcome = event.payload.outcome === 'interrupted' || event.payload.outcome === 'cancelled'
+            ? 'interrupted'
+            : event.payload.outcome === 'failed'
+                ? 'failed'
+                : null
+        if (turnTerminalOutcome) {
+            const activityId = event.itemId
+                ? `shared-error:${event.itemId}`
+                : `assistant-activity-turn-terminal-${latestTurn.id}`
+            deps.appendEvent('thread.activity.appended', event.createdAt, {
+                threadId: eventThreadId,
+                activity: {
+                    id: activityId,
+                    kind: 'error',
+                    tone: turnTerminalOutcome === 'interrupted' ? 'warning' : 'error',
+                    summary: turnTerminalOutcome === 'interrupted' ? 'Assistant interrupted' : 'Assistant error',
+                    detail: event.payload.errorMessage || (turnTerminalOutcome === 'interrupted'
+                        ? 'The assistant turn was interrupted.'
+                        : 'The assistant turn ended with an error.'),
+                    turnId: latestTurn.id,
+                    turnTerminalOutcome,
+                    createdAt: event.createdAt,
+                    payload: {
+                        status: turnTerminalOutcome === 'interrupted' ? 'cancelled' : 'failed',
+                        completedAt: event.createdAt,
+                        ...(event.itemId ? { canonicalMessageId: `assistant-message-${event.itemId}` } : {})
+                    }
+                }
+            }, eventSession.id, eventThreadId)
         }
         deps.appendEvent('thread.latest-turn.updated', event.createdAt, { threadId: eventThreadId, latestTurn }, eventSession.id, eventThreadId)
         deps.appendEvent('thread.updated', event.createdAt, {
@@ -1297,7 +1332,9 @@ export function handleAssistantRuntimeEvent(event: AssistantRuntimeEvent, deps: 
                 createdAt: event.createdAt,
                 resolvedAt: event.type === 'user-input.resolved' ? event.createdAt : null
             }
-        deps.appendEvent('thread.user-input.updated', event.createdAt, { threadId: eventThreadId, userInput }, eventSession.id, eventThreadId)
+        const inputCandidates = [...existingThread.pendingUserInputs.filter(input => input.requestId !== userInput.requestId), userInput]
+        const linkedInput = reconcileAssistantUserInputResponseMessageIds(inputCandidates, existingThread.messages, existingThread.messages).find(input => input.requestId === userInput.requestId)!
+        deps.appendEvent('thread.user-input.updated', event.createdAt, { threadId: eventThreadId, userInput: linkedInput }, eventSession.id, eventThreadId)
         return
     }
 

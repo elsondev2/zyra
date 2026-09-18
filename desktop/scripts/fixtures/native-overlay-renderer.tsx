@@ -21,6 +21,7 @@ let nextId = 0
 let buttons = 0
 let interactiveReady = 0
 let blockShow = false
+let supportsBounds = true
 let finishShow:()=>void = ()=>{}
 const preparedKinds = new Map<string,Kind>()
 ;(window as any).devscope = {
@@ -30,7 +31,7 @@ const preparedKinds = new Map<string,Kind>()
    const frameName='fixture-'+(++nextId);preparedKinds.set(frameName,kind)
    return {success:true,frameName}
  },
- setNativeOverlayVisible: async (value:any) => {calls.push(value);if(blockShow&&value.kind==='interactive'&&value.visible)await new Promise<void>(resolve=>{finishShow=resolve});return {success:true}},
+ setNativeOverlayVisible: async (value:any) => {calls.push(value);if(blockShow&&value.kind==='interactive'&&value.visible)await new Promise<void>(resolve=>{finishShow=resolve});return supportsBounds ? {success:true,bounds:value.bounds ?? null} : {success:true}},
  recoverNativeOverlay: async()=>{recoveries++;return {success:true,retry:recoverRetry}},
  onNativeOverlayDismiss:(callback:any)=>{listener=callback;return ()=>{listener=undefined;unsubscribeCount++}}
 }
@@ -44,10 +45,10 @@ window.open = ((_url:string, name:string) => {
 
 const context=createContext('')
 function Contents(){const value=useContext(context);const [count,setCount]=useState(0);return <div role="dialog" aria-label="Actual portal"><input data-native-overlay-autofocus data-value value={value} readOnly/><button data-increment onClick={()=>{buttons++;setCount(value=>value+1)}}>{count}</button></div>}
-type Options={a?:boolean;b?:boolean;passive?:boolean;value?:string;autoFocus?:boolean}
+type Options={a?:boolean;b?:boolean;passive?:boolean;value?:string;autoFocus?:boolean;bounds?:{x:number;y:number;width:number;height:number}}
 const root=createRoot(document.querySelector('#root')!)
-function App({a,b,passive,value='first',autoFocus=true}:Options){return <context.Provider value={value}>
- {a?<NativeOverlayPortal autoFocus={autoFocus} onReady={()=>{interactiveReady++}}><Contents/></NativeOverlayPortal>:null}
+function App({a,b,passive,value='first',autoFocus=true,bounds}:Options){return <context.Provider value={value}>
+ {a?<NativeOverlayPortal bounds={bounds} autoFocus={autoFocus} onReady={()=>{interactiveReady++}}><Contents/></NativeOverlayPortal>:null}
  {b?<NativeOverlayPortal onReady={()=>{interactiveReady++}}><div data-sibling>Sibling</div></NativeOverlayPortal>:null}
  {passive?<NativeOverlayPortal passive><div role="tooltip">Passive tooltip</div></NativeOverlayPortal>:null}
  </context.Provider>}
@@ -184,6 +185,38 @@ const fontMetrics=(owner:Document)=>{
  await until(()=>!shown('passive'),'last passive release')
  for(const kind of ['interactive','passive'] as Kind[]){const values=calls.filter(call=>call.kind===kind).map(call=>call.revision);assert(values.every((value,index)=>!index||value>values[index-1]),'visibility revisions increase')}
  checks.push('sibling release, independent kinds, final animation-frame hide and no focus theft')
+
+ const scopedBounds={x:220,y:80,width:360,height:300}
+ supportsBounds=false
+ render({a:true,bounds:scopedBounds,autoFocus:false})
+ await until(()=>shown('interactive'),'legacy native host')
+ await settle()
+ assert((last('interactive').document.querySelector('#zyra-native-overlay-root') as HTMLElement).style.transform==='', 'legacy native hosts must not shift the browser overlay away from its anchor')
+ render({})
+ await settle()
+ supportsBounds=true
+ blockShow=true
+ render({a:true,bounds:scopedBounds,autoFocus:false})
+ await until(()=>shown('interactive'),'scoped bounds request sent')
+ assert((last('interactive').document.querySelector('#zyra-native-overlay-root') as HTMLElement).style.transform==='', 'do not offset the DOM before the native view confirms its actual bounds')
+ blockShow=false;finishShow()
+ await settle()
+ await until(()=>shown('interactive'),'scoped browser surface')
+ assert(JSON.stringify((calls.at(-1) as any).bounds)===JSON.stringify(scopedBounds),'browser-scoped native input must not cover the whole app')
+ const scopedRoot=last('interactive').document.querySelector('#zyra-native-overlay-root') as HTMLElement
+ assert(scopedRoot.style.transform==='translate(-220px, -80px)','scoped native viewport keeps owner-coordinate portal positioning')
+ render({a:true,b:true,bounds:scopedBounds,autoFocus:false})
+ await settle()
+ assert((calls.at(-1) as any).bounds===null,'an app-wide nested portal expands the native surface')
+ render({a:true,bounds:scopedBounds,autoFocus:false})
+ await settle()
+ assert(JSON.stringify((calls.at(-1) as any).bounds)===JSON.stringify(scopedBounds),'closing an app-wide portal restores browser-only input bounds')
+ render({a:true,bounds:{...scopedBounds,x:260},autoFocus:false})
+ await settle()
+ assert((calls.at(-1) as any).bounds.x===260,'anchor movement updates an already-visible native surface')
+ render({})
+ await settle()
+ checks.push('browser-only native input bounds, nested expansion, release and live anchor movement')
 
  render({a:true,value:'before-loss'})
  await until(()=>shown('interactive'),'reopen')

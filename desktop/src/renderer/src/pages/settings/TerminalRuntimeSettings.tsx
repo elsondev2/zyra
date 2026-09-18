@@ -14,6 +14,7 @@ import {
     SettingsSelect,
     SettingsSwitch
 } from './settings-layout'
+import { TerminalCommandSettings } from './TerminalCommandSettings'
 
 let cachedPackageRuntimes: DevScopeInstalledPackageRuntime[] | null = null
 let pendingPackageRuntimes: { generation: number; promise: Promise<DevScopeInstalledPackageRuntime[]> } | null = null
@@ -79,7 +80,7 @@ export default function TerminalRuntimeSettings() {
     const runtimeById = useMemo(() => new Map(runtimes.map((runtime) => [runtime.id, runtime])), [runtimes])
 
     return (
-        <SettingsPageContainer title="Terminal & runtime" backTo="/settings/workspace" backLabel="Workspace">
+        <SettingsPageContainer title="Terminal & runtime" description="Configure embedded terminals, command-line access, and project script runners.">
             <SettingsSection title="Terminal">
                 <SettingsRow
                     title="Default shell"
@@ -95,8 +96,9 @@ export default function TerminalRuntimeSettings() {
                 <SettingsRow title="Font size" description="Set text size for embedded terminals." control={<SettingsInput type="number" min={10} max={24} value={settings.terminalFontSize} onChange={(event) => updateSettings({ terminalFontSize: Math.max(10, Math.min(24, Math.round(Number(event.target.value) || 12))) })} className="sm:w-24" aria-label="Terminal font size" />} />
                 <SettingsRow title="Blinking cursor" description="Blink the cursor in embedded terminals." control={<SettingsSwitch checked={settings.terminalCursorBlink} onCheckedChange={(terminalCursorBlink) => updateSettings({ terminalCursorBlink })} label="Blinking terminal cursor" />} />
                 <SettingsRow title="Scrollback" description="Lines retained by each embedded terminal, from 1,000 to 50,000." control={<SettingsInput type="number" min={1000} max={50000} step={1000} value={settings.terminalScrollback} onChange={(event) => updateSettings({ terminalScrollback: Math.max(1_000, Math.min(50_000, Math.round(Number(event.target.value) || 5_000))) })} className="sm:w-28" aria-label="Terminal scrollback lines" />} />
-                <SettingsRow title="Preview panel height" description="Set the starting height of the file-preview terminal." control={<SettingsInput type="number" min={140} max={720} value={settings.filePreviewTerminalPanelHeight} onChange={(event) => updateSettings({ filePreviewTerminalPanelHeight: Math.max(140, Math.min(720, Number(event.target.value) || 220)) })} className="sm:w-24" aria-label="Terminal panel height" />} />
             </SettingsSection>
+
+            <TerminalCommandSettings />
 
             <SettingsSection title="Package runtime" headerAction={<SettingsButton variant="ghost" onClick={() => void refreshRuntimes(true)} disabled={runtimeLoading}><RefreshCw size={12} className={runtimeLoading ? 'animate-spin' : ''} />Refresh</SettingsButton>}>
                 <SettingsRow

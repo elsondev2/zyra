@@ -1,5 +1,6 @@
 package dev.zyra.mobile.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -11,19 +12,29 @@ import androidx.compose.ui.unit.dp
 import dev.zyra.mobile.R
 import dev.zyra.mobile.data.QuestionAnswer
 
-@Composable fun QuestionResponseSummary(answers: List<QuestionAnswer>) {
+@Composable fun QuestionResponseSummary(answers: List<QuestionAnswer>, modifier: Modifier = Modifier, media: @Composable () -> Unit = {}) {
     if (answers.isEmpty()) return
-    var open by rememberSaveable { mutableStateOf(false) }
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    var open by rememberSaveable(answers) { mutableStateOf(false) }
+    Column(modifier, horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            AppIcon(R.drawable.ic_openai, modifier = Modifier.size(14.dp))
-            Text("Answered agent question", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            AppIcon(R.drawable.ic_bot, modifier = Modifier.size(14.dp))
+            Text(if (answers.size == 1) "Answered agent question" else "Answered ${answers.size} agent questions",
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Text(answers.first().question, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text(answers.first().answer, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        TextButton(onClick = { open = true }, contentPadding = PaddingValues(0.dp)) {
-            Text(if (answers.size == 1) "View answer" else "View ${answers.size} answers", style = MaterialTheme.typography.labelSmall)
-            AppIcon(R.drawable.ic_chevron_right, modifier = Modifier.size(14.dp))
+        Surface(onClick = { open = true }, shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainer,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f))) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                media()
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(answers.first().question, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(answers.first().answer, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                    AppIcon(R.drawable.ic_chevron_right, if (answers.size == 1) "View full answer" else "View all ${answers.size} answers", Modifier.size(14.dp))
+                }
+            }
         }
     }
     if (open) ZyraSheet(if (answers.size == 1) "Your answer" else "Your answers", { open = false }) {

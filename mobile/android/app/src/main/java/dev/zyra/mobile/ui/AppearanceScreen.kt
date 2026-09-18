@@ -51,6 +51,7 @@ import dev.zyra.mobile.data.Appearance
         item { ZyraSettingRow(title = "Work duration", click = { change(value.copy(workDetails = !value.workDetails)) }, trailing = { ZyraSwitch(value.workDetails, null) }) }
         item { ZyraSettingRow(title = "Thought processes", click = { change(value.copy(thoughtProcesses = !value.thoughtProcesses)) }, trailing = { ZyraSwitch(value.thoughtProcesses, null) }) }
         item { ZyraSettingRow(title = "Action counts", click = { change(value.copy(actionCounts = !value.actionCounts)) }, trailing = { ZyraSwitch(value.actionCounts, null) }) }
+        item { ZyraSettingRow(title = "Collapse active work", subtitle = "Allow hiding work while the agent is running", click = { change(value.copy(collapseActiveWork = !value.collapseActiveWork)) }, trailing = { ZyraSwitch(value.collapseActiveWork, null) }) }
         item { HorizontalDivider(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) }
         item { SectionCaption("Accessibility") }
         item { ZyraSettingRow(title = "Reduce motion", click = { change(value.copy(reduceMotion = !value.reduceMotion)) }, trailing = { ZyraSwitch(value.reduceMotion, null) }) }

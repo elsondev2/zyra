@@ -2,12 +2,17 @@ package dev.zyra.mobile.network
 
 import dev.zyra.mobile.data.Machine
 import dev.zyra.mobile.data.Pairing
+import dev.zyra.mobile.data.RuntimeStatus
+import dev.zyra.mobile.data.RuntimeConnection
+import dev.zyra.mobile.data.RuntimePhase
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -26,6 +31,8 @@ class HostConnection(val machine: Machine) {
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JSONObject>>()
     private val events = Channel<JSONObject>(128)
     val incoming = events.receiveAsFlow()
+    private val mutableRuntimeStatus = MutableStateFlow(RuntimeStatus.Unknown)
+    val runtimeStatus = mutableRuntimeStatus.asStateFlow()
     private var ready = CompletableDeferred<JSONObject>()
     val closed = CompletableDeferred<Throwable>()
     private val attachments = SessionAttachments { method, params -> request(method, params) }
@@ -46,7 +53,14 @@ class HostConnection(val machine: Machine) {
                             require(value.getString("hostId") == machine.id) { "The paired host identity changed." }
                             val advertised = value.optJSONArray("capabilities")
                             capabilities = (0 until (advertised?.length() ?: 0)).map { advertised!!.getString(it) }.toSet()
+                            mutableRuntimeStatus.value = RuntimeStatus.fromHello(value)
                             ready.complete(value)
+                        }
+                        "host.runtime-status" -> {
+                            mutableRuntimeStatus.value = RuntimeStatus.fromEvent(value)
+                            if (!events.trySend(value).isSuccess) {
+                                webSocket.close(1013, "Resynchronizing"); fail(HostFailure("EVENT_GAP", "Connection needs to resynchronize."))
+                            }
                         }
                         "response" -> {
                             val request = pending.remove(value.optString("id"))
@@ -74,6 +88,7 @@ class HostConnection(val machine: Machine) {
         return withTimeout(20000) { ready.await() }
     }
     private fun fail(t: Throwable) {
+        mutableRuntimeStatus.value = mutableRuntimeStatus.value.copy(connection = RuntimeConnection.Disconnected, phase = RuntimePhase.Failed)
         closed.complete(t)
         ready.completeExceptionally(t)
         pending.values.forEach { it.completeExceptionally(t) }; pending.clear()

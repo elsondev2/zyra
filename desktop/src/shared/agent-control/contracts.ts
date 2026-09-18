@@ -35,6 +35,7 @@ export type ControlTarget =
     }
     | {
         kind: 'chrome-tab'
+        browserName?: string
         accessMode?: 'read' | 'control'
         title?: string | null
         url?: string | null
@@ -329,6 +330,7 @@ export type ControlPendingActionApproval = {
 }
 
 export type ControlPairingState = {
+    automaticConnectionPaused?: boolean
     state: 'stopped' | 'waiting' | 'paired' | 'error'
     pairId?: string
     code?: string

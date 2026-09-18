@@ -14,7 +14,7 @@ try {
     await writeFile(join(userData, 'owner.html'), '<!doctype html><style>body{margin:0;background:#17212e;color:#fff;font:16px system-ui}header{padding:20px}</style><header>Trusted native overlay fixture <button id="trigger">Open controls</button></header>')
     const env = { ...process.env, ZYRA_NATIVE_OVERLAY_USER_DATA: userData }; delete env.ELECTRON_RUN_AS_NODE
     const exitCode = await new Promise((done, reject) => {
-        const args = [join(directory, 'native-overlay-smoke.cjs'), ...(process.argv.includes('--hold') ? ['--hold'] : [])]
+        const args = [join(directory, 'native-overlay-smoke.cjs'), ...process.argv.slice(2).filter(arg => arg === '--hold' || arg === '--hover-only' || arg === '--scoped-only')]
         const child = spawn(electronPath, args, { env, stdio: 'inherit', shell: false, windowsHide: true })
         child.once('error', reject); child.once('exit', code => done(code ?? 1))
     })

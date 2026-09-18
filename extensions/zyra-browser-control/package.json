@@ -1,13 +1,16 @@
 {
   "name": "@zyra/browser-control-extension",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
     "package": "node scripts/package.mjs",
-    "test": "node scripts/build.mjs && node --test tests/*.test.mjs",
-    "typecheck": "tsc --noEmit"
+    "test": "node scripts/build.mjs --controls-only && node --test tests/*.test.mjs && npm run test:cursor-page",
+    "test:cursor": "node --test tests/cursor.test.mjs tests/branding.test.mjs",
+    "test:cursor-page": "node tests/cursor-page.mjs",
+    "typecheck": "tsc --noEmit",
+    "typecheck:cursor": "tsc --noEmit -p tsconfig.cursor.json"
   },
   "dependencies": {
     "lucide-react": "0.468.0",

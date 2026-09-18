@@ -671,6 +671,7 @@ function injectSurfaceGuide(session, surface) {
     "Do not open with a banner, path recap, or generic greeting like \"Hey - I'm here\" unless the user only said hello.",
     "Start with the direct answer or the exact action being taken.",
     "Keep paragraphs short. Use bullets only when they help scan real work.",
+    "For useful charts, diagrams, or visual explanations, read the built-in visualize skill proactively. Explicit line-delimited <visualization> blocks render themed, sandboxed HTML/CSS/SVG in assistant messages. Include title and summary attributes; scripts and external requests are not supported. Streaming blocks show a placeholder until complete. Ordinary HTML code fences remain code.",
     "Final responses support inline images and videos. When presenting media the user requested, use the embedding syntax below in the final response, outside code fences and backticks. Work narration does not embed media.",
     "Image example: ![Screenshot](file:///C:/Users/example/Pictures/screen%20shot.png)",
     "Video example: [Chat debug](file:///C:/Users/example/Videos/chat%20debug.mp4)",
@@ -1637,7 +1638,8 @@ export async function runZyraPrompt(runtime, prompt, options = {}) {
   } finally {
     markRuntimeMemoryPollutedFromTurn(runtime, expanded, options, beforeEntryCount);
   }
-  assertFinalAssistantMessageSucceeded(runtime);
+  const lastMessage = assertFinalAssistantMessageSucceeded(runtime);
+  await compactZyraContextAfterTurn(runtime, lastMessage);
 }
 
 export async function queueZyraMidRunInput(runtime, prompt, options = {}) {
@@ -1678,8 +1680,9 @@ export async function runZyraPrintPrompt(runtime, prompt, options = {}) {
     markRuntimeMemoryPollutedFromTurn(runtime, expanded, options, beforeEntryCount);
   }
   const lastMessage = assertFinalAssistantMessageSucceeded(runtime);
-  if (lastMessage?.role !== "assistant") return "";
-  return extractAssistantText(lastMessage.content);
+  const text = lastMessage?.role === "assistant" ? extractAssistantText(lastMessage.content) : "";
+  await compactZyraContextAfterTurn(runtime, lastMessage);
+  return text;
 }
 
 function assertFinalAssistantMessageSucceeded(runtime) {
@@ -2395,6 +2398,24 @@ function hasUncompactedConversationEntries(runtime) {
   }
   if (latestCompactionIndex < 0) return branch.some((entry) => entry?.type === "message");
   return branch.slice(latestCompactionIndex + 1).some((entry) => entry?.type === "message");
+}
+
+/** Run Zyra's selected threshold after Pi has settled its retries and queued work.
+ * Keep preflight below: restored/aborted sessions and a large upcoming prompt still
+ * need it. Never turn maintenance failure into failure of an already-delivered answer.
+ */
+export async function compactZyraContextAfterTurn(runtime, lastMessage) {
+  const session = runtime?.session;
+  if (lastMessage?.role !== "assistant" || lastMessage.stopReason !== "stop"
+    || session?.autoCompactionEnabled === false || session?.isStreaming
+    || session?.isCompacting || session?.isIdle === false) return { compacted: false };
+  try {
+    return await compactZyraContextBeforePrompt(runtime, "");
+  } catch (error) {
+    // Pi publishes compaction_end with failure details; the next prompt retains
+    // the strict preflight guard and can retry when the provider recovers.
+    return { compacted: false, errorMessage: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export async function compactZyraContextBeforePrompt(runtime, prompt, options = {}) {

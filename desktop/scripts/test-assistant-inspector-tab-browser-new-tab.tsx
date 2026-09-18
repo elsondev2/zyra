@@ -1,3 +1,4 @@
+import './fixtures/inline-overlay-ssr'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
@@ -336,14 +337,17 @@ assert.match(browserNewTabSource, /contrast\.clock === 'dark'[\s\S]*contrast\.ac
 assert.match(browserNewTabContrastSource, /CONTRAST_REGIONS[\s\S]*actions:[\s\S]*attribution:[\s\S]*clock:[\s\S]*getImageData/, 'New Tab contrast reads the visible image pixels at each rendered control region')
 assert.match(browserNewTabSource, /aria-label="Choose New Tab background"[\s\S]{0,200}<ImageIcon size=\{14\}/, 'New Tab background and history actions stay directly on the image without visible button chrome')
 assert.match(browserNewTabSource, /role="combobox"[\s\S]*aria-activedescendant[\s\S]*role="listbox"[\s\S]*role="option"/, 'New Tab search exposes its keyboard-active suggestions to assistive technology')
-assert.match(browserNewTabSource, /text-white\/78 transition-colors[\s\S]{0,500}<span className="truncate text-\[11px\] font-medium">\{suggestion\}/, 'New Tab suggestion values remain high-contrast over the photographic canvas')
+assert.doesNotMatch(browserNewTabSource, /rgba\(5, 8, 12|text-white|bg-white|border-white/, 'New Tab controls must not mix fixed dark surfaces or white utilities with adaptive theme text')
+assert.match(browserNewTabSource, /backgroundColor: 'color-mix\(in srgb, var\(--color-bg\) 96%, transparent\)'/, 'search uses a near-opaque theme surface for photographic backgrounds')
+assert.match(browserNewTabSource, /backgroundColor: 'color-mix\(in srgb, var\(--color-bg\) 94%, transparent\)'/, 'both server drawer states use a readable theme surface')
+assert.match(browserNewTabSource, /text-sparkle-text transition-colors[\s\S]{0,500}<span className="truncate text-\[11px\] font-medium">\{suggestion\}/, 'New Tab suggestion values remain high-contrast over the photographic canvas')
 assert.doesNotMatch(browserNewTabSource, />Google suggestions<\/div>/, 'New Tab results attach directly without a redundant heading between the field and suggestions')
 assert.match(browserNewTabSource, /suggestionsOpen \? 'rounded-\[24px\]' : 'rounded-full'[\s\S]*max-h-72 overflow-y-auto border-t/, 'New Tab search is a full pill at rest and opens into one seamless result surface')
 assert.match(browserNewTabSource, /borderTopLeftRadius: 0[\s\S]*borderTopRightRadius: 0[\s\S]*height: localServersPanelHeight[\s\S]*maxWidth: 440[\s\S]*height 420ms/, 'local servers grow downward at one narrow width with square top corners like a search drawer')
 assert.match(browserNewTabSource, /opacity: serversExpanded \? 1 : 0[\s\S]*visibility: serversExpanded \? 'visible' : 'hidden'/, 'local server contents fade and move without remaining keyboard-focusable while collapsed')
 assert.match(browserNewTabSource, /bottom-0 flex items-center[\s\S]{0,500}justifyContent: 'flex-start'[\s\S]{0,700}>Local servers<\/span>/, 'the local-server rail label stays precisely left-aligned in both states')
 assert.match(browserNewTabSource, /transform: serversExpanded \? 'translateY\(0\)' : 'translateY\(3px\)'/, 'the collapsed rail cluster centers within the visible portion tucked below search')
-assert.match(browserNewTabSource, /height: 14, width: 14[\s\S]*height: 14, lineHeight: '14px'[\s\S]*text-\[10px\] font-medium text-white\/55[\s\S]*height: 14, lineHeight: '14px'/, 'the local-server icon, label, and standard-font count share one fixed alignment box')
+assert.match(browserNewTabSource, /height: 14, width: 14[\s\S]*height: 14, lineHeight: '14px'[\s\S]*text-\[10px\] font-medium text-sparkle-text-muted[\s\S]*height: 14, lineHeight: '14px'/, 'the local-server icon, label, and standard-font count share one fixed alignment box')
 assert.match(browserNewTabSource, /serversExpanded \? <button[^>]*onClick=\{onRefresh\}/, 'the refresh action only occupies space while the local-server drawer is open')
 assert.doesNotMatch(browserNewTabSource, /BrowserServerShortcut|quickServers/, 'expanded local servers use compact rows rather than shortcut icon tiles')
 assert.match(browserNewTabSource, /suggestionsOpen = focused[\s\S]*aria-expanded=\{suggestionsOpen\}[\s\S]*Finding suggestions/, 'New Tab keeps one result shell mounted while suggestion contents settle')

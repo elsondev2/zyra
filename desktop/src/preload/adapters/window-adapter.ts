@@ -1,8 +1,12 @@
 import { ipcRenderer } from 'electron'
+import { createAppMenuCommandQueue } from '../../shared/app-menu-commands'
 import type { DevScopeAppMenuCommand, DevScopeWindowRuntimeInfo } from '../../shared/contracts/devscope-api'
 
 export function createWindowAdapter() {
+    const commands = createAppMenuCommandQueue()
+    ipcRenderer.on('window:app-menu-command', (_event, command: unknown) => commands.push(command))
     return {
+        openDesktopSettings: () => ipcRenderer.invoke('desktop:open-settings'),
         window: {
             minimize: () => ipcRenderer.send('window:minimize'),
             maximize: () => ipcRenderer.send('window:maximize'),
@@ -26,15 +30,7 @@ export function createWindowAdapter() {
                 ipcRenderer.on('window:fullscreen-changed', listener)
                 return () => ipcRenderer.removeListener('window:fullscreen-changed', listener)
             },
-            onAppMenuCommand: (callback: (command: DevScopeAppMenuCommand) => void) => {
-                const listener = (_event: Electron.IpcRendererEvent, command: unknown) => {
-                    if (command === 'new-chat' || command === 'search' || command === 'settings' || command === 'reload' || command === 'about') {
-                        callback(command)
-                    }
-                }
-                ipcRenderer.on('window:app-menu-command', listener)
-                return () => ipcRenderer.removeListener('window:app-menu-command', listener)
-            }
+            onAppMenuCommand: (callback: (command: DevScopeAppMenuCommand) => void) => commands.subscribe(callback)
         }
     }
 }

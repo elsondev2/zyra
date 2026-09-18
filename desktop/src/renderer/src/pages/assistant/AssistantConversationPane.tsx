@@ -1,3 +1,4 @@
+import { withExtensionTabContext } from '@/lib/browser-extension'
 import { normalizeSpeakingStyle } from '@shared/assistant/speaking-style'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AssistantApprovalDecision, AssistantChatScopeRoot, AssistantMessage, AssistantProposedPlan, AssistantSession, AssistantVoiceExecutionConfiguration } from '@shared/assistant/contracts'
@@ -753,6 +754,9 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         options: AssistantComposerSendOptions
     ) => {
         if (!sessionId) return false
+        let browserPrompt: string
+        try { browserPrompt = await withExtensionTabContext(buildPromptWithContextFiles(prompt, contextFiles)) }
+        catch (reason) { props.onShowToast?.(reason instanceof Error ? reason.message : 'Browser context is unavailable.', 'error'); return false }
         const startedAt = new Date().toISOString()
         const previousUserMessageId = [...controller.timelineMessages].reverse().find((message) => message.role === 'user')?.id || null
         setOptimisticPromptBoundary({
@@ -763,7 +767,7 @@ export function AssistantConversationPane(props: AssistantConversationPaneProps)
         })
         setOptimisticPromptStartedAt((current) => current || startedAt)
         const images = buildPromptImageInputs(contextFiles)
-        const result = await actions.sendPromptResult(buildPromptWithContextFiles(prompt, contextFiles), {
+        const result = await actions.sendPromptResult(browserPrompt, {
             sessionId,
             model: options.model,
             runtimeMode: options.runtimeMode,

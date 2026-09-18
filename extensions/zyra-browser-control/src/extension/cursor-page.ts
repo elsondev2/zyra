@@ -1,3 +1,5 @@
+import type { CursorFavicon, createCursorFavicon } from './cursor-favicon';
+
 export type CursorAppearance = {
   light: { primary: string; secondary: string };
   dark: { primary: string; secondary: string };
@@ -12,9 +14,10 @@ export type CursorFrame = Partial<CursorPoint> & {
 };
 
 /** Bundled local code, executed only in the granted tab's isolated world. */
-export function cursorPageTask(command: string, frame: CursorFrame): unknown {
+export function cursorPageTask(command: string, frame: CursorFrame, favicon: typeof createCursorFavicon): unknown {
   type State = {
     host: HTMLDivElement; pointer: HTMLDivElement; visual: HTMLDivElement;
+    favicon: CursorFavicon;
     appearance: CursorAppearance; timer?: ReturnType<typeof setTimeout>;
     dispose: () => void; applyAppearance: () => void;
   };
@@ -65,18 +68,20 @@ export function cursorPageTask(command: string, frame: CursorFrame): unknown {
     const events = new AbortController();
     const created: State = {
       host, pointer, visual, appearance: frame.appearance,
-      dispose: () => { clearTimeout(created.timer); events.abort(); host.remove(); if (scope.__zyraCursor === created) delete scope.__zyraCursor; },
+      favicon: favicon((dark.matches ? frame.appearance.dark : frame.appearance.light).secondary),
+      dispose: () => { clearTimeout(created.timer); events.abort(); created.favicon.dispose(); host.remove(); if (scope.__zyraCursor === created) delete scope.__zyraCursor; },
       applyAppearance: () => {
         const colors = dark.matches ? created.appearance.dark : created.appearance.light;
         host.style.setProperty('--zyra-cursor-primary', colors.primary);
         host.style.setProperty('--zyra-cursor-secondary', colors.secondary);
         host.dataset.reduceMotion = String(created.appearance.reduceMotion || motion.matches);
+        created.favicon.update(colors.secondary);
       }
     };
     dark.addEventListener('change', created.applyAppearance, { signal: events.signal });
     motion.addEventListener('change', created.applyAppearance, { signal: events.signal });
     window.addEventListener('pagehide', created.dispose, { signal: events.signal });
-    document.addEventListener('visibilitychange', () => { if (document.hidden) created.dispose(); }, { signal: events.signal });
+    // A background tab is still controlled. Its favicon must retain the indicator.
     scope.__zyraCursor = state = created;
     document.documentElement.append(host);
     const from = frame.from || { x: frame.x!, y: frame.y! };
@@ -88,13 +93,14 @@ export function cursorPageTask(command: string, frame: CursorFrame): unknown {
   if (frame.appearance) state.appearance = frame.appearance;
   state.applyAppearance();
   const durationMs = state.host.dataset.reduceMotion === 'true' ? 0 : Math.max(0, Math.min(320, frame.durationMs || 0));
-  if (Number.isFinite(frame.x) && Number.isFinite(frame.y)) {
+  if (command !== 'cursor:keepalive' && Number.isFinite(frame.x) && Number.isFinite(frame.y)) {
     state.pointer.style.transitionDuration = `${durationMs}ms`;
     state.pointer.style.transform = `translate3d(${frame.x}px,${frame.y}px,0)`;
   }
-  state.pointer.dataset.phase = frame.phase || 'idle';
+  if (frame.phase) state.pointer.dataset.phase = frame.phase;
   clearTimeout(state.timer);
-  // A detached debugger cannot send cleanup. A bounded in-page lease removes orphaned overlays.
-  state.timer = setTimeout(state.dispose, 2500);
+  // Renewed by the owning controller, including between Actions. If it disappears
+  // without cleanup, this bounded lease restores the favicon and removes the pointer.
+  state.timer = setTimeout(state.dispose, 5000);
   return { durationMs };
 }

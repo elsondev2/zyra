@@ -186,6 +186,7 @@ export function PreviewHeaderHtmlControls({
         }
     }, [])
 
+    const SelectedIcon = VIEWPORT_PRESETS[viewport].icon
     const selectedLabel = viewport === 'responsive'
         ? 'Full Width'
         : `${VIEWPORT_PRESETS[viewport].label} (${VIEWPORT_PRESETS[viewport].width}x${VIEWPORT_PRESETS[viewport].height})`
@@ -193,17 +194,17 @@ export function PreviewHeaderHtmlControls({
     return (
         <div
             className={cn(
-                'flex items-center gap-2',
+                'flex items-center gap-1',
                 isCompactHtmlHeader ? 'order-3 w-full flex-wrap' : '',
                 isVeryCompactHtmlHeader ? 'justify-start' : isCompactHtmlHeader ? 'justify-between' : ''
             )}
         >
             <div
                 className={cn(
-                    'relative z-40 flex items-center gap-2',
+                    'relative z-40 flex h-7 items-center gap-1',
                     isIdeChrome
-                        ? 'rounded-md border border-white/[0.06] bg-white/[0.025] px-1.5 py-0.5'
-                        : 'rounded-lg bg-white/5 p-1.5',
+                        ? 'rounded-md border border-white/[0.06] bg-white/[0.025] px-1.5'
+                        : 'rounded-md border border-[var(--surface-divider)] bg-[var(--surface-floating)] px-1',
                     isUltraCompactHtmlHeader ? 'w-full' : ''
                 )}
             >
@@ -219,13 +220,14 @@ export function PreviewHeaderHtmlControls({
                                 ? 'rounded-b-none border-b-transparent border-white/20 shadow-[0_10px_24px_rgba(0,0,0,0.16)]'
                                 : 'rounded-t-none border-t-transparent border-white/20 shadow-[0_10px_24px_rgba(0,0,0,0.16)]'
                         ),
-                        isIdeChrome ? 'h-5 min-w-[170px]' : 'h-7 min-w-[220px]'
+                        isIdeChrome ? 'h-5 min-w-[170px]' : 'h-6 min-w-[168px]'
                     )}
                     title="Choose preview viewport size"
                     aria-label="Choose preview viewport size"
                     aria-haspopup="menu"
                     aria-expanded={menuVisible && menuOpen}
                 >
+                    <SelectedIcon size={14} className="shrink-0" aria-hidden="true" />
                     <span className="min-w-0 flex-1 truncate">{selectedLabel}</span>
                     <ChevronDown className={cn('size-3.5 shrink-0 text-white/45 transition-transform', menuVisible && menuOpen && 'rotate-180')} />
                 </button>
@@ -268,7 +270,7 @@ export function PreviewHeaderHtmlControls({
                                             )}
                                         >
                                             <span className="inline-flex size-5 shrink-0 items-center justify-center rounded-md border border-white/10 bg-white/[0.03]">
-                                                {OptionIcon ? <OptionIcon size={12} /> : <span className="block size-2 rounded-full bg-current/70" />}
+                                                <OptionIcon size={12} aria-hidden="true" />
                                             </span>
                                             <span className="min-w-0 flex-1 truncate">{optionLabel}</span>
                                             {isSelected ? <span className="text-[10px] uppercase tracking-[0.12em] text-sky-200/80">On</span> : null}

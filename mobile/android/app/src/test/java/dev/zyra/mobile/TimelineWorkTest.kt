@@ -72,4 +72,35 @@ class TimelineWorkTest {
         val actions = rows.filterIsInstance<ChatRailRow.Work>().single().actions
         assertEquals(1, actions.size); assertEquals("Verify the layout", actions.single().batch)
     }
+    @Test fun `generic output echoes stay stored but never become duplicate actions`() {
+        val echo = TimelineItem("echo", "toolResult", "Tool output\nBUILD SUCCESSFUL", "tool",
+            raw = """{"message":{"role":"toolResult","content":[{"type":"text","text":"BUILD SUCCESSFUL"}]}}""")
+        for (running in listOf(true, false)) {
+            val view = SessionView(id = "chat", items = listOf(user, call, tool, echo, answer), running = running)
+            for (source in listOf(view, TimelineReducer.decode(TimelineReducer.encode(view)))) {
+                val rows = TimelineWork().rows(source)
+                val work = rows.filterIsInstance<ChatRailRow.Work>().single()
+                assertEquals(listOf(tool.id), work.actions.map { it.item.id })
+                assertEquals("BUILD SUCCESSFUL", work.actions.single().output)
+                assertFalse(work.entries.any { it.id == echo.id })
+                assertFalse(rows.filterIsInstance<ChatRailRow.Message>().any { it.item.id == echo.id })
+                assertEquals(echo, source.items.first { it.id == echo.id })
+            }
+        }
+    }
+    @Test fun `anonymous result alone is hidden without hiding authored text or named tools`() {
+        val echo = TimelineItem("echo", "toolResult", "Tool output\nSaved", "tool")
+        val authored = user.copy(text = "Tool output")
+        val view = SessionView(items = listOf(authored, echo, answer))
+        assertEquals(listOf(authored, answer), TimelineWork().rows(view).filterIsInstance<ChatRailRow.Message>().map { it.item })
+        assertTrue(TimelineWork().rows(view).none { it is ChatRailRow.Work })
+        assertEquals(3, view.items.size)
+    }
+    @Test fun `identified file action with missing tool name remains visible`() {
+        val identified = TimelineItem("file", "toolResult", "Tool output\nSaved", "tool",
+            raw = """{"surface":{"version":1,"kind":"file-change","path":"src/app.kt"}}""")
+        val work = TimelineWork().rows(SessionView(items = listOf(user, identified, answer))).filterIsInstance<ChatRailRow.Work>().single()
+        assertEquals("Editing app.kt", work.actions.single().title)
+        assertEquals("Saved", work.actions.single().output)
+    }
 }

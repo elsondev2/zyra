@@ -1,5 +1,6 @@
 import { isAgentSurfaceDescriptor, normalizeAgentSurfaceTool } from "../../agent-surface.mjs";
 import { renderMarkdown } from "../../pi-markdown.mjs";
+import { visualizationTerminalText } from "../../visualizations/blocks.mjs";
 import { buildTerminalTheme } from "../../terminal-theme.mjs";
 import { parseMessageAttachments } from "../../message-attachments.mjs";
 import {
@@ -81,7 +82,7 @@ export class AssistantMessageComponent {
     this.key = key;
     this.content = content;
     this.theme = theme;
-    this.final = false;
+    this.final = options.final === true;
     this.showDivider = options.showDivider === true;
   }
 
@@ -97,7 +98,7 @@ export class AssistantMessageComponent {
   }
 
   render(width) {
-    const text = String(this.content?.text ?? "").trim();
+    const text = visualizationTerminalText(String(this.content?.text ?? ""), !this.final).trim();
     if (!text) return [];
     const contentWidth = Math.max(24, width - assistantPadding.length);
     const rendered = trimOuterBlankLines(renderMarkdown(text, contentWidth, this.theme));

@@ -4,6 +4,9 @@ const assert = require('node:assert/strict')
 const root = process.env.ZYRA_NATIVE_OVERLAY_USER_DATA
 const { NativeOverlayManager, addNativeWindowView, registerTrustedIpcSender, assertTrustedIpcEvent, NATIVE_OVERLAY_IPC: IPC, NATIVE_OVERLAY_FRAME_PREFIX: PREFIX } = require(join(root, 'manager.cjs'))
 app.setPath('userData', root)
+// Other desktop windows must not suspend this fixture before it tests our layers.
+// Keep guest visibility and animation assertions; do not change app preferences.
+if (process.platform === 'win32') app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
 const windows = [], pages = []
 let manager, recoveryResolve, recoveryCalls = 0, callbackOwner = null
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -23,8 +26,8 @@ function slot(owner, kind) { return manager.owners.get(owner.webContents.id).slo
 async function prepare(owner, kind) {
     return owner.webContents.executeJavaScript(`window.fixture.prepareNativeOverlay({kind:${JSON.stringify(kind)}})`)
 }
-async function visibility(owner, kind, visible, revision) {
-    return owner.webContents.executeJavaScript(`window.fixture.setNativeOverlayVisible(${JSON.stringify({kind,frameName:slot(owner,kind).frameName,visible,revision,focus:false})})`)
+async function visibility(owner, kind, visible, revision, bounds = null) {
+    return owner.webContents.executeJavaScript(`window.fixture.setNativeOverlayVisible(${JSON.stringify({kind,frameName:slot(owner,kind).frameName,visible,revision,focus:false,bounds})})`)
 }
 async function open(owner, kind) {
     const arm = await prepare(owner, kind)
@@ -53,11 +56,54 @@ async function ownerWindow(title) {
     await waitFor(() => window.isFocused(), 'fixture owner did not focus')
     return window
 }
+async function checkScopedBounds(owner, interactive, revision = 1) {
+    const browserBounds = {x:220,y:80,width:400,height:300}
+    const confirmed = await visibility(owner,'interactive',true,revision++,browserBounds)
+    assert.equal(confirmed.success,true)
+    assert.deepEqual(confirmed.bounds,browserBounds,'renderer receives confirmed native coordinates, not an assumed crop')
+    assert.deepEqual(interactive.view.getBounds(),browserBounds,'browser dialog native input excludes the sidebar and header')
+    owner.webContents.setZoomFactor(1.25)
+    assert.deepEqual((await visibility(owner,'interactive',true,revision++,browserBounds)).bounds,browserBounds,'bounds acknowledgement stays in owner CSS pixels at non-default zoom')
+    assert.deepEqual(interactive.view.getBounds(),{x:275,y:100,width:500,height:375},'scoped native input follows owner zoom')
+    assert.equal((await visibility(owner,'interactive',true,revision++,{...browserBounds,width:-1})).success,false,'invalid input bounds cannot alter presentation')
+    owner.webContents.setZoomFactor(1)
+    assert.equal((await visibility(owner,'interactive',true,revision++)).bounds,null,'app-wide acknowledgement clears the renderer offset')
+    assert.deepEqual(interactive.view.getBounds(),{x:0,y:0,width:owner.getContentBounds().width,height:owner.getContentBounds().height},'app-wide dialogs retain full native coverage')
+    await visibility(owner,'interactive',false,revision++)
+    console.log('PASS: browser-scoped native view bounds, owner zoom, validation and app-wide restoration')
+}
 app.whenReady().then(async () => {
     manager = new NativeOverlayManager({ showRecoveryDialog: () => { recoveryCalls++; return new Promise(resolve => { recoveryResolve = resolve }) } })
     manager.registerIpc()
     ipcMain.handle('fixture:callback', event => { assertTrustedIpcEvent(event); callbackOwner = event.sender.id; return callbackOwner })
     const owner = await ownerWindow('Zyra native overlay pass-through fixture')
+    if (process.argv.includes('--scoped-only')) {
+        await checkScopedBounds(owner, await open(owner, 'interactive'))
+        cleanup(0)
+        return
+    }
+    if (process.argv.includes('--hover-only')) {
+        const passive = await open(owner, 'passive')
+        await visibility(owner, 'passive', true, 1)
+        let transitions = 0
+        passive.companion.on('show', () => transitions++)
+        passive.companion.on('hide', () => transitions++)
+        for (let revision = 2; revision <= 8; revision++) {
+            await visibility(owner, 'passive', revision % 2 === 1, revision)
+        }
+        assert.equal(transitions, 0, 'hover changes must not show or hide a Windows window')
+        assert.equal(passive.companion.isVisible(), true)
+        assert.equal(passive.companion.isFocusable(), false)
+        const other = await ownerWindow('Hover focus fixture')
+        await waitFor(() => !passive.companion.isVisible(), 'hover host must hide on owner blur')
+        owner.focus()
+        await waitFor(() => passive.companion.isVisible(), 'hover host must return with owner')
+        assert.equal(owner.isFocused(), true)
+        other.hide()
+        console.log('PASS: stable passive hover window, focus isolation and blur lifecycle')
+        cleanup(0)
+        return
+    }
     const guest = new WebContentsView({webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}})
     pages.push(guest.webContents)
     addNativeWindowView(owner, guest, 'browser')
@@ -74,6 +120,8 @@ app.whenReady().then(async () => {
 
     owner.webContents.focus()
     assert.equal(owner.webContents.isFocused(),true,'fixture starts with owner input focus')
+    await waitFor(async()=> await guest.webContents.executeJavaScript('window.framesRendered') > 2, 'fixture guest never animated before opening an overlay')
+    assert.equal(await guest.webContents.executeJavaScript('document.visibilityState'), 'visible', 'fixture starts with an observable page')
     const interactive = await open(owner,'interactive')
     assert.equal(interactive.contents.getOSProcessId(),owner.webContents.getOSProcessId())
     assert.equal((await visibility(owner,'interactive',true,1)).success,true)
@@ -131,6 +179,7 @@ app.whenReady().then(async () => {
     await waitFor(()=>interactive.view.getVisible()&&passive.companion.isVisible(),'mounted dialog did not restore on focus')
     console.log('phase: focused owner restored')
     await visibility(owner,'interactive',false,5)
+    await checkScopedBounds(owner, interactive, 6)
     await visibility(owner,'passive',false,2)
     utility.focus()
     console.log('phase: utility opening')
