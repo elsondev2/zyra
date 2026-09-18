@@ -14,6 +14,15 @@ const vendors = [
 ];
 const license = 'extensions/zyra-browser-control/assets/LICENSES.txt';
 
+test('Mermaid vendor path is pinned to LF while desktop remains export-ignored', () => {
+  const attributes = readFileSync(path.join(root, '.gitattributes'), 'utf8')
+    .split(/\r?\n/).filter(Boolean);
+  assert.ok(attributes.includes('/desktop export-ignore'));
+  assert.ok(attributes.includes(`${vendors[0]} eol=lf`));
+  assert.ok(attributes.includes(`${vendors[1]} eol=crlf`));
+  assert.ok(attributes.includes('desktop/src/renderer/src/assets/plugin-logos/*.svg eol=lf'));
+});
+
 test('only the two exact pristine upstream artifacts receive local-rule exemptions', () => {
   for (const file of vendors) {
     const bytes = readFileSync(path.join(root, file));

@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm, rename, symlink } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createZyraPermissionGateExtension } from '../src/zyra-permission-gate.mjs';
+
+const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+const filesystemToolSource = readFileSync(new URL('../src/filesystem-access-tool.mjs', import.meta.url), 'utf8');
+const schemaDependency = filesystemToolSource.match(/import\s+\{\s*Type\s*\}\s+from\s+["']([^"']+)["']/)?.[1];
+assert.ok(schemaDependency && packageJson.dependencies?.[schemaDependency], 'filesystem access schema dependency must be declared in root dependencies');
 
 const fixture = await mkdtemp(path.join(os.tmpdir(), 'zyra-folder-access-'));
 let passed = 0;
@@ -22,6 +28,8 @@ try {
     });
     const tool = extension.tools.get('filesystem_access')?.definition;
     assert.ok(tool, 'The live gate must register the discoverable recovery tool');
+    assert.deepEqual(Object.keys(tool.parameters.properties), ['operation', 'path', 'access', 'reason']);
+    assert.equal(tool.parameters.additionalProperties, false, 'filesystem schema must reject undeclared fields');
     return { requests, tool, call: extension.handlers.get('tool_call')[0],
       grant: (folder = repo, access = 'read-only', signal) => tool.execute('scope-fixture', { operation: 'request', path: folder, access, reason: 'Read project instructions' }, signal),
     };
