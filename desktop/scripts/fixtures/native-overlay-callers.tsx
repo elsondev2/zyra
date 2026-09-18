@@ -47,11 +47,14 @@ const root = createRoot(host)
 const results: string[] = []
 const click = async (element: Element | null) => {
     check(element, 'expected an interactive control')
-    await act(async () => {
-        const owner = element!.ownerDocument.defaultView!
-        element!.dispatchEvent(new owner.PointerEvent('pointerdown', { bubbles: true }))
-        ;(element as HTMLElement).click()
-    })
+    const target = element!
+    const owner = target.ownerDocument.defaultView!
+    // Keep pointerdown and activation in separate React turns, as a native cross-document
+    // click does. Collapsing them hid portal listener cleanup between an Escape close and
+    // the next activation on Windows.
+    await act(async () => { target.dispatchEvent(new owner.PointerEvent('pointerdown', { bubbles: true })) })
+    check(target.isConnected, 'interactive control remained mounted through pointerdown')
+    await act(async () => { (target as HTMLElement).click() })
 }
 const key = async (element: Element, value: string, shiftKey = false) => {
     await act(async () => element.dispatchEvent(new element.ownerDocument.defaultView!.KeyboardEvent('keydown', { key: value, shiftKey, bubbles: true, cancelable: true })))
@@ -98,8 +101,14 @@ Object.assign(window, { nativeOverlayCallerCheck: (async () => {
     await key(options()!, 'Escape')
     await settle(() => !options(), 'Escape closes nested options')
     check(Boolean(panel()), 'nested Escape preserves Downloads')
+    // Observe the mounted child-document trigger's committed closed state before reopening.
+    // The menu's removal alone does not state that its trigger is ready for a new interaction.
+    await settle(() => {
+        const trigger = optionTrigger()
+        return Boolean(panel() && trigger?.isConnected && trigger.getAttribute('aria-expanded') === 'false')
+    }, 'options trigger is ready to reopen')
     await click(optionTrigger())
-    await settle(() => Boolean(options()), 'options reopen')
+    await settle(() => Boolean(options()), 'options reopen').catch(error => { throw new Error(`${error.message}; panel=${Boolean(panel())}; triggerConnected=${optionTrigger()?.isConnected}; expanded=${optionTrigger()?.getAttribute('aria-expanded')}; menus=${childDocument.querySelectorAll('[role=menu]').length}; originalMenus=${document.querySelectorAll('[role=menu]').length}; text=${childDocument.body.textContent?.slice(-600)}`) })
     await click([...options()!.querySelectorAll('button')].find(button => button.textContent?.includes('Show in folder'))!)
     check(actions.includes('reveal'), 'a real nested options click reaches the download API')
     await click(trigger())
