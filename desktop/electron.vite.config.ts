@@ -12,12 +12,26 @@ const desktopVersion = JSON.parse(readFileSync(resolve(__dirname, 'package.json'
 // the renderer's complete Monaco/Shiki graph is reserved for the production gate.
 const fastBuild = process.env.ZYRA_FAST_BUILD === '1'
 
+// electron-vite's main preset prepends browser-oriented entry fields during its
+// enforce:pre config hook. Mutate after that preset instead of returning a
+// config fragment, since Vite merges returned mainFields arrays.
+const nodeFirstMainEntriesPlugin = {
+    name: 'zyra:main-node-first-package-entries',
+    apply: 'build' as const,
+    enforce: 'post' as const,
+    config(config: { resolve?: { mainFields?: string[] } }) {
+        config.resolve ??= {}
+        config.resolve.mainFields = ['main', 'module']
+    }
+}
+
 export default defineConfig({
     main: {
         plugins: [
             externalizeDepsPlugin({
                 include: ['node-pty']
-            })
+            }),
+            nodeFirstMainEntriesPlugin
         ],
         build: {
             ...(fastBuild ? { minify: false, reportCompressedSize: false } : {}),
