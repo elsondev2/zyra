@@ -3,13 +3,13 @@ import { nativeImage, type NativeImage, type Rectangle, type WebContents } from 
 const captures = new WeakMap<WebContents, Promise<NativeImage>>()
 const previews = new WeakMap<WebContents, Promise<string>>()
 
-/** Read the owned surface directly; avoid full-size PNG encoding and decoding on hover. */
+/** Read a fresh owned frame without full-size PNG encoding/decoding or debugger attachment. */
 export function captureBrowserTabPreview(guest: WebContents): Promise<string> {
     const pending = previews.get(guest)
     if (pending) return pending
     const capture = (async () => {
         if (guest.isDestroyed()) throw new Error('The Browser tab was closed.')
-        const image = await bounded(guest.capturePage(undefined, { stayHidden: true, stayAwake: true }))
+        const image = await capturePreviewFrame(guest)
         if (image.isEmpty()) throw new Error('The Browser preview is unavailable.')
         const size = image.getSize()
         // 3x the card's display width preserves crisp text on high-DPI screens.
@@ -24,6 +24,38 @@ export function captureBrowserTabPreview(guest: WebContents): Promise<string> {
     previews.set(guest, capture)
     void capture.finally(() => { if (previews.get(guest) === capture) previews.delete(guest) }).catch(() => undefined)
     return capture
+}
+
+async function capturePreviewFrame(guest: WebContents): Promise<NativeImage> {
+    try {
+        let discardInitialFrame = true
+        let collectPaintedFrames = false
+        let resolveInitialFrame: () => void = () => undefined
+        let resolvePaintedFrame: (image: NativeImage) => void = () => undefined
+        const initialFrame = new Promise<void>(resolve => { resolveInitialFrame = resolve })
+        const nextPaintedFrame = new Promise<NativeImage>(resolve => { resolvePaintedFrame = resolve })
+        guest.beginFrameSubscription(false, image => {
+            // Electron can replay the previously presented surface as the first frame.
+            if (discardInitialFrame) {
+                discardInitialFrame = false
+                resolveInitialFrame()
+            } else if (collectPaintedFrames) {
+                // Compositor delivery can beat executeJavaScript's rAF completion IPC.
+                resolvePaintedFrame(image)
+            }
+        })
+        // capturePage wakes an occluded surface without changing its view visibility or
+        // focus. Discard its initial frame, then schedule the renderer's next paint.
+        const wake = guest.capturePage(undefined, { stayHidden: false, stayAwake: true })
+        return await bounded((async () => {
+            await Promise.all([wake, initialFrame])
+            collectPaintedFrames = true
+            await guest.executeJavaScript('new Promise(resolve => requestAnimationFrame(resolve))')
+            return await nextPaintedFrame
+        })())
+    } finally {
+        if (!guest.isDestroyed()) guest.endFrameSubscription()
+    }
 }
 
 async function bounded<T>(operation: Promise<T>): Promise<T> {

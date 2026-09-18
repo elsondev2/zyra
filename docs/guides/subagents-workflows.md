@@ -90,7 +90,7 @@ Direct controls are also available:
 /agent resume <run-id> Continue from the retained transcript
 ```
 
-Each child has an independent persistent Pi JSONL session. `/subtask` branches the current root session tree before launching the child. Child transcripts are paged on demand and are not copied wholesale into the root context.
+Each child has an independent persistent Pi JSONL session. `/subtask` branches the current root session tree before launching the child. Child transcripts are paged on demand and are not copied wholesale into the root context. Stop affects existing and in-flight children from that turn without poisoning next-turn delegation. `workspace-write` is accepted as an alias for the scoped `writer` mode; shell remains denied because it cannot enforce the declared scope.
 
 ## Isolation and capabilities
 

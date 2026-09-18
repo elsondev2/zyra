@@ -79,6 +79,7 @@ const preloadSource = readFileSync(path.join(desktopRoot, 'src/preload/adapters/
 const browserHandlersSource = readFileSync(path.join(desktopRoot, 'src/main/ipc/handlers/browser-preview-handlers.ts'), 'utf8')
 const browserDeveloperHandlersSource = readFileSync(path.join(desktopRoot, 'src/main/ipc/handlers/browser-preview-developer-handlers.ts'), 'utf8')
 const workspaceSource = readFileSync(path.join(desktopRoot, 'src/renderer/src/pages/assistant/AssistantBrowserWorkspace.tsx'), 'utf8')
+const nativeOverlayEventsSource = readFileSync(path.join(desktopRoot, 'src/renderer/src/components/ui/native-overlay-events.ts'), 'utf8')
 const apiSource = readFileSync(path.join(desktopRoot, 'src/shared/contracts/devscope-api.ts'), 'utf8')
 
 assert.match(mainSource, /web-contents-created[\s\S]*getType\(\) === 'webview'[\s\S]*action: 'deny'/, 'new webviews deny popups before their owner-specific policy is attached')
@@ -136,7 +137,9 @@ assert.match(browserSlotSource, /data-assistant-browser-view-slot/, 'the rendere
 assert.match(browserViewManagerSource, /popupManager\.registerGuest\(record\.ownerWindow, page, page\.id\)/, 'main-owned pages delegate window-open requests to the hardened popup policy')
 assert.match(workspaceSource, /closedTabsRef[\s\S]*reopen-closed-tab/, 'closed tabs can be restored with the standard shortcut')
 assert.match(workspaceSource, /const closedTab = closedTabsRef\.current\.at\(-1\)[\s\S]*ASSISTANT_BROWSER_TAB_LIMIT[\s\S]*closedTabsRef\.current\.pop\(\)/, 'a failed restore at the tab limit keeps the closed entry available')
-assert.match(workspaceSource, /window\.addEventListener\('keydown', handleBrowserShortcut, true\)/, 'renderer-focused browser chrome uses the same shortcut policy')
+assert.match(workspaceSource, /addOverlayEventListener\('keydown', handleBrowserShortcut, true\)/, 'renderer-focused browser chrome uses the shared shortcut policy across native overlay documents')
+assert.match(workspaceSource, /const removeOverlayListener3 = addOverlayEventListener\('keydown', handleBrowserShortcut, true\)[\s\S]*return \(\) => removeOverlayListener3\(\)/, 'browser shortcut listeners are released when the workspace is deactivated')
+assert.match(nativeOverlayEventsSource, /getOverlayEventDocuments\(\)[\s\S]*document\.addEventListener\(type, listener as EventListener, options\)[\s\S]*document\.removeEventListener\(type, listener as EventListener, options\)/, 'the shared overlay listener tracks native documents and cleans up each registration')
 assert.match(workspaceSource, /previousTabId !== tabId[\s\S]*webviewRefs\.current\.get\(previousTabId\)\?\.blur\(\)/, 'tab switches release keyboard focus from the hidden previous guest')
 assert.match(workspaceSource, /fullscreenTab && fullscreenTab !== tabId[\s\S]*setFullScreen\(false\)/, 'switching away from a fullscreen tab restores the normal window and Browser shell')
 assert.match(browserViewManagerSource, /input\.key === 'Escape' && record\.ownerWindow\.isFullScreen\(\)[\s\S]*record\.ownerWindow\.setFullScreen\(false\)/, 'guest-focused Escape exits Browser fullscreen')

@@ -13,6 +13,7 @@ export class ChildSessionHost {
     this.turnsStarted = 0;
     this.maxTurns = Math.max(1, Number(options.maxTurns) || 12);
     this.lastAssistantText = "";
+    this.limitFailure = null;
     this.abortingForLimit = false;
     this.sendChain = Promise.resolve();
   }
@@ -34,8 +35,7 @@ export class ChildSessionHost {
     const abortListener = () => void session.abort?.();
     options.signal?.addEventListener("abort", abortListener, { once: true });
     try {
-      this.reserveTurn();
-      await session.prompt(String(prompt), { source: "print" });
+      await this.executePrompt(session, prompt, "print");
       if (options.signal?.aborted) throw abortError(options.signal.reason);
       return this.resultSnapshot();
     } finally {
@@ -50,16 +50,26 @@ export class ChildSessionHost {
         await session.steer(String(message));
         return this.resultSnapshot("steer");
       }
-      this.reserveTurn();
-      await session.prompt(String(message), { source: "interactive" });
+      await this.executePrompt(session, message, "interactive");
       return this.resultSnapshot("follow-up");
     });
     this.sendChain = deliver.catch(() => {});
     return deliver;
   }
 
+  async executePrompt(session, prompt, source) {
+    this.reserveTurn();
+    try {
+      await session.prompt(String(prompt), { source });
+    } catch (error) {
+      if (this.limitFailure) throw this.limitFailure;
+      throw error;
+    }
+    if (this.limitFailure) throw this.limitFailure;
+  }
+
   reserveTurn() {
-    if (this.turnsStarted >= this.maxTurns) {
+    if (this.turnsStarted >= this.maxTurns || this.turns >= this.maxTurns) {
       const error = new Error(`Child agent reached its ${this.maxTurns}-turn limit.`);
       error.code = "CHILD_MAX_TURNS";
       throw error;
@@ -93,15 +103,15 @@ export class ChildSessionHost {
 
   handleEvent(event) {
     this.onEvent(event);
-    if (event?.type === "turn_end") {
-      this.turns += 1;
-      if (this.turns >= this.maxTurns && this.sessionResult?.session?.isStreaming && !this.abortingForLimit) {
-        this.abortingForLimit = true;
-        void this.sessionResult.session.abort().finally(() => { this.abortingForLimit = false; });
-      }
+    if (event?.type === "turn_start" && this.turns >= this.maxTurns && !this.limitFailure && !this.abortingForLimit) {
+      this.limitFailure = maxTurnsError(this.maxTurns);
+      this.abortingForLimit = true;
+      void Promise.resolve(this.sessionResult?.session?.abort?.()).finally(() => { this.abortingForLimit = false; });
     }
+    if (event?.type === "turn_end") this.turns += 1;
     if (event?.type === "message_end" && event.message?.role === "assistant") {
-      this.lastAssistantText = extractMessageText(event.message);
+      const text = extractMessageText(event.message);
+      if (text) this.lastAssistantText = text;
       this.usage = addUsage(this.usage, usageFromAssistantMessage(event.message));
     }
     if (["tool_execution_start", "tool_execution_update", "tool_execution_end"].includes(event?.type)) {
@@ -145,6 +155,12 @@ function boundValue(value, maxBytes) {
   } catch {
     return String(value).slice(0, maxBytes);
   }
+}
+
+function maxTurnsError(maxTurns) {
+  const error = new Error(`Child agent reached its ${maxTurns}-turn limit while still executing tools.`);
+  error.code = "CHILD_MAX_TURNS";
+  return error;
 }
 
 function abortError(reason) {

@@ -87,10 +87,11 @@ try {
     assert.equal(response.headers.get('content-type'), 'text/html')
     assert.equal(response.headers.get('cross-origin-resource-policy'), 'same-origin')
     const policy = response.headers.get('content-security-policy') || ''
+    assert.equal(policy.split(';').map(value => value.trim()).find(value => value.startsWith('frame-ancestors ')), 'frame-ancestors file:', 'only the packaged file-origin renderer may frame a passive local document')
     for (const directive of [
         'sandbox',
         "default-src 'none'",
-        "frame-ancestors 'none'",
+        'frame-ancestors file:',
         "script-src 'none'",
         "connect-src 'none'",
         "form-action 'none'"
